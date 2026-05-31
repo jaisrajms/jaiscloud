@@ -172,6 +172,13 @@ func (h *Handler) SetMeta(m HandlerMeta) {
 	h.meta = m
 }
 
+// Meta returns the handler's identity metadata (safe for concurrent use).
+func (h *Handler) Meta() HandlerMeta {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.meta
+}
+
 // RegisterResetter adds a store that will be reset on POST /_jaiscloud/reset.
 func (h *Handler) RegisterResetter(r Resetter) {
 	h.mu.Lock()

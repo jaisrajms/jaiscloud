@@ -76,6 +76,14 @@ func (s *BundledSQSStore) GetApproximateCounts(ctx context.Context, account, reg
 	return st.GetApproximateCounts(ctx, account, region, queueURL, now)
 }
 
+func (s *BundledSQSStore) Peek(ctx context.Context, account, region, queueURL string, offset, limit int) ([]SQSMessage, int, error) {
+	st, err := s.inner(account, region)
+	if err != nil {
+		return nil, 0, err
+	}
+	return st.Peek(ctx, account, region, queueURL, offset, limit)
+}
+
 func (s *BundledSQSStore) SetQueueRetention(ctx context.Context, account, region, queueURL string, retentionSecs int) error {
 	st, err := s.inner(account, region)
 	if err != nil {

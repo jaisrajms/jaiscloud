@@ -50,6 +50,12 @@ type SQSMessageStore interface {
 	// the store can expire old messages. retentionSecs=0 resets to the 4-day default.
 	SetQueueRetention(ctx context.Context, account, region, queueURL string, retentionSecs int) error
 
+	// Peek returns up to limit messages starting at offset WITHOUT changing their state
+	// (no visibility timeout update, no receive-count increment). UI-only debugging operation.
+	// Also returns the total number of messages in the queue for pagination.
+	// limit ≤ 0 defaults to 100.
+	Peek(ctx context.Context, account, region, queueURL string, offset, limit int) (msgs []SQSMessage, total int, err error)
+
 	// Reset wipes all messages across all queues.
 	Reset(ctx context.Context)
 }

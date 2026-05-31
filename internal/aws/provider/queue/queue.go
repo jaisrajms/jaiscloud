@@ -940,6 +940,49 @@ func (p *QueueProvider) ListQueueTags(ctx context.Context, nr *model.NormalizedR
 	return provider.OK(map[string]any{"Tags": tagsFromState(state)}), nil
 }
 
+// PeekMessages returns a page of messages from the queue without changing their
+// state. This is a non-standard, UI-only operation.
+func (p *QueueProvider) PeekMessages(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	queueURL, _ := stringParam(nr.Params, "QueueUrl")
+	if queueURL == "" {
+		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
+	}
+	limit := 50
+	if l, ok := nr.Params["Limit"].(int); ok && l > 0 {
+		limit = l
+	}
+	offset := 0
+	if o, ok := nr.Params["Offset"].(int); ok && o > 0 {
+		offset = o
+	}
+	msgs, total, err := p.messages.Peek(ctx, nr.AccountID, nr.Region, queueURL, offset, limit)
+	if err != nil {
+		return nil, model.NewProviderError("InternalError", err.Error(), 500)
+	}
+	now := nr.Clock.Now()
+	items := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		status := "visible"
+		if !m.VisibleAt.IsZero() && now.Before(m.VisibleAt) {
+			status = "in-flight"
+		} else if !m.DelayUntil.IsZero() && now.Before(m.DelayUntil) {
+			status = "delayed"
+		}
+		item := map[string]any{
+			"messageId":    m.MessageID,
+			"body":         m.Body,
+			"sentAt":       m.SentAt,
+			"receiveCount": m.ReceiveCount,
+			"status":       status,
+		}
+		if m.GroupID != "" {
+			item["groupId"] = m.GroupID
+		}
+		items = append(items, item)
+	}
+	return provider.OK(map[string]any{"messages": items, "total": total, "offset": offset, "limit": limit}), nil
+}
+
 // ─── DLQ ──────────────────────────────────────────────────────────────────────
 
 // checkDLQ evaluates whether msg has exceeded its maxReceiveCount and, if so,

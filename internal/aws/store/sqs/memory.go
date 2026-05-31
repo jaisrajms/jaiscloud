@@ -268,6 +268,32 @@ func (s *MemoryMessageStore) GetApproximateCounts(ctx context.Context, account, 
 	return
 }
 
+func (s *MemoryMessageStore) Peek(_ context.Context, _, _, queueURL string, offset, limit int) ([]SQSMessage, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q := s.queues[queueURL]
+	if q == nil {
+		return nil, 0, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	msgs := q.messages
+	total := len(msgs)
+	if offset >= total {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	result := make([]SQSMessage, end-offset)
+	for i := range end - offset {
+		result[i] = *msgs[offset+i]
+	}
+	return result, total, nil
+}
+
 func (s *MemoryMessageStore) SetQueueRetention(_ context.Context, _, _, queueURL string, retentionSecs int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

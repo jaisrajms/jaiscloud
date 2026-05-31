@@ -1,0 +1,20 @@
+/** AWS service display names and terminology map. */
+export const AWSTerminology: Record<string, string> = {
+  'sqs': 'Simple Queue Service (SQS)',
+  'lambda': 'Lambda',
+  'cloudwatch-logs': 'CloudWatch Logs',
+  's3': 'S3',
+  'dynamodb': 'DynamoDB',
+  'sns': 'Simple Notification Service (SNS)',
+  'iam': 'IAM',
+  'kms': 'Key Management Service (KMS)',
+  'secretsmanager': 'Secrets Manager',
+  'ssm': 'Systems Manager (SSM)',
+  'apigateway': 'API Gateway',
+  'glue': 'Glue',
+  'emr': 'EMR',
+  'emr-containers': 'EMR on EKS',
+  'eventbridge': 'EventBridge',
+  'stepfunctions': 'Step Functions',
+  'cloudwatch': 'CloudWatch',
+}
