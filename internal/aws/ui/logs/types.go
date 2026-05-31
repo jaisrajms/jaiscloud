@@ -42,3 +42,20 @@ type FilterLogEventsRequest struct {
 	NextToken     string `json:"nextToken"`
 	Limit         int    `json:"limit"`
 }
+
+// StartQueryRequest is the body for POST /queries.
+type StartQueryRequest struct {
+	QueryString   string   `json:"queryString"`
+	LogGroupName  string   `json:"logGroupName,omitempty"`
+	LogGroupNames []string `json:"logGroupNames,omitempty"`
+	StartTime     int64    `json:"startTime,omitempty"`
+	EndTime       int64    `json:"endTime,omitempty"`
+}
+
+// QueryResult is the response from GET /queries/{id}.
+type QueryResult struct {
+	QueryID    string              `json:"queryId"`
+	Status     string              `json:"status"`
+	Results    [][]map[string]string `json:"results"`
+	Statistics map[string]float64  `json:"statistics"`
+}

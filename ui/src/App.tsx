@@ -11,6 +11,7 @@ import { KMSRoutes } from './services/aws/kms'
 import { SecretsManagerRoutes } from './services/aws/secretsmanager'
 import { SSMRoutes } from './services/aws/ssm'
 import { IAMRoutes } from './services/aws/iam'
+import { CloudWatchRoutes } from './services/aws/cloudwatch'
 import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/aws/secretsmanager/*" element={<SecretsManagerRoutes />} />
         <Route path="/aws/ssm/*" element={<SSMRoutes />} />
         <Route path="/aws/iam/*" element={<IAMRoutes />} />
+        <Route path="/aws/cloudwatch/*" element={<CloudWatchRoutes />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

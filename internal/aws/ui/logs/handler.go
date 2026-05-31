@@ -293,6 +293,112 @@ func (h *Handler) FilterLogEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /queries  body: StartQueryRequest
+func (h *Handler) StartQuery(w http.ResponseWriter, r *http.Request) {
+	var req StartQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.QueryString == "" {
+		uihelper.UIError(w, "BadRequest", "queryString is required", http.StatusBadRequest)
+		return
+	}
+
+	region := uihelper.RegionFrom(r)
+	account := uihelper.AccountFrom(r)
+
+	nr := uihelper.NR(r.Context(), h.cfg, "logs", "StartQuery", region, account)
+	nr.Params["queryString"] = req.QueryString
+	if req.StartTime > 0 {
+		nr.Params["startTime"] = req.StartTime
+	}
+	if req.EndTime > 0 {
+		nr.Params["endTime"] = req.EndTime
+	}
+	if len(req.LogGroupNames) > 0 {
+		names := make([]any, len(req.LogGroupNames))
+		for i, n := range req.LogGroupNames {
+			names[i] = n
+		}
+		nr.Params["logGroupNames"] = names
+	} else if req.LogGroupName != "" {
+		nr.Params["logGroupName"] = req.LogGroupName
+	}
+
+	resp, err := h.provider.StartQuery(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	uihelper.WriteJSON(w, map[string]any{"queryId": resp.Data["queryId"]})
+}
+
+// GET /queries/{id}
+func (h *Handler) GetQueryResults(w http.ResponseWriter, r *http.Request) {
+	queryID := chi.URLParam(r, "id")
+	if queryID == "" {
+		uihelper.UIError(w, "BadRequest", "query id is required", http.StatusBadRequest)
+		return
+	}
+
+	region := uihelper.RegionFrom(r)
+	account := uihelper.AccountFrom(r)
+
+	nr := uihelper.NR(r.Context(), h.cfg, "logs", "GetQueryResults", region, account)
+	nr.Params["queryId"] = queryID
+
+	resp, err := h.provider.GetQueryResults(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+
+	status, _ := resp.Data["status"].(string)
+	rawResults, _ := resp.Data["results"].([][]map[string]string)
+	rawStats, _ := resp.Data["statistics"].(map[string]any)
+
+	stats := map[string]float64{}
+	for k, v := range rawStats {
+		if f, ok := v.(float64); ok {
+			stats[k] = f
+		}
+	}
+	if rawResults == nil {
+		rawResults = [][]map[string]string{}
+	}
+
+	uihelper.WriteJSON(w, QueryResult{
+		QueryID:    queryID,
+		Status:     status,
+		Results:    rawResults,
+		Statistics: stats,
+	})
+}
+
+// DELETE /queries/{id}
+func (h *Handler) StopQuery(w http.ResponseWriter, r *http.Request) {
+	queryID := chi.URLParam(r, "id")
+	if queryID == "" {
+		uihelper.UIError(w, "BadRequest", "query id is required", http.StatusBadRequest)
+		return
+	}
+
+	region := uihelper.RegionFrom(r)
+	account := uihelper.AccountFrom(r)
+
+	nr := uihelper.NR(r.Context(), h.cfg, "logs", "StopQuery", region, account)
+	nr.Params["queryId"] = queryID
+
+	if _, err := h.provider.StopQuery(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // helpers
 
 func mapLogGroup(m map[string]any) LogGroup {

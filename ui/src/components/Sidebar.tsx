@@ -66,6 +66,18 @@ const navTree: NavSection[] = [
     rootPath: '/aws/logs/groups',
     children: [
       { label: 'Log Groups', path: '/aws/logs/groups' },
+      { label: 'Insights', path: '/aws/logs/insights' },
+    ],
+  },
+  {
+    id: 'cloudwatch',
+    label: 'CloudWatch',
+    basePath: '/aws/cloudwatch',
+    rootPath: '/aws/cloudwatch/metrics',
+    children: [
+      { label: 'Metrics', path: '/aws/cloudwatch/metrics' },
+      { label: 'Alarms', path: '/aws/cloudwatch/alarms' },
+      { label: 'Dashboards', path: '/aws/cloudwatch/dashboards' },
     ],
   },
   {

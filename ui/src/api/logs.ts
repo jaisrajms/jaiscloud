@@ -76,3 +76,30 @@ export function filterLogEvents(groupName: string, req: Omit<FilterLogEventsRequ
     logGroupName: groupName,
   })
 }
+
+// Log Insights
+
+export interface QueryResult {
+  queryId: string
+  status: string
+  results: Array<Array<{ field: string; value: string }>>
+  statistics: { recordsMatched: number; recordsScanned: number; bytesScanned: number }
+}
+
+export function startQuery(req: {
+  queryString: string
+  logGroupName?: string
+  logGroupNames?: string[]
+  startTime?: number
+  endTime?: number
+}): Promise<{ queryId: string }> {
+  return api.post<{ queryId: string }>(`${BASE}/queries`, req)
+}
+
+export function getQueryResults(queryId: string): Promise<QueryResult> {
+  return api.get<QueryResult>(`${BASE}/queries/${encodeURIComponent(queryId)}`)
+}
+
+export function stopQuery(queryId: string): Promise<void> {
+  return api.delete<void>(`${BASE}/queries/${encodeURIComponent(queryId)}`)
+}

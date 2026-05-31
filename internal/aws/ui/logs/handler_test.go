@@ -61,6 +61,18 @@ func (m *mockLogsProvider) FilterLogEvents(_ context.Context, nr *model.Normaliz
 	m.capture(nr)
 	return m.filterEventsResp, m.filterEventsErr
 }
+func (m *mockLogsProvider) StartQuery(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	m.capture(nr)
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"queryId": "test-qid"}}, nil
+}
+func (m *mockLogsProvider) GetQueryResults(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	m.capture(nr)
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"queryId": nr.Params["queryId"], "status": "Complete", "results": [][]map[string]string{}, "statistics": map[string]any{"recordsMatched": 0.0, "recordsScanned": 0.0, "bytesScanned": 0.0}}}, nil
+}
+func (m *mockLogsProvider) StopQuery(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	m.capture(nr)
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"success": true}}, nil
+}
 
 func testCfg() *config.Config {
 	return &config.Config{

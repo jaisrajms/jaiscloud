@@ -19,5 +19,10 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/groups/{name}/streams/{stream}/events", h.GetLogEvents)
 	r.Post("/groups/{name}/filter", h.FilterLogEvents)
 
+	// Log Insights
+	r.Post("/queries", h.StartQuery)
+	r.Get("/queries/{id}", h.GetQueryResults)
+	r.Delete("/queries/{id}", h.StopQuery)
+
 	return r
 }

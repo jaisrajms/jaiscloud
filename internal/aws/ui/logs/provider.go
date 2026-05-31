@@ -15,4 +15,7 @@ type ProviderInterface interface {
 	GetLogEvents(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	FilterLogEvents(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	PutRetentionPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	StartQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	GetQueryResults(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	StopQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 }

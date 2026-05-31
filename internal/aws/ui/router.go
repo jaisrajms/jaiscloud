@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/admin"
 	adminpanelui "jaiscloud/internal/aws/ui/adminpanel"
+	cloudwatchui "jaiscloud/internal/aws/ui/cloudwatch"
 	dynamodbui "jaiscloud/internal/aws/ui/dynamodb"
 	iamui "jaiscloud/internal/aws/ui/iam"
 	kmsui "jaiscloud/internal/aws/ui/kms"
@@ -93,6 +94,11 @@ func BuildRouter(
 			r.Mount("/api/ui/v1/sns", snsui.BuildRouter(providers.Notif, cfg))
 		}
 		r.Mount("/api/ui/v1/admin", adminpanelui.BuildRouter(adminHandler, cfg))
+
+		// Phase 3 service routes
+		if providers.CW != nil {
+			r.Mount("/api/ui/v1/cloudwatch", cloudwatchui.BuildRouter(providers.CW, cfg))
+		}
 
 		// Phase 1b service routes
 		if providers.IAM != nil {
