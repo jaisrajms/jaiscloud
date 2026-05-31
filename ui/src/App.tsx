@@ -12,6 +12,9 @@ import { SecretsManagerRoutes } from './services/aws/secretsmanager'
 import { SSMRoutes } from './services/aws/ssm'
 import { IAMRoutes } from './services/aws/iam'
 import { CloudWatchRoutes } from './services/aws/cloudwatch'
+import { EMRRoutes } from './services/aws/emr'
+import { EMRContainersRoutes } from './services/aws/emroneks'
+import { GlueRoutes } from './services/aws/glue'
 import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
@@ -48,6 +51,9 @@ export default function App() {
         <Route path="/aws/ssm/*" element={<SSMRoutes />} />
         <Route path="/aws/iam/*" element={<IAMRoutes />} />
         <Route path="/aws/cloudwatch/*" element={<CloudWatchRoutes />} />
+        <Route path="/aws/emr/*" element={<EMRRoutes />} />
+        <Route path="/aws/emr-containers/*" element={<EMRContainersRoutes />} />
+        <Route path="/aws/glue/*" element={<GlueRoutes />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

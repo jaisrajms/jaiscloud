@@ -116,6 +116,35 @@ const navTree: NavSection[] = [
       { label: 'Roles', path: '/aws/iam' },
     ],
   },
+  {
+    id: 'emr',
+    label: 'EMR',
+    basePath: '/aws/emr',
+    rootPath: '/aws/emr/clusters',
+    children: [
+      { label: 'Clusters', path: '/aws/emr/clusters' },
+    ],
+  },
+  {
+    id: 'emr-containers',
+    label: 'EMR on EKS',
+    basePath: '/aws/emr-containers',
+    rootPath: '/aws/emr-containers/clusters',
+    children: [
+      { label: 'Virtual Clusters', path: '/aws/emr-containers/clusters' },
+    ],
+  },
+  {
+    id: 'glue',
+    label: 'Glue',
+    basePath: '/aws/glue',
+    rootPath: '/aws/glue/databases',
+    children: [
+      { label: 'Databases', path: '/aws/glue/databases' },
+      { label: 'Jobs', path: '/aws/glue/jobs' },
+      { label: 'Crawlers', path: '/aws/glue/crawlers' },
+    ],
+  },
 ]
 
 interface Props {
