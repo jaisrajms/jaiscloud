@@ -4,6 +4,7 @@ package logs
 
 import (
 	"context"
+	"io"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -67,6 +68,21 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 
 // Reset wipes all state. Implements admin.Resetter.
 func (p *Provider) Reset(ctx context.Context) { p.store.Reset(ctx) }
+
+// Snapshot implements admin.Snapshotter.
+func (p *Provider) Snapshot(ctx context.Context, w io.Writer) error {
+	return p.store.Snapshot(ctx, w)
+}
+
+// Restore implements admin.Snapshotter.
+func (p *Provider) Restore(ctx context.Context, r io.Reader) error {
+	return p.store.Restore(ctx, r)
+}
+
+// IsEmpty implements admin.Snapshotter.
+func (p *Provider) IsEmpty(ctx context.Context) (bool, error) {
+	return p.store.IsEmpty(ctx)
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 

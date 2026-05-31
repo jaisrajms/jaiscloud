@@ -2,6 +2,8 @@ package logs
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"sync"
 	"time"
 )
@@ -184,4 +186,96 @@ func (s *memStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reset()
+}
+
+// cwlSnapshot is the JSON payload written/read by Snapshot/Restore.
+type cwlSnapshot struct {
+	Groups              map[string]*LogGroup                      `json:"groups"`
+	Streams             map[string]map[string]*LogStream          `json:"streams"`
+	Events              map[string]map[string][]LogEvent          `json:"events"`
+	Tags                map[string]map[string]string              `json:"tags"`
+	SeqToken            map[string]map[string]int64               `json:"seq_token"`
+	SubscriptionFilters map[string]map[string]*SubscriptionFilter `json:"subscription_filters"`
+	MetricFilters       map[string]map[string]*MetricFilter       `json:"metric_filters"`
+	QueryDefinitions    map[string]*QueryDefinition               `json:"query_definitions"`
+}
+
+// IsEmpty returns true when no log groups have been created.
+func (s *memStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.groups) == 0, nil
+}
+
+// Snapshot serialises all persistent CWL state to w as JSON.
+func (s *memStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Flatten eventRings into plain slices so they are JSON-serialisable.
+	eventsFlat := make(map[string]map[string][]LogEvent, len(s.events))
+	for grp, streams := range s.events {
+		eventsFlat[grp] = make(map[string][]LogEvent, len(streams))
+		for stream, ring := range streams {
+			eventsFlat[grp][stream] = ring.Slice()
+		}
+	}
+
+	snap := cwlSnapshot{
+		Groups:              s.groups,
+		Streams:             s.streams,
+		Events:              eventsFlat,
+		Tags:                s.tags,
+		SeqToken:            s.seqToken,
+		SubscriptionFilters: s.subscriptionFilters,
+		MetricFilters:       s.metricFilters,
+		QueryDefinitions:    s.queryDefinitions,
+	}
+	return json.NewEncoder(w).Encode(snap)
+}
+
+// Restore replaces the store's contents atomically from JSON produced by Snapshot.
+func (s *memStore) Restore(_ context.Context, r io.Reader) error {
+	var snap cwlSnapshot
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reset()
+
+	if snap.Groups != nil {
+		s.groups = snap.Groups
+	}
+	if snap.Streams != nil {
+		s.streams = snap.Streams
+	}
+	// Rebuild eventRings from flat slices.
+	for grp, streams := range snap.Events {
+		if s.events[grp] == nil {
+			s.events[grp] = make(map[string]*eventRing)
+		}
+		for stream, evs := range streams {
+			ring := newEventRing()
+			ring.Append(evs)
+			s.events[grp][stream] = ring
+		}
+	}
+	if snap.Tags != nil {
+		s.tags = snap.Tags
+	}
+	if snap.SeqToken != nil {
+		s.seqToken = snap.SeqToken
+	}
+	if snap.SubscriptionFilters != nil {
+		s.subscriptionFilters = snap.SubscriptionFilters
+	}
+	if snap.MetricFilters != nil {
+		s.metricFilters = snap.MetricFilters
+	}
+	if snap.QueryDefinitions != nil {
+		s.queryDefinitions = snap.QueryDefinitions
+	}
+	return nil
 }

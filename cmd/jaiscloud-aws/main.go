@@ -58,6 +58,7 @@ import (
 
 	// G-PENDING new providers
 	"jaiscloud/internal/adapter"
+	ui "jaiscloud/internal/aws/ui"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/clock"
 	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
@@ -184,6 +185,7 @@ func startCmd() *cobra.Command {
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.ESMProvider, app.EventsProvider, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
+			adminHandler.RegisterSnapshotter("cw_logs", app.LogsP)
 			adminHandler.SetLambdaCodeFetcher(app.FuncP)
 			adminHandler.SetCWAlarmEvaluator(app.CWP.Evaluator())
 			adminHandler.SetFirehoseFlusher(app.FirehoseP)
@@ -304,6 +306,37 @@ func startCmd() *cobra.Command {
 				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
 			}
 
+			var uiServer *ui.UIServer
+			if cfg.UIEnabled {
+				uiProviders := &ui.AWSProviders{
+					Queue:    app.QueueP,
+					Function: app.FuncP,
+					Logs:     app.LogsP,
+				}
+				var uiErr error
+				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
+				if uiErr != nil {
+					slog.Warn("ui server init failed", "err", uiErr)
+				} else if uiServer != nil {
+					go func() {
+						addr := fmt.Sprintf(":%d", cfg.UIPort)
+						if err := uiServer.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
+							slog.Warn("ui server stopped", "err", err)
+						}
+					}()
+					if cfg.UIOpen {
+						ui.OpenBrowser(fmt.Sprintf("http://localhost:%d/ui/", cfg.UIPort))
+					}
+					prevCleanup5 := cleanup
+					cleanup = func() {
+						shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						_ = uiServer.Shutdown(shutCtx)
+						prevCleanup5()
+					}
+				}
+			}
+
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
 			_ = app.Bus
 			return srv.ListenAndServe()
@@ -364,6 +397,9 @@ func startCmd() *cobra.Command {
 	Env var: JAISCLOUD_SPARK_EMREKS_IMAGE`)
 	cmd.Flags().String("s3-virtual-host-bases", "", `Comma-separated host suffixes treated as S3 virtual-hosted bases.
 	Env var: JAISCLOUD_S3_VIRTUAL_HOST_BASES`)
+	cmd.Flags().Bool("ui", false, "Enable the UI Portal listener on --ui-port (default 4567)")
+	cmd.Flags().Int("ui-port", 4567, "Port for the UI Portal HTTP listener")
+	cmd.Flags().Bool("ui-open", false, "Auto-open browser when UI starts (no-op when not a TTY)")
 
 	return cmd
 }
@@ -397,6 +433,9 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("spark_emr_image", cmd.Flags().Lookup("spark-emr-image"))
 	viper.BindPFlag("spark_emreks_image", cmd.Flags().Lookup("spark-emreks-image"))
 	viper.BindPFlag("s3_virtual_host_bases", cmd.Flags().Lookup("s3-virtual-host-bases"))
+	viper.BindPFlag("ui", cmd.Flags().Lookup("ui"))
+	viper.BindPFlag("ui_port", cmd.Flags().Lookup("ui-port"))
+	viper.BindPFlag("ui_open", cmd.Flags().Lookup("ui-open"))
 }
 
 // AppContext holds every provider and service created by buildRegistry.
@@ -753,6 +792,9 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		k8sExec.SetCodeLoader(funcP)
 		k8sExec.SetLogsAPI(logsProvider)
 	}
+	// Wire CW Logs ingestor into FunctionProvider so all invocations (including mock)
+	// write START/END/REPORT platform logs to /aws/lambda/{name}.
+	funcP.SetLogsAPI(logsProvider)
 
 	// Wire ECS executor.
 	ecsMode, _ := config.ExecutorMode("ecs", "mock")
