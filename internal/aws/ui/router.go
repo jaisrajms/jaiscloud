@@ -8,11 +8,15 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/admin"
-	"jaiscloud/internal/aws/ui/middleware"
-	"jaiscloud/internal/aws/ui/sse"
+	adminpanelui "jaiscloud/internal/aws/ui/adminpanel"
+	dynamodbui "jaiscloud/internal/aws/ui/dynamodb"
 	lambdaui "jaiscloud/internal/aws/ui/lambda"
 	logsui "jaiscloud/internal/aws/ui/logs"
+	s3ui "jaiscloud/internal/aws/ui/s3"
+	snsui "jaiscloud/internal/aws/ui/sns"
 	sqsui "jaiscloud/internal/aws/ui/sqs"
+	"jaiscloud/internal/aws/ui/middleware"
+	"jaiscloud/internal/aws/ui/sse"
 	"jaiscloud/internal/config"
 )
 
@@ -73,6 +77,18 @@ func BuildRouter(
 		if providers.Logs != nil {
 			r.Mount("/api/ui/v1/logs", logsui.BuildRouter(providers.Logs, cfg))
 		}
+
+		// Phase 1a service routes
+		if providers.Object != nil {
+			r.Mount("/api/ui/v1/s3", s3ui.BuildRouter(providers.Object, cfg))
+		}
+		if providers.Table != nil {
+			r.Mount("/api/ui/v1/dynamodb", dynamodbui.BuildRouter(providers.Table, cfg))
+		}
+		if providers.Notif != nil {
+			r.Mount("/api/ui/v1/sns", snsui.BuildRouter(providers.Notif, cfg))
+		}
+		r.Mount("/api/ui/v1/admin", adminpanelui.BuildRouter(adminHandler, cfg))
 	})
 
 	return r

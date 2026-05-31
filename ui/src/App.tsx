@@ -4,6 +4,10 @@ import { Layout } from './components/Layout'
 import { SQSRoutes } from './services/aws/sqs'
 import { LambdaRoutes } from './services/aws/lambda'
 import { LogsRoutes } from './services/aws/logs'
+import { S3Routes } from './services/aws/s3'
+import { DynamoDBRoutes } from './services/aws/dynamodb'
+import { SNSRoutes } from './services/aws/sns'
+import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
   const { data: meta, isLoading } = useMeta()
@@ -31,6 +35,10 @@ export default function App() {
         <Route path="/aws/sqs/*" element={<SQSRoutes />} />
         <Route path="/aws/lambda/*" element={<LambdaRoutes />} />
         <Route path="/aws/logs/*" element={<LogsRoutes />} />
+        <Route path="/aws/s3/*" element={<S3Routes />} />
+        <Route path="/aws/dynamodb/*" element={<DynamoDBRoutes />} />
+        <Route path="/aws/sns/*" element={<SNSRoutes />} />
+        <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

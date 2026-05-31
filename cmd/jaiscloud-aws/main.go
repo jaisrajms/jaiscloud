@@ -310,8 +310,13 @@ func startCmd() *cobra.Command {
 			if cfg.UIEnabled {
 				uiProviders := &ui.AWSProviders{
 					Queue:    app.QueueP,
+					Object:   app.ObjectP,
+					Table:    app.TableP,
 					Function: app.FuncP,
 					Logs:     app.LogsP,
+					Notif:    app.NotifP,
+					CW:       app.CWP,
+					Sfn:      app.SfnP,
 				}
 				var uiErr error
 				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
@@ -461,6 +466,7 @@ type AppContext struct {
 	FirehoseP      *firehoseprovider.Provider
 	ComputeP       *compute.ComputeProvider
 	TableP         *table.TableProvider
+	NotifP         *notification.SNSProvider
 	Sched          *ebscheduler.Scheduler
 }
 
@@ -909,6 +915,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		FirehoseP:      firehoseP,
 		ComputeP:       computeP,
 		TableP:         tableProvider,
+		NotifP:         notifP,
 		Sched:          sched,
 	}
 }

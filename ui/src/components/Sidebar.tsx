@@ -15,12 +15,39 @@ interface NavSection {
 
 const navTree: NavSection[] = [
   {
+    id: 's3',
+    label: 'S3',
+    basePath: '/aws/s3',
+    rootPath: '/aws/s3',
+    children: [
+      { label: 'Buckets', path: '/aws/s3' },
+    ],
+  },
+  {
+    id: 'dynamodb',
+    label: 'DynamoDB',
+    basePath: '/aws/dynamodb',
+    rootPath: '/aws/dynamodb',
+    children: [
+      { label: 'Tables', path: '/aws/dynamodb' },
+    ],
+  },
+  {
     id: 'sqs',
     label: 'SQS',
     basePath: '/aws/sqs',
     rootPath: '/aws/sqs',
     children: [
       { label: 'Queues', path: '/aws/sqs' },
+    ],
+  },
+  {
+    id: 'sns',
+    label: 'SNS',
+    basePath: '/aws/sns',
+    rootPath: '/aws/sns',
+    children: [
+      { label: 'Topics', path: '/aws/sns' },
     ],
   },
   {
@@ -60,53 +87,72 @@ export function Sidebar({ open }: Props) {
       position: 'relative',
       zIndex: 10,
     }}>
-      <nav style={{ width: SIDEBAR_WIDTH, paddingTop: '0.5rem' }}>
-        {navTree.map((section) => {
-          const isActive = pathname.startsWith(section.basePath)
-          return (
-            <div key={section.id} style={{ marginBottom: '0.15rem' }}>
-              {/* Section header — NavLink to the service root */}
-              <NavLink
-                to={section.rootPath}
-                style={{
-                  ...sectionHeaderStyle,
-                  background: isActive ? 'rgba(232,118,0,0.12)' : 'none',
-                  color: isActive ? '#e87600' : '#c9cdd4',
-                  textDecoration: 'none',
-                  display: 'flex',
-                }}
-              >
-                <span style={{ fontSize: '0.6em', opacity: 0.7, width: 16, textAlign: 'center', flexShrink: 0, paddingTop: 1 }}>
-                  {isActive ? '▼' : '▶'}
-                </span>
-                <span style={{ fontWeight: isActive ? 600 : 400, fontSize: '0.83em' }}>
-                  {section.label}
-                </span>
-              </NavLink>
+      <nav style={{ width: SIDEBAR_WIDTH, paddingTop: '0.5rem', display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ flex: 1 }}>
+          {navTree.map((section) => {
+            const isActive = pathname.startsWith(section.basePath)
+            return (
+              <div key={section.id} style={{ marginBottom: '0.15rem' }}>
+                {/* Section header — NavLink to the service root */}
+                <NavLink
+                  to={section.rootPath}
+                  style={{
+                    ...sectionHeaderStyle,
+                    background: isActive ? 'rgba(232,118,0,0.12)' : 'none',
+                    color: isActive ? '#e87600' : '#c9cdd4',
+                    textDecoration: 'none',
+                    display: 'flex',
+                  }}
+                >
+                  <span style={{ fontSize: '0.6em', opacity: 0.7, width: 16, textAlign: 'center', flexShrink: 0, paddingTop: 1 }}>
+                    {isActive ? '▼' : '▶'}
+                  </span>
+                  <span style={{ fontWeight: isActive ? 600 : 400, fontSize: '0.83em' }}>
+                    {section.label}
+                  </span>
+                </NavLink>
 
-              {/* Children — shown when this service is active */}
-              {isActive && (
-                <div>
-                  {section.children.map((child) => (
-                    <NavLink
-                      key={child.path}
-                      to={child.path}
-                      end
-                      style={({ isActive: childActive }) => ({
-                        ...childLinkStyle,
-                        background: childActive ? 'rgba(9,114,211,0.12)' : 'none',
-                        color: childActive ? '#0972d3' : '#8d9daa',
-                        fontWeight: childActive ? 500 : 400,
-                      })}
-                    >
-                      {child.label}
-                    </NavLink>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
+                {/* Children — shown when this service is active */}
+                {isActive && (
+                  <div>
+                    {section.children.map((child) => (
+                      <NavLink
+                        key={child.path}
+                        to={child.path}
+                        end
+                        style={({ isActive: childActive }) => ({
+                          ...childLinkStyle,
+                          background: childActive ? 'rgba(9,114,211,0.12)' : 'none',
+                          color: childActive ? '#0972d3' : '#8d9daa',
+                          fontWeight: childActive ? 500 : 400,
+                        })}
+                      >
+                        {child.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Admin link pinned at bottom */}
+        <div style={{ borderTop: '1px solid #2d3748', padding: '0.5rem 0' }}>
+          <NavLink
+            to="/admin"
+            style={({ isActive: adminActive }) => ({
+              ...sectionHeaderStyle,
+              display: 'flex',
+              textDecoration: 'none',
+              background: adminActive ? 'rgba(232,118,0,0.12)' : 'none',
+              color: adminActive ? '#e87600' : '#8d9daa',
+            })}
+          >
+            <span style={{ fontSize: '0.6em', opacity: 0.7, width: 16, textAlign: 'center', flexShrink: 0, paddingTop: 1 }}>⚙</span>
+            <span style={{ fontWeight: pathname === '/admin' ? 600 : 400, fontSize: '0.83em' }}>Admin</span>
+          </NavLink>
+        </div>
       </nav>
     </aside>
   )
