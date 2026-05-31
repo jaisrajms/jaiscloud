@@ -68,6 +68,42 @@ const navTree: NavSection[] = [
       { label: 'Log Groups', path: '/aws/logs/groups' },
     ],
   },
+  {
+    id: 'kms',
+    label: 'KMS',
+    basePath: '/aws/kms',
+    rootPath: '/aws/kms',
+    children: [
+      { label: 'Keys', path: '/aws/kms' },
+    ],
+  },
+  {
+    id: 'secretsmanager',
+    label: 'Secrets Manager',
+    basePath: '/aws/secretsmanager',
+    rootPath: '/aws/secretsmanager',
+    children: [
+      { label: 'Secrets', path: '/aws/secretsmanager' },
+    ],
+  },
+  {
+    id: 'ssm',
+    label: 'SSM',
+    basePath: '/aws/ssm',
+    rootPath: '/aws/ssm',
+    children: [
+      { label: 'Parameters', path: '/aws/ssm' },
+    ],
+  },
+  {
+    id: 'iam',
+    label: 'IAM',
+    basePath: '/aws/iam',
+    rootPath: '/aws/iam',
+    children: [
+      { label: 'Roles', path: '/aws/iam' },
+    ],
+  },
 ]
 
 interface Props {

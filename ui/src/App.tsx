@@ -7,6 +7,10 @@ import { LogsRoutes } from './services/aws/logs'
 import { S3Routes } from './services/aws/s3'
 import { DynamoDBRoutes } from './services/aws/dynamodb'
 import { SNSRoutes } from './services/aws/sns'
+import { KMSRoutes } from './services/aws/kms'
+import { SecretsManagerRoutes } from './services/aws/secretsmanager'
+import { SSMRoutes } from './services/aws/ssm'
+import { IAMRoutes } from './services/aws/iam'
 import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
@@ -38,6 +42,10 @@ export default function App() {
         <Route path="/aws/s3/*" element={<S3Routes />} />
         <Route path="/aws/dynamodb/*" element={<DynamoDBRoutes />} />
         <Route path="/aws/sns/*" element={<SNSRoutes />} />
+        <Route path="/aws/kms/*" element={<KMSRoutes />} />
+        <Route path="/aws/secretsmanager/*" element={<SecretsManagerRoutes />} />
+        <Route path="/aws/ssm/*" element={<SSMRoutes />} />
+        <Route path="/aws/iam/*" element={<IAMRoutes />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

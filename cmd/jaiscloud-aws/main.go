@@ -309,14 +309,18 @@ func startCmd() *cobra.Command {
 			var uiServer *ui.UIServer
 			if cfg.UIEnabled {
 				uiProviders := &ui.AWSProviders{
-					Queue:    app.QueueP,
-					Object:   app.ObjectP,
-					Table:    app.TableP,
+					Queue:  app.QueueP,
+					Object: app.ObjectP,
+					Table:  app.TableP,
 					Function: app.FuncP,
-					Logs:     app.LogsP,
-					Notif:    app.NotifP,
-					CW:       app.CWP,
-					Sfn:      app.SfnP,
+					Logs:   app.LogsP,
+					Notif:  app.NotifP,
+					CW:     app.CWP,
+					Sfn:    app.SfnP,
+					IAM:    app.IAMP,
+					Key:    app.KeyP,
+					Secret: app.SecretP,
+					Param:  app.ParamP,
 				}
 				var uiErr error
 				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
@@ -467,6 +471,10 @@ type AppContext struct {
 	ComputeP       *compute.ComputeProvider
 	TableP         *table.TableProvider
 	NotifP         *notification.SNSProvider
+	IAMP           *iamprovider.IAMProvider
+	KeyP           *keyprovider.KeyProvider
+	SecretP        *secretprovider.SecretProvider
+	ParamP         *paramprovider.ParameterProvider
 	Sched          *ebscheduler.Scheduler
 }
 
@@ -916,6 +924,10 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		ComputeP:       computeP,
 		TableP:         tableProvider,
 		NotifP:         notifP,
+		IAMP:           iamP,
+		KeyP:           keyProv,
+		SecretP:        secretProv,
+		ParamP:         paramProv,
 		Sched:          sched,
 	}
 }

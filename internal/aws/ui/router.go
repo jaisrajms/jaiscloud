@@ -10,11 +10,15 @@ import (
 	"jaiscloud/internal/admin"
 	adminpanelui "jaiscloud/internal/aws/ui/adminpanel"
 	dynamodbui "jaiscloud/internal/aws/ui/dynamodb"
+	iamui "jaiscloud/internal/aws/ui/iam"
+	kmsui "jaiscloud/internal/aws/ui/kms"
 	lambdaui "jaiscloud/internal/aws/ui/lambda"
 	logsui "jaiscloud/internal/aws/ui/logs"
 	s3ui "jaiscloud/internal/aws/ui/s3"
+	secretsmanagerui "jaiscloud/internal/aws/ui/secretsmanager"
 	snsui "jaiscloud/internal/aws/ui/sns"
 	sqsui "jaiscloud/internal/aws/ui/sqs"
+	ssmui "jaiscloud/internal/aws/ui/ssm"
 	"jaiscloud/internal/aws/ui/middleware"
 	"jaiscloud/internal/aws/ui/sse"
 	"jaiscloud/internal/config"
@@ -89,6 +93,20 @@ func BuildRouter(
 			r.Mount("/api/ui/v1/sns", snsui.BuildRouter(providers.Notif, cfg))
 		}
 		r.Mount("/api/ui/v1/admin", adminpanelui.BuildRouter(adminHandler, cfg))
+
+		// Phase 1b service routes
+		if providers.IAM != nil {
+			r.Mount("/api/ui/v1/iam", iamui.BuildRouter(providers.IAM, cfg))
+		}
+		if providers.Key != nil {
+			r.Mount("/api/ui/v1/kms", kmsui.BuildRouter(providers.Key, cfg))
+		}
+		if providers.Secret != nil {
+			r.Mount("/api/ui/v1/secretsmanager", secretsmanagerui.BuildRouter(providers.Secret, cfg))
+		}
+		if providers.Param != nil {
+			r.Mount("/api/ui/v1/ssm", ssmui.BuildRouter(providers.Param, cfg))
+		}
 	})
 
 	return r
