@@ -17,11 +17,14 @@ import (
 	ecsui "jaiscloud/internal/aws/ui/ecs"
 	eksui "jaiscloud/internal/aws/ui/eks"
 	elasticacheui "jaiscloud/internal/aws/ui/elasticache"
+	elbv2ui "jaiscloud/internal/aws/ui/elbv2"
 	emrui "jaiscloud/internal/aws/ui/emr"
 	emroneksui "jaiscloud/internal/aws/ui/emroneks"
 	eventbridgeui "jaiscloud/internal/aws/ui/eventbridge"
+	firehoseui "jaiscloud/internal/aws/ui/firehose"
 	glueui "jaiscloud/internal/aws/ui/glue"
 	iamui "jaiscloud/internal/aws/ui/iam"
+	kinesisui "jaiscloud/internal/aws/ui/kinesis"
 	kmsui "jaiscloud/internal/aws/ui/kms"
 	lambdaui "jaiscloud/internal/aws/ui/lambda"
 	logsui "jaiscloud/internal/aws/ui/logs"
@@ -29,6 +32,7 @@ import (
 	route53ui "jaiscloud/internal/aws/ui/route53"
 	s3ui "jaiscloud/internal/aws/ui/s3"
 	secretsmanagerui "jaiscloud/internal/aws/ui/secretsmanager"
+	sesui "jaiscloud/internal/aws/ui/ses"
 	sfnui "jaiscloud/internal/aws/ui/sfn"
 	snsui "jaiscloud/internal/aws/ui/sns"
 	sqsui "jaiscloud/internal/aws/ui/sqs"
@@ -170,6 +174,20 @@ func BuildRouter(
 		}
 		if providers.Stack != nil {
 			r.Mount("/api/ui/v1/cloudformation", cfnui.BuildRouter(providers.Stack, cfg))
+		}
+
+		// Phase 7 service routes
+		if providers.Kinesis != nil {
+			r.Mount("/api/ui/v1/kinesis", kinesisui.BuildRouter(providers.Kinesis, cfg))
+		}
+		if providers.Firehose != nil {
+			r.Mount("/api/ui/v1/firehose", firehoseui.BuildRouter(providers.Firehose, cfg))
+		}
+		if providers.SES != nil {
+			r.Mount("/api/ui/v1/ses", sesui.BuildRouter(providers.SES, cfg))
+		}
+		if providers.ELBv2 != nil {
+			r.Mount("/api/ui/v1/elbv2", elbv2ui.BuildRouter(providers.ELBv2, cfg))
 		}
 	})
 

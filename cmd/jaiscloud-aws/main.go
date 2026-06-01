@@ -333,6 +333,10 @@ func startCmd() *cobra.Command {
 					Cache:     app.CacheP,
 					DNS:       app.DNSP,
 					Stack:     app.StackP,
+					Kinesis:   app.KinesisP,
+					Firehose:  app.FirehoseP,
+					SES:       app.SESP,
+					ELBv2:     app.ELBv2P,
 				}
 				var uiErr error
 				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
@@ -480,6 +484,9 @@ type AppContext struct {
 	CWP            *cloudwatchprovider.Provider
 	FuncP          *functionprovider.FunctionProvider
 	FirehoseP      *firehoseprovider.Provider
+	KinesisP       *kinesisprovider.Provider
+	SESP           *sesprovider.Provider
+	ELBv2P         *elbv2provider.ELBv2Provider
 	ComputeP       *compute.ComputeProvider
 	ContainerP     *containerprovider.ContainerProvider
 	TableP         *table.TableProvider
@@ -881,7 +888,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		Register(logsProvider).
 		Register(sesP).
 		Register(firehoseP)
-	dnsP, rdsP, cacheP, eksP := registerStatelessProviders(registry, s.resources)
+	dnsP, rdsP, cacheP, eksP, elbv2P := registerStatelessProviders(registry, s.resources)
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
@@ -943,6 +950,9 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		CWP:            cwP,
 		FuncP:          funcP,
 		FirehoseP:      firehoseP,
+		KinesisP:       kinesisP,
+		SESP:           sesP,
+		ELBv2P:         elbv2P,
 		ComputeP:       computeP,
 		ContainerP:     ecsP,
 		TableP:         tableProvider,
@@ -966,16 +976,17 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 // registerStatelessProviders registers providers whose only constructor dependency
 // is a ResourceStore and that require no post-construction Set* wiring calls.
-// Returns the four providers that are also wired into the UI layer.
+// Returns the five providers that are also wired into the UI layer.
 //
 // Invariant: every provider listed here must have a New(store.ResourceStore)
 // constructor and must NOT require any post-construction Set* calls. If a provider
 // grows cross-service dependencies, move it into buildRegistry with explicit wiring.
-func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore) (dnsP *dns.DNSProvider, rdsP *rdsprovider.RelationalProvider, cacheP *cacheprovider.CacheProvider, eksP *eksprovider.EKSProvider) {
+func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore) (dnsP *dns.DNSProvider, rdsP *rdsprovider.RelationalProvider, cacheP *cacheprovider.CacheProvider, eksP *eksprovider.EKSProvider, elbv2P *elbv2provider.ELBv2Provider) {
 	dnsP = dns.New(res)
 	rdsP = rdsprovider.New(res)
 	cacheP = cacheprovider.New(res)
 	eksP = eksprovider.New(res)
+	elbv2P = elbv2provider.New(res)
 	reg.Register(dnsP)
 	reg.Register(rdsP)
 	reg.Register(cacheP)
@@ -986,7 +997,7 @@ func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore)
 	reg.Register(cloudfrontprovider.New(res))
 	reg.Register(athenaprovider.New(res))
 	reg.Register(redshiftprovider.New(res))
-	reg.Register(elbv2provider.New(res))
+	reg.Register(elbv2P)
 	reg.Register(awsconfigprovider.New(res))
 	reg.Register(resourcegroupsprovider.New(res))
 	reg.Register(taggingprovider.New(res))

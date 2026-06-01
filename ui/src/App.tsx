@@ -1,6 +1,8 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useMeta } from './hooks/useMeta'
 import { Layout } from './components/Layout'
+import { AzureRoutes } from './services/azure'
+import { GCPRoutes } from './services/gcp'
 import { SQSRoutes } from './services/aws/sqs'
 import { LambdaRoutes } from './services/aws/lambda'
 import { LogsRoutes } from './services/aws/logs'
@@ -25,6 +27,10 @@ import { RDSRoutes } from './services/aws/rds'
 import { ElastiCacheRoutes } from './services/aws/elasticache'
 import { Route53Routes } from './services/aws/route53'
 import { CloudFormationRoutes } from './services/aws/cloudformation'
+import { KinesisRoutes } from './services/aws/kinesis'
+import { FirehoseRoutes } from './services/aws/firehose'
+import { SESRoutes } from './services/aws/ses'
+import { ELBv2Routes } from './services/aws/elbv2'
 import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
@@ -43,6 +49,32 @@ export default function App() {
       <div style={{ padding: '2rem', fontFamily: 'monospace', color: '#e53' }}>
         Could not connect to JaisCloud. Is the server running on port 4567?
       </div>
+    )
+  }
+
+  if (meta.cloud === 'azure') {
+    return (
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Navigate to="/azure" replace />} />
+          <Route path="/azure/*" element={<AzureRoutes />} />
+          <Route path="/admin" element={<AdminPanel />} />
+          <Route path="*" element={<Navigate to="/azure" replace />} />
+        </Routes>
+      </Layout>
+    )
+  }
+
+  if (meta.cloud === 'gcp') {
+    return (
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Navigate to="/gcp" replace />} />
+          <Route path="/gcp/*" element={<GCPRoutes />} />
+          <Route path="/admin" element={<AdminPanel />} />
+          <Route path="*" element={<Navigate to="/gcp" replace />} />
+        </Routes>
+      </Layout>
     )
   }
 
@@ -74,6 +106,10 @@ export default function App() {
         <Route path="/aws/elasticache/*" element={<ElastiCacheRoutes />} />
         <Route path="/aws/route53/*" element={<Route53Routes />} />
         <Route path="/aws/cloudformation/*" element={<CloudFormationRoutes />} />
+        <Route path="/aws/kinesis/*" element={<KinesisRoutes />} />
+        <Route path="/aws/firehose/*" element={<FirehoseRoutes />} />
+        <Route path="/aws/ses/*" element={<SESRoutes />} />
+        <Route path="/aws/elbv2/*" element={<ELBv2Routes />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

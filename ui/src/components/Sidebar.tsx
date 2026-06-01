@@ -236,6 +236,42 @@ const navTree: NavSection[] = [
       { label: 'Stacks', path: '/aws/cloudformation/stacks' },
     ],
   },
+  {
+    id: 'kinesis',
+    label: 'Kinesis',
+    basePath: '/aws/kinesis',
+    rootPath: '/aws/kinesis/streams',
+    children: [
+      { label: 'Data Streams', path: '/aws/kinesis/streams' },
+    ],
+  },
+  {
+    id: 'firehose',
+    label: 'Firehose',
+    basePath: '/aws/firehose',
+    rootPath: '/aws/firehose/streams',
+    children: [
+      { label: 'Delivery Streams', path: '/aws/firehose/streams' },
+    ],
+  },
+  {
+    id: 'ses',
+    label: 'SES',
+    basePath: '/aws/ses',
+    rootPath: '/aws/ses/identities',
+    children: [
+      { label: 'Identities', path: '/aws/ses/identities' },
+    ],
+  },
+  {
+    id: 'elbv2',
+    label: 'Elastic Load Balancing',
+    basePath: '/aws/elbv2',
+    rootPath: '/aws/elbv2/load-balancers',
+    children: [
+      { label: 'Load Balancers', path: '/aws/elbv2/load-balancers' },
+    ],
+  },
 ]
 
 interface Props {
