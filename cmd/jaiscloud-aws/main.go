@@ -309,18 +309,30 @@ func startCmd() *cobra.Command {
 			var uiServer *ui.UIServer
 			if cfg.UIEnabled {
 				uiProviders := &ui.AWSProviders{
-					Queue:  app.QueueP,
-					Object: app.ObjectP,
-					Table:  app.TableP,
-					Function: app.FuncP,
-					Logs:   app.LogsP,
-					Notif:  app.NotifP,
-					CW:     app.CWP,
-					Sfn:    app.SfnP,
-					IAM:    app.IAMP,
-					Key:    app.KeyP,
-					Secret: app.SecretP,
-					Param:  app.ParamP,
+					Queue:     app.QueueP,
+					Object:    app.ObjectP,
+					Table:     app.TableP,
+					Function:  app.FuncP,
+					Logs:      app.LogsP,
+					Notif:     app.NotifP,
+					CW:        app.CWP,
+					Sfn:       app.SfnP,
+					IAM:       app.IAMP,
+					Key:       app.KeyP,
+					Secret:    app.SecretP,
+					Param:     app.ParamP,
+					APIGW:     app.APIGWP,
+					Catalog:   app.GlueP,
+					EMR:       app.EMRP,
+					EMRC:      app.EMRCP,
+					Events:    app.EventsProvider.(*eventsprovider.EventBridgeProvider),
+					Compute:   app.ComputeP,
+					Container: app.ContainerP,
+					EKS:       app.EKSP,
+					RDS:       app.RDSP,
+					Cache:     app.CacheP,
+					DNS:       app.DNSP,
+					Stack:     app.StackP,
 				}
 				var uiErr error
 				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
@@ -469,12 +481,22 @@ type AppContext struct {
 	FuncP          *functionprovider.FunctionProvider
 	FirehoseP      *firehoseprovider.Provider
 	ComputeP       *compute.ComputeProvider
+	ContainerP     *containerprovider.ContainerProvider
 	TableP         *table.TableProvider
 	NotifP         *notification.SNSProvider
 	IAMP           *iamprovider.IAMProvider
 	KeyP           *keyprovider.KeyProvider
 	SecretP        *secretprovider.SecretProvider
 	ParamP         *paramprovider.ParameterProvider
+	APIGWP         *apigwprovider.GatewayProvider
+	GlueP          *catalog.GlueProvider
+	EMRP           *emrprovider.EMRProvider
+	EMRCP          *emrcontainersprovider.EMRContainersProvider
+	EKSP           *eksprovider.EKSProvider
+	RDSP           *rdsprovider.RelationalProvider
+	CacheP         *cacheprovider.CacheProvider
+	DNSP           *dns.DNSProvider
+	StackP         *stackprovider.StackProvider
 	Sched          *ebscheduler.Scheduler
 }
 
@@ -859,7 +881,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		Register(logsProvider).
 		Register(sesP).
 		Register(firehoseP)
-	registerStatelessProviders(registry, s.resources)
+	dnsP, rdsP, cacheP, eksP := registerStatelessProviders(registry, s.resources)
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
@@ -922,29 +944,42 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		FuncP:          funcP,
 		FirehoseP:      firehoseP,
 		ComputeP:       computeP,
+		ContainerP:     ecsP,
 		TableP:         tableProvider,
 		NotifP:         notifP,
 		IAMP:           iamP,
 		KeyP:           keyProv,
 		SecretP:        secretProv,
 		ParamP:         paramProv,
+		APIGWP:         apigwP,
+		GlueP:          glueP,
+		EMRP:           emrP,
+		EMRCP:          emrcP,
+		EKSP:           eksP,
+		RDSP:           rdsP,
+		CacheP:         cacheP,
+		DNSP:           dnsP,
+		StackP:         stackP,
 		Sched:          sched,
 	}
 }
 
 // registerStatelessProviders registers providers whose only constructor dependency
 // is a ResourceStore and that require no post-construction Set* wiring calls.
-// Adding a new AWS service with no cross-service dependencies requires one line
-// here rather than touching the buildRegistry body.
+// Returns the four providers that are also wired into the UI layer.
 //
 // Invariant: every provider listed here must have a New(store.ResourceStore)
 // constructor and must NOT require any post-construction Set* calls. If a provider
 // grows cross-service dependencies, move it into buildRegistry with explicit wiring.
-func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore) {
-	reg.Register(dns.New(res))
-	reg.Register(rdsprovider.New(res))
-	reg.Register(cacheprovider.New(res))
-	reg.Register(eksprovider.New(res))
+func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore) (dnsP *dns.DNSProvider, rdsP *rdsprovider.RelationalProvider, cacheP *cacheprovider.CacheProvider, eksP *eksprovider.EKSProvider) {
+	dnsP = dns.New(res)
+	rdsP = rdsprovider.New(res)
+	cacheP = cacheprovider.New(res)
+	eksP = eksprovider.New(res)
+	reg.Register(dnsP)
+	reg.Register(rdsP)
+	reg.Register(cacheP)
+	reg.Register(eksP)
 	reg.Register(cognitoprovider.New(res))
 	reg.Register(cognitoidentityprovider.New(res))
 	reg.Register(acmprovider.New(res))
@@ -955,6 +990,7 @@ func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore)
 	reg.Register(awsconfigprovider.New(res))
 	reg.Register(resourcegroupsprovider.New(res))
 	reg.Register(taggingprovider.New(res))
+	return
 }
 
 // cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)

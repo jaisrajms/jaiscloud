@@ -9,20 +9,27 @@ import (
 
 	"jaiscloud/internal/admin"
 	adminpanelui "jaiscloud/internal/aws/ui/adminpanel"
+	apigwui "jaiscloud/internal/aws/ui/apigw"
+	cfnui "jaiscloud/internal/aws/ui/cfn"
 	cloudwatchui "jaiscloud/internal/aws/ui/cloudwatch"
 	dynamodbui "jaiscloud/internal/aws/ui/dynamodb"
-	apigwui "jaiscloud/internal/aws/ui/apigw"
+	ec2ui "jaiscloud/internal/aws/ui/ec2"
+	ecsui "jaiscloud/internal/aws/ui/ecs"
+	eksui "jaiscloud/internal/aws/ui/eks"
+	elasticacheui "jaiscloud/internal/aws/ui/elasticache"
 	emrui "jaiscloud/internal/aws/ui/emr"
 	emroneksui "jaiscloud/internal/aws/ui/emroneks"
 	eventbridgeui "jaiscloud/internal/aws/ui/eventbridge"
 	glueui "jaiscloud/internal/aws/ui/glue"
 	iamui "jaiscloud/internal/aws/ui/iam"
-	sfnui "jaiscloud/internal/aws/ui/sfn"
 	kmsui "jaiscloud/internal/aws/ui/kms"
 	lambdaui "jaiscloud/internal/aws/ui/lambda"
 	logsui "jaiscloud/internal/aws/ui/logs"
+	rdsui "jaiscloud/internal/aws/ui/rds"
+	route53ui "jaiscloud/internal/aws/ui/route53"
 	s3ui "jaiscloud/internal/aws/ui/s3"
 	secretsmanagerui "jaiscloud/internal/aws/ui/secretsmanager"
+	sfnui "jaiscloud/internal/aws/ui/sfn"
 	snsui "jaiscloud/internal/aws/ui/sns"
 	sqsui "jaiscloud/internal/aws/ui/sqs"
 	ssmui "jaiscloud/internal/aws/ui/ssm"
@@ -140,6 +147,29 @@ func BuildRouter(
 		}
 		if providers.Param != nil {
 			r.Mount("/api/ui/v1/ssm", ssmui.BuildRouter(providers.Param, cfg))
+		}
+
+		// Phase 6 service routes
+		if providers.Compute != nil {
+			r.Mount("/api/ui/v1/ec2", ec2ui.BuildRouter(providers.Compute, cfg))
+		}
+		if providers.Container != nil {
+			r.Mount("/api/ui/v1/ecs", ecsui.BuildRouter(providers.Container, cfg))
+		}
+		if providers.EKS != nil {
+			r.Mount("/api/ui/v1/eks", eksui.BuildRouter(providers.EKS, cfg))
+		}
+		if providers.RDS != nil {
+			r.Mount("/api/ui/v1/rds", rdsui.BuildRouter(providers.RDS, cfg))
+		}
+		if providers.Cache != nil {
+			r.Mount("/api/ui/v1/elasticache", elasticacheui.BuildRouter(providers.Cache, cfg))
+		}
+		if providers.DNS != nil {
+			r.Mount("/api/ui/v1/route53", route53ui.BuildRouter(providers.DNS, cfg))
+		}
+		if providers.Stack != nil {
+			r.Mount("/api/ui/v1/cloudformation", cfnui.BuildRouter(providers.Stack, cfg))
 		}
 	})
 

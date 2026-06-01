@@ -18,6 +18,13 @@ import { GlueRoutes } from './services/aws/glue'
 import { EventBridgeRoutes } from './services/aws/eventbridge'
 import { APIGatewayRoutes } from './services/aws/apigw'
 import { SFNRoutes } from './services/aws/sfn'
+import { EC2Routes } from './services/aws/ec2'
+import { ECSRoutes } from './services/aws/ecs'
+import { EKSRoutes } from './services/aws/eks'
+import { RDSRoutes } from './services/aws/rds'
+import { ElastiCacheRoutes } from './services/aws/elasticache'
+import { Route53Routes } from './services/aws/route53'
+import { CloudFormationRoutes } from './services/aws/cloudformation'
 import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
@@ -60,6 +67,13 @@ export default function App() {
         <Route path="/aws/eventbridge/*" element={<EventBridgeRoutes />} />
         <Route path="/aws/apigateway/*" element={<APIGatewayRoutes />} />
         <Route path="/aws/sfn/*" element={<SFNRoutes />} />
+        <Route path="/aws/ec2/*" element={<EC2Routes />} />
+        <Route path="/aws/ecs/*" element={<ECSRoutes />} />
+        <Route path="/aws/eks/*" element={<EKSRoutes />} />
+        <Route path="/aws/rds/*" element={<RDSRoutes />} />
+        <Route path="/aws/elasticache/*" element={<ElastiCacheRoutes />} />
+        <Route path="/aws/route53/*" element={<Route53Routes />} />
+        <Route path="/aws/cloudformation/*" element={<CloudFormationRoutes />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

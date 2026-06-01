@@ -173,6 +173,69 @@ const navTree: NavSection[] = [
       { label: 'State Machines', path: '/aws/sfn/state-machines' },
     ],
   },
+  {
+    id: 'ec2',
+    label: 'EC2',
+    basePath: '/aws/ec2',
+    rootPath: '/aws/ec2/instances',
+    children: [
+      { label: 'Instances', path: '/aws/ec2/instances' },
+    ],
+  },
+  {
+    id: 'ecs',
+    label: 'ECS',
+    basePath: '/aws/ecs',
+    rootPath: '/aws/ecs/clusters',
+    children: [
+      { label: 'Clusters', path: '/aws/ecs/clusters' },
+    ],
+  },
+  {
+    id: 'eks',
+    label: 'EKS',
+    basePath: '/aws/eks',
+    rootPath: '/aws/eks/clusters',
+    children: [
+      { label: 'Clusters', path: '/aws/eks/clusters' },
+    ],
+  },
+  {
+    id: 'rds',
+    label: 'RDS',
+    basePath: '/aws/rds',
+    rootPath: '/aws/rds/instances',
+    children: [
+      { label: 'Instances', path: '/aws/rds/instances' },
+    ],
+  },
+  {
+    id: 'elasticache',
+    label: 'ElastiCache',
+    basePath: '/aws/elasticache',
+    rootPath: '/aws/elasticache/clusters',
+    children: [
+      { label: 'Clusters', path: '/aws/elasticache/clusters' },
+    ],
+  },
+  {
+    id: 'route53',
+    label: 'Route 53',
+    basePath: '/aws/route53',
+    rootPath: '/aws/route53/zones',
+    children: [
+      { label: 'Hosted Zones', path: '/aws/route53/zones' },
+    ],
+  },
+  {
+    id: 'cloudformation',
+    label: 'CloudFormation',
+    basePath: '/aws/cloudformation',
+    rootPath: '/aws/cloudformation/stacks',
+    children: [
+      { label: 'Stacks', path: '/aws/cloudformation/stacks' },
+    ],
+  },
 ]
 
 interface Props {
