@@ -24,3 +24,12 @@ export function filterLogEvents(groupName, req) {
         logGroupName: groupName,
     });
 }
+export function startQuery(req) {
+    return api.post(`${BASE}/queries`, req);
+}
+export function getQueryResults(queryId) {
+    return api.get(`${BASE}/queries/${encodeURIComponent(queryId)}`);
+}
+export function stopQuery(queryId) {
+    return api.delete(`${BASE}/queries/${encodeURIComponent(queryId)}`);
+}

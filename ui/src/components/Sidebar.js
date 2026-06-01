@@ -160,6 +160,105 @@ const navTree = [
             { label: 'State Machines', path: '/aws/sfn/state-machines' },
         ],
     },
+    {
+        id: 'ec2',
+        label: 'EC2',
+        basePath: '/aws/ec2',
+        rootPath: '/aws/ec2/instances',
+        children: [
+            { label: 'Instances', path: '/aws/ec2/instances' },
+        ],
+    },
+    {
+        id: 'ecs',
+        label: 'ECS',
+        basePath: '/aws/ecs',
+        rootPath: '/aws/ecs/clusters',
+        children: [
+            { label: 'Clusters', path: '/aws/ecs/clusters' },
+        ],
+    },
+    {
+        id: 'eks',
+        label: 'EKS',
+        basePath: '/aws/eks',
+        rootPath: '/aws/eks/clusters',
+        children: [
+            { label: 'Clusters', path: '/aws/eks/clusters' },
+        ],
+    },
+    {
+        id: 'rds',
+        label: 'RDS',
+        basePath: '/aws/rds',
+        rootPath: '/aws/rds/instances',
+        children: [
+            { label: 'Instances', path: '/aws/rds/instances' },
+        ],
+    },
+    {
+        id: 'elasticache',
+        label: 'ElastiCache',
+        basePath: '/aws/elasticache',
+        rootPath: '/aws/elasticache/clusters',
+        children: [
+            { label: 'Clusters', path: '/aws/elasticache/clusters' },
+        ],
+    },
+    {
+        id: 'route53',
+        label: 'Route 53',
+        basePath: '/aws/route53',
+        rootPath: '/aws/route53/zones',
+        children: [
+            { label: 'Hosted Zones', path: '/aws/route53/zones' },
+        ],
+    },
+    {
+        id: 'cloudformation',
+        label: 'CloudFormation',
+        basePath: '/aws/cloudformation',
+        rootPath: '/aws/cloudformation/stacks',
+        children: [
+            { label: 'Stacks', path: '/aws/cloudformation/stacks' },
+        ],
+    },
+    {
+        id: 'kinesis',
+        label: 'Kinesis',
+        basePath: '/aws/kinesis',
+        rootPath: '/aws/kinesis/streams',
+        children: [
+            { label: 'Data Streams', path: '/aws/kinesis/streams' },
+        ],
+    },
+    {
+        id: 'firehose',
+        label: 'Firehose',
+        basePath: '/aws/firehose',
+        rootPath: '/aws/firehose/streams',
+        children: [
+            { label: 'Delivery Streams', path: '/aws/firehose/streams' },
+        ],
+    },
+    {
+        id: 'ses',
+        label: 'SES',
+        basePath: '/aws/ses',
+        rootPath: '/aws/ses/identities',
+        children: [
+            { label: 'Identities', path: '/aws/ses/identities' },
+        ],
+    },
+    {
+        id: 'elbv2',
+        label: 'Elastic Load Balancing',
+        basePath: '/aws/elbv2',
+        rootPath: '/aws/elbv2/load-balancers',
+        children: [
+            { label: 'Load Balancers', path: '/aws/elbv2/load-balancers' },
+        ],
+    },
 ];
 export function Sidebar({ open }) {
     const { pathname } = useLocation();
