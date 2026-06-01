@@ -25,6 +25,16 @@ dist/
 *.test
 coverage.out
 
+# UI — npm/pnpm dependencies
+node_modules/
+
+# UI — TypeScript compiled output (.js files emitted next to .ts sources)
+ui/src/**/*.js
+ui/src/**/*.js.map
+
+# UI — TypeScript incremental build cache
+*.tsbuildinfo
+
 # Shared libraries / plugins
 *.so
 *.dylib
