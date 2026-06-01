@@ -11,10 +11,13 @@ import (
 	adminpanelui "jaiscloud/internal/aws/ui/adminpanel"
 	cloudwatchui "jaiscloud/internal/aws/ui/cloudwatch"
 	dynamodbui "jaiscloud/internal/aws/ui/dynamodb"
+	apigwui "jaiscloud/internal/aws/ui/apigw"
 	emrui "jaiscloud/internal/aws/ui/emr"
 	emroneksui "jaiscloud/internal/aws/ui/emroneks"
+	eventbridgeui "jaiscloud/internal/aws/ui/eventbridge"
 	glueui "jaiscloud/internal/aws/ui/glue"
 	iamui "jaiscloud/internal/aws/ui/iam"
+	sfnui "jaiscloud/internal/aws/ui/sfn"
 	kmsui "jaiscloud/internal/aws/ui/kms"
 	lambdaui "jaiscloud/internal/aws/ui/lambda"
 	logsui "jaiscloud/internal/aws/ui/logs"
@@ -101,6 +104,17 @@ func BuildRouter(
 		// Phase 3 service routes
 		if providers.CW != nil {
 			r.Mount("/api/ui/v1/cloudwatch", cloudwatchui.BuildRouter(providers.CW, cfg))
+		}
+
+		// Phase 5 service routes
+		if providers.Events != nil {
+			r.Mount("/api/ui/v1/eventbridge", eventbridgeui.BuildRouter(providers.Events, cfg))
+		}
+		if providers.APIGW != nil {
+			r.Mount("/api/ui/v1/apigateway", apigwui.BuildRouter(providers.APIGW, cfg))
+		}
+		if providers.Sfn != nil {
+			r.Mount("/api/ui/v1/sfn", sfnui.BuildRouter(providers.Sfn, cfg))
 		}
 
 		// Phase 4 service routes

@@ -145,6 +145,34 @@ const navTree: NavSection[] = [
       { label: 'Crawlers', path: '/aws/glue/crawlers' },
     ],
   },
+  {
+    id: 'eventbridge',
+    label: 'EventBridge',
+    basePath: '/aws/eventbridge',
+    rootPath: '/aws/eventbridge/rules',
+    children: [
+      { label: 'Rules', path: '/aws/eventbridge/rules' },
+      { label: 'Event Buses', path: '/aws/eventbridge/buses' },
+    ],
+  },
+  {
+    id: 'apigateway',
+    label: 'API Gateway',
+    basePath: '/aws/apigateway',
+    rootPath: '/aws/apigateway/apis',
+    children: [
+      { label: 'REST APIs', path: '/aws/apigateway/apis' },
+    ],
+  },
+  {
+    id: 'sfn',
+    label: 'Step Functions',
+    basePath: '/aws/sfn',
+    rootPath: '/aws/sfn/state-machines',
+    children: [
+      { label: 'State Machines', path: '/aws/sfn/state-machines' },
+    ],
+  },
 ]
 
 interface Props {

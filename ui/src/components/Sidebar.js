@@ -53,6 +53,111 @@ const navTree = [
         rootPath: '/aws/logs/groups',
         children: [
             { label: 'Log Groups', path: '/aws/logs/groups' },
+            { label: 'Insights', path: '/aws/logs/insights' },
+        ],
+    },
+    {
+        id: 'cloudwatch',
+        label: 'CloudWatch',
+        basePath: '/aws/cloudwatch',
+        rootPath: '/aws/cloudwatch/metrics',
+        children: [
+            { label: 'Metrics', path: '/aws/cloudwatch/metrics' },
+            { label: 'Alarms', path: '/aws/cloudwatch/alarms' },
+            { label: 'Dashboards', path: '/aws/cloudwatch/dashboards' },
+        ],
+    },
+    {
+        id: 'kms',
+        label: 'KMS',
+        basePath: '/aws/kms',
+        rootPath: '/aws/kms',
+        children: [
+            { label: 'Keys', path: '/aws/kms' },
+        ],
+    },
+    {
+        id: 'secretsmanager',
+        label: 'Secrets Manager',
+        basePath: '/aws/secretsmanager',
+        rootPath: '/aws/secretsmanager',
+        children: [
+            { label: 'Secrets', path: '/aws/secretsmanager' },
+        ],
+    },
+    {
+        id: 'ssm',
+        label: 'SSM',
+        basePath: '/aws/ssm',
+        rootPath: '/aws/ssm',
+        children: [
+            { label: 'Parameters', path: '/aws/ssm' },
+        ],
+    },
+    {
+        id: 'iam',
+        label: 'IAM',
+        basePath: '/aws/iam',
+        rootPath: '/aws/iam',
+        children: [
+            { label: 'Roles', path: '/aws/iam' },
+        ],
+    },
+    {
+        id: 'emr',
+        label: 'EMR',
+        basePath: '/aws/emr',
+        rootPath: '/aws/emr/clusters',
+        children: [
+            { label: 'Clusters', path: '/aws/emr/clusters' },
+        ],
+    },
+    {
+        id: 'emr-containers',
+        label: 'EMR on EKS',
+        basePath: '/aws/emr-containers',
+        rootPath: '/aws/emr-containers/clusters',
+        children: [
+            { label: 'Virtual Clusters', path: '/aws/emr-containers/clusters' },
+        ],
+    },
+    {
+        id: 'glue',
+        label: 'Glue',
+        basePath: '/aws/glue',
+        rootPath: '/aws/glue/databases',
+        children: [
+            { label: 'Databases', path: '/aws/glue/databases' },
+            { label: 'Jobs', path: '/aws/glue/jobs' },
+            { label: 'Crawlers', path: '/aws/glue/crawlers' },
+        ],
+    },
+    {
+        id: 'eventbridge',
+        label: 'EventBridge',
+        basePath: '/aws/eventbridge',
+        rootPath: '/aws/eventbridge/rules',
+        children: [
+            { label: 'Rules', path: '/aws/eventbridge/rules' },
+            { label: 'Event Buses', path: '/aws/eventbridge/buses' },
+        ],
+    },
+    {
+        id: 'apigateway',
+        label: 'API Gateway',
+        basePath: '/aws/apigateway',
+        rootPath: '/aws/apigateway/apis',
+        children: [
+            { label: 'REST APIs', path: '/aws/apigateway/apis' },
+        ],
+    },
+    {
+        id: 'sfn',
+        label: 'Step Functions',
+        basePath: '/aws/sfn',
+        rootPath: '/aws/sfn/state-machines',
+        children: [
+            { label: 'State Machines', path: '/aws/sfn/state-machines' },
         ],
     },
 ];

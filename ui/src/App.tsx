@@ -15,6 +15,9 @@ import { CloudWatchRoutes } from './services/aws/cloudwatch'
 import { EMRRoutes } from './services/aws/emr'
 import { EMRContainersRoutes } from './services/aws/emroneks'
 import { GlueRoutes } from './services/aws/glue'
+import { EventBridgeRoutes } from './services/aws/eventbridge'
+import { APIGatewayRoutes } from './services/aws/apigw'
+import { SFNRoutes } from './services/aws/sfn'
 import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
@@ -54,6 +57,9 @@ export default function App() {
         <Route path="/aws/emr/*" element={<EMRRoutes />} />
         <Route path="/aws/emr-containers/*" element={<EMRContainersRoutes />} />
         <Route path="/aws/glue/*" element={<GlueRoutes />} />
+        <Route path="/aws/eventbridge/*" element={<EventBridgeRoutes />} />
+        <Route path="/aws/apigateway/*" element={<APIGatewayRoutes />} />
+        <Route path="/aws/sfn/*" element={<SFNRoutes />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
