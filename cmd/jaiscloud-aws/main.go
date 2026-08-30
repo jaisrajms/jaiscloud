@@ -835,10 +835,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		k8sExec.SetCodeLoader(funcP)
 		k8sExec.SetLogsAPI(logsProvider)
 	}
-	// Wire CW Logs ingestor into FunctionProvider so all invocations (including mock)
-	// write START/END/REPORT platform logs to /aws/lambda/{name}.
-	funcP.SetLogsAPI(logsProvider)
-
 	// Wire ECS executor.
 	ecsMode, _ := config.ExecutorMode("ecs", "mock")
 	var ecsExec ecsexec.Executor
