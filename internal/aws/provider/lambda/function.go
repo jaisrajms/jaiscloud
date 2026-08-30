@@ -16,6 +16,7 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
 	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -37,6 +38,7 @@ type FunctionProvider struct {
 	resources          store.ResourceStore
 	executor           lambdaexec.LambdaExecutor
 	blobs              blobfs.BlobStore
+	logsAPI            logstream.Ingestor
 	concurrencyLimit   int64
 	syncPayloadMax     int64
 	asyncPayloadMax    int64
@@ -44,6 +46,10 @@ type FunctionProvider struct {
 	activeInvocations  atomic.Int64
 	asyncQueue         *AsyncQueue
 }
+
+// SetLogsAPI wires a CloudWatch Logs ingestor so every Lambda invocation writes
+// START / END / REPORT platform log lines to /aws/lambda/{name}.
+func (p *FunctionProvider) SetLogsAPI(l logstream.Ingestor) { p.logsAPI = l }
 
 func New(resources store.ResourceStore) *FunctionProvider {
 	p := &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}, blobs: blobfs.NewMemoryBlobStore()}
@@ -761,15 +767,51 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		}, nil
 	}
 
+	// Write platform log lines (START/END/REPORT) to CloudWatch Logs and build LogTail.
+	requestID := reqctx.GetRequestID(ctx)
+	if requestID == "" {
+		requestID = "00000000-0000-0000-0000-000000000000"
+	}
+	platformLines := buildPlatformLogs(requestID, cfg.MemorySize)
+	if p.logsAPI != nil {
+		logGroupName := "/aws/lambda/" + cfg.FunctionName
+		date := clock.RealNow().Format("2006/01/02")
+		logStreamName := fmt.Sprintf("%s/[$LATEST]%s", date, requestID)
+		_ = p.logsAPI.InternalCreateLogGroup(ctx, logGroupName)
+		events := make([]logstream.Event, len(platformLines))
+		now := clock.RealNow().UnixMilli()
+		for i, line := range platformLines {
+			events[i] = logstream.Event{Timestamp: now, Message: line}
+		}
+		_ = p.logsAPI.InternalPutEvents(ctx, logGroupName, logStreamName, events)
+	}
+
 	respData := map[string]any{"_payload": result.Payload}
-	if strings.EqualFold(logType, "Tail") && len(result.LogTail) > 0 {
-		respData["LogResult"] = base64.StdEncoding.EncodeToString(result.LogTail)
+	if strings.EqualFold(logType, "Tail") {
+		tail := result.LogTail
+		if len(tail) == 0 {
+			tail = []byte(strings.Join(platformLines, "\n") + "\n")
+		}
+		respData["LogResult"] = base64.StdEncoding.EncodeToString(tail)
 	}
 
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
 		Data:       respData,
 	}, nil
+}
+
+// buildPlatformLogs returns Lambda-style START / END / REPORT lines for an invocation.
+func buildPlatformLogs(requestID string, memMB int) []string {
+	if memMB <= 0 {
+		memMB = 128
+	}
+	return []string{
+		fmt.Sprintf("START RequestId: %s Version: $LATEST", requestID),
+		fmt.Sprintf("END RequestId: %s", requestID),
+		fmt.Sprintf("REPORT RequestId: %s\tDuration: 1.00 ms\tBilled Duration: 1 ms\tMemory Size: %d MB\tMax Memory Used: %d MB",
+			requestID, memMB, memMB),
+	}
 }
 
 // ─── Versions ─────────────────────────────────────────────────────────────────

@@ -16,14 +16,21 @@ import (
 
 type Config struct {
 	Port int
+	// UI Portal
+	UIEnabled   bool   // --ui / JAISCLOUD_UI
+	UIPort      int    // --ui-port / JAISCLOUD_UI_PORT (default 4567)
+	UIOpen      bool   // --ui-open / JAISCLOUD_UI_OPEN
+	UIDevMode   bool   // JAISCLOUD_UI_DEV (dev mode: relaxed CORS, verbose errors)
+	DevUIOrigin string // JAISCLOUD_DEV_UI_ORIGIN (default "http://localhost:5173")
 	// Ephemeral disables all state persistence. State is lost on process exit.
 	// Mutually exclusive with DSN. Intended for CI, unit tests, and throw-away runs.
 	Ephemeral bool
 	Cloud     model.Cloud // Cloud provider to emulate: aws (default), azure, gcp
 	LogLevel  string
 	Region    string
-	AccountID string
-	DSN       string // PostgreSQL DSN; when set all state is stored in PostgreSQL
+	AccountID     string
+	ExtraAccounts []string // additional account IDs available in the UI; JAISCLOUD_EXTRA_ACCOUNTS=111111111111,222222222222
+	DSN           string   // PostgreSQL DSN; when set all state is stored in PostgreSQL
 	// BlobDir is deprecated; use DataDir instead. Kept for backward compatibility.
 	BlobDir string // Deprecated: use DataDir
 	DataDir string // Root data directory for state.json saves and named snapshots (default: ~/.jaiscloud/<binary>)
@@ -119,10 +126,16 @@ func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
 
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
+	viper.SetDefault("ui", false)
+	viper.SetDefault("ui_port", 4567)
+	viper.SetDefault("ui_open", false)
+	viper.SetDefault("ui_dev", false)
+	viper.SetDefault("dev_ui_origin", "http://localhost:5173")
 	viper.SetDefault("ephemeral", false)
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("region", "us-east-1")
 	viper.SetDefault("account_id", "000000000000")
+	viper.SetDefault("extra_accounts", "")
 	viper.SetDefault("dsn", "")
 	if home, err := os.UserHomeDir(); err == nil {
 		viper.SetDefault("blob_dir", filepath.Join(home, ".jaiscloud", "blobs"))
@@ -168,10 +181,16 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Port:                viper.GetInt("port"),
+		UIEnabled:           viper.GetBool("ui"),
+		UIPort:              viper.GetInt("ui_port"),
+		UIOpen:              viper.GetBool("ui_open"),
+		UIDevMode:           viper.GetBool("ui_dev"),
+		DevUIOrigin:         viper.GetString("dev_ui_origin"),
 		Ephemeral:           viper.GetBool("ephemeral"),
 		LogLevel:            viper.GetString("log_level"),
 		Region:              viper.GetString("region"),
 		AccountID:           viper.GetString("account_id"),
+		ExtraAccounts:       splitCSV(viper.GetString("extra_accounts")),
 		DSN:                 viper.GetString("dsn"),
 		BlobDir:             viper.GetString("blob_dir"),
 		DataDir:             viper.GetString("data_dir"),

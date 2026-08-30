@@ -53,9 +53,9 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build test docker clean \
+.PHONY: lint lint-pagination help build build-ui test docker clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
-        stop-server up-docker down-docker up-k8s down-k8s \
+        server-ui stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
         test-integration \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
@@ -107,6 +107,10 @@ build-all: $(addprefix build-,$(CLOUDS))  ## Compile all cloud binaries (aws, az
 build-%:  ## Compile jaiscloud-<cloud>
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o jaiscloud-$* ./cmd/jaiscloud-$*/
 
+build-ui: ## Build frontend assets then compile jaiscloud-aws with embedded UI (-tags ui)
+	pnpm --dir ui run build
+	CGO_ENABLED=0 go build -tags ui -trimpath -ldflags="-s -w" -o jaiscloud-aws ./cmd/jaiscloud-aws/
+
 docker: docker-aws  ## Build jaiscloud-aws Docker image (default)
 
 docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
@@ -140,6 +144,10 @@ test: ## Run all unit tests with the race detector  (no server needed)
 	go test -race ./internal/...
 
 ##@ Server — foreground (Ctrl-C to stop)
+
+server-ui: build-ui ## Build with embedded UI and start with --ui --ui-open (opens browser)
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-aws start --ui --ui-open
 
 server-memory: build ## Default mode: memory stores + periodic state.json saves, mock executors
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \

@@ -318,6 +318,63 @@ func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, acco
 }
 
 // SetQueueRetention is a no-op for the postgres store: MessageRetentionPeriod
+func (s *PostgresSQSMessageStore) Peek(ctx context.Context, account, region, queueURL string, offset, limit int) ([]SQSMessage, int, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM jc_sqs_messages WHERE account_id=$1 AND region=$2 AND queue_url=$3`,
+		account, region, queueURL,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("peek count: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, receipt_handle, body, md5_of_body, group_id, dedup_id,
+		       sequence_number, sent_at, delay_until, visible_at,
+		       receive_count, first_received_at, msg_attributes
+		FROM jc_sqs_messages
+		WHERE account_id = $1 AND region = $2 AND queue_url = $3
+		ORDER BY sent_at
+		LIMIT $4 OFFSET $5
+	`, account, region, queueURL, limit, offset)
+	if err != nil {
+		return nil, total, fmt.Errorf("peek query: %w", err)
+	}
+	defer rows.Close()
+
+	var msgs []SQSMessage
+	for rows.Next() {
+		var m SQSMessage
+		var delayUntil, visibleAt *time.Time
+		var firstReceivedAt *time.Time
+		var attrsJSON []byte
+		if err := rows.Scan(&m.MessageID, &m.ReceiptHandle, &m.Body, &m.MD5OfBody,
+			&m.GroupID, &m.DeduplicationID, &m.SequenceNumber,
+			&m.SentAt, &delayUntil, &visibleAt,
+			&m.ReceiveCount, &firstReceivedAt, &attrsJSON); err != nil {
+			return nil, total, fmt.Errorf("peek scan: %w", err)
+		}
+		if len(attrsJSON) > 0 && string(attrsJSON) != "null" {
+			_ = json.Unmarshal(attrsJSON, &m.MessageAttributes)
+		}
+		if delayUntil != nil {
+			m.DelayUntil = *delayUntil
+		}
+		if visibleAt != nil {
+			m.VisibleAt = *visibleAt
+		}
+		m.FirstReceivedAt = firstReceivedAt
+		m.QueueURL = queueURL
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, total, fmt.Errorf("peek rows: %w", err)
+	}
+	return msgs, total, nil
+}
+
 // is read directly from jc_resources, where QueueProvider persists it on
 // CreateQueue / SetQueueAttributes. The single source of truth lives there.
 func (s *PostgresSQSMessageStore) SetQueueRetention(_ context.Context, _, _, _ string, _ int) error {
