@@ -1059,14 +1059,32 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 
 	// Retention check first: a held or retention-active object cannot be
 	// deleted (GCS returns PERMISSION_DENIED).
-	if meta, err := p.objects.GetObjectMeta(ctx, bucket, object); err == nil {
-		if objectProtected(meta) {
-			return nil, model.NewProviderError("PermissionDenied", "Object is under hold or retention and cannot be deleted", 403)
+	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return nil, model.NewProviderError("NotFound", "object not found", 404)
 		}
+		return nil, err
+	}
+	if objectProtected(meta) {
+		return nil, model.NewProviderError("PermissionDenied", "Object is under hold or retention and cannot be deleted", 403)
 	}
 
-	// Collect every generation's blob key before deleting metadata, so the
-	// bytes can be removed too.
+	if p.bucketVersioned(ctx, bucket) {
+		// Versioned bucket: delete only the live generation, leaving a
+		// non-live tombstone that appears in ?versions=true listings.
+		if _, err := p.objects.TombstoneObjectMeta(ctx, bucket, object); err != nil {
+			if errors.Is(err, gcs.ErrNoSuchObject) {
+				return nil, model.NewProviderError("NotFound", "object not found", 404)
+			}
+			return nil, err
+		}
+		_ = p.blobs.Delete(ctx, blobsNamespace, blobKey(bucket, object, meta.Generation))
+		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+	}
+
+	// Non-versioned bucket: hard-delete every generation (there should only
+	// be one) and its bytes.
 	var blobKeys []string
 	if gens, err := p.objects.ListObjectVersions(ctx, bucket); err == nil {
 		for _, m := range gens {
@@ -1075,7 +1093,6 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 			}
 		}
 	}
-
 	if err := p.objects.DeleteObjectMeta(ctx, bucket, object); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, model.NewProviderError("NotFound", "object not found", 404)
@@ -1086,6 +1103,20 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// bucketVersioned reports whether versioning is enabled on the bucket.
+func (p *Provider) bucketVersioned(ctx context.Context, bucket string) bool {
+	bmeta, err := p.objects.GetBucket(ctx, bucket)
+	if err != nil {
+		return false
+	}
+	if v, ok := bmeta["versioning"].(map[string]any); ok {
+		if en, _ := v["enabled"].(bool); en {
+			return true
+		}
+	}
+	return false
 }
 
 // objectProtected reports whether an object's holds or active retention block

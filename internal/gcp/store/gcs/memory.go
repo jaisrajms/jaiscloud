@@ -200,6 +200,29 @@ func (s *MemoryObjectStore) DeleteObjectMeta(_ context.Context, bucket, name str
 	return nil
 }
 
+func (s *MemoryObjectStore) TombstoneObjectMeta(_ context.Context, bucket, name string) (ObjectMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	objs, ok := s.objects[bucket]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	gens, ok := objs[name]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	// The live generation is the last appended one without a TimeDeleted mark.
+	for i := len(gens) - 1; i >= 0; i-- {
+		if gens[i].TimeDeleted == nil {
+			now := clock.Now()
+			gens[i].TimeDeleted = &now
+			objs[name] = gens
+			return gens[i], nil
+		}
+	}
+	return ObjectMeta{}, ErrNoSuchObject
+}
+
 func (s *MemoryObjectStore) ListObjects(_ context.Context, bucket string) ([]ObjectMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -103,6 +103,10 @@ type ObjectStore interface {
 	GetObjectGeneration(ctx context.Context, bucket, name, generation string) (ObjectMeta, error)
 	// DeleteObjectMeta removes every generation of the object.
 	DeleteObjectMeta(ctx context.Context, bucket, name string) error
+	// TombstoneObjectMeta marks the live generation non-live (timeDeleted set)
+	// and returns it, leaving any prior non-live generations untouched. Used
+	// for versioned-object deletion so a non-live tombstone is retained.
+	TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error)
 	// ListObjects returns the live generation of every object in the bucket,
 	// sorted by name. Prefix, delimiter, and pageToken pagination are applied
 	// by the provider.

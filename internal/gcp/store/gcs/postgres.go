@@ -97,6 +97,17 @@ func (s *PostgresObjectStore) DeleteBucket(ctx context.Context, name string) err
 	return nil
 }
 
+// ensureBucketExists returns ErrNoSuchBucket when the named bucket is absent,
+// guarding PutObjectMeta/PutObjectGeneration against orphan object rows.
+func ensureBucketExists(ctx context.Context, tx pgx.Tx, name string) error {
+	var one int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM jc_gcs_buckets WHERE name=$1`, name).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoSuchBucket
+	}
+	return err
+}
+
 func (s *PostgresObjectStore) ListBuckets(ctx context.Context, projectID string) ([]map[string]any, error) {
 	var rows pgx.Rows
 	var err error
@@ -133,6 +144,9 @@ func (s *PostgresObjectStore) PutObjectMeta(ctx context.Context, bucket, name st
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := ensureBucketExists(ctx, tx, bucket); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name); err != nil {
 		return err
 	}
@@ -153,6 +167,9 @@ func (s *PostgresObjectStore) PutObjectGeneration(ctx context.Context, bucket, n
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := ensureBucketExists(ctx, tx, bucket); err != nil {
+		return err
+	}
 	now := clock.Now()
 	if _, err := tx.Exec(ctx, `
 		UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL
@@ -259,8 +276,49 @@ func (s *PostgresObjectStore) GetObjectGeneration(ctx context.Context, bucket, n
 }
 
 func (s *PostgresObjectStore) DeleteObjectMeta(ctx context.Context, bucket, name string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name)
-	return err
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchObject
+	}
+	return nil
+}
+
+func (s *PostgresObjectStore) TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	defer tx.Rollback(ctx)
+	row := tx.QueryRow(ctx, `
+		SELECT `+objectCols+`
+		FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL
+		ORDER BY generation::bigint DESC LIMIT 1
+	`, bucket, name)
+	m, err := scanObject(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	now := clock.Now()
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND generation=$4
+	`, bucket, name, now, m.Generation)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ObjectMeta{}, err
+	}
+	m.TimeDeleted = &now
+	return m, nil
 }
 
 func (s *PostgresObjectStore) ListObjects(ctx context.Context, bucket string) ([]ObjectMeta, error) {
