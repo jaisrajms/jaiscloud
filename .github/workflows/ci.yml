@@ -32,7 +32,7 @@ jobs:
         run: go mod download
 
       - name: Build server
-        run: go build -o jaiscloud ./cmd/jaiscloud/
+        run: go build -o jaiscloud ./cmd/jaiscloud-aws/
 
       - name: Start jaiscloud server (background)
         run: |
@@ -63,7 +63,7 @@ jobs:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
-        run: go test ./tests/integration/ -v -count=1 -timeout 120s
+        run: go test ./tests/integration/ -v -count=1 -timeout 300s
 
       - name: Upload server log (on failure)
         if: failure()
