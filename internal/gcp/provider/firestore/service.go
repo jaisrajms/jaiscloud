@@ -86,7 +86,7 @@ type readSet struct {
 func newTxnID() []byte {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return []byte(time.Now().Format(time.RFC3339Nano))
+		return []byte(clock.Now().Format(time.RFC3339Nano))
 	}
 	return b
 }

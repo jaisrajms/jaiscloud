@@ -173,6 +173,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(storageP)
 			adminHandler.RegisterResetter(firestoreP)
 			adminHandler.RegisterResetter(firestoreGRPC)
+			adminHandler.RegisterPostRestoreHook(storageP)
 			if snap, ok := stores.resources.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("resources", snap)
 			}

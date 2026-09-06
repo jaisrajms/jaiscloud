@@ -129,6 +129,17 @@ func (p *Provider) SeedGeneration(ctx context.Context) {
 	p.seedGeneration(ctx)
 }
 
+// Name satisfies admin.PostRestoreHook.
+func (p *Provider) Name() string { return "gcs-generation" }
+
+// OnRestore re-seeds the generation counter after an admin import so that
+// generations stay monotonic past the highest generation present in the
+// imported snapshot (mirrors the startup-time SeedGeneration call).
+func (p *Provider) OnRestore(ctx context.Context) error {
+	p.SeedGeneration(ctx)
+	return nil
+}
+
 // nextGen returns a unique, monotonically-increasing object generation.
 func (p *Provider) nextGen() string {
 	p.genMu.Lock()
