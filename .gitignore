@@ -48,3 +48,6 @@ vendor/
 
 # Local SEO / personal notes (not for repo)
 SEO_NEXT_STEPS.md
+
+.astra/
+.astraignore
