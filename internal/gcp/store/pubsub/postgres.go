@@ -76,13 +76,38 @@ func (s *PostgresMessages) List(ctx context.Context, topic string) ([]Message, e
 }
 
 // Pull atomically claims eligible messages using FOR UPDATE SKIP LOCKED
-// (mirrors SQS Receive).
+// (mirrors SQS Receive), applying the same orderingKey FIFO gating as the
+// memory store: only the earliest eligible message in each ordering-key group
+// is claimed in a single pull.
 func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Ordering-key groups that currently have an earlier in-flight message
+	// (claimed but within its ack deadline) gate delivery of later messages.
+	inFlightGroups := map[string]bool{}
+	krows, err := tx.Query(ctx, `
+		SELECT DISTINCT ordering_key FROM jc_pubsub_messages
+		WHERE topic = $1 AND ordering_key <> '' AND visible_at > $2
+	`, topic, now)
+	if err != nil {
+		return nil, err
+	}
+	for krows.Next() {
+		var k string
+		if err := krows.Scan(&k); err != nil {
+			krows.Close()
+			return nil, err
+		}
+		inFlightGroups[k] = true
+	}
+	krows.Close()
+	if err := krows.Err(); err != nil {
+		return nil, err
+	}
 
 	rows, err := tx.Query(ctx, `
 		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key, kms_key_name, wrapped_dek
@@ -91,13 +116,12 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 		  AND (visible_at IS NULL OR visible_at <= $2)
 		  AND publish_time > $2 - make_interval(secs => $3)
 		ORDER BY publish_time
-		LIMIT $4
 		FOR UPDATE SKIP LOCKED
-	`, topic, now, retentionSec, maxMessages)
+	`, topic, now, retentionSec)
 	if err != nil {
 		return nil, err
 	}
-	var out []Message
+	var candidates []Message
 	for rows.Next() {
 		var m Message
 		var attrs []byte
@@ -107,13 +131,28 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 		}
 		json.Unmarshal(attrs, &m.Attributes)
 		m.Topic = topic
-		m.VisibleAt = now.Add(time.Duration(ackDeadlineSec) * time.Second)
-		m.DeliveryAttempt++
-		out = append(out, m)
+		candidates = append(candidates, m)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	var out []Message
+	for _, m := range candidates {
+		if len(out) >= maxMessages {
+			break
+		}
+		// FIFO: skip if an earlier message in the same ordering-key group is in-flight.
+		if m.OrderingKey != "" && inFlightGroups[m.OrderingKey] {
+			continue
+		}
+		m.VisibleAt = now.Add(time.Duration(ackDeadlineSec) * time.Second)
+		m.DeliveryAttempt++
+		if m.OrderingKey != "" {
+			inFlightGroups[m.OrderingKey] = true
+		}
+		out = append(out, m)
 	}
 
 	for _, m := range out {

@@ -23,6 +23,9 @@ import (
 	"jaiscloud/internal/gcp/crypto"
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
+	grpckms "jaiscloud/internal/gcp/grpc/kms"
+	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
+	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
@@ -43,6 +46,10 @@ import (
 	"jaiscloud/internal/store"
 
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
+	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
@@ -138,8 +145,22 @@ func startCmd() *cobra.Command {
 			// registry.
 			grpcPort, _ := cmd.Flags().GetInt("grpc-port")
 			firestoreGRPC := grpcfirestore.NewService(firestoreP.Service, cfg.ProjectID)
+			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
+			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
+			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
 			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
+			pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
+			pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
+			kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
+			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
+			// TestIamPermissions) is served by the SecretManagerService itself
+			// (its proto embeds the methods), so it does not re-register the
+			// standalone google.iam.v1.IAMPolicy service that Pub/Sub and KMS own.
+			// Pub/Sub and KMS share the single IAMPolicy service, so their IAM
+			// surfaces are dispatched through one router.
+			secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
+			iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
 
 			adminHandler := admin.NewHandler()
 			adminHandler.RegisterResetter(stores.objects)

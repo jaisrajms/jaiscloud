@@ -4,6 +4,10 @@ go 1.26.3
 
 require (
 	cloud.google.com/go/firestore v1.25.0
+	cloud.google.com/go/iam v1.13.0
+	cloud.google.com/go/kms v1.33.0
+	cloud.google.com/go/pubsub/v2 v2.7.0
+	cloud.google.com/go/secretmanager v1.21.0
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
@@ -69,6 +73,7 @@ require (
 )
 
 require (
+	cloud.google.com/go/longrunning v1.2.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.23 // indirect

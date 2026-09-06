@@ -205,8 +205,8 @@ func (s *PostgresObjectStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 		retainUntil, retentionMode := retentionArgs(&o)
 		timeDeleted := nullableTime(o.TimeDeleted)
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_gcs_objects (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
-			o.Bucket, o.Name, o.Generation, o.Metageneration, o.ContentType, o.Size, o.MD5Hash, o.CRC32C, o.StorageClass, json.RawMessage(mustJSON(metadata)), o.TimeCreated, o.Updated, retainUntil, retentionMode, o.TemporaryHold, o.EventBasedHold, timeDeleted, o.KmsKeyName, o.WrappedDEK, o.CSEKeySHA256); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_gcs_objects (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+			o.Bucket, o.Name, o.Generation, o.Metageneration, o.ContentType, o.Size, o.MD5Hash, o.CRC32C, o.StorageClass, json.RawMessage(mustJSON(metadata)), o.TimeCreated, o.Updated, retainUntil, retentionMode, o.TemporaryHold, o.EventBasedHold, timeDeleted, o.KmsKeyName, o.WrappedDEK, o.CSEKeySHA256, o.ComponentCount); err != nil {
 			return err
 		}
 	}

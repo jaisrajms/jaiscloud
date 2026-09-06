@@ -404,6 +404,10 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, err
 	}
 	secret, version := parseSecretName(name)
+	version, err = p.resolveVersion(ctx, nr.AccountID, secret, version)
+	if err != nil {
+		return nil, mapVersionErr(err)
+	}
 	v, err := p.secrets.GetVersion(ctx, nr.AccountID, secret, version)
 	if err != nil {
 		return nil, mapVersionErr(err)
@@ -443,11 +447,39 @@ func (p *Provider) GetVersion(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, err
 	}
 	secret, version := parseSecretName(name)
+	version, err = p.resolveVersion(ctx, nr.AccountID, secret, version)
+	if err != nil {
+		return nil, mapVersionErr(err)
+	}
 	v, err := p.secrets.GetVersion(ctx, nr.AccountID, secret, version)
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
 	return provider.OK(versionToMap(fromStoreVersion(nr, v))), nil
+}
+
+// resolveVersion resolves the "latest" version alias to the highest existing
+// version number. Any other version id passes through unchanged.
+func (p *Provider) resolveVersion(ctx context.Context, project, secret, version string) (string, error) {
+	if version != "latest" {
+		return version, nil
+	}
+	versions, err := p.secrets.ListVersions(ctx, project, secret)
+	if err != nil {
+		return "", err
+	}
+	latest := ""
+	latestN := -1
+	for _, v := range versions {
+		if n, err := strconv.Atoi(v.VersionID); err == nil && n > latestN {
+			latestN = n
+			latest = v.VersionID
+		}
+	}
+	if latest == "" {
+		return "", secretmanagerstore.ErrNoSuchVersion
+	}
+	return latest, nil
 }
 
 func (p *Provider) DestroyVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

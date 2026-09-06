@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
@@ -77,11 +78,12 @@ type uploadSession struct {
 	Bucket      string
 	Object      string
 	ContentType string
-	buf         []byte    // in-memory bytes up to resumableSpillThreshold
-	tmpPath     string    // spill file path once threshold is exceeded
-	tmpFile     *os.File  // open handle for appending spilled bytes
-	length      int64     // total accumulated bytes across chunks
-	lastAccess  time.Time // last chunk/status-query time, for the TTL sweep
+	Metadata    map[string]string // custom object metadata captured at session start
+	buf         []byte            // in-memory bytes up to resumableSpillThreshold
+	tmpPath     string            // spill file path once threshold is exceeded
+	tmpFile     *os.File          // open handle for appending spilled bytes
+	length      int64             // total accumulated bytes across chunks
+	lastAccess  time.Time         // last chunk/status-query time, for the TTL sweep
 }
 
 // New returns a GCS provider backed by the dedicated object store (buckets +
@@ -198,6 +200,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.ObjectsGetIamPolicy":         p.ObjectsGetIamPolicy,
 		"Storage.ObjectsSetIamPolicy":         p.ObjectsSetIamPolicy,
 		"Storage.ObjectsDelete":               p.ObjectsDelete,
+		"Storage.ObjectsRewrite":              p.ObjectsRewrite,
+		"Storage.ObjectsCompose":              p.ObjectsCompose,
 		"Storage.ObjectACLList":               p.ObjectACLList,
 		"Storage.ObjectACLInsert":             p.ObjectACLInsert,
 		"Storage.ObjectsInsertStartResumable": p.ObjectsInsertStartResumable,
@@ -237,6 +241,9 @@ type objectMeta struct {
 	StorageClass   string            `json:"storageClass,omitempty"`
 	TimeCreated    string            `json:"timeCreated,omitempty"`
 	Updated        string            `json:"updated,omitempty"`
+	// ComponentCount is the number of source objects accumulated by compose
+	// operations (GCS Object.componentCount). Zero for non-composite objects.
+	ComponentCount int64 `json:"componentCount,omitempty"`
 	// Retention is the object-level retention policy (Object.retention).
 	Retention *objectRetention `json:"retention,omitempty"`
 	// RetentionExpirationTime is the server-determined expiry (RFC 3339).
@@ -277,6 +284,7 @@ func toStoreObject(o objectMeta) gcs.ObjectMeta {
 		CRC32C:         o.Crc32c,
 		StorageClass:   o.StorageClass,
 		Metadata:       o.Metadata,
+		ComponentCount: o.ComponentCount,
 		TimeCreated:    tc,
 		Updated:        up,
 		TemporaryHold:  o.TemporaryHold,
@@ -314,6 +322,7 @@ func fromStoreObject(m gcs.ObjectMeta) objectMeta {
 		Generation:     m.Generation,
 		Metageneration: m.Metageneration,
 		StorageClass:   m.StorageClass,
+		ComponentCount: m.ComponentCount,
 		TemporaryHold:  m.TemporaryHold,
 		EventBasedHold: m.EventBasedHold,
 	}
@@ -710,7 +719,6 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 
 	now := clock.Now()
 	generation := p.nextGen()
-	id := blobKey(bucket, object, generation)
 
 	// Versioning + retention + holds are all driven by bucket config and the
 	// request body (GCP-native: bucket versioning.enabled, bucket
@@ -749,15 +757,8 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	if retention != nil {
 		o.RetentionExpirationTime = retention.RetainUntilTime
 	}
+	o.Metadata = uploadMetadata(nr.Params)
 	if body != nil {
-		if md, ok := body["metadata"].(map[string]any); ok {
-			o.Metadata = make(map[string]string, len(md))
-			for k, v := range md {
-				if s, ok := v.(string); ok {
-					o.Metadata[k] = s
-				}
-			}
-		}
 		if h, ok := body["temporaryHold"].(bool); ok {
 			o.TemporaryHold = h
 		}
@@ -779,32 +780,45 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		}
 	}
 
-	// Resolve the object encryption key: CSEK (header) wins, then CMEK
-	// (per-object kmsKeyName query param, else the bucket's
-	// encryption.defaultKmsKeyName), else the server DEK via Wrap.
-	kmsKeyName, cseKey, cseKeySHA256, err := p.resolveWriteKey(nr, bucket, bmeta)
-	if err != nil {
-		return nil, err
-	}
-
 	// Read the raw object bytes. Envelope encryption is applied whole-object
 	// with AES-GCM, so the body is buffered; TODO(streaming-AEAD): stream very
 	// large objects through a streaming AEAD (e.g. Tink StreamingAead) rather
 	// than buffering the full ciphertext in memory.
 	var raw []byte
 	if stream, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
-		raw, err = io.ReadAll(stream)
-		if err != nil {
-			return nil, err
+		b, rerr := io.ReadAll(stream)
+		if rerr != nil {
+			return nil, rerr
 		}
+		raw = b
 	} else {
 		raw = media
 	}
 
+	final, err := p.writeObjectRaw(ctx, nr, bucket, object, o, raw, versioned, priorBlobKey, true)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(final)), nil
+}
+
+// writeObjectRaw computes checksums over the plaintext, envelope-encrypts it,
+// and persists a new object generation (metadata + blob). md5Enabled controls
+// whether an MD5 checksum is computed (compose leaves MD5 empty). It returns the
+// finalized objectMeta with checksums/size populated.
+func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedRequest, bucket, object string, o objectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool) (objectMeta, error) {
+	bmeta, _ := p.objects.GetBucket(ctx, bucket)
+	kmsKeyName, cseKey, cseKeySHA256, err := p.resolveWriteKey(nr, bucket, bmeta)
+	if err != nil {
+		return o, err
+	}
+
 	// Plaintext checksums/size (GCS reports the logical object, not the
 	// ciphertext).
-	sum := md5.Sum(raw)
-	o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
+	if md5Enabled {
+		sum := md5.Sum(raw)
+		o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
+	}
 	crc := crc32.Checksum(raw, crc32.MakeTable(crc32.Castagnoli))
 	crcBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(crcBytes, crc)
@@ -812,28 +826,29 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	o.Size = strconv.FormatInt(int64(len(raw)), 10)
 
 	// Encrypt and store the ciphertext blob.
+	id := blobKey(bucket, object, o.Generation)
 	var wrappedDEK []byte
 	if cseKey != nil {
 		ciphertext, err := kmsstore.EncryptData(cseKey, raw, nil)
 		if err != nil {
-			return nil, err
+			return o, err
 		}
 		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
-			return nil, err
+			return o, err
 		}
 		o.CustomerEncryption = &customerEncryption{EncryptionAlgorithm: "AES256", KeySha256: cseKeySHA256}
 	} else {
 		rawDEK, wd, err := p.encryptor.Wrap(ctx, nr.AccountID, kmsKeyName)
 		if err != nil {
-			return nil, err
+			return o, err
 		}
 		wrappedDEK = wd
 		ciphertext, err := kmsstore.EncryptData(rawDEK, raw, nil)
 		if err != nil {
-			return nil, err
+			return o, err
 		}
 		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
-			return nil, err
+			return o, err
 		}
 		o.KmsKeyName = kmsKeyName
 	}
@@ -849,12 +864,12 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		// Roll back the just-written blob so a failed metadata write does not
 		// leave an orphaned object (metadata absent, blob present).
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
-		return nil, err
+		return o, err
 	}
 	if priorBlobKey != "" {
 		_ = p.blobs.Delete(ctx, blobsNamespace, priorBlobKey)
 	}
-	return provider.OK(toMap(o)), nil
+	return o, nil
 }
 
 func (p *Provider) ObjectsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -890,8 +905,264 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 		Data: map[string]any{
 			"_stream":           io.NopCloser(bytes.NewReader(plain)),
 			wire.ContentTypeKey: meta.ContentType,
+			wire.HeadersKey:     mediaHeaders(meta),
 		},
 	}, nil
+}
+
+// mediaHeaders builds the GCS media-download response headers for an object so
+// the Go SDK's Reader.Attrs (and reader.Metadata()) populate: x-goog-hash,
+// x-goog-generation, x-goog-metageneration, x-goog-stored-content-length, and
+// one x-goog-meta-<key> header per custom metadata entry.
+func mediaHeaders(m gcs.ObjectMeta) map[string]string {
+	h := map[string]string{
+		"x-goog-generation":            m.Generation,
+		"x-goog-metageneration":        m.Metageneration,
+		"x-goog-stored-content-length": strconv.FormatInt(m.Size, 10),
+	}
+	var hashes []string
+	if m.CRC32C != "" {
+		hashes = append(hashes, "crc32c="+m.CRC32C)
+	}
+	if m.MD5Hash != "" {
+		hashes = append(hashes, "md5="+m.MD5Hash)
+	}
+	if len(hashes) > 0 {
+		h["x-goog-hash"] = strings.Join(hashes, ",")
+	}
+	for k, v := range m.Metadata {
+		h["x-goog-meta-"+canonicalMetaKey(k)] = v
+	}
+	return h
+}
+
+// canonicalMetaKey canonicalises a metadata key the way net/http canonicalises
+// header names: lowercased key with the first rune title-cased
+// (e.g. "originalname" → "Originalname").
+func canonicalMetaKey(key string) string {
+	k := strings.ToLower(key)
+	if k == "" {
+		return k
+	}
+	r := []rune(k)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
+// uploadMetadata merges custom object metadata from the request body's
+// "metadata" map and the x-goog-meta-* request headers (wire.MetaHeadersKey).
+func uploadMetadata(params map[string]any) map[string]string {
+	out := bodyMetadata(params)
+	hdr, _ := params[wire.MetaHeadersKey].(map[string]string)
+	if len(hdr) == 0 {
+		return out
+	}
+	if out == nil {
+		out = make(map[string]string, len(hdr))
+	}
+	for k, v := range hdr {
+		out[k] = v
+	}
+	return out
+}
+
+// bucketVersioned reports whether the bucket has versioning.enabled.
+func (p *Provider) bucketVersioned(ctx context.Context, bucket string) bool {
+	bmeta, _ := p.objects.GetBucket(ctx, bucket)
+	if v, ok := bmeta["versioning"].(map[string]any); ok {
+		if en, _ := v["enabled"].(bool); en {
+			return true
+		}
+	}
+	return false
+}
+
+// readSourceRaw reads and decrypts an object's plaintext bytes.
+func (p *Provider) readSourceRaw(ctx context.Context, nr *model.NormalizedRequest, bucket, object string, params map[string]any) (gcs.ObjectMeta, []byte, error) {
+	meta, err := p.getObjectForRead(ctx, bucket, object, params)
+	if err != nil {
+		return gcs.ObjectMeta{}, nil, err
+	}
+	id := blobKey(bucket, object, meta.Generation)
+	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
+	if err != nil {
+		return gcs.ObjectMeta{}, nil, model.NewProviderError("InternalError", "object metadata present but blob missing: "+err.Error(), 500)
+	}
+	ciphertext, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		return gcs.ObjectMeta{}, nil, err
+	}
+	plain, err := p.decryptObject(ctx, nr, meta, ciphertext)
+	if err != nil {
+		return gcs.ObjectMeta{}, nil, err
+	}
+	return meta, plain, nil
+}
+
+// ObjectsRewrite implements objects.rewrite (the GCS JSON API copy action used
+// by the Go SDK's Object.CopierFrom). It copies the source object's bytes and
+// metadata to the destination under a new generation, returning the
+// storage#rewriteResponse envelope.
+func (p *Provider) ObjectsRewrite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	srcBucket, _ := nr.Params["sourceBucket"].(string)
+	srcObject, _ := nr.Params["sourceObject"].(string)
+	dstBucket, _ := nr.Params["destinationBucket"].(string)
+	dstObject, _ := nr.Params["destinationObject"].(string)
+	body, _ := nr.Params["body"].(map[string]any)
+	if dstObject == "" && body != nil {
+		dstObject, _ = body["name"].(string)
+	}
+	if srcBucket == "" || srcObject == "" || dstBucket == "" || dstObject == "" {
+		return nil, model.NewProviderError("InvalidRequest", "rewrite requires source and destination object names", 400)
+	}
+	if err := p.scopeToBucket(ctx, nr, dstBucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "destination bucket not found", 404)
+		}
+		return nil, err
+	}
+
+	srcParams := map[string]any{}
+	if g, _ := nr.Params["sourceGeneration"].(string); g != "" {
+		srcParams["generation"] = g
+	}
+	srcMeta, raw, err := p.readSourceRaw(ctx, nr, srcBucket, srcObject, srcParams)
+	if err != nil {
+		return nil, err
+	}
+
+	// Destination metadata starts as a copy of the source, overridden by the
+	// request body's writable fields, then stamped with a fresh generation.
+	now := clock.Now()
+	o := fromStoreObject(srcMeta)
+	o.Name = dstObject
+	o.Bucket = dstBucket
+	o.Generation = p.nextGen()
+	o.Metageneration = "1"
+	o.TimeCreated = now.Format(time.RFC3339Nano)
+	o.Updated = o.TimeCreated
+	o.Retention = nil
+	o.RetentionExpirationTime = ""
+	if body != nil {
+		if ct, _ := body["contentType"].(string); ct != "" {
+			o.ContentType = ct
+		}
+		if _, ok := body["metadata"]; ok {
+			o.Metadata = bodyMetadata(nr.Params)
+		}
+		if sc, _ := body["storageClass"].(string); sc != "" {
+			o.StorageClass = sc
+		}
+	}
+	o.ID = dstBucket + "/" + dstObject + "/" + o.Generation
+	o.Etag = "CAE="
+	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + dstBucket + "/o/" + url.PathEscape(dstObject)
+	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + dstBucket + "/o/" + url.PathEscape(dstObject) + "?alt=media"
+
+	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := map[string]any{
+		"kind":                "storage#rewriteResponse",
+		"totalBytesRewritten": final.Size,
+		"objectSize":          final.Size,
+		"done":                true,
+		"resource":            toMap(final),
+	}
+	return provider.OK(resp), nil
+}
+
+// ObjectsCompose implements objects.compose (the GCS JSON API compose action
+// used by the Go SDK's Object.ComposerFrom). It concatenates the source objects'
+// bytes in sourceObjects order, sets componentCount, computes CRC32C over the
+// concatenated bytes, and leaves MD5 empty.
+func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	object, _ := nr.Params["object"].(string)
+	body, _ := nr.Params["body"].(map[string]any)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
+
+	var dest map[string]any
+	if body != nil {
+		dest, _ = body["destination"].(map[string]any)
+	}
+	if object == "" && dest != nil {
+		object, _ = dest["name"].(string)
+	}
+	if bucket == "" || object == "" {
+		return nil, model.NewProviderError("InvalidRequest", "compose requires a destination object name", 400)
+	}
+
+	sources, _ := body["sourceObjects"].([]any)
+	if len(sources) == 0 {
+		return nil, model.NewProviderError("InvalidRequest", "compose requires source objects", 400)
+	}
+
+	var buf bytes.Buffer
+	for _, s := range sources {
+		sm, _ := s.(map[string]any)
+		name, _ := sm["name"].(string)
+		if name == "" {
+			return nil, model.NewProviderError("InvalidRequest", "compose source object missing name", 400)
+		}
+		srcParams := map[string]any{}
+		if g, _ := sm["generation"].(string); g != "" {
+			srcParams["generation"] = g
+		}
+		_, raw, err := p.readSourceRaw(ctx, nr, bucket, name, srcParams)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(raw)
+	}
+
+	now := clock.Now()
+	o := objectMeta{
+		Kind:           "storage#object",
+		Name:           object,
+		Bucket:         bucket,
+		ContentType:    "application/octet-stream",
+		Generation:     p.nextGen(),
+		Metageneration: "1",
+		StorageClass:   "STANDARD",
+		TimeCreated:    now.Format(time.RFC3339Nano),
+		Updated:        now.Format(time.RFC3339Nano),
+		ComponentCount: int64(len(sources)),
+	}
+	if dest != nil {
+		if ct, _ := dest["contentType"].(string); ct != "" {
+			o.ContentType = ct
+		}
+		if md, ok := dest["metadata"].(map[string]any); ok {
+			o.Metadata = make(map[string]string, len(md))
+			for k, v := range md {
+				if s, ok := v.(string); ok {
+					o.Metadata[k] = s
+				}
+			}
+		}
+		if sc, _ := dest["storageClass"].(string); sc != "" {
+			o.StorageClass = sc
+		}
+	}
+	o.ID = bucket + "/" + object + "/" + o.Generation
+	o.Etag = "CAE="
+	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object)
+	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object) + "?alt=media"
+
+	final, err := p.writeObjectRaw(ctx, nr, bucket, object, o, buf.Bytes(), p.bucketVersioned(ctx, bucket), "", false)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(final)), nil
 }
 
 // resolveWriteKey determines the DEK for an object write: CSEK (header) wins,
@@ -1103,20 +1374,6 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
-}
-
-// bucketVersioned reports whether versioning is enabled on the bucket.
-func (p *Provider) bucketVersioned(ctx context.Context, bucket string) bool {
-	bmeta, err := p.objects.GetBucket(ctx, bucket)
-	if err != nil {
-		return false
-	}
-	if v, ok := bmeta["versioning"].(map[string]any); ok {
-		if en, _ := v["enabled"].(bool); en {
-			return true
-		}
-	}
-	return false
 }
 
 // objectProtected reports whether an object's holds or active retention block
@@ -1646,7 +1903,7 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 		p.mu.Unlock()
 		return nil, model.NewProviderError("InvalidRequest", "too many active resumable uploads", 429)
 	}
-	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, lastAccess: now}
+	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, Metadata: uploadMetadata(nr.Params), lastAccess: now}
 	p.mu.Unlock()
 
 	// Sweep stale sessions from the durable store (may hold orphans from a
@@ -1723,6 +1980,7 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	bucket := sess.Bucket
 	object := sess.Object
 	contentType := sess.ContentType
+	metadata := sess.Metadata
 	length := sess.length
 	tmpPath := sess.tmpPath
 	var stream io.Reader
@@ -1782,6 +2040,9 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	nr.Params["object"] = object
 	nr.Params[wire.StreamKey] = stream
 	nr.Params[wire.ContentTypeKey] = contentType
+	if metadata != nil {
+		nr.Params[wire.MetaHeadersKey] = metadata
+	}
 	return p.ObjectsInsert(ctx, nr)
 }
 

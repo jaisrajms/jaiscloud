@@ -1,4 +1,4 @@
-package firestore
+package grpc
 
 import (
 	"errors"
@@ -8,6 +8,33 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// GRPCStatus converts a provider/service error into a gRPC status error.
+// Provider errors are resolved in precedence order: google.rpc Status name,
+// then the provider Code alias, then the HTTP status; anything else is
+// INTERNAL. This is the shared error-mapping used by every GCP gRPC service
+// (Firestore, Pub/Sub, Secret Manager, KMS).
+func GRPCStatus(err error) error {
+	if err == nil {
+		return nil
+	}
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) {
+		return status.Error(codes.Internal, err.Error())
+	}
+	if perr.Status != "" {
+		if c, ok := statusToCode(perr.Status); ok {
+			return status.Error(c, perr.Message)
+		}
+	}
+	if c, ok := codeAlias(perr.Code); ok {
+		return status.Error(c, perr.Message)
+	}
+	if c, ok := httpToCode(perr.HTTPStatus); ok {
+		return status.Error(c, perr.Message)
+	}
+	return status.Error(codes.Internal, perr.Message)
+}
 
 // statusToCode maps a google.rpc status name to its gRPC code. The bool is
 // false for unrecognized names so the caller can fall through to the HTTP/Code
@@ -90,29 +117,4 @@ func codeAlias(c string) (codes.Code, bool) {
 		return codes.Internal, true
 	}
 	return codes.Unknown, false
-}
-
-// mapError converts a provider/service error into a gRPC status error. Provider
-// errors are resolved in precedence order: google.rpc Status name, then the
-// provider Code alias, then the HTTP status; anything else is INTERNAL.
-func mapError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var perr *model.ProviderError
-	if !errors.As(err, &perr) {
-		return status.Error(codes.Internal, err.Error())
-	}
-	if perr.Status != "" {
-		if c, ok := statusToCode(perr.Status); ok {
-			return status.Error(c, perr.Message)
-		}
-	}
-	if c, ok := codeAlias(perr.Code); ok {
-		return status.Error(c, perr.Message)
-	}
-	if c, ok := httpToCode(perr.HTTPStatus); ok {
-		return status.Error(c, perr.Message)
-	}
-	return status.Error(codes.Internal, perr.Message)
 }

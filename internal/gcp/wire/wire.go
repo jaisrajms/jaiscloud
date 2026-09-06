@@ -46,4 +46,13 @@ const (
 	// and batchGet — whose response body is newline-delimited JSON, one JSON
 	// object per line, not a JSON array or a single object).
 	RawJSONKey = "jaiscloud:rawJSON"
+	// MetaHeadersKey carries custom object metadata extracted from x-goog-meta-*
+	// request headers (codec → provider), as map[string]string keyed by the
+	// canonicalised metadata key.
+	MetaHeadersKey = "jaiscloud:metaHeaders"
+	// HeadersKey carries extra response headers (provider → codec) as
+	// map[string]string. The codec merges them into the response header set, so
+	// media downloads can surface x-goog-hash / x-goog-generation /
+	// x-goog-meta-* etc. alongside the streamed bytes.
+	HeadersKey = "jaiscloud:headers"
 )

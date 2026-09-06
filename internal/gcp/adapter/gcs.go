@@ -47,6 +47,7 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
+	metadataFromHeaders(r, nr.Params)
 	nr.Params["bucket"] = seg[0]
 	nr.Params["object"] = strings.Join(seg[1:], "/")
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
@@ -76,6 +77,7 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
+	metadataFromHeaders(r, nr.Params)
 
 	switch {
 	case len(seg) == 1 && seg[0] == "b":
@@ -160,6 +162,33 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		} else {
 			nr.Action = "ObjectsGetIamPolicy"
 		}
+	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "o" && segmentIndex(seg, "rewriteTo") >= 0:
+		// /b/{srcBucket}/o/{srcObject...}/rewriteTo/b/{dstBucket}/o/{dstObject...}
+		ri := segmentIndex(seg, "rewriteTo")
+		nr.Params["sourceBucket"] = seg[1]
+		nr.Params["sourceObject"] = strings.Join(seg[3:ri], "/")
+		if ri+3 < len(seg) && seg[ri+1] == "b" && seg[ri+3] == "o" {
+			nr.Params["destinationBucket"] = seg[ri+2]
+			nr.Params["destinationObject"] = strings.Join(seg[ri+4:], "/")
+		}
+		nr.Action = "ObjectsRewrite"
+		if r.Method == http.MethodPost {
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+			}
+			nr.Params["body"] = m
+		}
+	case len(seg) >= 4 && seg[0] == "b" && seg[2] == "o" && seg[len(seg)-1] == "compose":
+		// /b/{bucket}/o/{destination...}/compose
+		nr.Params["bucket"] = seg[1]
+		nr.Params["object"] = strings.Join(seg[3:len(seg)-1], "/")
+		nr.Action = "ObjectsCompose"
+		m, err := parseJSON(body)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+		}
+		nr.Params["body"] = m
 	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "o":
 		// /b/{bucket}/o[/{object}]
 		nr.Params["bucket"] = seg[1]
@@ -231,6 +260,7 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
+	metadataFromHeaders(r, nr.Params)
 	nr.Params["bucket"] = seg[1]
 
 	if len(seg) > 3 {
@@ -310,6 +340,15 @@ func (c *GCSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespo
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
+
+	// Forward any extra response headers the provider surfaced (media-download
+	// x-goog-* headers, etc.). Applied before every branch below so they are
+	// emitted for streaming and buffered responses alike.
+	if extra, ok := resp.Data[wire.HeadersKey].(map[string]string); ok {
+		for k, v := range extra {
+			headers.Set(k, v)
+		}
+	}
 
 	if loc, ok := resp.Data[wire.LocationKey].(string); ok && loc != "" {
 		headers.Set("Location", loc)
@@ -473,6 +512,35 @@ func csekFromHeaders(r *http.Request, params map[string]any) {
 	if v := r.Header.Get("x-goog-encryption-key-sha256"); v != "" {
 		params[wire.CSEKKeySHA256] = v
 	}
+}
+
+// metadataFromHeaders copies x-goog-meta-* request headers into params as
+// wire.MetaHeadersKey (map[string]string). Custom object metadata is carried in
+// these headers by the simple-upload path (uploadType=media); the multipart and
+// resumable paths carry it in the JSON body's "metadata" map instead, and the
+// provider merges both sources.
+func metadataFromHeaders(r *http.Request, params map[string]any) {
+	md := map[string]string{}
+	for k, vs := range r.Header {
+		if len(vs) == 0 || !strings.HasPrefix(strings.ToLower(k), "x-goog-meta-") {
+			continue
+		}
+		key := k[len("x-goog-meta-"):]
+		md[strings.ToLower(key)] = vs[0]
+	}
+	if len(md) > 0 {
+		params[wire.MetaHeadersKey] = md
+	}
+}
+
+// segmentIndex returns the index of the first path segment equal to s, or -1.
+func segmentIndex(seg []string, s string) int {
+	for i, v := range seg {
+		if v == s {
+			return i
+		}
+	}
+	return -1
 }
 
 // parseJSON decodes a JSON body into a map, or returns nil for empty/JSON bodies

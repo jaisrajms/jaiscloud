@@ -684,11 +684,21 @@ func (p *Provider) TopicTestIamPermissions(ctx context.Context, nr *model.Normal
 		return nil, err
 	}
 	t := strings.TrimPrefix(name, "topics/")
-	if err := p.requireTopic(ctx, nr.AccountID, t); err != nil {
-		return nil, err
-	}
 	body, _ := nr.Params["body"].(map[string]any)
-	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
+	// Fail open: testIamPermissions does not require the topic to exist. A
+	// missing topic yields an empty permission list rather than NotFound.
+	perms := []string{}
+	if p.topicExists(ctx, nr.AccountID, t) {
+		perms = policy.TestPermissions(policy.Permissions(body))
+	}
+	return provider.OK(map[string]any{"permissions": perms}), nil
+}
+
+// topicExists reports whether a topic exists without erroring (used by
+// testIamPermissions' fail-open behavior).
+func (p *Provider) topicExists(ctx context.Context, account, t string) bool {
+	_, err := p.resources.Get(ctx, account, store.GlobalRegion, rtTopic, t)
+	return err == nil
 }
 
 func (p *Provider) SubscriptionGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -726,9 +736,18 @@ func (p *Provider) SubscriptionTestIamPermissions(ctx context.Context, nr *model
 		return nil, err
 	}
 	s := strings.TrimPrefix(name, "subscriptions/")
-	if err := p.requireSubscription(ctx, nr.AccountID, s); err != nil {
-		return nil, err
-	}
 	body, _ := nr.Params["body"].(map[string]any)
-	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
+	// Fail open: testIamPermissions does not require the subscription to exist.
+	perms := []string{}
+	if p.subscriptionExists(ctx, nr.AccountID, s) {
+		perms = policy.TestPermissions(policy.Permissions(body))
+	}
+	return provider.OK(map[string]any{"permissions": perms}), nil
+}
+
+// subscriptionExists reports whether a subscription exists without erroring
+// (used by testIamPermissions' fail-open behavior).
+func (p *Provider) subscriptionExists(ctx context.Context, account, s string) bool {
+	_, err := p.resources.Get(ctx, account, store.GlobalRegion, rtSubscription, s)
+	return err == nil
 }

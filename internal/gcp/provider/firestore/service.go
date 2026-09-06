@@ -31,6 +31,13 @@ type Service struct {
 	// (transactions are ephemeral and never persisted).
 	txnMu    sync.Mutex
 	readSets map[string]*readSet
+
+	// changeMu guards the change-feed: changeSeq (monotonic), changeLog (the
+	// full ordered history used for resume-token replay), and changeSubs.
+	changeMu   sync.Mutex
+	changeSeq  uint64
+	changeLog  []ChangeEvent
+	changeSubs map[*changeSub]struct{}
 }
 
 // newService returns a Firestore service backed by the given document store and
@@ -128,6 +135,22 @@ func (s *Service) clearReadSet(txn []byte) {
 	delete(s.readSets, string(txn))
 }
 
+// requireActive returns an InvalidArgument error when transaction is non-empty
+// but not currently active (rolled back, already committed, or never begun).
+// An empty transaction denotes a non-transactional operation and always passes.
+func (s *Service) requireActive(transaction []byte) error {
+	if len(transaction) == 0 {
+		return nil
+	}
+	s.txnMu.Lock()
+	defer s.txnMu.Unlock()
+	if s.readSets[string(transaction)] == nil {
+		return model.NewProviderError("InvalidArgument",
+			"transaction is no longer active (rolled back, committed, or never begun)", 400)
+	}
+	return nil
+}
+
 // ─── pagination ──────────────────────────────────────────────────────────────
 
 // pageParams carries cursor-pagination inputs (pageSize/pageToken) in a
@@ -146,6 +169,9 @@ func (p pageParams) params() map[string]any {
 // GetDocument returns a document by full name, recording the read in the
 // transaction read-set and applying the field mask when present.
 func (s *Service) GetDocument(ctx context.Context, name string, transaction []byte, mask []string) (firestorestore.Document, error) {
+	if err := s.requireActive(transaction); err != nil {
+		return firestorestore.Document{}, err
+	}
 	doc, err := s.store.GetDocument(ctx, name)
 	if err != nil {
 		if len(transaction) > 0 && errors.Is(err, firestorestore.ErrDocumentNotFound) {
@@ -190,6 +216,8 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 	if err := s.store.CreateDocument(ctx, doc); err != nil {
 		return firestorestore.Document{}, mapStoreError(err)
 	}
+	d := doc
+	s.publishChange(ChangeEvent{Name: d.Name, Doc: &d})
 	return doc, nil
 }
 
@@ -247,6 +275,8 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 			return firestorestore.Document{}, mapStoreError(err)
 		}
 	}
+	d := doc
+	s.publishChange(ChangeEvent{Name: d.Name, Doc: &d})
 	return doc, nil
 }
 
@@ -271,11 +301,15 @@ func (s *Service) DeleteDocument(ctx context.Context, project, database, path st
 	if err := s.store.DeleteDocument(ctx, name); err != nil {
 		return mapStoreError(err)
 	}
+	s.publishChange(ChangeEvent{Name: name})
 	return nil
 }
 
 // ListDocuments returns the direct children of a collection, paginated.
 func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask []string, page pageParams) ([]firestorestore.Document, string, error) {
+	if err := s.requireActive(transaction); err != nil {
+		return nil, "", err
+	}
 	docs, err := s.store.ListDocuments(ctx, project, database)
 	if err != nil {
 		return nil, "", err
@@ -339,6 +373,9 @@ func (s *Service) ListCollectionIds(ctx context.Context, project, database, path
 // enforcing composite-index requirements and recording reads in the
 // transaction read-set.
 func (s *Service) RunQuery(ctx context.Context, project, database, path string, q *structuredQuery, transaction []byte) ([]firestorestore.Document, error) {
+	if err := s.requireActive(transaction); err != nil {
+		return nil, err
+	}
 	parent := "projects/" + project + "/databases/" + database + "/documents"
 	if path != "" {
 		parent += "/" + path
@@ -407,6 +444,9 @@ func (s *Service) Rollback(ctx context.Context, transaction []byte) error {
 // Commit applies an atomic batch of writes with optimistic preconditions and
 // transaction read-set validation.
 func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writeWire) (time.Time, []map[string]any, error) {
+	if err := s.requireActive(transaction); err != nil {
+		return time.Time{}, nil, err
+	}
 	if len(writes) > maxWriteBatchSize {
 		return time.Time{}, nil, model.NewProviderError("InvalidArgument",
 			"a commit may contain at most "+strconv.Itoa(maxWriteBatchSize)+" writes", 400)
@@ -427,6 +467,14 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 		return time.Time{}, nil, mapCommitError(err)
 	}
 	s.clearReadSet(transaction)
+	for _, w := range ws {
+		if w.Document == nil {
+			s.publishChange(ChangeEvent{Name: w.Name})
+		} else {
+			d := *w.Document
+			s.publishChange(ChangeEvent{Name: w.Name, Doc: &d})
+		}
+	}
 	return commitTime, results, nil
 }
 
@@ -460,6 +508,9 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 // BatchGet returns the documents (found/missing wire items) for the given
 // names, recording reads in the transaction read-set.
 func (s *Service) BatchGet(ctx context.Context, documents []string, transaction []byte) ([]map[string]any, error) {
+	if err := s.requireActive(transaction); err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	readTime := clock.Now()
 	items := make([]map[string]any, 0, len(documents))

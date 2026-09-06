@@ -1,7 +1,9 @@
 package gcp
 
 import (
+	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"encoding/json"
@@ -197,5 +199,88 @@ func TestGCSCodecEncodeError(t *testing.T) {
 	}
 	if _, ok := errObj["status"]; ok {
 		t.Error("GCS error envelope must not contain a 'status' field")
+	}
+}
+
+func TestGCSCodecRewriteRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/srcbkt/o/dir/src.txt/rewriteTo/b/dstbkt/o/dir/dst.txt", nil)
+	nr, err := c.Decode(r, []byte(`{"contentType":"text/plain"}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsRewrite" {
+		t.Fatalf("expected ObjectsRewrite, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["sourceBucket"].(string); b != "srcbkt" {
+		t.Errorf("expected sourceBucket srcbkt, got %q", b)
+	}
+	if o, _ := nr.Params["sourceObject"].(string); o != "dir/src.txt" {
+		t.Errorf("expected sourceObject dir/src.txt, got %q", o)
+	}
+	if b, _ := nr.Params["destinationBucket"].(string); b != "dstbkt" {
+		t.Errorf("expected destinationBucket dstbkt, got %q", b)
+	}
+	if o, _ := nr.Params["destinationObject"].(string); o != "dir/dst.txt" {
+		t.Errorf("expected destinationObject dir/dst.txt, got %q", o)
+	}
+	if _, ok := nr.Params["body"].(map[string]any); !ok {
+		t.Error("expected rewrite request body to be parsed")
+	}
+}
+
+func TestGCSCodecComposeRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/bkt/o/dir/dst.txt/compose", nil)
+	nr, err := c.Decode(r, []byte(`{"sourceObjects":[{"name":"a.txt"}]}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsCompose" {
+		t.Fatalf("expected ObjectsCompose, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["bucket"].(string); b != "bkt" {
+		t.Errorf("expected bucket bkt, got %q", b)
+	}
+	if o, _ := nr.Params["object"].(string); o != "dir/dst.txt" {
+		t.Errorf("expected object dir/dst.txt, got %q", o)
+	}
+}
+
+func TestGCSCodecMetadataHeaders(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/upload/storage/v1/b/bkt/o?uploadType=media&name=obj", nil)
+	r.Header.Set("x-goog-meta-originalname", "file.dat")
+	r.Header.Set("x-goog-meta-env", "test")
+	nr, err := c.Decode(r, []byte("bytes"))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	md, _ := nr.Params[wire.MetaHeadersKey].(map[string]string)
+	if md["originalname"] != "file.dat" || md["env"] != "test" {
+		t.Fatalf("expected metadata headers captured, got %v", md)
+	}
+}
+
+func TestGCSCodecEncodeForwardsHeaders(t *testing.T) {
+	c := &GCSCodec{}
+	nr := &model.NormalizedRequest{}
+	resp := &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"_stream":           io.NopCloser(strings.NewReader("x")),
+			wire.HeadersKey:     map[string]string{"x-goog-generation": "123", "x-goog-meta-Foo": "bar"},
+			wire.ContentTypeKey: "text/plain",
+		},
+	}
+	status, hdr, _ := c.Encode(nr, resp)
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	if hdr.Get("x-goog-generation") != "123" {
+		t.Errorf("expected x-goog-generation header, got %q", hdr.Get("x-goog-generation"))
+	}
+	if hdr.Get("x-goog-meta-Foo") != "bar" {
+		t.Errorf("expected x-goog-meta-Foo header, got %q", hdr.Get("x-goog-meta-Foo"))
 	}
 }

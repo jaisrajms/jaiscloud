@@ -167,3 +167,34 @@ func TestSDKFirestoreReadsQueriesTxn(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, snap.Exists())
 }
+
+// TestSDKFirestoreSnapshots exercises the high-level Snapshots listener. It
+// verifies the emulator emits a TargetChange NO_CHANGE frame after CURRENT so
+// the SDK concludes a snapshot instead of hanging, and that subsequent writes
+// surface as real-time snapshot updates.
+func TestSDKFirestoreSnapshots(t *testing.T) {
+	ctx := context.Background()
+	client := newClient(t)
+	col := client.Collection(unique("snap"))
+
+	_, _, err := col.Add(ctx, map[string]any{"n": int64(1)})
+	require.NoError(t, err)
+
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	it := col.Snapshots(sctx)
+	defer it.Stop()
+
+	// Initial snapshot must be delivered promptly (without NO_CHANGE the SDK
+	// never concludes a snapshot and Next() blocks until the context deadline).
+	snap, err := it.Next()
+	require.NoError(t, err)
+	require.Equal(t, 1, snap.Size)
+
+	// A subsequent write must surface as a real-time snapshot update.
+	_, _, err = col.Add(ctx, map[string]any{"n": int64(2)})
+	require.NoError(t, err)
+	snap, err = it.Next()
+	require.NoError(t, err)
+	require.Equal(t, 2, snap.Size)
+}

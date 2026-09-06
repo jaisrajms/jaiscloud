@@ -42,8 +42,11 @@ type ObjectMeta struct {
 	CRC32C         string            `json:"crc32c,omitempty"`
 	StorageClass   string            `json:"storageClass"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
-	TimeCreated    time.Time         `json:"timeCreated"`
-	Updated        time.Time         `json:"updated"`
+	// ComponentCount is the number of source objects accumulated by compose
+	// operations (GCS Object.componentCount). Zero for non-composite objects.
+	ComponentCount int64     `json:"componentCount,omitempty"`
+	TimeCreated    time.Time `json:"timeCreated"`
+	Updated        time.Time `json:"updated"`
 	// Retention is the object-level retention policy (GCS Object.retention).
 	Retention *ObjectRetention `json:"retention,omitempty"`
 	// TemporaryHold / EventBasedHold mirror GCS Object.temporaryHold /

@@ -4,20 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	"jaiscloud/internal/clock"
-	"jaiscloud/internal/gcp/identity"
+	grpcutil "jaiscloud/internal/gcp/grpc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/genproto/googleapis/rpc/status"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -44,59 +41,17 @@ func (s *Service) Reset(ctx context.Context) { s.svc.Reset(ctx) }
 
 // ─── identity (project over gRPC metadata) ───────────────────────────────────
 
-var routingProjectRE = regexp.MustCompile(`projects/([^/]+)`)
-
-// resolveProject derives the project for an RPC: x-goog-request-params routing
-// metadata, then the bearer token's JWT project_id claim, then the configured
-// default. The Firestore unary request messages themselves carry full resource
-// names, so the message is authoritative; this is the fallback.
+// resolveProject derives the project for an RPC via the shared gRPC metadata
+// resolver, falling back to the configured default. The Firestore unary request
+// messages themselves carry full resource names, so the message is
+// authoritative; this is the fallback.
 func (s *Service) resolveProject(ctx context.Context) string {
-	if p := projectFromMetadata(ctx); p != "" {
-		return p
-	}
-	return s.defaultProj
+	return grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
 }
 
-func projectFromMetadata(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	if vals := md.Get("x-goog-request-params"); len(vals) > 0 {
-		if p := routingProject(vals[0]); p != "" {
-			return p
-		}
-	}
-	if vals := md.Get("authorization"); len(vals) > 0 {
-		if p := identity.ProjectFromToken(identity.BearerToken(vals[0])); p != "" {
-			return p
-		}
-	}
-	return ""
-}
-
-func routingProject(params string) string {
-	for _, kv := range strings.Split(params, "&") {
-		if kv == "" {
-			continue
-		}
-		key, val, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		unesc, err := url.QueryUnescape(val)
-		if err != nil {
-			unesc = val
-		}
-		if key == "project_id" {
-			return unesc
-		}
-		if m := routingProjectRE.FindStringSubmatch(unesc); len(m) == 2 {
-			return m[1]
-		}
-	}
-	return ""
-}
+// mapError converts a provider/service error into a gRPC status error via the
+// shared grpc.GRPCStatus mapping.
+func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
 // ─── resource-name parsing ────────────────────────────────────────────────────
 
