@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Sentinel errors returned by the store, mapped to gRPC status codes by the
@@ -17,6 +18,13 @@ var (
 	ErrEntityNotFound = errors.New("EntityNotFound")
 	ErrEntityExists   = errors.New("EntityExists")
 	ErrInvalidKey     = errors.New("InvalidKey")
+	// ErrConflict is returned by ApplyMutation/DeleteConflictChecked when a
+	// caller-supplied Precondition doesn't match the entity's current state.
+	// The mutation was NOT applied. This maps to a real Datastore Mutation's
+	// per-mutation conflict_detection_strategy outcome (MutationResult.
+	// conflict_detected=true) rather than aborting the whole Commit — see
+	// ApplyMutation's doc comment.
+	ErrConflict = errors.New("Conflict")
 )
 
 // GeoPoint is a Datastore geo_point_value ({latitude, longitude}).
@@ -53,10 +61,34 @@ type Value struct {
 // for kind-scoped queries). Key is the stable canonical key string
 // "kind/id-or-name" (see KeyOfID/KeyOfName); the store's primary key is
 // (project, Key). Properties is the property map keyed by property name.
+// Version and UpdateTime are server-managed bookkeeping used only by
+// ApplyMutation/DeleteConflictChecked's optimistic-concurrency check — a
+// caller constructing an Entity for Insert/Update/Upsert/ApplyMutation does
+// not set these; the store stamps them on write.
 type Entity struct {
 	Kind       string           `json:"kind"`
 	Key        string           `json:"key"`
 	Properties map[string]Value `json:"properties"`
+	Version    int64            `json:"version,omitempty"`
+	UpdateTime time.Time        `json:"updateTime,omitempty"`
+}
+
+// MutationKind identifies which Datastore mutation ApplyMutation applies.
+type MutationKind int
+
+const (
+	MutationInsert MutationKind = iota
+	MutationUpdate
+	MutationUpsert
+)
+
+// Precondition is the optional per-mutation conflict-detection condition from
+// Datastore's real Mutation.conflict_detection_strategy oneof. At most one of
+// BaseVersion/UpdateTime should be set; nil (no Precondition at all) always
+// matches.
+type Precondition struct {
+	BaseVersion *int64
+	UpdateTime  *time.Time
 }
 
 // Store is the Cloud Datastore entity data-plane store. Entities are
@@ -72,6 +104,38 @@ type Store interface {
 	Update(ctx context.Context, project string, e Entity) error
 	// Delete removes the entity at key. Idempotent.
 	Delete(ctx context.Context, project, key string) error
+
+	// ApplyMutation atomically checks precondition (if non-nil) against the
+	// entity currently stored at e.Key and, if it matches (or precondition is
+	// nil), applies the insert/update/upsert — all under one lock/transaction,
+	// so no concurrent mutation on the same entity can be observed or applied
+	// in between the check and the apply. Version and UpdateTime on e are
+	// ignored (server-managed) and stamped on the returned entity: 1 and
+	// clock.Now() for a successful Insert, current.Version+1 and clock.Now()
+	// for Update/Upsert.
+	//
+	// Returns ErrConflict — without applying the mutation — if precondition
+	// doesn't match. This must NOT be treated as fatal by the caller the way
+	// ErrEntityExists/ErrEntityNotFound are: real Datastore's
+	// conflict_detection_strategy is a per-mutation outcome (marked in that
+	// mutation's MutationResult.conflict_detected), not a reason to abort the
+	// rest of the Commit's other mutations.
+	//
+	// Returns ErrEntityExists for an Insert whose key already exists, or
+	// ErrEntityNotFound for an Update whose key doesn't — exactly as Insert/
+	// Update do — checked precondition-first, so a conflict takes priority
+	// over an existence mismatch when both would apply.
+	ApplyMutation(ctx context.Context, project string, kind MutationKind, e Entity, precondition *Precondition) (Entity, error)
+
+	// DeleteConflictChecked atomically checks precondition (if non-nil)
+	// against the entity currently stored at key and, if it matches (or
+	// precondition is nil), deletes it. Deleting an already-absent entity
+	// with a nil precondition is idempotent (matching Delete); with a
+	// non-nil precondition against an absent entity, only a
+	// Precondition{BaseVersion: &0} conceptually "matches" (real Datastore
+	// treats a missing entity as version 0) — anything else returns
+	// ErrConflict.
+	DeleteConflictChecked(ctx context.Context, project, key string, precondition *Precondition) error
 	// ListKind returns every entity of the given kind in the project, sorted by
 	// key. An empty kind returns every entity in the project.
 	ListKind(ctx context.Context, project, kind string) ([]Entity, error)
@@ -83,6 +147,29 @@ type Store interface {
 	// (numeric) entity.
 	AdvanceIDs(ctx context.Context, project string, max int64) error
 	Reset(ctx context.Context)
+}
+
+// preconditionMatches reports whether p is satisfied by the entity's current
+// state (current, exists). A nil p always matches. Shared by every Store
+// implementation's ApplyMutation/DeleteConflictChecked.
+func preconditionMatches(current Entity, exists bool, p *Precondition) bool {
+	if p == nil {
+		return true
+	}
+	if p.BaseVersion != nil {
+		if !exists {
+			// Real Datastore treats a nonexistent entity as version 0.
+			return *p.BaseVersion == 0
+		}
+		return current.Version == *p.BaseVersion
+	}
+	if p.UpdateTime != nil {
+		if !exists {
+			return false
+		}
+		return current.UpdateTime.Equal(*p.UpdateTime)
+	}
+	return true
 }
 
 // KeyOfID returns the canonical key string for a numeric-ID key:

@@ -79,6 +79,90 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreApplyMutation(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	e := testEntity("Task", "a", map[string]Value{"n": num(1)})
+
+	// Insert: no precondition, version stamped to 1.
+	inserted, err := s.ApplyMutation(ctx, "p1", MutationInsert, e, nil)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if inserted.Version != 1 {
+		t.Fatalf("inserted version = %d, want 1", inserted.Version)
+	}
+
+	// Insert again: ErrEntityExists regardless of precondition.
+	if _, err := s.ApplyMutation(ctx, "p1", MutationInsert, e, nil); !errors.Is(err, ErrEntityExists) {
+		t.Fatalf("duplicate insert = %v, want ErrEntityExists", err)
+	}
+
+	// Update with a stale base_version: ErrConflict, not applied. A fresh
+	// Entity (its own Properties map, not aliased with the stored one) —
+	// mutating e.Properties in place would corrupt the already-stored
+	// entity's data via the shared map reference, since Go doesn't copy maps
+	// on struct assignment.
+	stale := int64(0)
+	staleUpdate := testEntity("Task", "a", map[string]Value{"n": num(999)})
+	got, err := s.ApplyMutation(ctx, "p1", MutationUpdate, staleUpdate, &Precondition{BaseVersion: &stale})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale update = %v, want ErrConflict", err)
+	}
+	if got.Version != 1 {
+		t.Fatalf("conflict result version = %d, want 1 (the current, unchanged version)", got.Version)
+	}
+	current, _ := s.Get(ctx, "p1", e.Key)
+	n := current.Properties["n"].IntegerValue
+	if n == nil || *n != 1 {
+		t.Fatalf("entity must be unchanged after a rejected conditional update, got %+v", current.Properties["n"])
+	}
+
+	// Update with the correct base_version: applies, version advances.
+	correct := int64(1)
+	goodUpdate := testEntity("Task", "a", map[string]Value{"n": num(2)})
+	updated, err := s.ApplyMutation(ctx, "p1", MutationUpdate, goodUpdate, &Precondition{BaseVersion: &correct})
+	if err != nil {
+		t.Fatalf("correct update: %v", err)
+	}
+	if updated.Version != 2 {
+		t.Fatalf("updated version = %d, want 2", updated.Version)
+	}
+
+	// Update on a missing entity: ErrEntityNotFound.
+	missing := testEntity("Task", "missing", nil)
+	if _, err := s.ApplyMutation(ctx, "p1", MutationUpdate, missing, nil); !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("update missing = %v, want ErrEntityNotFound", err)
+	}
+}
+
+func TestMemoryStoreDeleteConflictChecked(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	e := testEntity("Task", "a", map[string]Value{"n": num(1)})
+	if _, err := s.ApplyMutation(ctx, "p1", MutationInsert, e, nil); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Stale precondition: ErrConflict, entity not deleted.
+	stale := int64(0)
+	if err := s.DeleteConflictChecked(ctx, "p1", e.Key, &Precondition{BaseVersion: &stale}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale delete = %v, want ErrConflict", err)
+	}
+	if _, err := s.Get(ctx, "p1", e.Key); err != nil {
+		t.Fatalf("entity must still exist after a rejected conditional delete, got %v", err)
+	}
+
+	// Correct precondition: deletes.
+	correct := int64(1)
+	if err := s.DeleteConflictChecked(ctx, "p1", e.Key, &Precondition{BaseVersion: &correct}); err != nil {
+		t.Fatalf("correct delete: %v", err)
+	}
+	if _, err := s.Get(ctx, "p1", e.Key); !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("get after delete = %v, want ErrEntityNotFound", err)
+	}
+}
+
 func TestMemoryStoreAllocateIDs(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

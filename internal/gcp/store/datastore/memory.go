@@ -2,8 +2,12 @@ package datastore
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
+
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 )
 
 // MemoryStore is an in-memory Store. Entities are keyed by (project, key).
@@ -67,6 +71,61 @@ func (s *MemoryStore) Update(_ context.Context, project string, e Entity) error 
 func (s *MemoryStore) Delete(_ context.Context, project, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.entities[project], key)
+	return nil
+}
+
+func (s *MemoryStore) ApplyMutation(_ context.Context, project string, kind MutationKind, e Entity, precondition *Precondition) (Entity, error) {
+	var observed Entity
+	result, err := storeutil.AtomicUpdate(&s.mu,
+		func() (Entity, bool) { ent, ok := s.entities[project][e.Key]; return ent, ok },
+		func(current Entity, exists bool) (Entity, error) {
+			observed = current
+			if !preconditionMatches(current, exists, precondition) {
+				return Entity{}, ErrConflict
+			}
+			switch kind {
+			case MutationInsert:
+				if exists {
+					return Entity{}, ErrEntityExists
+				}
+				e.Version = 1
+			case MutationUpdate:
+				if !exists {
+					return Entity{}, ErrEntityNotFound
+				}
+				e.Version = current.Version + 1
+			case MutationUpsert:
+				e.Version = current.Version + 1
+			}
+			e.UpdateTime = clock.Now()
+			return e, nil
+		},
+		func(ent Entity) {
+			if s.entities[project] == nil {
+				s.entities[project] = make(map[string]Entity)
+			}
+			s.entities[project][e.Key] = ent
+		},
+	)
+	if errors.Is(err, ErrConflict) {
+		// Report the entity's actual current (unchanged) state, not the zero
+		// value AtomicUpdate discards on error — real Datastore's
+		// MutationResult.version is "the version on the server after
+		// processing," which for a rejected mutation is the version that
+		// caused the rejection, useful for a client's retry.
+		return observed, ErrConflict
+	}
+	return result, err
+}
+
+func (s *MemoryStore) DeleteConflictChecked(_ context.Context, project, key string, precondition *Precondition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.entities[project][key]
+	if !preconditionMatches(current, exists, precondition) {
+		return ErrConflict
+	}
 	delete(s.entities[project], key)
 	return nil
 }

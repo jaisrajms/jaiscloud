@@ -79,6 +79,7 @@ func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*
 	project := s.project(ctx, req.GetProjectId())
 	results := make([]*datastorepb.MutationResult, 0, len(req.GetMutations()))
 	for _, m := range req.GetMutations() {
+		pre := mutationPrecondition(m)
 		mr := &datastorepb.MutationResult{Version: 1}
 		switch op := m.GetOperation().(type) {
 		case *datastorepb.Mutation_Insert:
@@ -86,25 +87,38 @@ func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*
 			if err != nil {
 				return nil, mapError(err)
 			}
-			if err := s.store.Insert(ctx, project, e); err != nil {
-				if errors.Is(err, datastorestore.ErrEntityExists) {
-					return nil, mapError(model.NewProviderError("AlreadyExists", "entity already exists", 409))
-				}
+			applied, err := s.store.ApplyMutation(ctx, project, datastorestore.MutationInsert, e, pre)
+			switch {
+			case errors.Is(err, datastorestore.ErrConflict):
+				mr.ConflictDetected = true
+				mr.Version = applied.Version
+			case errors.Is(err, datastorestore.ErrEntityExists):
+				return nil, mapError(model.NewProviderError("AlreadyExists", "entity already exists", 409))
+			case err != nil:
 				return nil, mapError(err)
-			}
-			if allocated {
-				mr.Key = keyProto(e.Key, project)
+			default:
+				mr.Version = applied.Version
+				if allocated {
+					mr.Key = keyProto(e.Key, project)
+				}
 			}
 		case *datastorepb.Mutation_Upsert:
 			e, allocated, err := s.resolveEntity(ctx, project, op.Upsert)
 			if err != nil {
 				return nil, mapError(err)
 			}
-			if err := s.store.Upsert(ctx, project, e); err != nil {
+			applied, err := s.store.ApplyMutation(ctx, project, datastorestore.MutationUpsert, e, pre)
+			switch {
+			case errors.Is(err, datastorestore.ErrConflict):
+				mr.ConflictDetected = true
+				mr.Version = applied.Version
+			case err != nil:
 				return nil, mapError(err)
-			}
-			if allocated {
-				mr.Key = keyProto(e.Key, project)
+			default:
+				mr.Version = applied.Version
+				if allocated {
+					mr.Key = keyProto(e.Key, project)
+				}
 			}
 		case *datastorepb.Mutation_Update:
 			e, err := entityFromProto(op.Update)
@@ -114,19 +128,29 @@ func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*
 			if e.Key == "" {
 				return nil, mapError(model.NewProviderError("InvalidArgument", "update key is incomplete", 400))
 			}
-			if err := s.store.Update(ctx, project, e); err != nil {
-				if errors.Is(err, datastorestore.ErrEntityNotFound) {
-					return nil, mapError(model.NewProviderError("FailedPrecondition", "entity not found", 404))
-				}
+			applied, err := s.store.ApplyMutation(ctx, project, datastorestore.MutationUpdate, e, pre)
+			switch {
+			case errors.Is(err, datastorestore.ErrConflict):
+				mr.ConflictDetected = true
+				mr.Version = applied.Version
+			case errors.Is(err, datastorestore.ErrEntityNotFound):
+				return nil, mapError(model.NewProviderError("FailedPrecondition", "entity not found", 404))
+			case err != nil:
 				return nil, mapError(err)
+			default:
+				mr.Version = applied.Version
 			}
 		case *datastorepb.Mutation_Delete:
 			key, err := deleteKey(op.Delete)
 			if err != nil {
 				return nil, mapError(err)
 			}
-			if err := s.store.Delete(ctx, project, key); err != nil {
-				return nil, mapError(err)
+			if err := s.store.DeleteConflictChecked(ctx, project, key, pre); err != nil {
+				if errors.Is(err, datastorestore.ErrConflict) {
+					mr.ConflictDetected = true
+				} else {
+					return nil, mapError(err)
+				}
 			}
 		default:
 			return nil, mapError(model.NewProviderError("InvalidArgument", "mutation has no operation", 400))
@@ -137,6 +161,23 @@ func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*
 		MutationResults: results,
 		// CommitTime is not set for non-transactional commits (see the proto).
 	}, nil
+}
+
+// mutationPrecondition translates a Mutation's conflict_detection_strategy
+// oneof (base_version or update_time — real Datastore's per-mutation
+// optimistic-concurrency precondition) into a store Precondition. Returns nil
+// when the mutation carries neither (the common case — no precondition).
+func mutationPrecondition(m *datastorepb.Mutation) *datastorestore.Precondition {
+	switch v := m.GetConflictDetectionStrategy().(type) {
+	case *datastorepb.Mutation_BaseVersion:
+		bv := v.BaseVersion
+		return &datastorestore.Precondition{BaseVersion: &bv}
+	case *datastorepb.Mutation_UpdateTime:
+		ut := v.UpdateTime.AsTime()
+		return &datastorestore.Precondition{UpdateTime: &ut}
+	default:
+		return nil
+	}
 }
 
 func (s *Service) Lookup(ctx context.Context, req *datastorepb.LookupRequest) (*datastorepb.LookupResponse, error) {
@@ -162,8 +203,11 @@ func (s *Service) Lookup(ctx context.Context, req *datastorepb.LookupRequest) (*
 		default:
 			_ = kind
 			resp.Found = append(resp.Found, &datastorepb.EntityResult{
-				Entity:  entityToProto(e, project),
-				Version: 1,
+				Entity: entityToProto(e, project),
+				// Real, per-entity version — clients read this and pass it
+				// back as a Mutation's base_version for a conditional write;
+				// a hardcoded 1 would make that OCC contract meaningless.
+				Version: e.Version,
 			})
 		}
 	}
@@ -207,7 +251,7 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 		}
 		batch.EntityResults = append(batch.EntityResults, &datastorepb.EntityResult{
 			Entity:  entityToProto(e, project),
-			Version: 1,
+			Version: e.Version,
 		})
 	}
 	return &datastorepb.RunQueryResponse{Batch: batch}, nil
