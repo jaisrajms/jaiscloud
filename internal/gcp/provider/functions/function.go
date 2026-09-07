@@ -294,44 +294,43 @@ func (p *Provider) UpdateFunction(ctx context.Context, nr *model.NormalizedReque
 	}
 	location := strParam(nr, "location")
 	id := functionID(name)
-	f, err := p.functions.GetFunction(ctx, nr.AccountID, location, id)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
-	// PATCH is a merge: apply only the fields present in the body.
-	if v := bodyString(body, "runtime"); v != "" {
-		f.Runtime = v
-	}
-	if v := bodyString(body, "entryPoint"); v != "" {
-		f.EntryPoint = v
-	}
-	if v := bodyString(body, "sourceUploadUrl"); v != "" {
-		f.SourceUploadURL = v
-	}
-	if v := bodyString(body, "sourceArchiveUrl"); v != "" {
-		f.SourceArchiveURL = v
-	}
-	if env := bodyStringMap(body, "environmentVariables"); env != nil {
-		f.EnvironmentVariables = env
-	}
-	if labels := bodyStringMap(body, "labels"); labels != nil {
-		f.Labels = labels
-	}
-	if v := bodyString(body, "description"); v != "" {
-		f.Description = v
-	}
-	if v := bodyString(body, "timeout"); v != "" {
-		f.Timeout = v
-	}
-	if n, ok := body["availableMemoryMb"].(float64); ok && n > 0 {
-		f.AvailableMemoryMB = int(n)
-	}
-	if et := bodyEventTrigger(body); et != nil {
-		f.EventTrigger = et
-	}
-	f.UpdateTime = clock.Now().UTC()
-	if err := p.functions.UpdateFunction(ctx, nr.AccountID, location, id, f); err != nil {
+	f, err := p.functions.UpdateFunctionAtomic(ctx, nr.AccountID, location, id, func(f functionsstore.Function) (functionsstore.Function, error) {
+		// PATCH is a merge: apply only the fields present in the body.
+		if v := bodyString(body, "runtime"); v != "" {
+			f.Runtime = v
+		}
+		if v := bodyString(body, "entryPoint"); v != "" {
+			f.EntryPoint = v
+		}
+		if v := bodyString(body, "sourceUploadUrl"); v != "" {
+			f.SourceUploadURL = v
+		}
+		if v := bodyString(body, "sourceArchiveUrl"); v != "" {
+			f.SourceArchiveURL = v
+		}
+		if env := bodyStringMap(body, "environmentVariables"); env != nil {
+			f.EnvironmentVariables = env
+		}
+		if labels := bodyStringMap(body, "labels"); labels != nil {
+			f.Labels = labels
+		}
+		if v := bodyString(body, "description"); v != "" {
+			f.Description = v
+		}
+		if v := bodyString(body, "timeout"); v != "" {
+			f.Timeout = v
+		}
+		if n, ok := body["availableMemoryMb"].(float64); ok && n > 0 {
+			f.AvailableMemoryMB = int(n)
+		}
+		if et := bodyEventTrigger(body); et != nil {
+			f.EventTrigger = et
+		}
+		f.UpdateTime = clock.Now().UTC()
+		return f, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	return provider.OK(functionToMap(nr, f)), nil

@@ -110,6 +110,61 @@ func (s *PostgresStore) UpdateFunction(ctx context.Context, projectID, location,
 	return nil
 }
 
+// UpdateFunctionAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the function for the
+// duration of mutate, so a concurrent UpdateFunctionAtomic on the same
+// function blocks until this transaction commits or rolls back, instead of
+// racing to silently overwrite this call's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateFunctionAtomic(ctx context.Context, projectID, location, id string, mutate func(Function) (Function, error)) (Function, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Function{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanFunction(tx.QueryRow(ctx, `
+		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
+		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
+		       available_memory_mb, timeout, description
+		FROM jc_functions WHERE project_id=$1 AND location=$2 AND function_id=$3 FOR UPDATE
+	`, projectID, location, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Function{}, ErrNoSuchFunction
+	}
+	if err != nil {
+		return Function{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Function{}, err
+	}
+
+	env, _ := json.Marshal(next.EnvironmentVariables)
+	labels, _ := json.Marshal(next.Labels)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_functions SET runtime=$4, entry_point=$5, source_upload_url=$6, source_archive_url=$7,
+		       https_trigger_url=$8, event_trigger=$9, environment_variables=$10, status=$11, update_time=$12, labels=$13,
+		       available_memory_mb=$14, timeout=$15, description=$16
+		WHERE project_id=$1 AND location=$2 AND function_id=$3
+	`, projectID, location, id, next.Runtime, next.EntryPoint, next.SourceUploadURL, next.SourceArchiveURL,
+		next.HttpsTriggerURL, nullableJSON(next.EventTrigger), json.RawMessage(env), next.Status, next.UpdateTime,
+		json.RawMessage(labels), next.AvailableMemoryMB, next.Timeout, next.Description)
+	if err != nil {
+		return Function{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Function{}, ErrNoSuchFunction
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Function{}, err
+	}
+	next.ID = id
+	next.Location = location
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteFunction(ctx context.Context, projectID, location, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_functions WHERE project_id=$1 AND location=$2 AND function_id=$3`, projectID, location, id)
 	if err != nil {

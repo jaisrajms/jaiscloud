@@ -59,6 +59,24 @@ func (s *MemoryStore) UpdateFunction(_ context.Context, projectID, location, id 
 	return nil
 }
 
+func (s *MemoryStore) UpdateFunctionAtomic(_ context.Context, projectID, location, id string, mutate func(Function) (Function, error)) (Function, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := lkey(projectID, location)
+	current, ok := s.functions[key][id]
+	if !ok {
+		return Function{}, ErrNoSuchFunction
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Function{}, err
+	}
+	next.ID = id
+	next.Location = location
+	s.functions[key][id] = next
+	return next, nil
+}
+
 func (s *MemoryStore) DeleteFunction(_ context.Context, projectID, location, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

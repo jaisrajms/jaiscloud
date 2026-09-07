@@ -48,6 +48,13 @@ type Store interface {
 	CreateFunction(ctx context.Context, projectID, location, id string, f Function) error
 	GetFunction(ctx context.Context, projectID, location, id string) (Function, error)
 	UpdateFunction(ctx context.Context, projectID, location, id string, f Function) error
+	// UpdateFunctionAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current function and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetFunction followed
+	// by UpdateFunction, this is atomic with respect to concurrent updates on
+	// the same function, so a PATCH that merges only a subset of fields can't
+	// lose a concurrent PATCH's changes to other fields.
+	UpdateFunctionAtomic(ctx context.Context, projectID, location, id string, mutate func(Function) (Function, error)) (Function, error)
 	DeleteFunction(ctx context.Context, projectID, location, id string) error
 	ListFunctions(ctx context.Context, projectID, location string) ([]Function, error)
 	// ListFunctionsAllLocations returns every function for a project across all

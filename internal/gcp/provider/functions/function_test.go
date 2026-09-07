@@ -3,7 +3,11 @@ package functions
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gcp/resource"
@@ -108,6 +112,100 @@ func TestFunctionCRUD(t *testing.T) {
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/hello"})
 	if _, err := p.GetFunction(ctx, nr); err == nil {
 		t.Errorf("expected NotFound after delete")
+	}
+}
+
+// delayedGetStore wraps a functionsstore.Store, delaying every GetFunction
+// call to widen a TOCTOU race window in tests.
+type delayedGetStore struct {
+	functionsstore.Store
+	delay time.Duration
+}
+
+func (d *delayedGetStore) GetFunction(ctx context.Context, projectID, location, id string) (functionsstore.Function, error) {
+	f, err := d.Store.GetFunction(ctx, projectID, location, id)
+	time.Sleep(d.delay)
+	return f, err
+}
+
+// TestUpdateFunctionConcurrentDisjointFieldsNoLostUpdate proves that
+// UpdateFunction's get-merge-write cycle is atomic with respect to other
+// concurrent PATCH requests. Without atomicity, a PATCH that only intends to
+// change "description" reads a stale full copy of the function (taken before
+// a concurrent "runtime"-only PATCH committed), then writes that stale copy
+// back — silently reverting the runtime change even though the description
+// PATCH never touched runtime. Here, 25 goroutines each PATCH only "runtime"
+// to a unique value and 25 PATCH only "description" to a unique value; if the
+// bug is present, the final runtime (or description) will revert to its
+// original pre-race value because some racing writer's stale snapshot landed
+// last, instead of ending on one of the values a goroutine actually wrote.
+func TestUpdateFunctionConcurrentDisjointFieldsNoLostUpdate(t *testing.T) {
+	ctx := context.Background()
+	// delayedGetStore widens the TOCTOU window between a read and a
+	// subsequent write so the race manifests reliably instead of depending on
+	// scheduler luck (in-memory Get+merge+Update round trips otherwise
+	// complete in nanoseconds, too fast to overlap reliably). Irrelevant to
+	// the fixed code path, which no longer calls GetFunction from Update at
+	// all — UpdateFunctionAtomic does its own locked read internally.
+	p := New(&delayedGetStore{Store: functionsstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore(), nil)
+
+	createNR := newNR(map[string]any{
+		"location":   "us-central1",
+		"functionId": "f1",
+		"body": map[string]any{
+			"runtime":     "nodejs20",
+			"entryPoint":  "h",
+			"description": "d0",
+			"timeout":     "60s",
+		},
+	})
+	if _, err := p.CreateFunction(ctx, createNR); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const perField = 25
+	var wg sync.WaitGroup
+	errs := make([]error, 2*perField)
+	for i := 0; i < perField; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			nr := newNR(map[string]any{
+				"location": "us-central1", "name": "locations/us-central1/functions/f1",
+				"body": map[string]any{"runtime": fmt.Sprintf("vR%d", i)},
+			})
+			_, errs[i] = p.UpdateFunction(ctx, nr)
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			nr := newNR(map[string]any{
+				"location": "us-central1", "name": "locations/us-central1/functions/f1",
+				"body": map[string]any{"description": fmt.Sprintf("vD%d", i)},
+			})
+			_, errs[perField+i] = p.UpdateFunction(ctx, nr)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("update %d: %v", i, err)
+		}
+	}
+
+	got, err := p.GetFunction(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/f1"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	runtime, _ := got.Data["runtime"].(string)
+	description, _ := got.Data["description"].(string)
+	if runtime == "nodejs20" || !strings.HasPrefix(runtime, "vR") {
+		t.Errorf("runtime reverted to a stale value instead of one of the 25 concurrent writers': got %q", runtime)
+	}
+	if description == "d0" || !strings.HasPrefix(description, "vD") {
+		t.Errorf("description reverted to a stale value instead of one of the 25 concurrent writers': got %q", description)
+	}
+	if got.Data["timeout"] != "60s" {
+		t.Errorf("untouched field timeout should be unaffected, got %v", got.Data["timeout"])
 	}
 }
 
