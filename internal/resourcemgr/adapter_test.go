@@ -49,6 +49,16 @@ func (m *memStore) Upsert(_ context.Context, _, _ string, e store.ResourceEntry)
 	return nil
 }
 
+func (m *memStore) UpsertAtomic(_ context.Context, _, _, t, id string, mutate func(store.ResourceEntry, bool) (store.ResourceEntry, error)) (store.ResourceEntry, error) {
+	current, exists := m.entries[m.key(t, id)]
+	next, err := mutate(current, exists)
+	if err != nil {
+		return store.ResourceEntry{}, err
+	}
+	m.entries[m.key(next.Type, next.ID)] = next
+	return next, nil
+}
+
 func (m *memStore) Delete(_ context.Context, _, _, t, id string) error {
 	delete(m.entries, m.key(t, id))
 	return nil
@@ -219,6 +229,9 @@ func (s *errStore) Update(_ context.Context, _, _ string, _ store.ResourceEntry)
 }
 func (s *errStore) Upsert(_ context.Context, _, _ string, _ store.ResourceEntry) error {
 	return s.err
+}
+func (s *errStore) UpsertAtomic(_ context.Context, _, _, _, _ string, _ func(store.ResourceEntry, bool) (store.ResourceEntry, error)) (store.ResourceEntry, error) {
+	return store.ResourceEntry{}, s.err
 }
 func (s *errStore) Delete(_ context.Context, _, _, _, _ string) error { return s.err }
 func (s *errStore) List(_ context.Context, _, _, _, _ string) ([]store.ResourceEntry, error) {

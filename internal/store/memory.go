@@ -88,6 +88,31 @@ func (s *MemoryResourceStore) Update(ctx context.Context, account, region string
 	return nil
 }
 
+func (s *MemoryResourceStore) UpsertAtomic(ctx context.Context, account, region, resourceType, id string, mutate func(current ResourceEntry, exists bool) (ResourceEntry, error)) (ResourceEntry, error) {
+	if region == "" {
+		return ResourceEntry{}, fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", resourceType, id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := key(account, region, resourceType, id)
+	current, exists := s.entries[k]
+	next, err := mutate(current, exists)
+	if err != nil {
+		return ResourceEntry{}, err
+	}
+	now := clock.Now()
+	if exists {
+		next.CreatedAt = current.CreatedAt
+	} else {
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	next.Type = resourceType
+	next.ID = id
+	s.entries[k] = next
+	return next, nil
+}
+
 func (s *MemoryResourceStore) Delete(ctx context.Context, account, region, resourceType, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

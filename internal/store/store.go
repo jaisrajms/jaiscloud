@@ -44,6 +44,16 @@ type ResourceStore interface {
 	List(ctx context.Context, account, region, resourceType, prefix string) ([]ResourceEntry, error)
 	Purge(ctx context.Context, account, region, resourceType string) error
 
+	// UpsertAtomic performs a locked read-mutate-write cycle on a single entry:
+	// mutate receives the current entry (zero value, exists=false if absent)
+	// and returns the entry to persist, or an error to abort without writing.
+	// Unlike a separate Get followed by Update/Upsert, the read and write are
+	// atomic with respect to concurrent Create/Upsert/Update/UpsertAtomic calls
+	// on the same key — callers doing read-modify-write with an in-value
+	// precondition (e.g. etag/CAS checks) must use this instead of Get+Upsert
+	// to avoid a lost-update race between two concurrent callers.
+	UpsertAtomic(ctx context.Context, account, region, resourceType, id string, mutate func(current ResourceEntry, exists bool) (ResourceEntry, error)) (ResourceEntry, error)
+
 	// Reset wipes all state — used by the admin reset endpoint.
 	Reset(ctx context.Context)
 }

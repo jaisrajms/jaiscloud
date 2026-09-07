@@ -44,9 +44,18 @@ func Load(ctx context.Context, s store.ResourceStore, account, resourceType, id 
 	return p
 }
 
+// errEtagMismatch aborts Set's UpsertAtomic mutate callback without writing,
+// distinguishing an etag-precondition failure from a genuine storage error.
+var errEtagMismatch = model.NewProviderError("Conflict", "etag mismatch: optimistic concurrency control failed", 409)
+
 // Set stores a policy for a resource, enforcing etag OCC. body is the parsed
 // request JSON — either the Policy fields directly, or wrapped in a "policy"
 // field per SetIamPolicyRequest. Returns the stored policy.
+//
+// The etag check and the write happen inside a single UpsertAtomic call so
+// two concurrent SetIamPolicy requests that both read the same starting etag
+// can't both pass the check and race to overwrite each other — the second to
+// acquire the lock sees the first's already-updated etag and is rejected.
 func Set(ctx context.Context, s store.ResourceStore, account, resourceType, id string, body map[string]any) (Policy, error) {
 	policyBody := body
 	if p, ok := body["policy"].(map[string]any); ok {
@@ -56,16 +65,30 @@ func Set(ctx context.Context, s store.ResourceStore, account, resourceType, id s
 	if bs, ok := policyBody["bindings"].([]any); ok {
 		bindings = bs
 	}
-	existing := Load(ctx, s, account, resourceType, id)
-	if reqEtag, _ := policyBody["etag"].(string); reqEtag != "" && reqEtag != existing.Etag {
-		return Policy{}, model.NewProviderError("Conflict", "etag mismatch: optimistic concurrency control failed", 409)
-	}
+	reqEtag, _ := policyBody["etag"].(string)
+
 	pol := Policy{Version: 1, Etag: EtagFor(bindings), Bindings: bindings}
 	if v, ok := policyBody["version"].(float64); ok {
 		pol.Version = int(v)
 	}
-	data, _ := json.Marshal(pol)
-	_ = s.Upsert(ctx, account, store.GlobalRegion, store.ResourceEntry{Type: resourceType, ID: id, Data: data})
+
+	_, err := s.UpsertAtomic(ctx, account, store.GlobalRegion, resourceType, id, func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+		existing := Policy{Version: 1, Etag: DefaultEtag, Bindings: []any{}}
+		if exists {
+			json.Unmarshal(current.Data, &existing)
+		}
+		if reqEtag != "" && reqEtag != existing.Etag {
+			return store.ResourceEntry{}, errEtagMismatch
+		}
+		data, _ := json.Marshal(pol)
+		return store.ResourceEntry{Type: resourceType, ID: id, Data: data}, nil
+	})
+	if err != nil {
+		if err == errEtagMismatch {
+			return Policy{}, errEtagMismatch
+		}
+		return Policy{}, err
+	}
 	return pol, nil
 }
 
