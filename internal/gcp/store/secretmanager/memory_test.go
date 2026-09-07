@@ -2,6 +2,7 @@ package secretmanager
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -122,6 +123,51 @@ func TestMemoryStoreNextVersion(t *testing.T) {
 	}
 	if _, err := s.NextVersion(ctx, "proj", "missing"); err != ErrNoSuchSecret {
 		t.Fatalf("expected ErrNoSuchSecret, got %v", err)
+	}
+}
+
+func TestMemoryStoreUpdateSecretAtomic(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	s.CreateSecret(ctx, "proj", "a", Secret{ID: "a", Labels: map[string]string{"k": "v"}, NextVer: 1})
+
+	updated, err := s.UpdateSecretAtomic(ctx, "proj", "a", func(cur Secret) (Secret, error) {
+		cur.Labels = map[string]string{"k": "v2"}
+		return cur, nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateSecretAtomic: %v", err)
+	}
+	if updated.Labels["k"] != "v2" {
+		t.Fatalf("returned value not updated: %+v", updated)
+	}
+	got, _ := s.GetSecret(ctx, "proj", "a")
+	if got.Labels["k"] != "v2" {
+		t.Fatalf("stored value not updated: %+v", got)
+	}
+
+	// mutate error: no-op, nothing written.
+	sentinel := errors.New("nope")
+	if _, err := s.UpdateSecretAtomic(ctx, "proj", "a", func(cur Secret) (Secret, error) {
+		return Secret{}, sentinel
+	}); !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
+	}
+	got, _ = s.GetSecret(ctx, "proj", "a")
+	if got.Labels["k"] != "v2" {
+		t.Fatalf("secret must be untouched after a mutate error, got %+v", got)
+	}
+
+	// missing secret → ErrNoSuchSecret, mutate never called.
+	mutateCalled := false
+	if _, err := s.UpdateSecretAtomic(ctx, "proj", "missing", func(cur Secret) (Secret, error) {
+		mutateCalled = true
+		return cur, nil
+	}); err != ErrNoSuchSecret {
+		t.Fatalf("expected ErrNoSuchSecret, got %v", err)
+	}
+	if mutateCalled {
+		t.Fatal("mutate must not be called for a missing secret")
 	}
 }
 

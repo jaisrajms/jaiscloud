@@ -49,6 +49,16 @@ type Store interface {
 	CreateSecret(ctx context.Context, projectID, id string, s Secret) error
 	GetSecret(ctx context.Context, projectID, id string) (Secret, error)
 	UpdateSecret(ctx context.Context, projectID, id string, s Secret) error
+	// UpdateSecretAtomic atomically reads the current secret, calls mutate to
+	// compute the new value, and writes it back — no other GetSecret/
+	// UpdateSecret/NextVersion for this secret can be observed or applied in
+	// between. Callers doing a read-modify-write (a labels/rotation patch, an
+	// automatic-rotation version bump) must use this instead of a separate
+	// GetSecret+UpdateSecret pair: the latter has a lost-update window where a
+	// concurrent NextVersion() call's counter advance gets silently rolled
+	// back by the stale write. Returns ErrNoSuchSecret if the secret doesn't
+	// exist (mutate is not called in that case).
+	UpdateSecretAtomic(ctx context.Context, projectID, id string, mutate func(current Secret) (Secret, error)) (Secret, error)
 	DeleteSecret(ctx context.Context, projectID, id string) error // cascades versions
 	ListSecrets(ctx context.Context, projectID string) ([]Secret, error)
 

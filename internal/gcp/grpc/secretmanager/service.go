@@ -189,29 +189,31 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	cur, err := s.secrets.GetSecret(ctx, project, id)
+	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
+	// concurrent AddVersion's NextVersion() counter advance can't land
+	// between our read and our write and get silently rolled back by it.
+	updated, err := s.secrets.UpdateSecretAtomic(ctx, project, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		if labels := proto.GetLabels(); labels != nil {
+			cur.Labels = labels
+		}
+		if r := proto.GetRotation(); r != nil {
+			cur.Rotation = rotationFromProto(r)
+		}
+		if va := proto.GetVersionAliases(); va != nil {
+			cur.VersionAliases = make(map[string]int, len(va))
+			for k, v := range va {
+				cur.VersionAliases[k] = int(v)
+			}
+		}
+		if kmsKeyName := kmsKeyNameFromSecret(proto); kmsKeyName != "" {
+			cur.KmsKeyName = kmsKeyName
+		}
+		return cur, nil
+	})
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	if labels := proto.GetLabels(); labels != nil {
-		cur.Labels = labels
-	}
-	if r := proto.GetRotation(); r != nil {
-		cur.Rotation = rotationFromProto(r)
-	}
-	if va := proto.GetVersionAliases(); va != nil {
-		cur.VersionAliases = make(map[string]int, len(va))
-		for k, v := range va {
-			cur.VersionAliases[k] = int(v)
-		}
-	}
-	if kmsKeyName := kmsKeyNameFromSecret(proto); kmsKeyName != "" {
-		cur.KmsKeyName = kmsKeyName
-	}
-	if err := s.secrets.UpdateSecret(ctx, project, id, cur); err != nil {
-		return nil, mapSecretErr(err)
-	}
-	return secretToProto(project, cur), nil
+	return secretToProto(project, updated), nil
 }
 
 func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteSecretRequest) (*emptypb.Empty, error) {

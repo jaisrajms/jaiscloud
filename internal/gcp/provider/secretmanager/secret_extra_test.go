@@ -2,6 +2,7 @@ package secretmanager
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -163,6 +164,76 @@ func TestSecretAddVersionConcurrent(t *testing.T) {
 	}
 	if len(versions) != n {
 		t.Fatalf("expected %d versions, got %d", n, len(versions))
+	}
+}
+
+// TestSecretUpdateConcurrentWithAddVersion is the regression test for the
+// version-counter corruption bug: Update used to Get the secret, merge
+// request fields (including the NextVer it just read) into a full copy, then
+// write that whole copy back with a separate UpdateSecret call. If a
+// concurrent AddVersion's NextVersion() advanced the counter in the window
+// between Update's read and its write, Update's stale write silently rolled
+// the counter back — a subsequent AddVersion would then reuse an
+// already-issued version ID and CreateVersion would silently overwrite that
+// version's stored payload. Fixed by routing Update through
+// UpdateSecretAtomic, which holds the store's lock for the whole
+// read-merge-write sequence so NextVersion() can't land in the middle of it.
+//
+// This asserts the property that actually matters: with N concurrent
+// AddVersion calls interleaved with N concurrent Update calls (patching an
+// unrelated field, labels), every AddVersion must produce a distinct version
+// ID — no two ever collide on the same ID, which is exactly what a rolled-
+// back counter would cause.
+func TestSecretUpdateConcurrentWithAddVersion(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "s"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*n)
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			nr := newNR(map[string]any{"name": "secrets/s", "body": map[string]any{"payload": map[string]any{"data": "aGk="}}})
+			if _, err := p.AddVersion(ctx, nr); err != nil {
+				errs <- err
+			}
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			nr := newNR(map[string]any{
+				"name": "secrets/s",
+				"body": map[string]any{"labels": map[string]any{"iteration": strconv.Itoa(i)}},
+			})
+			if _, err := p.Update(ctx, nr); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent AddVersion/Update: %v", err)
+	}
+
+	versions, err := p.secrets.ListVersions(ctx, "proj", "s")
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) != n {
+		t.Fatalf("expected %d distinct versions (a rolled-back counter would cause fewer, via silent ID collision), got %d", n, len(versions))
+	}
+	seen := make(map[string]bool, n)
+	for _, v := range versions {
+		if seen[v.VersionID] {
+			t.Fatalf("duplicate version ID %q — the counter was rolled back and two AddVersion calls collided", v.VersionID)
+		}
+		seen[v.VersionID] = true
 	}
 }
 

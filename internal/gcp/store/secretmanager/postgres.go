@@ -89,6 +89,58 @@ func (s *PostgresStore) UpdateSecret(ctx context.Context, projectID, id string, 
 	return nil
 }
 
+// UpdateSecretAtomic mirrors MemoryStore's version: a Serializable transaction
+// with SELECT ... FOR UPDATE row-locks the secret for the duration of
+// mutate, so a concurrent NextVersion() (or another UpdateSecretAtomic) call
+// on the same secret blocks until this transaction commits or rolls back,
+// instead of racing to silently roll back the other's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateSecretAtomic(ctx context.Context, projectID, id string, mutate func(Secret) (Secret, error)) (Secret, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Secret{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var sec Secret
+	var labels, rotation, aliases []byte
+	err = tx.QueryRow(ctx, `
+		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name
+		FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE
+	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Secret{}, ErrNoSuchSecret
+	}
+	if err != nil {
+		return Secret{}, err
+	}
+	json.Unmarshal(labels, &sec.Labels)
+	if len(rotation) > 0 {
+		json.Unmarshal(rotation, &sec.Rotation)
+	}
+	if len(aliases) > 0 {
+		json.Unmarshal(aliases, &sec.VersionAliases)
+	}
+
+	next, err := mutate(sec)
+	if err != nil {
+		return Secret{}, err
+	}
+
+	newLabels, _ := json.Marshal(next.Labels)
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7
+		WHERE project_id=$1 AND secret_id=$2
+	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName); err != nil {
+		return Secret{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Secret{}, err
+	}
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteSecret(ctx context.Context, projectID, id string) error {
 	if _, err := s.pool.Exec(ctx, `DELETE FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2`, projectID, id); err != nil {
 		return err

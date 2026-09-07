@@ -268,70 +268,98 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, err
 	}
 	id := secretID(name)
-	s, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
+	body, _ := nr.Params["body"].(map[string]any)
+
+	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
+	// concurrent AddVersion's NextVersion() counter advance can't land between
+	// our read and our write and get silently rolled back by it.
+	updated, err := p.secrets.UpdateSecretAtomic(ctx, nr.AccountID, id, func(current secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		m := fromStoreSecret(nr, current)
+		if body != nil {
+			if labels, ok := body["labels"].(map[string]any); ok {
+				m.Labels = make(map[string]string, len(labels))
+				for k, v := range labels {
+					if sv, ok := v.(string); ok {
+						m.Labels[k] = sv
+					}
+				}
+			}
+			if r := rotationFromBody(body); r != nil {
+				m.Rotation = r
+			}
+			if va := versionAliasesFromBody(body); va != nil {
+				m.VersionAliases = va
+			}
+			if kmsKeyName := kmsKeyNameFromBody(body); kmsKeyName != "" {
+				m.KmsKeyName = kmsKeyName
+			}
+		}
+		return toStoreSecret(m), nil
+	})
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	m := fromStoreSecret(nr, s)
-	if body, ok := nr.Params["body"].(map[string]any); ok {
-		if labels, ok := body["labels"].(map[string]any); ok {
-			m.Labels = make(map[string]string, len(labels))
-			for k, v := range labels {
-				if sv, ok := v.(string); ok {
-					m.Labels[k] = sv
-				}
-			}
-		}
-		if r := rotationFromBody(body); r != nil {
-			m.Rotation = r
-		}
-		if va := versionAliasesFromBody(body); va != nil {
-			m.VersionAliases = va
-		}
-		if kmsKeyName := kmsKeyNameFromBody(body); kmsKeyName != "" {
-			m.KmsKeyName = kmsKeyName
-		}
-	}
-	if err := p.secrets.UpdateSecret(ctx, nr.AccountID, id, toStoreSecret(m)); err != nil {
-		return nil, mapSecretErr(err)
-	}
-	return provider.OK(secretToMap(m)), nil
+	return provider.OK(secretToMap(fromStoreSecret(nr, updated))), nil
 }
 
-// maybeRotate advances a secret's rotation schedule when it is due: it creates
-// an empty version and advances nextRotationTime by rotationPeriod. This is
-// GCP's automatic-rotation behavior, evaluated lazily on read (no background
+// errSkipRotation aborts maybeRotate's atomic mutate without writing, when
+// rotation turns out not to be due after all (re-checked under the store's
+// lock, since the Secret this function receives may have been read well
+// before this call by a caller several frames up).
+var errSkipRotation = errors.New("secret rotation not due")
+
+// maybeRotate advances a secret's rotation schedule when it is due: it
+// allocates the next version number and creates an empty version, and
+// advances nextRotationTime by rotationPeriod. This is GCP's
+// automatic-rotation behavior, evaluated lazily on read (no background
 // worker), mirroring how AWS SQS enforces visibility lazily on receive.
+//
+// s is the caller's (possibly stale — read by Get/Access some time before
+// this call) snapshot, used only for the cheap up-front "is rotation even
+// configured and due" check, to avoid taking the store lock at all in the
+// overwhelmingly common case where it isn't. If that check passes,
+// everything that actually matters — whether rotation is STILL due, the
+// rotation-schedule advance, and the version-counter allocation — is
+// re-done from a fresh read inside UpdateSecretAtomic's locked section, so
+// a concurrent Update/AddVersion/maybeRotate on the same secret can't
+// interleave with this one.
 func (p *Provider) maybeRotate(ctx context.Context, account, id string, s secretmanagerstore.Secret) secretmanagerstore.Secret {
 	if s.Rotation == nil || s.Rotation.NextRotationTime == "" {
 		return s
 	}
-	next, err := time.Parse(time.RFC3339Nano, s.Rotation.NextRotationTime)
-	if err != nil || clock.Now().Before(next) {
+	if next, err := time.Parse(time.RFC3339Nano, s.Rotation.NextRotationTime); err != nil || clock.Now().Before(next) {
 		return s
 	}
-	if s.Rotation.RotationPeriod != "" {
-		if d, err := time.ParseDuration(s.Rotation.RotationPeriod); err == nil {
-			// Copy before mutating: s.Rotation is a pointer aliased with the
-			// store's own copy (GetSecret returns Secret by value, but Rotation
-			// is a *Rotation field), so writing through it directly would mutate
-			// live store state ahead of, and regardless of the outcome of, the
-			// UpdateSecret call below.
-			rotation := *s.Rotation
-			rotation.NextRotationTime = clock.Now().Add(d).UTC().Format(time.RFC3339Nano)
-			s.Rotation = &rotation
+
+	var allocatedVer int
+	updated, err := p.secrets.UpdateSecretAtomic(ctx, account, id, func(current secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		if current.Rotation == nil || current.Rotation.NextRotationTime == "" {
+			return secretmanagerstore.Secret{}, errSkipRotation
 		}
-	}
-	ver, err := p.secrets.NextVersion(ctx, account, id)
+		next, err := time.Parse(time.RFC3339Nano, current.Rotation.NextRotationTime)
+		if err != nil || clock.Now().Before(next) {
+			return secretmanagerstore.Secret{}, errSkipRotation
+		}
+		if current.Rotation.RotationPeriod != "" {
+			if d, err := time.ParseDuration(current.Rotation.RotationPeriod); err == nil {
+				rotation := *current.Rotation
+				rotation.NextRotationTime = clock.Now().Add(d).UTC().Format(time.RFC3339Nano)
+				current.Rotation = &rotation
+			}
+		}
+		allocatedVer = current.NextVer
+		current.NextVer++
+		return current, nil
+	})
 	if err != nil {
+		// errSkipRotation (already rotated, or rotation disabled, since our
+		// caller's read) or any store error: behave as if untouched.
 		return s
 	}
-	s.NextVer = ver + 1
 	_ = p.secrets.CreateVersion(ctx, account, secretmanagerstore.Version{
-		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED", CreateTime: clock.Now(),
+		SecretID: id, VersionID: strconv.Itoa(allocatedVer), State: "ENABLED", CreateTime: clock.Now(),
 	})
-	_ = p.secrets.UpdateSecret(ctx, account, id, s)
-	return s
+	return updated
 }
 
 func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

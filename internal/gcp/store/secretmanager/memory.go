@@ -4,6 +4,8 @@ import (
 	"context"
 	"sort"
 	"sync"
+
+	"jaiscloud/internal/gcp/storeutil"
 )
 
 // MemoryStore is an in-memory Store.
@@ -54,6 +56,19 @@ func (s *MemoryStore) UpdateSecret(_ context.Context, projectID, id string, sec 
 	}
 	s.secrets[projectID][id] = sec
 	return nil
+}
+
+func (s *MemoryStore) UpdateSecretAtomic(_ context.Context, projectID, id string, mutate func(Secret) (Secret, error)) (Secret, error) {
+	return storeutil.AtomicUpdate(&s.mu,
+		func() (Secret, bool) { sec, ok := s.secrets[projectID][id]; return sec, ok },
+		func(current Secret, exists bool) (Secret, error) {
+			if !exists {
+				return Secret{}, ErrNoSuchSecret
+			}
+			return mutate(current)
+		},
+		func(sec Secret) { s.secrets[projectID][id] = sec },
+	)
 }
 
 func (s *MemoryStore) DeleteSecret(_ context.Context, projectID, id string) error {
