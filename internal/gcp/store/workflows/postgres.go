@@ -107,6 +107,59 @@ func (s *PostgresStore) UpdateWorkflow(ctx context.Context, projectID, location,
 	return nil
 }
 
+// UpdateWorkflowAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the workflow for the
+// duration of mutate, so a concurrent UpdateWorkflowAtomic on the same
+// workflow blocks until this transaction commits or rolls back, instead of
+// racing to silently overwrite this call's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateWorkflowAtomic(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Workflow{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanWorkflow(tx.QueryRow(ctx, `
+		SELECT workflow_id, location, description, labels, service_account, source_contents,
+		       state, revision_id, create_time, update_time, call_log_level, user_env_vars, tags
+		FROM jc_workflows WHERE project_id=$1 AND location=$2 AND workflow_id=$3 FOR UPDATE
+	`, projectID, location, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Workflow{}, ErrNoSuchWorkflow
+	}
+	if err != nil {
+		return Workflow{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Workflow{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	userEnvVars, _ := json.Marshal(next.UserEnvVars)
+	tags, _ := json.Marshal(next.Tags)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_workflows SET description=$4, labels=$5, service_account=$6, source_contents=$7,
+		       state=$8, revision_id=$9, update_time=$10, call_log_level=$11, user_env_vars=$12, tags=$13
+		WHERE project_id=$1 AND location=$2 AND workflow_id=$3
+	`, projectID, location, id, next.Description, json.RawMessage(labels), next.ServiceAccount, next.SourceContents,
+		next.State, next.RevisionID, next.UpdateTime, next.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
+	if err != nil {
+		return Workflow{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Workflow{}, ErrNoSuchWorkflow
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Workflow{}, err
+	}
+	next.ID = id
+	next.Location = location
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteWorkflow(ctx context.Context, projectID, location, id string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

@@ -324,50 +324,49 @@ func (p *Provider) UpdateWorkflow(ctx context.Context, nr *model.NormalizedReque
 		return nil, model.NewProviderError("InvalidArgument", "missing workflow name", 400)
 	}
 	id := workflowID(name)
-	w, err := p.workflows.GetWorkflow(ctx, nr.AccountID, location, id)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
 	mask := strParam(nr, "updateMask")
 
 	apply := func(field string) bool {
 		return mask == "" || strings.Contains(","+mask+",", ","+field+",")
 	}
-	sourceChanged := false
-	if apply("description") {
-		w.Description = bodyString(body, "description")
-	}
-	if apply("labels") {
-		if labels := bodyStringMap(body, "labels"); labels != nil {
-			w.Labels = labels
+	w, err := p.workflows.UpdateWorkflowAtomic(ctx, nr.AccountID, location, id, func(w workflowsstore.Workflow) (workflowsstore.Workflow, error) {
+		sourceChanged := false
+		if apply("description") {
+			w.Description = bodyString(body, "description")
 		}
-	}
-	if apply("userEnvVars") {
-		if vars := bodyStringMap(body, "userEnvVars"); vars != nil {
-			w.UserEnvVars = vars
+		if apply("labels") {
+			if labels := bodyStringMap(body, "labels"); labels != nil {
+				w.Labels = labels
+			}
 		}
-	}
-	if apply("serviceAccount") {
-		if v := bodyString(body, "serviceAccount"); v != w.ServiceAccount {
-			w.ServiceAccount = v
-			sourceChanged = true
+		if apply("userEnvVars") {
+			if vars := bodyStringMap(body, "userEnvVars"); vars != nil {
+				w.UserEnvVars = vars
+			}
 		}
-	}
-	if apply("sourceContents") {
-		if v := bodyString(body, "sourceContents"); v != w.SourceContents {
-			w.SourceContents = v
-			sourceChanged = true
+		if apply("serviceAccount") {
+			if v := bodyString(body, "serviceAccount"); v != w.ServiceAccount {
+				w.ServiceAccount = v
+				sourceChanged = true
+			}
 		}
-	}
-	if apply("callLogLevel") {
-		w.CallLogLevel = bodyString(body, "callLogLevel")
-	}
-	if sourceChanged {
-		w.RevisionID = nextRevision(w.RevisionID)
-	}
-	w.UpdateTime = clock.Now().UTC()
-	if err := p.workflows.UpdateWorkflow(ctx, nr.AccountID, location, id, w); err != nil {
+		if apply("sourceContents") {
+			if v := bodyString(body, "sourceContents"); v != w.SourceContents {
+				w.SourceContents = v
+				sourceChanged = true
+			}
+		}
+		if apply("callLogLevel") {
+			w.CallLogLevel = bodyString(body, "callLogLevel")
+		}
+		if sourceChanged {
+			w.RevisionID = nextRevision(w.RevisionID)
+		}
+		w.UpdateTime = clock.Now().UTC()
+		return w, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	target := nr.ResourceID("workflow", location+"/"+id)

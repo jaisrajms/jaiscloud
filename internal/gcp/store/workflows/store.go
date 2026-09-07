@@ -104,6 +104,13 @@ type Store interface {
 	CreateWorkflow(ctx context.Context, projectID, location, id string, w Workflow) error
 	GetWorkflow(ctx context.Context, projectID, location, id string) (Workflow, error)
 	UpdateWorkflow(ctx context.Context, projectID, location, id string, w Workflow) error
+	// UpdateWorkflowAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current workflow and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetWorkflow followed
+	// by UpdateWorkflow, this is atomic with respect to concurrent updates on
+	// the same workflow, so a masked PATCH that merges only a subset of
+	// fields can't lose a concurrent PATCH's changes to other fields.
+	UpdateWorkflowAtomic(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error)
 	DeleteWorkflow(ctx context.Context, projectID, location, id string) error
 	ListWorkflows(ctx context.Context, projectID, location string) ([]Workflow, error)
 

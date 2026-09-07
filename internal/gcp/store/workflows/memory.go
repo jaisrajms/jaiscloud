@@ -68,6 +68,24 @@ func (s *MemoryStore) UpdateWorkflow(_ context.Context, projectID, location, id 
 	return nil
 }
 
+func (s *MemoryStore) UpdateWorkflowAtomic(_ context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := wlkey(projectID, location)
+	current, ok := s.workflows[key][id]
+	if !ok {
+		return Workflow{}, ErrNoSuchWorkflow
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Workflow{}, err
+	}
+	next.ID = id
+	next.Location = location
+	s.workflows[key][id] = next
+	return next, nil
+}
+
 func (s *MemoryStore) DeleteWorkflow(_ context.Context, projectID, location, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

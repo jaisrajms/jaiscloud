@@ -2,9 +2,12 @@ package workflows
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/gcp/resource"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
@@ -23,6 +26,92 @@ const simpleSource = "main:\n  steps:\n    - r:\n        return: 1\n"
 // revisionRE matches the GCP revision_id format "000001-a4d": a zero-padded
 // six-digit ordinal, a hyphen, and exactly three hexadecimal characters.
 var revisionRE = regexp.MustCompile(`^[0-9]{6}-[0-9a-f]{3}$`)
+
+// delayedGetStore wraps a workflowsstore.Store, delaying every GetWorkflow
+// call to widen a TOCTOU race window in tests.
+type delayedGetStore struct {
+	workflowsstore.Store
+	delay time.Duration
+}
+
+func (d *delayedGetStore) GetWorkflow(ctx context.Context, projectID, location, id string) (workflowsstore.Workflow, error) {
+	w, err := d.Store.GetWorkflow(ctx, projectID, location, id)
+	time.Sleep(d.delay)
+	return w, err
+}
+
+// TestUpdateWorkflowConcurrentDisjointFieldsNoLostUpdate proves that
+// UpdateWorkflow's get-merge-write cycle is atomic with respect to other
+// concurrent masked-PATCH requests. Without atomicity, a PATCH updating only
+// "description" (via updateMask) reads a stale full copy of the workflow
+// (taken before a concurrent "callLogLevel"-only PATCH committed), then
+// writes that stale copy back — silently reverting the callLogLevel change
+// even though the description PATCH's mask never named it. 25 goroutines
+// each PATCH only "description" to a unique value and 25 PATCH only
+// "callLogLevel" to a unique value; a delayed-Get store wrapper widens the
+// TOCTOU window reliably (the real in-memory round trip otherwise completes
+// in nanoseconds, too fast to overlap deterministically).
+func TestUpdateWorkflowConcurrentDisjointFieldsNoLostUpdate(t *testing.T) {
+	ctx := context.Background()
+	p := New(&delayedGetStore{Store: workflowsstore.NewMemoryStore(), delay: 5 * time.Millisecond})
+
+	createNR := newNR(map[string]any{
+		"location":   "us-central1",
+		"workflowId": "wf1",
+		"body": map[string]any{
+			"description":    "d0",
+			"sourceContents": simpleSource,
+			"callLogLevel":   "LOG_ALL_CALLS",
+		},
+	})
+	if _, err := p.CreateWorkflow(ctx, createNR); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const perField = 25
+	var wg sync.WaitGroup
+	errs := make([]error, 2*perField)
+	for i := 0; i < perField; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			nr := newNR(map[string]any{
+				"location": "us-central1", "name": "locations/us-central1/workflows/wf1",
+				"updateMask": "description",
+				"body":       map[string]any{"description": fmt.Sprintf("vDesc%d", i)},
+			})
+			_, errs[i] = p.UpdateWorkflow(ctx, nr)
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			nr := newNR(map[string]any{
+				"location": "us-central1", "name": "locations/us-central1/workflows/wf1",
+				"updateMask": "callLogLevel",
+				"body":       map[string]any{"callLogLevel": fmt.Sprintf("LEVEL%d", i)},
+			})
+			_, errs[perField+i] = p.UpdateWorkflow(ctx, nr)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("update %d: %v", i, err)
+		}
+	}
+
+	got, err := p.GetWorkflow(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/workflows/wf1"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	description, _ := got.Data["description"].(string)
+	callLogLevel, _ := got.Data["callLogLevel"].(string)
+	if description == "d0" || !strings.HasPrefix(description, "vDesc") {
+		t.Errorf("description reverted to a stale value instead of one of the 25 concurrent writers': got %q", description)
+	}
+	if callLogLevel == "LOG_ALL_CALLS" || !strings.HasPrefix(callLogLevel, "LEVEL") {
+		t.Errorf("callLogLevel reverted to a stale value instead of one of the 25 concurrent writers': got %q", callLogLevel)
+	}
+}
 
 func TestWorkflowCRUDAndLRO(t *testing.T) {
 	ctx := context.Background()
