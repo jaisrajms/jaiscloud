@@ -383,6 +383,50 @@ func BlobKey(bucket, object, generation string) string {
 	return blobKey(bucket, object, generation)
 }
 
+// objectPrecondition parses GCS's real ifGenerationMatch/ifGenerationNotMatch/
+// ifMetagenerationMatch/ifMetagenerationNotMatch query params — the codec's
+// generic queryToParams already copies these into nr.Params as strings, but
+// nothing previously read them, so a client's conditional write (most
+// commonly ifGenerationMatch=0 for "create only if this object doesn't
+// already exist") was silently applied unconditionally. Returns nil when the
+// request carries none of them (the overwhelmingly common case).
+func objectPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
+	var pre gcs.Precondition
+	set := false
+	if v, ok := parseInt64Param(nr, "ifGenerationMatch"); ok {
+		pre.GenerationMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifGenerationNotMatch"); ok {
+		pre.GenerationNotMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifMetagenerationMatch"); ok {
+		pre.MetagenerationMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifMetagenerationNotMatch"); ok {
+		pre.MetagenerationNotMatch = &v
+		set = true
+	}
+	if !set {
+		return nil
+	}
+	return &pre
+}
+
+func parseInt64Param(nr *model.NormalizedRequest, key string) (int64, bool) {
+	s, ok := nr.Params[key].(string)
+	if !ok || s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 // ─── buckets ──────────────────────────────────────────────────────────────────
 
 // bucketToMap converts a bucketMeta into the map stored by the ObjectStore.
@@ -834,8 +878,11 @@ func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return o, err
 	}
-	finalMeta, err := p.PutObjectData(ctx, nr.AccountID, toStoreObject(o), raw, versioned, priorBlobKey, md5Enabled, kmsKeyName, cseKey, cseKeySHA256)
+	finalMeta, err := p.PutObjectData(ctx, nr.AccountID, toStoreObject(o), raw, versioned, priorBlobKey, md5Enabled, kmsKeyName, cseKey, cseKeySHA256, objectPrecondition(nr))
 	if err != nil {
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return o, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		}
 		return o, err
 	}
 	return fromStoreObject(finalMeta), nil
@@ -848,7 +895,11 @@ func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedReque
 // generation and metadata; checksums/size are computed here and stamped onto
 // the returned metadata. project is the owning project (account scope) used for
 // envelope DEK wrapping.
-func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.ObjectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool, kmsKeyName string, cseKey []byte, cseKeySHA256 string) (gcs.ObjectMeta, error) {
+// precondition is GCS's ifGenerationMatch/ifGenerationNotMatch/
+// ifMetagenerationMatch/ifMetagenerationNotMatch, checked atomically with the
+// metadata write (see gcs.ObjectStore's *Checked methods) — nil for a caller
+// (currently: the gRPC Storage service) that doesn't yet parse one.
+func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.ObjectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool, kmsKeyName string, cseKey []byte, cseKeySHA256 string, precondition *gcs.Precondition) (gcs.ObjectMeta, error) {
 	// Plaintext checksums/size (GCS reports the logical object, not the
 	// ciphertext).
 	if md5Enabled {
@@ -892,9 +943,9 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	meta.WrappedDEK = wrappedDEK
 	var err error
 	if versioned {
-		err = p.objects.PutObjectGeneration(ctx, meta.Bucket, meta.Name, meta)
+		err = p.objects.PutObjectGenerationChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
 	} else {
-		err = p.objects.PutObjectMeta(ctx, meta.Bucket, meta.Name, meta)
+		err = p.objects.PutObjectMetaChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
 	}
 	if err != nil {
 		// Roll back the just-written blob so a failed metadata write does not
@@ -1410,9 +1461,12 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
-	if err := p.objects.PutObjectMeta(ctx, bucket, object, toStoreObject(o)); err != nil {
+	if err := p.objects.PutObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 		return nil, err
 	}
@@ -1448,9 +1502,12 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	}
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
-	if err := p.objects.PutObjectMeta(ctx, bucket, object, toStoreObject(o)); err != nil {
+	if err := p.objects.PutObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 		return nil, err
 	}
@@ -1499,7 +1556,7 @@ func bumpMeta(m string) string {
 func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	if err := p.DeleteObjectData(ctx, bucket, object); err != nil {
+	if err := p.DeleteObjectData(ctx, bucket, object, objectPrecondition(nr)); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -1508,10 +1565,17 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 // DeleteObjectData deletes an object, honoring retention holds and bucket
 // versioning (non-versioned: hard-delete every generation and its bytes;
 // versioned: tombstone the live generation and drop its bytes). Shared by the
-// REST ObjectsDelete and the gRPC DeleteObject.
-func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string) error {
+// REST ObjectsDelete and the gRPC DeleteObject. precondition is GCS's
+// ifGenerationMatch/ifGenerationNotMatch (the common "safe delete" idiom —
+// only delete if the object is still at the generation I last observed),
+// checked atomically with the delete; nil for a caller (currently: the gRPC
+// Storage service) that doesn't yet parse one.
+func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string, precondition *gcs.Precondition) error {
 	// Retention check first: a held or retention-active object cannot be
-	// deleted (GCS returns PERMISSION_DENIED).
+	// deleted (GCS returns PERMISSION_DENIED). Note this GetObjectMeta read is
+	// separate from the precondition check inside the *Checked delete call
+	// below — a hold added/removed in between is a pre-existing, narrower race
+	// unrelated to (and not widened by) the precondition fix here.
 	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
@@ -1526,9 +1590,12 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string) 
 	if p.bucketVersioned(ctx, bucket) {
 		// Versioned bucket: delete only the live generation, leaving a
 		// non-live tombstone that appears in ?versions=true listings.
-		if _, err := p.objects.TombstoneObjectMeta(ctx, bucket, object); err != nil {
+		if _, err := p.objects.TombstoneObjectMetaChecked(ctx, bucket, object, precondition); err != nil {
 			if errors.Is(err, gcs.ErrNoSuchObject) {
 				return model.NewProviderError("NotFound", "object not found", 404)
+			}
+			if errors.Is(err, gcs.ErrPreconditionFailed) {
+				return model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 			}
 			return err
 		}
@@ -1546,9 +1613,12 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string) 
 			}
 		}
 	}
-	if err := p.objects.DeleteObjectMeta(ctx, bucket, object); err != nil {
+	if err := p.objects.DeleteObjectMetaChecked(ctx, bucket, object, precondition); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return model.NewProviderError("NotFound", "object not found", 404)
+		}
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 		return err
 	}

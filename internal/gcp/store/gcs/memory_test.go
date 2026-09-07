@@ -97,3 +97,72 @@ func TestMemoryObjectStoreRoundTrip(t *testing.T) {
 		t.Fatalf("expected ErrNoSuchBucket after reset, got %v", err)
 	}
 }
+
+func TestMemoryObjectStorePutObjectMetaChecked(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryObjectStore()
+	if err := s.CreateBucket(ctx, "proj", "bkt", nil); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	// ifGenerationMatch=0 ("create only if absent") succeeds when no live
+	// object exists yet.
+	zero := int64(0)
+	o1 := ObjectMeta{Generation: "1", ContentType: "text/plain", TimeCreated: time.Now(), Updated: time.Now()}
+	if err := s.PutObjectMetaChecked(ctx, "bkt", "a.txt", o1, &Precondition{GenerationMatch: &zero}); err != nil {
+		t.Fatalf("create-if-absent: %v", err)
+	}
+
+	// The same precondition now fails: a live object exists.
+	o2 := ObjectMeta{Generation: "2", ContentType: "text/plain", TimeCreated: time.Now(), Updated: time.Now()}
+	if err := s.PutObjectMetaChecked(ctx, "bkt", "a.txt", o2, &Precondition{GenerationMatch: &zero}); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("expected ErrPreconditionFailed, got %v", err)
+	}
+	current, err := s.GetObjectMeta(ctx, "bkt", "a.txt")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if current.Generation != "1" {
+		t.Fatalf("generation = %q after a rejected write, want 1 (unchanged)", current.Generation)
+	}
+
+	// A matching generation precondition succeeds.
+	one := int64(1)
+	if err := s.PutObjectMetaChecked(ctx, "bkt", "a.txt", o2, &Precondition{GenerationMatch: &one}); err != nil {
+		t.Fatalf("matching generation write: %v", err)
+	}
+	current, _ = s.GetObjectMeta(ctx, "bkt", "a.txt")
+	if current.Generation != "2" {
+		t.Fatalf("generation = %q after a matching write, want 2", current.Generation)
+	}
+}
+
+func TestMemoryObjectStoreDeleteObjectMetaChecked(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryObjectStore()
+	if err := s.CreateBucket(ctx, "proj", "bkt", nil); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	o := ObjectMeta{Generation: "1", ContentType: "text/plain", TimeCreated: time.Now(), Updated: time.Now()}
+	if err := s.PutObjectMeta(ctx, "bkt", "a.txt", o); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// Stale generation precondition: rejected, object survives.
+	stale := int64(999)
+	if err := s.DeleteObjectMetaChecked(ctx, "bkt", "a.txt", &Precondition{GenerationMatch: &stale}); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("expected ErrPreconditionFailed, got %v", err)
+	}
+	if _, err := s.GetObjectMeta(ctx, "bkt", "a.txt"); err != nil {
+		t.Fatalf("object must still exist after a rejected conditional delete, got %v", err)
+	}
+
+	// Correct generation precondition: deletes.
+	correct := int64(1)
+	if err := s.DeleteObjectMetaChecked(ctx, "bkt", "a.txt", &Precondition{GenerationMatch: &correct}); err != nil {
+		t.Fatalf("delete with correct generation: %v", err)
+	}
+	if _, err := s.GetObjectMeta(ctx, "bkt", "a.txt"); !errors.Is(err, ErrNoSuchObject) {
+		t.Fatalf("expected ErrNoSuchObject after delete, got %v", err)
+	}
+}

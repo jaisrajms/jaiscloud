@@ -7,6 +7,7 @@ package gcs
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -20,7 +21,67 @@ var (
 	ErrNoSuchUpload   = errors.New("NoSuchUpload")
 	ErrBucketNotEmpty = errors.New("BucketNotEmpty")
 	ErrAlreadyExists  = errors.New("AlreadyExists")
+	// ErrPreconditionFailed is returned by the *Checked object-write methods
+	// when a Precondition doesn't match the object's current live-generation
+	// state. The write was NOT applied — real GCS's ifGenerationMatch/
+	// ifGenerationNotMatch/ifMetagenerationMatch/ifMetagenerationNotMatch
+	// query params, which the codec already decodes into request params but
+	// which nothing previously read or enforced.
+	ErrPreconditionFailed = errors.New("PreconditionFailed")
 )
+
+// Precondition is GCS's real per-request conditional-write precondition:
+// ifGenerationMatch / ifGenerationNotMatch / ifMetagenerationMatch /
+// ifMetagenerationNotMatch. A nil field means that condition wasn't
+// specified — nil Precondition entirely (or nil the *Checked call is given)
+// always matches, same as no precondition at all. A GenerationMatch of 0
+// means "no live generation currently exists" — GCS's standard
+// create-only-if-absent idiom.
+type Precondition struct {
+	GenerationMatch        *int64
+	GenerationNotMatch     *int64
+	MetagenerationMatch    *int64
+	MetagenerationNotMatch *int64
+}
+
+// objectPreconditionMatches reports whether p is satisfied by the object's
+// current live-generation state (current, exists). A nil p always matches.
+func objectPreconditionMatches(current ObjectMeta, exists bool, p *Precondition) bool {
+	if p == nil {
+		return true
+	}
+	var gen, metagen int64
+	if exists {
+		gen, _ = strconv.ParseInt(current.Generation, 10, 64)
+		metagen, _ = strconv.ParseInt(current.Metageneration, 10, 64)
+	}
+	if p.GenerationMatch != nil {
+		if !exists {
+			if *p.GenerationMatch != 0 {
+				return false
+			}
+		} else if gen != *p.GenerationMatch {
+			return false
+		}
+	}
+	if p.GenerationNotMatch != nil {
+		if !exists {
+			// NotMatch against 0 means "must already exist".
+			if *p.GenerationNotMatch == 0 {
+				return false
+			}
+		} else if gen == *p.GenerationNotMatch {
+			return false
+		}
+	}
+	if p.MetagenerationMatch != nil && (!exists || metagen != *p.MetagenerationMatch) {
+		return false
+	}
+	if p.MetagenerationNotMatch != nil && exists && metagen == *p.MetagenerationNotMatch {
+		return false
+	}
+	return true
+}
 
 // ObjectRetention is the GCS Object.retention object ({retainUntilTime, mode}).
 // mode is "Unlocked" or "Locked".
@@ -110,6 +171,17 @@ type ObjectStore interface {
 	// and returns it, leaving any prior non-live generations untouched. Used
 	// for versioned-object deletion so a non-live tombstone is retained.
 	TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error)
+
+	// PutObjectMetaChecked/PutObjectGenerationChecked/DeleteObjectMetaChecked/
+	// TombstoneObjectMetaChecked mirror their unchecked counterparts above,
+	// but atomically validate precondition (if non-nil) against the object's
+	// current live-generation state under the same lock/transaction as the
+	// write, instead of the write applying unconditionally. Returns
+	// ErrPreconditionFailed — without applying the write — on a mismatch.
+	PutObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	PutObjectGenerationChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error
+	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error)
 	// ListObjects returns the live generation of every object in the bucket,
 	// sorted by name. Prefix, delimiter, and pageToken pagination are applied
 	// by the provider.

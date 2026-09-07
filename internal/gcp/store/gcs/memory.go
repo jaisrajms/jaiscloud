@@ -154,6 +154,102 @@ func (s *MemoryObjectStore) PutObjectGeneration(_ context.Context, bucket, name 
 	return nil
 }
 
+func (s *MemoryObjectStore) PutObjectMetaChecked(_ context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.buckets[bucket]; !ok {
+		return ErrNoSuchBucket
+	}
+	current, exists := liveGeneration(s.objects[bucket][name])
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ErrPreconditionFailed
+	}
+	meta.Bucket = bucket
+	meta.Name = name
+	normalizeMeta(&meta)
+	if s.objects[bucket] == nil {
+		s.objects[bucket] = make(map[string][]ObjectMeta)
+	}
+	s.objects[bucket][name] = []ObjectMeta{meta}
+	return nil
+}
+
+func (s *MemoryObjectStore) PutObjectGenerationChecked(_ context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.buckets[bucket]; !ok {
+		return ErrNoSuchBucket
+	}
+	current, exists := liveGeneration(s.objects[bucket][name])
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ErrPreconditionFailed
+	}
+	meta.Bucket = bucket
+	meta.Name = name
+	normalizeMeta(&meta)
+	if s.objects[bucket] == nil {
+		s.objects[bucket] = make(map[string][]ObjectMeta)
+	}
+	gens := s.objects[bucket][name]
+	now := clock.Now()
+	for i := range gens {
+		if gens[i].TimeDeleted == nil {
+			t := now
+			gens[i].TimeDeleted = &t
+		}
+	}
+	s.objects[bucket][name] = append(gens, meta)
+	return nil
+}
+
+func (s *MemoryObjectStore) DeleteObjectMetaChecked(_ context.Context, bucket, name string, precondition *Precondition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	objs, ok := s.objects[bucket]
+	if !ok {
+		return ErrNoSuchObject
+	}
+	gens, ok := objs[name]
+	if !ok {
+		return ErrNoSuchObject
+	}
+	current, exists := liveGeneration(gens)
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ErrPreconditionFailed
+	}
+	delete(objs, name)
+	return nil
+}
+
+func (s *MemoryObjectStore) TombstoneObjectMetaChecked(_ context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	objs, ok := s.objects[bucket]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	gens, ok := objs[name]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	current, exists := liveGeneration(gens)
+	if !exists {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ObjectMeta{}, ErrPreconditionFailed
+	}
+	for i := len(gens) - 1; i >= 0; i-- {
+		if gens[i].TimeDeleted == nil {
+			now := clock.Now()
+			gens[i].TimeDeleted = &now
+			objs[name] = gens
+			return gens[i], nil
+		}
+	}
+	return ObjectMeta{}, ErrNoSuchObject
+}
+
 func (s *MemoryObjectStore) GetObjectMeta(_ context.Context, bucket, name string) (ObjectMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

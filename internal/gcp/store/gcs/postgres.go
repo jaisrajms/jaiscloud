@@ -250,6 +250,142 @@ func nullableTimePtr(t *time.Time) pgtype.Timestamptz {
 	return nullableTime(t)
 }
 
+// lockLiveGeneration reads (and, via FOR UPDATE, row-locks) the object's
+// current live generation within tx, returning (ObjectMeta{}, false, nil)
+// when none exists. Shared by every *Checked method below so the
+// precondition check and the write happen inside one Serializable
+// transaction — mirroring store/firestore/postgres.go's Commit.
+func lockLiveGeneration(ctx context.Context, tx pgx.Tx, bucket, name string) (ObjectMeta, bool, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT `+objectCols+`
+		FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL
+		ORDER BY generation::bigint DESC LIMIT 1
+		FOR UPDATE
+	`, bucket, name)
+	m, err := scanObject(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ObjectMeta{}, false, nil
+	}
+	if err != nil {
+		return ObjectMeta{}, false, err
+	}
+	return m, true, nil
+}
+
+func (s *PostgresObjectStore) PutObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error {
+	meta.Bucket = bucket
+	meta.Name = name
+	normalizeMeta(&meta)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := ensureBucketExists(ctx, tx, bucket); err != nil {
+		return err
+	}
+	current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+	if err != nil {
+		return err
+	}
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ErrPreconditionFailed
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name); err != nil {
+		return err
+	}
+	if err := insertObjectGeneration(ctx, tx, meta); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresObjectStore) PutObjectGenerationChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error {
+	meta.Bucket = bucket
+	meta.Name = name
+	normalizeMeta(&meta)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := ensureBucketExists(ctx, tx, bucket); err != nil {
+		return err
+	}
+	current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+	if err != nil {
+		return err
+	}
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ErrPreconditionFailed
+	}
+	now := clock.Now()
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL
+	`, bucket, name, now); err != nil {
+		return err
+	}
+	if err := insertObjectGeneration(ctx, tx, meta); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresObjectStore) DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNoSuchObject
+	}
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ErrPreconditionFailed
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresObjectStore) TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	defer tx.Rollback(ctx)
+	m, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	if !exists {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if !objectPreconditionMatches(m, exists, precondition) {
+		return ObjectMeta{}, ErrPreconditionFailed
+	}
+	now := clock.Now()
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND generation=$4
+	`, bucket, name, now, m.Generation)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ObjectMeta{}, err
+	}
+	m.TimeDeleted = &now
+	return m, nil
+}
+
 func (s *PostgresObjectStore) GetObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT `+objectCols+`

@@ -491,7 +491,13 @@ func (s *Service) DeleteObject(ctx context.Context, req *storagepb.DeleteObjectR
 		return nil, mapError(err)
 	}
 
-	if err := s.provider.DeleteObjectData(ctx, bucket, object); err != nil {
+	// precondition: nil — checkObjectPreconditions above already validated
+	// the request's preconditions against a separately-fetched read. That
+	// check-then-write isn't atomic the way the REST path's is (see
+	// storage.DeleteObjectData's *Checked call) — a real but narrower,
+	// pre-existing gap, left as a follow-up rather than duplicating the
+	// check here.
+	if err := s.provider.DeleteObjectData(ctx, bucket, object, nil); err != nil {
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -621,7 +627,10 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 	meta := protoResourceToMeta(dest, bucket, object, s.provider.NextGen(), now)
 	meta.ComponentCount = int64(len(sources))
 
-	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, nil, "")
+	// precondition: nil — this gRPC path doesn't yet parse
+	// WriteObjectSpec.if_generation_match/if_metageneration_match; the REST
+	// ObjectsInsert/ObjectsRewrite path does (see storage.objectPrecondition).
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, nil, "", nil)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -728,7 +737,7 @@ func (s *Service) finalize(ctx context.Context, project string, sess *uploadSess
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
 	}
-	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, sess.buf, versioned, priorBlobKey, true, sess.kmsKeyName, sess.cseKey, sess.cseKeySHA256)
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, sess.buf, versioned, priorBlobKey, true, sess.kmsKeyName, sess.cseKey, sess.cseKeySHA256, nil)
 	if err != nil {
 		return nil, err
 	}
