@@ -85,21 +85,50 @@ type Store interface {
 	Reset(ctx context.Context)
 }
 
-// KeyOfID returns the canonical key string for a numeric-ID key: "kind/id:<id>".
+// KeyOfID returns the canonical key string for a numeric-ID key:
+// "<len(kind)>:<kind>/id:<id>". The kind is length-prefixed — rather than
+// relying on "/" as an unambiguous separator — so a kind containing "/" (or
+// any other character) still round-trips correctly through SplitKey. This
+// mirrors the structural principle real Datastore/Firestore key encoding
+// uses: a Key is a protobuf message with explicit length-delimited fields,
+// never a delimiter-joined string, so a kind or name can never corrupt the
+// parse regardless of its contents. See
+// https://cloud.google.com/php/docs/reference/cloud-datastore/latest/V1.Key
+// (Key.PathElement: kind + (id xor name), not a joined string).
 func KeyOfID(kind string, id int64) string {
-	return kind + "/" + "id:" + strconv.FormatInt(id, 10)
+	return encodeKind(kind) + "id:" + strconv.FormatInt(id, 10)
 }
 
-// KeyOfName returns the canonical key string for a name key: "kind/name:<name>".
+// KeyOfName returns the canonical key string for a name key:
+// "<len(kind)>:<kind>/name:<name>". See KeyOfID for why kind is
+// length-prefixed. name is not: ParseIDOrName splits it off by the fixed
+// "id:"/"name:" tag prefix (a single Cut on the first ":"), so name may
+// itself contain "/" or ":" without ambiguity.
 func KeyOfName(kind, name string) string {
-	return kind + "/" + "name:" + name
+	return encodeKind(kind) + "name:" + name
 }
 
-// SplitKey parses "kind/id-or-name" into its kind and tagged id-or-name. ok is
-// false when the key is malformed.
+func encodeKind(kind string) string {
+	return strconv.Itoa(len(kind)) + ":" + kind + "/"
+}
+
+// SplitKey parses "<len(kind)>:<kind>/id-or-name" into its kind and tagged
+// id-or-name. ok is false when the key is malformed.
 func SplitKey(key string) (kind, idOrName string, ok bool) {
-	kind, idOrName, ok = strings.Cut(key, "/")
-	if !ok || kind == "" || idOrName == "" {
+	lenStr, rest, found := strings.Cut(key, ":")
+	if !found {
+		return "", "", false
+	}
+	n, err := strconv.Atoi(lenStr)
+	if err != nil || n < 0 || n > len(rest) {
+		return "", "", false
+	}
+	kind = rest[:n]
+	if kind == "" || len(rest) == n || rest[n] != '/' {
+		return "", "", false
+	}
+	idOrName = rest[n+1:]
+	if idOrName == "" {
 		return "", "", false
 	}
 	return kind, idOrName, true

@@ -175,13 +175,13 @@ func TestMemoryStoreAdvanceIDs(t *testing.T) {
 }
 
 func TestKeyHelpers(t *testing.T) {
-	if KeyOfID("Task", 42) != "Task/id:42" {
+	if KeyOfID("Task", 42) != "4:Task/id:42" {
 		t.Fatalf("KeyOfID = %q", KeyOfID("Task", 42))
 	}
-	if KeyOfName("Task", "foo") != "Task/name:foo" {
+	if KeyOfName("Task", "foo") != "4:Task/name:foo" {
 		t.Fatalf("KeyOfName = %q", KeyOfName("Task", "foo"))
 	}
-	kind, idOrName, ok := SplitKey("Task/name:foo")
+	kind, idOrName, ok := SplitKey("4:Task/name:foo")
 	if !ok || kind != "Task" || idOrName != "name:foo" {
 		t.Fatalf("SplitKey = %q %q %v", kind, idOrName, ok)
 	}
@@ -192,5 +192,50 @@ func TestKeyHelpers(t *testing.T) {
 	id, name, isID = ParseIDOrName("name:foo")
 	if isID || id != 0 || name != "foo" {
 		t.Fatalf("ParseIDOrName name = %d %q %v", id, name, isID)
+	}
+}
+
+// TestKeyHelpers_KindContainingSlash verifies the bug the length-prefixed
+// encoding fixes: a kind containing "/" used to corrupt SplitKey's parse
+// (it split on the first "/", which could land inside the kind instead of
+// at the kind/id-or-name boundary). Length-prefixing the kind makes the
+// boundary explicit regardless of what characters the kind contains.
+func TestKeyHelpers_KindContainingSlash(t *testing.T) {
+	key := KeyOfID("my/kind", 7)
+	kind, idOrName, ok := SplitKey(key)
+	if !ok || kind != "my/kind" || idOrName != "id:7" {
+		t.Fatalf("SplitKey(%q) = %q %q %v, want \"my/kind\" \"id:7\" true", key, kind, idOrName, ok)
+	}
+	id, _, isID := ParseIDOrName(idOrName)
+	if !isID || id != 7 {
+		t.Fatalf("ParseIDOrName(%q) = %d _ %v", idOrName, id, isID)
+	}
+
+	// A name containing both "/" and ":" must also still round-trip.
+	key = KeyOfName("k/i:nd", "a/b:c")
+	kind, idOrName, ok = SplitKey(key)
+	if !ok || kind != "k/i:nd" || idOrName != "name:a/b:c" {
+		t.Fatalf("SplitKey(%q) = %q %q %v", key, kind, idOrName, ok)
+	}
+	_, name, isID := ParseIDOrName(idOrName)
+	if isID || name != "a/b:c" {
+		t.Fatalf("ParseIDOrName(%q) = _ %q %v", idOrName, name, isID)
+	}
+}
+
+func TestSplitKey_Malformed(t *testing.T) {
+	for _, bad := range []string{
+		"",
+		"no-length-prefix",
+		"abc:Task/id:1", // non-numeric length
+		"-1:Task/id:1",  // negative length
+		"100:Task/id:1", // length longer than remaining string
+		"4:Task|id:1",   // missing "/" at the length boundary
+		"0:/id:1",       // empty kind
+		"4:Task/",       // empty id-or-name
+	} {
+		if _, _, ok := SplitKey(bad); ok {
+			t.Errorf("SplitKey(%q): expected ok=false", bad)
+		}
 	}
 }
