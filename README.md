@@ -17,7 +17,7 @@ JaisCloud is a free, open-source AWS emulator that lets developers test AWS appl
 |---|---|---|
 | AWS | `jaiscloud-aws` | Full implementation |
 | Azure | `jaiscloud-azure` | In pipeline |
-| GCP | `jaiscloud-gcp` | In pipeline |
+| GCP | `jaiscloud-gcp` | In pipeline — see the [GCP guide](README-GCP.md) |
 
 ---
 
