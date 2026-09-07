@@ -276,14 +276,20 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		CreateTime: createTime,
 		UpdateTime: now,
 	}
-	if exists {
-		if err := s.store.UpdateDocument(ctx, doc); err != nil {
-			return firestorestore.Document{}, mapStoreError(err)
-		}
-	} else {
-		if err := s.store.CreateDocument(ctx, doc); err != nil {
-			return firestorestore.Document{}, mapStoreError(err)
-		}
+	// Route through store.Commit (the same atomic check-and-apply primitive
+	// transactions use) instead of a separate Get-then-Update/Create, so a
+	// write that landed between our read above and this call is detected
+	// instead of silently overwritten: the implicit ReadRef re-validates
+	// (exists, updateTime) — Firestore's own optimistic-concurrency token,
+	// the ETag/If-Match equivalent — against the live document under the
+	// store's lock, atomically with applying the write. The lock is only
+	// held for that fast in-memory check-and-apply, not across this
+	// function's merge computation.
+	implicitRead := firestorestore.ReadRef{Name: name, Exists: exists, UpdateTime: existing.UpdateTime}
+	if err := s.store.Commit(ctx, []firestorestore.ReadRef{implicitRead}, []firestorestore.Write{
+		{Name: name, Document: &doc, Precondition: pre},
+	}); err != nil {
+		return firestorestore.Document{}, mapCommitError(err)
 	}
 	d := doc
 	s.publishChange(ChangeEvent{Name: d.Name, Doc: &d})
@@ -468,11 +474,11 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 	}
 
 	commitTime := clock.Now()
-	ws, results, err := s.buildWrites(ctx, writes, commitTime)
+	ws, results, implicitReads, err := s.buildWrites(ctx, writes, commitTime)
 	if err != nil {
 		return time.Time{}, nil, err
 	}
-	reads := s.readSetFor(transaction)
+	reads := append(s.readSetFor(transaction), implicitReads...)
 	if err := s.store.Commit(ctx, reads, ws); err != nil {
 		return time.Time{}, nil, mapCommitError(err)
 	}
@@ -498,13 +504,13 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 	statuses := make([]any, 0, len(writes))
 	writeResults := make([]any, 0, len(writes))
 	for _, w := range writes {
-		ws, results, err := s.buildWrites(ctx, []*writeWire{w}, now)
+		ws, results, implicitReads, err := s.buildWrites(ctx, []*writeWire{w}, now)
 		if err != nil {
 			statuses = append(statuses, statusWire(3, errMsg(err)))
 			writeResults = append(writeResults, map[string]any{})
 			continue
 		}
-		if err := s.store.Commit(ctx, nil, ws); err != nil {
+		if err := s.store.Commit(ctx, implicitReads, ws); err != nil {
 			statuses = append(statuses, statusWireForError(err))
 			writeResults = append(writeResults, map[string]any{})
 			continue
@@ -550,14 +556,21 @@ func (s *Service) BatchGet(ctx context.Context, documents []string, transaction 
 // ─── write resolution ────────────────────────────────────────────────────────
 
 // buildWrites translates wire writes into store writes + write-results,
-// resolving masks and transforms against the current document state.
-func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, error) {
+// resolving masks and transforms against the current document state. The
+// returned reads are the implicit ReadRefs buildUpdate/buildTransform used as
+// their merge base — the caller must fold these into the read-set passed to
+// store.Commit (see buildUpdate's doc comment). Delete writes need no
+// implicit ReadRef: an unconditional delete is idempotent by design (real
+// Firestore's DeleteDocument doesn't error without an explicit precondition),
+// so there's no "lost update" for a concurrent delete to cause.
+func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, []firestorestore.ReadRef, error) {
 	writes := make([]firestorestore.Write, 0, len(wire))
 	results := make([]map[string]any, 0, len(wire))
+	reads := make([]firestorestore.ReadRef, 0, len(wire))
 	for _, w := range wire {
 		pre, err := toPrecondition(w.CurrentDocument)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		switch {
@@ -566,46 +579,53 @@ func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.T
 			results = append(results, map[string]any{}) // no updateTime after delete
 
 		case w.Transform != nil:
-			doc, res, err := s.buildTransform(ctx, w.Transform, pre, now)
+			doc, res, readRef, err := s.buildTransform(ctx, w.Transform, pre, now)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
 			results = append(results, res)
+			reads = append(reads, readRef)
 
 		case w.Update != nil:
-			doc, res, err := s.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
+			doc, res, readRef, err := s.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
 			results = append(results, res)
+			reads = append(reads, readRef)
 
 		default:
-			return nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
+			return nil, nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
 		}
 	}
-	return writes, results, nil
+	return writes, results, reads, nil
 }
 
 // buildUpdate resolves an update (with optional mask + transforms) against the
-// current document.
-func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, error) {
+// current document. The returned ReadRef is the document state this merge was
+// computed from — the caller must fold it into the read-set passed to
+// store.Commit so a write that lands between this read and the eventual
+// Commit call is detected (ErrAborted) instead of silently overwritten by the
+// merge this function computed from a now-stale base.
+func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, error) {
 	if dw.Name == "" {
-		return firestorestore.Document{}, nil, model.NewProviderError("InvalidArgument", "update document name is required", 400)
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "update document name is required", 400)
 	}
 	if err := validateFields(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 	if err := checkSize(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 
 	existing, err := s.store.GetDocument(ctx, dw.Name)
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
+	readRef := firestorestore.ReadRef{Name: dw.Name, Exists: exists, UpdateTime: existing.UpdateTime}
 
 	base := map[string]*firestorestore.Value{}
 	if exists {
@@ -635,12 +655,12 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		var res []*firestorestore.Value
 		merged, res, err = applyFieldTransforms(merged, transforms, now)
 		if err != nil {
-			return firestorestore.Document{}, nil, err
+			return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 		}
 		transformResults = res
 	}
 	if err := checkSize(merged); err != nil {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 
 	createTime := now
@@ -656,19 +676,23 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		}
 		res["transformResults"] = tr
 	}
-	return doc, res, nil
+	return doc, res, readRef, nil
 }
 
 // buildTransform resolves a document transform against the current document.
-func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, error) {
+// The returned ReadRef is the document state the transform was computed from
+// — see buildUpdate's doc comment for why the caller must fold it into the
+// read-set passed to store.Commit.
+func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, error) {
 	if tw.Document == "" {
-		return firestorestore.Document{}, nil, model.NewProviderError("InvalidArgument", "transform document name is required", 400)
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "transform document name is required", 400)
 	}
 	existing, err := s.store.GetDocument(ctx, tw.Document)
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
+	readRef := firestorestore.ReadRef{Name: tw.Document, Exists: exists, UpdateTime: existing.UpdateTime}
 
 	base := map[string]*firestorestore.Value{}
 	createTime := now
@@ -678,10 +702,10 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	}
 	fields, transformResults, err := applyFieldTransforms(base, tw.FieldTransforms, now)
 	if err != nil {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 	if err := checkSize(fields); err != nil {
-		return firestorestore.Document{}, nil, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 
 	doc := firestorestore.Document{Name: tw.Document, Fields: fields, CreateTime: createTime, UpdateTime: now}
@@ -689,7 +713,7 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	for _, r := range transformResults {
 		tr = append(tr, valueWire(r))
 	}
-	return doc, map[string]any{"updateTime": now.Format(time.RFC3339Nano), "transformResults": tr}, nil
+	return doc, map[string]any{"updateTime": now.Format(time.RFC3339Nano), "transformResults": tr}, readRef, nil
 }
 
 // ─── index management ────────────────────────────────────────────────────────

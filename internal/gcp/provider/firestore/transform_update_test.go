@@ -35,7 +35,7 @@ func TestBuildUpdateThreeMaskStates(t *testing.T) {
 	seedTransformDoc(t, p, name)
 
 	// 1. nil mask → replace-all: unrelated field keep is dropped.
-	doc, _, err := p.buildUpdate(ctx, &documentWire{
+	doc, _, _, err := p.buildUpdate(ctx, &documentWire{
 		Name:   name,
 		Fields: map[string]*firestorestore.Value{"n": firestorestore.IntVal(1)},
 	}, nil, nil, nil, now)
@@ -47,7 +47,7 @@ func TestBuildUpdateThreeMaskStates(t *testing.T) {
 	}
 
 	// 2. non-empty mask → patch: only n is replaced, keep preserved.
-	doc, _, err = p.buildUpdate(ctx, &documentWire{
+	doc, _, _, err = p.buildUpdate(ctx, &documentWire{
 		Name:   name,
 		Fields: map[string]*firestorestore.Value{"n": firestorestore.IntVal(2)},
 	}, &documentMaskWire{FieldPaths: []string{"n"}}, nil, nil, now)
@@ -62,7 +62,7 @@ func TestBuildUpdateThreeMaskStates(t *testing.T) {
 	}
 
 	// 3. empty (present) mask + transform → transforms only on existing base.
-	doc, _, err = p.buildUpdate(ctx, &documentWire{Name: name},
+	doc, _, _, err = p.buildUpdate(ctx, &documentWire{Name: name},
 		&documentMaskWire{}, []fieldTransformWire{{FieldPath: "n", Increment: firestorestore.IntVal(5)}}, nil, now)
 	if err != nil {
 		t.Fatalf("transform-only buildUpdate: %v", err)
