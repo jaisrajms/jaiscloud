@@ -663,11 +663,16 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if loc := strValue(body, "location"); loc != "" {
 		jobCfg["jobReference"].(map[string]any)["location"] = loc
 	}
-	if data, err := json.Marshal(jobCfg); err == nil {
-		j := bqstore.Job{JobID: jobID, Config: data, CreateTime: now}
-		if err := p.store.CreateJob(ctx, projectOf(nr), j); err != nil {
-			return nil, mapErr(err)
-		}
+	data, err := json.Marshal(jobCfg)
+	if err != nil {
+		// Never report jobComplete=true for a job that wasn't actually stored —
+		// a subsequent GetJob/GetQueryResults for this jobId would otherwise
+		// 404 despite this call having just reported success.
+		return nil, model.NewProviderError("Internal", "failed to encode job configuration", 500)
+	}
+	j := bqstore.Job{JobID: jobID, Config: data, CreateTime: now}
+	if err := p.store.CreateJob(ctx, projectOf(nr), j); err != nil {
+		return nil, mapErr(err)
 	}
 	ref := map[string]any{"projectId": projectOf(nr), "jobId": jobID}
 	if loc := strValue(body, "location"); loc != "" {

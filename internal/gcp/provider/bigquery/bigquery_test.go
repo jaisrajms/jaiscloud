@@ -2,6 +2,7 @@ package bigquery
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
@@ -278,6 +279,43 @@ func TestJobAndQueryEmptyResults(t *testing.T) {
 	}
 	if _, err := p.GetJob(ctx, newNR(map[string]any{"jobId": "j1"})); err == nil {
 		t.Fatalf("expected NotFound after job delete")
+	}
+}
+
+// TestQuery_RejectsUnencodableConfig verifies that Query never reports
+// jobComplete=true without actually storing the job. A json.Marshal failure
+// while building the stored job config used to be silently swallowed (the
+// store.CreateJob call sat inside "if data, err := json.Marshal(...); err ==
+// nil { ... }", so a marshal failure just skipped job creation entirely) while
+// the handler still returned a success response — a later GetJob/
+// GetQueryResults for that jobId would then 404 despite Query having reported
+// success. A real request body can't itself contain a value json.Marshal
+// rejects (it's always already-decoded JSON), so this forces the failure
+// directly with a math.Inf value to exercise the handler's own error path.
+func TestQuery_RejectsUnencodableConfig(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	_, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query":        "SELECT * FROM t",
+		"useLegacySql": false,
+		"unencodable":  math.Inf(1),
+	}}))
+	if err == nil {
+		t.Fatal("expected an error for an unencodable job configuration, got nil")
+	}
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "Internal" || perr.HTTPStatus != 500 {
+		t.Fatalf("expected Internal/500, got %v", err)
+	}
+
+	// No job should have been created.
+	list, err := p.ListJobs(ctx, newNR(map[string]any{}))
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if jobs, _ := list.Data["jobs"].([]any); len(jobs) != 0 {
+		t.Fatalf("expected no jobs stored, got %d: %+v", len(jobs), jobs)
 	}
 }
 
