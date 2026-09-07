@@ -66,6 +66,24 @@ func (s *MemoryStore) UpdateCluster(_ context.Context, projectID, location strin
 	return nil
 }
 
+func (s *MemoryStore) UpdateClusterAtomic(_ context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := clusterScope(projectID, location)
+	current, ok := s.clusters[key][name]
+	if !ok {
+		return Cluster{}, ErrNoSuchCluster
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Cluster{}, err
+	}
+	next.ProjectID = projectID
+	next.Location = location
+	s.clusters[key][name] = next
+	return next, nil
+}
+
 func (s *MemoryStore) DeleteCluster(_ context.Context, projectID, location, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,6 +147,25 @@ func (s *MemoryStore) UpdateTopic(_ context.Context, projectID, location, cluste
 	t.ClusterName = clusterName
 	s.topics[key][t.Name] = t
 	return nil
+}
+
+func (s *MemoryStore) UpdateTopicAtomic(_ context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := topicScope(projectID, location, clusterName)
+	current, ok := s.topics[key][topicName]
+	if !ok {
+		return Topic{}, ErrNoSuchTopic
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Topic{}, err
+	}
+	next.ProjectID = projectID
+	next.Location = location
+	next.ClusterName = clusterName
+	s.topics[key][topicName] = next
+	return next, nil
 }
 
 func (s *MemoryStore) DeleteTopic(_ context.Context, projectID, location, clusterName, topicName string) error {

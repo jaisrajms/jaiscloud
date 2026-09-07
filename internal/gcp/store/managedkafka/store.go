@@ -52,12 +52,26 @@ type Store interface {
 	CreateCluster(ctx context.Context, projectID, location string, c Cluster) error
 	GetCluster(ctx context.Context, projectID, location, name string) (Cluster, error)
 	UpdateCluster(ctx context.Context, projectID, location string, c Cluster) error
+	// UpdateClusterAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current cluster and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetCluster followed
+	// by UpdateCluster, this is atomic with respect to concurrent updates on
+	// the same cluster, so two concurrent PATCH requests merging different
+	// fields can't lose one or the other.
+	UpdateClusterAtomic(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error)
 	DeleteCluster(ctx context.Context, projectID, location, name string) error
 	ListClusters(ctx context.Context, projectID, location string) ([]Cluster, error)
 
 	CreateTopic(ctx context.Context, projectID, location, clusterName string, t Topic) error
 	GetTopic(ctx context.Context, projectID, location, clusterName, topicName string) (Topic, error)
 	UpdateTopic(ctx context.Context, projectID, location, clusterName string, t Topic) error
+	// UpdateTopicAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current topic and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetTopic followed by
+	// UpdateTopic, this is atomic with respect to concurrent updates on the
+	// same topic, so two concurrent PATCH requests merging different fields
+	// can't lose one or the other.
+	UpdateTopicAtomic(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error)
 	DeleteTopic(ctx context.Context, projectID, location, clusterName, topicName string) error
 	ListTopics(ctx context.Context, projectID, location, clusterName string) ([]Topic, error)
 

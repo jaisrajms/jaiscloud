@@ -232,28 +232,27 @@ func (p *Provider) UpdateCluster(ctx context.Context, nr *model.NormalizedReques
 	if location == "" || clusterID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing location or clusterId", 400)
 	}
-	c, err := p.store.GetCluster(ctx, nr.AccountID, location, clusterID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
-	if body != nil {
-		stored := map[string]any{}
-		if len(c.Config) > 0 {
-			_ = json.Unmarshal(c.Config, &stored)
+	c, err := p.store.UpdateClusterAtomic(ctx, nr.AccountID, location, clusterID, func(c mkstore.Cluster) (mkstore.Cluster, error) {
+		if body != nil {
+			stored := map[string]any{}
+			if len(c.Config) > 0 {
+				_ = json.Unmarshal(c.Config, &stored)
+			}
+			for k, v := range body {
+				stored[k] = v
+			}
+			if labels := bodyStringMap(body, "labels"); labels != nil {
+				c.Labels = labels
+			}
+			if data, err := json.Marshal(stored); err == nil {
+				c.Config = data
+			}
 		}
-		for k, v := range body {
-			stored[k] = v
-		}
-		if labels := bodyStringMap(body, "labels"); labels != nil {
-			c.Labels = labels
-		}
-		if data, err := json.Marshal(stored); err == nil {
-			c.Config = data
-		}
-	}
-	c.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateCluster(ctx, nr.AccountID, location, c); err != nil {
+		c.UpdateTime = clock.Now().UTC()
+		return c, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	return p.clusterLRO(nr, c), nil
@@ -348,31 +347,30 @@ func (p *Provider) UpdateTopic(ctx context.Context, nr *model.NormalizedRequest)
 	if location == "" || clusterID == "" || topicID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing location, clusterId, or topicId", 400)
 	}
-	t, err := p.store.GetTopic(ctx, nr.AccountID, location, clusterID, topicID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
-	if body != nil {
-		if _, ok := body["partitionCount"]; ok {
-			t.PartitionCount = bodyInt(body, "partitionCount")
+	t, err := p.store.UpdateTopicAtomic(ctx, nr.AccountID, location, clusterID, topicID, func(t mkstore.Topic) (mkstore.Topic, error) {
+		if body != nil {
+			if _, ok := body["partitionCount"]; ok {
+				t.PartitionCount = bodyInt(body, "partitionCount")
+			}
+			if _, ok := body["replicationFactor"]; ok {
+				t.ReplicationFactor = bodyInt(body, "replicationFactor")
+			}
+			stored := map[string]any{}
+			if len(t.Config) > 0 {
+				_ = json.Unmarshal(t.Config, &stored)
+			}
+			for k, v := range body {
+				stored[k] = v
+			}
+			if data, err := json.Marshal(stored); err == nil {
+				t.Config = data
+			}
 		}
-		if _, ok := body["replicationFactor"]; ok {
-			t.ReplicationFactor = bodyInt(body, "replicationFactor")
-		}
-		stored := map[string]any{}
-		if len(t.Config) > 0 {
-			_ = json.Unmarshal(t.Config, &stored)
-		}
-		for k, v := range body {
-			stored[k] = v
-		}
-		if data, err := json.Marshal(stored); err == nil {
-			t.Config = data
-		}
-	}
-	t.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateTopic(ctx, nr.AccountID, location, clusterID, t); err != nil {
+		t.UpdateTime = clock.Now().UTC()
+		return t, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	return provider.OK(p.topicMap(nr, t)), nil

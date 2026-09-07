@@ -86,6 +86,54 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, location s
 	return nil
 }
 
+// UpdateClusterAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the cluster for the
+// duration of mutate, so a concurrent UpdateClusterAtomic on the same
+// cluster blocks until this transaction commits or rolls back, instead of
+// racing to silently overwrite this call's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Cluster{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanCluster(tx.QueryRow(ctx, `
+		SELECT project_id, location, cluster_name, config, labels, create_time, update_time
+		FROM jc_mk_clusters WHERE project_id=$1 AND location=$2 AND cluster_name=$3 FOR UPDATE
+	`, projectID, location, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Cluster{}, ErrNoSuchCluster
+	}
+	if err != nil {
+		return Cluster{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Cluster{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_mk_clusters SET config=$4, labels=$5, update_time=$6
+		WHERE project_id=$1 AND location=$2 AND cluster_name=$3
+	`, projectID, location, name, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), next.UpdateTime)
+	if err != nil {
+		return Cluster{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Cluster{}, ErrNoSuchCluster
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Cluster{}, err
+	}
+	next.ProjectID = projectID
+	next.Location = location
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteCluster(ctx context.Context, projectID, location, name string) error {
 	// Delete the cluster's topics first so no orphaned rows remain, mirroring
 	// MemoryStore.DeleteCluster (which drops the topic scope alongside the
@@ -183,6 +231,54 @@ func (s *PostgresStore) UpdateTopic(ctx context.Context, projectID, location, cl
 		return ErrNoSuchTopic
 	}
 	return nil
+}
+
+// UpdateTopicAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the topic for the
+// duration of mutate, so a concurrent UpdateTopicAtomic on the same topic
+// blocks until this transaction commits or rolls back, instead of racing to
+// silently overwrite this call's write. See store/firestore/postgres.go's
+// Commit for the same convention.
+func (s *PostgresStore) UpdateTopicAtomic(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Topic{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanTopic(tx.QueryRow(ctx, `
+		SELECT project_id, location, cluster_name, topic_name, partition_count, replication_factor, config, create_time, update_time
+		FROM jc_mk_topics WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND topic_name=$4 FOR UPDATE
+	`, projectID, location, clusterName, topicName))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Topic{}, ErrNoSuchTopic
+	}
+	if err != nil {
+		return Topic{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Topic{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_mk_topics SET partition_count=$5, replication_factor=$6, config=$7, update_time=$8
+		WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND topic_name=$4
+	`, projectID, location, clusterName, topicName, next.PartitionCount, next.ReplicationFactor, nullableJSONRaw(next.Config, "{}"), next.UpdateTime)
+	if err != nil {
+		return Topic{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Topic{}, ErrNoSuchTopic
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Topic{}, err
+	}
+	next.ProjectID = projectID
+	next.Location = location
+	next.ClusterName = clusterName
+	return next, nil
 }
 
 func (s *PostgresStore) DeleteTopic(ctx context.Context, projectID, location, clusterName, topicName string) error {
