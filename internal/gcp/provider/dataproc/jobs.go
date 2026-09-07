@@ -218,11 +218,21 @@ func (p *Provider) CancelJob(ctx context.Context, nr *model.NormalizedRequest) (
 	if region == "" || jobID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing region or jobId", 400)
 	}
-	j, err := p.store.GetJob(ctx, nr.AccountID, region, jobID)
+	now := clock.Now().UTC()
+	var transitioned bool
+	j, err := p.store.UpdateJobAtomic(ctx, nr.AccountID, region, jobID, func(j dataprocstore.Job) (dataprocstore.Job, error) {
+		if jobTerminal(j.Status.State) {
+			return j, nil // already terminal — nothing to cancel
+		}
+		transitioned = true
+		j.StatusHistory = append(j.StatusHistory, j.Status)
+		j.Status = dataprocstore.JobStatus{State: "CANCELLED", StateStartTime: now}
+		return j, nil
+	})
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	if jobTerminal(j.Status.State) {
+	if !transitioned {
 		return provider.OK(jobToMap(j)), nil
 	}
 
@@ -232,13 +242,10 @@ func (p *Provider) CancelJob(ctx context.Context, nr *model.NormalizedRequest) (
 	if ok {
 		cancel()
 	}
-
-	now := clock.Now().UTC()
-	j.StatusHistory = append(j.StatusHistory, j.Status)
-	j.Status = dataprocstore.JobStatus{State: "CANCELLED", StateStartTime: now}
-	if err := p.store.UpdateJob(ctx, nr.AccountID, region, j); err != nil {
-		return nil, mapErr(err)
-	}
+	// Close out the SubmitJobAsOperation LRO for this transition — finishJob
+	// won't run it (or will see the job already terminal and no-op) once
+	// CancelJob has won the race for the terminal-state transition.
+	p.completeSubmitOperation(nr.AccountID, region, j)
 	return provider.OK(jobToMap(j)), nil
 }
 

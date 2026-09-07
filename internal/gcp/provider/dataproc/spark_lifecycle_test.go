@@ -17,6 +17,7 @@ import (
 	"jaiscloud/internal/clock"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/k8shelpers"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -331,6 +332,92 @@ func TestCancelJob_NotFound(t *testing.T) {
 	_, err := p.CancelJob(context.Background(), testNR(map[string]any{"region": "us-central1", "jobId": "nope"}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "job not found")
+}
+
+// delayedGetJobStore wraps a dataprocstore.Store, delaying every GetJob call
+// to widen a TOCTOU race window in tests. It only affects the pre-fix code
+// path (CancelJob/finishJob calling a standalone GetJob); UpdateJobAtomic
+// does its own internal locked read and never reaches this override, so
+// against the fixed code the delay is simply never invoked.
+type delayedGetJobStore struct {
+	dataprocstore.Store
+	delay time.Duration
+}
+
+func (d *delayedGetJobStore) GetJob(ctx context.Context, projectID, region, jobID string) (dataprocstore.Job, error) {
+	j, err := d.Store.GetJob(ctx, projectID, region, jobID)
+	time.Sleep(d.delay)
+	return j, err
+}
+
+// TestCancelJob_CompletesSubmitOperation proves CancelJob closes out the
+// SubmitJobAsOperation LRO on its own terminal-state transition. Previously
+// only finishJob ever called completeSubmitOperation, so a job submitted
+// asynchronously and then cancelled left its operation stuck at done=false
+// forever — a client polling the operation would hang indefinitely even
+// though the job itself correctly shows CANCELLED.
+func TestCancelJob_CompletesSubmitOperation(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	j := newTestJob()
+	j.JobID = "j-cancel-lro"
+	require.NoError(t, p.store.CreateJob(ctx, j.ProjectID, j.Region, j))
+	require.NoError(t, p.store.CreateOperation(ctx, j.ProjectID, j.Region, dataprocstore.Operation{
+		ID: j.JobID, Verb: "submit", Target: j.JobID, CreateTime: clock.Now().UTC(),
+	}))
+
+	resp, err := p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	require.NoError(t, err)
+	require.Equal(t, "CANCELLED", resp.Data["status"].(map[string]any)["state"])
+
+	op, err := p.store.GetOperation(ctx, j.ProjectID, j.Region, j.JobID)
+	require.NoError(t, err)
+	require.True(t, op.Done, "operation must be closed once CancelJob transitions the job to CANCELLED")
+}
+
+// TestFinishJobDoesNotResurrectCancelledJob deterministically reproduces the
+// TOCTOU race between CancelJob and finishJob: both are launched concurrently
+// against a job that a client is racing to cancel just as it finishes
+// naturally. A delayed-Get store wrapper widens the window between each
+// side's read and write. Without atomicity, whichever write lands last wins
+// outright regardless of which one the client was actually told about via
+// CancelJob's response — so a client told "CANCELLED" could see the job
+// silently resurrect to DONE moments later. With UpdateJobAtomic, CancelJob's
+// response is always consistent with the job's final persisted state: if
+// CancelJob performed the transition, nothing can un-cancel it afterward.
+func TestCancelJobVsFinishJobConcurrent_ResponseMatchesFinalState(t *testing.T) {
+	ctx := context.Background()
+	p := New(&delayedGetJobStore{Store: dataprocstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore())
+	j := newTestJob()
+	j.JobID = "j-race-1"
+	require.NoError(t, p.store.CreateJob(ctx, j.ProjectID, j.Region, j))
+	require.NoError(t, p.store.CreateOperation(ctx, j.ProjectID, j.Region, dataprocstore.Operation{
+		ID: j.JobID, Verb: "submit", Target: j.JobID, CreateTime: clock.Now().UTC(),
+	}))
+
+	var cancelResp *model.ProviderResponse
+	var cancelErr error
+	finishDone := make(chan struct{})
+	go func() {
+		defer close(finishDone)
+		p.finishJob(j.ProjectID, j.Region, j, "DONE", "")
+	}()
+	cancelResp, cancelErr = p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	<-finishDone
+	require.NoError(t, cancelErr)
+
+	got, err := p.store.GetJob(ctx, j.ProjectID, j.Region, j.JobID)
+	require.NoError(t, err)
+
+	respState := cancelResp.Data["status"].(map[string]any)["state"]
+	if respState == "CANCELLED" {
+		require.Equal(t, "CANCELLED", got.Status.State,
+			"CancelJob told the client CANCELLED, but the job later resurrected to %q", got.Status.State)
+	}
+
+	op, err := p.store.GetOperation(ctx, j.ProjectID, j.Region, j.JobID)
+	require.NoError(t, err)
+	require.True(t, op.Done, "operation must be closed regardless of whether CancelJob or finishJob won the race")
 }
 
 // TestCancelJob_ConcurrentCancels_SingleTerminal stresses the cancel map under

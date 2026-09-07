@@ -92,12 +92,26 @@ type Store interface {
 	CreateCluster(ctx context.Context, projectID, region string, c Cluster) error
 	GetCluster(ctx context.Context, projectID, region, name string) (Cluster, error)
 	UpdateCluster(ctx context.Context, projectID, region string, c Cluster) error
+	// UpdateClusterAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current cluster and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetCluster followed
+	// by UpdateCluster, this is atomic with respect to concurrent updates on
+	// the same cluster, so a labels/config PATCH can't race with a concurrent
+	// StartCluster/StopCluster status transition and lose one or the other.
+	UpdateClusterAtomic(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error)
 	DeleteCluster(ctx context.Context, projectID, region, name string) error
 	ListClusters(ctx context.Context, projectID, region string) ([]Cluster, error)
 
 	CreateJob(ctx context.Context, projectID, region string, j Job) error
 	GetJob(ctx context.Context, projectID, region, jobID string) (Job, error)
 	UpdateJob(ctx context.Context, projectID, region string, j Job) error
+	// UpdateJobAtomic performs a locked get-mutate-set cycle: mutate receives
+	// the current job and returns the version to persist, or an error to
+	// abort without writing. Used by CancelJob and finishJob so a client
+	// cancelling a job can't race with the job's own goroutine reaching a
+	// terminal state — whichever acquires the lock first wins, and the other
+	// sees the already-terminal state inside its own mutate and no-ops.
+	UpdateJobAtomic(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error)
 	DeleteJob(ctx context.Context, projectID, region, jobID string) error
 	ListJobs(ctx context.Context, projectID, region string) ([]Job, error)
 

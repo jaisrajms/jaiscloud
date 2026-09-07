@@ -103,6 +103,58 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, region str
 	return nil
 }
 
+// UpdateClusterAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the cluster for the
+// duration of mutate, so a concurrent UpdateClusterAtomic on the same
+// cluster (e.g. a labels PATCH racing a StartCluster/StopCluster status
+// transition) blocks until this transaction commits or rolls back, instead
+// of racing to silently overwrite this call's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Cluster{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanCluster(tx.QueryRow(ctx, `
+		SELECT project_id, region, cluster_name, config, labels, status, status_history, cluster_uuid, create_time, update_time
+		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 AND cluster_name=$3 FOR UPDATE
+	`, projectID, region, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Cluster{}, ErrNoSuchCluster
+	}
+	if err != nil {
+		return Cluster{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Cluster{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	status, _ := json.Marshal(next.Status)
+	history, _ := json.Marshal(next.StatusHistory)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_dataproc_clusters SET config=$4, labels=$5, status=$6, status_history=$7, cluster_uuid=$8, update_time=$9
+		WHERE project_id=$1 AND region=$2 AND cluster_name=$3
+	`, projectID, region, name, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"),
+		nullableJSONRaw(history, "[]"), next.ClusterUUID, next.UpdateTime)
+	if err != nil {
+		return Cluster{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Cluster{}, ErrNoSuchCluster
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Cluster{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteCluster(ctx context.Context, projectID, region, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 AND cluster_name=$3`, projectID, region, name)
 	if err != nil {
@@ -206,6 +258,58 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, region string,
 		return ErrNoSuchJob
 	}
 	return nil
+}
+
+// UpdateJobAtomic mirrors MemoryStore's version: a Serializable transaction
+// with SELECT ... FOR UPDATE row-locks the job for the duration of mutate,
+// so CancelJob and finishJob (which both call this) can't race to overwrite
+// each other's terminal-state transition. See store/firestore/postgres.go's
+// Commit for the same convention.
+func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Job{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanJob(tx.QueryRow(ctx, `
+		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time
+		FROM jc_dataproc_jobs WHERE project_id=$1 AND region=$2 AND job_id=$3 FOR UPDATE
+	`, projectID, region, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, ErrNoSuchJob
+	}
+	if err != nil {
+		return Job{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Job{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	status, _ := json.Marshal(next.Status)
+	history, _ := json.Marshal(next.StatusHistory)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_dataproc_jobs SET placement_cluster_name=$4, job_type=$5, type_job=$6, labels=$7, status=$8,
+		       status_history=$9, driver_output_resource_uri=$10, driver_control_files_uri=$11, job_uuid=$12
+		WHERE project_id=$1 AND region=$2 AND job_id=$3
+	`, projectID, region, jobID, next.PlacementClusterName, next.Type, nullableJSONRaw(next.TypeJob, "{}"), nullableJSONRaw(labels, "{}"),
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.DriverOutputResourceURI, next.DriverControlFilesURI, next.JobUUID)
+	if err != nil {
+		return Job{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Job{}, ErrNoSuchJob
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	return next, nil
 }
 
 func (s *PostgresStore) DeleteJob(ctx context.Context, projectID, region, jobID string) error {

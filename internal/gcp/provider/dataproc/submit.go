@@ -137,25 +137,31 @@ func entryPointForJob(j dataprocstore.Job) (sparkhelpers.EntryPoint, []string, [
 	return ep, propertiesToConfArgs(mustJSONMap(j.TypeJob)), jarArgs, nil
 }
 
-// finishJob writes the terminal state back to the jobs store (loading fresh to
-// avoid clobbering a CancelJob write).
+// finishJob writes the terminal state back to the jobs store. The get-check-
+// set cycle is atomic (UpdateJobAtomic) so it can't race with a concurrent
+// CancelJob: whichever of the two acquires the lock first wins the terminal-
+// state transition, and the other sees the already-terminal state inside its
+// own mutate and no-ops instead of overwriting it.
 func (p *Provider) finishJob(project, region string, j dataprocstore.Job, state, details string) {
 	now := clock.Now().UTC()
-	fresh, err := p.store.GetJob(context.Background(), project, region, j.JobID)
+	var transitioned bool
+	fresh, err := p.store.UpdateJobAtomic(context.Background(), project, region, j.JobID, func(fresh dataprocstore.Job) (dataprocstore.Job, error) {
+		if jobTerminal(fresh.Status.State) {
+			return fresh, nil // already terminal (e.g. cancelled) — first write wins
+		}
+		transitioned = true
+		fresh.StatusHistory = append(fresh.StatusHistory, fresh.Status)
+		fresh.Status = dataprocstore.JobStatus{State: state, Details: details, StateStartTime: now}
+		if state == "DONE" && fresh.DriverOutputResourceURI == "" {
+			fresh.DriverOutputResourceURI = "gs://jaiscloud-dataproc/" + fresh.JobUUID + "/driveroutput"
+		}
+		return fresh, nil
+	})
 	if err != nil {
-		slog.Warn("dataproc: finishJob load failed", "job", j.JobID, "err", err)
+		slog.Warn("dataproc: finishJob update failed", "job", j.JobID, "err", err)
 		return
 	}
-	if jobTerminal(fresh.Status.State) {
-		return // already terminal (e.g. cancelled) — first write wins
-	}
-	fresh.StatusHistory = append(fresh.StatusHistory, fresh.Status)
-	fresh.Status = dataprocstore.JobStatus{State: state, Details: details, StateStartTime: now}
-	if state == "DONE" && fresh.DriverOutputResourceURI == "" {
-		fresh.DriverOutputResourceURI = "gs://jaiscloud-dataproc/" + fresh.JobUUID + "/driveroutput"
-	}
-	if err := p.store.UpdateJob(context.Background(), project, region, fresh); err != nil {
-		slog.Warn("dataproc: finishJob update failed", "job", j.JobID, "err", err)
+	if !transitioned {
 		return
 	}
 	p.completeSubmitOperation(project, region, fresh)

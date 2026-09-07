@@ -3,7 +3,9 @@ package dataproc
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/gcp/resource"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
@@ -134,6 +136,74 @@ func TestUpdateCluster_UpdateMask(t *testing.T) {
 	config, _ := c.Data["config"].(map[string]any)
 	if config == nil || config["workerConfig"] == nil {
 		t.Fatalf("config was clobbered by label-only update: %v", c.Data)
+	}
+}
+
+// delayedGetClusterStore wraps a dataprocstore.Store, delaying every
+// GetCluster call to widen a TOCTOU race window in tests.
+type delayedGetClusterStore struct {
+	dataprocstore.Store
+	delay time.Duration
+}
+
+func (d *delayedGetClusterStore) GetCluster(ctx context.Context, projectID, region, name string) (dataprocstore.Cluster, error) {
+	c, err := d.Store.GetCluster(ctx, projectID, region, name)
+	time.Sleep(d.delay)
+	return c, err
+}
+
+// TestUpdateClusterVsStopClusterConcurrent_NoLostUpdate proves UpdateCluster
+// and startStopCluster (Start/StopCluster) are atomic with respect to each
+// other. Without atomicity, a labels-only PATCH and a concurrent StopCluster
+// status transition each do a separate Get-then-Update: both read the same
+// base snapshot, and whichever write lands last silently reverts the other's
+// already-applied change (labels reverting to their pre-race value, or the
+// status transition being lost). A delayed-Get store wrapper widens the
+// TOCTOU window reliably (the real in-memory round trip otherwise completes
+// in nanoseconds, too fast to overlap deterministically).
+func TestUpdateClusterVsStopClusterConcurrent_NoLostUpdate(t *testing.T) {
+	p := New(&delayedGetClusterStore{Store: dataprocstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore())
+	ctx := context.Background()
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1", "labels": map[string]any{"env": "dev"}},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	var updateErr, stopErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, updateErr = p.UpdateCluster(ctx, testNR(map[string]any{
+			"region": "us-central1", "clusterName": "c1", "updateMask": "labels",
+			"body": map[string]any{"labels": map[string]any{"env": "prod"}},
+		}))
+	}()
+	go func() {
+		defer wg.Done()
+		_, stopErr = p.StopCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"}))
+	}()
+	wg.Wait()
+	if updateErr != nil {
+		t.Fatalf("update: %v", updateErr)
+	}
+	if stopErr != nil {
+		t.Fatalf("stop: %v", stopErr)
+	}
+
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	labels, _ := c.Data["labels"].(map[string]string)
+	if labels["env"] != "prod" {
+		t.Errorf("labels PATCH lost: got %v, want env=prod", labels)
+	}
+	status, _ := c.Data["status"].(map[string]any)
+	if status["state"] != "STOPPED" {
+		t.Errorf("StopCluster transition lost: got %v, want STOPPED", status["state"])
 	}
 }
 

@@ -98,10 +98,6 @@ func (p *Provider) UpdateCluster(ctx context.Context, nr *model.NormalizedReques
 	if region == "" || name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing region or clusterName", 400)
 	}
-	c, err := p.store.GetCluster(ctx, nr.AccountID, region, name)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
 	mask := strParam(nr, "updateMask")
 
@@ -109,25 +105,28 @@ func (p *Provider) UpdateCluster(ctx context.Context, nr *model.NormalizedReques
 		return mask == "" || containsMaskField(mask, field)
 	}
 
-	// labels
-	if apply("labels") {
-		if labels := bodyStringMap(body, "labels"); labels != nil {
-			c.Labels = labels
-		}
-	}
-	// config.* fields are applied onto the stored config verbatim (the
-	// updateMask selects the path; only top-level config.* keys are honored).
-	if c.Config != nil && bodyConfig(body) != nil {
-		var stored map[string]any
-		if json.Unmarshal(c.Config, &stored) == nil {
-			applyConfigMask(stored, bodyConfig(body), mask)
-			if data, err := json.Marshal(stored); err == nil {
-				c.Config = data
+	c, err := p.store.UpdateClusterAtomic(ctx, nr.AccountID, region, name, func(c dataprocstore.Cluster) (dataprocstore.Cluster, error) {
+		// labels
+		if apply("labels") {
+			if labels := bodyStringMap(body, "labels"); labels != nil {
+				c.Labels = labels
 			}
 		}
-	}
-	c.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateCluster(ctx, nr.AccountID, region, c); err != nil {
+		// config.* fields are applied onto the stored config verbatim (the
+		// updateMask selects the path; only top-level config.* keys are honored).
+		if c.Config != nil && bodyConfig(body) != nil {
+			var stored map[string]any
+			if json.Unmarshal(c.Config, &stored) == nil {
+				applyConfigMask(stored, bodyConfig(body), mask)
+				if data, err := json.Marshal(stored); err == nil {
+					c.Config = data
+				}
+			}
+		}
+		c.UpdateTime = clock.Now().UTC()
+		return c, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	target := nr.ResourceID("dataproc-cluster", region+"/"+name)
@@ -170,14 +169,13 @@ func (p *Provider) startStopCluster(ctx context.Context, nr *model.NormalizedReq
 	if region == "" || name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing region or clusterName", 400)
 	}
-	c, err := p.store.GetCluster(ctx, nr.AccountID, region, name)
+	c, err := p.store.UpdateClusterAtomic(ctx, nr.AccountID, region, name, func(c dataprocstore.Cluster) (dataprocstore.Cluster, error) {
+		c.StatusHistory = append(c.StatusHistory, c.Status)
+		c.Status = dataprocstore.ClusterStatus{State: toState, StateStartTime: clock.Now().UTC()}
+		c.UpdateTime = clock.Now().UTC()
+		return c, nil
+	})
 	if err != nil {
-		return nil, mapErr(err)
-	}
-	c.StatusHistory = append(c.StatusHistory, c.Status)
-	c.Status = dataprocstore.ClusterStatus{State: toState, StateStartTime: clock.Now().UTC()}
-	c.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateCluster(ctx, nr.AccountID, region, c); err != nil {
 		return nil, mapErr(err)
 	}
 	target := nr.ResourceID("dataproc-cluster", region+"/"+name)

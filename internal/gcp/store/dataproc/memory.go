@@ -64,6 +64,24 @@ func (s *MemoryStore) UpdateCluster(_ context.Context, projectID, region string,
 	return nil
 }
 
+func (s *MemoryStore) UpdateClusterAtomic(_ context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scopeKey(projectID, region)
+	current, ok := s.clusters[key][name]
+	if !ok {
+		return Cluster{}, ErrNoSuchCluster
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Cluster{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	s.clusters[key][name] = next
+	return next, nil
+}
+
 func (s *MemoryStore) DeleteCluster(_ context.Context, projectID, region, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,6 +142,24 @@ func (s *MemoryStore) UpdateJob(_ context.Context, projectID, region string, j J
 	j.Region = region
 	s.jobs[key][j.JobID] = j
 	return nil
+}
+
+func (s *MemoryStore) UpdateJobAtomic(_ context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scopeKey(projectID, region)
+	current, ok := s.jobs[key][jobID]
+	if !ok {
+		return Job{}, ErrNoSuchJob
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Job{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	s.jobs[key][jobID] = next
+	return next, nil
 }
 
 func (s *MemoryStore) DeleteJob(_ context.Context, projectID, region, jobID string) error {
