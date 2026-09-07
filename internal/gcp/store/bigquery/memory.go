@@ -68,6 +68,23 @@ func (s *MemoryStore) UpdateDataset(_ context.Context, projectID string, d Datas
 	return nil
 }
 
+func (s *MemoryStore) UpdateDatasetAtomic(_ context.Context, projectID, datasetID string, mutate func(Dataset) (Dataset, error)) (Dataset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := datasetScope(projectID, datasetID)
+	current, ok := s.datasets[key]
+	if !ok {
+		return Dataset{}, ErrNoSuchDataset
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Dataset{}, err
+	}
+	next.ProjectID = projectID
+	s.datasets[key] = next
+	return next, nil
+}
+
 func (s *MemoryStore) DeleteDataset(_ context.Context, projectID, datasetID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,6 +155,24 @@ func (s *MemoryStore) UpdateTable(_ context.Context, projectID, datasetID string
 	t.DatasetID = datasetID
 	s.tables[key] = t
 	return nil
+}
+
+func (s *MemoryStore) UpdateTableAtomic(_ context.Context, projectID, datasetID, tableID string, mutate func(Table) (Table, error)) (Table, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := tableScope(projectID, datasetID, tableID)
+	current, ok := s.tables[key]
+	if !ok {
+		return Table{}, ErrNoSuchTable
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Table{}, err
+	}
+	next.ProjectID = projectID
+	next.DatasetID = datasetID
+	s.tables[key] = next
+	return next, nil
 }
 
 func (s *MemoryStore) DeleteTable(_ context.Context, projectID, datasetID, tableID string) error {

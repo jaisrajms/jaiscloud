@@ -306,28 +306,27 @@ func (p *Provider) UpdateDataset(ctx context.Context, nr *model.NormalizedReques
 	if datasetID == "" {
 		return nil, invalidArgument("datasetId is required")
 	}
-	d, err := p.store.GetDataset(ctx, projectOf(nr), datasetID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body := bodyMap(nr)
-	if body != nil {
-		stored := map[string]any{}
-		if len(d.Config) > 0 {
-			_ = json.Unmarshal(d.Config, &stored)
+	d, err := p.store.UpdateDatasetAtomic(ctx, projectOf(nr), datasetID, func(d bqstore.Dataset) (bqstore.Dataset, error) {
+		if body != nil {
+			stored := map[string]any{}
+			if len(d.Config) > 0 {
+				_ = json.Unmarshal(d.Config, &stored)
+			}
+			for k, v := range body {
+				stored[k] = v
+			}
+			if data, err := json.Marshal(stored); err == nil {
+				d.Config = data
+			}
+			if labels := stringMap(body, "labels"); labels != nil {
+				d.Labels = labels
+			}
 		}
-		for k, v := range body {
-			stored[k] = v
-		}
-		if data, err := json.Marshal(stored); err == nil {
-			d.Config = data
-		}
-		if labels := stringMap(body, "labels"); labels != nil {
-			d.Labels = labels
-		}
-	}
-	d.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateDataset(ctx, projectOf(nr), d); err != nil {
+		d.UpdateTime = clock.Now().UTC()
+		return d, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	return provider.OK(p.datasetMap(projectOf(nr), d)), nil
@@ -426,33 +425,32 @@ func (p *Provider) UpdateTable(ctx context.Context, nr *model.NormalizedRequest)
 	if datasetID == "" || tableID == "" {
 		return nil, invalidArgument("datasetId and tableId are required")
 	}
-	t, err := p.store.GetTable(ctx, projectOf(nr), datasetID, tableID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body := bodyMap(nr)
-	if body != nil {
-		stored := map[string]any{}
-		if len(t.Config) > 0 {
-			_ = json.Unmarshal(t.Config, &stored)
-		}
-		for k, v := range body {
-			stored[k] = v
-		}
-		if data, err := json.Marshal(stored); err == nil {
-			t.Config = data
-		}
-		if schema := mapValue(body, "schema"); schema != nil {
-			if data, err := json.Marshal(schema); err == nil {
-				t.Schema = data
+	t, err := p.store.UpdateTableAtomic(ctx, projectOf(nr), datasetID, tableID, func(t bqstore.Table) (bqstore.Table, error) {
+		if body != nil {
+			stored := map[string]any{}
+			if len(t.Config) > 0 {
+				_ = json.Unmarshal(t.Config, &stored)
+			}
+			for k, v := range body {
+				stored[k] = v
+			}
+			if data, err := json.Marshal(stored); err == nil {
+				t.Config = data
+			}
+			if schema := mapValue(body, "schema"); schema != nil {
+				if data, err := json.Marshal(schema); err == nil {
+					t.Schema = data
+				}
+			}
+			if labels := stringMap(body, "labels"); labels != nil {
+				t.Labels = labels
 			}
 		}
-		if labels := stringMap(body, "labels"); labels != nil {
-			t.Labels = labels
-		}
-	}
-	t.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateTable(ctx, projectOf(nr), datasetID, t); err != nil {
+		t.UpdateTime = clock.Now().UTC()
+		return t, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	return provider.OK(p.tableMap(projectOf(nr), t)), nil

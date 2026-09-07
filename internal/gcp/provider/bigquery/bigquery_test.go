@@ -2,8 +2,12 @@ package bigquery
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/model"
@@ -89,6 +93,84 @@ func TestDatasetCRUD(t *testing.T) {
 	}
 	if _, err := p.GetDataset(ctx, newNR(map[string]any{"datasetId": "sales"})); err == nil {
 		t.Fatalf("expected NotFound after delete")
+	}
+}
+
+// delayedGetDatasetStore wraps a bqstore.Store, delaying every GetDataset
+// call to widen a TOCTOU race window in tests. It only affects the pre-fix
+// code path (UpdateDataset calling a standalone GetDataset);
+// UpdateDatasetAtomic does its own internal locked read and never reaches
+// this override.
+type delayedGetDatasetStore struct {
+	bqstore.Store
+	delay time.Duration
+}
+
+func (d *delayedGetDatasetStore) GetDataset(ctx context.Context, projectID, datasetID string) (bqstore.Dataset, error) {
+	ds, err := d.Store.GetDataset(ctx, projectID, datasetID)
+	time.Sleep(d.delay)
+	return ds, err
+}
+
+// TestUpdateDatasetConcurrentDisjointFieldsNoLostUpdate proves UpdateDataset's
+// get-merge-write cycle is atomic with respect to other concurrent PATCH
+// requests. Without atomicity, a PATCH touching only "friendlyName" reads a
+// stale full copy of the dataset (taken before a concurrent "description"-only
+// PATCH committed), then writes that stale copy back — silently reverting the
+// description change even though the friendlyName PATCH never touched it. 25
+// goroutines each PATCH only "friendlyName" and 25 PATCH only "description";
+// a delayed-Get store wrapper widens the TOCTOU window reliably (the real
+// in-memory round trip otherwise completes in nanoseconds).
+func TestUpdateDatasetConcurrentDisjointFieldsNoLostUpdate(t *testing.T) {
+	ctx := context.Background()
+	p := New(&delayedGetDatasetStore{Store: bqstore.NewMemoryStore(), delay: 5 * time.Millisecond})
+
+	if _, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "ds1"},
+		"friendlyName":     "orig-name",
+		"description":      "orig-desc",
+	}})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const perField = 25
+	var wg sync.WaitGroup
+	errs := make([]error, 2*perField)
+	for i := 0; i < perField; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = p.UpdateDataset(ctx, newNR(map[string]any{
+				"datasetId": "ds1",
+				"body":      map[string]any{"friendlyName": fmt.Sprintf("vName%d", i)},
+			}))
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[perField+i] = p.UpdateDataset(ctx, newNR(map[string]any{
+				"datasetId": "ds1",
+				"body":      map[string]any{"description": fmt.Sprintf("vDesc%d", i)},
+			}))
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("update %d: %v", i, err)
+		}
+	}
+
+	got, err := p.GetDataset(ctx, newNR(map[string]any{"datasetId": "ds1"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	friendlyName, _ := got.Data["friendlyName"].(string)
+	description, _ := got.Data["description"].(string)
+	if friendlyName == "orig-name" || !strings.HasPrefix(friendlyName, "vName") {
+		t.Errorf("friendlyName reverted to a stale value instead of one of the 25 concurrent writers': got %q", friendlyName)
+	}
+	if description == "orig-desc" || !strings.HasPrefix(description, "vDesc") {
+		t.Errorf("description reverted to a stale value instead of one of the 25 concurrent writers': got %q", description)
 	}
 }
 

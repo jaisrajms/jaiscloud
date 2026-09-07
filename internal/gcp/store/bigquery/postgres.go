@@ -86,6 +86,53 @@ func (s *PostgresStore) UpdateDataset(ctx context.Context, projectID string, d D
 	return nil
 }
 
+// UpdateDatasetAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the dataset for the
+// duration of mutate, so a concurrent UpdateDatasetAtomic on the same
+// dataset blocks until this transaction commits or rolls back, instead of
+// racing to silently overwrite this call's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateDatasetAtomic(ctx context.Context, projectID, datasetID string, mutate func(Dataset) (Dataset, error)) (Dataset, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Dataset{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanDataset(tx.QueryRow(ctx, `
+		SELECT project_id, dataset_id, config, labels, create_time, update_time
+		FROM jc_bq_datasets WHERE project_id=$1 AND dataset_id=$2 FOR UPDATE
+	`, projectID, datasetID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Dataset{}, ErrNoSuchDataset
+	}
+	if err != nil {
+		return Dataset{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Dataset{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_bq_datasets SET config=$3, labels=$4, update_time=$5
+		WHERE project_id=$1 AND dataset_id=$2
+	`, projectID, datasetID, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), next.UpdateTime)
+	if err != nil {
+		return Dataset{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Dataset{}, ErrNoSuchDataset
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Dataset{}, err
+	}
+	next.ProjectID = projectID
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteDataset(ctx context.Context, projectID, datasetID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -190,6 +237,54 @@ func (s *PostgresStore) UpdateTable(ctx context.Context, projectID, datasetID st
 		return ErrNoSuchTable
 	}
 	return nil
+}
+
+// UpdateTableAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the table for the
+// duration of mutate, so a concurrent UpdateTableAtomic on the same table
+// blocks until this transaction commits or rolls back, instead of racing to
+// silently overwrite this call's write. See store/firestore/postgres.go's
+// Commit for the same convention.
+func (s *PostgresStore) UpdateTableAtomic(ctx context.Context, projectID, datasetID, tableID string, mutate func(Table) (Table, error)) (Table, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Table{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanTable(tx.QueryRow(ctx, `
+		SELECT project_id, dataset_id, table_id, config, schema, labels, num_rows, create_time, update_time
+		FROM jc_bq_tables WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3 FOR UPDATE
+	`, projectID, datasetID, tableID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Table{}, ErrNoSuchTable
+	}
+	if err != nil {
+		return Table{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Table{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_bq_tables SET config=$4, schema=$5, labels=$6, update_time=$7
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
+	`, projectID, datasetID, tableID, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(next.Schema, "{}"), nullableJSONRaw(labels, "{}"), next.UpdateTime)
+	if err != nil {
+		return Table{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Table{}, ErrNoSuchTable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Table{}, err
+	}
+	next.ProjectID = projectID
+	next.DatasetID = datasetID
+	return next, nil
 }
 
 func (s *PostgresStore) DeleteTable(ctx context.Context, projectID, datasetID, tableID string) error {

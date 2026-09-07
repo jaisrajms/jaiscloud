@@ -71,12 +71,26 @@ type Store interface {
 	CreateDataset(ctx context.Context, projectID string, d Dataset) error
 	GetDataset(ctx context.Context, projectID, datasetID string) (Dataset, error)
 	UpdateDataset(ctx context.Context, projectID string, d Dataset) error
+	// UpdateDatasetAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current dataset and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetDataset followed
+	// by UpdateDataset, this is atomic with respect to concurrent updates on
+	// the same dataset, so two concurrent PATCH requests merging different
+	// fields can't lose one or the other.
+	UpdateDatasetAtomic(ctx context.Context, projectID, datasetID string, mutate func(Dataset) (Dataset, error)) (Dataset, error)
 	DeleteDataset(ctx context.Context, projectID, datasetID string) error
 	ListDatasets(ctx context.Context, projectID string) ([]Dataset, error)
 
 	CreateTable(ctx context.Context, projectID, datasetID string, t Table) error
 	GetTable(ctx context.Context, projectID, datasetID, tableID string) (Table, error)
 	UpdateTable(ctx context.Context, projectID, datasetID string, t Table) error
+	// UpdateTableAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current table and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetTable followed by
+	// UpdateTable, this is atomic with respect to concurrent updates on the
+	// same table, so two concurrent PATCH requests merging different fields
+	// can't lose one or the other.
+	UpdateTableAtomic(ctx context.Context, projectID, datasetID, tableID string, mutate func(Table) (Table, error)) (Table, error)
 	DeleteTable(ctx context.Context, projectID, datasetID, tableID string) error
 	ListTables(ctx context.Context, projectID, datasetID string) ([]Table, error)
 
