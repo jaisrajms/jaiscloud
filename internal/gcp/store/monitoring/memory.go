@@ -144,6 +144,22 @@ func (s *MemoryStore) UpdateAlertPolicy(_ context.Context, project string, p Ale
 	return nil
 }
 
+func (s *MemoryStore) UpdateAlertPolicyAtomic(_ context.Context, project, id string, mutate func(AlertPolicy) (AlertPolicy, error)) (AlertPolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.policies[project][id]
+	if !ok {
+		return AlertPolicy{}, ErrAlertPolicyNotFound
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return AlertPolicy{}, err
+	}
+	next.ID = id
+	s.policies[project][id] = next
+	return next, nil
+}
+
 func (s *MemoryStore) DeleteAlertPolicy(_ context.Context, project, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

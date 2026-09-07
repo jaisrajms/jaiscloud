@@ -2,8 +2,10 @@ package monitoring
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +26,12 @@ import (
 
 func testServer(t *testing.T) (monitoringpb.MetricServiceClient, monitoringpb.AlertPolicyServiceClient, func()) {
 	t.Helper()
-	svc := NewService(monitoringstore.NewMemoryStore(), "test")
+	return testServerWithStore(t, monitoringstore.NewMemoryStore())
+}
+
+func testServerWithStore(t *testing.T, store monitoringstore.Store) (monitoringpb.MetricServiceClient, monitoringpb.AlertPolicyServiceClient, func()) {
+	t.Helper()
+	svc := NewService(store, "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -402,6 +409,94 @@ func TestUpdateAlertPolicyUpdateMask(t *testing.T) {
 		},
 	}); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("unsupported mask path err = %v, want Unimplemented", err)
+	}
+}
+
+// delayedGetAlertPolicyStore wraps a monitoringstore.Store, delaying every
+// GetAlertPolicy call to widen a TOCTOU race window in tests. It only
+// affects the pre-fix code path (UpdateAlertPolicy calling a standalone
+// GetAlertPolicy); UpdateAlertPolicyAtomic does its own internal locked read
+// and never reaches this override.
+type delayedGetAlertPolicyStore struct {
+	monitoringstore.Store
+	delay time.Duration
+}
+
+func (d *delayedGetAlertPolicyStore) GetAlertPolicy(ctx context.Context, project, id string) (monitoringstore.AlertPolicy, error) {
+	p, err := d.Store.GetAlertPolicy(ctx, project, id)
+	time.Sleep(d.delay)
+	return p, err
+}
+
+// TestUpdateAlertPolicyConcurrentDisjointMasksNoLostUpdate proves
+// UpdateAlertPolicy's get-merge-write cycle is atomic with respect to other
+// concurrent masked-update requests. Without atomicity, a masked update
+// touching only "display_name" reads a stale full copy of the policy (taken
+// before a concurrent "enabled"-only masked update committed), then writes
+// that stale copy back — silently reverting the enabled change even though
+// the display_name update's mask never named it. 25 goroutines each update
+// only "display_name" and 25 update only "enabled"; a delayed-Get store
+// wrapper widens the TOCTOU window reliably (the real in-memory round trip
+// otherwise completes in nanoseconds).
+func TestUpdateAlertPolicyConcurrentDisjointMasksNoLostUpdate(t *testing.T) {
+	_, ac, cleanup := testServerWithStore(t, &delayedGetAlertPolicyStore{Store: monitoringstore.NewMemoryStore(), delay: 5 * time.Millisecond})
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := ac.CreateAlertPolicy(ctx, &monitoringpb.CreateAlertPolicyRequest{
+		Name: "projects/test",
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			DisplayName: "orig-name",
+			Combiner:    monitoringpb.AlertPolicy_AND,
+			Enabled:     wrapperspb.Bool(false),
+		},
+	})
+	if err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	const perField = 25
+	var wg sync.WaitGroup
+	errs := make([]error, 2*perField)
+	for i := 0; i < perField; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+				AlertPolicy: &monitoringpb.AlertPolicy{
+					Name:        created.GetName(),
+					DisplayName: fmt.Sprintf("vName%d", i),
+				},
+			})
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[perField+i] = ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"enabled"}},
+				AlertPolicy: &monitoringpb.AlertPolicy{
+					Name:    created.GetName(),
+					Enabled: wrapperspb.Bool(true),
+				},
+			})
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("update %d: %v", i, err)
+		}
+	}
+
+	got, err := ac.GetAlertPolicy(ctx, &monitoringpb.GetAlertPolicyRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !strings.HasPrefix(got.GetDisplayName(), "vName") {
+		t.Errorf("display_name reverted to a stale value instead of one of the 25 concurrent writers': got %q", got.GetDisplayName())
+	}
+	if !got.GetEnabled().GetValue() {
+		t.Errorf("enabled reverted to the stale pre-race value (false) instead of the 25 concurrent writers' value (true)")
 	}
 }
 

@@ -271,6 +271,54 @@ func (s *PostgresStore) UpdateAlertPolicy(ctx context.Context, project string, p
 	return nil
 }
 
+// UpdateAlertPolicyAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the policy for the
+// duration of mutate, so a concurrent UpdateAlertPolicyAtomic on the same
+// policy blocks until this transaction commits or rolls back, instead of
+// racing to silently overwrite this call's write. See
+// store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresStore) UpdateAlertPolicyAtomic(ctx context.Context, project, id string, mutate func(AlertPolicy) (AlertPolicy, error)) (AlertPolicy, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return AlertPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+		SELECT `+policyCols+` FROM jc_monitoring_alert_policies WHERE project_id=$1 AND id=$2 FOR UPDATE
+	`, project, id)
+	current, err := scanAlertPolicy(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AlertPolicy{}, ErrAlertPolicyNotFound
+	}
+	if err != nil {
+		return AlertPolicy{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return AlertPolicy{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_monitoring_alert_policies
+		SET display_name=$3, combiner=$4, enabled=$5, documentation=$6, conditions=$7, notification_channels=$8, user_labels=$9
+		WHERE project_id=$1 AND id=$2
+	`, project, id, next.DisplayName, next.Combiner, next.Enabled, jsonb(next.Documentation),
+		jsonb(next.Conditions), jsonb(next.NotificationChannels), jsonb(next.UserLabels))
+	if err != nil {
+		return AlertPolicy{}, fmt.Errorf("monitoring UpdateAlertPolicyAtomic: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return AlertPolicy{}, ErrAlertPolicyNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AlertPolicy{}, err
+	}
+	next.ID = id
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteAlertPolicy(ctx context.Context, project, id string) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM jc_monitoring_alert_policies WHERE project_id=$1 AND id=$2

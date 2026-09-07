@@ -378,20 +378,18 @@ func (s *Service) UpdateAlertPolicy(ctx context.Context, req *monitoringpb.Updat
 
 	// An empty/nil update mask is a full replace (the historical behavior).
 	// A non-empty mask merges field-by-field: masked paths take the incoming
-	// value, unmasked paths retain the stored value.
-	p := incoming
-	if paths := req.GetUpdateMask().GetPaths(); len(paths) > 0 {
-		stored, err := s.store.GetAlertPolicy(ctx, project, id)
-		if err != nil {
-			return nil, mapError(err)
+	// value, unmasked paths retain the stored value. The get-check-merge
+	// happens inside UpdateAlertPolicyAtomic's locked section so a concurrent
+	// masked update touching different fields can't read the same stale
+	// snapshot and silently overwrite this one's change.
+	p, err := s.store.UpdateAlertPolicyAtomic(ctx, project, id, func(stored monitoringstore.AlertPolicy) (monitoringstore.AlertPolicy, error) {
+		paths := req.GetUpdateMask().GetPaths()
+		if len(paths) == 0 {
+			return incoming, nil
 		}
-		merged, err := applyAlertPolicyMask(stored, incoming, paths)
-		if err != nil {
-			return nil, mapError(err)
-		}
-		p = merged
-	}
-	if err := s.store.UpdateAlertPolicy(ctx, project, p); err != nil {
+		return applyAlertPolicyMask(stored, incoming, paths)
+	})
+	if err != nil {
 		return nil, mapError(err)
 	}
 	return alertPolicyToProto(p, project), nil

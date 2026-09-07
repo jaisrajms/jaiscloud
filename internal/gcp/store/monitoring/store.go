@@ -108,6 +108,14 @@ type Store interface {
 	GetAlertPolicy(ctx context.Context, project, id string) (AlertPolicy, error)
 	ListAlertPolicies(ctx context.Context, project string) ([]AlertPolicy, error)
 	UpdateAlertPolicy(ctx context.Context, project string, p AlertPolicy) error
+	// UpdateAlertPolicyAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current policy and returns the version to persist, or an
+	// error to abort without writing. Unlike a separate GetAlertPolicy
+	// followed by UpdateAlertPolicy, this is atomic with respect to
+	// concurrent updates on the same policy, so a masked PATCH that merges
+	// only a subset of fields can't lose a concurrent PATCH's changes to
+	// other fields.
+	UpdateAlertPolicyAtomic(ctx context.Context, project, id string, mutate func(AlertPolicy) (AlertPolicy, error)) (AlertPolicy, error)
 	DeleteAlertPolicy(ctx context.Context, project, id string) error
 
 	Reset(ctx context.Context)
