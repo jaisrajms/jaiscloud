@@ -162,17 +162,20 @@ func TestSDKPubSubDeleteNotFound(t *testing.T) {
 	topic := "projects/proj/topics/" + unique("del")
 	_, err = svc.Projects.Topics.Create(topic, &pubsub.Topic{Name: topic}).Do()
 	require.NoError(t, err)
-	_, err = svc.Projects.Topics.Delete(topic).Do()
-	require.NoError(t, err)
-	_, err = svc.Projects.Topics.Get(topic).Do()
-	requireNotFound(t, err)
 
+	// The subscription must be created while the topic still exists (Pub/Sub
+	// rejects a subscription for a missing topic with NotFound).
 	sub := "projects/proj/subscriptions/" + unique("del-sub")
 	_, err = svc.Projects.Subscriptions.Create(sub, &pubsub.Subscription{Name: sub, Topic: topic}).Do()
 	require.NoError(t, err)
 	_, err = svc.Projects.Subscriptions.Delete(sub).Do()
 	require.NoError(t, err)
 	_, err = svc.Projects.Subscriptions.Get(sub).Do()
+	requireNotFound(t, err)
+
+	_, err = svc.Projects.Topics.Delete(topic).Do()
+	require.NoError(t, err)
+	_, err = svc.Projects.Topics.Get(topic).Do()
 	requireNotFound(t, err)
 }
 

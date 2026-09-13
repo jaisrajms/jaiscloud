@@ -282,6 +282,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			}
 		case "subscriptions":
 			switch custom {
+			case "detach":
+				return "SubscriptionDetach"
 			case "pull":
 				return "SubscriptionPull"
 			case "acknowledge":

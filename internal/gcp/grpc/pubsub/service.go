@@ -24,6 +24,7 @@ import (
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/gcp/pubsubfilter"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
@@ -194,6 +195,23 @@ func (s *Service) DeleteTopic(ctx context.Context, req *pubsubpb.DeleteTopicRequ
 		}
 		return nil, mapError(err)
 	}
+	// Existing subscriptions are not deleted; their topic is set to the
+	// sentinel "_deleted-topic_" (real Pub/Sub behaviour).
+	topicFull := topicName(project, t)
+	if entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtSubscription, ""); err == nil {
+		for _, e := range entries {
+			var meta map[string]any
+			if json.Unmarshal(e.Data, &meta) != nil {
+				continue
+			}
+			if st, _ := meta["topic"].(string); st != topicFull {
+				continue
+			}
+			meta["topic"] = "_deleted-topic_"
+			data, _ := json.Marshal(meta)
+			_ = s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: e.ID, Data: data})
+		}
+	}
 	return &emptypb.Empty{}, nil
 }
 
@@ -321,6 +339,17 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 	if project == "" {
 		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
 	}
+	// The topic must already exist (real Pub/Sub returns NotFound otherwise).
+	_, topicID, ok := splitTopicName(req.GetTopic())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic name", 400))
+	}
+	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtTopic, topicID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "topic not found", 404))
+		}
+		return nil, mapError(err)
+	}
 	ackDeadline := 10
 	if req.GetAckDeadlineSeconds() != 0 {
 		ackDeadline = int(req.GetAckDeadlineSeconds())
@@ -329,6 +358,15 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		"name":               subscriptionName(project, sub),
 		"topic":              req.GetTopic(),
 		"ackDeadlineSeconds": ackDeadline,
+	}
+	if f := req.GetFilter(); f != "" {
+		if _, err := pubsubfilter.Compile(f); err != nil {
+			return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription filter: "+err.Error(), 400))
+		}
+		meta["filter"] = f
+	}
+	if len(req.GetLabels()) > 0 {
+		meta["labels"] = req.GetLabels()
 	}
 	if dlp := req.GetDeadLetterPolicy(); dlp != nil {
 		meta["deadLetterPolicy"] = map[string]any{
@@ -411,6 +449,13 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 	}
 	var meta map[string]any
 	json.Unmarshal(e.Data, &meta)
+	if detached, _ := meta["detached"].(bool); detached {
+		return nil, mapError(&model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "subscription " + sub + " is detached",
+		})
+	}
+	subFilter, _ := meta["filter"].(string)
 	topic, _ := meta["topic"].(string)
 	topicID := topic
 	if i := strings.LastIndex(topicID, "/"); i >= 0 {
@@ -453,6 +498,7 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 		return nil, mapError(err)
 	}
 
+	msgs = s.filterMessages(ctx, sub, subFilter, msgs)
 	received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, msgs)
 	if err != nil {
 		return nil, err
@@ -560,6 +606,13 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	}
 	var meta map[string]any
 	json.Unmarshal(e.Data, &meta)
+	if detached, _ := meta["detached"].(bool); detached {
+		return mapError(&model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "subscription " + sub + " is detached",
+		})
+	}
+	subFilter, _ := meta["filter"].(string)
 	topic, _ := meta["topic"].(string)
 	topicID := topic
 	if i := strings.LastIndex(topicID, "/"); i >= 0 {
@@ -657,6 +710,7 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 			return mapError(err)
 		}
 		if len(msgs) > 0 {
+			msgs = s.filterMessages(ctx, sub, subFilter, msgs)
 			received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, msgs)
 			if err != nil {
 				return err
@@ -796,6 +850,105 @@ func (s *Service) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAck
 	return &emptypb.Empty{}, nil
 }
 
+// filterMessages drops (and deletes) messages that do not match a
+// subscription's filter. Filters are immutable, so a non-matching message will
+// never be delivered to this subscription and is discarded for it.
+func (s *Service) filterMessages(ctx context.Context, queue, filterExpr string, msgs []pubsubstore.Message) []pubsubstore.Message {
+	filter, err := pubsubfilter.Compile(filterExpr)
+	if err != nil || filter == nil {
+		return msgs
+	}
+	kept := make([]pubsubstore.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if filter.Match(m.Attributes) {
+			kept = append(kept, m)
+		} else {
+			_ = s.messages.Delete(ctx, queue, m.MessageID)
+		}
+	}
+	return kept
+}
+
+// UpdateSubscription applies an update_mask to a subscription. The filter is
+// immutable (rejected even when unchanged); labels and ack_deadline_seconds are
+// supported.
+func (s *Service) UpdateSubscription(ctx context.Context, req *pubsubpb.UpdateSubscriptionRequest) (*pubsubpb.Subscription, error) {
+	in := req.GetSubscription()
+	if in == nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "subscription is required", 400))
+	}
+	project, id, ok := splitSubscriptionName(in.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	var meta map[string]any
+	json.Unmarshal(e.Data, &meta)
+
+	paths := req.GetUpdateMask().GetPaths()
+	if len(paths) == 0 {
+		paths = []string{"labels"}
+	}
+	for _, p := range paths {
+		switch p {
+		case "filter":
+			return nil, mapError(model.NewProviderError("InvalidArgument",
+				"subscription filter is immutable and cannot be updated", 400))
+		case "labels":
+			if len(in.GetLabels()) == 0 {
+				delete(meta, "labels")
+			} else {
+				meta["labels"] = in.GetLabels()
+			}
+		case "ack_deadline_seconds", "ackDeadlineSeconds":
+			meta["ackDeadlineSeconds"] = int(in.GetAckDeadlineSeconds())
+		default:
+			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
+		}
+	}
+	data, _ := json.Marshal(meta)
+	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: id, Data: data}); err != nil {
+		return nil, mapError(err)
+	}
+	return subToProto(meta), nil
+}
+
+// DetachSubscription detaches a subscription from its topic: it stops receiving
+// messages, its backlog is dropped, and Pull returns FailedPrecondition. The
+// subscription resource is retained (real Pub/Sub DetachSubscription).
+func (s *Service) DetachSubscription(ctx context.Context, req *pubsubpb.DetachSubscriptionRequest) (*pubsubpb.DetachSubscriptionResponse, error) {
+	project, id, ok := splitSubscriptionName(req.GetSubscription())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	var meta map[string]any
+	json.Unmarshal(e.Data, &meta)
+	meta["detached"] = true
+	data, _ := json.Marshal(meta)
+	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: id, Data: data}); err != nil {
+		return nil, mapError(err)
+	}
+	if msgs, err := s.messages.List(ctx, id); err == nil {
+		for _, m := range msgs {
+			_ = s.messages.Delete(ctx, id, m.MessageID)
+		}
+	}
+	return &pubsubpb.DetachSubscriptionResponse{}, nil
+}
+
 // ─── IAM (google.iam.v1.IAMPolicy over topics and subscriptions) ─────────────
 
 // Owns reports whether the Pub/Sub service handles IAM for this resource name.
@@ -923,6 +1076,25 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 	sub.Topic, _ = meta["topic"].(string)
 	if ad, ok := asInt(meta["ackDeadlineSeconds"]); ok {
 		sub.AckDeadlineSeconds = int32(ad)
+	}
+	if f, _ := meta["filter"].(string); f != "" {
+		sub.Filter = f
+	}
+	if detached, _ := meta["detached"].(bool); detached {
+		sub.Detached = true
+	}
+	if labels, ok := meta["labels"].(map[string]any); ok {
+		m := make(map[string]string, len(labels))
+		for k, v := range labels {
+			if s, ok := v.(string); ok {
+				m[k] = s
+			}
+		}
+		if len(m) > 0 {
+			sub.Labels = m
+		}
+	} else if labels, ok := meta["labels"].(map[string]string); ok {
+		sub.Labels = labels
 	}
 	if dlp, ok := meta["deadLetterPolicy"].(map[string]any); ok {
 		p := &pubsubpb.DeadLetterPolicy{}

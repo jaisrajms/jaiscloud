@@ -16,6 +16,7 @@ import (
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/gcp/pubsubfilter"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
@@ -61,6 +62,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"PubSub.SubscriptionCreate":             p.SubscriptionCreate,
 		"PubSub.SubscriptionGet":                p.SubscriptionGet,
 		"PubSub.SubscriptionDelete":             p.SubscriptionDelete,
+		"PubSub.SubscriptionDetach":             p.SubscriptionDetach,
 		"PubSub.SubscriptionList":               p.SubscriptionList,
 		"PubSub.SubscriptionPull":               p.SubscriptionPull,
 		"PubSub.SubscriptionAcknowledge":        p.SubscriptionAcknowledge,
@@ -155,6 +157,55 @@ func (p *Provider) TopicDelete(ctx context.Context, nr *model.NormalizedRequest)
 			return nil, model.NewProviderError("NotFound", "topic not found", 404)
 		}
 		return nil, err
+	}
+	// Existing subscriptions are not deleted; their topic is set to the
+	// sentinel "_deleted-topic_" (real Pub/Sub behaviour).
+	topicFull := nr.ResourceID("pubsub-topic", t)
+	if entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, ""); err == nil {
+		for _, e := range entries {
+			var meta map[string]any
+			if json.Unmarshal(e.Data, &meta) != nil {
+				continue
+			}
+			if st, _ := meta["topic"].(string); st != topicFull {
+				continue
+			}
+			meta["topic"] = "_deleted-topic_"
+			data, _ := json.Marshal(meta)
+			_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: e.ID, Data: data})
+		}
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// SubscriptionDetach implements subscriptions.detach: the subscription stops
+// receiving messages (its backlog is dropped) and Pull returns
+// FailedPrecondition. The subscription itself is retained.
+func (p *Provider) SubscriptionDetach(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "subscription not found", 404)
+		}
+		return nil, err
+	}
+	var meta map[string]any
+	json.Unmarshal(e.Data, &meta)
+	meta["detached"] = true
+	data, _ := json.Marshal(meta)
+	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: s, Data: data}); err != nil {
+		return nil, err
+	}
+	// Drop the backlog: a detached subscription receives no further messages.
+	if msgs, err := p.messages.List(ctx, s); err == nil {
+		for _, m := range msgs {
+			_ = p.messages.Delete(ctx, s, m.MessageID)
+		}
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
@@ -326,6 +377,14 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	topic, _ := body["topic"].(string)
+	if topic == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing topic", 400)
+	}
+	// The topic must already exist (real Pub/Sub rejects a subscription for a
+	// missing topic with NotFound).
+	if !p.topicExists(ctx, nr.AccountID, lastSegment(topic)) {
+		return nil, model.NewProviderError("NotFound", "topic not found", 404)
+	}
 	ackDeadline := 10
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
 		ackDeadline = int(ad)
@@ -334,6 +393,12 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		"name":               nr.ResourceID("pubsub-subscription", s),
 		"topic":              topic,
 		"ackDeadlineSeconds": ackDeadline,
+	}
+	if filter, _ := body["filter"].(string); filter != "" {
+		if _, err := pubsubfilter.Compile(filter); err != nil {
+			return nil, model.NewProviderError("InvalidArgument", "invalid subscription filter: "+err.Error(), 400)
+		}
+		meta["filter"] = filter
 	}
 	if dp, ok := body["deadLetterPolicy"].(map[string]any); ok {
 		meta["deadLetterPolicy"] = dp
@@ -419,6 +484,14 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 	}
 	var sub map[string]any
 	json.Unmarshal(e.Data, &sub)
+	if detached, _ := sub["detached"].(bool); detached {
+		return nil, &model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "subscription " + s + " is detached",
+		}
+	}
+	filterExpr, _ := sub["filter"].(string)
+	filter, _ := pubsubfilter.Compile(filterExpr)
 	topic, _ := sub["topic"].(string)
 	// topic full name → topic ID (last segment).
 	topicID := topic
@@ -472,6 +545,12 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 	}
 	received := make([]any, 0, len(msgs))
 	for _, m := range msgs {
+		// Filtering: a message that does not match the subscription's filter is
+		// dropped for this subscription (filters are immutable).
+		if filter != nil && !filter.Match(m.Attributes) {
+			_ = p.messages.Delete(ctx, s, m.MessageID)
+			continue
+		}
 		// DLQ: once delivery attempts exceed maxDeliveryAttempts, republish to the
 		// dead-letter topic and drop the original (mirrors SQS checkDLQ, strictly
 		// greater threshold).

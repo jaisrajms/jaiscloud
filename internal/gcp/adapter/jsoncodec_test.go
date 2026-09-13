@@ -163,3 +163,15 @@ func TestDetectV1Service(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONCodecSubscriptionDetachRouting(t *testing.T) {
+	c := &JSONCodec{Service: "pubsub"}
+	r := httptest.NewRequest("POST", "/v1/projects/p/subscriptions/s:detach", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "SubscriptionDetach" {
+		t.Fatalf("expected SubscriptionDetach, got %q", nr.Action)
+	}
+}

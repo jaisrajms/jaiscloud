@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // pubsubTestService dials a real in-process gRPC server backed by the memory
@@ -473,5 +474,158 @@ func TestPubSubFanOutGRPC(t *testing.T) {
 		if got := string(pull.GetReceivedMessages()[0].GetMessage().GetData()); got != "broadcast" {
 			t.Fatalf("subscription %s: data = %q, want broadcast", s, got)
 		}
+	}
+}
+
+func TestPubSubFilterGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/filter-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	filtered := "projects/test/subscriptions/filtered"
+	unfiltered := "projects/test/subscriptions/unfiltered"
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: filtered, Topic: topic, AckDeadlineSeconds: 30, Filter: `attributes.event_type = "a"`,
+	}); err != nil {
+		t.Fatalf("CreateSubscription filtered: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: unfiltered, Topic: topic, AckDeadlineSeconds: 30,
+	}); err != nil {
+		t.Fatalf("CreateSubscription unfiltered: %v", err)
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{Topic: topic, Messages: []*pubsubpb.PubsubMessage{
+		{Data: []byte("match"), Attributes: map[string]string{"event_type": "a"}},
+		{Data: []byte("nope"), Attributes: map[string]string{"event_type": "b"}},
+	}}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	fp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: filtered, MaxMessages: 10, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull filtered: %v", err)
+	}
+	if len(fp.GetReceivedMessages()) != 1 || string(fp.GetReceivedMessages()[0].GetMessage().GetData()) != "match" {
+		t.Fatalf("filtered pull = %v, want exactly [match]", fp.GetReceivedMessages())
+	}
+	up, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: unfiltered, MaxMessages: 10, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull unfiltered: %v", err)
+	}
+	if len(up.GetReceivedMessages()) != 2 {
+		t.Fatalf("unfiltered pull got %d, want 2", len(up.GetReceivedMessages()))
+	}
+}
+
+func TestPubSubUnparseableFilterRejectedGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/bad-filter-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	_, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: "projects/test/subscriptions/bad-filter", Topic: topic, Filter: "this is not a filter (((",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateSubscription bad filter err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestPubSubDetachGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/detach-topic"
+	const sub = "projects/test/subscriptions/detach-sub"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: sub, Topic: topic}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if _, err := pub.DetachSubscription(ctx, &pubsubpb.DetachSubscriptionRequest{Subscription: sub}); err != nil {
+		t.Fatalf("DetachSubscription: %v", err)
+	}
+	got, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: sub})
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if !got.GetDetached() {
+		t.Fatal("expected detached=true")
+	}
+	if _, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 1, ReturnImmediately: true}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Pull detached err = %v, want FailedPrecondition", err)
+	}
+}
+
+func TestPubSubUpdateFilterImmutableGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/immutable-topic"
+	const sub = "projects/test/subscriptions/immutable-sub"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: sub, Topic: topic, Filter: `attributes.event_type = "a"`,
+	}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+
+	_, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+		Subscription: &pubsubpb.Subscription{Name: sub, Filter: `attributes.event_type = "b"`},
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"filter"}},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("UpdateSubscription filter err = %v, want InvalidArgument", err)
+	}
+
+	relabelled, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+		Subscription: &pubsubpb.Subscription{Name: sub, Labels: map[string]string{"env": "local"}},
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSubscription labels: %v", err)
+	}
+	if relabelled.GetLabels()["env"] != "local" {
+		t.Fatalf("labels = %v, want env=local", relabelled.GetLabels())
+	}
+	if relabelled.GetFilter() != `attributes.event_type = "a"` {
+		t.Fatalf("filter changed to %q", relabelled.GetFilter())
+	}
+}
+
+func TestPubSubTopicDeleteOrphansGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/orphan-topic"
+	const sub = "projects/test/subscriptions/orphan-sub"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: sub, Topic: topic}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if _, err := pub.DeleteTopic(ctx, &pubsubpb.DeleteTopicRequest{Topic: topic}); err != nil {
+		t.Fatalf("DeleteTopic: %v", err)
+	}
+	got, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: sub})
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if got.GetTopic() != "_deleted-topic_" {
+		t.Fatalf("topic = %q, want _deleted-topic_", got.GetTopic())
 	}
 }

@@ -387,3 +387,137 @@ func TestPubSubFanOut(t *testing.T) {
 		t.Fatalf("acked subscription still has %d messages", len(received))
 	}
 }
+
+func pubsubPull(t *testing.T, p *Provider, sub string) []any {
+	t.Helper()
+	ctx := context.Background()
+	resp, err := p.SubscriptionPull(ctx, newNR(map[string]any{
+		"name": "subscriptions/" + sub,
+		"body": map[string]any{"returnImmediately": true},
+	}))
+	if err != nil {
+		t.Fatalf("pull %s: %v", sub, err)
+	}
+	msgs, _ := resp.Data["receivedMessages"].([]any)
+	return msgs
+}
+
+func TestPubSubSubscriptionFilter(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/ft"})); err != nil {
+		t.Fatalf("topic: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/fs",
+		"body": map[string]any{"topic": "projects/proj/topics/ft", "filter": `attributes.event_type = "a"`},
+	})); err != nil {
+		t.Fatalf("filtered sub: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/fu",
+		"body": map[string]any{"topic": "projects/proj/topics/ft"},
+	})); err != nil {
+		t.Fatalf("unfiltered sub: %v", err)
+	}
+	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
+		"name": "topics/ft",
+		"body": map[string]any{"messages": []any{
+			map[string]any{"data": "bWF0Y2g=", "attributes": map[string]any{"event_type": "a"}},
+			map[string]any{"data": "bm9wZQ==", "attributes": map[string]any{"event_type": "b"}},
+		}},
+	})); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	fs := pubsubPull(t, p, "fs")
+	if len(fs) != 1 {
+		t.Fatalf("filtered sub got %d messages, want 1", len(fs))
+	}
+	got := fs[0].(map[string]any)["message"].(map[string]any)["data"]
+	if got != "bWF0Y2g=" {
+		t.Errorf("filtered sub data = %v, want bWF0Y2g=", got)
+	}
+	if fu := pubsubPull(t, p, "fu"); len(fu) != 2 {
+		t.Fatalf("unfiltered sub got %d messages, want 2", len(fu))
+	}
+}
+
+func TestPubSubUnparseableFilterRejected(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/bt"})); err != nil {
+		t.Fatalf("topic: %v", err)
+	}
+	_, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/bs",
+		"body": map[string]any{"topic": "projects/proj/topics/bt", "filter": "this is not a filter ((("},
+	}))
+	if err == nil {
+		t.Fatal("expected invalid filter to be rejected")
+	}
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.Code != "InvalidArgument" {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+func TestPubSubDetachSubscription(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/dt"})); err != nil {
+		t.Fatalf("topic: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/ds", "body": map[string]any{"topic": "projects/proj/topics/dt"},
+	})); err != nil {
+		t.Fatalf("sub: %v", err)
+	}
+	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
+		"name": "topics/dt", "body": map[string]any{"messages": []any{map[string]any{"data": "aGk="}}},
+	})); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if _, err := p.SubscriptionDetach(ctx, newNR(map[string]any{"name": "subscriptions/ds"})); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	get, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/ds"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if detached, _ := get.Data["detached"].(bool); !detached {
+		t.Fatalf("expected detached=true, got %v", get.Data["detached"])
+	}
+	if _, err := p.SubscriptionPull(ctx, newNR(map[string]any{"name": "subscriptions/ds"})); err == nil {
+		t.Fatal("expected pull on detached subscription to fail")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "FailedPrecondition" {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+	if msgs, _ := p.messages.List(ctx, "ds"); len(msgs) != 0 {
+		t.Fatalf("expected detached subscription backlog dropped, got %d", len(msgs))
+	}
+}
+
+func TestPubSubTopicDeleteOrphansSubscription(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/ot"})); err != nil {
+		t.Fatalf("topic: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/os", "body": map[string]any{"topic": "projects/proj/topics/ot"},
+	})); err != nil {
+		t.Fatalf("sub: %v", err)
+	}
+	if _, err := p.TopicDelete(ctx, newNR(map[string]any{"name": "topics/ot"})); err != nil {
+		t.Fatalf("delete topic: %v", err)
+	}
+	get, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/os"}))
+	if err != nil {
+		t.Fatalf("get sub: %v", err)
+	}
+	if get.Data["topic"] != "_deleted-topic_" {
+		t.Fatalf("expected topic _deleted-topic_, got %v", get.Data["topic"])
+	}
+}
