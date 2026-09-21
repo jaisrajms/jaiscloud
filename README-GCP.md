@@ -55,6 +55,10 @@ The published GA contract — what `ga` means here, the rollup, the CI gates, cl
 compatibility, deploy artifacts, and the surfaces that are explicitly non-GA — is
 [`docs/GA.md`](docs/GA.md). The one-command aggregate gate is `make ga-check`.
 
+Uplifting a workload from AWS? [`docs/GCP-UPLIFT.md`](docs/GCP-UPLIFT.md) is the
+per-service local-testability contract: what a local run proves, and what must be
+verified on real GCP.
+
 ---
 
 ## Quick Start
