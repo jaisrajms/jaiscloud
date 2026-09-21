@@ -7,6 +7,10 @@ declaration of which operation/transport cells are supported and wire-conformant
 claim of feature-parity with Google Cloud. Read it with
 [`docs/fidelity/fidelity-matrix.md`](fidelity/fidelity-matrix.md) open.
 
+For the migration-facing view — per-service tiers, behavioural depth, the AWS→GCP
+mapping, and what must be tested against real GCP — see
+[`docs/GCP-UPLIFT.md`](GCP-UPLIFT.md).
+
 ---
 
 ## 1. What GA means here
