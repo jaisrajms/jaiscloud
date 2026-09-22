@@ -1,9 +1,8 @@
-# Uplifting from AWS to GCP — local-testability contract
+# GCP local-testability contract
 
-This is the **migration contract** for teams moving a workload from AWS (where
-`jaiscloud-aws` is the local target) to GCP (where `jaiscloud-gcp` is the local
-target). It states, per service, **what you may trust a local run to prove** and
-**what you must verify against real GCP**.
+This is the **local-testability contract** for `jaiscloud-gcp`. It states, per GCP
+service, **what a local run may be trusted to prove** and **what must be verified
+against real GCP**. An **AWS → GCP mapping** is included for reference.
 
 It is a companion to, not a replacement for:
 
@@ -17,10 +16,10 @@ It is a companion to, not a replacement for:
 
 ---
 
-## 1. Purpose & audience
+## 1. Purpose & scope
 
-**Audience:** service teams uplifting a workload from AWS to GCP who want to use
-`jaiscloud-gcp` as the local dev/CI target.
+**Scope:** what `jaiscloud-gcp` can and cannot prove locally when used as a dev/CI
+target.
 
 **What the emulator can prove locally**
 
@@ -34,7 +33,7 @@ It is a companion to, not a replacement for:
 
 **What it cannot prove locally**
 
-- That your workload behaves correctly against the *real backend*. The emulator is not
+- That a client behaves correctly against the *real backend*. The emulator is not
   real GCP: several services are metadata-only, some long-running operations finish
   synchronously, authorization is not enforced, and there is no quota/throttling plane.
 - Anything behind a `preview` service (no engine ships locally), or the data plane of a
@@ -51,7 +50,7 @@ Tiers classify each service from its fidelity-matrix cells, with two documented
 overrides (`functions` → Yellow, `kms` → Green) so the tier reflects local **trust**
 rather than a raw `ga` ratio.
 
-| Tier | Matrix basis | Locally trustworthy? | What it means for an uplift team |
+| Tier | Matrix basis | Locally trustworthy? | What it means for local testing |
 | --- | --- | --- | --- |
 | 🟢 **Green** | `ga` cells, no `preview` | **Yes** — for data-plane services; shape only for metadata services | Build the GCP adapter and unit/CI-test it against the emulator. |
 | 🟡 **Yellow** | only `limited` cells (or a large `limited` share) | **Shape only** | Control-plane/IaC metadata works; data-plane and authorization behaviour is not modelled. Gate on a real-GCP smoke test. |
@@ -89,7 +88,7 @@ of writing:
 ## 4. Per-service contract
 
 `ga`/total is taken directly from the matrix. "Depth" is the behavioural-depth class
-from §5. "Locally trustworthy?" answers the migration question, not the matrix state.
+from §5. "Locally trustworthy?" answers the local-trust question, not the matrix state.
 
 | Service | Transport(s) | `ga`/total | Tier | Depth | Locally trustworthy? | Note |
 | --- | --- | ---: | --- | --- | --- | --- |
@@ -193,7 +192,7 @@ evidence for any of them.
       edge cases can behave differently. Do not rely on frozen-clock results as production
       evidence.
 - [ ] **Per-language SDK wire paths.** Different official SDKs exercise different wire
-      paths. Add each migrating service's SDK/language to the conformance matrix rather
+      paths. Add each client SDK/language in use to the conformance matrix rather
       than assuming one client's pass transfers.
 
 Additional service-specific caveats live in
