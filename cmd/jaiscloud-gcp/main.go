@@ -24,7 +24,6 @@ import (
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	"jaiscloud/internal/gcp/crypto"
 	grpcserver "jaiscloud/internal/gcp/grpc"
-	grpcdatastore "jaiscloud/internal/gcp/grpc/datastore"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/grpc/logging"
@@ -56,6 +55,7 @@ import (
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
+	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
@@ -75,6 +75,8 @@ import (
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
+	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -193,6 +195,12 @@ func startCmd() *cobra.Command {
 			iamP := iamprovider.New(stores.resources)
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
+
+			// Cloud Datastore's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports use one
+			// transaction read-set registry and cannot drift.
+			datastoreCore := datastorecore.NewService(stores.entities, cfg.ProjectID)
+			datastoreRestP := restdatastore.NewProvider(datastoreCore, cfg.ProjectID)
 
 			// Cloud Functions reuses the Lambda executor: mock echo by default,
 			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The executor (warm
@@ -330,6 +338,7 @@ func startCmd() *cobra.Command {
 				{"compute", computeP},
 				{"serviceusage", serviceusageP},
 				{"resourcemanager", resourcemanagerP},
+				{"datastore", datastoreRestP},
 			} {
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
@@ -354,7 +363,7 @@ func startCmd() *cobra.Command {
 				encryptor: crypto.NewEnvelopeEncryptor(stores.keys),
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
-			datastoreGRPC := grpcdatastore.NewService(stores.entities, cfg.ProjectID)
+			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -427,6 +436,11 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(storageGRPC)
 			adminHandler.RegisterResetter(firestoreP)
 			adminHandler.RegisterResetter(firestoreGRPC)
+			// The Datastore core owns the in-memory transaction read-set
+			// registry; register it so /_jaiscloud/reset clears open
+			// transactions. Its entity store (stores.entities) is registered
+			// separately above.
+			adminHandler.RegisterResetter(datastoreCore)
 			adminHandler.RegisterPostRestoreHook(storageP)
 			if snap, ok := stores.resources.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("resources", snap)

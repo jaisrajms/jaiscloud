@@ -19,7 +19,6 @@ import (
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 
 	grpcserver "jaiscloud/internal/gcp/grpc"
-	grpcdatastore "jaiscloud/internal/gcp/grpc/datastore"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/grpc/logging"
@@ -29,6 +28,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 )
 
 // GRPCService is one gRPC service the emulator registers, read back from the

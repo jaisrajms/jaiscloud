@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **506**
+Cells: **514**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 362 |
+| ga | 370 |
 | limited | 95 |
 | preview | 37 |
 | unsupported | 12 |
@@ -21,10 +21,10 @@ Cells: **506**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 206 | 87 | 37 | 12 |
+| rest | 214 | 87 | 37 | 12 |
 | grpc | 156 | 8 | 0 | 0 |
 
-gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
+gRPC-only services (no REST transport): logging, monitoring, operations.
 
 ## bigquery
 
@@ -174,13 +174,21 @@ _15 cell(s): ga=14 limited=0 preview=0 unsupported=1_
 
 ## datastore
 
-_8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
+_16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | AllocateIds | grpc | ga | — |
 | BeginTransaction | grpc | ga | — |
 | Commit | grpc | ga | — |
+| Datastore.AllocateIds | rest | ga | — |
+| Datastore.BeginTransaction | rest | ga | — |
+| Datastore.Commit | rest | ga | — |
+| Datastore.Lookup | rest | ga | — |
+| Datastore.ReserveIds | rest | ga | — |
+| Datastore.Rollback | rest | ga | — |
+| Datastore.RunAggregationQuery | rest | ga | — |
+| Datastore.RunQuery | rest | ga | — |
 | Lookup | grpc | ga | — |
 | ReserveIds | grpc | ga | — |
 | Rollback | grpc | ga | — |

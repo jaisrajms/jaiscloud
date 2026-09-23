@@ -120,6 +120,15 @@ func detectV1Service(path string) string {
 			break
 		}
 	}
+	// Cloud Datastore v1 data methods are project-segment custom verbs
+	// (POST /v1/projects/{project}:lookup|runQuery|runAggregationQuery|
+	// beginTransaction|commit|rollback|allocateIds|reserveIds). They share the
+	// /v1/projects/{project}:verb shape with Cloud Resource Manager's project
+	// custom methods, so the verb — not the resource segment — discriminates.
+	// This must run before the resource-manager guard below.
+	if pi >= 0 && pi+1 == len(seg)-1 && isDatastoreVerb(seg[pi+1]) {
+		return "datastore"
+	}
 	// Cloud Resource Manager project surface: when the project segment is the
 	// LAST segment there is no trailing resource type — either the bare project
 	// resource (GET /v1/projects/{project} → projects.get) or a project-segment
@@ -198,6 +207,29 @@ func detectV1Service(path string) string {
 		return "eventarc"
 	}
 	return ""
+}
+
+// datastoreVerbs are the Cloud Datastore v1 REST data-method custom verbs. All
+// are POSTs to /v1/projects/{project}:{verb}.
+var datastoreVerbs = map[string]bool{
+	"lookup":              true,
+	"runQuery":            true,
+	"runAggregationQuery": true,
+	"beginTransaction":    true,
+	"commit":              true,
+	"rollback":            true,
+	"allocateIds":         true,
+	"reserveIds":          true,
+}
+
+// isDatastoreVerb reports whether seg is a project segment carrying a Datastore
+// custom verb ("{project}:{verb}").
+func isDatastoreVerb(seg string) bool {
+	i := strings.IndexByte(seg, ':')
+	if i < 0 {
+		return false
+	}
+	return datastoreVerbs[seg[i+1:]]
 }
 
 // detectV2Service maps a /v2/projects/{project}/locations/{location}/... path

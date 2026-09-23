@@ -184,6 +184,36 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds},
 	)
 
+	// ─── Cloud Datastore (REST data plane) ────────────────────────────────────
+	dsA := "conf-ds-a-" + suffix
+	dsTxn := "conf-ds-txn-" + suffix
+	dsKey := func(name string) string {
+		return fmt.Sprintf(`{"partitionId":{"projectId":%q},"path":[{"kind":"ConfDsTask","name":%q}]}`, p, name)
+	}
+	sc = append(sc,
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":commit",
+			Body: fmt.Sprintf(`{"mode":"NON_TRANSACTIONAL","mutations":[{"upsert":{"key":%s,"properties":{"n":{"integerValue":"1"}}}}]}`, dsKey(dsA))},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":lookup",
+			Body: fmt.Sprintf(`{"keys":[%s]}`, dsKey(dsA))},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":lookup",
+			Body: fmt.Sprintf(`{"keys":[%s]}`, dsKey("conf-ds-missing-"+suffix))},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":runQuery",
+			Body: `{"query":{"kind":[{"name":"ConfDsTask"}],"filter":{"propertyFilter":{"property":{"name":"n"},"op":"EQUAL","value":{"integerValue":"1"}}}}}`},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":runAggregationQuery",
+			Body: `{"aggregationQuery":{"nestedQuery":{"kind":[{"name":"ConfDsTask"}]},"aggregations":[{"alias":"total","count":{}}]}}`},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":allocateIds",
+			Body: fmt.Sprintf(`{"keys":[{"partitionId":{"projectId":%q},"path":[{"kind":"ConfDsTask"}]}]}`, p)},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":reserveIds",
+			Body: fmt.Sprintf(`{"keys":[{"partitionId":{"projectId":%q},"path":[{"kind":"ConfDsTask","id":"999999999"}]}]}`, p)},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":beginTransaction", Body: `{}`,
+			Save: map[string]string{"txn": "transaction"}},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":commit",
+			Body: fmt.Sprintf(`{"mode":"TRANSACTIONAL","transaction":"${txn}","mutations":[{"insert":{"key":%s,"properties":{"n":{"integerValue":"2"}}}}]}`, dsKey(dsTxn))},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":rollback", Body: `{}`},
+		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":runQuery",
+			Body: `{"gqlQuery":{"queryString":"SELECT * FROM ConfDsTask"}}`},
+	)
+
 	return sc
 }
 

@@ -7,6 +7,7 @@ import (
 
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 
+	core "jaiscloud/internal/gcp/service/datastore"
 	datastorestore "jaiscloud/internal/gcp/store/datastore"
 
 	"google.golang.org/grpc"
@@ -18,7 +19,7 @@ import (
 
 func testServer(t *testing.T) (datastorepb.DatastoreClient, func()) {
 	t.Helper()
-	svc := NewService(datastorestore.NewMemoryStore(), "test")
+	svc := NewService(core.NewService(datastorestore.NewMemoryStore(), "test"), "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -617,32 +618,3 @@ func TestRunQueryLimitAndOffset(t *testing.T) {
 		t.Fatalf("negative limit = %v, want InvalidArgument", err)
 	}
 }
-
-func TestValueEqualNumeric(t *testing.T) {
-	int3 := datastorestore.Value{IntegerValue: ptrInt64(3)}
-	dbl3 := datastorestore.Value{DoubleValue: ptrFloat64(3.0)}
-	int5 := datastorestore.Value{IntegerValue: ptrInt64(5)}
-
-	if !valueEqual(int3, dbl3) {
-		t.Fatal("valueEqual(int 3, double 3.0) = false")
-	}
-	if !valueEqual(dbl3, int3) {
-		t.Fatal("valueEqual(double 3.0, int 3) = false")
-	}
-	if valueEqual(int3, int5) {
-		t.Fatal("valueEqual(int 3, int 5) = true")
-	}
-	if valueEqual(int3, datastorestore.Value{DoubleValue: ptrFloat64(3.5)}) {
-		t.Fatal("valueEqual(int 3, double 3.5) = true")
-	}
-
-	if c, ok := valueCompare(int3, int5); !ok || c >= 0 {
-		t.Fatalf("valueCompare(int 3, int 5) = %d, %v; want < 0", c, ok)
-	}
-	if c, ok := valueCompare(dbl3, int5); !ok || c >= 0 {
-		t.Fatalf("valueCompare(double 3.0, int 5) = %d, %v; want < 0", c, ok)
-	}
-}
-
-func ptrInt64(n int64) *int64       { return &n }
-func ptrFloat64(f float64) *float64 { return &f }

@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 506,
+    "total": 514,
     "by_state": {
-      "ga": 362,
+      "ga": 370,
       "limited": 95,
       "preview": 37,
       "unsupported": 12
@@ -14,7 +14,7 @@
         "limited": 8
       },
       "rest": {
-        "ga": 206,
+        "ga": 214,
         "limited": 87,
         "preview": 37,
         "unsupported": 12
@@ -41,7 +41,7 @@
         "unsupported": 1
       },
       "datastore": {
-        "ga": 8
+        "ga": 16
       },
       "eventarc": {
         "ga": 18
@@ -110,7 +110,6 @@
       }
     },
     "grpc_only_services": [
-      "datastore",
       "logging",
       "monitoring",
       "operations"
@@ -1400,6 +1399,87 @@
         "mutating",
         "postgres=yes",
         "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.AllocateIds",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.allocateIds",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.BeginTransaction",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.beginTransaction",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.Commit",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.commit",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.Lookup",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.lookup",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.ReserveIds",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.reserveIds",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.Rollback",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.rollback",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.RunAggregationQuery",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.runAggregationQuery",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "datastore",
+      "operation": "Datastore.RunQuery",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=datastore.projects.runQuery",
+        "postgres=yes"
       ]
     },
     {
