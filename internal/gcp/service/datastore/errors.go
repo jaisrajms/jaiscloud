@@ -39,7 +39,7 @@ func mapStoreError(err error) error {
 	case errors.Is(err, dsstore.ErrEntityExists):
 		return alreadyExists("entity already exists")
 	case errors.Is(err, dsstore.ErrEntityNotFound):
-		return failedPrecondition("entity not found", 404)
+		return failedPrecondition("entity not found", 400)
 	case errors.Is(err, dsstore.ErrInvalidKey):
 		return invalidArgument("invalid key")
 	default:

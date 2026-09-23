@@ -239,6 +239,37 @@ func TestRESTTransactionCommitAndRollback(t *testing.T) {
 	}
 }
 
+// TestRESTUpdateMissingReturnsEnvelope locks the core/adapter error contract:
+// an Update for a missing entity surfaces as FAILED_PRECONDITION with the
+// canonical HTTP 400 (never 404, which would contradict the status name).
+func TestRESTUpdateMissingReturnsEnvelope(t *testing.T) {
+	c, p := newTestProvider(t)
+	_, err := call(t, c, p, "test", "commit", map[string]any{
+		"mode": "NON_TRANSACTIONAL",
+		"mutations": []any{map[string]any{"update": map[string]any{
+			"key":        nameKey("Task", "ghost"),
+			"properties": map[string]any{"n": map[string]any{"integerValue": "1"}},
+		}}},
+	})
+	perr, ok := err.(*model.ProviderError)
+	if !ok {
+		t.Fatalf("err = %v (%T), want *model.ProviderError", err, err)
+	}
+	if perr.HTTPStatus != 400 || perr.Code != "FailedPrecondition" {
+		t.Fatalf("err = %+v, want 400/FailedPrecondition", perr)
+	}
+}
+
+// TestRESTAllocateIdsRejectsEmptyKeyPath asserts the empty-key-path validation
+// still reaches the REST surface as InvalidArgument.
+func TestRESTAllocateIdsRejectsEmptyKeyPath(t *testing.T) {
+	c, p := newTestProvider(t)
+	_, err := call(t, c, p, "test", "allocateIds", map[string]any{"keys": []any{map[string]any{}}})
+	if err == nil {
+		t.Fatal("empty key path should be rejected")
+	}
+}
+
 func TestCodecRejectsNonPostAndUnknownVerb(t *testing.T) {
 	c := NewCodec()
 	raw := []byte(`{}`)

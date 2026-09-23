@@ -210,7 +210,11 @@ func detectV1Service(path string) string {
 }
 
 // datastoreVerbs are the Cloud Datastore v1 REST data-method custom verbs. All
-// are POSTs to /v1/projects/{project}:{verb}.
+// are POSTs to /v1/projects/{project}:{verb}. The Discovery document's two
+// Datastore Admin methods (projects:export / projects:import) are deliberately
+// not claimed here — the emulator implements the data plane only; leaving them
+// out means they fall through to the resource-manager guard and 404 rather than
+// being mis-served.
 var datastoreVerbs = map[string]bool{
 	"lookup":              true,
 	"runQuery":            true,

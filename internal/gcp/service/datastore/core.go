@@ -83,9 +83,6 @@ func NewService(store dsstore.Store, defaultProj string) *Service {
 	}
 }
 
-// DefaultProject returns the configured default project.
-func (s *Service) DefaultProject() string { return s.defaultProj }
-
 // Reset clears the in-memory transaction read-set registry. The store's own
 // state is reset separately (it is registered as a Resetter by main.go).
 func (s *Service) Reset(context.Context) {
@@ -267,7 +264,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
 			case errors.Is(err, dsstore.ErrEntityNotFound):
-				return nil, failedPrecondition("entity not found", 404)
+				return nil, failedPrecondition("entity not found", 400)
 			case err != nil:
 				return nil, mapStoreError(err)
 			default:
@@ -546,6 +543,11 @@ func (s *Service) AllocateIDs(ctx context.Context, project string, keys []Key) (
 	for _, k := range keys {
 		if k.Complete() {
 			return nil, invalidArgument("allocate ids requires incomplete keys")
+		}
+		// An empty key path cannot be completed with an allocated ID (the old
+		// behavior, preserved): the kind is required to form the canonical key.
+		if k.Kind == "" {
+			return nil, invalidArgument("cannot allocate an id for an empty key path")
 		}
 	}
 	ids, err := s.store.AllocateIDs(ctx, project, len(keys))

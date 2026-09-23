@@ -57,3 +57,12 @@ func TestResetClearsTransactions(t *testing.T) {
 
 func ptrInt64(n int64) *int64       { return &n }
 func ptrFloat64(f float64) *float64 { return &f }
+
+// TestAllocateIDsRejectsEmptyKeyPath locks the preserved validation: an empty
+// key path (no kind) cannot be completed with an allocated ID.
+func TestAllocateIDsRejectsEmptyKeyPath(t *testing.T) {
+	s := NewService(dsstore.NewMemoryStore(), "test")
+	if _, err := s.AllocateIDs(context.Background(), "p", []Key{{}}); err == nil {
+		t.Fatal("AllocateIDs with an empty key path should be rejected")
+	}
+}
