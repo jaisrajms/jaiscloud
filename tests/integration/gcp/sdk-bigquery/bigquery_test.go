@@ -122,10 +122,11 @@ func TestSDKBigQuery(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, data.Rows, 2)
 		require.Equal(t, int64(2), data.TotalRows)
-		// Schema-ordered cells: id (INTEGER) then name (STRING).
-		require.Equal(t, float64(1), data.Rows[0].F[0].V)
+		// Schema-ordered cells: id (INTEGER) then name (STRING). Every
+		// primitive cell is a string on the BigQuery wire.
+		require.Equal(t, "1", data.Rows[0].F[0].V)
 		require.Equal(t, "alice", data.Rows[0].F[1].V)
-		require.Equal(t, float64(2), data.Rows[1].F[0].V)
+		require.Equal(t, "2", data.Rows[1].F[0].V)
 		require.Equal(t, "bob", data.Rows[1].F[1].V)
 	})
 

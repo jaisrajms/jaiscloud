@@ -226,7 +226,12 @@ func (c *BigQueryCodec) Encode(nr *model.NormalizedRequest, resp *model.Provider
 	return status, headers, out
 }
 
-// EncodeError serialises a ProviderError as a GCP error envelope.
+// EncodeError serialises a ProviderError as the BigQuery error envelope. Real
+// BigQuery (unlike the modern gRPC-transcoded REST APIs) carries the legacy
+// Errors array alongside the google.rpc status: the official client SDKs read
+// error.errors[0].reason to populate their typed error (the Java
+// BigQueryException builds its whole error list from that reason), so a
+// response that omits it surfaces as a null error.
 func (c *BigQueryCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	status := perr.HTTPStatus
 	if status == 0 {
@@ -239,9 +244,39 @@ func (c *BigQueryCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Pro
 		"error": map[string]any{
 			"code":    status,
 			"message": perr.Message,
-			"status":  statusStr,
+			"errors": []any{
+				map[string]any{
+					"domain":  "global",
+					"reason":  bigQueryReason(perr.Code),
+					"message": perr.Message,
+				},
+			},
+			"status": statusStr,
 		},
 	}
 	out, _ := json.Marshal(env)
 	return status, headers, out
+}
+
+// bigQueryReason maps a ProviderError code to the ErrorProto.reason value the
+// BigQuery clients surface (for example a duplicate dataset is reason
+// "duplicate", not the HTTP-derived "alreadyExists"). Unknown codes fall back
+// to a non-empty generic reason so the envelope always stays SDK-parseable.
+func bigQueryReason(code string) string {
+	switch code {
+	case "NotFound":
+		return "notFound"
+	case "AlreadyExists", "Conflict":
+		return "duplicate"
+	case "InvalidArgument", "InvalidRequest", "InvalidParameter", "FailedPrecondition":
+		return "invalid"
+	case "InvalidQuery":
+		return "invalidQuery"
+	case "PermissionDenied":
+		return "accessDenied"
+	case "UnsupportedOperation", "Unimplemented":
+		return "unsupported"
+	default:
+		return "internalError"
+	}
 }
