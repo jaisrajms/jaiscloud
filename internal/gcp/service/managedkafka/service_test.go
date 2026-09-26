@@ -44,6 +44,9 @@ func TestClusterCRUDAndLRO(t *testing.T) {
 	if resp, _ := opJSON["response"].(map[string]any); resp["name"] != "projects/proj/locations/us-central1/clusters/c1" {
 		t.Errorf("response name = %v", resp["name"])
 	}
+	if resp, _ := opJSON["response"].(map[string]any); resp["bootstrapAddress"] != "bootstrap.c1.us-central1.managedkafka.proj.cloud.goog" {
+		t.Errorf("response bootstrapAddress = %v", resp["bootstrapAddress"])
+	}
 
 	// The operation is persisted and retrievable by id.
 	got, err := s.GetOperation(ctx, "proj", "us-central1", op.ID)
@@ -365,6 +368,30 @@ func TestTopicJSONEchoesConfigs(t *testing.T) {
 	cfg, ok := js["configs"].(map[string]any)
 	if !ok || cfg["cleanup.policy"] != "compact" {
 		t.Errorf("configs = %#v, want cleanup.policy=compact", js["configs"])
+	}
+}
+
+func TestBootstrapAddress(t *testing.T) {
+	if got, want := BootstrapAddress("proj", "us-central1", "c1"), "bootstrap.c1.us-central1.managedkafka.proj.cloud.goog"; got != want {
+		t.Errorf("BootstrapAddress = %q, want %q", got, want)
+	}
+}
+
+// TestClusterJSONIncludesBootstrapAddress guards the Java-compat gap where
+// GetCluster omitted bootstrapAddress for an ACTIVE cluster.
+func TestClusterJSONIncludesBootstrapAddress(t *testing.T) {
+	ctx := context.Background()
+	s := newCore()
+	if _, _, err := s.CreateCluster(ctx, "proj", "europe-west1", "my-cluster", clusterIn(nil)); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := s.GetCluster(ctx, "proj", "europe-west1", "my-cluster")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	js := ClusterJSON(c, "proj")
+	if js["bootstrapAddress"] != "bootstrap.my-cluster.europe-west1.managedkafka.proj.cloud.goog" {
+		t.Errorf("bootstrapAddress = %v", js["bootstrapAddress"])
 	}
 }
 

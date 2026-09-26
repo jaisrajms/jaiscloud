@@ -728,18 +728,33 @@ func (p *Provider) recordOperation(ctx context.Context, nr *model.NormalizedRequ
 
 // ─── Discovery surfaces ───────────────────────────────────────────────────────
 
-// sqlFlags is a small, stable catalogue of real Cloud SQL database flags.
+// postgresVersions are the PostgreSQL major versions the emulator advertises.
+var postgresVersions = []string{"POSTGRES_15", "POSTGRES_16", "POSTGRES_17", "POSTGRES_18"}
+
+// sqlFlags is a small, stable catalogue of real Cloud SQL database flags. It is
+// static (there is no backend), but the names/types/appliesTo mirror flags real
+// GCP returns so clients that pre-validate settings succeed.
 var sqlFlags = []map[string]any{
 	{"name": "character_set_server", "type": "STRING", "appliesTo": []string{"MYSQL_8_0", "MYSQL_5_7"}, "requiresRestart": false},
 	{"name": "collation_server", "type": "STRING", "appliesTo": []string{"MYSQL_8_0", "MYSQL_5_7"}, "requiresRestart": false},
 	{"name": "default_time_zone", "type": "STRING", "appliesTo": []string{"MYSQL_8_0"}, "requiresRestart": false},
 	{"name": "log_output", "type": "STRING", "appliesTo": []string{"MYSQL_8_0"}, "allowedStringValues": []string{"TABLE", "FILE", "NONE"}, "requiresRestart": false},
-	{"name": "max_connections", "type": "INTEGER", "appliesTo": []string{"MYSQL_8_0", "POSTGRES_15"}, "minValue": "1", "maxValue": "100000", "requiresRestart": false},
+	{"name": "max_connections", "type": "INTEGER", "appliesTo": append([]string{"MYSQL_8_0"}, postgresVersions...), "minValue": "1", "maxValue": "100000", "requiresRestart": false},
 	{"name": "slow_query_log", "type": "BOOLEAN", "appliesTo": []string{"MYSQL_8_0"}, "requiresRestart": false},
+	{"name": "cloudsql.iam_authentication", "type": "BOOLEAN", "appliesTo": postgresVersions, "requiresRestart": true},
+	{"name": "log_min_duration_statement", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "-1", "maxValue": "2147483647", "requiresRestart": false},
 }
 
 func (p *Provider) ListFlags(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, nextPageToken := paginate(sqlFlags, func(f map[string]any) string { return stringField(f, "name") }, nr.Params)
+	// Build a fresh slice of copies: paginate sorts in place, and the catalogue
+	// is a shared package-level value that concurrent requests must not mutate.
+	flags := make([]map[string]any, 0, len(sqlFlags))
+	for _, f := range sqlFlags {
+		item := cloneMap(f)
+		item["kind"] = "sql#flag"
+		flags = append(flags, item)
+	}
+	page, nextPageToken := paginate(flags, func(f map[string]any) string { return stringField(f, "name") }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, f := range page {
 		items = append(items, f)
@@ -751,17 +766,51 @@ func (p *Provider) ListFlags(_ context.Context, nr *model.NormalizedRequest) (*m
 	return provider.OK(resp), nil
 }
 
-// sqlTier is the single machine tier the emulator advertises.
+// sqlTier is the implicit machine tier applied when a create/update omits
+// settings.tier; it is also the smallest entry in the static tier catalogue.
 const sqlTier = "db-f1-micro"
 
+// sqlTierSpec is one entry in the static machine-tier catalogue.
+type sqlTierSpec struct {
+	name  string
+	ramMB string
+}
+
+// sqlTiers is the static machine-tier catalogue tiers.list returns. Real Cloud
+// SQL's catalogue is region-specific and far larger; this covers the shared-core
+// and standard/highmem tiers clients commonly pick plus the predefined custom
+// machine types (db-custom-{vcpu}-{memoryMB}) the SDKs and console resolve.
+var sqlTiers = []sqlTierSpec{
+	{sqlTier, "614"},
+	{"db-g1-small", "1740"},
+	{"db-n1-standard-1", "3840"},
+	{"db-n1-standard-2", "7680"},
+	{"db-n1-standard-4", "15360"},
+	{"db-n1-standard-8", "30720"},
+	{"db-n1-standard-16", "61440"},
+	{"db-n1-highmem-2", "13312"},
+	{"db-n1-highmem-4", "26624"},
+	{"db-n1-highmem-8", "53248"},
+	{"db-custom-1-3840", "3840"},
+	{"db-custom-2-7680", "7680"},
+	{"db-custom-4-15360", "15360"},
+	{"db-custom-8-30720", "30720"},
+}
+
+// sqlTierRegions are the regions the catalogue advertises each tier in.
+var sqlTierRegions = []string{"us-central1", "us-east1", "europe-west1", "asia-east1"}
+
 func (p *Provider) ListTiers(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	tiers := []map[string]any{{
-		"kind":      "sql#tier",
-		"tier":      sqlTier,
-		"region":    []string{"us-central1", "us-east1", "europe-west1", "asia-east1"},
-		"RAM":       "614",
-		"DiskQuota": "3072",
-	}}
+	tiers := make([]map[string]any, 0, len(sqlTiers))
+	for _, t := range sqlTiers {
+		tiers = append(tiers, map[string]any{
+			"kind":      "sql#tier",
+			"tier":      t.name,
+			"region":    sqlTierRegions,
+			"RAM":       t.ramMB,
+			"DiskQuota": "3072",
+		})
+	}
 	page, nextPageToken := paginate(tiers, func(t map[string]any) string { return stringField(t, "tier") }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, t := range page {
