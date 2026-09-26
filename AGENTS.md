@@ -8,6 +8,12 @@
 The GCP backlog spans many plan docs and PRs. Do not rely on memory or chat
 history to decide what is implemented.
 
+**Any GCP plan you write must follow
+[`docs/gcp-wave-plan-template.md`](docs/gcp-wave-plan-template.md):** a wave index
+with `Session` / `IDs` / `Branch` columns, a detail table, and one session = one
+branch = one PR. The ledger parses it automatically; a plan without those
+headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
+
 1. **Read the ledger.** `make gcp-status` rebuilds the canonical ledger
    (`plan_docs/STATUS.md` human view + `plan_docs/status.json`) by parsing every
    `plan_docs/**/*.md` table (backlog IDs, the dual-protocol phase tracker, the

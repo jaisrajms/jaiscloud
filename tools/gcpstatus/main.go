@@ -1470,7 +1470,8 @@ func runCoverage(root string, includeArchive bool, items []*Item) int {
 		s := string(txt)
 		o, dn := listMarkerCounts(s)
 		r := rows[rel]
-		bl := r == 0 && (o > 0 || dn > 0)
+		isWavePlan := strings.Contains(strings.ToLower(base), "wave-plan")
+		bl := (r == 0 && (o > 0 || dn > 0)) || (isWavePlan && r == 0)
 		if bl {
 			blind++
 		}
@@ -1491,7 +1492,7 @@ func runCoverage(root string, includeArchive bool, items []*Item) int {
 		fmt.Printf("\n=> %d doc(s) have status markers but produced no rows (blind spots).\n", blind)
 		return 1
 	}
-	fmt.Println("\n=> every doc produced rows or has no status markers.")
+	fmt.Println("\n=> every doc produced rows, or has no status markers (wave-plan docs require the template index).")
 	return 0
 }
 
