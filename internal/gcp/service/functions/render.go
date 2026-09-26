@@ -91,12 +91,16 @@ func functionSourceV2(f functionsstore.Function) map[string]any {
 }
 
 // functionJSONV2 renders the Cloud Functions v2 Function shape: state,
-// buildConfig (runtime/entryPoint/source), serviceConfig (uri), and the shared
-// metadata. functionJSONV1 is deliberately left unchanged.
+// environment, buildConfig (runtime/entryPoint/source), serviceConfig
+// (service/uri), and the shared metadata. functionJSONV1 is deliberately left
+// unchanged.
 func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	out := map[string]any{
 		"name":  resourceID(project)("cloud-function", f.Location+"/"+f.ID),
 		"state": f.Status,
+		// Cloud Functions v2 runs on Cloud Run (GEN_2); the field is
+		// output-only and every emulated v2 function is GEN_2.
+		"environment": "GEN_2",
 	}
 	if !f.CreateTime.IsZero() {
 		out["createTime"] = formatTimestamp(f.CreateTime)
@@ -123,7 +127,12 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	if len(build) > 0 {
 		out["buildConfig"] = build
 	}
-	svc := map[string]any{}
+	svc := map[string]any{
+		// The backing Cloud Run service is named after the function. It is
+		// output-only and always rendered (even without a trigger) so clients
+		// that read serviceConfig.service get a stable value.
+		"service": resourceID(project)("cloud-run-service", f.Location+"/"+f.ID),
+	}
 	if f.HttpsTriggerURL != "" {
 		svc["uri"] = f.HttpsTriggerURL
 	}
@@ -157,7 +166,7 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 // Operation is a completed Cloud Functions long-running operation. Function
 // mutations complete synchronously, so Done is always true and the operation is
 // never persisted or pollable. Function is the create/update response; it is nil
-// for a delete (whose response is google.protobuf.Empty / {}).
+// for a delete (whose response is a google.protobuf.Empty Any).
 type Operation struct {
 	ID       string
 	Location string
@@ -177,11 +186,13 @@ func OperationName(project string, op Operation) string {
 }
 
 // OperationJSON renders a mutation Operation as a google.longrunning.Operation
-// wire map.
+// wire map. The response is a typed Any carrying the @type discriminator gax
+// clients require to unpack it: the Function for create/update, or
+// google.protobuf.Empty for a delete.
 func OperationJSON(v Version, project string, op Operation) map[string]any {
-	response := map[string]any{}
+	response := anyResponse(emptyTypeURL, nil)
 	if op.Function != nil {
-		response = FunctionJSON(v, project, *op.Function)
+		response = anyResponse(functionTypeFor(v), FunctionJSON(v, project, *op.Function))
 	}
 	return map[string]any{
 		"name":     OperationName(project, op),
@@ -189,6 +200,29 @@ func OperationJSON(v Version, project string, op Operation) map[string]any {
 		"done":     true,
 		"response": response,
 	}
+}
+
+// functionTypeFor returns the google.protobuf.Any type URL of the Function
+// resource for the given API version.
+func functionTypeFor(v Version) string {
+	if v == V2 {
+		return functionTypeURLV2
+	}
+	return functionTypeURLV1
+}
+
+// anyResponse wraps a rendered resource body as the Any-shaped JSON a
+// google.longrunning.Operation response carries, adding the required @type
+// discriminator (a missing type URL makes gax fail with "Missing type url when
+// parsing"). body is copied, never mutated; a nil body yields the bare @type
+// object (e.g. google.protobuf.Empty).
+func anyResponse(typeURL string, body map[string]any) map[string]any {
+	out := make(map[string]any, len(body)+1)
+	out["@type"] = typeURL
+	for k, val := range body {
+		out[k] = val
+	}
+	return out
 }
 
 // operationMetadataMap renders the version-specific OperationMetadata carried
@@ -219,14 +253,14 @@ func operationMetadataMap(v Version, op Operation) map[string]any {
 // SynthesizedOperationJSON renders a done google.longrunning.Operation for a
 // GetOperation lookup. Function mutations are returned inline and never
 // persisted, so there is no stored operation; a done operation with an empty
-// response is synthesized for the requested name.
+// (google.protobuf.Empty-typed) response is synthesized for the requested name.
 func SynthesizedOperationJSON(v Version, project, location, id string) map[string]any {
 	op := Operation{ID: id, Location: location}
 	return map[string]any{
 		"name":       OperationName(project, op),
 		"metadata":   operationMetadataMap(v, op),
 		"done":       true,
-		"response":   map[string]any{},
+		"response":   anyResponse(emptyTypeURL, nil),
 		"createTime": formatTimestamp(now()),
 		"updateTime": formatTimestamp(now()),
 	}
