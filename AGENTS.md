@@ -42,7 +42,8 @@ parseable index/detail.
    in priority order — the wave-plan execution order (Wave 1 client-impact
    first), with an explicit `Pri` (P1–P20) as the fallback when an item is not in
    a wave and `impact` breaking ties — plus a separate `ATTENTION` list. Take
-   the top item unless told otherwise.
+   the top item unless told otherwise. Slash aliases: `/gcp:new` (next item +
+   start), `/gcp:status`, `/gcp:list`, `/gcp:audit`, `/gcp:find`.
 4. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
    `unowned` (fix verdict, no branch, only a historical table), `stale-doc` (a
