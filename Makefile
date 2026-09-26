@@ -111,7 +111,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-status gcp-status-audit gcp-status-coverage gcp-status-next gcp-status-check
+        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -728,6 +728,17 @@ gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=w
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) -series "$(SERIES)" $(if $(include-archive),-include-archive,)
+
+gcp-status-lint-plans: ## Fail if any plan-shaped file under plan_docs has no parseable index/detail (skipped the template)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -lint-plans $(if $(include-archive),-include-archive,)
+
+gcp-plan-new: ## Scaffold a preview->GA wave plan from the fidelity matrix: SERVICE=<svc> [EFFORT=ga] [FORCE=1]
+	@test -n "$(SERVICE)" || { echo 'usage: make gcp-plan-new SERVICE=<service> [EFFORT=ga]'; exit 2; }
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -new-plan "$(SERVICE)" -effort "$(if $(EFFORT),$(EFFORT),ga)" $(if $(FORCE),-force,)
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;

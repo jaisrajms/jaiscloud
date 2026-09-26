@@ -203,9 +203,23 @@ func main() {
 	nextN := flag.Int("n", 5, "number of items for -next")
 	by := flag.String("by", "wave", "ordering for -next: wave (execution order) or pri (P-list rank)")
 	series := flag.String("series", "", "comma-separated plan families in priority order (others sort after, alphabetically)")
+	lintPlans := flag.Bool("lint-plans", false, "fail if any plan-shaped doc has no parseable index/detail rows")
+	newPlan := flag.String("new-plan", "", "scaffold a preview->GA wave plan for this service (writes plan_docs/)")
+	effort := flag.String("effort", "ga", "label for -new-plan output filename")
+	force := flag.Bool("force", false, "overwrite an existing -new-plan output")
+	matrixPath := flag.String("matrix", "docs/fidelity/fidelity-matrix.json", "fidelity matrix JSON for -new-plan")
+	templatePath := flag.String("template", "docs/gcp-wave-plan-template.md", "template appended to -new-plan output")
 	includeArchive := flag.Bool("include-archive", false, "also parse plan_docs/archive/**")
 	verbose := flag.Bool("v", false, "log parsing/PR diagnostics to stderr")
 	flag.Parse()
+
+	if *newPlan != "" {
+		if err := generatePlan(*newPlan, *effort, *force, *matrixPath, *templatePath); err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	items, docPaths, waves := collect(*docs, *includeArchive, *verbose)
 	items = applyWaveAliases(items, waves)
@@ -220,6 +234,9 @@ func main() {
 	classifyAll(items)
 	sortItems(items)
 
+	if *lintPlans {
+		os.Exit(runLintPlans(*docs, *includeArchive, items))
+	}
 	if *coverage {
 		os.Exit(runCoverage(*docs, *includeArchive, items))
 	}
@@ -1516,20 +1533,27 @@ func runAudit(items []*Item) {
 // runCoverage reports, per plan doc, how many ledger rows it produced versus
 // how many status markers it contains, and flags docs that have markers but no
 // rows (blind spots). Returns 1 if any blind spot remains.
-func runCoverage(root string, includeArchive bool, items []*Item) int {
+type docStat struct {
+	rel              string
+	rows, open, done int
+	plan, blind      bool
+}
+
+// isPlanShaped reports whether a plan_docs filename is expected to carry a
+// parseable index/detail so the ledger can track it.
+func isPlanShaped(base string) bool {
+	b := strings.ToLower(base)
+	return strings.HasSuffix(b, "-plan.md") || strings.Contains(b, "-plan-") || strings.Contains(b, "wave-plan")
+}
+
+func computeCoverage(root string, includeArchive bool, items []*Item) []docStat {
 	rows := map[string]int{}
 	for _, it := range items {
 		if it.Source != "github:pr" {
 			rows[it.Source]++
 		}
 	}
-	type stat struct {
-		rel              string
-		rows, open, done int
-		blind            bool
-	}
-	var stats []stat
-	blind := 0
+	var stats []docStat
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
 			return nil
@@ -1539,31 +1563,34 @@ func runCoverage(root string, includeArchive bool, items []*Item) int {
 			return nil
 		}
 		rel := filepath.ToSlash(path)
-		if strings.Contains(rel, "/final/") || strings.Contains(rel, "/archive/") && !includeArchive {
+		if strings.Contains(rel, "/final/") || (strings.Contains(rel, "/archive/") && !includeArchive) {
 			return nil
 		}
 		txt, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
-		s := string(txt)
-		o, dn := listMarkerCounts(s)
+		o, dn := listMarkerCounts(string(txt))
 		r := rows[rel]
-		isWavePlan := strings.Contains(strings.ToLower(base), "wave-plan")
-		bl := (r == 0 && (o > 0 || dn > 0)) || (isWavePlan && r == 0)
-		if bl {
-			blind++
-		}
-		stats = append(stats, stat{rel: rel, rows: r, open: o, done: dn, blind: bl})
+		plan := isPlanShaped(base)
+		bl := (r == 0 && (o > 0 || dn > 0)) || (plan && r == 0)
+		stats = append(stats, docStat{rel: rel, rows: r, open: o, done: dn, plan: plan, blind: bl})
 		return nil
 	})
 	sort.Slice(stats, func(i, j int) bool { return stats[i].rel < stats[j].rel })
+	return stats
+}
+
+func runCoverage(root string, includeArchive bool, items []*Item) int {
+	stats := computeCoverage(root, includeArchive, items)
+	blind := 0
 	fmt.Printf("gcp-status coverage: %d docs (rows = ledger rows; open/done = marker counts)\n\n", len(stats))
 	fmt.Printf("  %-5s %-6s %-6s %-6s %s\n", "rows", "open", "done", "blind", "file")
 	for _, s := range stats {
 		bl := ""
 		if s.blind {
 			bl = "YES"
+			blind++
 		}
 		fmt.Printf("  %-5d %-6d %-6d %-6s %s\n", s.rows, s.open, s.done, bl, s.rel)
 	}
@@ -1571,8 +1598,173 @@ func runCoverage(root string, includeArchive bool, items []*Item) int {
 		fmt.Printf("\n=> %d doc(s) have status markers but produced no rows (blind spots).\n", blind)
 		return 1
 	}
-	fmt.Println("\n=> every doc produced rows, or has no status markers (wave-plan docs require the template index).")
+	fmt.Println("\n=> every doc produced rows, or has no status markers (plan docs require the template index).")
 	return 0
+}
+
+// runLintPlans fails if any plan-shaped doc produced no ledger rows — i.e. it
+// skipped (or malformed) the wave-plan template index/detail tables.
+func runLintPlans(root string, includeArchive bool, items []*Item) int {
+	stats := computeCoverage(root, includeArchive, items)
+	fail := 0
+	fmt.Println("gcp-status plan lint (plan-shaped docs must produce ledger rows)")
+	for _, s := range stats {
+		if !s.plan {
+			continue
+		}
+		status := "PASS"
+		if s.rows == 0 {
+			status = "FAIL"
+			fail++
+		}
+		fmt.Printf("  %-4s rows=%-4d %s\n", status, s.rows, s.rel)
+	}
+	if fail > 0 {
+		fmt.Printf("\n=> %d plan doc(s) have no parseable index/detail. Use docs/gcp-wave-plan-template.md.\n", fail)
+		return 1
+	}
+	fmt.Println("\n=> all plan docs carry a parseable index/detail.")
+	return 0
+}
+
+// ─── plan scaffolding ─────────────────────────────────────────────────────────
+
+type matrixCell struct {
+	Service   string `json:"service"`
+	Operation string `json:"operation"`
+	Transport string `json:"transport"`
+	State     string `json:"state"`
+	Reason    string `json:"reason"`
+}
+
+type matrixFile struct {
+	Cells []matrixCell `json:"cells"`
+}
+
+type planOp struct {
+	op         string
+	transports map[string]bool
+	states     map[string]bool
+}
+
+func serviceIDPrefix(svc string) string {
+	overrides := map[string]string{
+		"bigquery": "BQ", "iceberg": "ICE", "cloudsql": "CS", "compute": "CE",
+		"clouddns": "CD", "memorystore": "MS", "datastore": "DS", "firestore": "FS",
+		"pubsub": "PS", "secretmanager": "SM", "serviceusage": "SU", "resourcemanager": "RM",
+	}
+	if p, ok := overrides[strings.ToLower(svc)]; ok {
+		return p
+	}
+	up := strings.ToUpper(svc)
+	if len(up) > 2 {
+		up = up[:2]
+	}
+	return up
+}
+
+var opSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func opSlug(op string) string {
+	s := strings.ToLower(op)
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.Trim(opSlugRe.ReplaceAllString(s, "-"), "-")
+	if s == "" {
+		s = "op"
+	}
+	return s
+}
+
+func joinSorted(m map[string]bool) string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return strings.Join(ks, ", ")
+}
+
+// generatePlan scaffolds a preview->GA wave plan from the fidelity matrix and
+// the committed template.
+func generatePlan(svc, effort string, force bool, matrixPath, templatePath string) error {
+	raw, err := os.ReadFile(matrixPath)
+	if err != nil {
+		return fmt.Errorf("read matrix: %w", err)
+	}
+	var mf matrixFile
+	if err := json.Unmarshal(raw, &mf); err != nil {
+		return fmt.Errorf("parse matrix: %w", err)
+	}
+	svcLower := strings.ToLower(svc)
+	byOp := map[string]*planOp{}
+	var order []string
+	nonGA := 0
+	for _, c := range mf.Cells {
+		if strings.ToLower(c.Service) != svcLower || strings.EqualFold(c.State, "ga") {
+			continue
+		}
+		nonGA++
+		o, ok := byOp[c.Operation]
+		if !ok {
+			o = &planOp{op: c.Operation, transports: map[string]bool{}, states: map[string]bool{}}
+			byOp[c.Operation] = o
+			order = append(order, c.Operation)
+		}
+		o.transports[c.Transport] = true
+		o.states[c.State] = true
+	}
+	if len(order) == 0 {
+		return fmt.Errorf("no non-ga cells for service %q in %s", svc, matrixPath)
+	}
+	sort.Strings(order)
+	prefix := serviceIDPrefix(svc)
+	family := svcLower + "-" + effort
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s preview → GA — wave plan\n\n", svc)
+	fmt.Fprintf(&b, "Scaffolded by `make gcp-plan-new SERVICE=%s EFFORT=%s` from `%s` (`%d` non-ga cells across `%d` operations).\n\n", svc, effort, matrixPath, nonGA, len(order))
+	fmt.Fprintf(&b, "Provenance: `%s`. Fill in impact/effort and group operations into sensible sessions before starting.\n", matrixPath)
+	fmt.Fprintf(&b, "Exit criteria: `%s` has 0 preview/limited cells; no `%s` downgrade in `docs/fidelity-overrides.yaml`; `docs/GA.md` §2/§7 + README updated; `make gen-gcp-fidelity-matrix` + `make ga-check` green.\n\n", svc, svcLower)
+	fmt.Fprintf(&b, "Plan family (Series): `%s` (from the filename). Order with `make gcp-status-next SERIES=\"java-compat,%s\"` (or the reverse).\n\n", family, family)
+
+	b.WriteString("## 1. Index\n\n")
+	b.WriteString("| Wave | Session | IDs | Service(s) | Branch | Depends on |\n")
+	b.WriteString("|---|---|---|---|---|---|\n")
+	for i, op := range order {
+		fmt.Fprintf(&b, "| 1 | W1.%d | %s%d | %s | `feat/gcp-%s-%s` | — |\n", i+1, prefix, i+1, op, svcLower, opSlug(op))
+	}
+	b.WriteString("\n## 2. Detail\n\n")
+	b.WriteString("| ID | service | gap | impact | effort | verdict | prompt |\n")
+	b.WriteString("|---|---|---|---|---|---|---|\n")
+	for i, op := range order {
+		o := byOp[op]
+		fmt.Fprintf(&b, "| %s%d | %s | `%s` (%s, %s) | — | — | fix | `feat/gcp-%s-%s` |\n",
+			prefix, i+1, svcLower, op, joinSorted(o.transports), joinSorted(o.states), svcLower, opSlug(op))
+	}
+	b.WriteString("\n")
+
+	if tpl, err := os.ReadFile(templatePath); err == nil {
+		if s := string(tpl); strings.Contains(s, "## 3.") {
+			b.WriteString(s[strings.Index(s, "## 3."):])
+		}
+	}
+
+	if err := os.MkdirAll("plan_docs", 0o755); err != nil {
+		return err
+	}
+	out := filepath.Join("plan_docs", fmt.Sprintf("gcp-%s-%s-wave-plan.md", svcLower, effort))
+	if !force {
+		if _, err := os.Stat(out); err == nil {
+			return fmt.Errorf("%s already exists (use FORCE=1 to overwrite)", out)
+		}
+	}
+	if err := os.WriteFile(out, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s (%d operations, %d non-ga cells)\n", out, len(order), nonGA)
+	return nil
 }
 
 // ─── output ───────────────────────────────────────────────────────────────────

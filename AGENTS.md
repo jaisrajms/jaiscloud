@@ -15,7 +15,10 @@ branch = one PR. The ledger parses it automatically; a plan without those
 headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
 Plans are independent *families* (default: the filename) and order via
 `SERIES` (e.g. `make gcp-status-next SERIES="java-compat,bigquery-ga"`); the
-Makefile default keeps `java-compat` first.
+Makefile default keeps `java-compat` first. Scaffold a new plan with
+`make gcp-plan-new SERVICE=<svc>` (pre-fills that service's non-`ga` fidelity
+cells), and `make gcp-status-lint-plans` fails any plan-shaped doc that lacks a
+parseable index/detail.
 
 1. **Read the ledger.** `make gcp-status` rebuilds the canonical ledger
    (`plan_docs/STATUS.md` human view + `plan_docs/status.json`) by parsing every
@@ -52,6 +55,8 @@ Makefile default keeps `java-compat` first.
    `plan_docs/final/` with an ID-prefixed name (e.g.
    `final/J1-datastore-rest-protobuf.md`) and put the backlog ID in the
    commit/PR title (e.g. `fix(gcp/datastore): … (J1)`) so the next run links it.
+   Then run `make gcp-status` plus `make gcp-status-lint-plans` and
+   `make gcp-status-coverage`.
 
 `plan_docs/` is gitignored local scratch; `tools/gcpstatus` and this file are
 committed.

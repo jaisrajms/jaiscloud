@@ -89,7 +89,12 @@ GA contribution: <service>.<op> <transport> <state> -> ga.
 make gcp-status            # rebuild; this doc's sessions appear as W rows
 make gcp-status-next       # confirm the next session / priority
 make gcp-status-check Q="<service> <keywords>"
+make gcp-status-lint-plans # this plan must carry a parseable index/detail
 # ... implement, review, PR with the ID in the title ...
 make gcp-status            # the merged PR flips the session to `merged`
 make gcp-status-coverage   # no blind spots
 ```
+
+To scaffold this file from the fidelity matrix instead of by hand:
+`make gcp-plan-new SERVICE=<service> [EFFORT=ga]` (writes
+`plan_docs/gcp-<service>-<effort>-wave-plan.md`).
