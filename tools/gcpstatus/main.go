@@ -116,6 +116,7 @@ func main() {
 	service := flag.String("service", "", "filter query by service")
 	check := flag.Bool("check", false, "with -query/-service, exit 2 if already done, 3 if in flight")
 	audit := flag.Bool("audit", false, "print the audit classification of not-done items")
+	coverage := flag.Bool("coverage", false, "report per-doc coverage and fail if any doc has status markers but no rows")
 	includeArchive := flag.Bool("include-archive", false, "also parse plan_docs/archive/**")
 	verbose := flag.Bool("v", false, "log parsing/PR diagnostics to stderr")
 	flag.Parse()
@@ -131,6 +132,9 @@ func main() {
 	classifyAll(items)
 	sortItems(items)
 
+	if *coverage {
+		os.Exit(runCoverage(*docs, *includeArchive, items))
+	}
 	if *audit {
 		runAudit(items)
 		return
@@ -171,6 +175,12 @@ func collect(root string, includeArchive, verbose bool) ([]*Item, []string, *wav
 		itemList = append(itemList, it)
 	}
 
+	type docFile struct {
+		rel      string
+		content  string
+		archived bool
+	}
+	var files []docFile
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -186,30 +196,57 @@ func collect(root string, includeArchive, verbose bool) ([]*Item, []string, *wav
 		if archived && !includeArchive {
 			return nil
 		}
-		docPaths = append(docPaths, rel)
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
-		for _, t := range parseTables(string(content)) {
+		docPaths = append(docPaths, rel)
+		files = append(files, docFile{rel: rel, content: string(content), archived: archived})
+		return nil
+	})
+
+	// Pass 1 — structured tables + the debt-plan remainder list.
+	contributing := map[string]bool{}
+	for _, f := range files {
+		for _, t := range parseTables(f.content) {
 			switch {
 			case isWaveTable(t.headers):
-				waveFromTable(t, waves)
-			case isStatusTable(t.headers):
-				for _, it := range debtItemsFromTable(t, rel) {
+				for _, it := range waveFromTable(t, f.rel, waves) {
 					add(it)
 				}
-			default:
-				for _, it := range itemsFromTable(t, rel, archived) {
+				contributing[f.rel] = true
+			case isStatusTable(t.headers):
+				for _, it := range debtItemsFromTable(t, f.rel) {
 					add(it)
+				}
+				contributing[f.rel] = true
+			default:
+				items := itemsFromTable(t, f.rel, f.archived)
+				for _, it := range items {
+					add(it)
+				}
+				if len(items) > 0 {
+					contributing[f.rel] = true
 				}
 			}
 		}
-		for _, it := range parseRemainder(string(content), rel) {
+		for _, it := range parseRemainder(f.content, f.rel) {
+			add(it)
+			contributing[f.rel] = true
+		}
+	}
+
+	// Pass 2 — prose fallback for docs with no structured rows, so their
+	// "still open"/"DONE #N" statements are not invisible blind spots.
+	for _, f := range files {
+		if contributing[f.rel] || strings.EqualFold(filepath.Base(f.rel), "README.md") || strings.Contains(f.rel, "/final/") {
+			continue
+		}
+		for _, it := range parseProse(f.content, f.rel) {
 			add(it)
 		}
-		return nil
-	})
+	}
+
 	if verbose {
 		fmt.Fprintf(os.Stderr, "parsed %d docs, %d items\n", len(docPaths), len(itemList))
 	}
@@ -318,10 +355,11 @@ func isStatusTable(headers []string) bool {
 	return status && (item || ev || needed)
 }
 
-func waveFromTable(t table, w *waveMeta) {
+func waveFromTable(t table, source string, w *waveMeta) []*Item {
 	idx := headerIndex(t.headers)
 	si := idx["session"]
 	ii := idx["ids"]
+	var out []*Item
 	for _, row := range t.rows {
 		session := cell(row, si)
 		if session == "" {
@@ -330,6 +368,21 @@ func waveFromTable(t table, w *waveMeta) {
 		branch := cleanBranch(rowAt(idx, row, "branch"))
 		dep := rowAt(idx, row, "dependson", "depends", "status")
 		done := strings.Contains(strings.ToUpper(dep), "DONE")
+		it := &Item{
+			ID:          session,
+			Kind:        "wave",
+			Source:      source,
+			Gap:         stripFormatting(rowAt(idx, row, "service(s)", "services", "scope", "service")),
+			Branch:      branch,
+			Disposition: "fix",
+		}
+		if it.Gap == "" {
+			it.Gap = stripFormatting(rowAt(idx, row, "ids"))
+		}
+		if done {
+			it.DocState = "done"
+		}
+		it.Service = inferService(it.Gap)
 		for _, g := range parseAliasGroups(cell(row, ii)) {
 			w.groups = append(w.groups, g)
 			for _, id := range g {
@@ -337,12 +390,15 @@ func waveFromTable(t table, w *waveMeta) {
 					w.branchByAlias[id] = branch
 				}
 				w.waveByAlias[id] = session
+				it.Aliases = appendUnique(it.Aliases, id)
 			}
 			if done {
 				w.doneWaves[session] = true
 			}
 		}
+		out = append(out, it)
 	}
+	return out
 }
 
 func debtItemsFromTable(t table, source string) []*Item {
@@ -371,9 +427,13 @@ func debtItemsFromTable(t table, source string) []*Item {
 		}
 		it.Service = inferService(itemCell + " " + statusCell)
 		it.Aliases = sectionRefs(itemCell + " " + strings.Join(row, " "))
-		for _, m := range barePRRe.FindAllStringSubmatch(statusCell, -1) {
-			if n := atoi(m[1]); n > 0 && !containsInt(it.PRs, n) {
-				it.PRs = append(it.PRs, n)
+		if state == "done" {
+			// A PR ref only counts as landing evidence when the row is done; a
+			// "still open ... #62 fixed only X" row is a partial fix, not done.
+			for _, m := range barePRRe.FindAllStringSubmatch(statusCell, -1) {
+				if n := atoi(m[1]); n > 0 && !containsInt(it.PRs, n) {
+					it.PRs = append(it.PRs, n)
+				}
 			}
 		}
 		out = append(out, it)
@@ -471,6 +531,87 @@ func parseRemainder(content, source string) []*Item {
 	return out
 }
 
+// parseProse turns list bullets with status language into rows, for docs that
+// have no structured tables. It skips fenced code, the "what's actually left"
+// section (handled by parseRemainder), and bullets that already start with a
+// tracked ID.
+var proseNoFixRe = regexp.MustCompile(`(?i)(out of scope|no fix|won't fix|wontfix|not planned|by design|by-design|gold-plating|gold plating|not debt|delete from plan)`)
+var proseDoneRe = regexp.MustCompile(`(?i)(✅|\bdone\b|\bmerged\b|\blanded\b|\bshipped\b|\bcompleted\b)`)
+var proseOpenRe = regexp.MustCompile(`(?i)(still open|not implemented|unimplemented|not done|not started|\btodo\b|\bpending\b|\bdeferred\b|\bopen\b)`)
+
+func parseProse(content, source string) []*Item {
+	var out []*Item
+	inFence, inRemainder := false, false
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			inRemainder = strings.Contains(strings.ToLower(line), "what's actually left")
+			continue
+		}
+		if inRemainder || !isListLine(line) {
+			continue
+		}
+		gap := listText(line)
+		if gap == "" || extractID(gap) != "" {
+			continue
+		}
+		low := strings.ToLower(gap)
+		if strings.HasPrefix(low, "pr:") || strings.Contains(low, "http") ||
+			strings.Contains(low, "definition of done") || strings.Contains(low, "definition-of-done") {
+			continue // meta/checklist/links, not backlog items
+		}
+		var state, disp string
+		switch {
+		case proseNoFixRe.MatchString(low):
+			state, disp = "deferred", "no-fix"
+		case proseDoneRe.MatchString(low):
+			state, disp = "done", "unknown"
+		case proseOpenRe.MatchString(low):
+			state, disp = "open", "fix"
+		default:
+			continue
+		}
+		it := &Item{
+			ID:          "prose:" + slug(gap) + "-" + shortHash(source+"|"+gap),
+			Kind:        "prose",
+			Source:      source,
+			Gap:         stripFormatting(gap),
+			DocState:    state,
+			Disposition: disp,
+		}
+		it.Service = inferService(gap)
+		it.Aliases = sectionRefs(gap)
+		for _, m := range barePRRe.FindAllStringSubmatch(gap, -1) {
+			if n := atoi(m[1]); n > 0 && !containsInt(it.PRs, n) {
+				it.PRs = append(it.PRs, n)
+			}
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+var listMarkerRe = regexp.MustCompile(`^([-*]|\d+\.)\s+`)
+
+func isListLine(line string) bool {
+	return listMarkerRe.MatchString(line)
+}
+
+func listText(line string) string {
+	line = listMarkerRe.ReplaceAllString(line, "")
+	line = strings.TrimPrefix(line, "[ ] ")
+	line = strings.TrimPrefix(line, "[x] ")
+	line = strings.TrimPrefix(line, "[X] ")
+	return strings.TrimSpace(line)
+}
+
 func itemsFromTable(t table, source string, archived bool) []*Item {
 	idx := headerIndex(t.headers)
 	if _, ok := firstHeader(idx, "id", "#", "pri", "phase"); !ok {
@@ -488,7 +629,12 @@ func itemsFromTable(t table, source string, archived bool) []*Item {
 		it.Verdict = firstNonEmpty(rowAt(idx, row, "verdict", "decision"))
 		it.Effort = firstNonEmpty(rowAt(idx, row, "effort", "estimate"))
 		it.Branch = cleanBranch(firstNonEmpty(rowAt(idx, row, "prompt", "branch")))
-		it.DocState = parseDocState(row, t.section)
+		if si, ok := idx["status"]; ok && cell(row, si) != "" {
+			// A status column is authoritative; notes may mention other statuses.
+			it.DocState, _ = parseStatusCell(cell(row, si), row)
+		} else {
+			it.DocState = parseDocState(row, t.section)
+		}
 		it.Disposition = dispositionFrom(it.Verdict, t.section)
 		if it.Service == "" {
 			it.Service = inferService(it.Gap + " " + it.Verdict)
@@ -1022,6 +1168,9 @@ func classifyAll(items []*Item) {
 
 func classify(it *Item) string {
 	if it.State == "merged" || it.State == "done" {
+		if it.DocState == "open" {
+			return "stale-doc"
+		}
 		return "done"
 	}
 	switch it.Disposition {
@@ -1049,7 +1198,7 @@ func classify(it *Item) string {
 }
 
 func runAudit(items []*Item) {
-	order := []string{"oversight?", "unowned", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done"}
+	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done"}
 	counts := map[string]int{}
 	byClass := map[string][]*Item{}
 	for _, it := range items {
@@ -1063,7 +1212,7 @@ func runAudit(items []*Item) {
 		}
 	}
 	// Detail for the actionable classes.
-	for _, c := range []string{"oversight?", "unowned", "abandoned", "claimed-done", "unscheduled"} {
+	for _, c := range []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled"} {
 		rows := byClass[c]
 		if len(rows) == 0 {
 			continue
@@ -1079,7 +1228,97 @@ func runAudit(items []*Item) {
 	}
 }
 
+// runCoverage reports, per plan doc, how many ledger rows it produced versus
+// how many status markers it contains, and flags docs that have markers but no
+// rows (blind spots). Returns 1 if any blind spot remains.
+func runCoverage(root string, includeArchive bool, items []*Item) int {
+	rows := map[string]int{}
+	for _, it := range items {
+		if it.Source != "github:pr" {
+			rows[it.Source]++
+		}
+	}
+	type stat struct {
+		rel              string
+		rows, open, done int
+		blind            bool
+	}
+	var stats []stat
+	blind := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
+			return nil
+		}
+		base := filepath.Base(path)
+		if strings.EqualFold(base, "STATUS.md") || strings.EqualFold(base, "README.md") {
+			return nil
+		}
+		rel := filepath.ToSlash(path)
+		if strings.Contains(rel, "/final/") || strings.Contains(rel, "/archive/") && !includeArchive {
+			return nil
+		}
+		txt, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		s := string(txt)
+		o, dn := listMarkerCounts(s)
+		r := rows[rel]
+		bl := r == 0 && (o > 0 || dn > 0)
+		if bl {
+			blind++
+		}
+		stats = append(stats, stat{rel: rel, rows: r, open: o, done: dn, blind: bl})
+		return nil
+	})
+	sort.Slice(stats, func(i, j int) bool { return stats[i].rel < stats[j].rel })
+	fmt.Printf("gcp-status coverage: %d docs (rows = ledger rows; open/done = marker counts)\n\n", len(stats))
+	fmt.Printf("  %-5s %-6s %-6s %-6s %s\n", "rows", "open", "done", "blind", "file")
+	for _, s := range stats {
+		bl := ""
+		if s.blind {
+			bl = "YES"
+		}
+		fmt.Printf("  %-5d %-6d %-6d %-6s %s\n", s.rows, s.open, s.done, bl, s.rel)
+	}
+	if blind > 0 {
+		fmt.Printf("\n=> %d doc(s) have status markers but produced no rows (blind spots).\n", blind)
+		return 1
+	}
+	fmt.Println("\n=> every doc produced rows or has no status markers.")
+	return 0
+}
+
 // ─── output ───────────────────────────────────────────────────────────────────
+
+// listMarkerCounts counts status markers that appear on list bullets (the
+// itemizable form parseProse consumes), skipping fenced code.
+func listMarkerCounts(content string) (open, done int) {
+	inFence := false
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || !isListLine(line) {
+			continue
+		}
+		gap := listText(line)
+		low := strings.ToLower(gap)
+		if gap == "" || extractID(gap) != "" || strings.Contains(low, "http") ||
+			strings.Contains(low, "definition of done") || strings.Contains(low, "definition-of-done") {
+			continue // already tracked by an ID, or meta/checklist/links
+		}
+		switch {
+		case proseDoneRe.MatchString(gap):
+			done++
+		case proseOpenRe.MatchString(gap) || proseNoFixRe.MatchString(gap):
+			open++
+		}
+	}
+	return open, done
+}
 
 func writeJSON(path string, items []*Item) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1204,7 +1443,7 @@ func classCounts(items []*Item) map[string]int {
 }
 
 func countsLine(c map[string]int) string {
-	order := []string{"oversight?", "unowned", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done"}
+	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done"}
 	var parts []string
 	for _, k := range order {
 		if c[k] > 0 {

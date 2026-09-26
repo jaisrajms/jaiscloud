@@ -12,7 +12,9 @@ history to decide what is implemented.
    (`plan_docs/STATUS.md` human view + `plan_docs/status.json`) by parsing every
    `plan_docs/**/*.md` table (backlog IDs, the dual-protocol phase tracker, the
    Java wave plan, the deferred-debt status tables, and the authoritative
-   "what's actually left" list), joining it with git branch + GitHub PR state,
+   "what's actually left" list; docs without tables fall back to a prose scan of
+   their status bullets, and the wave plan emits one row per W-session), joining
+   it with git branch + GitHub PR state,
    and adding a **PR-history row for every base-`gcp` PR** not otherwise
    represented — so merged work is never invisible.
    `merged` / `branch` / `pr` come from git/GitHub and are authoritative; `todo`
@@ -26,10 +28,12 @@ history to decide what is implemented.
    **no match** → new work.
 3. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
-   `unowned` (fix verdict, no branch, only in a historical table),
-   `abandoned` (branch/PR closed unmerged), `claimed-done` (doc says done, no
-   evidence) vs the healthy `scheduled` / `unscheduled` / `intentional`. Use it
-   to decide oversight vs planned future work before picking up a doc item.
+   `unowned` (fix verdict, no branch, only a historical table), `stale-doc` (a
+   merged fix the docs still call open), `abandoned` (branch/PR closed unmerged),
+   `claimed-done` (doc says done, no evidence) vs the healthy `scheduled` /
+   `unscheduled` / `intentional`. Use it to decide oversight vs planned future
+   work. `make gcp-status-coverage` fails if any `plan_docs` file still has
+   status markers but produced no rows (an audit blind spot).
 4. **Record the outcome when you finish.** Move the plan doc into
    `plan_docs/final/` with an ID-prefixed name (e.g.
    `final/J1-datastore-rest-protobuf.md`) and put the backlog ID in the
