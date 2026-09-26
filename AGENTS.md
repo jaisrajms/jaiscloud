@@ -13,6 +13,9 @@ history to decide what is implemented.
 with `Session` / `IDs` / `Branch` columns, a detail table, and one session = one
 branch = one PR. The ledger parses it automatically; a plan without those
 headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
+Plans are independent *families* (default: the filename) and order via
+`SERIES` (e.g. `make gcp-status-next SERIES="java-compat,bigquery-ga"`); the
+Makefile default keeps `java-compat` first.
 
 1. **Read the ledger.** `make gcp-status` rebuilds the canonical ledger
    (`plan_docs/STATUS.md` human view + `plan_docs/status.json`) by parsing every

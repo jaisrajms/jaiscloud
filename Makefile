@@ -5,6 +5,11 @@
 # test-gcp-python-conformance). Override with `make ... PYTHON=python3.12`.
 PYTHON ?= python3
 
+# Plan families in priority order for `make gcp-status-next` (comma-separated);
+# other families sort after these, alphabetically. The Java-compat effort owns
+# waves W1–W3 today.
+SERIES ?= java-compat
+
 # ─── Version ──────────────────────────────────────────────────────────────────
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
              grep -oP 'const version = "\K[^"]+' cmd/jaiscloud-aws/main.go 2>/dev/null || \
@@ -701,7 +706,7 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 gcp-status: ## Rebuild the GCP parity status ledger (plan_docs/STATUS.md + status.json) from all plan docs + git/GitHub state
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json
+	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json -series "$(SERIES)"
 
 gcp-status-check: ## Assess a proposed change against known state: Q="<keywords>" [SERVICE=<svc>] [include-archive=1]; exit 2 = already done, 3 = in flight
 	@test -n "$(Q)$(SERVICE)" || { echo 'usage: make gcp-status-check Q="<keywords>" [SERVICE=<svc>]'; exit 2; }
@@ -719,10 +724,10 @@ gcp-status-coverage: ## Fail if any plan_docs file has status markers but produc
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -docs plan_docs -coverage $(if $(include-archive),-include-archive,)
 
-gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=wave|pri)
+gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=wave|pri, SERIES=a,b)
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) $(if $(include-archive),-include-archive,)
+	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) -series "$(SERIES)" $(if $(include-archive),-include-archive,)
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;

@@ -51,8 +51,9 @@ type Item struct {
 	Disposition string   `json:"disposition,omitempty"` // fix | follow-up | no-fix | optional | unknown
 	Impact      string   `json:"impact,omitempty"`
 	Pri         int      `json:"pri,omitempty"`   // rank from a Pri column (P1=1)
-	Order       int      `json:"order,omitempty"` // wave-plan execution order (lower = earlier)
+	Order       int      `json:"order,omitempty"` // global execution order (lower = earlier)
 	OrderSource string   `json:"orderSource,omitempty"`
+	Series      string   `json:"series,omitempty"` // plan family, e.g. java-compat
 	Wave        string   `json:"wave,omitempty"`
 	WaveDone    bool     `json:"waveDone,omitempty"`
 	PRs         []int    `json:"prs,omitempty"`
@@ -87,19 +88,21 @@ type table struct {
 // waveMeta captures the Java wave-plan index: alias→branch, alias→wave, and
 // which waves are already done, plus the alias groups used to merge J/R pairs.
 type waveMeta struct {
-	groups         [][]string
-	branchByAlias  map[string]string
-	waveByAlias    map[string]string
-	doneWaves      map[string]bool
-	orderBySession map[string]int
+	groups          [][]string
+	branchByAlias   map[string]string
+	waveByAlias     map[string]string
+	doneWaves       map[string]bool
+	orderBySession  map[string]int
+	seriesBySession map[string]string
 }
 
 func newWaveMeta() *waveMeta {
 	return &waveMeta{
-		branchByAlias:  map[string]string{},
-		waveByAlias:    map[string]string{},
-		doneWaves:      map[string]bool{},
-		orderBySession: map[string]int{},
+		branchByAlias:   map[string]string{},
+		waveByAlias:     map[string]string{},
+		doneWaves:       map[string]bool{},
+		orderBySession:  map[string]int{},
+		seriesBySession: map[string]string{},
 	}
 }
 
@@ -112,6 +115,68 @@ func waveOrder(session string) int {
 		return 0
 	}
 	return atoi(m[1])*100 + atoi(m[2])
+}
+
+// seriesFromSource derives a plan family from its file:
+// gcp-java-compat-wave-plan.md -> "java-compat".
+func seriesFromSource(rel string) string {
+	base := strings.TrimSuffix(filepath.Base(rel), ".md")
+	base = strings.TrimPrefix(base, "gcp-")
+	base = strings.TrimSuffix(base, "-wave-plan")
+	base = strings.TrimSuffix(base, "-plan")
+	return base
+}
+
+func parseWave(it *Item) (int, int) {
+	s := it.Wave
+	if s == "" && it.Kind == "wave" {
+		s = it.ID
+	}
+	m := waveSessionRe.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return 0, 0
+	}
+	return atoi(m[1]), atoi(m[2])
+}
+
+// assignOrders computes one global Order across independent plan families.
+// Families listed in seriesOrder rank first (in that order); all others rank
+// alphabetically after them. Order = seriesRank*1e6 + wave*100 + seq.
+func assignOrders(items []*Item, seriesOrder []string) {
+	rank := map[string]int{}
+	next := 0
+	for _, s := range seriesOrder {
+		if s = strings.TrimSpace(s); s != "" {
+			if _, ok := rank[s]; !ok {
+				rank[s] = next
+				next++
+			}
+		}
+	}
+	var rest []string
+	seen := map[string]bool{}
+	for _, it := range items {
+		if it.Series == "" {
+			it.Series = seriesFromSource(it.Source)
+		}
+		if _, ok := rank[it.Series]; !ok && !seen[it.Series] {
+			seen[it.Series] = true
+			rest = append(rest, it.Series)
+		}
+	}
+	sort.Strings(rest)
+	for _, s := range rest {
+		rank[s] = next
+		next++
+	}
+	for _, it := range items {
+		w, seq := parseWave(it)
+		if w == 0 {
+			continue
+		}
+		it.Order = rank[it.Series]*100000 + w*100 + seq
+		it.OrderSource = "wave"
+	}
 }
 
 var idRe = regexp.MustCompile(`^([A-Z]{1,3}[0-9]+(?:-[0-9]+)?)\b`)
@@ -137,6 +202,7 @@ func main() {
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
 	by := flag.String("by", "wave", "ordering for -next: wave (execution order) or pri (P-list rank)")
+	series := flag.String("series", "", "comma-separated plan families in priority order (others sort after, alphabetically)")
 	includeArchive := flag.Bool("include-archive", false, "also parse plan_docs/archive/**")
 	verbose := flag.Bool("v", false, "log parsing/PR diagnostics to stderr")
 	flag.Parse()
@@ -144,6 +210,7 @@ func main() {
 	items, docPaths, waves := collect(*docs, *includeArchive, *verbose)
 	items = applyWaveAliases(items, waves)
 	annotateWaves(items)
+	assignOrders(items, strings.Split(*series, ","))
 
 	prs, branchSet := loadGitState(*prRepo, *verbose)
 	enrich(items, prs, branchSet, docPaths)
@@ -397,6 +464,11 @@ func waveFromTable(t table, source string, w *waveMeta) []*Item {
 		if order > 0 {
 			w.orderBySession[session] = order
 		}
+		series := stripFormatting(rowAt(idx, row, "series", "plan"))
+		if series == "" {
+			series = seriesFromSource(source)
+		}
+		w.seriesBySession[session] = series
 		it := &Item{
 			ID:          session,
 			Kind:        "wave",
@@ -406,6 +478,7 @@ func waveFromTable(t table, source string, w *waveMeta) []*Item {
 			Disposition: "fix",
 			Order:       order,
 			OrderSource: "wave",
+			Series:      series,
 		}
 		if it.Gap == "" {
 			it.Gap = stripFormatting(rowAt(idx, row, "ids"))
@@ -927,6 +1000,9 @@ func applyWaveAliases(items []*Item, w *waveMeta) []*Item {
 		if wv, ok := anyAlias(w.waveByAlias, members); ok {
 			best.Wave = wv
 			best.WaveDone = w.doneWaves[wv]
+			if s := w.seriesBySession[wv]; s != "" {
+				best.Series = s
+			}
 			if o := w.orderBySession[wv]; o > 0 {
 				best.Order = o
 				best.OrderSource = "wave"
@@ -1328,9 +1404,9 @@ func runNext(items []*Item, n int, by string) {
 			return it.Order, it.OrderSource
 		}
 		if it.Pri > 0 {
-			return it.Pri, "pri"
+			return 10000000 + it.Pri, "pri"
 		}
-		return 100000, "none"
+		return 20000000, "none"
 	}
 	sort.SliceStable(attention, func(i, j int) bool {
 		a, b := attention[i], attention[j]
@@ -1377,6 +1453,9 @@ func runNext(items []*Item, n int, by string) {
 		}
 		if o, src := effOrder(it); src != "" && src != "none" {
 			meta = append(meta, fmt.Sprintf("order=%d(%s)", o, src))
+		}
+		if it.Series != "" {
+			meta = append(meta, "series="+it.Series)
 		}
 		if it.Impact != "" {
 			meta = append(meta, "impact="+it.Impact)

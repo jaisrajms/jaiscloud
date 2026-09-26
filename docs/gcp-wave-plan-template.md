@@ -13,8 +13,8 @@ A plan that does not use this shape is invisible to `make gcp-status-next`,
 
 ## 1. Index — drives priority
 
-`make gcp-status-next` orders by `Session` (`W<wave>.<seq>`, wave-major); ties
-break on the detail table's `Pri`/`impact`.
+`make gcp-status-next` orders by plan family (`Series`) first, then `Session`
+(`W<wave>.<seq>`, wave-major); ties break on the detail table's `Pri`/`impact`.
 
 | Wave | Session | IDs | Service(s) | Branch | Depends on |
 |---|---|---|---|---|---|
@@ -23,8 +23,13 @@ break on the detail table's `Pri`/`impact`.
 | 5 | W5.1 | SVC3 | <service> <op group> | `feat/gcp-<svc>-<topic>` | — |
 
 Rules:
-- **Continue the global `W` sequence** (the Java plan uses W1–W3; new efforts
-  start at W4+), so ordering works with no tool change.
+- **Series** (optional column): the plan family, e.g. `java-compat` or
+  `bigquery-ga`. Defaults to the filename (`gcp-<name>-wave-plan.md` → `<name>`),
+  so separate plans are separate families automatically. Families sort by the
+  `SERIES` variable (Makefile) in order, then alphabetically — put a plan earlier
+  in `SERIES` to run it first: `make gcp-status-next SERIES="bigquery-ga,java-compat"`.
+- **Continue the per-family `W` sequence** (each family numbers its own waves
+  from 1) so families do not collide.
 - **IDs**: unique `[A-Z]{1,3}[0-9]+` (e.g. `BQ1`, `ICE2`). One ID per deliverable.
   Reuse an existing ID only when aliasing (e.g. `J2/R2`).
 - **Branch** is the branch the session will create; the ledger matches the merged
