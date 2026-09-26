@@ -70,6 +70,16 @@ const operationMetadataType = "type.googleapis.com/google.cloud.functions.v1.Ope
 // rejects the v1 @type.
 const operationMetadataTypeV2 = "type.googleapis.com/google.cloud.functions.v2.OperationMetadata"
 
+// The google.longrunning.Operation `response` is a google.protobuf.Any and must
+// carry a resolvable type URL, or gax clients fail to unpack it ("Missing type
+// url when parsing"). Create/Update respond with the Function (a CloudFunction
+// on v1); Delete responds with google.protobuf.Empty.
+const (
+	functionTypeURLV1 = "type.googleapis.com/google.cloud.functions.v1.CloudFunction"
+	functionTypeURLV2 = "type.googleapis.com/google.cloud.functions.v2.Function"
+	emptyTypeURL      = "type.googleapis.com/google.protobuf.Empty"
+)
+
 // defaultMemoryMB and defaultTimeout are the Cloud Functions defaults applied
 // when a create/update body omits them.
 const (

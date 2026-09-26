@@ -63,6 +63,16 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// The backing Cloud Run service of a Cloud Functions v2 function is
+	// "projects/{p}/locations/{l}/services/{id}"; callers pass "location/id".
+	// It is reported as Cloud Functions' serviceConfig.service (output-only),
+	// not as a Cloud Run emulation surface. The path shape matches
+	// metastore-service, but this is a distinct resource type so the two do not
+	// drift when either service evolves.
+	"cloud-run-service": func(p, n string) string {
+		loc, s := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/services/%s", p, loc, s)
+	},
 	// Cloud Workflows — names embed the location; callers pass "location/workflow".
 	"workflow": func(p, n string) string {
 		loc, wf := wfLoc(n)

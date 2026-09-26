@@ -17,7 +17,11 @@ import (
 	"jaiscloud/internal/store"
 )
 
-const operationMetadataTypeV2 = "type.googleapis.com/google.cloud.functions.v2.OperationMetadata"
+const (
+	operationMetadataTypeV2 = "type.googleapis.com/google.cloud.functions.v2.OperationMetadata"
+	functionTypeURLV2       = "type.googleapis.com/google.cloud.functions.v2.Function"
+	emptyTypeURL            = "type.googleapis.com/google.protobuf.Empty"
+)
 
 // stubExecutor captures the InvokeRequest and optionally returns a fixed error.
 type stubExecutor struct {
@@ -59,7 +63,8 @@ func newProvider(t *testing.T, resources store.ResourceStore, exec lambdaexec.La
 }
 
 // operationResponse asserts resp is a done google.longrunning.Operation and
-// returns its response object (the Function for create/update, {} for delete).
+// returns its response object (the Function for create/update, the
+// google.protobuf.Empty Any for delete).
 func operationResponse(t *testing.T, resp *model.ProviderResponse) map[string]any {
 	t.Helper()
 	if done, _ := resp.Data["done"].(bool); !done {
@@ -98,6 +103,9 @@ func TestFunctionCRUD(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	fn := operationResponse(t, resp)
+	if fn["@type"] != "type.googleapis.com/google.cloud.functions.v1.CloudFunction" {
+		t.Errorf("v1 create response @type = %v", fn["@type"])
+	}
 	if fn["name"] != "projects/proj/locations/us-central1/functions/hello" {
 		t.Errorf("unexpected name: %v", fn["name"])
 	}
@@ -142,14 +150,15 @@ func TestFunctionCRUD(t *testing.T) {
 		t.Errorf("expected 1 function, got %d", len(fns))
 	}
 
-	// Delete returns a done Operation with an empty response.
+	// Delete returns a done Operation whose response is a typed
+	// google.protobuf.Empty Any (gax unpacks it as Empty).
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/hello"})
 	resp, err = p.DeleteFunction(ctx, nr)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if del := operationResponse(t, resp); len(del) != 0 {
-		t.Errorf("expected empty delete response, got %v", del)
+	if del := operationResponse(t, resp); del["@type"] != "type.googleapis.com/google.protobuf.Empty" || len(del) != 1 {
+		t.Errorf("expected Empty-typed delete response, got %v", del)
 	}
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/hello"})
 	if _, err := p.GetFunction(ctx, nr); err == nil {
@@ -188,8 +197,14 @@ func TestFunctionCRUDv2(t *testing.T) {
 		t.Fatalf("create v2 metadata @type = %q, want %q", got, operationMetadataTypeV2)
 	}
 	fn, _ := resp.Data["response"].(map[string]any)
+	if fn["@type"] != functionTypeURLV2 {
+		t.Errorf("v2 create response @type = %v, want %v", fn["@type"], functionTypeURLV2)
+	}
 	if fn["state"] != "ACTIVE" {
 		t.Errorf("state = %v, want ACTIVE", fn["state"])
+	}
+	if fn["environment"] != "GEN_2" {
+		t.Errorf("environment = %v, want GEN_2", fn["environment"])
 	}
 	if _, ok := fn["status"]; ok {
 		t.Errorf("v2 response must not carry v1 status: %v", fn["status"])
@@ -204,6 +219,9 @@ func TestFunctionCRUDv2(t *testing.T) {
 	sc, _ := fn["serviceConfig"].(map[string]any)
 	if sc["uri"] == "" || sc["availableMemory"] != "512M" || sc["timeoutSeconds"] != 120 {
 		t.Errorf("unexpected serviceConfig: %v", sc)
+	}
+	if sc["service"] != "projects/proj/locations/us-central1/services/hello" {
+		t.Errorf("serviceConfig.service = %v, want the backing Cloud Run service", sc["service"])
 	}
 
 	// Get emits v2.
@@ -244,11 +262,14 @@ func TestFunctionCRUDv2(t *testing.T) {
 		t.Fatalf("update v2: %v", err)
 	}
 	upd, _ := resp.Data["response"].(map[string]any)
+	if upd["@type"] != functionTypeURLV2 {
+		t.Errorf("v2 update response @type = %v, want %v", upd["@type"], functionTypeURLV2)
+	}
 	if bc, _ := upd["buildConfig"].(map[string]any); bc["runtime"] != "nodejs22" {
 		t.Errorf("v2 update runtime = %v, want nodejs22", upd["buildConfig"])
 	}
 
-	// Delete returns a v2-done operation.
+	// Delete returns a v2-done operation whose response is a typed Empty Any.
 	resp, err = p.DeleteFunction(ctx, newNRv2(map[string]any{
 		"location": "us-central1", "name": "locations/us-central1/functions/hello",
 	}))
@@ -257,6 +278,9 @@ func TestFunctionCRUDv2(t *testing.T) {
 	}
 	if got, _ := resp.Data["metadata"].(map[string]any)["@type"].(string); got != operationMetadataTypeV2 {
 		t.Errorf("delete v2 metadata @type = %q", got)
+	}
+	if del, _ := resp.Data["response"].(map[string]any); del["@type"] != emptyTypeURL || len(del) != 1 {
+		t.Errorf("delete v2 response = %v, want a bare Empty Any", del)
 	}
 }
 
@@ -280,6 +304,9 @@ func TestOperationsV2(t *testing.T) {
 	}
 	if got, _ := resp.Data["metadata"].(map[string]any)["@type"].(string); got != operationMetadataTypeV2 {
 		t.Errorf("operation metadata @type = %q, want v2", got)
+	}
+	if got, _ := resp.Data["response"].(map[string]any)["@type"].(string); got != emptyTypeURL {
+		t.Errorf("operation response @type = %q, want %q", got, emptyTypeURL)
 	}
 
 	resp, err = p.ListOperations(ctx, newNRv2(map[string]any{"location": "us-central1"}))

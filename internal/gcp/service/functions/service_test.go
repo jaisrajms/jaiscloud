@@ -124,6 +124,12 @@ func TestFunctionJSONVersions(t *testing.T) {
 	if v2["url"] != "https://x" {
 		t.Fatalf("v2 url = %v, want https://x", v2["url"])
 	}
+	if v2["environment"] != "GEN_2" {
+		t.Fatalf("v2 environment = %v, want GEN_2", v2["environment"])
+	}
+	if sc, _ := v2["serviceConfig"].(map[string]any); sc["service"] != "projects/p/locations/us-central1/services/f1" {
+		t.Fatalf("v2 serviceConfig.service = %v", sc["service"])
+	}
 	if _, ok := v2["status"]; ok {
 		t.Fatalf("v2 must not carry v1 status: %+v", v2)
 	}
