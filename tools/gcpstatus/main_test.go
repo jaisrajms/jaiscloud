@@ -347,3 +347,61 @@ func TestCollectEndToEnd(t *testing.T) {
 		t.Fatalf("wave metadata missing: %+v", waves)
 	}
 }
+
+func TestFinalizePlan(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "plan_docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	src := filepath.Join(root, "plan_docs", "J10-storage-csek-plan.md")
+	if err := os.WriteFile(src, []byte("# plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Invalid ID is rejected before any move.
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "notanid", "", true); err == nil {
+		t.Fatal("expected invalid-ID error")
+	}
+	// Dry run prints but does not move.
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", true); err != nil {
+		t.Fatalf("dry finalize: %v", err)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("dry run moved the file: %v", err)
+	}
+	// Real move; the leading ID prefix is stripped, then re-prefixed.
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", false); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	dest := filepath.Join(root, "plan_docs", "final", "J10-storage-csek-plan.md")
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("expected %s: %v", dest, err)
+	}
+	// A second finalize of the same ID collides.
+	if err := os.WriteFile(src, []byte("# plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", false); err == nil {
+		t.Fatal("expected destination-exists error")
+	}
+	// Explicit slug override is honored.
+	src2 := filepath.Join(root, "plan_docs", "notes.md")
+	if err := os.WriteFile(src2, []byte("# plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizePlan("plan_docs/notes.md", "R99", "custom-slug", false); err != nil {
+		t.Fatalf("slug override: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "plan_docs", "final", "R99-custom-slug.md")); err != nil {
+		t.Fatalf("expected R99-custom-slug.md: %v", err)
+	}
+}

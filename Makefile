@@ -115,7 +115,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-matrix-diff
+        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -751,6 +751,17 @@ gcp-plan-new: ## Scaffold a preview->GA wave plan from the fidelity matrix: SERV
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -new-plan "$(SERVICE)" -effort "$(if $(EFFORT),$(EFFORT),ga)" $(if $(FORCE),-force,)
+
+gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md ID=<J-id> [SLUG=...] [DRY=1] [OPS=1]
+	@test -n "$(PLAN)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id> [SLUG=...]'; exit 2; }
+	@test -n "$(ID)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id>'; exit 2; }
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -finalize "$(PLAN)" -id "$(ID)" $(if $(SLUG),-slug "$(SLUG)",) $(if $(DRY),-dry,)
+	@if [ -z "$(DRY)" ]; then \
+	  $(MAKE) --no-print-directory gcp-status gcp-status-lint-plans gcp-status-coverage; \
+	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/gcp; fi; \
+	fi
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
