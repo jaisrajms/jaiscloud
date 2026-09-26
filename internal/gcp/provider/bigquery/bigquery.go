@@ -13,10 +13,16 @@
 //   - tabledata.insertAll honors insertId (best-effort duplicate suppression
 //     over a bounded, TTL'd per-table window), skipInvalidRows,
 //     ignoreUnknownValues and the table schema (missing REQUIRED fields and
-//     unknown fields), reporting per-row insertErrors. insertId dedup is
-//     process-local and not persisted across store snapshots/restarts.
-//     templateSuffix is not supported and field *types* are not enforced (only
-//     presence/unknown-field checks).
+//     unknown fields). Row-level failures never fail the request: the response
+//     is always 200 with per-row insertErrors, and when skipInvalidRows is
+//     false nothing is inserted and the otherwise-valid rows are reported with
+//     reason "stopped" (matching the real API). insertId dedup is process-local
+//     and not persisted across store snapshots/restarts. templateSuffix is not
+//     supported and field *types* are not enforced (only presence/unknown-field
+//     checks).
+//   - tabledata.list renders every TableCell the way the client SDKs parse it:
+//     primitive values as strings, REPEATED as {"v": [<cell>...]},
+//     RECORD/STRUCT as {"v": {"f": [...]}}, and NULL as {"v": null}.
 //   - List methods emit the Discovery summary subsets: datasets.list uses
 //     DatasetList.datasets, tables.list uses TableList.tables, and jobs.list
 //     uses JobList.jobs (ListFormatJob, which omits etag).
@@ -686,9 +692,6 @@ func (p *Provider) InsertAll(ctx context.Context, nr *model.NormalizedRequest) (
 	validIndexes := make([]int, 0, len(parsed))
 	for _, pr := range parsed {
 		if errs := validateRow(pr.json, fields, ignoreUnknownValues); len(errs) > 0 {
-			if !skipInvalidRows {
-				return nil, invalidArgument(fmt.Sprintf("invalid row %d: %s", pr.index, errs[0].Message))
-			}
 			rowErrs = append(rowErrs, rowErrors{index: pr.index, errs: errs})
 			continue
 		}
@@ -697,18 +700,35 @@ func (p *Provider) InsertAll(ctx context.Context, nr *model.NormalizedRequest) (
 		validIndexes = append(validIndexes, pr.index)
 	}
 
-	dups, err := p.store.InsertRows(ctx, projectOf(nr), datasetID, tableID, validRows)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	for _, di := range dups {
-		rowErrs = append(rowErrs, rowErrors{
-			index: validIndexes[di],
-			errs: []insertError{{
-				Reason:  "duplicate",
-				Message: "row already inserted with the same insertId",
-			}},
-		})
+	// Row-level failures never fail the request at the HTTP level: the real API
+	// answers 200 and reports them through insertErrors. When skipInvalidRows is
+	// false nothing is inserted and every otherwise-valid row is reported as
+	// reason "stopped"; when it is true the valid rows are inserted and only the
+	// invalid ones are reported.
+	if len(rowErrs) > 0 && !skipInvalidRows {
+		for _, idx := range validIndexes {
+			rowErrs = append(rowErrs, rowErrors{
+				index: idx,
+				errs: []insertError{{
+					Reason:  "stopped",
+					Message: "The row was not inserted because another row in the request was invalid.",
+				}},
+			})
+		}
+	} else if len(validRows) > 0 {
+		dups, err := p.store.InsertRows(ctx, projectOf(nr), datasetID, tableID, validRows)
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		for _, di := range dups {
+			rowErrs = append(rowErrs, rowErrors{
+				index: validIndexes[di],
+				errs: []insertError{{
+					Reason:  "duplicate",
+					Message: "row already inserted with the same insertId",
+				}},
+			})
+		}
 	}
 
 	sort.Slice(rowErrs, func(i, j int) bool { return rowErrs[i].index < rowErrs[j].index })
@@ -726,46 +746,95 @@ func (p *Provider) InsertAll(ctx context.Context, nr *model.NormalizedRequest) (
 	}), nil
 }
 
-func schemaFieldNames(schema json.RawMessage) []string {
-	if len(schema) == 0 {
-		return nil
-	}
-	var s struct {
-		Fields []struct {
-			Name string `json:"name"`
-		} `json:"fields"`
-	}
-	if json.Unmarshal(schema, &s) != nil {
-		return nil
-	}
-	names := make([]string, 0, len(s.Fields))
-	for _, f := range s.Fields {
-		names = append(names, f.Name)
-	}
-	return names
+// isRecordType reports whether a BigQuery field type is a nested record. The
+// standard-SQL name is STRUCT; the legacy Discovery name is RECORD.
+func isRecordType(t string) bool {
+	return strings.EqualFold(t, "RECORD") || strings.EqualFold(t, "STRUCT")
 }
 
-func rowToTableRow(data json.RawMessage, fields []string) map[string]any {
+// scalarCellString renders a primitive cell value as the string the BigQuery
+// wire format uses: integers and floats as decimal text, booleans as
+// "true"/"false". Client SDKs parse every primitive cell as a string (the Java
+// FieldValue parser rejects raw JSON numbers and booleans).
+func scalarCellString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	default:
+		// Nested object/array values only reach here on a schema-less table;
+		// render them as JSON text rather than Go syntax.
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// tableCell renders one value as a BigQuery TableCell, always a {"v": ...}
+// wrapper around the field value: a scalar string, [<cell>...] for a REPEATED
+// field (each element wrapped in its own cell), {"f": [...]} for a
+// RECORD/STRUCT value, or null. Real BigQuery wraps top-level records as
+// {"v": {"f": [...]}} (the first-party Python client reads cell["v"]
+// unconditionally), and a null must be {"v": null} rather than an empty object
+// (the Java FieldValue.fromPb recurses through "v" and treats JSON null as a
+// null primitive, while an object with neither "f" nor "v" is unparseable).
+func tableCell(f schemaField, value any) map[string]any {
+	if strings.EqualFold(f.Mode, "REPEATED") {
+		list, _ := value.([]any)
+		elems := make([]any, 0, len(list))
+		element := schemaField{Name: f.Name, Type: f.Type, Fields: f.Fields}
+		for _, e := range list {
+			elems = append(elems, tableCell(element, e))
+		}
+		return map[string]any{"v": elems}
+	}
+	if value == nil {
+		return map[string]any{"v": nil}
+	}
+	if isRecordType(f.Type) {
+		obj, _ := value.(map[string]any)
+		return map[string]any{"v": map[string]any{"f": rowCells(f.Fields, obj)}}
+	}
+	return map[string]any{"v": scalarCellString(value)}
+}
+
+// rowCells renders one row (or nested record) in schema order.
+func rowCells(fields []schemaField, m map[string]any) []any {
+	cells := make([]any, 0, len(fields))
+	for _, f := range fields {
+		cells = append(cells, tableCell(f, m[f.Name]))
+	}
+	return cells
+}
+
+// rowToTableRow renders a stored row as the BigQuery TableRow wire shape
+// {"f": [TableCell...]}. A table without a schema falls back to every stored
+// key in sorted order, rendered as scalar cells.
+func rowToTableRow(data json.RawMessage, fields []schemaField) map[string]any {
 	m := map[string]any{}
 	if len(data) > 0 {
 		_ = json.Unmarshal(data, &m)
 	}
-	cells := make([]any, 0, len(fields))
-	if len(fields) > 0 {
-		for _, f := range fields {
-			cells = append(cells, map[string]any{"v": m[f]})
-		}
-	} else {
+	if len(fields) == 0 {
 		keys := make([]string, 0, len(m))
 		for k := range m {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+		cells := make([]any, 0, len(keys))
 		for _, k := range keys {
-			cells = append(cells, map[string]any{"v": m[k]})
+			cells = append(cells, tableCell(schemaField{}, m[k]))
 		}
+		return map[string]any{"f": cells}
 	}
-	return map[string]any{"f": cells}
+	return map[string]any{"f": rowCells(fields, m)}
 }
 
 func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -782,7 +851,7 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	fields := schemaFieldNames(t.Schema)
+	fields := parseSchemaFields(t.Schema)
 	rows, err := p.store.ListRows(ctx, projectOf(nr), datasetID, tableID)
 	if err != nil {
 		return nil, err

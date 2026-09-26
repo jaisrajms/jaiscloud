@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -292,7 +293,8 @@ func TestTableAndRowRoundTrip(t *testing.T) {
 	cells0, _ := row0["f"].([]any)
 	cell0, _ := cells0[0].(map[string]any)
 	cell1, _ := cells0[1].(map[string]any)
-	if cell0["v"] != float64(1) || cell1["v"] != "alice" {
+	// Primitive cells are strings on the wire (the SDK parses them that way).
+	if cell0["v"] != "1" || cell1["v"] != "alice" {
 		t.Fatalf("row 0 cells not schema-ordered: %v", cells0)
 	}
 	if listRows.Data["totalRows"] != "2" {
@@ -372,8 +374,8 @@ func TestListRowsStartIndex(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows from startIndex 2, got %d", len(rows))
 	}
-	if got := firstID(rows[0]); got != float64(2) {
-		t.Errorf("first row id = %v, want 2", got)
+	if got := firstID(rows[0]); got != "2" {
+		t.Errorf("first row id = %v, want \"2\"", got)
 	}
 
 	// Out-of-range startIndex yields an empty page, not an error.
@@ -705,8 +707,10 @@ func TestInsertAllInsertIdDedup(t *testing.T) {
 	}
 }
 
-// TestInsertAllUnknownField verifies ignoreUnknownValues=false rejects the
-// request with a top-level error, while true accepts the row.
+// TestInsertAllUnknownField verifies an unknown field with
+// ignoreUnknownValues=false is reported per-row at HTTP 200 (never a top-level
+// failure), while true accepts the row. Both default skipInvalidRows=false, so
+// the rejected batch inserts nothing.
 func TestInsertAllUnknownField(t *testing.T) {
 	ctx := context.Background()
 	p := New(bqstore.NewMemoryStore())
@@ -725,14 +729,19 @@ func TestInsertAllUnknownField(t *testing.T) {
 		}))
 	}
 
-	if _, err := insert(false, "u1"); err == nil {
-		t.Fatal("expected top-level error for unknown field with ignoreUnknownValues=false")
+	resp, err := insert(false, "u1")
+	if err != nil {
+		t.Fatalf("insertAll must not fail the request on an unknown field: %v", err)
+	}
+	idx, e := soleRowError(t, resp)
+	if idx != 0 || e["reason"] != "invalid" || e["location"] != "extra" {
+		t.Fatalf("expected invalid unknown field at index 0, got index=%d err=%v", idx, e)
 	}
 	if got := rowDataCount(t, p, "d", "t"); got != 0 {
-		t.Fatalf("rejected request must insert nothing, got %d rows", got)
+		t.Fatalf("skipInvalidRows=false must insert nothing, got %d rows", got)
 	}
 
-	resp, err := insert(true, "u1")
+	resp, err = insert(true, "u1")
 	if err != nil {
 		t.Fatalf("insertAll with ignoreUnknownValues=true: %v", err)
 	}
@@ -745,8 +754,9 @@ func TestInsertAllUnknownField(t *testing.T) {
 }
 
 // TestInsertAllRequiredFieldAndSkipInvalidRows covers both skipInvalidRows
-// modes: false fails the whole request and writes nothing; true reports the
-// invalid row per-index while inserting the valid ones.
+// modes at HTTP 200: false reports the invalid row plus a "stopped" entry for
+// the otherwise-valid one and writes nothing; true reports only the invalid row
+// while inserting the valid ones.
 func TestInsertAllRequiredFieldAndSkipInvalidRows(t *testing.T) {
 	ctx := context.Background()
 	p := New(bqstore.NewMemoryStore())
@@ -756,20 +766,44 @@ func TestInsertAllRequiredFieldAndSkipInvalidRows(t *testing.T) {
 		map[string]any{"name": "name", "type": "STRING"},
 	))
 
-	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+	resp, err := p.InsertAll(ctx, newNR(map[string]any{
 		"datasetId": "d", "tableId": "t",
 		"body": map[string]any{"rows": []any{
 			map[string]any{"insertId": "r1", "json": map[string]any{"id": "a"}},
 			map[string]any{"insertId": "r2", "json": map[string]any{"name": "missing-id"}},
 		}},
-	})); err == nil {
-		t.Fatal("expected top-level error when a required field is missing and skipInvalidRows=false")
+	}))
+	if err != nil {
+		t.Fatalf("insertAll must not fail the request when a required field is missing: %v", err)
+	}
+	reasonAt := func(resp *model.ProviderResponse) map[int]map[string]any {
+		first := map[int]map[string]any{}
+		for _, e := range insertErrorsOf(t, resp) {
+			m, _ := e.(map[string]any)
+			idx, _ := m["index"].(int)
+			list, _ := m["errors"].([]any)
+			if len(list) == 0 {
+				continue
+			}
+			first[idx], _ = list[0].(map[string]any)
+		}
+		return first
+	}
+	byIndex := reasonAt(resp)
+	if len(byIndex) != 2 {
+		t.Fatalf("expected invalid + stopped entries, got %v", byIndex)
+	}
+	if byIndex[0]["reason"] != "stopped" {
+		t.Fatalf("valid row must be reported stopped, got %v", byIndex[0])
+	}
+	if byIndex[1]["reason"] != "invalid" || byIndex[1]["location"] != "id" {
+		t.Fatalf("invalid row must be reported invalid, got %v", byIndex[1])
 	}
 	if got := rowDataCount(t, p, "d", "t"); got != 0 {
 		t.Fatalf("failed request must write nothing, got %d rows", got)
 	}
 
-	resp, err := p.InsertAll(ctx, newNR(map[string]any{
+	resp, err = p.InsertAll(ctx, newNR(map[string]any{
 		"datasetId": "d", "tableId": "t",
 		"body": map[string]any{
 			"skipInvalidRows": true,
@@ -1035,5 +1069,113 @@ func TestListJobsOmitsEtag(t *testing.T) {
 	}
 	if _, ok := got.Data["etag"]; !ok {
 		t.Errorf("jobs.get must include etag, got %#v", got.Data)
+	}
+}
+
+// TestListRowsCellEncoding locks in the BigQuery TableCell wire contract: every
+// primitive is a string, REPEATED wraps each element in its own cell,
+// RECORD/STRUCT is {"v": {"f": [...]}}, and a NULL is {"v": null}. The official
+// client SDKs reject raw numbers/booleans and objects with neither f nor v.
+func TestListRowsCellEncoding(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(
+		map[string]any{"name": "id", "type": "INTEGER"},
+		map[string]any{"name": "score", "type": "FLOAT64"},
+		map[string]any{"name": "active", "type": "BOOL"},
+		map[string]any{"name": "tags", "type": "STRING", "mode": "REPEATED"},
+		map[string]any{"name": "addr", "type": "RECORD", "fields": []any{
+			map[string]any{"name": "city", "type": "STRING"},
+			map[string]any{"name": "zip", "type": "INTEGER"},
+		}},
+	))
+
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t",
+		"body": map[string]any{"rows": []any{
+			map[string]any{"json": map[string]any{
+				"id": 7, "score": 9.5, "active": true,
+				"tags": []any{"admin", "dev"},
+				"addr": map[string]any{"city": "NYC", "zip": 10001},
+			}},
+		}},
+	})); err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+
+	resp, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t"}))
+	if err != nil {
+		t.Fatalf("list rows: %v", err)
+	}
+	rows, _ := resp.Data["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	cells, _ := rows[0].(map[string]any)["f"].([]any)
+	want := []map[string]any{
+		{"v": "7"},
+		{"v": "9.5"},
+		{"v": "true"},
+		{"v": []any{map[string]any{"v": "admin"}, map[string]any{"v": "dev"}}},
+		{"v": map[string]any{"f": []any{
+			map[string]any{"v": "NYC"},
+			map[string]any{"v": "10001"},
+		}}},
+	}
+	if len(cells) != len(want) {
+		t.Fatalf("expected %d cells, got %d: %#v", len(want), len(cells), cells)
+	}
+	for i := range want {
+		if !reflect.DeepEqual(cells[i], want[i]) {
+			t.Errorf("cell %d = %#v, want %#v", i, cells[i], want[i])
+		}
+	}
+
+	// A schema-less table still stringifies scalar values and emits nulls as
+	// {"v": null}.
+	createTable(t, p, "d", "raw", nil)
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "raw",
+		"body": map[string]any{"rows": []any{
+			map[string]any{"json": map[string]any{"flag": false, "n": 3}},
+		}},
+	})); err != nil {
+		t.Fatalf("insertAll raw: %v", err)
+	}
+	rawResp, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "raw"}))
+	if err != nil {
+		t.Fatalf("list raw: %v", err)
+	}
+	rawRows, _ := rawResp.Data["rows"].([]any)
+	rawCells, _ := rawRows[0].(map[string]any)["f"].([]any)
+	// Keys are sorted: flag, n.
+	if !reflect.DeepEqual(rawCells[0], map[string]any{"v": "false"}) ||
+		!reflect.DeepEqual(rawCells[1], map[string]any{"v": "3"}) {
+		t.Fatalf("schema-less cells not stringified: %#v", rawCells)
+	}
+
+	// A missing value in a schema'd table is a JSON-null cell, not an omitted
+	// one (the SDK enforces the row/field count match).
+	createTable(t, p, "d", "sparse", schemaOf(
+		map[string]any{"name": "id", "type": "INTEGER"},
+		map[string]any{"name": "name", "type": "STRING"},
+	))
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "sparse",
+		"body": map[string]any{"rows": []any{
+			map[string]any{"json": map[string]any{"id": 1}},
+		}},
+	})); err != nil {
+		t.Fatalf("insertAll sparse: %v", err)
+	}
+	sparseResp, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "sparse"}))
+	if err != nil {
+		t.Fatalf("list sparse: %v", err)
+	}
+	sparseRows, _ := sparseResp.Data["rows"].([]any)
+	sparseCells, _ := sparseRows[0].(map[string]any)["f"].([]any)
+	if !reflect.DeepEqual(sparseCells[1], map[string]any{"v": nil}) {
+		t.Fatalf("missing value must be {\"v\": null}, got %#v", sparseCells[1])
 	}
 }
