@@ -2,7 +2,7 @@
 description: Triage the GCP ledger audit (oversight/unowned/stale-doc/...)
 ---
 
-!`make gcp-status-audit 2>&1`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-status-audit 2>&1`
 
 Triage the audit output above. For every `ATTENTION` item — `oversight?`,
 `unowned`, `stale-doc`, `claimed-done`, `abandoned` — verify it against the code

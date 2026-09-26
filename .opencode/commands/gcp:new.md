@@ -2,7 +2,7 @@
 description: Start the next GCP backlog item from the status ledger
 ---
 
-!`make gcp-status-next N=10 2>&1; echo; echo '--- coverage ---'; make gcp-status-coverage 2>&1 | tail -2`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-status-next N=10 2>&1; echo; echo '--- coverage ---'; make gcp-status-coverage 2>&1 | tail -2`
 
 You are starting a new GCP work session in the jaiscloud repo. The ledger output
 above is the source of truth for what to do next.

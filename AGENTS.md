@@ -5,6 +5,13 @@
 
 ## GCP parity work — check the status ledger before you plan
 
+**Toolchain:** OpenCode sessions do not have `go` on `PATH`. Before any `go`,
+`gofmt`, or `make gcp-status*` command, run
+`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH` (`go` is
+`/tmp/opencode/go/bin/go`). For the Java/SDK compat gate also export
+`JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
+`/tmp/opencode/toolchain/maven/bin`.
+
 The GCP backlog spans many plan docs and PRs. Do not rely on memory or chat
 history to decide what is implemented.
 

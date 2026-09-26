@@ -2,7 +2,7 @@
 description: Show the next GCP items from the status ledger
 ---
 
-!`make gcp-status-next N=10 2>&1`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-status-next N=10 2>&1`
 
 Present the next GCP items above concisely — one line each: ID, series/wave,
 branch, `P`-rank and impact — then recommend the single top item to work on and

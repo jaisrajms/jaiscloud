@@ -2,7 +2,7 @@
 description: List the next actionable GCP items from the ledger
 ---
 
-!`make gcp-status-next N=25 2>&1`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-status-next N=25 2>&1`
 
 List the actionable GCP items above in priority order. Group them by series/wave,
 show the branch, the `P`-rank, the impact and the `plan doc`, and call out the

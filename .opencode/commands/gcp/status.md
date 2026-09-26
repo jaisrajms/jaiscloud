@@ -2,7 +2,7 @@
 description: Show the GCP parity ledger summary and audit
 ---
 
-!`make gcp-status 2>&1 | tail -3; echo; make gcp-status-audit 2>&1`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-status 2>&1 | tail -3; echo; make gcp-status-audit 2>&1`
 
 Summarize the GCP parity ledger above:
 
