@@ -59,7 +59,11 @@ parseable index/detail.
    `plan_docs/final/` with an ID-prefixed name (e.g.
    `final/J1-datastore-rest-protobuf.md`) and put the backlog ID in the
    commit/PR title (e.g. `fix(gcp/datastore): … (J1)`) so the next run links it.
-   Then run `make gcp-status` plus `make gcp-status-lint-plans` and
+   **Record deferrals:** for every item you deferred or left unimplemented (a
+   REST/gRPC-only limitation, an unsupported parameter, a code `TODO`), add a row
+   with an ID and a `verdict` — `fix` + a `prompt` branch to schedule it, or
+   `no fix` / `out of scope` to close it (operation-level gaps are auto-covered by
+   the matrix). Then run `make gcp-status` plus `make gcp-status-lint-plans` and
    `make gcp-status-coverage`. If the session changed operations, also run
    `make gcp-matrix-diff REF=upstream/gcp` (fails on a `ga`→worse regression).
 

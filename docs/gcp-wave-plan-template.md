@@ -91,6 +91,7 @@ make gcp-status-next       # confirm the next session / priority
 make gcp-status-check Q="<service> <keywords>"
 make gcp-status-lint-plans # this plan must carry a parseable index/detail
 # ... implement, review, PR with the ID in the title ...
+# record any deferred/unimplemented item as a new row (ID + verdict) before finishing
 make gcp-status            # the merged PR flips the session to `merged`
 make gcp-status-coverage   # no blind spots
 ```
