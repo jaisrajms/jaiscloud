@@ -91,7 +91,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build build-all docker docker-all docker-gcp-samples test test-aws test-gcp clean \
+.PHONY: lint lint-pagination help build build-all docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         stop-server up-docker down-docker up-k8s down-k8s \
@@ -206,6 +206,9 @@ test-aws: ## Run AWS + shared unit tests (excludes internal/gcp — mirrors CI t
 
 test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
 	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
+
+test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
 
 ##@ Server — foreground (Ctrl-C to stop)
 

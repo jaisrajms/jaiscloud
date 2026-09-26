@@ -120,6 +120,9 @@ func waveOrder(session string) int {
 // seriesFromSource derives a plan family from its file:
 // gcp-java-compat-wave-plan.md -> "java-compat".
 func seriesFromSource(rel string) string {
+	if strings.TrimSpace(rel) == "" {
+		return ""
+	}
 	base := strings.TrimSuffix(filepath.Base(rel), ".md")
 	base = strings.TrimPrefix(base, "gcp-")
 	base = strings.TrimSuffix(base, "-wave-plan")
@@ -158,6 +161,9 @@ func assignOrders(items []*Item, seriesOrder []string) {
 	for _, it := range items {
 		if it.Series == "" {
 			it.Series = seriesFromSource(it.Source)
+		}
+		if it.Series == "" {
+			continue
 		}
 		if _, ok := rank[it.Series]; !ok && !seen[it.Series] {
 			seen[it.Series] = true
@@ -1713,6 +1719,10 @@ func matrixItems(path string) []*Item {
 	if json.Unmarshal(raw, &mf) != nil {
 		return nil
 	}
+	return matrixItemsFrom(mf)
+}
+
+func matrixItemsFrom(mf matrixFile) []*Item {
 	var out []*Item
 	seen := map[string]bool{}
 	for _, c := range mf.Cells {
@@ -1774,17 +1784,30 @@ func runMatrixDiff(ref, curPath string) int {
 		fmt.Fprintln(os.Stderr, "gcpstatus: bad matrix json")
 		return 2
 	}
+	regress, added := diffMatrices(oldM, curM)
+	fmt.Printf("gcp-status matrix diff vs %s: %d regression(s), %d new non-ga cell(s)\n", ref, len(regress), len(added))
+	for _, r := range regress {
+		fmt.Println("  REGRESSION " + r)
+	}
+	for _, a := range added {
+		fmt.Println("  NEW-GAP    " + a)
+	}
+	if len(regress) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// diffMatrices returns cells that got worse (regressions) and cells that are
+// new and non-ga (new gaps), formatted as "key: old -> new" / "key -> state".
+func diffMatrices(oldM, curM matrixFile) (regress, added []string) {
 	key := func(c matrixCell) string { return c.Service + "|" + c.Operation + "|" + c.Transport }
 	old := map[string]matrixCell{}
 	for _, c := range oldM.Cells {
 		old[key(c)] = c
 	}
-	cur := map[string]matrixCell{}
 	for _, c := range curM.Cells {
-		cur[key(c)] = c
-	}
-	var regress, added []string
-	for k, c := range cur {
+		k := key(c)
 		o, ok := old[k]
 		if !ok {
 			if !strings.EqualFold(c.State, "ga") {
@@ -1798,17 +1821,7 @@ func runMatrixDiff(ref, curPath string) int {
 	}
 	sort.Strings(regress)
 	sort.Strings(added)
-	fmt.Printf("gcp-status matrix diff vs %s: %d regression(s), %d new non-ga cell(s)\n", ref, len(regress), len(added))
-	for _, r := range regress {
-		fmt.Println("  REGRESSION " + r)
-	}
-	for _, a := range added {
-		fmt.Println("  NEW-GAP    " + a)
-	}
-	if len(regress) > 0 {
-		return 1
-	}
-	return 0
+	return regress, added
 }
 
 // generatePlan scaffolds a preview->GA wave plan from the fidelity matrix and

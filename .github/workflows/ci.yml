@@ -132,6 +132,9 @@ jobs:
       - name: Run GCP unit tests
         run: go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 
+      - name: Run GCP dev-tool tests
+        run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+
   # Builds and boots jaiscloud-gcp on both REST (8080) and gRPC (8081) ports,
   # then runs the raw-HTTP and per-SDK integration suites against the emulator.
   test-gcp-integration:
