@@ -213,6 +213,10 @@ func main() {
 	newPlan := flag.String("new-plan", "", "scaffold a preview->GA wave plan for this service (writes plan_docs/)")
 	effort := flag.String("effort", "ga", "label for -new-plan output filename")
 	force := flag.Bool("force", false, "overwrite an existing -new-plan output")
+	finalize := flag.String("finalize", "", "move a completed plan doc into plan_docs/final/<ID>-<slug>.md")
+	finalizeID := flag.String("id", "", "backlog ID for -finalize (e.g. J10, R15, G7)")
+	finalizeSlug := flag.String("slug", "", "slug override for -finalize (default: derived from the filename)")
+	finalizeDry := flag.Bool("dry", false, "print the -finalize action without moving the file")
 	matrixPath := flag.String("matrix", "docs/fidelity/fidelity-matrix.json", "fidelity matrix JSON")
 	fromMatrix := flag.Bool("from-matrix", false, "also ingest non-ga fidelity cells as matrix gaps (kind=matrix)")
 	matrixDiff := flag.String("matrix-diff", "", "git ref to diff the fidelity matrix against; exit 1 on a ga->worse regression")
@@ -223,6 +227,13 @@ func main() {
 
 	if *newPlan != "" {
 		if err := generatePlan(*newPlan, *effort, *force, *matrixPath, *templatePath); err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *finalize != "" {
+		if err := finalizePlan(*finalize, *finalizeID, *finalizeSlug, *finalizeDry); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
 			os.Exit(1)
 		}
@@ -2335,6 +2346,75 @@ func slug(s string) string {
 
 func shortSource(p string) string {
 	return strings.TrimSuffix(filepath.Base(p), ".md")
+}
+
+var finalizeIDRe = regexp.MustCompile(`^[A-Za-z]+[0-9]+$`)
+var leadingIDRe = regexp.MustCompile(`^[A-Za-z]+[0-9]+-`)
+
+// finalizePlan moves a completed plan doc into plan_docs/final/ with an
+// ID-prefixed filename (e.g. plan_docs/final/J10-storage-csek.md) so the status
+// ledger can link the doc to its merged PR. plan_docs/ is gitignored, so this
+// is a plain rename, not `git mv`. Dry-run prints the intended action.
+func finalizePlan(plan, id, slugOverride string, dry bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("finalize: an ID is required (-id, e.g. J10)")
+	}
+	if !finalizeIDRe.MatchString(id) {
+		return fmt.Errorf("finalize: invalid ID %q (want e.g. J10, R15, G7)", id)
+	}
+	if strings.TrimSpace(plan) == "" {
+		return fmt.Errorf("finalize: a plan path is required (-finalize plan_docs/<doc>.md)")
+	}
+	abs, err := filepath.Abs(plan)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return fmt.Errorf("finalize: %s: %w", plan, err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(wd, abs)
+	if err != nil {
+		return err
+	}
+	rel = filepath.ToSlash(rel)
+	if !strings.HasPrefix(rel, "plan_docs/") {
+		return fmt.Errorf("finalize: %s is not under plan_docs/ (run make from the repo root)", plan)
+	}
+	if strings.HasPrefix(rel, "plan_docs/final/") {
+		return fmt.Errorf("finalize: %s is already under plan_docs/final/", rel)
+	}
+
+	base := strings.TrimSuffix(filepath.Base(plan), ".md")
+	sl := strings.TrimSpace(slugOverride)
+	if sl == "" {
+		sl = leadingIDRe.ReplaceAllString(base, "")
+	}
+	sl = slug(sl)
+
+	finalDir := filepath.Join(wd, "plan_docs", "final")
+	name := id + "-" + sl + ".md"
+	if _, err := os.Stat(filepath.Join(finalDir, name)); err == nil {
+		return fmt.Errorf("finalize: destination already exists: plan_docs/final/%s", name)
+	}
+
+	if dry {
+		fmt.Printf("gcpstatus: would move %s -> plan_docs/final/%s\n", rel, name)
+	} else {
+		if err := os.MkdirAll(finalDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(abs, filepath.Join(finalDir, name)); err != nil {
+			return fmt.Errorf("finalize: move %s: %w", plan, err)
+		}
+		fmt.Printf("gcpstatus: moved %s -> plan_docs/final/%s\n", rel, name)
+	}
+	fmt.Printf("gcpstatus: put the backlog ID in the commit/PR title, e.g. \"fix(gcp/<svc>): ... (%s)\"\n", id)
+	return nil
 }
 
 func truncate(s string, n int) string {
