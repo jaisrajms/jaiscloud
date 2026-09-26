@@ -9,7 +9,11 @@
 // INTERNAL on gRPC. Both transports now resolve through Resolve.
 package gcperr
 
-import "jaiscloud/internal/model"
+import (
+	"jaiscloud/internal/model"
+
+	"google.golang.org/grpc/codes"
+)
 
 // Canonical google.rpc status names.
 const (
@@ -167,4 +171,47 @@ func Resolve(perr *model.ProviderError) (status string, httpStatus int) {
 		}
 	}
 	return status, httpStatus
+}
+
+// GRPCCodeForStatus maps a canonical google.rpc status name to its gRPC code.
+// The bool is false for unrecognized names so the caller can fall back (both
+// the gRPC transport and the REST protobuf encoder use INTERNAL). It is the
+// single source of the name→code table shared by both transports.
+func GRPCCodeForStatus(status string) (codes.Code, bool) {
+	switch status {
+	case FailedPrecondition:
+		return codes.FailedPrecondition, true
+	case OutOfRange:
+		return codes.OutOfRange, true
+	case Aborted:
+		return codes.Aborted, true
+	case NotFound:
+		return codes.NotFound, true
+	case InvalidArgument:
+		return codes.InvalidArgument, true
+	case AlreadyExists:
+		return codes.AlreadyExists, true
+	case PermissionDenied:
+		return codes.PermissionDenied, true
+	case Unauthenticated:
+		return codes.Unauthenticated, true
+	case ResourceExhausted:
+		return codes.ResourceExhausted, true
+	case Unimplemented:
+		return codes.Unimplemented, true
+	case Internal:
+		return codes.Internal, true
+	case Unknown:
+		return codes.Unknown, true
+	case Unavailable:
+		return codes.Unavailable, true
+	case Cancelled:
+		return codes.Canceled, true
+	case DataLoss:
+		return codes.DataLoss, true
+	case DeadlineExceeded:
+		return codes.DeadlineExceeded, true
+	default:
+		return codes.Unknown, false
+	}
 }

@@ -25,48 +25,8 @@ func GRPCStatus(err error) error {
 		return status.Error(codes.Internal, err.Error())
 	}
 	name, _ := gcperr.Resolve(perr)
-	if c, ok := statusToCode(name); ok {
+	if c, ok := gcperr.GRPCCodeForStatus(name); ok {
 		return status.Error(c, perr.Message)
 	}
 	return status.Error(codes.Internal, perr.Message)
-}
-
-// statusToCode maps a canonical google.rpc status name to its gRPC code. The
-// bool is false for unrecognized names so the caller can fall back to INTERNAL.
-func statusToCode(s string) (codes.Code, bool) {
-	switch s {
-	case gcperr.FailedPrecondition:
-		return codes.FailedPrecondition, true
-	case gcperr.OutOfRange:
-		return codes.OutOfRange, true
-	case gcperr.Aborted:
-		return codes.Aborted, true
-	case gcperr.NotFound:
-		return codes.NotFound, true
-	case gcperr.InvalidArgument:
-		return codes.InvalidArgument, true
-	case gcperr.AlreadyExists:
-		return codes.AlreadyExists, true
-	case gcperr.PermissionDenied:
-		return codes.PermissionDenied, true
-	case gcperr.Unauthenticated:
-		return codes.Unauthenticated, true
-	case gcperr.ResourceExhausted:
-		return codes.ResourceExhausted, true
-	case gcperr.Unimplemented:
-		return codes.Unimplemented, true
-	case gcperr.Internal:
-		return codes.Internal, true
-	case gcperr.Unknown:
-		return codes.Unknown, true
-	case gcperr.Unavailable:
-		return codes.Unavailable, true
-	case gcperr.Cancelled:
-		return codes.Canceled, true
-	case gcperr.DataLoss:
-		return codes.DataLoss, true
-	case gcperr.DeadlineExceeded:
-		return codes.DeadlineExceeded, true
-	}
-	return codes.Unknown, false
 }

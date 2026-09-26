@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"jaiscloud/internal/model"
+
+	"google.golang.org/grpc/codes"
 )
 
 func TestStatusForHTTP(t *testing.T) {
@@ -78,5 +80,35 @@ func TestResolvePrecedence(t *testing.T) {
 				t.Fatalf("Resolve() = (%q, %d), want (%q, %d)", gotStatus, gotHTTP, tc.wantStatus, tc.wantHTTP)
 			}
 		})
+	}
+}
+
+func TestGRPCCodeForStatus(t *testing.T) {
+	cases := map[string]codes.Code{
+		InvalidArgument:    codes.InvalidArgument,
+		NotFound:           codes.NotFound,
+		AlreadyExists:      codes.AlreadyExists,
+		FailedPrecondition: codes.FailedPrecondition,
+		Aborted:            codes.Aborted,
+		OutOfRange:         codes.OutOfRange,
+		PermissionDenied:   codes.PermissionDenied,
+		Unauthenticated:    codes.Unauthenticated,
+		ResourceExhausted:  codes.ResourceExhausted,
+		Unimplemented:      codes.Unimplemented,
+		Internal:           codes.Internal,
+		Unknown:            codes.Unknown,
+		Unavailable:        codes.Unavailable,
+		Cancelled:          codes.Canceled,
+		DataLoss:           codes.DataLoss,
+		DeadlineExceeded:   codes.DeadlineExceeded,
+	}
+	for status, want := range cases {
+		got, ok := GRPCCodeForStatus(status)
+		if !ok || got != want {
+			t.Errorf("GRPCCodeForStatus(%q) = (%v, %v), want (%v, true)", status, got, ok, want)
+		}
+	}
+	if _, ok := GRPCCodeForStatus("BOGUS"); ok {
+		t.Errorf("GRPCCodeForStatus(BOGUS) ok = true, want false")
 	}
 }
