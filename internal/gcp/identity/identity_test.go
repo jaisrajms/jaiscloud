@@ -24,6 +24,21 @@ func TestFromRequest_BearerTokenEmail(t *testing.T) {
 	}
 }
 
+func TestServiceAccountFromToken(t *testing.T) {
+	token := "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImRldkBleGFtcGxlLmNvbSIsInN1YiI6ImRldiJ9.sig"
+	if got := ServiceAccountFromToken(token); got != "dev@example.com" {
+		t.Errorf("ServiceAccountFromToken = %q, want dev@example.com", got)
+	}
+	// Falls back to sub when email is absent.
+	token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzdWJAb25seSJ9.sig"
+	if got := ServiceAccountFromToken(token); got != "sub@only" {
+		t.Errorf("ServiceAccountFromToken = %q, want sub@only", got)
+	}
+	if got := ServiceAccountFromToken("opaque-token"); got != "" {
+		t.Errorf("ServiceAccountFromToken(opaque) = %q, want empty", got)
+	}
+}
+
 func TestFromRequest_NoCredential(t *testing.T) {
 	r := httptest.NewRequest("GET", "/storage/v1/b/bkt/o", nil)
 	got := FromRequest(r)

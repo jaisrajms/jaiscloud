@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"jaiscloud/internal/gcp/downscope"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/model"
@@ -81,6 +82,9 @@ func (s *Service) BidiReadObject(stream storagepb.Storage_BidiReadObjectServer) 
 
 	bucket, object, generation, err := s.resolveBidiReadTarget(spec)
 	if err != nil {
+		return err
+	}
+	if err := s.requireDownscope(ctx, downscope.ReadObject, bucket, object); err != nil {
 		return err
 	}
 	project := s.projectForBucket(ctx, bucket)

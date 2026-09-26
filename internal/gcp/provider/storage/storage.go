@@ -28,6 +28,7 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
+	"jaiscloud/internal/gcp/downscope"
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
@@ -265,6 +266,26 @@ func (p *Provider) sweepStaleStore(ctx context.Context) {
 	for _, s := range stale {
 		_ = p.objects.DeleteResumable(ctx, s.UploadID)
 	}
+}
+
+// requireDownscope enforces a downscoped credential's access boundary on one
+// GCS operation. It is a no-op when the request carries no downscoped bearer
+// token (ordinary emulator requests stay unrestricted) and for synthetic
+// requests without an underlying HTTP request (in-process dispatch, unit tests).
+func requireDownscope(nr *model.NormalizedRequest, op downscope.Op, bucket, name string) error {
+	if nr == nil || nr.Raw == nil {
+		return nil
+	}
+	if err := downscope.Allowed(nr.Raw.Header.Get("Authorization"), op, bucket, name); err != nil {
+		return model.NewProviderError("PermissionDenied", "Downscoped token does not allow this GCS operation", 403)
+	}
+	return nil
+}
+
+// requireBucketAdmin denies any bucket-level operation performed with a
+// downscoped credential: a rule grants object access only.
+func requireBucketAdmin(nr *model.NormalizedRequest) error {
+	return requireDownscope(nr, downscope.BucketAdmin, "", "")
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -645,6 +666,9 @@ func paginateBuckets(buckets []map[string]any, params map[string]any) ([]map[str
 }
 
 func (p *Provider) BucketsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	buckets, err := p.objects.ListBuckets(ctx, nr.AccountID)
 	if err != nil {
 		return nil, err
@@ -662,6 +686,9 @@ func (p *Provider) BucketsList(ctx context.Context, nr *model.NormalizedRequest)
 }
 
 func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	body, _ := nr.Params["body"].(map[string]any)
 	name, _ := body["name"].(string)
 	if name == "" {
@@ -702,6 +729,9 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	name, _ := nr.Params["bucket"].(string)
 	meta, err := p.objects.GetBucket(ctx, name)
 	if err != nil {
@@ -718,6 +748,9 @@ func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) 
 // is the resource `gcloud storage cp` (and the GCS SDKs) reads before uploading,
 // and its absence previously aborted those clients.
 func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	name, _ := nr.Params["bucket"].(string)
 	meta, err := p.objects.GetBucket(ctx, name)
 	if err != nil {
@@ -738,6 +771,9 @@ func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.Normal
 }
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	name, _ := nr.Params["bucket"].(string)
 	body, _ := nr.Params["body"].(map[string]any)
 	pre := bucketPrecondition(nr)
@@ -830,6 +866,9 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 // with no retention policy, or an unknown bucket, is NotFound; an already
 // locked policy is returned unchanged (locking is idempotent).
 func (p *Provider) BucketsLockRetentionPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	name, _ := nr.Params["bucket"].(string)
 	if name == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket name", 400)
@@ -875,6 +914,9 @@ func (p *Provider) BucketsLockRetentionPolicy(ctx context.Context, nr *model.Nor
 }
 
 func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	name, _ := nr.Params["bucket"].(string)
 	project := p.bucketProject(ctx, name)
 	if err := p.objects.DeleteBucket(ctx, name); err != nil {
@@ -900,6 +942,9 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 // NotificationsInsert implements storage.notifications.insert: POST
 // /storage/v1/b/{bucket}/notificationConfigs.
 func (p *Provider) NotificationsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
@@ -985,6 +1030,9 @@ func validNotificationEventType(et string) bool {
 // NotificationsList implements storage.notifications.list: GET
 // /storage/v1/b/{bucket}/notificationConfigs.
 func (p *Provider) NotificationsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
@@ -1012,6 +1060,9 @@ func (p *Provider) NotificationsList(ctx context.Context, nr *model.NormalizedRe
 // NotificationsGet implements storage.notifications.get: GET
 // /storage/v1/b/{bucket}/notificationConfigs/{notification}.
 func (p *Provider) NotificationsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, id, err := p.notificationTarget(ctx, nr)
 	if err != nil {
 		return nil, err
@@ -1033,6 +1084,9 @@ func (p *Provider) NotificationsGet(ctx context.Context, nr *model.NormalizedReq
 // NotificationsDelete implements storage.notifications.delete: DELETE
 // /storage/v1/b/{bucket}/notificationConfigs/{notification}.
 func (p *Provider) NotificationsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, id, err := p.notificationTarget(ctx, nr)
 	if err != nil {
 		return nil, err
@@ -1311,6 +1365,9 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	}
 
 	pfx, _ := nr.Params["prefix"].(string)
+	if err := requireDownscope(nr, downscope.List, bucket, pfx); err != nil {
+		return nil, err
+	}
 	delim, _ := nr.Params["delimiter"].(string)
 	// startOffset filters the listing to names lexicographically equal to or
 	// after it (GCS objects.list). It composes with prefix/delimiter and is
@@ -1493,6 +1550,9 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	}
 	if object == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing object name", 400)
+	}
+	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
 	}
 
 	media, _ := nr.Params[wire.MediaKey].([]byte)
@@ -1751,6 +1811,9 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	}
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := requireDownscope(nr, downscope.ReadObject, bucket, object); err != nil {
+		return nil, err
+	}
 	// Metadata first: metadata gone → 404; metadata present + blob absent → 404
 	// (a tombstoned/deleted version whose data was dropped, not corruption).
 	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
@@ -2104,6 +2167,12 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 	if srcBucket == "" || srcObject == "" || dstBucket == "" || dstObject == "" {
 		return objectMeta{}, model.NewProviderError("InvalidRequest", "copy requires source and destination object names", 400)
 	}
+	if err := requireDownscope(nr, downscope.ReadObject, srcBucket, srcObject); err != nil {
+		return objectMeta{}, err
+	}
+	if err := requireDownscope(nr, downscope.WriteObject, dstBucket, dstObject); err != nil {
+		return objectMeta{}, err
+	}
 	if err := p.scopeToBucket(ctx, nr, dstBucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return objectMeta{}, model.NewProviderError("NotFound", "destination bucket not found", 404)
@@ -2263,6 +2332,15 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 	if srcBucket == dstBucket && srcObject == dstObject {
 		return nil, model.NewProviderError("InvalidRequest", "source and destination object must differ", 400)
 	}
+	if err := requireDownscope(nr, downscope.ReadObject, srcBucket, srcObject); err != nil {
+		return nil, err
+	}
+	if err := requireDownscope(nr, downscope.DeleteObject, srcBucket, srcObject); err != nil {
+		return nil, err
+	}
+	if err := requireDownscope(nr, downscope.WriteObject, dstBucket, dstObject); err != nil {
+		return nil, err
+	}
 	if err := p.scopeToBucket(ctx, nr, dstBucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "destination bucket not found", 404)
@@ -2315,6 +2393,9 @@ func (p *Provider) ObjectsRestore(ctx context.Context, nr *model.NormalizedReque
 	if bucket == "" || object == "" || generation == "" {
 		return nil, model.NewProviderError("InvalidRequest", "restore requires bucket, object, and generation", 400)
 	}
+	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
 	meta, err := p.objects.RestoreObjectGeneration(ctx, bucket, object, generation, objectPrecondition(nr))
 	if err != nil {
 		switch {
@@ -2356,10 +2437,20 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	if bucket == "" || object == "" {
 		return nil, model.NewProviderError("InvalidRequest", "compose requires a destination object name", 400)
 	}
+	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
 
 	sources, _ := body["sourceObjects"].([]any)
 	if len(sources) == 0 {
 		return nil, model.NewProviderError("InvalidRequest", "compose requires source objects", 400)
+	}
+	for _, src := range sources {
+		m, _ := src.(map[string]any)
+		name, _ := m["name"].(string)
+		if err := requireDownscope(nr, downscope.ReadObject, bucket, name); err != nil {
+			return nil, err
+		}
 	}
 
 	var buf bytes.Buffer
@@ -2561,6 +2652,9 @@ func (p *Provider) decryptObjectWithKey(ctx context.Context, project string, met
 func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
 	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
@@ -2603,6 +2697,9 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
 	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
@@ -2698,6 +2795,9 @@ func bumpMeta(m string) string {
 func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := requireDownscope(nr, downscope.DeleteObject, bucket, object); err != nil {
+		return nil, err
+	}
 	// objects.delete honours an explicit ?generation= to delete only that
 	// revision; with no generation it deletes the live object (tombstoning it
 	// in a versioned bucket).
@@ -3069,6 +3169,9 @@ func parseRetentionPeriod(s string) time.Duration {
 func (p *Provider) objectResponse(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := requireDownscope(nr, downscope.ReadObject, bucket, object); err != nil {
+		return nil, err
+	}
 	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
 	if err != nil {
 		return nil, err
@@ -3195,6 +3298,9 @@ func defaultPolicy(bucket, project, resourceID string) iamPolicy {
 }
 
 func (p *Provider) BucketsGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -3219,6 +3325,9 @@ func (p *Provider) BucketsGetIamPolicy(ctx context.Context, nr *model.Normalized
 // concurrency control: a request carrying an etag that does not match the
 // stored policy is rejected with 409.
 func (p *Provider) BucketsSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -3232,6 +3341,9 @@ func (p *Provider) BucketsSetIamPolicy(ctx context.Context, nr *model.Normalized
 // ObjectsGetIamPolicy returns the object-level IAM policy (defaulting to the
 // project's legacy bindings when none has been stored).
 func (p *Provider) ObjectsGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	id := bucket + "/" + object
@@ -3260,6 +3372,9 @@ func (p *Provider) ObjectsGetIamPolicy(ctx context.Context, nr *model.Normalized
 // ObjectsSetIamPolicy implements objects.setIamPolicy with the same etag-based
 // optimistic concurrency control as the bucket-level method.
 func (p *Provider) ObjectsSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	id := bucket + "/" + object
@@ -3429,6 +3544,9 @@ func (p *Provider) insertACL(ctx context.Context, nr *model.NormalizedRequest, b
 }
 
 func (p *Provider) BucketACLList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -3440,6 +3558,9 @@ func (p *Provider) BucketACLList(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *Provider) BucketACLInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -3451,6 +3572,9 @@ func (p *Provider) BucketACLInsert(ctx context.Context, nr *model.NormalizedRequ
 }
 
 func (p *Provider) ObjectACLList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
@@ -3463,6 +3587,9 @@ func (p *Provider) ObjectACLList(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *Provider) ObjectACLInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
@@ -3486,6 +3613,9 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 	}
 	if bucket == "" || object == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket or object name", 400)
+	}
+	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
 	}
 	ct, _ := nr.Params[wire.ContentTypeKey].(string)
 
@@ -3530,6 +3660,10 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	sess, ok := p.uploads[uploadID]
 	if !ok {
 		if done, ok := p.completed[uploadID]; ok {
+			if err := requireDownscope(nr, downscope.WriteObject, done.Bucket, done.Object); err != nil {
+				p.mu.Unlock()
+				return nil, err
+			}
 			p.mu.Unlock()
 			return provider.OK(done.objectJSON), nil
 		}
@@ -3537,6 +3671,10 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 		return nil, model.NewProviderError("NotFound", "unknown upload_id", 404)
 	}
 	sess.lastAccess = clock.RealNow()
+	if err := requireDownscope(nr, downscope.WriteObject, sess.Bucket, sess.Object); err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
 	if ct, _ := nr.Params[wire.ContentTypeKey].(string); ct != "" {
 		sess.ContentType = ct
 	}
