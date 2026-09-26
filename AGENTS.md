@@ -32,7 +32,9 @@ parseable index/detail.
    `merged` / `branch` / `pr` come from git/GitHub and are authoritative; `todo`
    / `done?` are doc-derived (`done?` = a doc claims done but no merged
    PR/branch was found). Each row also carries a **disposition**
-   (`fix`/`no-fix`/`optional`) distinct from its state.
+   (`fix`/`no-fix`/`optional`) distinct from its state. Non-`ga` fidelity cells
+   are also ingested automatically as `kind=matrix` in a separate **Fidelity
+   gaps** section (disable with `MATRIX=`); they are records, not scheduled work.
 2. **Assess the proposed change before implementing.**
    `make gcp-status-check Q="<service> <keywords>"` (add `SERVICE=<svc>`).
    Verdict/exit: **already done/merged** → do not re-implement (reuse or
@@ -58,7 +60,8 @@ parseable index/detail.
    `final/J1-datastore-rest-protobuf.md`) and put the backlog ID in the
    commit/PR title (e.g. `fix(gcp/datastore): … (J1)`) so the next run links it.
    Then run `make gcp-status` plus `make gcp-status-lint-plans` and
-   `make gcp-status-coverage`.
+   `make gcp-status-coverage`. If the session changed operations, also run
+   `make gcp-matrix-diff REF=upstream/gcp` (fails on a `ga`→worse regression).
 
 `plan_docs/` is gitignored local scratch; `tools/gcpstatus` and this file are
 committed.

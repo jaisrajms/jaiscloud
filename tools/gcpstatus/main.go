@@ -207,7 +207,9 @@ func main() {
 	newPlan := flag.String("new-plan", "", "scaffold a preview->GA wave plan for this service (writes plan_docs/)")
 	effort := flag.String("effort", "ga", "label for -new-plan output filename")
 	force := flag.Bool("force", false, "overwrite an existing -new-plan output")
-	matrixPath := flag.String("matrix", "docs/fidelity/fidelity-matrix.json", "fidelity matrix JSON for -new-plan")
+	matrixPath := flag.String("matrix", "docs/fidelity/fidelity-matrix.json", "fidelity matrix JSON")
+	fromMatrix := flag.Bool("from-matrix", false, "also ingest non-ga fidelity cells as matrix gaps (kind=matrix)")
+	matrixDiff := flag.String("matrix-diff", "", "git ref to diff the fidelity matrix against; exit 1 on a ga->worse regression")
 	templatePath := flag.String("template", "docs/gcp-wave-plan-template.md", "template appended to -new-plan output")
 	includeArchive := flag.Bool("include-archive", false, "also parse plan_docs/archive/**")
 	verbose := flag.Bool("v", false, "log parsing/PR diagnostics to stderr")
@@ -220,6 +222,9 @@ func main() {
 		}
 		return
 	}
+	if *matrixDiff != "" {
+		os.Exit(runMatrixDiff(*matrixDiff, *matrixPath))
+	}
 
 	items, docPaths, waves := collect(*docs, *includeArchive, *verbose)
 	items = applyWaveAliases(items, waves)
@@ -230,6 +235,9 @@ func main() {
 	enrich(items, prs, branchSet, docPaths)
 	if *includePRs {
 		items = append(items, backfillPRs(items, prs, *prPrefixes, docPaths)...)
+	}
+	if *fromMatrix {
+		items = append(items, matrixItems(*matrixPath)...)
 	}
 	classifyAll(items)
 	sortItems(items)
@@ -1331,11 +1339,14 @@ func backfillPRs(items []*Item, prs []ghPR, prefixes string, docPaths []string) 
 
 func classifyAll(items []*Item) {
 	for _, it := range items {
-		if it.Kind == "pr" {
+		switch it.Kind {
+		case "pr":
 			it.Class = "pr"
-			continue
+		case "matrix":
+			it.Class = "matrix"
+		default:
+			it.Class = classify(it)
 		}
-		it.Class = classify(it)
 	}
 }
 
@@ -1409,7 +1420,7 @@ func impactRank(s string) int {
 func runNext(items []*Item, n int, by string) {
 	var planned, attention []*Item
 	for _, it := range items {
-		if it.Kind == "pr" || it.State == "merged" || it.State == "done" || it.Class == "intentional" {
+		if it.Kind == "pr" || it.Kind == "matrix" || it.State == "merged" || it.State == "done" || it.Class == "intentional" {
 			continue
 		}
 		if classAttention(it.Class) < 99 {
@@ -1505,7 +1516,7 @@ func runNext(items []*Item, n int, by string) {
 }
 
 func runAudit(items []*Item) {
-	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done"}
+	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done", "matrix"}
 	counts := map[string]int{}
 	byClass := map[string][]*Item{}
 	for _, it := range items {
@@ -1691,6 +1702,115 @@ func joinSorted(m map[string]bool) string {
 	return strings.Join(ks, ", ")
 }
 
+// matrixItems ingests non-ga fidelity cells as informational ledger items
+// (kind=matrix). They are visible/queryable but excluded from next/audit intent.
+func matrixItems(path string) []*Item {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var mf matrixFile
+	if json.Unmarshal(raw, &mf) != nil {
+		return nil
+	}
+	var out []*Item
+	seen := map[string]bool{}
+	for _, c := range mf.Cells {
+		if strings.EqualFold(c.State, "ga") {
+			continue
+		}
+		id := "mx:" + slug(c.Service) + "-" + opSlug(c.Operation) + "-" + c.Transport
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		disp := "unknown"
+		if c.State == "limited" || c.State == "preview" {
+			disp = "fix"
+		}
+		out = append(out, &Item{
+			ID:          id,
+			Kind:        "matrix",
+			Source:      "fidelity:" + c.Service,
+			Gap:         c.Operation + " (" + c.Transport + ")",
+			Service:     c.Service,
+			State:       c.State,
+			DocState:    "open",
+			Disposition: disp,
+			Note:        c.State + ": " + c.Reason,
+		})
+	}
+	return out
+}
+
+func stateRank(s string) int {
+	switch s {
+	case "ga":
+		return 3
+	case "limited":
+		return 2
+	case "preview":
+		return 1
+	default:
+		return 0 // unsupported
+	}
+}
+
+// runMatrixDiff compares the working fidelity matrix against a git ref and
+// fails on a regression (a cell getting worse). New non-ga cells are reported.
+func runMatrixDiff(ref, curPath string) int {
+	oldRaw, err := run("git", "show", ref+":docs/fidelity/fidelity-matrix.json")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: read %s matrix: %v\n", ref, err)
+		return 2
+	}
+	curRaw, err := os.ReadFile(curPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: read %s: %v\n", curPath, err)
+		return 2
+	}
+	var oldM, curM matrixFile
+	if json.Unmarshal([]byte(oldRaw), &oldM) != nil || json.Unmarshal(curRaw, &curM) != nil {
+		fmt.Fprintln(os.Stderr, "gcpstatus: bad matrix json")
+		return 2
+	}
+	key := func(c matrixCell) string { return c.Service + "|" + c.Operation + "|" + c.Transport }
+	old := map[string]matrixCell{}
+	for _, c := range oldM.Cells {
+		old[key(c)] = c
+	}
+	cur := map[string]matrixCell{}
+	for _, c := range curM.Cells {
+		cur[key(c)] = c
+	}
+	var regress, added []string
+	for k, c := range cur {
+		o, ok := old[k]
+		if !ok {
+			if !strings.EqualFold(c.State, "ga") {
+				added = append(added, k+" -> "+c.State)
+			}
+			continue
+		}
+		if stateRank(c.State) < stateRank(o.State) {
+			regress = append(regress, k+": "+o.State+" -> "+c.State)
+		}
+	}
+	sort.Strings(regress)
+	sort.Strings(added)
+	fmt.Printf("gcp-status matrix diff vs %s: %d regression(s), %d new non-ga cell(s)\n", ref, len(regress), len(added))
+	for _, r := range regress {
+		fmt.Println("  REGRESSION " + r)
+	}
+	for _, a := range added {
+		fmt.Println("  NEW-GAP    " + a)
+	}
+	if len(regress) > 0 {
+		return 1
+	}
+	return 0
+}
+
 // generatePlan scaffolds a preview->GA wave plan from the fidelity matrix and
 // the committed template.
 func generatePlan(svc, effort string, force bool, matrixPath, templatePath string) error {
@@ -1816,17 +1936,20 @@ func writeJSON(path string, items []*Item) error {
 
 func writeMarkdown(path string, items []*Item) error {
 	counts := classCounts(items)
-	var backlog, prs []*Item
+	var backlog, prs, matrix []*Item
 	for _, it := range items {
-		if it.Kind == "pr" {
+		switch it.Kind {
+		case "pr":
 			prs = append(prs, it)
-		} else {
+		case "matrix":
+			matrix = append(matrix, it)
+		default:
 			backlog = append(backlog, it)
 		}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# GCP parity status\n\n")
-	fmt.Fprintf(&b, "Generated: %s · %d items (%d backlog + %d PR history)\n\n", time.Now().Format("2006-01-02 15:04 MST"), len(items), len(backlog), len(prs))
+	fmt.Fprintf(&b, "Generated: %s · %d items (%d backlog + %d PR history + %d matrix gaps)\n\n", time.Now().Format("2006-01-02 15:04 MST"), len(items), len(backlog), len(prs), len(matrix))
 	fmt.Fprintf(&b, "Audit: %s\n\n", countsLine(counts))
 	fmt.Fprintf(&b, "> Regenerate with `make gcp-status`; audit with `make gcp-status-audit`. Sources: every\n")
 	fmt.Fprintf(&b, "> `plan_docs/**/*.md` table + the debt-plan remainder list + base-gcp PRs, joined with git.\n")
@@ -1879,6 +2002,17 @@ func writeMarkdown(path string, items []*Item) error {
 		}
 		b.WriteString("\n")
 	}
+	if len(matrix) > 0 {
+		fmt.Fprintf(&b, "## Fidelity gaps — from the matrix (%d)\n\n", len(matrix))
+		fmt.Fprintf(&b, "> Non-`ga` fidelity cells, ingested automatically (`MATRIX=1`). These are records of\n")
+		fmt.Fprintf(&b, "> implemented-with-caveat / not-covered / not-implemented cells, not scheduled work.\n\n")
+		fmt.Fprintf(&b, "| ID | service | matrix state | gap | reason |\n|---|---|---|---|---|\n")
+		for _, it := range matrix {
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
+				it.ID, esc(it.Service), esc(it.State), esc(truncate(it.Gap, 50)), esc(truncate(it.Note, 70)))
+		}
+		b.WriteString("\n")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -1900,15 +2034,18 @@ func writeTable(b *strings.Builder, rows []*Item) {
 }
 
 func printSummary(items []*Item, out, jsonOut string) {
-	backlog, prs := 0, 0
+	backlog, prs, matrix := 0, 0, 0
 	for _, it := range items {
-		if it.Kind == "pr" {
+		switch it.Kind {
+		case "pr":
 			prs++
-		} else {
+		case "matrix":
+			matrix++
+		default:
 			backlog++
 		}
 	}
-	fmt.Printf("gcp-status: %d items (%d backlog + %d PR) — %s\n", len(items), backlog, prs, countsLine(classCounts(items)))
+	fmt.Printf("gcp-status: %d items (%d backlog + %d PR + %d matrix) — %s\n", len(items), backlog, prs, matrix, countsLine(classCounts(items)))
 	if out != "" {
 		fmt.Printf("  wrote %s\n", out)
 	}
@@ -1926,7 +2063,7 @@ func classCounts(items []*Item) map[string]int {
 }
 
 func countsLine(c map[string]int) string {
-	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done"}
+	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done", "matrix"}
 	var parts []string
 	for _, k := range order {
 		if c[k] > 0 {
@@ -1987,8 +2124,8 @@ func runQuery(items []*Item, query, service string, check bool) int {
 		if it.PlanDoc != "" {
 			fmt.Printf("         plan doc: %s\n", it.PlanDoc)
 		}
-		if it.Kind == "pr" {
-			continue // PR history is context, not a commitment
+		if it.Kind == "pr" || it.Kind == "matrix" {
+			continue // PR history / matrix gaps are context, not a commitment
 		}
 		backlogHit = true
 		switch it.State {

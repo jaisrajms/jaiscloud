@@ -10,6 +10,10 @@ PYTHON ?= python3
 # waves W1–W3 today.
 SERIES ?= java-compat
 
+# Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
+# Set MATRIX= to disable.
+MATRIX ?= 1
+
 # ─── Version ──────────────────────────────────────────────────────────────────
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
              grep -oP 'const version = "\K[^"]+' cmd/jaiscloud-aws/main.go 2>/dev/null || \
@@ -111,7 +115,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new
+        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-matrix-diff
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -706,7 +710,7 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 gcp-status: ## Rebuild the GCP parity status ledger (plan_docs/STATUS.md + status.json) from all plan docs + git/GitHub state
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json -series "$(SERIES)"
+	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json -series "$(SERIES)" $(if $(MATRIX),-from-matrix,)
 
 gcp-status-check: ## Assess a proposed change against known state: Q="<keywords>" [SERVICE=<svc>] [include-archive=1]; exit 2 = already done, 3 = in flight
 	@test -n "$(Q)$(SERVICE)" || { echo 'usage: make gcp-status-check Q="<keywords>" [SERVICE=<svc>]'; exit 2; }
@@ -717,7 +721,7 @@ gcp-status-check: ## Assess a proposed change against known state: Q="<keywords>
 gcp-status-audit: ## Classify not-done items: oversight? / unowned / stale-doc / abandoned / claimed-done / unscheduled / scheduled / intentional
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -audit $(if $(include-archive),-include-archive,)
+	@bin/gcpstatus -docs plan_docs -audit -matrix docs/fidelity/fidelity-matrix.json $(if $(MATRIX),-from-matrix,) $(if $(include-archive),-include-archive,)
 
 gcp-status-coverage: ## Fail if any plan_docs file has status markers but produced no ledger rows (audit blind spots)
 	@mkdir -p bin
@@ -733,6 +737,11 @@ gcp-status-lint-plans: ## Fail if any plan-shaped file under plan_docs has no pa
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -docs plan_docs -lint-plans $(if $(include-archive),-include-archive,)
+
+gcp-matrix-diff: ## Fail if the fidelity matrix regressed vs REF (default upstream/gcp)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -matrix-diff "$(if $(REF),$(REF),upstream/gcp)" -matrix docs/fidelity/fidelity-matrix.json
 
 gcp-plan-new: ## Scaffold a preview->GA wave plan from the fidelity matrix: SERVICE=<svc> [EFFORT=ga] [FORCE=1]
 	@test -n "$(SERVICE)" || { echo 'usage: make gcp-plan-new SERVICE=<service> [EFFORT=ga]'; exit 2; }
