@@ -27,6 +27,7 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	op := jsonMap(t, body)
 	require.Equal(t, true, op["done"])
 	fn, _ := op["response"].(map[string]any)
+	require.Equal(t, "type.googleapis.com/google.cloud.functions.v1.CloudFunction", fn["@type"])
 	require.Equal(t, "projects/proj/locations/us-central1/functions/hello", fn["name"])
 	require.Equal(t, "ACTIVE", fn["status"])
 	require.Equal(t, "nodejs20", fn["runtime"])
@@ -62,14 +63,16 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	require.Equal(t, "ping", call["result"])
 	require.NotEmpty(t, call["executionId"])
 
-	// Delete returns a done Operation with an empty response.
+	// Delete returns a done Operation whose response is a typed
+	// google.protobuf.Empty Any (gax unpacks it as Empty).
 	resp, body = do(t, "DELETE", base+"/hello", nil, nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	del := jsonMap(t, body)
 	require.Equal(t, true, del["done"])
 	delResp, ok := del["response"].(map[string]any)
 	require.True(t, ok)
-	require.Empty(t, delResp)
+	require.Equal(t, "type.googleapis.com/google.protobuf.Empty", delResp["@type"])
+	require.Len(t, delResp, 1)
 
 	// Gone after delete.
 	resp, _ = do(t, "GET", base+"/hello", nil, nil)
