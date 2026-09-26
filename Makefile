@@ -105,7 +105,8 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
-        gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check
+        gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
+        gcp-status gcp-status-check
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -696,6 +697,17 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	$(MAKE) gen-gcp-fidelity-matrix
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
+
+gcp-status: ## Rebuild the GCP parity status ledger (plan_docs/STATUS.md + status.json) from all plan docs + git/GitHub state
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json
+
+gcp-status-check: ## Assess a proposed change against known state: Q="<keywords>" [SERVICE=<svc>] [include-archive=1]; exit 2 = already done, 3 = in flight
+	@test -n "$(Q)$(SERVICE)" || { echo 'usage: make gcp-status-check Q="<keywords>" [SERVICE=<svc>]'; exit 2; }
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -query "$(Q)" -service "$(SERVICE)" -check $(if $(include-archive),-include-archive,)
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
