@@ -12,9 +12,11 @@ above is the source of truth for what to do next.
   say so; 3 = in flight → coordinate with the existing branch/PR; 0 = proceed).
 - Otherwise take the first `NEXT` item above. Ignore the `ATTENTION` list unless
   it directly blocks the item.
-- Read the item's `plan doc` and its `source` section from the ledger, then read
-  `~/.config/opencode/skills/gcp-phase-workflow/SKILL.md` (and
-  `parity-fix-workflow.md` beside it) and implement per `AGENTS.md` /
+- Read the item's `plan doc` and its `source` section from the ledger. Then
+  **load the `gcp-phase-workflow` skill** (use the skill tool with id
+  `gcp-phase-workflow`; if it is not registered, read
+  `~/.config/opencode/skills/gcp-phase-workflow/SKILL.md` and
+  `parity-fix-workflow.md` beside it) and follow it, together with `AGENTS.md` /
   `CLAUDE.md` (transport-neutral core owns logic, `gcperr` errors, REST + gRPC
   parity, serialized shared hotspots, never import `internal/aws`).
 - Close out: run `make gcp-status`, `make gcp-status-lint-plans` and
