@@ -955,10 +955,15 @@ func parseAliasGroups(cellValue string) [][]string {
 
 func expandIDs(s string) []string {
 	s = strings.TrimSpace(s)
+	// A single id may itself contain a dash (e.g. "B2-10"); only an explicit
+	// range such as "J12-J16" expands.
+	if m := idRe.FindStringSubmatch(s); m != nil && m[1] == s {
+		return []string{s}
+	}
 	if m := rangeIDRe.FindStringSubmatch(s); m != nil {
 		pre := m[1]
 		start, end := atoi(m[2]), atoi(m[4])
-		if end >= start && m[3] == "" || m[3] == m[1] {
+		if (m[3] == "" || m[3] == pre) && end >= start {
 			var out []string
 			for i := start; i <= end; i++ {
 				out = append(out, fmt.Sprintf("%s%d", pre, i))
