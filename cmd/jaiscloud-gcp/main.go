@@ -22,6 +22,7 @@ import (
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
+	gcauth "jaiscloud/internal/gcp/auth"
 	"jaiscloud/internal/gcp/crypto"
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
@@ -681,6 +682,20 @@ func startCmd() *cobra.Command {
 				}
 				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
 					gcpadapter.RegisterMetadataRoutes(r, metaCfg)
+				}))
+			}
+			if transports.REST() {
+				// OAuth2 token endpoint at the emulator root (/token, /v1/token).
+				// google-auth-library service-account credentials exchange a
+				// signed JWT assertion here for an access token; without it the
+				// whole SA-credentials flow 404s. REST-only, since gRPC clients
+				// authenticate via metadata/ADC.
+				tokenSvc := gcauth.NewService(gcauth.Config{
+					ProjectID:      cfg.ProjectID,
+					ServiceAccount: cfg.GCPServiceAccount,
+				})
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
+					tokenSvc.RegisterRoutes(r)
 				}))
 			}
 

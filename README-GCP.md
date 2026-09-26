@@ -95,6 +95,8 @@ export FIRESTORE_EMULATOR_HOST=localhost:8081           # Firestore (gRPC)
 export STORAGE_EMULATOR_HOST=http://localhost:8080      # GCS REST client
 ```
 
+**Service-account credentials.** The emulator serves an OAuth2 token endpoint at the root (`POST /token`, also `/v1/token`) so `google-auth-library` service-account credentials can mint an access token instead of calling Google. Point `ServiceAccountCredentials`'s token server URI at `<endpoint>/token`; the JWT-bearer grant is implemented (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`), and the response is the standard `{access_token, token_type, expires_in}`. This is independent of the opt-in metadata server (`--gcp-metadata`); it is available whenever the REST transport is selected.
+
 ---
 
 ## Connect your SDK
@@ -213,6 +215,10 @@ curl -X POST http://localhost:8080/_jaiscloud/reset
 ## Known Limitations
 
 This section documents deliberate simplifications and known correctness edge cases — distinct from ordinary bugs, these are behaviours a developer relying on this emulator should know about up front.
+
+### OAuth2: the service-account assertion signature and audience are not verified
+
+The token endpoint (`POST /token`) parses the JWT-bearer assertion and enforces that it is a well-formed, unexpired JWT identifying a service account, but it does **not** verify the assertion's signature or its `aud` claim: the client signs with a key the emulator has never registered and hardcodes the audience to `https://oauth2.googleapis.com/token` regardless of the configured token server, and JaisCloud likewise never verifies the signature of the bearer tokens it accepts (identity is decoded, not authenticated — see the metadata server). The minted access token is a JaisCloud HS256 JWT carrying the service-account email and project, not an opaque Google token. `refresh_token` is accepted but there is no real refresh-token store — any non-empty value mints a fresh access token.
 
 ### Cloud Storage: range reads are served from a whole-object decrypt
 

@@ -1,16 +1,12 @@
 package gcp
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
-	"jaiscloud/internal/clock"
+	gcauth "jaiscloud/internal/gcp/auth"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -69,19 +65,9 @@ func writeMetadataText(w http.ResponseWriter, s string) {
 	fmt.Fprint(w, s)
 }
 
-// mockAccessToken builds an unverified HS256 JWT carrying the service-account
-// email and project, signed with a fixed dev secret. JaisCloud never verifies
-// the signature — it only decodes the payload (internal/gcp/identity).
+// mockAccessToken builds the metadata server's access token. It is the same
+// unverified HS256 JWT the OAuth2 token endpoint mints (internal/gcp/auth), so
+// metadata- and SA-credential-authenticated clients resolve to one identity.
 func mockAccessToken(sa, project string) string {
-	const secret = "jaiscloud-dev"
-	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(
-		`{"email":%q,"sub":%q,"project_id":%q,"exp":%d}`,
-		sa, sa, project, clock.RealNow().Add(time.Hour).Unix(),
-	)))
-	signingInput := hdr + "." + payload
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(signingInput))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return signingInput + "." + sig
+	return gcauth.MintAccessToken(sa, project)
 }
