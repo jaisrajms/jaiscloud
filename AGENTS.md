@@ -46,7 +46,7 @@ parseable index/detail.
    a wave and `impact` breaking ties — plus a separate `ATTENTION` list. Take
    the top item unless told otherwise. Slash aliases: `/gcp:next` (show next),
    `/gcp:new` (next item + start), `/gcp:status`, `/gcp:list`, `/gcp:audit`,
-   `/gcp:find`.
+   `/gcp:find` (nested `/gcp/next` etc. resolve too).
 4. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
    `unowned` (fix verdict, no branch, only a historical table), `stale-doc` (a
