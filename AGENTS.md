@@ -10,16 +10,27 @@ history to decide what is implemented.
 
 1. **Read the ledger.** `make gcp-status` rebuilds the canonical ledger
    (`plan_docs/STATUS.md` human view + `plan_docs/status.json`) by parsing every
-   `plan_docs/**/*.md` table and joining it with git branch and GitHub PR state.
-   `merged` / `branch` / `pr` come from git/GitHub and are authoritative;
-   `todo` / `done?` are doc-derived (`done?` = a doc claims done but no merged
-   PR/branch was found — verify before trusting it).
+   `plan_docs/**/*.md` table (backlog IDs, the dual-protocol phase tracker, the
+   Java wave plan, the deferred-debt status tables, and the authoritative
+   "what's actually left" list), joining it with git branch + GitHub PR state,
+   and adding a **PR-history row for every base-`gcp` PR** not otherwise
+   represented — so merged work is never invisible.
+   `merged` / `branch` / `pr` come from git/GitHub and are authoritative; `todo`
+   / `done?` are doc-derived (`done?` = a doc claims done but no merged
+   PR/branch was found). Each row also carries a **disposition**
+   (`fix`/`no-fix`/`optional`) distinct from its state.
 2. **Assess the proposed change before implementing.**
    `make gcp-status-check Q="<service> <keywords>"` (add `SERVICE=<svc>`).
    Verdict/exit: **already done/merged** → do not re-implement (reuse or
    verify); **in flight** → coordinate with the existing branch/PR;
    **no match** → new work.
-3. **Record the outcome when you finish.** Move the plan doc into
+3. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
+   not-done items: `oversight?` (declared in a finished wave, not merged),
+   `unowned` (fix verdict, no branch, only in a historical table),
+   `abandoned` (branch/PR closed unmerged), `claimed-done` (doc says done, no
+   evidence) vs the healthy `scheduled` / `unscheduled` / `intentional`. Use it
+   to decide oversight vs planned future work before picking up a doc item.
+4. **Record the outcome when you finish.** Move the plan doc into
    `plan_docs/final/` with an ID-prefixed name (e.g.
    `final/J1-datastore-rest-protobuf.md`) and put the backlog ID in the
    commit/PR title (e.g. `fix(gcp/datastore): … (J1)`) so the next run links it.

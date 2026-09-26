@@ -361,9 +361,12 @@ Integration tests call `POST /_jaiscloud/reset` between each test via `resetStat
 
 The GCP backlog spans many plan docs; don't decide "what's implemented" from
 memory. `make gcp-status` rebuilds `plan_docs/STATUS.md` + `status.json` from
-every `plan_docs/**/*.md` table joined with git/GitHub state, and
-`make gcp-status-check Q="<service> <keywords>"` assesses a proposed change
-(exit 2 = already done, 3 = in flight). See [AGENTS.md](AGENTS.md).
+every `plan_docs/**/*.md` table plus git/GitHub state and a row for every
+base-`gcp` PR. `make gcp-status-check Q="<service> <keywords>"` assesses a
+proposed change (exit 2 = already done, 3 = in flight), and
+`make gcp-status-audit` classifies not-done items (`oversight?` / `unowned` /
+`abandoned` / `claimed-done` vs `scheduled`/`unscheduled`/`intentional`). See
+[AGENTS.md](AGENTS.md).
 
 ### Resource IDs: use nr.ResourceID, never hardcode ARN formats
 
