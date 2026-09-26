@@ -3,6 +3,7 @@ package cloudsql
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
@@ -365,8 +366,12 @@ func TestFlagsTiersConnect(t *testing.T) {
 	if flags.Data["kind"] != kindFlagsList {
 		t.Errorf("flags kind = %v", flags.Data["kind"])
 	}
-	if items, _ := flags.Data["items"].([]any); len(items) == 0 {
+	flagItems, _ := flags.Data["items"].([]any)
+	if len(flagItems) == 0 {
 		t.Error("expected at least one flag")
+	}
+	if !hasItemField(flagItems, "name", "max_connections") {
+		t.Error("flags.list must include max_connections")
 	}
 
 	tiers, err := p.ListTiers(ctx, newNR(nil))
@@ -375,6 +380,12 @@ func TestFlagsTiersConnect(t *testing.T) {
 	}
 	if tiers.Data["kind"] != kindTiersList {
 		t.Errorf("tiers kind = %v", tiers.Data["kind"])
+	}
+	tierItems, _ := tiers.Data["items"].([]any)
+	for _, want := range []string{"db-f1-micro", "db-n1-standard-1", "db-custom-1-3840"} {
+		if !hasItemField(tierItems, "tier", want) {
+			t.Errorf("tiers.list must include %s", want)
+		}
 	}
 
 	cs, err := p.GetConnectSettings(ctx, newNR(map[string]any{"instance": "inst-a"}))
@@ -427,4 +438,32 @@ func isCode(err error, code string) bool {
 		return false
 	}
 	return perr.Code == code
+}
+
+// hasItemField reports whether any item in a list response has field == value.
+func hasItemField(items []any, field, value string) bool {
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok && stringField(m, field) == value {
+			return true
+		}
+	}
+	return false
+}
+
+// TestListFlagsConcurrent guards against in-place sorting of the shared
+// package-level flag catalogue: paginate must only sort a per-request copy.
+func TestListFlagsConcurrent(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := p.ListFlags(ctx, newNR(nil)); err != nil {
+				t.Errorf("ListFlags: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }

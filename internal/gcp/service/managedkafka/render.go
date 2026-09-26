@@ -23,10 +23,11 @@ func formatTimestamp(t time.Time) string {
 // stored config verbatim; the remaining fields are derived.
 func ClusterJSON(c mkstore.Cluster, project string) map[string]any {
 	out := map[string]any{
-		"name":       ClusterName(project, c.Location, c.Name),
-		"state":      "ACTIVE",
-		"createTime": formatTimestamp(c.CreateTime),
-		"updateTime": formatTimestamp(c.UpdateTime),
+		"name":             ClusterName(project, c.Location, c.Name),
+		"state":            "ACTIVE",
+		"bootstrapAddress": BootstrapAddress(project, c.Location, c.Name),
+		"createTime":       formatTimestamp(c.CreateTime),
+		"updateTime":       formatTimestamp(c.UpdateTime),
 	}
 	var cfg map[string]any
 	if len(c.Config) > 0 {
