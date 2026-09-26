@@ -18,10 +18,11 @@
 // signature is verified on the way back in (local emulator only).
 //
 // Extending the endpoint: grant types are dispatched through a registry
-// (RegisterGrantType) rather than being hardcoded in the handler, so a later
-// phase (the STS token-exchange grant) extends the existing /v1/token route by
-// registering a handler instead of mounting a competing route — which would
-// silently replace the jwt-bearer handler for that path in chi.
+// (RegisterGrantType) rather than being hardcoded in the handler, so the STS
+// token-exchange grant (RegisterGrantType(GrantTypeTokenExchange, …)) extends
+// the existing /v1/token route by registering a handler instead of mounting a
+// competing route — which would silently replace the jwt-bearer handler for that
+// path in chi.
 package auth
 
 import (
@@ -35,6 +36,8 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/downscope"
+	"jaiscloud/internal/gcp/identity"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -48,7 +51,14 @@ const (
 	// real refresh tokens, but accepts a non-empty one and mints a fresh token
 	// so user-credential-shaped clients still work.
 	GrantTypeRefreshToken = "refresh_token"
+	// GrantTypeTokenExchange is the RFC 8693 token-exchange grant used by
+	// google-auth-library DownscopedCredentials (STS, served at /v1/token).
+	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
 )
+
+// TokenTypeAccessToken is the RFC 8693 access-token token type, required as
+// both subject_token_type and requested_token_type by the emulator.
+const TokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token"
 
 // accessTokenTTLSeconds is the lifetime advertised for a minted access token.
 // Real GCP access tokens last an hour.
@@ -77,12 +87,13 @@ type Service struct {
 	grants map[string]GrantHandler
 }
 
-// NewService returns a token service with the jwt-bearer and refresh-token
-// grants installed.
+// NewService returns a token service with the jwt-bearer, refresh-token and
+// STS token-exchange grants installed.
 func NewService(cfg Config) *Service {
-	s := &Service{cfg: cfg, grants: make(map[string]GrantHandler, 2)}
+	s := &Service{cfg: cfg, grants: make(map[string]GrantHandler, 3)}
 	s.RegisterGrantType(GrantTypeJWTBearer, s.serveJWTBearer)
 	s.RegisterGrantType(GrantTypeRefreshToken, s.serveRefreshToken)
+	s.RegisterGrantType(GrantTypeTokenExchange, s.serveTokenExchange)
 	return s
 }
 
@@ -175,6 +186,65 @@ func (s *Service) writeToken(w http.ResponseWriter, sa, project string) {
 	})
 }
 
+// stsTokenResponse is the RFC 8693 §2.2.1 token-exchange success response.
+type stsTokenResponse struct {
+	AccessToken     string `json:"access_token"`
+	IssuedTokenType string `json:"issued_token_type"`
+	TokenType       string `json:"token_type"`
+	ExpiresIn       int    `json:"expires_in"`
+}
+
+// serveTokenExchange implements the RFC 8693 token-exchange grant used by
+// google-auth-library DownscopedCredentials. It accepts an access token as the
+// subject token and a Credential Access Boundary in `options`, and mints a
+// downscoped token the GCS provider enforces (internal/gcp/downscope).
+func (s *Service) serveTokenExchange(w http.ResponseWriter, r *http.Request, form url.Values) {
+	if got := strings.TrimSpace(form.Get("subject_token_type")); got != TokenTypeAccessToken {
+		writeOAuthError(w, "invalid_request", "subject_token_type must be "+TokenTypeAccessToken)
+		return
+	}
+	if got := strings.TrimSpace(form.Get("requested_token_type")); got != TokenTypeAccessToken {
+		writeOAuthError(w, "invalid_request", "requested_token_type must be "+TokenTypeAccessToken)
+		return
+	}
+	subjectToken := strings.TrimSpace(form.Get("subject_token"))
+	if subjectToken == "" {
+		writeOAuthError(w, "invalid_request", "subject_token is required")
+		return
+	}
+	options := strings.TrimSpace(form.Get("options"))
+	if options == "" {
+		writeOAuthError(w, "invalid_request", "options is required")
+		return
+	}
+	rules, err := downscope.ParseOptions(options)
+	if err != nil {
+		writeOAuthError(w, "invalid_grant", err.Error())
+		return
+	}
+
+	// Carry the source credential's identity when it is one of the emulator's
+	// own JWTs; opaque source tokens fall back to the configured identity (real
+	// STS does not validate the source token, and neither does floci).
+	sa := identity.ServiceAccountFromToken(subjectToken)
+	if sa == "" {
+		sa = s.cfg.ServiceAccount
+	}
+	project := identity.ProjectFromToken(subjectToken)
+	if project == "" {
+		project = s.cfg.ProjectID
+	}
+
+	writeTokenHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(stsTokenResponse{
+		AccessToken:     MintDownscopedToken(sa, project, rules),
+		IssuedTokenType: TokenTypeAccessToken,
+		TokenType:       "Bearer",
+		ExpiresIn:       accessTokenTTLSeconds,
+	})
+}
+
 // assertionClaims is the subset of an RSA-signed JWT assertion (RFC 7523) that
 // the emulator reads.
 type assertionClaims struct {
@@ -253,26 +323,54 @@ type tokenClaims struct {
 	ExpiresAt int64  `json:"exp"`
 }
 
-// MintAccessToken builds the emulator's HS256 access token. It carries the
-// service-account email and project so internal/gcp/identity can recover the
-// caller's identity from the Authorization header. The signature uses a fixed
-// development secret and is never verified — this mirrors the GCE
+// downscopedClaims is the JWT payload MintDownscopedToken signs: the same
+// identity claims as an access token plus the access-boundary rules the GCS
+// provider enforces.
+type downscopedClaims struct {
+	Email          string           `json:"email"`
+	Subject        string           `json:"sub"`
+	ProjectID      string           `json:"project_id"`
+	ExpiresAt      int64            `json:"exp"`
+	AccessBoundary []downscope.Rule `json:"access_boundary,omitempty"`
+}
+
+// signJWT builds the emulator's HS256 JWT around payload. The signature uses a
+// fixed development secret and is never verified — this mirrors the GCE
 // metadata-server token and keeps the emulator self-contained.
-//
-// Exported so the STS token-exchange surface (a later phase) can mint an
-// ordinary access token through the same code path.
-func MintAccessToken(sa, project string) string {
+func signJWT(payload any) string {
 	const secret = "jaiscloud-dev"
 	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload, _ := json.Marshal(tokenClaims{
+	raw, _ := json.Marshal(payload)
+	signingInput := hdr + "." + base64.RawURLEncoding.EncodeToString(raw)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(signingInput))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signingInput + "." + sig
+}
+
+// MintAccessToken builds the emulator's HS256 access token. It carries the
+// service-account email and project so internal/gcp/identity can recover the
+// caller's identity from the Authorization header.
+func MintAccessToken(sa, project string) string {
+	return signJWT(tokenClaims{
 		Email:     sa,
 		Subject:   sa,
 		ProjectID: project,
 		ExpiresAt: clock.RealNow().Unix() + accessTokenTTLSeconds,
 	})
-	signingInput := hdr + "." + base64.RawURLEncoding.EncodeToString(payload)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(signingInput))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return signingInput + "." + sig
+}
+
+// MintDownscopedToken builds a downscoped access token: the emulator
+// TokenPrefix followed by an HS256 JWT carrying the caller's identity and the
+// access-boundary rules. internal/gcp/identity still recovers the identity
+// (the JWT payload is the second dot-separated segment), while
+// internal/gcp/downscope recovers and enforces the boundary.
+func MintDownscopedToken(sa, project string, rules []downscope.Rule) string {
+	return downscope.TokenPrefix + signJWT(downscopedClaims{
+		Email:          sa,
+		Subject:        sa,
+		ProjectID:      project,
+		ExpiresAt:      clock.RealNow().Unix() + accessTokenTTLSeconds,
+		AccessBoundary: rules,
+	})
 }

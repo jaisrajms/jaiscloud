@@ -29,6 +29,7 @@ import (
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/downscope"
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	"jaiscloud/internal/gcp/policy"
@@ -394,6 +395,10 @@ func (s *Service) requireIamResource(ctx context.Context, bucket, object string)
 }
 
 func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyRequest) (*iampb.Policy, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	bucket, object, _, ok := parseIamResource(req.GetResource())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
@@ -406,6 +411,10 @@ func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyReque
 }
 
 func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyRequest) (*iampb.Policy, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	bucket, object, _, ok := parseIamResource(req.GetResource())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
@@ -422,6 +431,10 @@ func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyReque
 }
 
 func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPermissionsRequest) (*iampb.TestIamPermissionsResponse, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	bucket, object, _, ok := parseIamResource(req.GetResource())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
@@ -492,6 +505,10 @@ func toStrings(v any) []string {
 // ─── buckets ──────────────────────────────────────────────────────────────────
 
 func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketRequest) (*storagepb.Bucket, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	name := req.GetBucketId()
 	if name == "" {
 		name = req.GetBucket().GetBucketId()
@@ -541,6 +558,10 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 }
 
 func (s *Service) GetBucket(ctx context.Context, req *storagepb.GetBucketRequest) (*storagepb.Bucket, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	name := parseBucketName(req.GetName())
 	meta, err := s.objects.GetBucket(ctx, name)
 	if err != nil {
@@ -553,6 +574,10 @@ func (s *Service) GetBucket(ctx context.Context, req *storagepb.GetBucketRequest
 }
 
 func (s *Service) DeleteBucket(ctx context.Context, req *storagepb.DeleteBucketRequest) (*emptypb.Empty, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	name := parseBucketName(req.GetName())
 	if err := s.objects.DeleteBucket(ctx, name); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
@@ -567,6 +592,10 @@ func (s *Service) DeleteBucket(ctx context.Context, req *storagepb.DeleteBucketR
 }
 
 func (s *Service) ListBuckets(ctx context.Context, req *storagepb.ListBucketsRequest) (*storagepb.ListBucketsResponse, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	project := parseProject(req.GetParent())
 	if project == "" {
 		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
@@ -777,6 +806,10 @@ func bucketLabels(meta map[string]any) map[string]string {
 // UpdateBucketMetaAtomic path the REST BucketsUpdate uses, so the two transports
 // share bucket metageneration state.
 func (s *Service) UpdateBucket(ctx context.Context, req *storagepb.UpdateBucketRequest) (*storagepb.Bucket, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	bucket := parseBucketName(req.GetBucket().GetName())
 	if bucket == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket name", 400))
@@ -813,6 +846,10 @@ func (s *Service) UpdateBucket(ctx context.Context, req *storagepb.UpdateBucketR
 // A missing bucket or a bucket with no retention policy is NotFound; a bucket
 // whose policy is already locked is returned unchanged (locking is idempotent).
 func (s *Service) LockBucketRetentionPolicy(ctx context.Context, req *storagepb.LockBucketRetentionPolicyRequest) (*storagepb.Bucket, error) {
+	if err := s.requireBucketAdminDownscope(ctx); err != nil {
+		return nil, err
+	}
+
 	bucket := parseBucketName(req.GetBucket())
 	if bucket == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket name", 400))
@@ -855,6 +892,9 @@ func (s *Service) LockBucketRetentionPolicy(ctx context.Context, req *storagepb.
 
 func (s *Service) GetObject(ctx context.Context, req *storagepb.GetObjectRequest) (*storagepb.Object, error) {
 	bucket := parseBucketName(req.GetBucket())
+	if err := s.requireDownscope(ctx, downscope.ReadObject, bucket, req.GetObject()); err != nil {
+		return nil, err
+	}
 	var meta gcs.ObjectMeta
 	var err error
 	if req.GetGeneration() > 0 {
@@ -873,6 +913,9 @@ func (s *Service) GetObject(ctx context.Context, req *storagepb.GetObjectRequest
 
 func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsRequest) (*storagepb.ListObjectsResponse, error) {
 	bucket := parseBucketName(req.GetParent())
+	if err := s.requireDownscope(ctx, downscope.List, bucket, req.GetPrefix()); err != nil {
+		return nil, err
+	}
 	var objs []gcs.ObjectMeta
 	var err error
 	if req.GetVersions() {
@@ -931,6 +974,9 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 func (s *Service) DeleteObject(ctx context.Context, req *storagepb.DeleteObjectRequest) (*emptypb.Empty, error) {
 	bucket := parseBucketName(req.GetBucket())
 	object := req.GetObject()
+	if err := s.requireDownscope(ctx, downscope.DeleteObject, bucket, object); err != nil {
+		return nil, err
+	}
 
 	// Preconditions are threaded into the store's *Checked delete so the check
 	// and the delete happen under one lock/transaction — the same atomic path
@@ -1020,6 +1066,9 @@ func checkObjectPreconditions(live gcs.ObjectMeta, ifGenMatch, ifGenNotMatch, if
 func (s *Service) RestoreObject(ctx context.Context, req *storagepb.RestoreObjectRequest) (*storagepb.Object, error) {
 	bucket := parseBucketName(req.GetBucket())
 	object := req.GetObject()
+	if err := s.requireDownscope(ctx, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
 	if bucket == "" || object == "" || req.GetGeneration() <= 0 {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "restore requires bucket, object, and a positive generation", 400))
 	}
@@ -1041,6 +1090,9 @@ func (s *Service) RestoreObject(ctx context.Context, req *storagepb.RestoreObjec
 func (s *Service) UpdateObject(ctx context.Context, req *storagepb.UpdateObjectRequest) (*storagepb.Object, error) {
 	bucket := parseBucketName(req.GetObject().GetBucket())
 	object := req.GetObject().GetName()
+	if err := s.requireDownscope(ctx, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
 	meta, err := s.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
@@ -1100,6 +1152,14 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 	sources := req.GetSourceObjects()
 	if len(sources) == 0 {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "compose requires source objects", 400))
+	}
+	if err := s.requireDownscope(ctx, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
+	}
+	for _, src := range sources {
+		if err := s.requireDownscope(ctx, downscope.ReadObject, bucket, src.GetName()); err != nil {
+			return nil, err
+		}
 	}
 
 	project := s.projectForBucket(ctx, bucket)
@@ -1218,6 +1278,12 @@ func (s *Service) RewriteObject(ctx context.Context, req *storagepb.RewriteObjec
 	if srcBucket == "" || srcObject == "" || dstBucket == "" || dstObject == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "rewrite requires source and destination object names", 400))
 	}
+	if err := s.requireDownscope(ctx, downscope.ReadObject, srcBucket, srcObject); err != nil {
+		return nil, err
+	}
+	if err := s.requireDownscope(ctx, downscope.WriteObject, dstBucket, dstObject); err != nil {
+		return nil, err
+	}
 
 	srcProject := s.projectForBucket(ctx, srcBucket)
 	srcGen := ""
@@ -1270,6 +1336,15 @@ func (s *Service) MoveObject(ctx context.Context, req *storagepb.MoveObjectReque
 	if srcObject == dstObject {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "source and destination object must differ", 400))
 	}
+	if err := s.requireDownscope(ctx, downscope.ReadObject, bucket, srcObject); err != nil {
+		return nil, err
+	}
+	if err := s.requireDownscope(ctx, downscope.DeleteObject, bucket, srcObject); err != nil {
+		return nil, err
+	}
+	if err := s.requireDownscope(ctx, downscope.WriteObject, bucket, dstObject); err != nil {
+		return nil, err
+	}
 
 	project := s.projectForBucket(ctx, bucket)
 	srcMeta, raw, err := s.provider.GetObjectData(ctx, project, bucket, srcObject, "", nil)
@@ -1305,6 +1380,9 @@ func (s *Service) StartResumableWrite(ctx context.Context, req *storagepb.StartR
 	object := resource.GetName()
 	if bucket == "" || object == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket or object name", 400))
+	}
+	if err := s.requireDownscope(ctx, downscope.WriteObject, bucket, object); err != nil {
+		return nil, err
 	}
 
 	id := s.provider.NextGen()
@@ -1358,6 +1436,9 @@ func (s *Service) QueryWriteStatus(ctx context.Context, req *storagepb.QueryWrit
 	if !ok {
 		return nil, mapError(model.NewProviderError("NotFound", "unknown upload_id", 404))
 	}
+	if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
+		return nil, err
+	}
 	return &storagepb.QueryWriteStatusResponse{
 		WriteStatus: &storagepb.QueryWriteStatusResponse_PersistedSize{PersistedSize: persisted},
 	}, nil
@@ -1374,7 +1455,12 @@ func (s *Service) CancelResumableWrite(ctx context.Context, req *storagepb.Cance
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing upload_id", 400))
 	}
 	s.mu.Lock()
-	if sess, ok := s.uploads[id]; ok {
+	sess, ok := s.uploads[id]
+	if ok {
+		if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
 		sess.closeSpill()
 		delete(s.uploads, id)
 	}
@@ -1555,6 +1641,9 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				project = s.projectForBucket(ctx, sess.bucket)
+				if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
+					return err
+				}
 			case *storagepb.WriteObjectRequest_UploadId:
 				resumable = true
 				uploadID = fm.UploadId
@@ -1566,6 +1655,9 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 				}
 				sess = existing
 				project = s.projectForBucket(ctx, sess.bucket)
+				if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
+					return err
+				}
 			default:
 				return mapError(model.NewProviderError("InvalidArgument", "missing write object spec", 400))
 			}
@@ -1645,6 +1737,9 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 				}
 				sess.cseKey, sess.cseKeySHA256 = cseKeyFromParams(req.GetCommonObjectRequestParams())
 				project = s.projectForBucket(ctx, sess.bucket)
+				if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
+					return err
+				}
 			case *storagepb.BidiWriteObjectRequest_UploadId:
 				resumable = true
 				uploadID = fm.UploadId
@@ -1659,6 +1754,9 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 				}
 				sess = existing
 				project = s.projectForBucket(ctx, sess.bucket)
+				if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
+					return err
+				}
 			default:
 				return mapError(model.NewProviderError("InvalidArgument", "missing write object spec", 400))
 			}
@@ -1718,6 +1816,9 @@ func (s *Service) ReadObject(req *storagepb.ReadObjectRequest, stream storagepb.
 	ctx := stream.Context()
 	bucket := parseBucketName(req.GetBucket())
 	project := s.projectForBucket(ctx, bucket)
+	if err := s.requireDownscope(ctx, downscope.ReadObject, bucket, req.GetObject()); err != nil {
+		return err
+	}
 	gen := ""
 	if req.GetGeneration() > 0 {
 		gen = int64ToGen(req.GetGeneration())

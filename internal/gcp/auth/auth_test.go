@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/downscope"
 	"jaiscloud/internal/gcp/identity"
 
 	"github.com/go-chi/chi/v5"
@@ -321,6 +323,173 @@ func TestServeTokenEmptyConfig(t *testing.T) {
 	// No project in the assertion or config: identity falls back to its default.
 	if ident.ProjectID != identity.DefaultProjectID {
 		t.Errorf("project = %q, want default %q", ident.ProjectID, identity.DefaultProjectID)
+	}
+}
+
+const testOptions = `{"accessBoundary":{"accessBoundaryRules":[{"availableResource":"//storage.googleapis.com/projects/_/buckets/bkt","availablePermissions":["inRole:roles/storage.objectViewer"]}]}}`
+
+func exchangeForm(subjectToken string) url.Values {
+	return url.Values{
+		"grant_type":           {GrantTypeTokenExchange},
+		"subject_token_type":   {TokenTypeAccessToken},
+		"requested_token_type": {TokenTypeAccessToken},
+		"subject_token":        {subjectToken},
+		"options":              {testOptions},
+	}
+}
+
+func decodeSTSResponse(t *testing.T, rec *httptest.ResponseRecorder) stsTokenResponse {
+	t.Helper()
+	var resp stsTokenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode STS response %q: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+func TestServeTokenExchange(t *testing.T) {
+	svc := NewService(Config{ProjectID: "cfg-proj", ServiceAccount: "cfg-sa@example.com"})
+	// A source access token minted by the emulator carries the caller identity.
+	source := MintAccessToken("src@example.com", "src-proj")
+
+	for _, path := range []string{"/token", "/v1/token"} {
+		rec := postForm(t, newRouter(svc), path, exchangeForm(source))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", path, rec.Code, rec.Body.String())
+		}
+		resp := decodeSTSResponse(t, rec)
+		if !strings.HasPrefix(resp.AccessToken, downscope.TokenPrefix) {
+			t.Errorf("%s: access_token %q does not carry the downscoped prefix", path, resp.AccessToken)
+		}
+		if resp.IssuedTokenType != TokenTypeAccessToken {
+			t.Errorf("issued_token_type = %q", resp.IssuedTokenType)
+		}
+		if resp.TokenType != "Bearer" {
+			t.Errorf("token_type = %q", resp.TokenType)
+		}
+		if resp.ExpiresIn != accessTokenTTLSeconds {
+			t.Errorf("expires_in = %d, want %d", resp.ExpiresIn, accessTokenTTLSeconds)
+		}
+
+		// The downscoped token still resolves to the source identity.
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", "Bearer "+resp.AccessToken)
+		ident := identity.FromRequest(req)
+		if ident.ServiceAccount != "src@example.com" {
+			t.Errorf("service account = %q, want src@example.com", ident.ServiceAccount)
+		}
+		if ident.ProjectID != "src-proj" {
+			t.Errorf("project = %q, want src-proj", ident.ProjectID)
+		}
+
+		// ... and the GCS boundary is enforced.
+		if err := downscope.Allowed("Bearer "+resp.AccessToken, downscope.ReadObject, "bkt", "o"); err != nil {
+			t.Errorf("boundary should allow bkt/o: %v", err)
+		}
+		if err := downscope.Allowed("Bearer "+resp.AccessToken, downscope.ReadObject, "other", "o"); !errors.Is(err, downscope.ErrDenied) {
+			t.Errorf("boundary should deny other bucket, got %v", err)
+		}
+	}
+}
+
+func TestServeTokenExchangeOpaqueSourceFallsBackToConfig(t *testing.T) {
+	svc := NewService(Config{ProjectID: "cfg-proj", ServiceAccount: "cfg-sa@example.com"})
+	rec := postForm(t, newRouter(svc), "/v1/token", exchangeForm("source-token"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeSTSResponse(t, rec)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+resp.AccessToken)
+	ident := identity.FromRequest(req)
+	if ident.ServiceAccount != "cfg-sa@example.com" {
+		t.Errorf("service account = %q, want cfg-sa@example.com", ident.ServiceAccount)
+	}
+	if ident.ProjectID != "cfg-proj" {
+		t.Errorf("project = %q, want cfg-proj", ident.ProjectID)
+	}
+}
+
+func TestServeTokenExchangeErrors(t *testing.T) {
+	svc := NewService(Config{ProjectID: "proj", ServiceAccount: "sa@example.com"})
+	r := newRouter(svc)
+
+	valid := exchangeForm("source-token")
+	cases := []struct {
+		name     string
+		mutate   func(url.Values)
+		wantCode string
+	}{
+		{"missing subject_token_type", func(f url.Values) { f.Del("subject_token_type") }, "invalid_request"},
+		{"wrong subject_token_type", func(f url.Values) { f.Set("subject_token_type", "urn:ietf:params:oauth:token-type:jwt") }, "invalid_request"},
+		{"missing requested_token_type", func(f url.Values) { f.Del("requested_token_type") }, "invalid_request"},
+		{"wrong requested_token_type", func(f url.Values) { f.Set("requested_token_type", "urn:ietf:params:oauth:token-type:jwt") }, "invalid_request"},
+		{"missing subject_token", func(f url.Values) { f.Set("subject_token", "  ") }, "invalid_request"},
+		{"missing options", func(f url.Values) { f.Del("options") }, "invalid_request"},
+		{"invalid options json", func(f url.Values) { f.Set("options", "{not json") }, "invalid_grant"},
+		{"no rules", func(f url.Values) { f.Set("options", `{"accessBoundary":{"accessBoundaryRules":[]}}`) }, "invalid_grant"},
+		{"unsupported permission", func(f url.Values) {
+			f.Set("options", `{"accessBoundary":{"accessBoundaryRules":[{"availableResource":"//storage.googleapis.com/projects/_/buckets/bkt","availablePermissions":["inRole:roles/storage.admin"]}]}}`)
+		}, "invalid_grant"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			form := url.Values{}
+			for k, v := range valid {
+				form[k] = v
+			}
+			tc.mutate(form)
+			rec := postForm(t, r, "/v1/token", form)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body %q: %v", rec.Body.String(), err)
+			}
+			if body["error"] != tc.wantCode {
+				t.Errorf("error = %q, want %q (body %s)", body["error"], tc.wantCode, rec.Body.String())
+			}
+		})
+	}
+
+	// The jwt-bearer grant must remain reachable on the same /v1/token route
+	// after the token-exchange grant is installed.
+	assert := assertion(t, map[string]any{"iss": "sa@example.com", "exp": clock.RealNow().Add(time.Hour).Unix()})
+	rec := postForm(t, r, "/v1/token", url.Values{"grant_type": {GrantTypeJWTBearer}, "assertion": {assert}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("jwt-bearer on /v1/token: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMintDownscopedTokenIsWellFormed(t *testing.T) {
+	rules := []downscope.Rule{{Bucket: "bkt", ObjectPrefix: "allowed/", Permissions: []string{downscope.PermissionObjectViewer}}}
+	token := MintDownscopedToken("sa@example.com", "proj", rules)
+	if !strings.HasPrefix(token, downscope.TokenPrefix) {
+		t.Fatalf("token %q lacks the downscoped prefix", token)
+	}
+	rest := strings.TrimPrefix(token, downscope.TokenPrefix)
+	parts := strings.Split(rest, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	var claims struct {
+		Email          string           `json:"email"`
+		ProjectID      string           `json:"project_id"`
+		AccessBoundary []downscope.Rule `json:"access_boundary"`
+	}
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatalf("unmarshal claims: %v", err)
+	}
+	if claims.Email != "sa@example.com" || claims.ProjectID != "proj" {
+		t.Errorf("unexpected identity claims: %+v", claims)
+	}
+	if len(claims.AccessBoundary) != 1 || claims.AccessBoundary[0].Bucket != "bkt" {
+		t.Errorf("unexpected access boundary: %+v", claims.AccessBoundary)
 	}
 }
 

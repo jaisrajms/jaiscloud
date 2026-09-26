@@ -124,13 +124,14 @@ func FromRequest(r *http.Request) Parsed {
 }
 
 // BearerToken extracts the token from an "Authorization: Bearer <token>" header.
-// Returns "" for any other scheme or malformed input.
+// The scheme is matched case-insensitively (RFC 7235); returns "" for any other
+// scheme or malformed input.
 func BearerToken(auth string) string {
 	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(auth, prefix))
+	return strings.TrimSpace(auth[len(prefix):])
 }
 
 // ProjectFromToken returns the project ID embedded in a JWT bearer token's
@@ -141,6 +142,21 @@ func ProjectFromToken(token string) string {
 		return c.ProjectID
 	}
 	return ""
+}
+
+// ServiceAccountFromToken returns the service-account email embedded in a JWT
+// bearer token's email/sub claims, or "" for opaque tokens and malformed JWTs.
+// The signature is never verified. It is the identity source the STS
+// token-exchange surface uses to mint a downscoped token for the same caller.
+func ServiceAccountFromToken(token string) string {
+	c := decodeClaims(token)
+	if c == nil {
+		return ""
+	}
+	if c.Email != "" {
+		return c.Email
+	}
+	return c.Subject
 }
 
 // ProjectFromPath extracts the project ID from a GCP resource-name URL path.
