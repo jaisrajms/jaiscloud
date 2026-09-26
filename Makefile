@@ -106,7 +106,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-status gcp-status-audit gcp-status-coverage gcp-status-check
+        gcp-status gcp-status-audit gcp-status-coverage gcp-status-next gcp-status-check
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -718,6 +718,11 @@ gcp-status-coverage: ## Fail if any plan_docs file has status markers but produc
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -docs plan_docs -coverage $(if $(include-archive),-include-archive,)
+
+gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=wave|pri)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) $(if $(include-archive),-include-archive,)
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;

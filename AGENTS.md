@@ -26,7 +26,12 @@ history to decide what is implemented.
    Verdict/exit: **already done/merged** → do not re-implement (reuse or
    verify); **in flight** → coordinate with the existing branch/PR;
    **no match** → new work.
-3. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
+3. **Pick what's next.** `make gcp-status-next` prints the next actionable items
+   in priority order — the wave-plan execution order (Wave 1 client-impact
+   first), with an explicit `Pri` (P1–P20) as the fallback when an item is not in
+   a wave and `impact` breaking ties — plus a separate `ATTENTION` list. Take
+   the top item unless told otherwise.
+4. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
    `unowned` (fix verdict, no branch, only a historical table), `stale-doc` (a
    merged fix the docs still call open), `abandoned` (branch/PR closed unmerged),
@@ -34,7 +39,7 @@ history to decide what is implemented.
    `unscheduled` / `intentional`. Use it to decide oversight vs planned future
    work. `make gcp-status-coverage` fails if any `plan_docs` file still has
    status markers but produced no rows (an audit blind spot).
-4. **Record the outcome when you finish.** Move the plan doc into
+5. **Record the outcome when you finish.** Move the plan doc into
    `plan_docs/final/` with an ID-prefixed name (e.g.
    `final/J1-datastore-rest-protobuf.md`) and put the backlog ID in the
    commit/PR title (e.g. `fix(gcp/datastore): … (J1)`) so the next run links it.

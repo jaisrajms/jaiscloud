@@ -45,10 +45,14 @@ type Item struct {
 	Effort      string   `json:"effort,omitempty"`
 	Branch      string   `json:"branch,omitempty"`
 	Source      string   `json:"source"`
-	Kind        string   `json:"kind,omitempty"` // backlog | debt | remainder | pr
+	Kind        string   `json:"kind,omitempty"` // backlog | debt | remainder | prose | wave | pr
 	Archived    bool     `json:"archived,omitempty"`
 	DocState    string   `json:"docState,omitempty"`
 	Disposition string   `json:"disposition,omitempty"` // fix | follow-up | no-fix | optional | unknown
+	Impact      string   `json:"impact,omitempty"`
+	Pri         int      `json:"pri,omitempty"`   // rank from a Pri column (P1=1)
+	Order       int      `json:"order,omitempty"` // wave-plan execution order (lower = earlier)
+	OrderSource string   `json:"orderSource,omitempty"`
 	Wave        string   `json:"wave,omitempty"`
 	WaveDone    bool     `json:"waveDone,omitempty"`
 	PRs         []int    `json:"prs,omitempty"`
@@ -83,18 +87,31 @@ type table struct {
 // waveMeta captures the Java wave-plan index: alias→branch, alias→wave, and
 // which waves are already done, plus the alias groups used to merge J/R pairs.
 type waveMeta struct {
-	groups        [][]string
-	branchByAlias map[string]string
-	waveByAlias   map[string]string
-	doneWaves     map[string]bool
+	groups         [][]string
+	branchByAlias  map[string]string
+	waveByAlias    map[string]string
+	doneWaves      map[string]bool
+	orderBySession map[string]int
 }
 
 func newWaveMeta() *waveMeta {
 	return &waveMeta{
-		branchByAlias: map[string]string{},
-		waveByAlias:   map[string]string{},
-		doneWaves:     map[string]bool{},
+		branchByAlias:  map[string]string{},
+		waveByAlias:    map[string]string{},
+		doneWaves:      map[string]bool{},
+		orderBySession: map[string]int{},
 	}
+}
+
+var waveSessionRe = regexp.MustCompile(`^W(\d+)\.(\d+)$`)
+
+// waveOrder turns "W2.3" into 203 so wave-major, session-minor ordering.
+func waveOrder(session string) int {
+	m := waveSessionRe.FindStringSubmatch(strings.TrimSpace(session))
+	if m == nil {
+		return 0
+	}
+	return atoi(m[1])*100 + atoi(m[2])
 }
 
 var idRe = regexp.MustCompile(`^([A-Z]{1,3}[0-9]+(?:-[0-9]+)?)\b`)
@@ -117,12 +134,16 @@ func main() {
 	check := flag.Bool("check", false, "with -query/-service, exit 2 if already done, 3 if in flight")
 	audit := flag.Bool("audit", false, "print the audit classification of not-done items")
 	coverage := flag.Bool("coverage", false, "report per-doc coverage and fail if any doc has status markers but no rows")
+	next := flag.Bool("next", false, "print the next actionable items in priority order")
+	nextN := flag.Int("n", 5, "number of items for -next")
+	by := flag.String("by", "wave", "ordering for -next: wave (execution order) or pri (P-list rank)")
 	includeArchive := flag.Bool("include-archive", false, "also parse plan_docs/archive/**")
 	verbose := flag.Bool("v", false, "log parsing/PR diagnostics to stderr")
 	flag.Parse()
 
 	items, docPaths, waves := collect(*docs, *includeArchive, *verbose)
 	items = applyWaveAliases(items, waves)
+	annotateWaves(items)
 
 	prs, branchSet := loadGitState(*prRepo, *verbose)
 	enrich(items, prs, branchSet, docPaths)
@@ -134,6 +155,10 @@ func main() {
 
 	if *coverage {
 		os.Exit(runCoverage(*docs, *includeArchive, items))
+	}
+	if *next {
+		runNext(items, *nextN, *by)
+		return
 	}
 	if *audit {
 		runAudit(items)
@@ -368,6 +393,10 @@ func waveFromTable(t table, source string, w *waveMeta) []*Item {
 		branch := cleanBranch(rowAt(idx, row, "branch"))
 		dep := rowAt(idx, row, "dependson", "depends", "status")
 		done := strings.Contains(strings.ToUpper(dep), "DONE")
+		order := waveOrder(session)
+		if order > 0 {
+			w.orderBySession[session] = order
+		}
 		it := &Item{
 			ID:          session,
 			Kind:        "wave",
@@ -375,6 +404,8 @@ func waveFromTable(t table, source string, w *waveMeta) []*Item {
 			Gap:         stripFormatting(rowAt(idx, row, "service(s)", "services", "scope", "service")),
 			Branch:      branch,
 			Disposition: "fix",
+			Order:       order,
+			OrderSource: "wave",
 		}
 		if it.Gap == "" {
 			it.Gap = stripFormatting(rowAt(idx, row, "ids"))
@@ -628,6 +659,10 @@ func itemsFromTable(t table, source string, archived bool) []*Item {
 		it.Gap = firstNonEmpty(rowAt(idx, row, "gap", "operation", "assertion", "scope", "what", "class", "method(s)", "method", "item"))
 		it.Verdict = firstNonEmpty(rowAt(idx, row, "verdict", "decision"))
 		it.Effort = firstNonEmpty(rowAt(idx, row, "effort", "estimate"))
+		it.Impact = firstNonEmpty(rowAt(idx, row, "impact"))
+		if pi, ok := idx["pri"]; ok {
+			it.Pri = firstInt(cell(row, pi))
+		}
 		it.Branch = cleanBranch(firstNonEmpty(rowAt(idx, row, "prompt", "branch")))
 		if si, ok := idx["status"]; ok && cell(row, si) != "" {
 			// A status column is authoritative; notes may mention other statuses.
@@ -892,10 +927,40 @@ func applyWaveAliases(items []*Item, w *waveMeta) []*Item {
 		if wv, ok := anyAlias(w.waveByAlias, members); ok {
 			best.Wave = wv
 			best.WaveDone = w.doneWaves[wv]
+			if o := w.orderBySession[wv]; o > 0 {
+				best.Order = o
+				best.OrderSource = "wave"
+			}
 		}
 		out = append(out, best)
 	}
 	return out
+}
+
+// annotateWaves copies the best Pri/Impact from a wave session's aliased items
+// onto the W row, so the wave carries the priority of its constituent IDs.
+func annotateWaves(items []*Item) {
+	byID := map[string]*Item{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	for _, it := range items {
+		if it.Kind != "wave" {
+			continue
+		}
+		for _, a := range it.Aliases {
+			src, ok := byID[a]
+			if !ok {
+				continue
+			}
+			if src.Pri > 0 && (it.Pri == 0 || src.Pri < it.Pri) {
+				it.Pri = src.Pri
+			}
+			if it.Impact == "" {
+				it.Impact = src.Impact
+			}
+		}
+	}
 }
 
 func pickCanonical(group []*Item) *Item {
@@ -933,6 +998,16 @@ func mergeItem(dst, src *Item) {
 	}
 	if dst.Effort == "" {
 		dst.Effort = src.Effort
+	}
+	if dst.Impact == "" {
+		dst.Impact = src.Impact
+	}
+	if dst.Pri == 0 {
+		dst.Pri = src.Pri
+	}
+	if dst.Order == 0 {
+		dst.Order = src.Order
+		dst.OrderSource = src.OrderSource
 	}
 	if dst.Branch == "" {
 		dst.Branch = src.Branch
@@ -1194,6 +1269,137 @@ func classify(it *Item) string {
 		return "unowned"
 	default:
 		return "unscheduled"
+	}
+}
+
+func classAttention(c string) int {
+	switch c {
+	case "oversight?":
+		return 0
+	case "unowned":
+		return 1
+	case "stale-doc":
+		return 2
+	case "claimed-done":
+		return 3
+	case "abandoned":
+		return 4
+	}
+	return 99
+}
+
+func impactRank(s string) int {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "high":
+		return 0
+	case "med-high", "medium-high":
+		return 1
+	case "medium", "med":
+		return 2
+	case "low-med", "medium-low":
+		return 3
+	case "low":
+		return 4
+	}
+	return 5
+}
+
+// runNext prints the next actionable items. Priority is the wave-plan execution
+// order (wave-major, session-minor); an explicit Pri (P1..P20) is the fallback
+// when an item is not in a wave, and impact breaks ties. Attention items
+// (oversight?/unowned/stale-doc/...) are listed separately.
+func runNext(items []*Item, n int, by string) {
+	var planned, attention []*Item
+	for _, it := range items {
+		if it.Kind == "pr" || it.State == "merged" || it.State == "done" || it.Class == "intentional" {
+			continue
+		}
+		if classAttention(it.Class) < 99 {
+			attention = append(attention, it)
+			continue
+		}
+		if it.Kind == "backlog" && it.Wave != "" {
+			continue // represented by its wave session row
+		}
+		planned = append(planned, it)
+	}
+	effOrder := func(it *Item) (int, string) {
+		if it.Order > 0 {
+			return it.Order, it.OrderSource
+		}
+		if it.Pri > 0 {
+			return it.Pri, "pri"
+		}
+		return 100000, "none"
+	}
+	sort.SliceStable(attention, func(i, j int) bool {
+		a, b := attention[i], attention[j]
+		if classAttention(a.Class) != classAttention(b.Class) {
+			return classAttention(a.Class) < classAttention(b.Class)
+		}
+		return a.ID < b.ID
+	})
+	sort.SliceStable(planned, func(i, j int) bool {
+		a, b := planned[i], planned[j]
+		if by == "pri" {
+			if (a.Pri > 0) != (b.Pri > 0) {
+				return a.Pri > 0
+			}
+			if a.Pri > 0 && a.Pri != b.Pri {
+				return a.Pri < b.Pri
+			}
+		}
+		ao, _ := effOrder(a)
+		bo, _ := effOrder(b)
+		if ao != bo {
+			return ao < bo
+		}
+		if a.Pri != b.Pri {
+			return a.Pri < b.Pri
+		}
+		if impactRank(a.Impact) != impactRank(b.Impact) {
+			return impactRank(a.Impact) < impactRank(b.Impact)
+		}
+		return a.ID < b.ID
+	})
+
+	fmt.Printf("gcp-status next (%d planned, %d attention; by=%s)\n", len(planned), len(attention), by)
+	if n <= 0 {
+		n = 5
+	}
+	for i, it := range planned {
+		if i >= n {
+			break
+		}
+		var meta []string
+		if it.Pri > 0 {
+			meta = append(meta, fmt.Sprintf("P%d", it.Pri))
+		}
+		if o, src := effOrder(it); src != "" && src != "none" {
+			meta = append(meta, fmt.Sprintf("order=%d(%s)", o, src))
+		}
+		if it.Impact != "" {
+			meta = append(meta, "impact="+it.Impact)
+		}
+		if it.Kind == "wave" && len(it.Aliases) > 0 {
+			meta = append(meta, "ids="+strings.Join(it.Aliases, ","))
+		}
+		if it.Branch != "" {
+			meta = append(meta, "branch="+it.Branch)
+		}
+		fmt.Printf("NEXT  %-8s %-26s %s\n", it.ID, truncate(it.Service, 26), truncate(it.Gap, 52))
+		if len(meta) > 0 {
+			fmt.Printf("            %s\n", strings.Join(meta, "  "))
+		}
+		if it.PlanDoc != "" {
+			fmt.Printf("            plan doc: %s\n", it.PlanDoc)
+		}
+	}
+	if len(attention) > 0 {
+		fmt.Printf("\nATTENTION (verify record/code drift before planning)\n")
+		for _, it := range attention {
+			fmt.Printf("  %-12s %-18s %-9s %s\n", it.Class, it.ID, it.State, truncate(it.Gap, 60))
+		}
 	}
 }
 
@@ -1642,6 +1848,15 @@ func sectionRefs(s string) []string {
 		out = appendUnique(out, m)
 	}
 	return out
+}
+
+var firstIntRe = regexp.MustCompile(`\d+`)
+
+func firstInt(s string) int {
+	if m := firstIntRe.FindString(s); m != "" {
+		return atoi(m)
+	}
+	return 0
 }
 
 func atoi(s string) int {
