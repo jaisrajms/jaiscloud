@@ -329,25 +329,7 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	podName := pfx + sanitized + "-" + shortID()
 	svcName := pfx + sanitized
 
-	env := []k8stypes.EnvVar{
-		{Name: "AWS_LAMBDA_FUNCTION_NAME", Value: req.FunctionName},
-		{Name: "AWS_DEFAULT_REGION", Value: regionOrDefault(e.cfg.Region)},
-		{Name: "AWS_REGION", Value: regionOrDefault(e.cfg.Region)},
-		{Name: "_HANDLER", Value: req.Handler},
-		{Name: "AWS_ACCESS_KEY_ID", Value: req.AccountID},
-		{Name: "AWS_SECRET_ACCESS_KEY", Value: "test"},
-		{Name: "AWS_SESSION_TOKEN", Value: "test"},
-		{Name: "LAMBDA_TASK_ROOT", Value: "/var/task"},
-		{Name: "LAMBDA_RUNTIME_DIR", Value: "/var/runtime"},
-		{Name: "AWS_LAMBDA_RUNTIME_API", Value: "127.0.0.1:9001"},
-	}
-	if e.cfg.JaisCloudEndpoint != "" {
-		env = append(env, k8stypes.EnvVar{Name: "AWS_ENDPOINT_URL", Value: e.cfg.JaisCloudEndpoint})
-		env = append(env, k8stypes.EnvVar{Name: "JAISCLOUD_ENDPOINT", Value: e.cfg.JaisCloudEndpoint})
-	}
-	for k, v := range req.EnvVars {
-		env = append(env, k8stypes.EnvVar{Name: k, Value: v})
-	}
+	env := k8sRuntimeEnv(e.cfg, req)
 
 	var args []string
 	if req.Handler != "" {

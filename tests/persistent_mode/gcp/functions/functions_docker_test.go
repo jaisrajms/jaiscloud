@@ -118,7 +118,7 @@ func putAbsolute(t *testing.T, url string, body []byte, contentType string) (int
 // then invokes it and asserts the handler actually ran (not mock echo).
 func TestFunctionSourceExecutionDocker(t *testing.T) {
 	requireDockerEnv(t)
-	testFunctionSourceExecution(t)
+	testFunctionSourceExecution(t, "hello")
 }
 
 // deploySourceFunction uploads a Python source archive through the v2
@@ -168,19 +168,31 @@ func deploySourceFunction(t *testing.T, id string) {
 // flow, run against a Docker- or K8s-backed emulator. It deploys a function
 // from a GCS-uploaded archive, invokes it, and asserts the handler actually ran
 // (not mock echo).
-func testFunctionSourceExecution(t *testing.T) {
+func testFunctionSourceExecution(t *testing.T, id string) {
 	t.Helper()
 	reset(t)
-	deploySourceFunction(t, "hello")
+	deploySourceFunction(t, id)
+	invokeUntilHandlerResult(t, id)
 
-	// 3. Invoke synchronously. A cold container start can exceed the first
-	// request's readiness window, so retry until the deadline.
+	// Deleting the function removes it (and its archive) cleanly.
+	if code, body := do(t, "DELETE", "/v1/projects/proj/locations/us-central1/functions/"+id, nil, ""); code != http.StatusOK {
+		t.Fatalf("delete function: HTTP %d: %s", code, body)
+	}
+	if code, _ := do(t, "GET", "/v1/projects/proj/locations/us-central1/functions/"+id, nil, ""); code != http.StatusNotFound {
+		t.Fatalf("get after delete: HTTP %d, want 404", code)
+	}
+}
+
+// invokeUntilHandlerResult invokes the deployed function synchronously, retrying
+// until the cold start completes or the deadline passes, and asserts the
+// uploaded handler actually ran (not mock echo). Returns the result payload.
+func invokeUntilHandlerResult(t *testing.T, id string) string {
+	t.Helper()
 	payload := `{"name":"jaiscloud"}`
 	callBody := []byte(`{"data":` + strconv.Quote(payload) + `}`)
 	deadline := time.Now().Add(2 * time.Minute)
-	var result string
 	for {
-		code, body := do(t, "POST", "/v1/projects/proj/locations/us-central1/functions/hello:call",
+		code, body := do(t, "POST", "/v1/projects/proj/locations/us-central1/functions/"+id+":call",
 			callBody, "application/json")
 		if code != http.StatusOK {
 			t.Fatalf("call: HTTP %d: %s", code, body)
@@ -196,19 +208,10 @@ func testFunctionSourceExecution(t *testing.T) {
 			}
 			t.Fatalf("invoke never succeeded: %s", errStr)
 		}
-		result, _ = call["result"].(string)
-		break
-	}
-
-	if !strings.Contains(result, `"hello"`) || !strings.Contains(result, "jaiscloud") {
-		t.Fatalf("handler did not run as expected; result=%q", result)
-	}
-
-	// 4. Deleting the function removes it (and its archive) cleanly.
-	if code, body := do(t, "DELETE", "/v1/projects/proj/locations/us-central1/functions/hello", nil, ""); code != http.StatusOK {
-		t.Fatalf("delete function: HTTP %d: %s", code, body)
-	}
-	if code, _ := do(t, "GET", "/v1/projects/proj/locations/us-central1/functions/hello", nil, ""); code != http.StatusNotFound {
-		t.Fatalf("get after delete: HTTP %d, want 404", code)
+		result, _ := call["result"].(string)
+		if !strings.Contains(result, `"hello"`) || !strings.Contains(result, "jaiscloud") {
+			t.Fatalf("handler did not run as expected; result=%q", result)
+		}
+		return result
 	}
 }

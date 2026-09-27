@@ -1,16 +1,17 @@
 //go:build functions_e2e
 
 // Package functions_test verifies the Cloud Functions source-execution path end
-// to end under the Kubernetes executor. This is the FD7 acceptance test: the
-// code-fetch init container downloads the function's archive from the admin API
-// (JAISCLOUD_LAMBDA_CODE_URL) and unpacks it into /var/task, so the deployed
-// function runs the uploaded code rather than an empty task root.
+// to end under the Kubernetes executor. The code-fetch init container downloads
+// the function's archive from the admin API (JAISCLOUD_LAMBDA_CODE_URL) and
+// unpacks it into /var/task, so the deployed function runs the uploaded code
+// rather than an empty task root (FD7). The pod's bundled RIE then serves the
+// invocation (FD14): the shared executor must leave AWS_LAMBDA_RUNTIME_API unset
+// so the base image entrypoint starts the RIE, otherwise the pod never becomes
+// Ready.
 //
-// It asserts the code-mount contract specifically — the init container's
-// terminal status and unpacked contents — because that is the piece FD7 fixes.
-// It deliberately does not require a successful invocation: running the archive
-// depends on the shared Lambda executor's container runtime integration, which
-// is independent of the code mount.
+// The test invokes the function and asserts the uploaded handler actually ran,
+// then additionally checks the code-fetch init container's terminal status and
+// unpacked contents (the FD7 contract).
 //
 // Requires a jaiscloud-gcp started with JAISCLOUD_EXECUTOR_MODE=k8s and a
 // cluster-reachable JAISCLOUD_LAMBDA_CODE_URL (the Makefile target
@@ -29,7 +30,6 @@ package functions_test
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -52,27 +52,19 @@ func TestFunctionSourceCodeMountK8s(t *testing.T) {
 	reset(t)
 	// A unique function id per run guarantees a fresh pod: the K8s executor
 	// caches warm pods, so reusing an id would reuse a pod left by an earlier
-	// run instead of exercising a new code-fetch.
+	// run instead of exercising a new code-fetch + RIE start.
 	id := fmt.Sprintf("mount-%d", time.Now().UnixNano())
 	deploySourceFunction(t, id)
 
-	// Trigger one invocation in the background. The K8s executor creates the
-	// pod and runs its code-fetch init container before the runtime readiness
-	// check completes, so the pod is observable even if the call itself errors.
-	go func() {
-		req, err := http.NewRequest(http.MethodPost,
-			host()+"/v1/projects/proj/locations/us-central1/functions/"+id+":call",
-			strings.NewReader(`{"data":"{}"}`))
-		if err != nil {
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-		if err == nil {
-			resp.Body.Close()
-		}
-	}()
+	// Invoke synchronously. This requires the pod's RIE to actually serve on
+	// :8080, which in turn requires the base image entrypoint to start it — the
+	// FD14 regression: setting AWS_LAMBDA_RUNTIME_API stops the entrypoint from
+	// starting the RIE and the pod never becomes Ready.
+	invokeUntilHandlerResult(t, id)
 
+	// The invocation proves the code was mounted and the runtime served; still
+	// assert the code-fetch init container itself succeeded and unpacked the
+	// archive (the FD7 contract).
 	pod, exit := waitForCodeFetch(t, ns, id, 90*time.Second)
 	logs := kubectl(t, ns, "logs", pod, "-c", "code-fetch")
 	if exit != 0 {
@@ -81,7 +73,7 @@ func TestFunctionSourceCodeMountK8s(t *testing.T) {
 	if !strings.Contains(logs, "lambda_function.py") {
 		t.Fatalf("code-fetch did not unpack lambda_function.py; logs:\n%s", logs)
 	}
-	t.Logf("code-fetch fetched and unpacked the archive (pod %s)", pod)
+	t.Logf("function invoked and ran uploaded code (pod %s)", pod)
 }
 
 func kubectl(t *testing.T, ns string, args ...string) string {

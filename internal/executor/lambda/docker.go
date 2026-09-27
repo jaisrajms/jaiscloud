@@ -238,25 +238,7 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	pfx := instancePrefix(e.cfg.InstanceID)
 	name := pfx + sanitizeName(req.FunctionName) + "-" + shortID()
 
-	env := []string{
-		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", req.FunctionName),
-		fmt.Sprintf("AWS_DEFAULT_REGION=%s", regionOrDefault(e.cfg.Region)),
-		fmt.Sprintf("AWS_REGION=%s", regionOrDefault(e.cfg.Region)),
-		fmt.Sprintf("_HANDLER=%s", req.Handler),
-		fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", req.AccountID),
-		"AWS_SECRET_ACCESS_KEY=test",
-		"AWS_SESSION_TOKEN=test",
-		"LAMBDA_TASK_ROOT=/var/task",
-		"LAMBDA_RUNTIME_DIR=/var/runtime",
-		"AWS_LAMBDA_RUNTIME_API=127.0.0.1:9001",
-	}
-	if e.cfg.JaisCloudEndpoint != "" {
-		env = append(env, "AWS_ENDPOINT_URL="+e.cfg.JaisCloudEndpoint)
-		env = append(env, "JAISCLOUD_ENDPOINT="+e.cfg.JaisCloudEndpoint)
-	}
-	for k, v := range req.EnvVars {
-		env = append(env, k+"="+v)
-	}
+	env := dockerRuntimeEnv(e.cfg, req)
 
 	// Platform layer: TLS PEM bundle + extra env for this container.
 	var binds []string
