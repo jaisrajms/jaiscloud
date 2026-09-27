@@ -30,7 +30,7 @@
 | Managed Kafka | REST + gRPC | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
 | Cloud Monitoring | REST + gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
-| Cloud Logging | REST + gRPC | Log entries, filtering, tailing, monitored-resource descriptors, sinks + exclusions (routing evaluated, not delivered) |
+| Cloud Logging | REST + gRPC | Log entries, filtering, tailing, monitored-resource descriptors, sinks + exclusions (routing evaluated, not delivered), logs-based metrics |
 | Eventarc | REST + gRPC | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
 | Cloud DNS | REST | Metadata-only managed zones + record sets/changes — no authoritative DNS server, see [Known Limitations](#known-limitations) |
 | Memorystore for Redis | REST | Metadata-only instances + location discovery — no Redis data plane, see [Known Limitations](#known-limitations) |
@@ -278,6 +278,12 @@ Alert policies are evaluated by a background worker (30s tick, matching the AWS 
 The config plane is implemented over both transports for **sinks** (`sinks.create`/`get`/`list`/`update`/`patch`/`delete`, gRPC `CreateSink`/`GetSink`/`ListSinks`/`UpdateSink`/`DeleteSink`) and **resource-level exclusions** (`exclusions.create`/`get`/`list`/`patch`/`delete`, gRPC `ConfigServiceV2` exclusions). Sinks and exclusions are project-scoped and persisted (memory + Postgres + snapshots); the sink's inline `exclusions` and the `writer_identity` output field round-trip, and masked updates honor the REST `updateMask`/gRPC `FieldMask` paths (`destination`, `filter`, `description`, `disabled`, `exclusions`, `include_children`). A filter that the emulator's advanced-log subset cannot parse is rejected at write time (`InvalidArgument`) rather than silently routing nothing.
 
 `WriteLogEntries` **evaluates** routing: resource-level exclusions are applied first, then each enabled sink's inline exclusions, then the sink filter, and the matched sink resource names are recorded (debug log). The emulator has **no export destination delivery** — no bytes are written to the sink's bucket/dataset/topic — so a sink is configuration + routing evaluation only. Sink/exclusion filters use the same filter engine as `ListLogEntries` (the documented subset), so filters the engine does not understand are rejected loud. The gRPC `ConfigServiceV2` bucket/view/link, CMEK/settings, and `CopyLogEntries` RPCs are explicit `Unimplemented` stubs (the emulator has no log-bucket storage plane).
+
+### Cloud Logging: logs-based metrics are definitions, not computed time series
+
+Logs-based metrics are implemented over both transports (`metrics.create`/`get`/`list`/`update`/`delete`, gRPC `MetricsServiceV2` `CreateLogMetric`/`GetLogMetric`/`ListLogMetrics`/`UpdateLogMetric`/`DeleteLogMetric`). A metric is a project-scoped, persisted definition (`filter`, `description`, `disabled`, `bucket_name`, `value_extractor`, `label_extractors`, `bucket_options`, and the descriptor's `metric_kind`/`value_type`/`unit`/`display_name`/`labels`) stored in the memory and Postgres backends and included in snapshots/export/import. The filter is compiled by the same advanced-log engine as `ListLogEntries`, so an unparseable filter is rejected at write time (`InvalidArgument`); a `DISTRIBUTION` metric requires a `value_extractor`, and every descriptor label must have a matching `label_extractors` entry (and vice versa).
+
+The output-only `metric_descriptor.name`/`type`/`description` are synthesized from the metric id/description (`logging.googleapis.com/user/{METRIC_ID}`), and `metric_kind`/`value_type` are immutable across updates (existing label value types are too; new labels may be added). The emulator **does not compute metric time series** — there is no Monitoring writer on the log write path — so a logs-based metric is a definition only. Metric ids may contain slashes (e.g. `nginx/requests`); the id is percent-encoded (`%2F`) in the canonical resource name and accepted either encoded or raw on a read.
 
 ### Cloud KMS: rotation schedule is executed lazily on read
 

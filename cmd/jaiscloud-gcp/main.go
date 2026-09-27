@@ -452,6 +452,7 @@ func startCmd() *cobra.Command {
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			loggingConfigGRPC := grpclogging.NewConfigService(loggingCore, cfg.ProjectID)
+			loggingMetricsGRPC := grpclogging.NewMetricsService(loggingCore, cfg.ProjectID)
 			monitoringGRPC := grpcmonitoring.NewService(monitoringCore, cfg.ProjectID)
 			// The background evaluator evaluates alert-policy condition_threshold
 			// conditions, opens/closes incidents, and publishes notifications to
@@ -526,6 +527,7 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("logging") {
 					loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
 					loggingpb.RegisterConfigServiceV2Server(gserv.GRPC(), loggingConfigGRPC)
+					loggingpb.RegisterMetricsServiceV2Server(gserv.GRPC(), loggingMetricsGRPC)
 				}
 				if transports.GRPCFor("monitoring") {
 					monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)

@@ -15,12 +15,13 @@ type memorySnapshot struct {
 	Entries    map[string][]LogEntry              `json:"entries"`
 	Sinks      map[string]map[string]LogSink      `json:"sinks,omitempty"`
 	Exclusions map[string]map[string]LogExclusion `json:"exclusions,omitempty"`
+	Metrics    map[string]map[string]LogMetric    `json:"metrics,omitempty"`
 }
 
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.entries) == 0 && len(s.sinks) == 0 && len(s.exclusions) == 0, nil
+	return len(s.entries) == 0 && len(s.sinks) == 0 && len(s.exclusions) == 0 && len(s.metrics) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
@@ -30,6 +31,7 @@ func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 		Entries:    s.entries,
 		Sinks:      s.sinks,
 		Exclusions: s.exclusions,
+		Metrics:    s.metrics,
 	})
 }
 
@@ -62,11 +64,15 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	if snap.Exclusions == nil {
 		snap.Exclusions = make(map[string]map[string]LogExclusion)
 	}
+	if snap.Metrics == nil {
+		snap.Metrics = make(map[string]map[string]LogMetric)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = snap.Entries
 	s.sinks = snap.Sinks
 	s.exclusions = snap.Exclusions
+	s.metrics = snap.Metrics
 	var maxID int64
 	for _, entries := range snap.Entries {
 		for _, e := range entries {
@@ -93,6 +99,7 @@ func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 		SELECT (SELECT count(*) FROM jc_log_entries)
 		     + (SELECT count(*) FROM jc_log_sinks)
 		     + (SELECT count(*) FROM jc_log_exclusions)
+		     + (SELECT count(*) FROM jc_log_metrics)
 	`).Scan(&n); err != nil {
 		return false, err
 	}
@@ -115,6 +122,10 @@ type pgSnapshot struct {
 		ProjectID string       `json:"projectId"`
 		Exclusion LogExclusion `json:"exclusion"`
 	} `json:"exclusions,omitempty"`
+	Metrics []struct {
+		ProjectID string    `json:"projectId"`
+		Metric    LogMetric `json:"metric"`
+	} `json:"metrics,omitempty"`
 }
 
 func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
@@ -204,6 +215,41 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		return err
 	}
 
+	metricRows, err := s.pool.Query(ctx, `
+		SELECT project_id, name, description, filter, disabled, bucket_name, value_extractor, label_extractors, bucket_options, descriptor, create_time, update_time
+		FROM jc_log_metrics ORDER BY project_id, name
+	`)
+	if err != nil {
+		return err
+	}
+	for metricRows.Next() {
+		var r struct {
+			ProjectID string    `json:"projectId"`
+			Metric    LogMetric `json:"metric"`
+		}
+		var labelExtractors, bucketOptions, descriptor []byte
+		if err := metricRows.Scan(&r.ProjectID, &r.Metric.Name, &r.Metric.Description, &r.Metric.Filter, &r.Metric.Disabled,
+			&r.Metric.BucketName, &r.Metric.ValueExtractor, &labelExtractors, &bucketOptions, &descriptor,
+			&r.Metric.CreateTime, &r.Metric.UpdateTime); err != nil {
+			metricRows.Close()
+			return err
+		}
+		if len(labelExtractors) > 0 {
+			_ = json.Unmarshal(labelExtractors, &r.Metric.LabelExtractors)
+		}
+		if len(bucketOptions) > 0 {
+			r.Metric.BucketOptions = append([]byte(nil), bucketOptions...)
+		}
+		if len(descriptor) > 0 {
+			_ = json.Unmarshal(descriptor, &r.Metric.Descriptor)
+		}
+		snap.Metrics = append(snap.Metrics, r)
+	}
+	metricRows.Close()
+	if err := metricRows.Err(); err != nil {
+		return err
+	}
+
 	return json.NewEncoder(w).Encode(snap)
 }
 
@@ -224,6 +270,9 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_exclusions`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_metrics`); err != nil {
 		return err
 	}
 	for _, r := range snap.Entries {
@@ -252,6 +301,20 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			VALUES ($1,$2,$3,$4,$5,$6,$7)
 		`, r.ProjectID, r.Exclusion.Name, r.Exclusion.Description, r.Exclusion.Filter, r.Exclusion.Disabled,
 			r.Exclusion.CreateTime, r.Exclusion.UpdateTime); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.Metrics {
+		labelExtractors, descriptor, bucketOptions, jerr := metricJSON(r.Metric)
+		if jerr != nil {
+			return jerr
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_log_metrics
+				(project_id, name, description, filter, disabled, bucket_name, value_extractor, label_extractors, bucket_options, descriptor, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		`, r.ProjectID, r.Metric.Name, r.Metric.Description, r.Metric.Filter, r.Metric.Disabled, r.Metric.BucketName,
+			r.Metric.ValueExtractor, labelExtractors, bucketOptions, descriptor, r.Metric.CreateTime, r.Metric.UpdateTime); err != nil {
 			return err
 		}
 	}

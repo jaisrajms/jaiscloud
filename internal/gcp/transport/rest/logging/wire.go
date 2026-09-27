@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -378,6 +379,136 @@ func exclusionToWire(e loggingstore.LogExclusion) map[string]any {
 	}
 	if !e.UpdateTime.IsZero() {
 		out["updateTime"] = e.UpdateTime.UTC().Format(time.RFC3339Nano)
+	}
+	return out
+}
+
+// ─── metric transcoding ───────────────────────────────────────────────────────
+
+// metricFromWire decodes a Discovery LogMetric body into the neutral stored form.
+// Output-only fields (resourceName, metricDescriptor.name/type/description,
+// createTime, updateTime) are ignored.
+func metricFromWire(v map[string]any) loggingstore.LogMetric {
+	m := loggingstore.LogMetric{
+		Name:            strFrom(v["name"]),
+		Description:     strFrom(v["description"]),
+		Filter:          strFrom(v["filter"]),
+		Disabled:        boolFrom(v["disabled"]),
+		BucketName:      strFrom(v["bucketName"]),
+		ValueExtractor:  strFrom(v["valueExtractor"]),
+		LabelExtractors: stringMapFrom(v["labelExtractors"]),
+	}
+	if bo, ok := v["bucketOptions"]; ok && bo != nil {
+		if raw, err := json.Marshal(bo); err == nil {
+			m.BucketOptions = raw
+		}
+	}
+	if md, ok := v["metricDescriptor"].(map[string]any); ok {
+		m.Descriptor = metricDescriptorFromWire(md)
+	}
+	return m
+}
+
+func metricDescriptorFromWire(md map[string]any) loggingstore.LogMetricDescriptor {
+	d := loggingstore.LogMetricDescriptor{
+		MetricKind:  strFrom(md["metricKind"]),
+		ValueType:   strFrom(md["valueType"]),
+		Unit:        strFrom(md["unit"]),
+		DisplayName: strFrom(md["displayName"]),
+	}
+	if arr, ok := md["labels"].([]any); ok {
+		for _, l := range arr {
+			if lm, ok := l.(map[string]any); ok {
+				d.Labels = append(d.Labels, loggingstore.LogMetricLabel{
+					Key:         strFrom(lm["key"]),
+					ValueType:   strFrom(lm["valueType"]),
+					Description: strFrom(lm["description"]),
+				})
+			}
+		}
+	}
+	return d
+}
+
+// metricToWire encodes a stored metric as the Discovery LogMetric JSON. The
+// metric's descriptor must already carry its synthesized output fields (the core
+// fills them). The metric id is the short client-assigned name; the full name is
+// emitted as the output-only resourceName.
+func metricToWire(scopeParent string, m loggingstore.LogMetric) map[string]any {
+	out := map[string]any{}
+	if m.Name != "" {
+		out["name"] = m.Name
+	}
+	if scopeParent != "" {
+		out["resourceName"] = core.MetricResourceName(scopeParent, m.Name)
+	}
+	if m.Description != "" {
+		out["description"] = m.Description
+	}
+	if m.Filter != "" {
+		out["filter"] = m.Filter
+	}
+	if m.Disabled {
+		out["disabled"] = true
+	}
+	if m.BucketName != "" {
+		out["bucketName"] = m.BucketName
+	}
+	if m.ValueExtractor != "" {
+		out["valueExtractor"] = m.ValueExtractor
+	}
+	if len(m.LabelExtractors) > 0 {
+		out["labelExtractors"] = m.LabelExtractors
+	}
+	if len(m.BucketOptions) > 0 {
+		var bo any
+		if err := json.Unmarshal(m.BucketOptions, &bo); err == nil {
+			out["bucketOptions"] = bo
+		}
+	}
+	out["metricDescriptor"] = metricDescriptorToWire(m.Descriptor)
+	if !m.CreateTime.IsZero() {
+		out["createTime"] = m.CreateTime.UTC().Format(time.RFC3339Nano)
+	}
+	if !m.UpdateTime.IsZero() {
+		out["updateTime"] = m.UpdateTime.UTC().Format(time.RFC3339Nano)
+	}
+	return out
+}
+
+func metricDescriptorToWire(d loggingstore.LogMetricDescriptor) map[string]any {
+	out := map[string]any{}
+	if d.Name != "" {
+		out["name"] = d.Name
+	}
+	if d.Type != "" {
+		out["type"] = d.Type
+	}
+	if d.Description != "" {
+		out["description"] = d.Description
+	}
+	if d.Unit != "" {
+		out["unit"] = d.Unit
+	}
+	if d.MetricKind != "" {
+		out["metricKind"] = d.MetricKind
+	}
+	if d.ValueType != "" {
+		out["valueType"] = d.ValueType
+	}
+	if d.DisplayName != "" {
+		out["displayName"] = d.DisplayName
+	}
+	if len(d.Labels) > 0 {
+		labels := make([]any, 0, len(d.Labels))
+		for _, l := range d.Labels {
+			labels = append(labels, map[string]any{
+				"key":         l.Key,
+				"valueType":   l.ValueType,
+				"description": l.Description,
+			})
+		}
+		out["labels"] = labels
 	}
 	return out
 }

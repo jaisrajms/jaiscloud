@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 761,
+    "total": 771,
     "by_state": {
-      "ga": 521,
+      "ga": 531,
       "limited": 100,
       "preview": 37,
       "unsupported": 103
     },
     "by_transport": {
       "grpc": {
-        "ga": 255,
+        "ga": 260,
         "limited": 11,
         "unsupported": 94
       },
       "rest": {
-        "ga": 266,
+        "ga": 271,
         "limited": 89,
         "preview": 37,
         "unsupported": 9
@@ -71,7 +71,7 @@
         "limited": 4
       },
       "logging": {
-        "ga": 31,
+        "ga": 41,
         "limited": 1,
         "unsupported": 22
       },
@@ -4358,6 +4358,17 @@
     },
     {
       "service": "logging",
+      "operation": "CreateLogMetric",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "logging",
       "operation": "CreateSink",
       "transport": "grpc",
       "state": "ga",
@@ -4417,6 +4428,17 @@
     {
       "service": "logging",
       "operation": "DeleteLog",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "DeleteLogMetric",
       "transport": "grpc",
       "state": "ga",
       "evidence": [
@@ -4493,6 +4515,16 @@
     },
     {
       "service": "logging",
+      "operation": "GetLogMetric",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "logging",
       "operation": "GetSettings",
       "transport": "grpc",
       "state": "unsupported",
@@ -4558,6 +4590,16 @@
     {
       "service": "logging",
       "operation": "ListLogEntries",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "ListLogMetrics",
       "transport": "grpc",
       "state": "ga",
       "evidence": [
@@ -4702,6 +4744,59 @@
     },
     {
       "service": "logging",
+      "operation": "Logging.MetricCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.metrics.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.MetricDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.metrics.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.MetricGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.metrics.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.MetricList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.metrics.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.MetricUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.metrics.update",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
       "operation": "Logging.MonitoredResourceDescriptorList",
       "transport": "rest",
       "state": "ga",
@@ -4841,6 +4936,17 @@
         "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "UpdateLogMetric",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {

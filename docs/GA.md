@@ -144,8 +144,8 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **272/272 checks pass** (Dataproc 14,
-  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 15,
+- **gRPC** — official `cloud.google.com/go` clients: **278/278 checks pass** (Dataproc 14,
+  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 21,
   Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
@@ -210,11 +210,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
   (runtime invocation) and v2 `ListRuntimes` are explicit `unsupported` `Unimplemented` stubs —
   the gRPC surface is control-plane only.
-- **gRPC** — **11** of **360** cells remain `limited`: verified against proto descriptors only.
-  The other **255** are `ga` and **94** are explicit `unsupported` stubs (see the `Unimplemented`
+- **gRPC** — **11** of **365** cells remain `limited`: verified against proto descriptors only.
+  The other **260** are `ga` and **94** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **272** checks over those `ga` proto methods (Dataproc 14,
-  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 15,
+  The conformance harness exercises **278** checks over those `ga` proto methods (Dataproc 14,
+  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 21,
   Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5, the rest one
   per method). KMS
@@ -224,7 +224,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   to update), Logging `TailLogEntries` (a bounded store-poll with no deterministic conformance
   assertion), and Managed Kafka
   `List`/`Get`/`Update`/`DeleteConsumerGroup` (no broker, so the list is empty and the item
-  methods report `NOT_FOUND`). Logging's gRPC `ConfigServiceV2` serves sinks + exclusions; its
+  methods report `NOT_FOUND`). Logging's gRPC `ConfigServiceV2` serves sinks + exclusions and
+  `MetricsServiceV2` serves logs-based metrics (create/get/list/update/delete, with the descriptor
+  `name`/`type`/`description` synthesized from the metric id/description and `metric_kind`/`value_type`
+  immutable across updates); its
   log-bucket/view/link, CMEK/settings, and `CopyLogEntries` RPCs are explicit `unsupported`
   `Unimplemented` stubs (the emulator has no bucket/view storage plane).
 - **Other documented caveats** (functional, not cell states — see

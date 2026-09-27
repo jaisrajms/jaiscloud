@@ -13,10 +13,12 @@
 //	GET/PUT/PATCH/DELETE /v2/{sinkName}               sinks.get/update/patch/delete
 //	GET/POST        /v2/{parent}/exclusions           exclusions.list / exclusions.create
 //	GET/PATCH/DELETE /v2/{name}                       exclusions.get/patch/delete
+//	GET/POST        /v2/{parent}/metrics              metrics.list / metrics.create
+//	GET/PUT/DELETE  /v2/{metricName}                  metrics.get/update/delete
 //
 // entries.tail is bidirectional-streaming and stays gRPC-only; the
-// settings/metrics/buckets/views and entries.copy families are not implemented
-// (they are out of scope for this phase).
+// settings/buckets/views and entries.copy families are not implemented (they are
+// out of scope for this phase).
 //
 // The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the core's typed
 // API); the Provider holds the routes. Neither owns business logic — both
@@ -27,6 +29,7 @@ package logging
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"jaiscloud/internal/gcp/gcperr"
@@ -76,6 +79,10 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Action = "EntryList"
 	case r.Method == http.MethodGet && rest == "monitoredResourceDescriptors":
 		nr.Action = "MonitoredResourceDescriptorList"
+	case decodeMetricsPath(r, rest, nr):
+		// Action/params are set by the helper. Checked before the log family so
+		// a (non-canonical) raw-slash metric id containing a "logs" segment is
+		// not misrouted.
 	case r.Method == http.MethodGet && strings.HasSuffix(rest, "/logs"):
 		nr.Action = "LogList"
 		nr.Params["parent"] = strings.TrimSuffix(rest, "/logs")
@@ -100,6 +107,54 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	}
 	queryToParams(r, nr.Params)
 	return nr, nil
+}
+
+// decodeMetricsPath recognises the logs-based metric paths and sets the action +
+// resource params on nr. It returns false when rest is not a metric path (or
+// uses an unsupported method on one).
+//
+//	GET    /v2/{parent}/metrics            metrics.list
+//	POST   /v2/{parent}/metrics            metrics.create
+//	GET    /v2/{metricName}                metrics.get
+//	PUT    /v2/{metricName}                metrics.update
+//	DELETE /v2/{metricName}                metrics.delete
+//
+// The metric id may itself contain slashes; clients percent-encode them as
+// %2F (the id is one path segment on the wire), so the item id is reassembled
+// from every remaining segment and URL-decoded.
+func decodeMetricsPath(r *http.Request, rest string, nr *model.NormalizedRequest) bool {
+	parts := strings.Split(rest, "/")
+	if len(parts) < 3 || !core.IsLogScope(parts[0]) || parts[1] == "" || parts[2] != "metrics" {
+		return false
+	}
+	parent := parts[0] + "/" + parts[1]
+	if len(parts) == 3 {
+		switch r.Method {
+		case http.MethodGet:
+			nr.Action, nr.Params["parent"] = "MetricList", parent
+		case http.MethodPost:
+			nr.Action, nr.Params["parent"] = "MetricCreate", parent
+		default:
+			return false
+		}
+		return true
+	}
+	decoded, err := url.PathUnescape(strings.Join(parts[3:], "/"))
+	if err != nil || decoded == "" {
+		return false
+	}
+	full := parent + "/metrics/" + url.PathEscape(decoded)
+	switch r.Method {
+	case http.MethodGet:
+		nr.Action, nr.Params["metricName"] = "MetricGet", full
+	case http.MethodPut:
+		nr.Action, nr.Params["metricName"] = "MetricUpdate", full
+	case http.MethodDelete:
+		nr.Action, nr.Params["metricName"] = "MetricDelete", full
+	default:
+		return false
+	}
+	return true
 }
 
 // decodeConfigPath recognises the Logging config-plane paths and sets the

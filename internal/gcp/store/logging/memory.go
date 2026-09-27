@@ -13,6 +13,7 @@ type MemoryStore struct {
 	entries    map[string][]LogEntry              // scope → entries
 	sinks      map[string]map[string]LogSink      // scope → name → sink
 	exclusions map[string]map[string]LogExclusion // scope → name → exclusion
+	metrics    map[string]map[string]LogMetric    // scope → name → metric
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -21,6 +22,7 @@ func NewMemoryStore() *MemoryStore {
 		entries:    make(map[string][]LogEntry),
 		sinks:      make(map[string]map[string]LogSink),
 		exclusions: make(map[string]map[string]LogExclusion),
+		metrics:    make(map[string]map[string]LogMetric),
 	}
 }
 
@@ -191,11 +193,87 @@ func (s *MemoryStore) DeleteExclusion(_ context.Context, scope, name string) err
 	return nil
 }
 
+// ─── metrics ──────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateMetric(_ context.Context, scope string, m LogMetric) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.metrics[scope] == nil {
+		s.metrics[scope] = make(map[string]LogMetric)
+	}
+	if _, ok := s.metrics[scope][m.Name]; ok {
+		return ErrMetricExists
+	}
+	s.metrics[scope][m.Name] = cloneMetric(m)
+	return nil
+}
+
+func (s *MemoryStore) GetMetric(_ context.Context, scope, name string) (LogMetric, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.metrics[scope][name]
+	if !ok {
+		return LogMetric{}, ErrMetricNotFound
+	}
+	return cloneMetric(m), nil
+}
+
+func (s *MemoryStore) ListMetrics(_ context.Context, scope string) ([]LogMetric, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]LogMetric, 0, len(s.metrics[scope]))
+	for _, m := range s.metrics[scope] {
+		result = append(result, cloneMetric(m))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func (s *MemoryStore) UpdateMetric(_ context.Context, scope string, m LogMetric) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.metrics[scope][m.Name]; !ok {
+		return ErrMetricNotFound
+	}
+	s.metrics[scope][m.Name] = cloneMetric(m)
+	return nil
+}
+
+func (s *MemoryStore) DeleteMetric(_ context.Context, scope, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.metrics[scope][name]; !ok {
+		return ErrMetricNotFound
+	}
+	delete(s.metrics[scope], name)
+	return nil
+}
+
+// cloneMetric deep-copies the slice-bearing fields so a stored metric cannot be
+// mutated through the caller's maps/slices.
+func cloneMetric(m LogMetric) LogMetric {
+	if m.LabelExtractors != nil {
+		labels := make(map[string]string, len(m.LabelExtractors))
+		for k, v := range m.LabelExtractors {
+			labels[k] = v
+		}
+		m.LabelExtractors = labels
+	}
+	if m.BucketOptions != nil {
+		m.BucketOptions = append([]byte(nil), m.BucketOptions...)
+	}
+	if m.Descriptor.Labels != nil {
+		m.Descriptor.Labels = append([]LogMetricLabel(nil), m.Descriptor.Labels...)
+	}
+	return m
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = make(map[string][]LogEntry)
 	s.sinks = make(map[string]map[string]LogSink)
 	s.exclusions = make(map[string]map[string]LogExclusion)
+	s.metrics = make(map[string]map[string]LogMetric)
 	s.nextID = 0
 }

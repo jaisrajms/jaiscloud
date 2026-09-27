@@ -48,6 +48,12 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Logging.ExclusionList":   p.ExclusionList,
 		"Logging.ExclusionPatch":  p.ExclusionPatch,
 		"Logging.ExclusionDelete": p.ExclusionDelete,
+
+		"Logging.MetricCreate": p.MetricCreate,
+		"Logging.MetricGet":    p.MetricGet,
+		"Logging.MetricList":   p.MetricList,
+		"Logging.MetricUpdate": p.MetricUpdate,
+		"Logging.MetricDelete": p.MetricDelete,
 	}
 }
 
@@ -312,4 +318,75 @@ func (p *Provider) ExclusionDelete(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
+}
+
+// ─── logs-based metrics ───────────────────────────────────────────────────────
+
+func (p *Provider) MetricCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	parent := strParam(nr, "parent")
+	m, err := p.core.CreateMetric(ctx, parent, metricFromWire(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(metricToWire(metricScopeParent(parent), m)), nil
+}
+
+func (p *Provider) MetricGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr, "metricName")
+	m, err := p.core.GetMetric(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(metricToWire(metricScopeParent(name), m)), nil
+}
+
+func (p *Provider) MetricList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	parent := strParam(nr, "parent")
+	metrics, next, err := p.core.ListMetrics(ctx, parent,
+		intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(metrics) > 0 {
+		list := make([]any, 0, len(metrics))
+		scope := metricScopeParent(parent)
+		for _, m := range metrics {
+			list = append(list, metricToWire(scope, m))
+		}
+		out["metrics"] = list
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) MetricUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr, "metricName")
+	m, err := p.core.UpdateMetric(ctx, name, metricFromWire(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(metricToWire(metricScopeParent(name), m)), nil
+}
+
+func (p *Provider) MetricDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := p.core.DeleteMetric(ctx, strParam(nr, "metricName")); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// metricScopeParent resolves the canonical scope parent of a metric resource
+// name, or "" when the name does not parse (a create/list parent parses via
+// ParseScopeParent, a full metric name via ParseMetricName).
+func metricScopeParent(name string) string {
+	if scope, _, err := core.ParseMetricName(name); err == nil {
+		return scope
+	}
+	if scope, err := core.ParseScopeParent(name); err == nil {
+		return scope
+	}
+	return ""
 }

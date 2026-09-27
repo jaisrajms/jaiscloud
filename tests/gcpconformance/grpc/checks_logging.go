@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	labelpb "google.golang.org/genproto/googleapis/api/label"
+	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredres "google.golang.org/genproto/googleapis/api/monitoredres"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -64,6 +66,195 @@ func loggingConfigChecks() []Check {
 		{Service: "logging", RPC: "ListExclusions", KeyField: "exclusions[] contains the created exclusion", Run: checkLoggingListExclusions},
 		{Service: "logging", RPC: "UpdateExclusion", KeyField: "masked disabled update", Run: checkLoggingUpdateExclusion},
 		{Service: "logging", RPC: "DeleteExclusion", KeyField: "exclusion absent from ListExclusions after delete", Run: checkLoggingDeleteExclusion},
+	}
+}
+
+// loggingMetricsChecks covers the Cloud Logging v2 logs-based metric plane
+// (google.logging.v2.MetricsServiceV2) through the official generated logging
+// MetricsClient. The probes run create -> get -> list -> update -> delete and
+// share one run-unique metric, so the sequence is self-contained and idempotent.
+func loggingMetricsChecks() []Check {
+	return []Check{
+		{Service: "logging", RPC: "CreateLogMetric", KeyField: "metric descriptor type/valueType round-trip", Run: checkLoggingCreateMetric},
+		{Service: "logging", RPC: "GetLogMetric", KeyField: "metric by full resource name", Run: checkLoggingGetMetric},
+		{Service: "logging", RPC: "ListLogMetrics", KeyField: "metrics[] contains the created metric", Run: checkLoggingListMetrics},
+		{Service: "logging", RPC: "UpdateLogMetric", KeyField: "filter update preserves descriptor type", Run: checkLoggingUpdateMetric},
+		{Service: "logging", RPC: "UpdateLogMetric (create)", Method: "UpdateLogMetric", KeyField: "update on an absent metric creates it", Run: checkLoggingUpsertMetric},
+		{Service: "logging", RPC: "DeleteLogMetric", KeyField: "metric absent from ListLogMetrics after delete", Run: checkLoggingDeleteMetric},
+	}
+}
+
+// newLoggingMetricsClient dials the emulator and returns the official generated
+// Logging metrics client.
+func newLoggingMetricsClient(ctx context.Context, cfg Config) (*logging.MetricsClient, error) {
+	return logging.NewMetricsClient(ctx,
+		option.WithEndpoint(cfg.GRPCAddr()),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		option.WithoutAuthentication(),
+	)
+}
+
+func loggingMetricID(cfg Config) string { return cfg.ResourceName("gcpc-grpc-metric") }
+
+func loggingMetricName(cfg Config) string {
+	return fmt.Sprintf("%s/metrics/%s", loggingParent(cfg), loggingMetricID(cfg))
+}
+
+func checkLoggingCreateMetric(ctx context.Context, cfg Config) error {
+	client, err := newLoggingMetricsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metrics client: %w", err)
+	}
+	defer client.Close()
+
+	m, err := client.CreateLogMetric(ctx, &loggingpb.CreateLogMetricRequest{
+		Parent: loggingParent(cfg),
+		Metric: &loggingpb.LogMetric{
+			Name:            loggingMetricID(cfg),
+			Description:     "conformance",
+			Filter:          "severity>=ERROR",
+			LabelExtractors: map[string]string{"code": "EXTRACT(jsonPayload.code)"},
+			MetricDescriptor: &metricpb.MetricDescriptor{
+				ValueType: metricpb.MetricDescriptor_INT64,
+				Labels:    []*labelpb.LabelDescriptor{{Key: "code", ValueType: labelpb.LabelDescriptor_INT64}},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateLogMetric: %w", err)
+	}
+	if m.GetName() != loggingMetricID(cfg) {
+		return fmt.Errorf("metric name = %q, want %q", m.GetName(), loggingMetricID(cfg))
+	}
+	if want := "logging.googleapis.com/user/" + loggingMetricID(cfg); m.GetMetricDescriptor().GetType() != want {
+		return fmt.Errorf("metric descriptor type = %q, want %q", m.GetMetricDescriptor().GetType(), want)
+	}
+	if m.GetMetricDescriptor().GetValueType() != metricpb.MetricDescriptor_INT64 {
+		return fmt.Errorf("metric descriptor valueType = %v, want INT64", m.GetMetricDescriptor().GetValueType())
+	}
+	if m.GetCreateTime() == nil {
+		return fmt.Errorf("metric createTime is unset")
+	}
+	return nil
+}
+
+func checkLoggingGetMetric(ctx context.Context, cfg Config) error {
+	client, err := newLoggingMetricsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metrics client: %w", err)
+	}
+	defer client.Close()
+
+	m, err := client.GetLogMetric(ctx, &loggingpb.GetLogMetricRequest{MetricName: loggingMetricName(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetLogMetric: %w", err)
+	}
+	if m.GetFilter() != "severity>=ERROR" {
+		return fmt.Errorf("metric filter = %q, want %q", m.GetFilter(), "severity>=ERROR")
+	}
+	return nil
+}
+
+func checkLoggingListMetrics(ctx context.Context, cfg Config) error {
+	client, err := newLoggingMetricsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metrics client: %w", err)
+	}
+	defer client.Close()
+
+	it := client.ListLogMetrics(ctx, &loggingpb.ListLogMetricsRequest{Parent: loggingParent(cfg)})
+	for {
+		m, err := it.Next()
+		if err == iterator.Done {
+			return fmt.Errorf("created metric %q not listed", loggingMetricID(cfg))
+		}
+		if err != nil {
+			return fmt.Errorf("ListLogMetrics: %w", err)
+		}
+		if m.GetName() == loggingMetricID(cfg) {
+			return nil
+		}
+	}
+}
+
+func checkLoggingUpdateMetric(ctx context.Context, cfg Config) error {
+	client, err := newLoggingMetricsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metrics client: %w", err)
+	}
+	defer client.Close()
+
+	updated, err := client.UpdateLogMetric(ctx, &loggingpb.UpdateLogMetricRequest{
+		MetricName: loggingMetricName(cfg),
+		Metric: &loggingpb.LogMetric{
+			Filter:          "severity>=WARNING",
+			LabelExtractors: map[string]string{"code": "EXTRACT(jsonPayload.code)"},
+			MetricDescriptor: &metricpb.MetricDescriptor{
+				ValueType: metricpb.MetricDescriptor_INT64,
+				Labels:    []*labelpb.LabelDescriptor{{Key: "code", ValueType: labelpb.LabelDescriptor_INT64}},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateLogMetric: %w", err)
+	}
+	if updated.GetFilter() != "severity>=WARNING" {
+		return fmt.Errorf("updated filter = %q, want %q", updated.GetFilter(), "severity>=WARNING")
+	}
+	if want := "logging.googleapis.com/user/" + loggingMetricID(cfg); updated.GetMetricDescriptor().GetType() != want {
+		return fmt.Errorf("update changed descriptor type: %q, want %q", updated.GetMetricDescriptor().GetType(), want)
+	}
+	return nil
+}
+
+// checkLoggingUpsertMetric verifies the API's create-or-update contract: an
+// UpdateLogMetric against a metric that does not exist creates it.
+func checkLoggingUpsertMetric(ctx context.Context, cfg Config) error {
+	client, err := newLoggingMetricsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metrics client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-metric-upsert")
+	created, err := client.UpdateLogMetric(ctx, &loggingpb.UpdateLogMetricRequest{
+		MetricName: fmt.Sprintf("%s/metrics/%s", loggingParent(cfg), id),
+		Metric:     &loggingpb.LogMetric{Filter: "severity>=ERROR"},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateLogMetric (create): %w", err)
+	}
+	if created.GetName() != id {
+		return fmt.Errorf("upserted metric name = %q, want %q", created.GetName(), id)
+	}
+	if created.GetFilter() != "severity>=ERROR" {
+		return fmt.Errorf("upserted metric filter = %q, want %q", created.GetFilter(), "severity>=ERROR")
+	}
+	return nil
+}
+
+func checkLoggingDeleteMetric(ctx context.Context, cfg Config) error {
+	client, err := newLoggingMetricsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metrics client: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.DeleteLogMetric(ctx, &loggingpb.DeleteLogMetricRequest{MetricName: loggingMetricName(cfg)}); err != nil {
+		return fmt.Errorf("DeleteLogMetric: %w", err)
+	}
+	it := client.ListLogMetrics(ctx, &loggingpb.ListLogMetricsRequest{Parent: loggingParent(cfg)})
+	for {
+		m, err := it.Next()
+		if err == iterator.Done {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("ListLogMetrics after DeleteLogMetric: %w", err)
+		}
+		if m.GetName() == loggingMetricID(cfg) {
+			return fmt.Errorf("ListLogMetrics still lists %q after DeleteLogMetric", loggingMetricID(cfg))
+		}
 	}
 }
 

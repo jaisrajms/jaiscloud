@@ -242,8 +242,10 @@ func isDatastoreVerb(seg string) bool {
 // Cloud Functions v2 are the two emulated services that claim the /v2/
 // namespace: Logging owns the entries custom methods
 // (POST /v2/entries:write|:list), the descriptor catalog
-// (/v2/monitoredResourceDescriptors), and the {scope}/{scopeID}/logs family
-// (logs.list / logs.delete); Cloud Functions owns
+// (/v2/monitoredResourceDescriptors), the {scope}/{scopeID}/logs family
+// (logs.list / logs.delete), the config plane
+// ({scope}/{scopeID}/{sinks,exclusions}), and logs-based metrics
+// ({scope}/{scopeID}/metrics); Cloud Functions owns
 // /v2/projects/{project}/locations/... (functions/operations). The two do not
 // collide: Logging's log paths sit directly under a project, while Functions
 // always has a locations segment next.
@@ -268,6 +270,11 @@ func detectV2Service(path string) string {
 	// Cloud Logging config plane: /v2/{scope}/{scopeID}/sinks[/{id}] and
 	// /v2/{scope}/{scopeID}/exclusions[/{id}].
 	if isLoggingConfigPath(seg) {
+		return "logging"
+	}
+	// Cloud Logging logs-based metrics:
+	// /v2/{scope}/{scopeID}/metrics[/{metricId...}].
+	if isLoggingMetricsPath(seg) {
 		return "logging"
 	}
 
@@ -325,6 +332,16 @@ func isLoggingConfigPath(seg []string) bool {
 		return false
 	}
 	return seg[3] == "sinks" || seg[3] == "exclusions"
+}
+
+// isLoggingMetricsPath reports whether seg is
+// /v2/{scope}/{scopeID}/metrics[/{metricId...}]. A metric id may itself contain
+// slashes, so any number of trailing segments is accepted.
+func isLoggingMetricsPath(seg []string) bool {
+	if len(seg) < 4 || !servicelogging.IsLogScope(seg[1]) || seg[2] == "" {
+		return false
+	}
+	return seg[3] == "metrics"
 }
 
 // detectDataprocResourceType returns "clusters", "jobs", or "operations" when

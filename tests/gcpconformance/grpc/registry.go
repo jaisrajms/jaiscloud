@@ -73,6 +73,7 @@ func Registry() []Check {
 	checks = append(checks, datastoreChecks()...)
 	checks = append(checks, loggingChecks()...)
 	checks = append(checks, loggingConfigChecks()...)
+	checks = append(checks, loggingMetricsChecks()...)
 	checks = append(checks, operationsChecks()...)
 	checks = append(checks, monitoringChecks()...)
 	checks = append(checks, workflowExecutionsChecks()...)

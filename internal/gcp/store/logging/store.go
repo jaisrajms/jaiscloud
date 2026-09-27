@@ -6,18 +6,21 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
 
-// Sentinel errors returned by the store for the sink/exclusion registries. The
-// service maps them to gRPC status codes (errors.Is-compatible, matching the
-// datastore/monitoring conventions).
+// Sentinel errors returned by the store for the sink/exclusion/metric
+// registries. The service maps them to gRPC status codes (errors.Is-compatible,
+// matching the datastore/monitoring conventions).
 var (
 	ErrSinkNotFound      = errors.New("SinkNotFound")
 	ErrSinkExists        = errors.New("SinkExists")
 	ErrExclusionNotFound = errors.New("ExclusionNotFound")
 	ErrExclusionExists   = errors.New("ExclusionExists")
+	ErrMetricNotFound    = errors.New("MetricNotFound")
+	ErrMetricExists      = errors.New("MetricExists")
 )
 
 // LogEntry is a stored Cloud Logging entry. LogName is the full resource name
@@ -68,6 +71,49 @@ type LogExclusion struct {
 	UpdateTime  time.Time `json:"updateTime,omitempty"`
 }
 
+// LogMetricLabel is one label of a logs-based metric's descriptor.
+type LogMetricLabel struct {
+	Key         string `json:"key"`
+	ValueType   string `json:"valueType,omitempty"` // STRING | BOOL | INT64
+	Description string `json:"description,omitempty"`
+}
+
+// LogMetricDescriptor is the configurable part of a logs-based metric's
+// MetricDescriptor. Name/Type/Description are output-only and synthesized by
+// the service from the metric's name/description and its scope; they are
+// carried here only so a fetched metric can be rendered without the caller
+// rebuilding the invariant fields.
+type LogMetricDescriptor struct {
+	Name        string           `json:"name,omitempty"`
+	Type        string           `json:"type,omitempty"`
+	Description string           `json:"description,omitempty"`
+	MetricKind  string           `json:"metricKind,omitempty"` // DELTA | GAUGE | CUMULATIVE
+	ValueType   string           `json:"valueType,omitempty"`  // INT64 | DOUBLE | DISTRIBUTION
+	Unit        string           `json:"unit,omitempty"`
+	DisplayName string           `json:"displayName,omitempty"`
+	Labels      []LogMetricLabel `json:"labels,omitempty"`
+}
+
+// LogMetric is a stored logs-based metric. Name is the decoded client-assigned
+// metric id (the [METRIC_ID] part of the resource name, which may contain
+// slashes); the full resource name is built by the service. BucketOptions is
+// the opaque, canonical-JSON encoded google.api.Distribution.BucketOptions
+// (stored verbatim so both transports round-trip it without the store
+// depending on protobuf).
+type LogMetric struct {
+	Name            string              `json:"name"`
+	Description     string              `json:"description,omitempty"`
+	Filter          string              `json:"filter"`
+	Disabled        bool                `json:"disabled,omitempty"`
+	BucketName      string              `json:"bucketName,omitempty"`
+	ValueExtractor  string              `json:"valueExtractor,omitempty"`
+	LabelExtractors map[string]string   `json:"labelExtractors,omitempty"`
+	BucketOptions   json.RawMessage     `json:"bucketOptions,omitempty"`
+	Descriptor      LogMetricDescriptor `json:"descriptor,omitempty"`
+	CreateTime      time.Time           `json:"createTime,omitempty"`
+	UpdateTime      time.Time           `json:"updateTime,omitempty"`
+}
+
 // Store is the Cloud Logging store. Entries are isolated by scope parent, the
 // two-segment Cloud Logging resource container ("projects/p",
 // "organizations/123", "folders/f", "billingAccounts/b"); queries return
@@ -101,6 +147,16 @@ type Store interface {
 	ListExclusions(ctx context.Context, scope string) ([]LogExclusion, error)
 	UpdateExclusion(ctx context.Context, scope string, e LogExclusion) error
 	DeleteExclusion(ctx context.Context, scope, name string) error
+
+	// Logs-based metric registry, keyed by the decoded metric id (which may
+	// contain slashes). CreateMetric returns ErrMetricExists on a duplicate;
+	// GetMetric/UpdateMetric/DeleteMetric return ErrMetricNotFound.
+	CreateMetric(ctx context.Context, scope string, m LogMetric) error
+	GetMetric(ctx context.Context, scope, name string) (LogMetric, error)
+	// ListMetrics returns the scope's metrics ordered by name.
+	ListMetrics(ctx context.Context, scope string) ([]LogMetric, error)
+	UpdateMetric(ctx context.Context, scope string, m LogMetric) error
+	DeleteMetric(ctx context.Context, scope, name string) error
 
 	Reset(ctx context.Context)
 }

@@ -289,8 +289,133 @@ func scanExclusion(row sinkScanner) (LogExclusion, error) {
 	return e, nil
 }
 
+// ─── metrics ──────────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateMetric(ctx context.Context, scope string, m LogMetric) error {
+	labelExtractors, descriptor, bucketOptions, err := metricJSON(m)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_log_metrics
+			(project_id, name, description, filter, disabled, bucket_name, value_extractor, label_extractors, bucket_options, descriptor, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (project_id, name) DO NOTHING
+	`, scope, m.Name, m.Description, m.Filter, m.Disabled, m.BucketName, m.ValueExtractor, labelExtractors, bucketOptions, descriptor, m.CreateTime, m.UpdateTime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrMetricExists
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetMetric(ctx context.Context, scope, name string) (LogMetric, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT name, description, filter, disabled, bucket_name, value_extractor, label_extractors, bucket_options, descriptor, create_time, update_time
+		FROM jc_log_metrics WHERE project_id=$1 AND name=$2
+	`, scope, name)
+	return scanMetric(row)
+}
+
+func (s *PostgresStore) ListMetrics(ctx context.Context, scope string) ([]LogMetric, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, description, filter, disabled, bucket_name, value_extractor, label_extractors, bucket_options, descriptor, create_time, update_time
+		FROM jc_log_metrics WHERE project_id=$1 ORDER BY name
+	`, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []LogMetric
+	for rows.Next() {
+		m, err := scanMetric(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) UpdateMetric(ctx context.Context, scope string, m LogMetric) error {
+	labelExtractors, descriptor, bucketOptions, err := metricJSON(m)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jc_log_metrics
+		SET description=$3, filter=$4, disabled=$5, bucket_name=$6, value_extractor=$7, label_extractors=$8, bucket_options=$9, descriptor=$10, update_time=$11
+		WHERE project_id=$1 AND name=$2
+	`, scope, m.Name, m.Description, m.Filter, m.Disabled, m.BucketName, m.ValueExtractor, labelExtractors, bucketOptions, descriptor, m.UpdateTime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrMetricNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) DeleteMetric(ctx context.Context, scope, name string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_log_metrics WHERE project_id=$1 AND name=$2`, scope, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrMetricNotFound
+	}
+	return nil
+}
+
+// metricJSON marshals a metric's JSONB columns. An empty label_extractors map
+// is stored as `{}` (never NULL) so the column default and decode agree; a nil
+// bucket_options is stored as SQL NULL (via nullableJSON, which also handles the
+// typed-nil case).
+func metricJSON(m LogMetric) (labelExtractors, descriptor []byte, bucketOptions any, err error) {
+	extractors := m.LabelExtractors
+	if extractors == nil {
+		extractors = map[string]string{}
+	}
+	if labelExtractors, err = json.Marshal(extractors); err != nil {
+		return nil, nil, nil, err
+	}
+	if descriptor, err = json.Marshal(m.Descriptor); err != nil {
+		return nil, nil, nil, err
+	}
+	if len(m.BucketOptions) > 0 {
+		bucketOptions = m.BucketOptions
+	}
+	return labelExtractors, descriptor, bucketOptions, nil
+}
+
+func scanMetric(row sinkScanner) (LogMetric, error) {
+	var m LogMetric
+	var labelExtractors, bucketOptions, descriptor []byte
+	err := row.Scan(&m.Name, &m.Description, &m.Filter, &m.Disabled, &m.BucketName, &m.ValueExtractor,
+		&labelExtractors, &bucketOptions, &descriptor, &m.CreateTime, &m.UpdateTime)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return LogMetric{}, ErrMetricNotFound
+		}
+		return LogMetric{}, err
+	}
+	if len(labelExtractors) > 0 {
+		_ = json.Unmarshal(labelExtractors, &m.LabelExtractors)
+	}
+	if len(bucketOptions) > 0 {
+		m.BucketOptions = append([]byte(nil), bucketOptions...)
+	}
+	if len(descriptor) > 0 {
+		_ = json.Unmarshal(descriptor, &m.Descriptor)
+	}
+	return m, nil
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_entries`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_sinks`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_exclusions`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_metrics`)
 }

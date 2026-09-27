@@ -252,7 +252,7 @@ func TestCodecRejectsUnknownPaths(t *testing.T) {
 		method, path string
 	}{
 		{http.MethodPost, "/v2/entries:copy"},
-		{http.MethodGet, "/v2/projects/test/metrics"},
+		{http.MethodGet, "/v2/projects/test/bogus"},
 		{http.MethodPost, "/v1/projects/test/logs"},
 	} {
 		req, _ := http.NewRequest(tc.method, tc.path, nil)
@@ -274,11 +274,11 @@ func TestCodecUnimplementedVsNotFound(t *testing.T) {
 		t.Fatalf("entries:tail err = %v, want 501 Unimplemented", err)
 	}
 
-	req, _ = http.NewRequest(http.MethodGet, "/v2/projects/test/metrics", nil)
+	req, _ = http.NewRequest(http.MethodGet, "/v2/projects/test/bogus", nil)
 	_, err = c.Decode(req, nil)
 	perr, ok = err.(*model.ProviderError)
 	if !ok || perr.Code != "NotFound" || perr.HTTPStatus != 404 {
-		t.Fatalf("metrics err = %v, want 404 NotFound", err)
+		t.Fatalf("unknown path err = %v, want 404 NotFound", err)
 	}
 }
 

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 272,
-  "passed": 272,
+  "total": 278,
+  "passed": 278,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 272,
-    "passed": 272,
+    "checks": 278,
+    "passed": 278,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -72,8 +72,8 @@
     },
     {
       "service": "logging",
-      "total": 15,
-      "passed": 15,
+      "total": 21,
+      "passed": 21,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1163,6 +1163,48 @@
       "method": "DeleteExclusion",
       "status": "pass",
       "key_field": "exclusion absent from ListExclusions after delete"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateLogMetric",
+      "method": "CreateLogMetric",
+      "status": "pass",
+      "key_field": "metric descriptor type/valueType round-trip"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetLogMetric",
+      "method": "GetLogMetric",
+      "status": "pass",
+      "key_field": "metric by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListLogMetrics",
+      "method": "ListLogMetrics",
+      "status": "pass",
+      "key_field": "metrics[] contains the created metric"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateLogMetric",
+      "method": "UpdateLogMetric",
+      "status": "pass",
+      "key_field": "filter update preserves descriptor type"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateLogMetric (create)",
+      "method": "UpdateLogMetric",
+      "status": "pass",
+      "key_field": "update on an absent metric creates it"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteLogMetric",
+      "method": "DeleteLogMetric",
+      "status": "pass",
+      "key_field": "metric absent from ListLogMetrics after delete"
     },
     {
       "service": "operations",

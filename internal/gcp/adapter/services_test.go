@@ -41,6 +41,11 @@ func TestDetectServiceLoggingAndFunctionsV2(t *testing.T) {
 		{http.MethodGet, "/v2/billingAccounts/b/logs"},
 		{http.MethodDelete, "/v2/projects/p/logs/mylog"},
 		{http.MethodDelete, "/v2/folders/9/logs/a%2Fb"},
+		{http.MethodGet, "/v2/projects/p/metrics"},
+		{http.MethodPost, "/v2/projects/p/metrics"},
+		{http.MethodGet, "/v2/projects/p/metrics/nginx%2Frequests"},
+		{http.MethodPut, "/v2/organizations/12/metrics/m"},
+		{http.MethodDelete, "/v2/folders/9/metrics/a/b"},
 	}
 	for _, tc := range loggingPaths {
 		r, _ := http.NewRequest(tc.method, tc.path, nil)

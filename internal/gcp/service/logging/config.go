@@ -174,6 +174,10 @@ func mapConfigStoreError(err error) error {
 		return notFound("exclusion not found")
 	case errors.Is(err, loggingstore.ErrExclusionExists):
 		return alreadyExists("exclusion already exists")
+	case errors.Is(err, loggingstore.ErrMetricNotFound):
+		return notFound("metric not found")
+	case errors.Is(err, loggingstore.ErrMetricExists):
+		return alreadyExists("metric already exists")
 	}
 	return err
 }

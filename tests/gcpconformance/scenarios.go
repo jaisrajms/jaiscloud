@@ -258,6 +258,20 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + exclName},
 	)
 
+	// Cloud Logging logs-based metrics.
+	metricID := "conf-metric-" + suffix
+	metricName := "projects/" + p + "/metrics/" + metricID
+	sc = append(sc,
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/projects/" + p + "/metrics",
+			Body: fmt.Sprintf(`{"name":%q,"description":"conformance","filter":"severity>=ERROR","valueExtractor":"EXTRACT(jsonPayload.latency)","labelExtractors":{"code":"EXTRACT(jsonPayload.code)"},"metricDescriptor":{"valueType":"DISTRIBUTION","unit":"ms","labels":[{"key":"code","valueType":"INT64"}]},"bucketOptions":{"linearBuckets":{"numFiniteBuckets":3,"width":1,"offset":0}}}`, metricID)},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + metricName},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/projects/" + p + "/metrics"},
+		Scenario{Service: "logging", Method: "PUT", Path: "/v2/" + metricName,
+			Body: fmt.Sprintf(`{"name":%q,"filter":"severity>=WARNING","valueExtractor":"EXTRACT(jsonPayload.latency)","labelExtractors":{"code":"EXTRACT(jsonPayload.code)"},"metricDescriptor":{"valueType":"DISTRIBUTION","unit":"ms","labels":[{"key":"code","valueType":"INT64"}]}}`, metricID)},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + metricName},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + metricName},
+	)
+
 	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────
 	mType := "conf.metric_" + suffix
 	tsType := "conf.ts_" + suffix
