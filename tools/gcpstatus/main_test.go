@@ -315,8 +315,37 @@ func TestBackfillPRs(t *testing.T) {
 	}
 }
 
-// ─── table predicates ─────────────────────────────────────────────────────────
+// TestFindPlanDocIDCollision guards the J40 cross-service collision: an ID
+// reused by two services (firestore and monitoring) must not let either row
+// inherit the other service's `<ID>-<slug>.md` doc. The ID fallback only binds
+// a doc whose declared service matches, and otherwise falls back to the row's
+// source doc.
+func TestFindPlanDocIDCollision(t *testing.T) {
+	fsDoc := "plan_docs/final/J40-firestore-delete-precondition.md"
+	monDoc := "plan_docs/final/J12-monitoring-java-gaps.md"
+	newDoc := "plan_docs/gcp-monitoring-alignment-grid-wave-plan.md"
+	docPaths := []string{fsDoc, monDoc, newDoc}
+	docService := serviceIndexByDoc([]*Item{
+		{ID: "J40", Service: "firestore", Source: fsDoc},
+		{ID: "J40", Service: "monitoring", Source: monDoc},
+	})
 
+	mon := &Item{ID: "J40", Service: "monitoring", Source: monDoc}
+	if got := findPlanDoc(mon, docPaths, docService); got != monDoc {
+		t.Fatalf("monitoring J40 plan doc = %q, want %q", got, monDoc)
+	}
+	fs := &Item{ID: "J40", Service: "firestore", Source: fsDoc}
+	if got := findPlanDoc(fs, docPaths, docService); got != fsDoc {
+		t.Fatalf("firestore J40 plan doc = %q, want %q", got, fsDoc)
+	}
+	// The branch slug still wins over the ID heuristic.
+	mon.Branch = "fix/gcp-monitoring-alignment-grid"
+	if got := findPlanDoc(mon, docPaths, docService); got != newDoc {
+		t.Fatalf("branch-slug plan doc = %q, want %q", got, newDoc)
+	}
+}
+
+// ─── table predicates ─────────────────────────────────────────────────────────
 func TestTablePredicates(t *testing.T) {
 	if !isWaveTable([]string{"Wave", "Session", "IDs", "Service(s)", "Branch", "Depends on"}) {
 		t.Error("isWaveTable should be true for the template headers")

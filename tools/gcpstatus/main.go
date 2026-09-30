@@ -1249,6 +1249,7 @@ func loadGitState(prRepo string, verbose bool) ([]ghPR, map[string]bool) {
 }
 
 func enrich(items []*Item, prs []ghPR, branches map[string]bool, docPaths []string) {
+	docService := serviceIndexByDoc(items)
 	for _, it := range items {
 		var matched *ghPR
 		merged, open, closed := false, false, false
@@ -1288,7 +1289,7 @@ func enrich(items []*Item, prs []ghPR, branches map[string]bool, docPaths []stri
 		default:
 			it.State = deriveFromDocs(it)
 		}
-		it.PlanDoc = findPlanDoc(it, docPaths)
+		it.PlanDoc = findPlanDoc(it, docPaths, docService)
 	}
 }
 
@@ -1445,21 +1446,69 @@ func branchExists(branch string, branches map[string]bool) bool {
 	return false
 }
 
-func findPlanDoc(it *Item, docPaths []string) string {
+// serviceIndexByDoc maps each source doc to the service it declares for an ID
+// (doc source -> ID -> service). It lets findPlanDoc's ID-prefix fallback tell
+// two same-ID rows apart when they belong to different services — e.g. the
+// firestore J40 and the monitoring J40 live in different docs.
+func serviceIndexByDoc(items []*Item) map[string]map[string]string {
+	idx := map[string]map[string]string{}
+	for _, it := range items {
+		if it.Source == "" || it.ID == "" {
+			continue
+		}
+		m := idx[it.Source]
+		if m == nil {
+			m = map[string]string{}
+			idx[it.Source] = m
+		}
+		if m[it.ID] == "" {
+			m[it.ID] = it.Service
+		}
+	}
+	return idx
+}
+
+// findPlanDoc links an item to its plan doc. Priority:
+//
+//  1. the branch slug appearing in a doc filename (a session's dedicated doc);
+//  2. an ID-prefixed doc filename (`<ID>-<slug>.md`) whose declared service
+//     matches the item (or is unknown);
+//  3. otherwise the doc the row was parsed from, when that is itself a plan doc
+//     — important when an ID is reused across services, so a monitoring row
+//     cannot inherit the firestore doc for the same ID.
+func findPlanDoc(it *Item, docPaths []string, docService map[string]map[string]string) string {
 	slug := it.Branch
 	slug = strings.TrimPrefix(slug, "fix/")
 	slug = strings.TrimPrefix(slug, "feat/")
-	best := ""
+	bestAny, bestSvc := "", ""
+	sourceIsDoc := false
 	for _, p := range docPaths {
+		if p == it.Source {
+			sourceIsDoc = true
+		}
 		base := strings.ToLower(filepath.Base(p))
 		if slug != "" && strings.Contains(base, strings.ToLower(slug)) {
 			return p
 		}
 		if strings.Contains(base, strings.ToLower(it.ID)+"-") {
-			best = p
+			bestAny = p
+			svc := docService[p][it.ID]
+			if svc == "" || it.Service == "" || svc == it.Service {
+				bestSvc = p
+			}
 		}
 	}
-	return best
+	if bestSvc != "" {
+		return bestSvc
+	}
+	// An ID-prefixed doc exists but is owned by a different service: the ID is
+	// reused (e.g. J40 firestore vs monitoring). Prefer the doc this row was
+	// parsed from rather than silently borrowing the other service's plan.
+	// With no candidate at all, stay empty to match the historical behavior.
+	if bestAny != "" && sourceIsDoc {
+		return it.Source
+	}
+	return bestAny
 }
 
 // backfillPRs adds a row for every base-gcp PR not already matched to an item.
@@ -1508,7 +1557,7 @@ func backfillPRs(items []*Item, prs []ghPR, prefixes string, docPaths []string) 
 		if pr.MergeCommit != nil {
 			it.MergeSHA = shortSHA(pr.MergeCommit.OID)
 		}
-		it.PlanDoc = findPlanDoc(it, docPaths)
+		it.PlanDoc = findPlanDoc(it, docPaths, nil)
 		out = append(out, it)
 	}
 	return out
