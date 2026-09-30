@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"jaiscloud/internal/clock"
-
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 )
 
@@ -97,14 +95,13 @@ func (a *Aggregation) validate() error {
 	return nil
 }
 
-// applyAggregation aligns each series to AlignmentPeriod buckets and, when a
-// cross-series reducer is set, collapses the resulting series by the group-by
-// fields. iv supplies the request interval end used as the bucket anchor; a nil
-// or zero-end interval is anchored at the current clock time.
+// applyAggregation aligns each series to AlignmentPeriod buckets on the
+// Unix-epoch period grid and, when a cross-series reducer is set, collapses the
+// resulting series by the group-by fields.
 //
 // Returning the input unchanged when no aggregation is requested keeps the
 // unaggregated path allocation-free.
-func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation, iv *TimeInterval) ([]monitoringstore.TimeSeries, error) {
+func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation) ([]monitoringstore.TimeSeries, error) {
 	if agg == nil {
 		return series, nil
 	}
@@ -117,14 +114,9 @@ func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation, iv 
 		return series, nil
 	}
 
-	reqEnd := clock.Now().UTC()
-	if iv != nil && !iv.End.IsZero() {
-		reqEnd = iv.End.UTC()
-	}
-
 	aligned := make([]alignedSeries, 0, len(series))
 	for _, ts := range series {
-		a, err := alignSeries(ts, aggCopy.PerSeriesAligner, aggCopy.AlignmentPeriod, reqEnd)
+		a, err := alignSeries(ts, aggCopy.PerSeriesAligner, aggCopy.AlignmentPeriod)
 		if err != nil {
 			return nil, err
 		}
@@ -168,17 +160,18 @@ func (a alignedSeries) output() monitoringstore.TimeSeries {
 	return out
 }
 
-// alignSeries buckets ts.Points by AlignmentPeriod anchored at reqEnd and aligns
-// each bucket. It returns nil for a series with no points.
-func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Duration, reqEnd time.Time) (*alignedSeries, error) {
+// alignSeries buckets ts.Points into AlignmentPeriod windows on the Unix-epoch
+// grid and aligns each bucket. A point belongs to the window ending at the first
+// period boundary at or after its end time, matching Cloud Monitoring's
+// half-open `(start, end]` alignment windows; a point exactly on a boundary
+// stays in that boundary's window. It returns nil for a series with no points.
+func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Duration) (*alignedSeries, error) {
 	if len(ts.Points) == 0 {
 		return nil, nil
 	}
-	periodMs := period.Milliseconds()
-	if periodMs <= 0 {
-		return nil, invalidArgument("alignment_period must be greater than zero")
+	if period < time.Millisecond {
+		return nil, invalidArgument("alignment_period must be at least one millisecond")
 	}
-	reqEndMs := reqEnd.UnixMilli()
 
 	byBucket := map[int64][]float64{}
 	for _, pt := range ts.Points {
@@ -189,17 +182,17 @@ func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Dur
 		if !ok {
 			return nil, invalidArgument("time series values of this type cannot be aggregated")
 		}
-		k := floorDiv(reqEndMs-pt.EndTime.UnixMilli(), periodMs)
-		byBucket[k] = append(byBucket[k], v)
+		end := ceilToPeriod(pt.EndTime, period)
+		key := end.UnixMilli()
+		byBucket[key] = append(byBucket[key], v)
 	}
 	if len(byBucket) == 0 {
 		return nil, nil
 	}
 
 	buckets := make(map[time.Time]float64, len(byBucket))
-	for k, vals := range byBucket {
-		end := time.UnixMilli(reqEndMs - k*periodMs).UTC()
-		buckets[end] = alignValues(vals, aligner)
+	for ms, vals := range byBucket {
+		buckets[time.UnixMilli(ms).UTC()] = alignValues(vals, aligner)
 	}
 	return &alignedSeries{
 		src:     ts,
@@ -472,9 +465,26 @@ func sortedBucketTimes(buckets map[time.Time]float64) []time.Time {
 	return out
 }
 
+// ceilToPeriod returns the smallest instant on the Unix-epoch period grid at or
+// after t — the end of the alignment window containing t. Cloud Monitoring
+// alignment windows are half-open `(start, end]`, so a t that already falls on a
+// boundary is returned unchanged (it stays in that boundary's window).
+func ceilToPeriod(t time.Time, period time.Duration) time.Time {
+	p := period.Milliseconds()
+	if p <= 0 {
+		return t.UTC()
+	}
+	ms := t.UnixMilli()
+	end := floorDiv(ms, p) * p
+	if end != ms {
+		end += p
+	}
+	return time.UnixMilli(end).UTC()
+}
+
 // floorDiv returns floor(a/b) for b > 0, matching the mathematical floor rather
-// than Go's truncation toward zero (needed when a point is after the interval
-// end, making a-b negative).
+// than Go's truncation toward zero (needed when a point predates the Unix epoch,
+// making a-b negative).
 func floorDiv(a, b int64) int64 {
 	q := a / b
 	if a%b != 0 && (a < 0) != (b < 0) {

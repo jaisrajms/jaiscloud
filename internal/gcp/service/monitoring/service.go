@@ -127,7 +127,7 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 		matching = append(matching, ts)
 	}
 	if aggregation != nil {
-		matching, err = applyAggregation(matching, aggregation, interval)
+		matching, err = applyAggregation(matching, aggregation)
 		if err != nil {
 			return nil, "", err
 		}
