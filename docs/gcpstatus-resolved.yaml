@@ -168,7 +168,7 @@ entries:
   - source: "gcp-floci-compat-results"
     match: "implement-or-explicitly-document-the-rem"
     pr: 291
-    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries (CT3); Firebase Auth/GKE documented out of scope in #291 (SCH2)"
+    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries in #293 (CT3); Firebase Auth/GKE documented out of scope in #291 (SCH2)"
   - source: "gcp-floci-compat-results"
     match: "scheduler-4-cloud-scheduler-not-implemen"
     pr: 291
@@ -176,4 +176,4 @@ entries:
   - source: "gcp-floci-compat-results"
     match: "not-implemented-cloud-tasks-cloud-schedu"
     pr: 291
-    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries (CT3)"
+    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries in #293 (CT3)"
