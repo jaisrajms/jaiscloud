@@ -560,10 +560,15 @@ func startCmd() *cobra.Command {
 			schedulerP := restscheduler.NewProvider(schedulerCore)
 
 			// Cloud Tasks v2's transport-neutral core is shared by the REST
-			// provider and the gRPC adapter, so both transports run against one
-			// store and cannot drift. This phase implements the control plane;
-			// RunTask returns Unimplemented until the dispatch engine lands.
+			// provider, the gRPC adapter, and the dispatch engine, so all three
+			// run against one store and cannot drift. The engine delivers due
+			// httpRequest tasks on the emulator clock (advance /_jaiscloud/clock
+			// or POST /_jaiscloud/tasks-tick to fire deterministically) with
+			// per-queue rate limits and exponential-backoff retries; RunTask
+			// forces a synchronous attempt.
 			tasksCore := taskscore.NewService(stores.tasks, stores.resources)
+			tasksEngine := taskscore.NewEngine(stores.tasks, taskscore.NewRunner())
+			tasksCore.SetEngine(tasksEngine)
 			tasksP := resttasks.NewProvider(tasksCore, cfg.ProjectID)
 
 			// Cloud Resource Manager's transport-neutral core is shared by the
@@ -846,6 +851,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(schedulerCore)
 			adminHandler.RegisterSchedulerTicker(schedulerEngine)
 			adminHandler.RegisterResetter(tasksCore)
+			adminHandler.RegisterTasksTicker(tasksEngine)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -1068,6 +1074,14 @@ func startCmd() *cobra.Command {
 				schedulerCtx, schedulerCancel := context.WithCancel(ctx)
 				go schedulerEngine.Run(schedulerCtx)
 				defer schedulerCancel()
+			}
+
+			// Cloud Tasks dispatch engine: delivers due httpRequest tasks on the
+			// virtual clock. Stopped cleanly on shutdown.
+			if serviceEnabled("tasks") {
+				tasksCtx, tasksCancel := context.WithCancel(ctx)
+				go tasksEngine.Run(tasksCtx)
+				defer tasksCancel()
 			}
 
 			// Cloud Functions event-trigger delivery workers. Stopped cleanly on

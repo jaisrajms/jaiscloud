@@ -110,17 +110,6 @@ operations:
     operation: DiagnoseCluster
     state: unsupported
     reason: "explicit Unimplemented stub"
-  # Cloud Tasks RunTask/:run is an explicit Unimplemented stub until the
-  # dispatch engine (CT3) lands; the control plane deliberately does not serve
-  # it, so the REST cell must not read "ga".
-  - service: tasks
-    operation: Tasks.TasksRun
-    state: limited
-    reason: "explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3)"
-  - service: tasks
-    operation: RunTask
-    state: limited
-    reason: "explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3)"
   # Cloud Functions v2 ListRuntimes is implemented over the shared runtime
   # catalog on both transports (REST GET /v2/.../runtimes + gRPC ListRuntimes),
   # verified by the official gRPC client conformance suite, so it needs no

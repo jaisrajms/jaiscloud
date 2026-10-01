@@ -99,8 +99,8 @@ func TestServiceTaskLifecycleAndPurge(t *testing.T) {
 	if list, err := s.ListTasks(ctx, "p", "l", "q1"); err != nil || len(list) != 1 {
 		t.Fatalf("ListTasks = %v, %v", list, err)
 	}
-	if _, err := s.RunTask(ctx, "p", "l", "q1", tk.Name); err == nil {
-		t.Fatalf("RunTask should be Unimplemented")
+	if ran, err := s.RunTask(ctx, "p", "l", "q1", tk.Name); err != nil || ran.Name != tk.Name {
+		t.Fatalf("RunTask = %+v, %v", ran, err)
 	}
 	if _, err := s.PurgeQueue(ctx, "p", "l", "q1"); err != nil {
 		t.Fatalf("PurgeQueue: %v", err)

@@ -401,17 +401,39 @@ func seedScheduler(d *driver, suffix string) (func() error, func() error, error)
 	return d.verifyPresent(get), d.verifyGone(get), nil
 }
 
-// seedTasks creates a Cloud Tasks queue (v2 projects.locations.queues.create).
+// seedTasks creates a Cloud Tasks queue (v2 projects.locations.queues.create)
+// and a task under it, then verifies both survive a restart and are cleared by
+// reset (the queue delete cascades to the task).
 func seedTasks(d *driver, suffix string) (func() error, func() error, error) {
 	id := "tasks-" + suffix
+	queuePath := fmt.Sprintf("/v2/projects/%s/locations/%s/queues/%s", project, location, id)
 	post := fmt.Sprintf("/v2/projects/%s/locations/%s/queues", project, location)
 	if err := d.expect("POST", post, jsonBody(map[string]any{
 		"name": fmt.Sprintf("projects/%s/locations/%s/queues/%s", project, location, id),
 	}), http.StatusOK); err != nil {
 		return nil, nil, err
 	}
-	get := fmt.Sprintf("/v2/projects/%s/locations/%s/queues/%s", project, location, id)
-	return d.verifyPresent(get), d.verifyGone(get), nil
+	taskID := "task-" + suffix
+	taskPath := queuePath + "/tasks/" + taskID
+	if err := d.expect("POST", queuePath+"/tasks", jsonBody(map[string]any{
+		"name":        fmt.Sprintf("projects/%s/locations/%s/queues/%s/tasks/%s", project, location, id, taskID),
+		"httpRequest": map[string]any{"url": "http://example.test/hook", "httpMethod": "GET"},
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	survived := func() error {
+		if err := d.verifyPresent(queuePath)(); err != nil {
+			return err
+		}
+		return d.verifyPresent(taskPath)()
+	}
+	cleared := func() error {
+		if err := d.verifyGone(queuePath)(); err != nil {
+			return err
+		}
+		return d.verifyGone(taskPath)()
+	}
+	return survived, cleared, nil
 }
 
 func seedManagedKafka(d *driver, suffix string) (func() error, func() error, error) {

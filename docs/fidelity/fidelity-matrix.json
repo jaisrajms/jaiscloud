@@ -3,20 +3,20 @@
   "summary": {
     "total": 878,
     "by_state": {
-      "ga": 641,
-      "limited": 119,
+      "ga": 643,
+      "limited": 117,
       "preview": 14,
       "unsupported": 104
     },
     "by_transport": {
       "grpc": {
-        "ga": 306,
-        "limited": 12,
+        "ga": 307,
+        "limited": 11,
         "unsupported": 92
       },
       "rest": {
-        "ga": 335,
-        "limited": 107,
+        "ga": 336,
+        "limited": 106,
         "preview": 14,
         "unsupported": 12
       }
@@ -117,8 +117,7 @@
         "ga": 57
       },
       "tasks": {
-        "ga": 32,
-        "limited": 2
+        "ga": 34
       },
       "workflowexecutions": {
         "ga": 8
@@ -9099,11 +9098,10 @@
       "service": "tasks",
       "operation": "RunTask",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -9299,8 +9297,7 @@
       "service": "tasks",
       "operation": "Tasks.TasksRun",
       "transport": "rest",
-      "state": "limited",
-      "reason": "explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3)",
+      "state": "ga",
       "evidence": [
         "discovery=cloudtasks.projects.locations.queues.tasks.run",
         "postgres=yes"

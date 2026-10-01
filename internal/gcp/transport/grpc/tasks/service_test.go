@@ -72,7 +72,7 @@ func TestGRPCQueueLifecycle(t *testing.T) {
 	}
 }
 
-func TestGRPCTaskLifecycleAndRunUnimplemented(t *testing.T) {
+func TestGRPCTaskLifecycleAndRun(t *testing.T) {
 	ctx := context.Background()
 	s := newServer()
 	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
@@ -96,8 +96,8 @@ func TestGRPCTaskLifecycleAndRunUnimplemented(t *testing.T) {
 	if err != nil || len(list.GetTasks()) != 1 {
 		t.Fatalf("ListTasks = %+v, %v", list, err)
 	}
-	if _, err := s.RunTask(ctx, &cloudtaskspb.RunTaskRequest{Name: name}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("RunTask code = %v", status.Code(err))
+	if ran, err := s.RunTask(ctx, &cloudtaskspb.RunTaskRequest{Name: name}); err != nil || ran.GetName() != name {
+		t.Fatalf("RunTask = %+v, %v", ran, err)
 	}
 	if _, err := s.DeleteTask(ctx, &cloudtaskspb.DeleteTaskRequest{Name: name}); err != nil {
 		t.Fatalf("DeleteTask: %v", err)

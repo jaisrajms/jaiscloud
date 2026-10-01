@@ -213,6 +213,18 @@ func (s *PostgresStore) ListQueues(ctx context.Context, projectID, location stri
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListAllQueues(ctx context.Context) ([]Queue, error) {
+	rows, err := s.listAllQueues(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Queue, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, r.Queue)
+	}
+	return result, nil
+}
+
 func (s *PostgresStore) CreateTask(ctx context.Context, projectID, location, queue string, t Task) error {
 	data, err := encodeTask(t)
 	if err != nil {

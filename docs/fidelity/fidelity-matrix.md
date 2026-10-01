@@ -12,8 +12,8 @@ Cells: **878**
 
 | state | count |
 | --- | --- |
-| ga | 641 |
-| limited | 119 |
+| ga | 643 |
+| limited | 117 |
 | preview | 14 |
 | unsupported | 104 |
 
@@ -21,8 +21,8 @@ Cells: **878**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 335 | 107 | 14 | 12 |
-| grpc | 306 | 12 | 0 | 92 |
+| rest | 336 | 106 | 14 | 12 |
+| grpc | 307 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -1034,7 +1034,7 @@ _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 
 ## tasks
 
-_34 cell(s): ga=32 limited=2 preview=0 unsupported=0_
+_34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -1050,7 +1050,7 @@ _34 cell(s): ga=32 limited=2 preview=0 unsupported=0_
 | PauseQueue | grpc | ga | — |
 | PurgeQueue | grpc | ga | — |
 | ResumeQueue | grpc | ga | — |
-| RunTask | grpc | limited | explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3) |
+| RunTask | grpc | ga | — |
 | SetIamPolicy | grpc | ga | — |
 | Tasks.QueuesCreate | rest | ga | — |
 | Tasks.QueuesDelete | rest | ga | — |
@@ -1069,7 +1069,7 @@ _34 cell(s): ga=32 limited=2 preview=0 unsupported=0_
 | Tasks.TasksDelete | rest | ga | — |
 | Tasks.TasksGet | rest | ga | — |
 | Tasks.TasksList | rest | ga | — |
-| Tasks.TasksRun | rest | limited | explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3) |
+| Tasks.TasksRun | rest | ga | — |
 | TestIamPermissions | grpc | ga | — |
 | UpdateQueue | grpc | ga | — |
 

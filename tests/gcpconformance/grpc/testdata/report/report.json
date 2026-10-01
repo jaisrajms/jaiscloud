@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 333,
-  "passed": 333,
+  "total": 334,
+  "passed": 334,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 23,
-    "checks": 333,
-    "passed": 333,
+    "checks": 334,
+    "passed": 334,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -156,8 +156,8 @@
     },
     {
       "service": "tasks",
-      "total": 15,
-      "passed": 15,
+      "total": 16,
+      "passed": 16,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1786,6 +1786,13 @@
       "method": "DeleteTask",
       "status": "pass",
       "key_field": "subsequent GetTask NOT_FOUND"
+    },
+    {
+      "service": "tasks",
+      "rpc": "RunTask",
+      "method": "RunTask",
+      "status": "pass",
+      "key_field": "dispatched task returned; success deletes it"
     },
     {
       "service": "resourcemanager",

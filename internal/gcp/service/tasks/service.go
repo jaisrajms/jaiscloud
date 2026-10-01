@@ -2,9 +2,12 @@
 // (google.cloud.tasks.v2.CloudTasks). Both the REST and gRPC adapters share one
 // instance (and one store), so the two transports cannot drift.
 //
-// This phase implements the control plane: queue CRUD + pause/resume/purge +
-// queue IAM, and task CRUD + REST batch. Task dispatch (RunTask and the
-// delivery engine) is a later phase; RunTask returns Unimplemented.
+// It implements the control plane (queue CRUD + pause/resume/purge + queue IAM,
+// and task CRUD + REST batch) and the HTTP dispatch engine: a created task is
+// delivered to its httpRequest target with per-queue rate limits and
+// exponential-backoff retries, and RunTask forces a synchronous attempt.
+// appEngineHttpRequest targets are stored and echoed but never delivered (no
+// App Engine router); their attempts are recorded as Unimplemented failures.
 package tasks
 
 import (
@@ -33,6 +36,7 @@ var (
 type Service struct {
 	store     tasksstore.Store
 	resources store.ResourceStore
+	engine    *Engine
 }
 
 // NewService returns a Cloud Tasks core over the store. resources backs queue
@@ -41,9 +45,17 @@ func NewService(s tasksstore.Store, resources store.ResourceStore) *Service {
 	return &Service{store: s, resources: resources}
 }
 
+// SetEngine attaches the dispatch engine so RunTask shares its dispatcher and
+// retry state with the background worker. Optional: a nil engine disables
+// delivery (unit tests).
+func (s *Service) SetEngine(e *Engine) { s.engine = e }
+
 // Reset clears all queues, tasks, and queue IAM policies.
 func (s *Service) Reset(ctx context.Context) {
 	s.store.Reset(ctx)
+	if s.engine != nil {
+		s.engine.ResetState()
+	}
 	if s.resources != nil {
 		_ = s.resources.Purge(ctx, "", store.GlobalRegion, rtQueuePolicy)
 	}
@@ -201,11 +213,6 @@ func invalidArgument(msg string) error {
 
 func failedPrecondition(msg string) error {
 	return model.NewProviderError("FailedPrecondition", msg, 400)
-}
-
-// Unimplemented is returned by operations this phase does not serve (RunTask).
-func Unimplemented(msg string) error {
-	return model.NewProviderError("Unimplemented", msg, 501)
 }
 
 func mapStoreErr(err error) error {

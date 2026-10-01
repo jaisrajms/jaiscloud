@@ -110,6 +110,7 @@ type Handler struct {
 	ttlSweeper       TTLSweeper
 	ebScheduler      EBSchedulerTicker
 	schedulerTicker  SchedulerTicker
+	tasksTicker      TasksTicker
 }
 
 func NewHandler() *Handler {

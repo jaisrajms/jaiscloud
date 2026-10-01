@@ -261,10 +261,11 @@ func (s *Service) RunTask(ctx context.Context, req *cloudtaskspb.RunTaskRequest)
 	if !ok {
 		return nil, mapError(invalid("invalid task name"))
 	}
-	if _, err := s.core.RunTask(ctx, s.projectFor(ctx, project), location, queue, name); err != nil {
+	t, err := s.core.RunTask(ctx, s.projectFor(ctx, project), location, queue, name)
+	if err != nil {
 		return nil, mapError(err)
 	}
-	return nil, nil
+	return taskToProto(t), nil
 }
 
 // --- helpers ---

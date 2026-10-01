@@ -169,6 +169,10 @@ type Store interface {
 	UpdateQueueAtomic(ctx context.Context, projectID, location, name string, mutate func(Queue) (Queue, error)) (Queue, error)
 	DeleteQueue(ctx context.Context, projectID, location, name string) error
 	ListQueues(ctx context.Context, projectID, location string) ([]Queue, error)
+	// ListAllQueues returns every queue across all projects and locations. The
+	// dispatch engine enumerates queues with it (it has no project/location
+	// input).
+	ListAllQueues(ctx context.Context) ([]Queue, error)
 
 	CreateTask(ctx context.Context, projectID, location, queue string, t Task) error
 	GetTask(ctx context.Context, projectID, location, queue, name string) (Task, error)

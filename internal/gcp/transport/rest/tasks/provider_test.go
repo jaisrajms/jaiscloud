@@ -109,8 +109,10 @@ func TestProviderTaskLifecycleAndBatch(t *testing.T) {
 	if _, err := p.GetTask(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "task": taskNameOf(t, name)})); err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if _, err := p.RunTask(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "task": taskNameOf(t, name)})); err == nil {
-		t.Fatalf("RunTask should be Unimplemented")
+	if ran, err := p.RunTask(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "task": taskNameOf(t, name)})); err != nil {
+		t.Fatalf("RunTask: %v", err)
+	} else if ran.Data["name"] != name {
+		t.Fatalf("RunTask name = %v, want %v", ran.Data["name"], name)
 	}
 	if _, err := p.DeleteTask(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "task": taskNameOf(t, name)})); err != nil {
 		t.Fatalf("DeleteTask: %v", err)

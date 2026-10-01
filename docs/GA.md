@@ -306,14 +306,19 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   echoed but never delivered (no App Engine router) — its attempts are recorded as `Unimplemented`.
   English-like schedules ("every 5 minutes") are not parsed (unix-cron plus `@` descriptors only);
   `oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token, not a real Google token.
-- **Cloud Tasks** — the v2 control plane: queue CRUD plus `pause`/`resume`/`purge`, queue IAM
-  (`getIamPolicy`/`setIamPolicy`/`testIamPermissions` over the shared policy store — metadata only,
-  authorization is not enforced), and task CRUD plus the REST-only
-  `tasks:batchCreate`/`tasks:batchDelete`. `httpRequest` (url/method/headers/body/oauth|oidcToken)
-  and `appEngineHttpRequest` are accepted and echoed. Task **dispatch** (`RunTask` / REST
-  `:run`) is an explicit `Unimplemented` stub until the delivery engine lands, so no task is ever
-  delivered; REST `tasks:buffer`, App Engine delivery, and task auto-expiry (31 days) are not
-  modelled.
+- **Cloud Tasks** — the v2 control plane plus a dispatch engine: queue CRUD plus
+  `pause`/`resume`/`purge`, queue IAM (`getIamPolicy`/`setIamPolicy`/`testIamPermissions` over the
+  shared policy store — metadata only, authorization is not enforced), and task CRUD plus the
+  REST-only `tasks:batchCreate`/`tasks:batchDelete`. `httpRequest`
+  (url/method/headers/body/oauth|oidcToken) and `appEngineHttpRequest` are accepted and echoed. The
+  engine delivers due `httpRequest` tasks on the emulator clock (advance `/_jaiscloud/clock`, or use
+  `POST /_jaiscloud/tasks-tick`, to fire deterministically) with per-queue rate limits and
+  exponential-backoff retries, attaching the documented `X-CloudTasks-*` headers; a 2xx target
+  response deletes the task, a failure retries until `retryConfig.maxAttempts`/`maxRetryDuration` is
+  exhausted. `RunTask` / REST `:run` forces a synchronous attempt that bypasses pause and rate
+  limits. `appEngineHttpRequest` is never delivered (no App Engine router) — its attempts are
+  recorded as `Unimplemented`; REST `tasks:buffer`, App Engine delivery, and task auto-expiry
+  (31 days) are not modelled.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud Run, Cloud
   Endpoints, Deployment Manager, Firebase Auth (Identity Toolkit), and GKE
   (`container.googleapis.com`): no emulator surface (requests are unhandled). Artifact Registry

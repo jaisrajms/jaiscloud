@@ -72,6 +72,31 @@ func TestMemoryTaskRoundTripAndPurge(t *testing.T) {
 	}
 }
 
+func TestMemoryListAllQueues(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	_ = s.CreateQueue(ctx, "p1", "l1", Queue{Name: "b"})
+	_ = s.CreateQueue(ctx, "p1", "l1", Queue{Name: "a"})
+	_ = s.CreateQueue(ctx, "p2", "l2", Queue{Name: "c"})
+	all, err := s.ListAllQueues(ctx)
+	if err != nil {
+		t.Fatalf("ListAllQueues: %v", err)
+	}
+	got := make([]string, 0, len(all))
+	for _, q := range all {
+		got = append(got, q.ProjectID+"/"+q.Location+"/"+q.Name)
+	}
+	want := []string{"p1/l1/a", "p1/l1/b", "p2/l2/c"}
+	if len(got) != len(want) {
+		t.Fatalf("ListAllQueues = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ListAllQueues = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestMemoryDeleteQueueCascadesTasks(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

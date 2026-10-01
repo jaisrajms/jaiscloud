@@ -20,11 +20,11 @@ import (
 // validate the location list.
 const tasksLocation = "us-central1"
 
-// tasksChecks covers the Cloud Tasks v2 control plane
+// tasksChecks covers the Cloud Tasks v2 control plane and dispatch engine
 // (google.cloud.tasks.v2.CloudTasks) via the official generated
-// cloud.google.com/go/cloudtasks/apiv2 client. RunTask is intentionally not
-// probed: it is Unimplemented until the dispatch engine (CT3) lands, so its
-// cell stays "limited" rather than claiming a verified pass. The REST-only
+// cloud.google.com/go/cloudtasks/apiv2 client. RunTask is probed: it forces a
+// synchronous delivery to the task's HTTP target, which is the emulator's own
+// health endpoint, and a successful (2xx) run deletes the task. The REST-only
 // tasks:batchCreate / tasks:batchDelete have no gRPC method.
 //
 // Every probe is self-contained and run-unique (cfg.ResourceName).
@@ -45,6 +45,7 @@ func tasksChecks() []Check {
 		{Service: "tasks", RPC: "GetTask", Method: "GetTask", KeyField: "name round-trip", Run: checkTasksGetTask},
 		{Service: "tasks", RPC: "ListTasks", Method: "ListTasks", KeyField: "created task present", Run: checkTasksListTasks},
 		{Service: "tasks", RPC: "DeleteTask", Method: "DeleteTask", KeyField: "subsequent GetTask NOT_FOUND", Run: checkTasksDeleteTask},
+		{Service: "tasks", RPC: "RunTask", Method: "RunTask", KeyField: "dispatched task returned; success deletes it", Run: checkTasksRunTask},
 	}
 }
 
@@ -454,6 +455,40 @@ func checkTasksDeleteTask(ctx context.Context, cfg Config) error {
 	}
 	if _, err := client.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: task.GetName()}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetTask after delete code = %v, want NotFound", status.Code(err))
+	}
+	return nil
+}
+
+// checkTasksRunTask forces a synchronous delivery. The task targets the
+// emulator's own health endpoint, so the run succeeds and Cloud Tasks deletes
+// the task; RunTask must return the dispatched task (not Unimplemented).
+func checkTasksRunTask(ctx context.Context, cfg Config) error {
+	client, err := newTasksClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	created, err := createTasksQueue(ctx, client, cfg, "gcpc-grpc-tasks-run")
+	if err != nil {
+		return err
+	}
+	task, err := createTasksTask(ctx, client, cfg, created.GetName(), "gcpc-grpc-tasks-run")
+	if err != nil {
+		return err
+	}
+	ran, err := client.RunTask(ctx, &cloudtaskspb.RunTaskRequest{Name: task.GetName()})
+	if err != nil {
+		return fmt.Errorf("RunTask: %w", err)
+	}
+	if ran.GetName() != task.GetName() {
+		return fmt.Errorf("RunTask name = %q, want %q", ran.GetName(), task.GetName())
+	}
+	if ran.GetDispatchCount() == 0 {
+		return fmt.Errorf("RunTask did not record a dispatch attempt")
+	}
+	if _, err := client.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: task.GetName()}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetTask after successful RunTask code = %v, want NotFound", status.Code(err))
 	}
 	return nil
 }

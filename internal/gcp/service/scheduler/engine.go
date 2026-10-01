@@ -1,9 +1,7 @@
 package scheduler
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -11,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/httptarget"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
 )
 
@@ -61,50 +60,28 @@ func (r *Runner) deliverHTTP(ctx context.Context, j schedstore.Job) schedstore.S
 	if t == nil {
 		return schedstore.Status{Code: int32(codes.InvalidArgument), Message: "httpTarget is missing"}
 	}
-	method := t.HTTPMethod
-	if method == "" || method == "HTTP_METHOD_UNSPECIFIED" {
-		method = http.MethodPost
-	}
-	var body io.Reader
-	if len(t.Body) > 0 {
-		body = bytes.NewReader(t.Body)
-	}
-	deadline := j.AttemptDeadline
-	if deadline <= 0 {
-		deadline = 3 * time.Minute
-	}
-	cctx, cancel := context.WithTimeout(ctx, deadline)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, method, t.URI, body)
-	if err != nil {
-		return schedstore.Status{Code: int32(codes.InvalidArgument), Message: err.Error()}
-	}
+	headers := make(map[string]string, len(t.Headers)+3)
 	for k, v := range t.Headers {
-		req.Header.Set(k, v)
-	}
-	if len(t.Body) > 0 && req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/octet-stream")
+		headers[k] = v
 	}
 	// Headers real Cloud Scheduler attaches to every delivery.
-	req.Header.Set("User-Agent", "Google-Cloud-Scheduler")
-	req.Header.Set("X-CloudScheduler", "true")
-	req.Header.Set("X-CloudScheduler-JobName", JobName(j.ProjectID, j.Location, j.Name))
+	headers["User-Agent"] = "Google-Cloud-Scheduler"
+	headers["X-CloudScheduler"] = "true"
+	headers["X-CloudScheduler-JobName"] = JobName(j.ProjectID, j.Location, j.Name)
 	if t.OAuthToken != nil || t.OidcToken != nil {
 		// Real Cloud Scheduler mints a Google token; the emulator attaches a
 		// synthetic emulator-local bearer token so a target that only checks the
 		// header is present still works. Documented limitation.
-		req.Header.Set("Authorization", "Bearer emulator-cloud-scheduler-token")
+		headers["Authorization"] = "Bearer emulator-cloud-scheduler-token"
 	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return schedstore.Status{Code: int32(codes.Unavailable), Message: err.Error()}
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-		return schedstore.Status{}
-	}
-	return schedstore.Status{Code: int32(resp.StatusCode), Message: resp.Status}
+	res := httptarget.Deliver(ctx, r.client, httptarget.Request{
+		Method:   t.HTTPMethod,
+		URL:      t.URI,
+		Headers:  headers,
+		Body:     t.Body,
+		Deadline: j.AttemptDeadline,
+	})
+	return schedstore.Status{Code: res.Code, Message: res.Message}
 }
 
 func (r *Runner) deliverPubSub(ctx context.Context, j schedstore.Job) schedstore.Status {

@@ -108,6 +108,27 @@ func (s *MemoryStore) ListQueues(_ context.Context, projectID, location string) 
 	return result, nil
 }
 
+func (s *MemoryStore) ListAllQueues(_ context.Context) ([]Queue, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Queue, 0)
+	for _, byName := range s.queues {
+		for _, q := range byName {
+			result = append(result, q)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ProjectID != result[j].ProjectID {
+			return result[i].ProjectID < result[j].ProjectID
+		}
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
 func (s *MemoryStore) CreateTask(_ context.Context, projectID, location, queue string, t Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

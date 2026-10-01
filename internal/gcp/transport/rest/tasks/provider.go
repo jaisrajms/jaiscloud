@@ -271,13 +271,13 @@ func (p *Provider) DeleteTask(ctx context.Context, nr *model.NormalizedRequest) 
 	return provider.OK(map[string]any{}), nil
 }
 
-// RunTask is not served in this phase.
+// RunTask forces the task to run now and returns the dispatched task.
 func (p *Provider) RunTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	_, err := p.core.RunTask(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "queue"), strParam(nr, "task"))
+	t, err := p.core.RunTask(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "queue"), strParam(nr, "task"))
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(map[string]any{}), nil
+	return provider.OK(taskToJSON(t)), nil
 }
 
 // --- helpers ---

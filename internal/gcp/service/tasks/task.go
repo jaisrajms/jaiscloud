@@ -85,9 +85,17 @@ func (s *Service) DeleteTask(ctx context.Context, project, location, queue, name
 	return nil
 }
 
-// RunTask is not served in this phase (the dispatch engine arrives with CT3).
-func (s *Service) RunTask(_ context.Context, _, _, _, _ string) (tasksstore.Task, error) {
-	return tasksstore.Task{}, Unimplemented("RunTask is not supported by the emulator yet")
+// RunTask forces the task to run now. It bypasses the queue's paused state and
+// rate limits, matching the Cloud Tasks contract.
+func (s *Service) RunTask(ctx context.Context, project, location, queue, name string) (tasksstore.Task, error) {
+	t, err := s.store.GetTask(ctx, project, location, queue, name)
+	if err != nil {
+		return tasksstore.Task{}, mapStoreErr(err)
+	}
+	if s.engine == nil {
+		return t, nil
+	}
+	return s.engine.runNow(ctx, t)
 }
 
 // --- validation ---
