@@ -317,8 +317,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   response deletes the task, a failure retries until `retryConfig.maxAttempts`/`maxRetryDuration` is
   exhausted. `RunTask` / REST `:run` forces a synchronous attempt that bypasses pause and rate
   limits. `appEngineHttpRequest` is never delivered (no App Engine router) — its attempts are
-  recorded as `Unimplemented`; REST `tasks:buffer`, App Engine delivery, and task auto-expiry
-  (31 days) are not modelled.
+  recorded as `Unimplemented`; REST `tasks:buffer`, App Engine delivery, task auto-expiry
+  (31 days), task-level `retryConfig` overrides (the queue's `retryConfig` governs), and real
+  `oauthToken`/`oidcToken` token minting (a synthetic emulator-local bearer token is attached
+  instead) are not modelled. The engine polls once per second, so sustained throughput is bounded
+  by `maxBurstSize` per second rather than `maxDispatchesPerSecond`.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud Run, Cloud
   Endpoints, Deployment Manager, Firebase Auth (Identity Toolkit), and GKE
   (`container.googleapis.com`): no emulator surface (requests are unhandled). Artifact Registry

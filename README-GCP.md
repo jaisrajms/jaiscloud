@@ -323,10 +323,12 @@ attempt, bypassing the queue's paused state and rate limits.
 
 Limitations: `appEngineHttpRequest` is stored and echoed but never delivered (no App Engine
 router) — its attempts are recorded as `Unimplemented` failures. REST `tasks:buffer`, task
-auto-expiry (31 days), IAM enforcement (queue policies are stored but not enforced), and
+auto-expiry (31 days), IAM enforcement (queue policies are stored but not enforced),
+task-level `retryConfig` overrides (the queue's `retryConfig` governs), and
 `oauthToken`/`oidcToken` Google-token minting (a synthetic emulator-local bearer token is attached
 instead) are not modelled. Rate-limit and retry state is in-memory and not persisted across
-restarts.
+restarts; the engine polls once per second, so sustained throughput is bounded by
+`maxBurstSize` per second rather than `maxDispatchesPerSecond`.
 
 ### Managed Kafka: metadata only, no real broker
 

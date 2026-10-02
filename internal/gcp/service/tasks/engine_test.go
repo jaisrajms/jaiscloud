@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -88,8 +89,11 @@ func TestEngineDispatchesHTTPAndDeletes(t *testing.T) {
 	if got := headers.Get("X-CloudTasks-TaskRetryCount"); got != "0" {
 		t.Fatalf("X-CloudTasks-TaskRetryCount = %q", got)
 	}
-	if got := headers.Get("X-CloudTasks-TaskExecutionCount"); got != "1" {
+	if got := headers.Get("X-CloudTasks-TaskExecutionCount"); got != "0" {
 		t.Fatalf("X-CloudTasks-TaskExecutionCount = %q", got)
+	}
+	if got := headers.Get("X-CloudTasks-TaskETA"); got != strconv.FormatInt(at.Unix(), 10) {
+		t.Fatalf("X-CloudTasks-TaskETA = %q, want epoch seconds", got)
 	}
 	if _, err := core.GetTask(ctx, "p", "l", "q1", tk.Name); err == nil {
 		t.Fatalf("successful task was not deleted")
@@ -117,8 +121,14 @@ func TestEngineRetryBackoffAndDrop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask after first failure: %v", err)
 	}
-	if got.DispatchCount != 1 || got.LastAttempt == nil || got.LastAttempt.ResponseStatus.Code != http.StatusInternalServerError {
+	if got.DispatchCount != 1 || got.ResponseCount != 1 || got.LastAttempt == nil || got.LastAttempt.ResponseStatus.Code != http.StatusInternalServerError {
 		t.Fatalf("after first failure: %+v", got)
+	}
+	if got.FirstAttempt == nil || got.FirstAttempt.ScheduleTime != (time.Time{}) {
+		t.Fatalf("firstAttempt should retain only dispatchTime: %+v", got.FirstAttempt)
+	}
+	if got.ExecutionCount != 0 {
+		t.Fatalf("executionCount after a 5XX = %d, want 0", got.ExecutionCount)
 	}
 	if !got.ScheduleTime.Equal(at.Add(time.Second)) {
 		t.Fatalf("retry scheduleTime = %v, want %v", got.ScheduleTime, at.Add(time.Second))
@@ -319,6 +329,51 @@ func TestEngineRunTaskFailureReschedules(t *testing.T) {
 	}
 	if _, err := core.GetTask(ctx, "p", "l", "q1", tk.Name); err != nil {
 		t.Fatalf("failed task vanished: %v", err)
+	}
+}
+
+func TestRetryBackoffShape(t *testing.T) {
+	rc := &tasksstore.RetryConfig{MinBackoff: 10 * time.Second, MaxBackoff: 300 * time.Second, MaxDoublings: 3}
+	want := []time.Duration{
+		10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second,
+		160 * time.Second, 240 * time.Second, 300 * time.Second, 300 * time.Second,
+	}
+	for i, w := range want {
+		if got := retryBackoff(rc, int32(i+1)); got != w {
+			t.Fatalf("retryBackoff(attempt %d) = %v, want %v", i+1, got, w)
+		}
+	}
+}
+
+func TestEngineMaxRetryDurationMeasuredFromFirstAttempt(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	withFixedClock(t, at)
+	ctx := context.Background()
+	core, engine, _ := newEngineCore(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	// createTime is far in the past relative to the (future) schedule; the
+	// duration limit must be measured from the first attempt, not creation, so
+	// the first failure still schedules a retry even though the task was
+	// created more than maxRetryDuration ago.
+	mustQueue(t, core, tasksstore.Queue{Name: "q1", RetryConfig: &tasksstore.RetryConfig{
+		MaxAttempts: 1, MaxRetryDuration: time.Hour, MinBackoff: 5 * time.Second, MaxBackoff: time.Hour, MaxDoublings: 4,
+	}})
+	due := at.Add(2 * time.Hour)
+	tk := mustTask(t, core, "q1", tasksstore.Task{Name: "t1", Target: tasksstore.TargetHTTP, ScheduleTime: due, HTTP: &tasksstore.HttpRequest{URL: server.URL}})
+
+	clock.SetGlobalClock(clock.FixedClock{T: due})
+	engine.TickNow(ctx)
+	got, err := core.GetTask(ctx, "p", "l", "q1", tk.Name)
+	if err != nil {
+		t.Fatalf("task dropped after first failure (maxRetryDuration measured from creation): %v", err)
+	}
+	if got.DispatchCount != 1 || !got.ScheduleTime.Equal(due.Add(5*time.Second)) {
+		t.Fatalf("after first failure: %+v", got)
 	}
 }
 

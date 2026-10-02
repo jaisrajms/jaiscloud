@@ -55,16 +55,17 @@ func (r *Runner) deliverHTTP(ctx context.Context, t tasksstore.Task) tasksstore.
 	for k, v := range h.Headers {
 		headers[k] = v
 	}
-	// Headers real Cloud Tasks attaches to every delivery. The task's
-	// DispatchCount counts attempts already made, so the attempt in flight is
-	// retry count + 1 (executionCount includes the current attempt).
+	// Headers real Cloud Tasks attaches to every delivery. TaskRetryCount is
+	// the number of prior attempts (0 on the first); TaskExecutionCount is the
+	// number of prior handler responses other than 5XX; TaskETA is the expected
+	// dispatch time in epoch seconds.
 	headers["User-Agent"] = "Google-Cloud-Tasks"
 	headers["X-CloudTasks-QueueName"] = t.Queue
 	headers["X-CloudTasks-TaskName"] = t.Name
 	headers["X-CloudTasks-TaskRetryCount"] = strconv.Itoa(int(t.DispatchCount))
-	headers["X-CloudTasks-TaskExecutionCount"] = strconv.Itoa(int(t.DispatchCount) + 1)
+	headers["X-CloudTasks-TaskExecutionCount"] = strconv.Itoa(int(t.ExecutionCount))
 	if !t.ScheduleTime.IsZero() {
-		headers["X-CloudTasks-TaskETA"] = t.ScheduleTime.UTC().Format(time.RFC3339)
+		headers["X-CloudTasks-TaskETA"] = strconv.FormatInt(t.ScheduleTime.Unix(), 10)
 	}
 	if h.OAuthToken != nil || h.OidcToken != nil {
 		// Real Cloud Tasks mints a Google token; the emulator attaches a
@@ -78,6 +79,8 @@ func (r *Runner) deliverHTTP(ctx context.Context, t tasksstore.Task) tasksstore.
 		Headers:  headers,
 		Body:     h.Body,
 		Deadline: t.DispatchDeadline,
+		// Cloud Tasks documents that it does not set Content-Type.
+		SkipContentTypeDefault: true,
 	})
 	return tasksstore.Status{Code: res.Code, Message: res.Message}
 }
@@ -173,14 +176,15 @@ func (e *Engine) tick(ctx context.Context, wait bool) {
 			if t.ScheduleTime.IsZero() || t.ScheduleTime.After(now) {
 				continue
 			}
-			if !st.bucket.allow(clock.RealNow()) {
-				// Dry bucket: no further task on this queue can dispatch this
-				// pass, so stop scanning it.
-				break
-			}
 			if !st.tryBegin(t.Name) {
 				// Already in flight (or the concurrency cap is reached).
 				continue
+			}
+			if !st.bucket.allow(clock.RealNow()) {
+				// Dry bucket: no further task on this queue can dispatch this
+				// pass, so release the claim and stop scanning it.
+				st.end(t.Name)
+				break
 			}
 			e.wg.Add(1)
 			go func(t tasksstore.Task, q tasksstore.Queue, st *queueState) {
@@ -234,8 +238,8 @@ func queueLimits(q tasksstore.Queue) (rate float64, burst int, maxConc int) {
 
 // attempt delivers one task and records the outcome: success deletes the task
 // (real Cloud Tasks deletes a task once its target answers successfully);
-// failure increments the dispatch count and either reschedules with exponential
-// backoff or drops the task when its attempt budget is exhausted.
+// failure increments the counters and either reschedules with exponential
+// backoff or drops the task when its retry limits are exhausted.
 func (e *Engine) attempt(ctx context.Context, t tasksstore.Task, q tasksstore.Queue) {
 	now := clock.Now()
 	status := e.disp.Deliver(ctx, t)
@@ -249,17 +253,9 @@ func (e *Engine) attempt(ctx context.Context, t tasksstore.Task, q tasksstore.Qu
 		_ = e.store.DeleteTask(ctx, t.ProjectID, t.Location, t.Queue, t.Name)
 		return
 	}
-	attempt := tasksstore.Attempt{
-		ScheduleTime:   t.ScheduleTime,
-		DispatchTime:   now,
-		ResponseTime:   clock.Now(),
-		ResponseStatus: &status,
-	}
+	attempt := newAttempt(t.ScheduleTime, now, status)
 	_, _ = e.store.UpdateTaskAtomic(ctx, t.ProjectID, t.Location, t.Queue, t.Name, func(cur tasksstore.Task) (tasksstore.Task, error) {
-		if cur.FirstAttempt == nil {
-			cur.FirstAttempt = &attempt
-		}
-		cur.LastAttempt = &attempt
+		recordAttempt(&cur, attempt, status)
 		cur.DispatchCount++
 		cur.ScheduleTime = next
 		return cur, nil
@@ -282,23 +278,20 @@ func (e *Engine) runNow(ctx context.Context, t tasksstore.Task) (tasksstore.Task
 	}
 	now := clock.Now()
 	status := e.disp.Deliver(ctx, t)
-	attempt := tasksstore.Attempt{
-		ScheduleTime:   t.ScheduleTime,
-		DispatchTime:   now,
-		ResponseTime:   clock.Now(),
-		ResponseStatus: &status,
-	}
+	attempt := newAttempt(t.ScheduleTime, now, status)
 	updated, err := e.store.UpdateTaskAtomic(ctx, t.ProjectID, t.Location, t.Queue, t.Name, func(cur tasksstore.Task) (tasksstore.Task, error) {
-		if cur.FirstAttempt == nil {
-			cur.FirstAttempt = &attempt
-		}
-		cur.LastAttempt = &attempt
-		cur.DispatchCount++
 		if status.Code == 0 {
+			if cur.FirstAttempt == nil {
+				cur.FirstAttempt = &tasksstore.Attempt{DispatchTime: attempt.DispatchTime}
+			}
+			cur.LastAttempt = attempt
+			cur.DispatchCount++
 			cur.ResponseCount++
-		} else {
-			cur.ScheduleTime = now.Add(retryBackoff(q.RetryConfig, t.DispatchCount+1))
+			return cur, nil
 		}
+		recordAttempt(&cur, attempt, status)
+		cur.DispatchCount++
+		cur.ScheduleTime = now.Add(retryBackoff(q.RetryConfig, t.DispatchCount+1))
 		return cur, nil
 	})
 	if err != nil {
@@ -310,9 +303,46 @@ func (e *Engine) runNow(ctx context.Context, t tasksstore.Task) (tasksstore.Task
 	return updated, nil
 }
 
-// failureSchedule decides the next attempt time after a failed dispatch. It
-// returns drop=true when the queue's maxAttempts (counting this attempt) or
-// maxRetryDuration is exceeded; the caller then deletes the task.
+// newAttempt builds the Attempt record for a delivered attempt.
+func newAttempt(scheduled, dispatch time.Time, status tasksstore.Status) *tasksstore.Attempt {
+	return &tasksstore.Attempt{
+		ScheduleTime:   scheduled,
+		DispatchTime:   dispatch,
+		ResponseTime:   clock.Now(),
+		ResponseStatus: &status,
+	}
+}
+
+// recordAttempt stores a failed attempt on the task. FirstAttempt retains only
+// its dispatchTime (Cloud Tasks does not keep the rest of the first attempt);
+// LastAttempt keeps the full record. responseCount counts every attempt that
+// received a response; executionCount counts responses other than 5XX (the
+// X-CloudTasks-TaskExecutionCount semantics). A transport-level failure updates
+// neither.
+func recordAttempt(cur *tasksstore.Task, attempt *tasksstore.Attempt, status tasksstore.Status) {
+	if cur.FirstAttempt == nil {
+		cur.FirstAttempt = &tasksstore.Attempt{DispatchTime: attempt.DispatchTime}
+	}
+	cur.LastAttempt = attempt
+	if receivedResponse(status) {
+		cur.ResponseCount++
+		if status.Code < 500 {
+			cur.ExecutionCount++
+		}
+	}
+}
+
+// receivedResponse reports whether the attempt got an HTTP response from the
+// target (as opposed to a transport-level failure).
+func receivedResponse(status tasksstore.Status) bool {
+	return status.Code >= 100 && status.Code <= 599
+}
+
+// failureSchedule decides the next attempt time after a failed dispatch. Cloud
+// Tasks stops retrying only when BOTH maxAttempts and maxRetryDuration are
+// satisfied (or the task succeeds); a maxAttempts of -1 or a maxRetryDuration
+// of 0 is unlimited and never blocks. It returns drop=true to have the caller
+// delete the task.
 func failureSchedule(q tasksstore.Queue, t tasksstore.Task, now time.Time, dispatches int32) (time.Time, bool) {
 	maxAttempts := int32(100)
 	maxRetryDuration := time.Duration(0)
@@ -322,26 +352,35 @@ func failureSchedule(q tasksstore.Queue, t tasksstore.Task, now time.Time, dispa
 		}
 		maxRetryDuration = q.RetryConfig.MaxRetryDuration
 	}
-	// maxAttempts = -1 means unlimited.
-	if maxAttempts >= 0 && dispatches >= maxAttempts {
-		return time.Time{}, true
-	}
+	attemptsReached := maxAttempts >= 0 && dispatches >= maxAttempts
+	durationReached := true
 	if maxRetryDuration > 0 {
-		first := t.CreateTime
-		if t.FirstAttempt != nil && !t.FirstAttempt.DispatchTime.IsZero() {
-			first = t.FirstAttempt.DispatchTime
-		}
-		if !first.IsZero() && now.Sub(first) >= maxRetryDuration {
-			return time.Time{}, true
-		}
+		first := firstAttemptTime(t, now)
+		durationReached = !first.IsZero() && now.Sub(first) >= maxRetryDuration
+	}
+	if attemptsReached && durationReached {
+		return time.Time{}, true
 	}
 	return now.Add(retryBackoff(q.RetryConfig, dispatches)), false
 }
 
-// retryBackoff computes the exponential backoff before attempt number
-// `dispatches` (the failed attempt count, starting at 1):
-// min(minBackoff · 2^(dispatches-1), maxBackoff), with at most maxDoublings
-// doublings. All values fall back to the Cloud Tasks defaults.
+// firstAttemptTime is when the task was first attempted: the recorded first
+// attempt, or now when this failure IS the first attempt (FirstAttempt is only
+// persisted once the attempt completes).
+func firstAttemptTime(t tasksstore.Task, now time.Time) time.Time {
+	if t.FirstAttempt != nil && !t.FirstAttempt.DispatchTime.IsZero() {
+		return t.FirstAttempt.DispatchTime
+	}
+	return now
+}
+
+// retryBackoff computes the retry interval before attempt number `dispatches`
+// (the failed attempt count, starting at 1). Per the Cloud Tasks RetryConfig
+// contract the interval starts at minBackoff, doubles at most maxDoublings
+// times, then increases linearly by minBackoff·2^maxDoublings, and is finally
+// capped at maxBackoff — e.g. 10s,20s,40s,80s,160s,240s,300s,300s with
+// min=10s, max=300s, maxDoublings=3. Values fall back to the Cloud Tasks
+// defaults.
 func retryBackoff(rc *tasksstore.RetryConfig, dispatches int32) time.Duration {
 	minB := 100 * time.Millisecond
 	maxB := time.Hour
@@ -360,19 +399,28 @@ func retryBackoff(rc *tasksstore.RetryConfig, dispatches int32) time.Duration {
 	if minB <= 0 {
 		return 0
 	}
-	doublings := dispatches - 1
-	if doublings < 0 {
-		doublings = 0
-	}
-	if doublings > maxD {
-		doublings = maxD
+	n := dispatches - 1
+	if n < 0 {
+		n = 0
 	}
 	backoff := minB
-	for i := int32(0); i < doublings; i++ {
+	for i := int32(0); i < n && i < maxD; i++ {
 		if backoff >= maxB {
 			break
 		}
 		backoff *= 2
+	}
+	if n > maxD {
+		step := minB
+		for i := int32(0); i < maxD && step < maxB; i++ {
+			step *= 2
+		}
+		for i := maxD; i < n; i++ {
+			if backoff >= maxB {
+				break
+			}
+			backoff += step
+		}
 	}
 	if backoff > maxB {
 		backoff = maxB

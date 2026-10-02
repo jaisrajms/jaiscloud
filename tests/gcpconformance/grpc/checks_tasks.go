@@ -473,6 +473,11 @@ func checkTasksRunTask(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	// Pause the queue so the background dispatch engine cannot deliver the task
+	// between CreateTask and RunTask; RunTask must bypass PAUSED.
+	if _, err := client.PauseQueue(ctx, &cloudtaskspb.PauseQueueRequest{Name: created.GetName()}); err != nil {
+		return fmt.Errorf("PauseQueue: %w", err)
+	}
 	task, err := createTasksTask(ctx, client, cfg, created.GetName(), "gcpc-grpc-tasks-run")
 	if err != nil {
 		return err

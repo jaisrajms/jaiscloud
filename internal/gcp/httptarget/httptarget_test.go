@@ -67,6 +67,25 @@ func TestDeliverTransportError(t *testing.T) {
 	}
 }
 
+func TestDeliverSkipContentTypeDefault(t *testing.T) {
+	var gotCT string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	Deliver(context.Background(), server.Client(), Request{
+		Method:                 "POST",
+		URL:                    server.URL,
+		Body:                   []byte("{}"),
+		SkipContentTypeDefault: true,
+	})
+	if gotCT != "" {
+		t.Fatalf("content type = %q, want unset (Cloud Tasks does not set it)", gotCT)
+	}
+}
+
 func TestDeliverRespectsContentTypeHeader(t *testing.T) {
 	var gotCT string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

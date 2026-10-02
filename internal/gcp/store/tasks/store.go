@@ -155,8 +155,13 @@ type Task struct {
 	DispatchDeadline time.Duration `json:"dispatchDeadline,omitempty"`
 	DispatchCount    int32         `json:"dispatchCount,omitempty"`
 	ResponseCount    int32         `json:"responseCount,omitempty"`
-	FirstAttempt     *Attempt      `json:"firstAttempt,omitempty"`
-	LastAttempt      *Attempt      `json:"lastAttempt,omitempty"`
+	// ExecutionCount is the number of attempts whose handler returned a
+	// response other than 5XX (Cloud Tasks' X-CloudTasks-TaskExecutionCount
+	// header). It is internal: real Cloud Tasks does not expose it on the Task
+	// resource.
+	ExecutionCount int32    `json:"executionCount,omitempty"`
+	FirstAttempt   *Attempt `json:"firstAttempt,omitempty"`
+	LastAttempt    *Attempt `json:"lastAttempt,omitempty"`
 }
 
 // Store is the Cloud Tasks store.

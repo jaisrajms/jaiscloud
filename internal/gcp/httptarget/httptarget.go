@@ -22,15 +22,21 @@ const defaultDeadline = 3 * time.Minute
 
 // Request is one HTTP delivery attempt. Method may be empty or a proto
 // unspecified sentinel, in which case POST is used. Headers are attached as-is;
-// the caller supplies any service-specific headers. Body is sent verbatim and
-// defaults Content-Type to application/octet-stream when a body is present and
-// no Content-Type header is set.
+// the caller supplies any service-specific headers. Body is sent verbatim.
+//
+// The two engines differ on Content-Type: Cloud Scheduler defaults a body's
+// Content-Type to application/octet-stream, while Cloud Tasks documents that it
+// "won't be set by Cloud Tasks". Callers therefore opt out with
+// SkipContentTypeDefault.
 type Request struct {
 	Method   string
 	URL      string
 	Headers  map[string]string
 	Body     []byte
 	Deadline time.Duration
+	// SkipContentTypeDefault suppresses the application/octet-stream default
+	// when a body is present and no Content-Type was supplied.
+	SkipContentTypeDefault bool
 }
 
 // Result reports the outcome of one attempt. Code is 0 when the target
@@ -69,7 +75,7 @@ func Deliver(ctx context.Context, client *http.Client, r Request) Result {
 	for k, v := range r.Headers {
 		req.Header.Set(k, v)
 	}
-	if len(r.Body) > 0 && req.Header.Get("Content-Type") == "" {
+	if len(r.Body) > 0 && !r.SkipContentTypeDefault && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 
