@@ -1,0 +1,4 @@
+ALTER TABLE jc_sm_secrets ADD COLUMN IF NOT EXISTS kms_key_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE jc_sm_versions ADD COLUMN IF NOT EXISTS kms_key_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE jc_sm_versions ADD COLUMN IF NOT EXISTS wrapped_dek BYTEA;
+

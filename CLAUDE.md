@@ -357,6 +357,19 @@ Integration tests call `POST /_jaiscloud/reset` between each test via `resetStat
 
 ## Key conventions
 
+### GCP parity status ledger: run `make gcp-status` before planning
+
+The GCP backlog spans many plan docs; don't decide "what's implemented" from
+memory. `make gcp-status` rebuilds `plan_docs/STATUS.md` + `status.json` from
+every `plan_docs/**/*.md` table plus git/GitHub state and a row for every
+base-`gcp` PR. `make gcp-status-check Q="<service> <keywords>"` assesses a
+proposed change (exit 2 = already done, 3 = in flight),
+`make gcp-status-audit` classifies not-done items (`oversight?` / `unowned` /
+`stale-doc` / `abandoned` / `claimed-done` vs `scheduled`/`unscheduled`/`intentional`),
+`make gcp-status-next` gives the next items in priority order (wave order, then
+`Pri`, then impact), and `make gcp-status-coverage` fails if any doc has status
+markers but produced no ledger rows. See [AGENTS.md](AGENTS.md).
+
 ### Resource IDs: use nr.ResourceID, never hardcode ARN formats
 
 Providers must use `nr.ResourceID("type", name)` — never `fmt.Sprintf("arn:aws:...")`.

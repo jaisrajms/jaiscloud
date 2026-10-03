@@ -1,0 +1,509 @@
+---
+# ConfigMap — the Medallion (multi-hop) ELT pipeline driver. Standard-library
+# Python only; it talks to the GCP emulator's GCS + Dataproc REST APIs.
+#
+#   Ingest    seed events                     -> gs://lakehouse-raw/events
+#   Transform Spark (Dataproc pysparkJob)     -> gs://lakehouse-conformed/events
+#   Derive    Spark SQL (Dataproc sparkSqlJob)-> gs://lakehouse-curated/revenue_by_region
+#   Publish   serving copy + manifest         -> gs://lakehouse-published
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lakehouse-pipeline-script
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-lakehouse-pipeline
+data:
+  pipeline.py: |
+    #!/usr/bin/env python3
+    """Vendor-neutral Medallion (multi-hop) ELT pipeline against the GCP emulator.
+
+    Stages: Ingest -> Transform -> Derive -> Publish.
+      Landing/Raw (bronze) : gs://lakehouse-raw/events          (seed JSON)
+      Conformed   (silver) : gs://lakehouse-conformed/events    (typed/cleaned, pysparkJob)
+      Curated     (gold)   : gs://lakehouse-curated/revenue_by_region (aggregated, sparkSqlJob)
+      Published   (serving): gs://lakehouse-published/          (+ manifest.json)
+
+    Transform runs as a real PySpark job and Derive as a real Spark SQL job, both
+    submitted through the emulator's Dataproc API (jobs:submit); on Kubernetes the
+    emulator runs each as a client-mode Spark pod (spark-submit / spark-sql). All
+    input/output lives in the emulator's GCS.
+
+    Prints a JSON summary prefixed with PIPELINE_OK on success and exits 0;
+    any failure raises and exits non-zero.
+    """
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    BASE = os.environ.get(
+        "EMULATOR_URL", "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080"
+    ).rstrip("/")
+    PROJECT = os.environ.get("PROJECT", "jaiscloud-project")
+    REGION = os.environ.get("REGION", "us-central1")
+    CLUSTER = os.environ.get("CLUSTER", "lakehouse-cluster")
+    # Run-unique Dataproc Metastore service the cluster attaches through its
+    # virtualClusterConfig.auxiliaryServicesConfig (validated same-region).
+    HMS = os.environ.get("HMS_SERVICE", "lakehouse-hms")
+    JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "600"))
+    # Unique per run so a re-run never collides with an existing Dataproc job
+    # id in the emulator's store (SubmitJob rejects a duplicate jobId with 409).
+    RUN_ID = os.environ.get("RUN_ID") or f"{int(time.time())}-{os.getpid()}"
+    RECORDS = int(os.environ.get("RECORDS", "100"))
+    # Rows per ingested GCS object; also the Spark input-partition granularity.
+    SHARD_ROWS = int(os.environ.get("SHARD_ROWS", "250000"))
+
+    # Spark footprint for the two hops. The k3d node is capped at ~6Gi, so this
+    # stays lean: 2 executors + driver at >1g each tip the node cgroup into an
+    # OOM kill. 512m per JVM handles a 1M-row seed comfortably; the seed is
+    # streamed in SHARD_ROWS shards so no task sees more than a few 10s of MB.
+    SPARK_PROPERTIES = {
+        "spark.driver.memory": os.environ.get("SPARK_DRIVER_MEMORY", "512m"),
+        "spark.executor.memory": os.environ.get("SPARK_EXECUTOR_MEMORY", "512m"),
+        "spark.executor.instances": os.environ.get("SPARK_EXECUTOR_INSTANCES", "1"),
+        "spark.sql.shuffle.partitions": os.environ.get("SPARK_SHUFFLE_PARTITIONS", "8"),
+    }
+
+    RAW = "lakehouse-raw"
+    CONFORMED = "lakehouse-conformed"
+    CURATED = "lakehouse-curated"
+    PUBLISHED = "lakehouse-published"
+
+
+    def log(msg):
+        print(f"[lakehouse] {msg}", flush=True)
+
+
+    def _req(method, path, body=None, content_type="application/json"):
+        data = body
+        if isinstance(body, (dict, list)):
+            data = json.dumps(body).encode()
+        req = urllib.request.Request(
+            BASE + path, data=data, method=method,
+            headers={"Content-Type": content_type},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = r.read()
+                return r.status, (json.loads(raw) if raw else {})
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except ValueError:
+                parsed = {"raw": raw.decode(errors="replace")}
+            return e.code, parsed
+
+
+    def _raw_get(path):
+        with urllib.request.urlopen(BASE + path, timeout=60) as r:
+            return r.read()
+
+
+    def ensure_bucket(name):
+        status, body = _req(
+            "POST", "/storage/v1/b?project=" + urllib.parse.quote(PROJECT), {"name": name}
+        )
+        # 409 == already exists (idempotent); any other non-2xx is fatal.
+        if status >= 300 and status != 409:
+            raise RuntimeError(f"create bucket {name}: HTTP {status} {body}")
+
+
+    def upload(bucket, name, data, content_type="application/octet-stream"):
+        if isinstance(data, str):
+            data = data.encode()
+        q = urllib.parse.urlencode({"uploadType": "media", "name": name})
+        status, body = _req("POST", f"/upload/storage/v1/b/{bucket}/o?{q}", data, content_type)
+        if status >= 300:
+            raise RuntimeError(f"upload {bucket}/{name}: HTTP {status} {body}")
+
+
+    def list_objects(bucket, prefix=""):
+        q = "?prefix=" + urllib.parse.quote(prefix) if prefix else ""
+        status, body = _req("GET", f"/storage/v1/b/{bucket}/o{q}")
+        if status >= 300:
+            raise RuntimeError(f"list {bucket}: HTTP {status} {body}")
+        return [o["name"] for o in body.get("items", [])]
+
+
+    def download_text(bucket, name):
+        path = f"/storage/v1/b/{bucket}/o/{urllib.parse.quote(name, safe='')}?alt=media"
+        return _raw_get(path).decode()
+
+
+    def delete_object(bucket, name):
+        path = f"/storage/v1/b/{bucket}/o/{urllib.parse.quote(name, safe='')}"
+        status, body = _req("DELETE", path)
+        if status >= 300 and status != 404:
+            raise RuntimeError(f"delete {bucket}/{name}: HTTP {status} {body}")
+
+
+    def purge_bucket(name):
+        """Delete every object in a bucket so a re-run starts from a clean slate.
+        Fixed bucket names otherwise accumulate objects across runs — and after
+        the emulator pod is rolled (blob dir is ephemeral) a stale object's
+        metadata outlives its bytes, which is exactly how a re-run 404s."""
+        for obj in list_objects(name):
+            delete_object(name, obj)
+
+
+    def create_metastore_service():
+        """Ensure the Metastore service the cluster attaches exists (409 is
+        idempotent) and return its fully-qualified name."""
+        status, body = _req(
+            "POST",
+            f"/v1/projects/{PROJECT}/locations/{REGION}/services?serviceId={HMS}",
+            {"hiveMetastoreConfig": {"endpointProtocol": "THRIFT"}},
+        )
+        if status >= 300 and status != 409:
+            raise RuntimeError(f"create metastore service {HMS}: HTTP {status} {body}")
+        return f"projects/{PROJECT}/locations/{REGION}/services/{HMS}"
+
+    def poll_operation(op_name, what):
+        """Poll a Dataproc long-running operation (by resource name) to
+        completion; the emulator's cluster/job state machine advances lazily on
+        each read. Returns the packed response ({} for a delete)."""
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            status, body = _req("GET", "/v1/" + op_name)
+            if status >= 300:
+                raise RuntimeError(f"poll {what}: HTTP {status} {body}")
+            if body.get("done"):
+                return body.get("response") or {}
+            time.sleep(0.5)
+        raise RuntimeError(f"{what} operation did not complete within 120s")
+
+    def delete_cluster():
+        """Delete a prior run's cluster and wait for the async delete to settle,
+        so this run recreates it with a GKE virtualClusterConfig."""
+        status, body = _req(
+            "DELETE", f"/v1/projects/{PROJECT}/regions/{REGION}/clusters/{CLUSTER}"
+        )
+        if status == 404:
+            return
+        if status >= 300:
+            raise RuntimeError(f"delete cluster {CLUSTER}: HTTP {status} {body}")
+        if body.get("name"):
+            poll_operation(body["name"], f"delete cluster {CLUSTER}")
+
+    def ensure_cluster():
+        """Recreate the cluster as a GKE-backed Dataproc-on-GKE cluster
+        (virtualClusterConfig) attached to a Metastore service, and poll the
+        asynchronous create operation to RUNNING. Both placements run the same
+        client-mode Spark pods; the GKE config is metadata only."""
+        ms_ref = create_metastore_service()
+        delete_cluster()
+        status, body = _req(
+            "POST",
+            f"/v1/projects/{PROJECT}/regions/{REGION}/clusters",
+            {
+                "clusterName": CLUSTER,
+                "virtualClusterConfig": {
+                    "kubernetesClusterConfig": {
+                        "gkeClusterConfig": {
+                            "gkeClusterTarget": f"projects/{PROJECT}/locations/{REGION}/clusters/lakehouse-gke"
+                        }
+                    },
+                    "auxiliaryServicesConfig": {
+                        "metastoreConfig": {"dataprocMetastoreService": ms_ref}
+                    },
+                },
+            },
+        )
+        if status >= 300:
+            raise RuntimeError(f"create cluster {CLUSTER}: HTTP {status} {body}")
+        if body.get("done"):
+            raise RuntimeError(f"cluster {CLUSTER} created inline; want an async LRO")
+        poll_operation(body["name"], f"create cluster {CLUSTER}")
+
+        status, cl = _req(
+            "GET", f"/v1/projects/{PROJECT}/regions/{REGION}/clusters/{CLUSTER}"
+        )
+        if status >= 300:
+            raise RuntimeError(f"get cluster {CLUSTER}: HTTP {status} {cl}")
+        if cl.get("status", {}).get("state") != "RUNNING":
+            raise RuntimeError(f"cluster {CLUSTER} state = {cl.get('status')}")
+        vcc = cl.get("virtualClusterConfig") or {}
+        if not vcc.get("kubernetesClusterConfig"):
+            raise RuntimeError(f"cluster {CLUSTER} lost virtualClusterConfig: {cl}")
+        got = (
+            (vcc.get("auxiliaryServicesConfig") or {}).get("metastoreConfig") or {}
+        ).get("dataprocMetastoreService")
+        if got != ms_ref:
+            raise RuntimeError(f"cluster {CLUSTER} metastore = {got!r}, want {ms_ref!r}")
+        log(f"cluster {CLUSTER} RUNNING (GKE virtualClusterConfig + metastore {ms_ref})")
+        return ms_ref
+
+    def fetch_driver_output(job_id):
+        """Resolve a terminal job's driverOutputResourceUri to the real GCS
+        object the emulator staged (<uri>.000000000) and return (uri, bytes)."""
+        status, body = _req(
+            "GET", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs/{job_id}"
+        )
+        if status >= 300:
+            raise RuntimeError(f"get job {job_id}: HTTP {status} {body}")
+        uri = body.get("driverOutputResourceUri") or ""
+        if not uri.startswith("gs://"):
+            raise RuntimeError(f"job {job_id} driverOutputResourceUri = {uri!r}")
+        bucket, _, obj = uri[len("gs://"):].partition("/")
+        data = _raw_get(
+            "/storage/v1/b/" + bucket + "/o/"
+            + urllib.parse.quote(obj + ".000000000", safe="") + "?alt=media"
+        )
+        log(f"driver output {job_id} -> gs://{bucket}/{obj}.000000000 ({len(data)} bytes)")
+        return uri, len(data)
+
+
+    def submit_job(job_id, script_uri):
+        body = {
+            "job": {
+                "placement": {"clusterName": CLUSTER},
+                "reference": {"jobId": job_id},
+                "pysparkJob": {
+                    "mainPythonFileUri": script_uri,
+                    "properties": SPARK_PROPERTIES,
+                },
+            }
+        }
+        status, resp = _req("POST", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", body)
+        if status >= 300:
+            raise RuntimeError(f"submit {job_id}: HTTP {status} {resp}")
+        # The response must carry the pysparkJob type we submitted.
+        if "pysparkJob" not in resp:
+            raise RuntimeError(f"submit {job_id}: response has no pysparkJob: {resp}")
+        log(f"submitted job {job_id} (pysparkJob mainPythonFileUri={script_uri})")
+        return job_id
+
+
+    def submit_sql_job(job_id, queries):
+        """Submit a Dataproc sparkSqlJob whose queryList holds one entry per
+        statement. The emulator runs it through the real Spark SQL CLI
+        (spark-sql); scriptVariables map to --hivevar and properties to --conf."""
+        body = {
+            "job": {
+                "placement": {"clusterName": CLUSTER},
+                "reference": {"jobId": job_id},
+                "sparkSqlJob": {
+                    "queryList": {"queries": queries},
+                    "properties": SPARK_PROPERTIES,
+                },
+            }
+        }
+        status, resp = _req("POST", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", body)
+        if status >= 300:
+            raise RuntimeError(f"submit {job_id}: HTTP {status} {resp}")
+        # The response must carry the sparkSqlJob type we submitted (and not a
+        # pysparkJob): this is the wire-level proof the SQL path was selected.
+        if "sparkSqlJob" not in resp or "pysparkJob" in resp:
+            raise RuntimeError(f"submit {job_id}: response is not a sparkSqlJob: {resp}")
+        log(f"submitted job {job_id} (sparkSqlJob queries={len(queries)})")
+        return job_id
+
+
+    def wait_job(job_id):
+        deadline = time.time() + JOB_TIMEOUT_S
+        while time.time() < deadline:
+            status, body = _req("GET", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs/{job_id}")
+            if status >= 300:
+                raise RuntimeError(f"get job {job_id}: HTTP {status} {body}")
+            state = body.get("status", {}).get("state")
+            if state in ("DONE", "CANCELLED", "ERROR"):
+                if state != "DONE":
+                    raise RuntimeError(f"job {job_id} ended {state}: {json.dumps(body)}")
+                log(f"job {job_id} DONE")
+                return
+            time.sleep(5)
+        raise RuntimeError(f"job {job_id} did not finish within {JOB_TIMEOUT_S}s")
+
+
+    TRANSFORM_PY = '''
+    from pyspark.sql import SparkSession
+    from pyspark.sql import functions as F
+
+    spark = SparkSession.builder.getOrCreate()
+    # Declare the schema explicitly: spark.read.json defaults to
+    # samplingRatio=1.0, which scans the whole dataset on the driver to infer
+    # types and OOM-kills it at scale. The seed shape is known here.
+    schema = "event_id STRING, region STRING, amount DOUBLE"
+    raw = spark.read.schema(schema).json("gs://lakehouse-raw/events/")
+    conformed = (
+        raw.withColumn("amount", F.col("amount").cast("double"))
+        .filter(F.col("amount").isNotNull())
+        .withColumn("region", F.upper(F.col("region")))
+    )
+    conformed.write.mode("overwrite").json("gs://lakehouse-conformed/events")
+    print("TRANSFORM_OK rows=", conformed.count())
+    '''
+
+    # The Derive hop is a Dataproc sparkSqlJob. The Spark SQL CLI reads the
+    # conformed JSON with an explicitly declared schema (the CREATE TEMPORARY
+    # VIEW column list avoids the whole-dataset schema inference that OOM-kills
+    # the driver at scale) and writes the aggregation with INSERT OVERWRITE
+    # DIRECTORY. One list entry per statement; the emulator joins them with ";\n".
+    DERIVE_SQL = [
+        (
+            "CREATE TEMPORARY VIEW conformed "
+            "(event_id STRING, region STRING, amount DOUBLE) "
+            "USING json OPTIONS (path 'gs://lakehouse-conformed/events/')"
+        ),
+        (
+            "INSERT OVERWRITE DIRECTORY 'gs://lakehouse-curated/revenue_by_region' "
+            "USING json "
+            "SELECT region, COUNT(*) AS orders, ROUND(SUM(amount), 2) AS revenue "
+            "FROM conformed GROUP BY region"
+        ),
+    ]
+
+
+    def ingest_events():
+        """Write RECORDS seed events to gs://RAW/events/ in SHARD_ROWS-sized
+        objects and return (per-region tally, shard count). Streams one shard at
+        a time so driver memory stays bounded regardless of RECORDS, and each
+        shard becomes a Spark input partition."""
+        regions = ["us", "eu", "us", "apac", "eu", "us"]
+        counts = {}
+        shard = []
+        shards = 0
+        for i in range(1, RECORDS + 1):
+            region = regions[i % len(regions)]
+            shard.append(json.dumps(
+                {"event_id": f"e{i:06d}", "region": region,
+                 "amount": round(10 + (i * 7) % 90 + (i % 3) * 0.5, 2)}))
+            counts[region.upper()] = counts.get(region.upper(), 0) + 1
+            if len(shard) >= SHARD_ROWS:
+                upload(RAW, f"events/part-{shards:04d}.json",
+                       "\n".join(shard) + "\n", "application/json")
+                shards += 1
+                shard = []
+        if shard:
+            upload(RAW, f"events/part-{shards:04d}.json",
+                   "\n".join(shard) + "\n", "application/json")
+            shards += 1
+        return counts, shards
+
+
+    def main():
+        log(f"emulator={BASE} project={PROJECT} region={REGION} cluster={CLUSTER}")
+        for b in (RAW, CONFORMED, CURATED, PUBLISHED):
+            ensure_bucket(b)
+            purge_bucket(b)
+
+        # ---- Ingest ----------------------------------------------------------
+        ingest_counts, shards = ingest_events()
+        upload(RAW, "jobs/transform.py", TRANSFORM_PY, "text/x-python")
+        log(f"ingested {RECORDS} raw events in {shards} shard(s) -> gs://{RAW}/events/")
+
+        metastore_ref = ensure_cluster()
+
+        # ---- Transform (PySpark) --------------------------------------------
+        transform_job = f"lakehouse-transform-{RUN_ID}"
+        submit_job(transform_job, f"gs://{RAW}/jobs/transform.py")
+        wait_job(transform_job)
+        transform_output = fetch_driver_output(transform_job)
+
+        # ---- Derive (Spark SQL) ---------------------------------------------
+        derive_job = f"lakehouse-derive-{RUN_ID}"
+        submit_sql_job(derive_job, DERIVE_SQL)
+        wait_job(derive_job)
+        derive_output = fetch_driver_output(derive_job)
+
+        # ---- Publish ---------------------------------------------------------
+        curated_parts = sorted(
+            n for n in list_objects(CURATED, "revenue_by_region/") if n.endswith(".json")
+        )
+        if not curated_parts:
+            raise RuntimeError("no curated output to publish")
+        published = []
+        for name in curated_parts:
+            upload(PUBLISHED, name, download_text(CURATED, name), "application/json")
+            published.append(name)
+
+        manifest = {
+            "pipeline": "medallion-elt",
+            "run_id": RUN_ID,
+            "stages": ["ingest", "transform", "derive", "publish"],
+            # The Dataproc job types each Spark hop ran as: Transform is a
+            # pysparkJob, Derive is a sparkSqlJob (the path this e2e exercises).
+            "job_types": {"transform": "pysparkJob", "derive": "sparkSqlJob"},
+            "input_rows": RECORDS,
+            "ingest_shards": shards,
+            "ingest_region_counts": ingest_counts,
+            "curated_objects": curated_parts,
+            "published_objects": sorted(published),
+            # GKE virtualClusterConfig + Metastore attachment, and the real GCS
+            # driver-output objects the emulator staged for each Spark job.
+            "cluster": CLUSTER,
+            "metastore_service": metastore_ref,
+            "driver_outputs": {
+                transform_job: {"uri": transform_output[0], "bytes": transform_output[1]},
+                derive_job: {"uri": derive_output[0], "bytes": derive_output[1]},
+            },
+        }
+        upload(PUBLISHED, "manifest.json",
+               json.dumps(manifest, indent=2, sort_keys=True), "application/json")
+        log(f"published {len(published)} object(s) + manifest.json")
+
+        summary = {"PIPELINE_OK": True, **manifest}
+        print(json.dumps(summary), flush=True)
+
+
+    if __name__ == "__main__":
+        try:
+            main()
+        except Exception as exc:  # noqa: BLE001 - surfaced to the Job logs
+            print(f"PIPELINE_FAILED: {exc}", file=sys.stderr, flush=True)
+            sys.exit(1)
+---
+# Job — runs the pipeline driver in-cluster. The driver only needs the emulator
+# (no Kubernetes API access), so it runs as a plain pod.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakehouse-pipeline
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-lakehouse-pipeline
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: jaiscloud-lakehouse-pipeline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pipeline
+          image: python:3.12-slim
+          command: ["python", "/scripts/pipeline.py"]
+          env:
+            - name: EMULATOR_URL
+              value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+            - name: PROJECT
+              value: jaiscloud-project
+            - name: REGION
+              value: us-central1
+            - name: CLUSTER
+              value: lakehouse-cluster
+            # Record count; `make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=N`
+            # renders this value so the test's expectations match the run.
+            - name: RECORDS
+              value: "100"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: scripts
+          configMap:
+            name: lakehouse-pipeline-script

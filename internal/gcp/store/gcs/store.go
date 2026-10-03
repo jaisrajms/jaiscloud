@@ -1,0 +1,320 @@
+// Package gcs provides the GCS metadata store implementations, mirroring the
+// AWS S3 store (internal/aws/store/s3/). Buckets, objects, and resumable-upload
+// sessions live in dedicated tables (jc_gcs_*) rather than the generic
+// jc_resources store; object bytes remain in blobfs.
+package gcs
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"time"
+
+	"jaiscloud/internal/clock"
+)
+
+// Sentinel errors returned by the store, mapped to GCS HTTP responses by the
+// provider (errors.Is-compatible, unlike AWS's string sentinels).
+var (
+	ErrNoSuchBucket   = errors.New("NoSuchBucket")
+	ErrNoSuchObject   = errors.New("NoSuchObject")
+	ErrNoSuchUpload   = errors.New("NoSuchUpload")
+	ErrBucketNotEmpty = errors.New("BucketNotEmpty")
+	ErrAlreadyExists  = errors.New("AlreadyExists")
+	// ErrPreconditionFailed is returned by the *Checked object-write methods
+	// when a Precondition doesn't match the object's current live-generation
+	// state. The write was NOT applied — real GCS's ifGenerationMatch/
+	// ifGenerationNotMatch/ifMetagenerationMatch/ifMetagenerationNotMatch
+	// query params, which the codec already decodes into request params but
+	// which nothing previously read or enforced.
+	ErrPreconditionFailed = errors.New("PreconditionFailed")
+)
+
+// BucketMetageneration returns the bucket's metageneration as a decimal string,
+// defaulting to "1" for buckets persisted before the counter existed (and when
+// the stored value is missing or not a string).
+func BucketMetageneration(meta map[string]any) string {
+	if s, ok := meta["metageneration"].(string); ok && s != "" {
+		return s
+	}
+	return "1"
+}
+
+// normalizeBucketMeta ensures a bucket's metageneration field is present and a
+// decimal string, defaulting a legacy bucket to "1".
+func normalizeBucketMeta(meta map[string]any) {
+	if _, ok := meta["metageneration"].(string); !ok {
+		meta["metageneration"] = "1"
+	}
+}
+
+// nextMetageneration increments a metageneration string ("N" → "N+1",
+// defaulting a missing/invalid value to "1").
+func nextMetageneration(m string) string {
+	n, err := strconv.Atoi(m)
+	if err != nil {
+		return "1"
+	}
+	return strconv.Itoa(n + 1)
+}
+
+// BucketMetagenerationMatches reports whether p is satisfied by the bucket's
+// current metageneration. Buckets have no generation dimension, so only
+// MetagenerationMatch/MetagenerationNotMatch are consulted; a nil p matches,
+// mirroring objectPreconditionMatches' nil behavior.
+func BucketMetagenerationMatches(meta map[string]any, p *Precondition) bool {
+	if p == nil {
+		return true
+	}
+	metagen, _ := strconv.ParseInt(BucketMetageneration(meta), 10, 64)
+	if p.MetagenerationMatch != nil && metagen != *p.MetagenerationMatch {
+		return false
+	}
+	if p.MetagenerationNotMatch != nil && metagen == *p.MetagenerationNotMatch {
+		return false
+	}
+	return true
+}
+
+// Precondition is GCS's real per-request conditional-write precondition:
+// ifGenerationMatch / ifGenerationNotMatch / ifMetagenerationMatch /
+// ifMetagenerationNotMatch. A nil field means that condition wasn't
+// specified — nil Precondition entirely (or nil the *Checked call is given)
+// always matches, same as no precondition at all. A GenerationMatch of 0
+// means "no live generation currently exists" — GCS's standard
+// create-only-if-absent idiom.
+type Precondition struct {
+	GenerationMatch        *int64
+	GenerationNotMatch     *int64
+	MetagenerationMatch    *int64
+	MetagenerationNotMatch *int64
+}
+
+// objectPreconditionMatches reports whether p is satisfied by the object's
+// current live-generation state (current, exists). A nil p always matches.
+func objectPreconditionMatches(current ObjectMeta, exists bool, p *Precondition) bool {
+	if p == nil {
+		return true
+	}
+	var gen, metagen int64
+	if exists {
+		gen, _ = strconv.ParseInt(current.Generation, 10, 64)
+		metagen, _ = strconv.ParseInt(current.Metageneration, 10, 64)
+	}
+	if p.GenerationMatch != nil {
+		if !exists {
+			if *p.GenerationMatch != 0 {
+				return false
+			}
+		} else if gen != *p.GenerationMatch {
+			return false
+		}
+	}
+	if p.GenerationNotMatch != nil {
+		// GCS documents this rule for ifGenerationNotMatch only: "If no live
+		// object exists, the precondition fails" — whatever the compared value.
+		// (ifMetagenerationNotMatch carries no such sentence, so its behavior
+		// on a missing object is left unchanged.)
+		if !exists || gen == *p.GenerationNotMatch {
+			return false
+		}
+	}
+	if p.MetagenerationMatch != nil && (!exists || metagen != *p.MetagenerationMatch) {
+		return false
+	}
+	if p.MetagenerationNotMatch != nil && exists && metagen == *p.MetagenerationNotMatch {
+		return false
+	}
+	return true
+}
+
+// ObjectRetention is the GCS Object.retention object ({retainUntilTime, mode}).
+// mode is "Unlocked" or "Locked".
+type ObjectRetention struct {
+	RetainUntilTime time.Time `json:"retainUntilTime,omitempty"`
+	Mode            string    `json:"mode,omitempty"`
+}
+
+// ObjectMeta holds GCS object metadata. Generation/metageneration are the GCS
+// analogues of S3's version_id; CRC32C is the GCS checksum (vs S3's IEEE CRC32).
+type ObjectMeta struct {
+	Bucket         string `json:"bucket"`
+	Name           string `json:"name"`
+	Generation     string `json:"generation"`
+	Metageneration string `json:"metageneration"`
+	ContentType    string `json:"contentType,omitempty"`
+	// ContentEncoding is the object's own content encoding (GCS
+	// Object.contentEncoding), e.g. "gzip". It is distinct from HTTP transport
+	// encoding and surfaces as x-goog-stored-content-encoding on the XML API.
+	ContentEncoding string            `json:"contentEncoding,omitempty"`
+	Size            int64             `json:"size"`
+	MD5Hash         string            `json:"md5Hash,omitempty"`
+	CRC32C          string            `json:"crc32c,omitempty"`
+	StorageClass    string            `json:"storageClass"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	// ComponentCount is the number of source objects accumulated by compose
+	// operations (GCS Object.componentCount). Zero for non-composite objects.
+	ComponentCount int64     `json:"componentCount,omitempty"`
+	TimeCreated    time.Time `json:"timeCreated"`
+	Updated        time.Time `json:"updated"`
+	// Retention is the object-level retention policy (GCS Object.retention).
+	Retention *ObjectRetention `json:"retention,omitempty"`
+	// TemporaryHold / EventBasedHold mirror GCS Object.temporaryHold /
+	// Object.eventBasedHold: while true, the object cannot be deleted.
+	TemporaryHold  bool `json:"temporaryHold,omitempty"`
+	EventBasedHold bool `json:"eventBasedHold,omitempty"`
+	// TimeDeleted is set when this generation is no longer live (versioning).
+	TimeDeleted *time.Time `json:"timeDeleted,omitempty"`
+	// KmsKeyName is the CMEK key name (empty when server-DEK encrypted).
+	KmsKeyName string `json:"kmsKeyName,omitempty"`
+	// WrappedDEK is the DEK wrapped under KmsKeyName (nil for CSEK/server-DEK).
+	WrappedDEK []byte `json:"wrappedDek,omitempty"`
+	// CSEKeySHA256 is the base64 SHA-256 of the customer-supplied encryption
+	// key when the object is CSEK-encrypted (empty otherwise).
+	CSEKeySHA256 string `json:"cseKeySha256,omitempty"`
+}
+
+// ResumableSession tracks an in-progress GCS resumable upload (the analogue of
+// S3 multipart uploads). The body spills to TmpPath once it exceeds the
+// in-memory threshold.
+type ResumableSession struct {
+	UploadID    string
+	Bucket      string
+	Name        string
+	ContentType string
+	Length      int64
+	TmpPath     string
+	LastAccess  time.Time
+}
+
+// ObjectStore is the GCS metadata store. Object bytes are stored separately in
+// blobfs.BlobStore.
+type ObjectStore interface {
+	// Buckets. meta is the bucket's JSON map (location, storageClass,
+	// timeCreated, ...). Bucket names are globally unique; projectID is the
+	// owning project used only for CreateBucket/ListBuckets scoping.
+	CreateBucket(ctx context.Context, projectID, name string, meta map[string]any) error
+	GetBucket(ctx context.Context, name string) (map[string]any, error)
+	UpdateBucketMeta(ctx context.Context, name string, meta map[string]any) error
+	// UpdateBucketMetaAtomic atomically reads the bucket's current meta, applies
+	// mutate, and writes the result — holding the same lock (memory) or
+	// Serializable transaction with a row lock (postgres) across the read and
+	// the write, so a precondition checked inside mutate cannot race a
+	// concurrent update. Returns ErrNoSuchBucket when the bucket is absent;
+	// mutate may return ErrPreconditionFailed to abort without applying.
+	// The returned map is the persisted post-mutation meta.
+	UpdateBucketMetaAtomic(ctx context.Context, name string, mutate func(meta map[string]any) (map[string]any, error)) (map[string]any, error)
+	DeleteBucket(ctx context.Context, name string) error // ErrBucketNotEmpty if objects exist
+	ListBuckets(ctx context.Context, projectID string) ([]map[string]any, error)
+
+	// Objects.
+	// PutObjectMeta replaces the object's metadata with a single live
+	// generation (prior generations for this name are removed). Used when
+	// versioning is disabled.
+	PutObjectMeta(ctx context.Context, bucket, name string, meta ObjectMeta) error
+	// PutObjectGeneration appends a new live generation, marking any prior
+	// live generation non-live (timeDeleted set). Used when versioning is
+	// enabled so prior generations are retained.
+	PutObjectGeneration(ctx context.Context, bucket, name string, meta ObjectMeta) error
+	// GetObjectMeta returns the live generation of the object, or
+	// ErrNoSuchObject.
+	GetObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error)
+	// GetObjectGeneration returns the generation with the given decimal id, or
+	// ErrNoSuchObject.
+	GetObjectGeneration(ctx context.Context, bucket, name, generation string) (ObjectMeta, error)
+	// DeleteObjectMeta removes every generation of the object.
+	DeleteObjectMeta(ctx context.Context, bucket, name string) error
+	// TombstoneObjectMeta marks the live generation non-live (timeDeleted set)
+	// and returns it, leaving any prior non-live generations untouched. Used
+	// for versioned-object deletion so a non-live tombstone is retained.
+	TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error)
+	// RestoreObjectGeneration makes the given (tombstoned) generation the live
+	// generation: the current live generation, if any, is marked non-live
+	// (timeDeleted set) and the target generation's timeDeleted is cleared. The
+	// precondition (if non-nil) is validated against the current live-generation
+	// state atomically with the mutation. Returns ErrNoSuchObject when the
+	// target generation does not exist and ErrPreconditionFailed — without
+	// applying the mutation — on a mismatch. If the target is already live the
+	// call is a no-op and returns it unchanged.
+	RestoreObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error)
+
+	// PutObjectMetaChecked/PutObjectGenerationChecked/DeleteObjectMetaChecked/
+	// TombstoneObjectMetaChecked mirror their unchecked counterparts above,
+	// but atomically validate precondition (if non-nil) against the object's
+	// current live-generation state under the same lock/transaction as the
+	// write, instead of the write applying unconditionally. Returns
+	// ErrPreconditionFailed — without applying the write — on a mismatch.
+	PutObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	PutObjectGenerationChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	// UpdateObjectMetaChecked updates the live generation's metadata in place:
+	// the generation id, creation time, size/checksums, encryption material,
+	// and every other (noncurrent) generation are left untouched. This is the
+	// GCS objects.patch/objects.update (and gRPC UpdateObject) write: a
+	// metadata change does not create a new generation, only a new
+	// metageneration. precondition (if non-nil) is validated against the
+	// current live-generation state atomically with the write. Returns
+	// ErrNoSuchObject when no live generation exists and ErrPreconditionFailed
+	// — without applying the write — on a mismatch.
+	UpdateObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	// UpdateObjectGenerationMetaChecked updates the metadata of one specific
+	// generation in place (live or non-current), preserving every other
+	// generation and the target's immutable fields (id, creation time,
+	// size/checksums, encryption material). This backs GCS's
+	// objects.patch/objects.update and gRPC UpdateObject when the request
+	// selects a revision via ?generation= / Object.generation: real GCS updates
+	// the selected revision (including noncurrent) by id. precondition (if
+	// non-nil) is validated against the selected generation atomically with the
+	// write. Returns ErrNoSuchObject when the generation does not exist and
+	// ErrPreconditionFailed — without applying the write — on a mismatch.
+	UpdateObjectGenerationMetaChecked(ctx context.Context, bucket, name, generation string, meta ObjectMeta, precondition *Precondition) error
+	DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error
+	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error)
+	// DeleteObjectGeneration removes exactly one generation (live or non-live)
+	// of an object, returning its metadata for blob cleanup/events. Deleting
+	// the live generation does not promote a noncurrent survivor: remaining
+	// revisions stay noncurrent (GCS has no delete markers/promotion), so a
+	// bare lookup by name stops resolving. When no generations remain the
+	// object is forgotten. precondition (if non-nil) is validated against the
+	// current live-generation state atomically. Returns ErrNoSuchObject when
+	// the generation does not exist and ErrPreconditionFailed — without
+	// applying the delete — on a mismatch.
+	DeleteObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error)
+	// ListObjects returns the live generation of every object in the bucket,
+	// sorted by name. Prefix, delimiter, and pageToken pagination are applied
+	// by the provider.
+	ListObjects(ctx context.Context, bucket string) ([]ObjectMeta, error)
+	// ListObjectVersions returns every generation (live and non-live) of every
+	// object, sorted by name then generation. Used by ?versions=true listings.
+	ListObjectVersions(ctx context.Context, bucket string) ([]ObjectMeta, error)
+
+	// MaxGeneration returns the highest object generation across all buckets
+	// (as a decimal string), or "" when no objects exist. Used to keep the
+	// generation counter monotonic across restarts.
+	MaxGeneration(ctx context.Context) (string, error)
+
+	// Resumable upload sessions.
+	InitResumable(ctx context.Context, s ResumableSession) error
+	GetResumable(ctx context.Context, uploadID string) (ResumableSession, error)
+	UpdateResumable(ctx context.Context, s ResumableSession) error
+	DeleteResumable(ctx context.Context, uploadID string) error
+	// ListStaleResumable returns sessions with LastAccess older than cutoff.
+	ListStaleResumable(ctx context.Context, cutoff time.Time) ([]ResumableSession, error)
+
+	Reset(ctx context.Context)
+}
+
+// normalizeMeta fills default object fields before persistence (both backends).
+func normalizeMeta(meta *ObjectMeta) {
+	if meta.ContentType == "" {
+		meta.ContentType = "application/octet-stream"
+	}
+	if meta.StorageClass == "" {
+		meta.StorageClass = "STANDARD"
+	}
+	if meta.TimeCreated.IsZero() {
+		meta.TimeCreated = clock.Now()
+	}
+	if meta.Updated.IsZero() {
+		meta.Updated = meta.TimeCreated
+	}
+}

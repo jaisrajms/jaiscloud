@@ -25,12 +25,26 @@ var SharedMigrationFS embed.FS
 //
 // cloud must be an allowlist-validated value ("aws", "azure", "gcp").
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, cloud string, migrationsFS embed.FS, source string) error {
+	// Serialize concurrent migrations with a session advisory lock held on a
+	// dedicated connection. Two processes starting against the same database
+	// (e.g. parallel integration-test packages) would otherwise race on the
+	// jc_schema_migrations bookkeeping table.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration conn: %w", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", int64(0x6a616973)); err != nil {
+		return fmt.Errorf("migration advisory lock: %w", err)
+	}
+	defer conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(0x6a616973))
+
 	schemaIdent := pgx.Identifier{cloud}.Sanitize()
 	if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaIdent); err != nil {
 		return fmt.Errorf("create schema %s: %w", cloud, err)
 	}
 
-	_, err := pool.Exec(ctx, `
+	_, err = pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS jc_schema_migrations (
 			filename   TEXT        PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path"
 	"regexp"
 	"strings"
 	"unicode"
@@ -32,6 +33,22 @@ func nonEmptyOr(s, def string) string {
 	return def
 }
 
+// driverCommand returns the driver container's binary. A SqlEntryPoint runs the
+// spark-sql CLI (its `-e`/`-f` flags are parsed by the SQL driver, not by
+// spark-submit), defaulting to a `spark-sql` sibling of SparkSubmitPath so a
+// deployment that sets the off-PATH /opt/spark/bin/spark-submit gets
+// /opt/spark/bin/spark-sql without a second setting. Every other entry point
+// runs spark-submit.
+func driverCommand(job ClientModeJob) string {
+	if _, ok := job.EntryPoint.(SqlEntryPoint); ok {
+		if job.SparkSqlPath != "" {
+			return job.SparkSqlPath
+		}
+		return path.Join(path.Dir(job.SparkSubmitPath), "spark-sql")
+	}
+	return nonEmptyOr(job.SparkSubmitPath, "spark-submit")
+}
+
 // sanitizeJobID lowercases the jobID, replaces non-alphanumeric chars with '-',
 // and truncates to 52 chars (to stay within k8s 63-char limit with prefix).
 func sanitizeJobID(jobID string) string {
@@ -55,7 +72,10 @@ func sanitizeJobID(jobID string) string {
 	return s
 }
 
-// BuildClientModeArgs returns the argv for spark-submit (excluding the binary name itself).
+// BuildClientModeArgs returns the argv for the driver tool (excluding the binary
+// name itself). It is spark-submit's argv for jar/python/R jobs, and the
+// spark-sql CLI's argv for a SqlEntryPoint (spark-sql forwards the standard
+// spark-submit flags to spark-submit and the SQL flags to the SQL driver).
 // Argv order:
 //  1. --master k8s://kubernetes.default.svc
 //  2. --deploy-mode client
@@ -64,8 +84,8 @@ func sanitizeJobID(jobID string) string {
 //  5. --conf spark.kubernetes.executor.podTemplateFile=file:///jaiscloud/spark/executor-template.yaml
 //  6. --conf spark.driver.bindAddress=0.0.0.0
 //  7. caller's SparkSubmitArgs verbatim
-//  8. entry-point pre-args (e.g. --class MainClass)
-//  9. jarOrScript
+//  8. entry-point pre-args (e.g. --class MainClass, or the SQL --jars/-e/-f)
+//  9. jarOrScript (empty for SQL)
 //  10. JarArgs
 func BuildClientModeArgs(job ClientModeJob) []string {
 	args := []string{
@@ -112,7 +132,7 @@ func BuildClientModeArgs(job ClientModeJob) []string {
 //  1. Validates required fields (Image)
 //  2. Builds executor pod template via BuildExecutorPodTemplate
 //  3. Creates ConfigMap spark-exec-tpl-<sanitized-jobID> with template YAML
-//  4. Builds main container (spark-submit) with driver resources
+//  4. Builds main container (spark-submit, or spark-sql for a SqlEntryPoint) with driver resources
 //  5. Mounts ConfigMap via projected volume
 //  6. Calls k8shelpers.BuildPodSpec for platform overlay + driver template
 //  7. Calls k8shelpers.SubmitJob and returns the handle
@@ -126,8 +146,13 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 		return k8shelpers.JobHandle{}, fmt.Errorf("sparkhelpers: build executor pod template: %w", err)
 	}
 
-	// 2. Create ConfigMap for executor template.
-	cmName := "spark-exec-tpl-" + sanitizeJobID(job.JobID)
+	// 2. Create ConfigMap for executor template. On a restart attempt the name
+	// is suffixed so it does not collide with the previous attempt's objects.
+	objectSuffix := ""
+	if job.Attempt > 0 {
+		objectSuffix = fmt.Sprintf("-r%d", job.Attempt)
+	}
+	cmName := "spark-exec-tpl-" + sanitizeJobID(job.JobID) + objectSuffix
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cmName,
@@ -161,11 +186,9 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 		_ = k8s.CoreV1().ConfigMaps(job.Namespace).Delete(context.Background(), cmName, metav1.DeleteOptions{})
 	}()
 
-	// 3. Build spark-submit binary path.
-	sparkSubmitPath := job.SparkSubmitPath
-	if sparkSubmitPath == "" {
-		sparkSubmitPath = "spark-submit"
-	}
+	// 3. Build the driver binary path: spark-sql for a SQL entry point (the SQL
+	// CLI flags are not spark-submit flags), spark-submit otherwise.
+	sparkSubmitPath := driverCommand(job)
 
 	// Build main container.
 	mainContainer := corev1.Container{
@@ -258,7 +281,7 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 	})
 
 	// 6. Submit the job.
-	jobName := "jc-spark-cm-" + sanitizeJobID(job.JobID)
+	jobName := "jc-spark-cm-" + sanitizeJobID(job.JobID) + objectSuffix
 	req := k8shelpers.SubmitJobRequest{
 		Namespace:               job.Namespace,
 		JobName:                 jobName,

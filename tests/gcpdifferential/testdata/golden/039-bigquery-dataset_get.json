@@ -1,0 +1,42 @@
+{
+  "index": 39,
+  "service": "bigquery",
+  "op": "dataset_get",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>",
+  "status": 200,
+  "response": {
+    "access": [
+      {
+        "role": "WRITER",
+        "specialGroup": "projectWriters"
+      },
+      {
+        "role": "OWNER",
+        "specialGroup": "projectOwners"
+      },
+      {
+        "role": "OWNER",
+        "userByEmail": "<userByEmail>"
+      },
+      {
+        "role": "READER",
+        "specialGroup": "projectReaders"
+      }
+    ],
+    "creationTime": "<time>",
+    "datasetReference": {
+      "datasetId": "<dataset>",
+      "projectId": "<project>"
+    },
+    "etag": "<etag>",
+    "id": "<project>:<dataset>",
+    "kind": "bigquery#dataset",
+    "lastModifiedTime": "<time>",
+    "location": "US",
+    "maxTimeTravelHours": "168",
+    "selfLink": "<selfLink>",
+    "type": "DEFAULT"
+  }
+}
+

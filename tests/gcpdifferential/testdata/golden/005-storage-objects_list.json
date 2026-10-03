@@ -1,0 +1,34 @@
+{
+  "index": 5,
+  "service": "storage",
+  "op": "objects_list",
+  "method": "GET",
+  "path": "/storage/v1/b/<bucket>/o",
+  "status": 200,
+  "response": {
+    "items": [
+      {
+        "bucket": "<bucket>",
+        "contentType": "text/plain",
+        "crc32c": "<crc32c>",
+        "etag": "<etag>",
+        "generation": "<generation>",
+        "id": "<bucket>/hello.txt/<generation>",
+        "kind": "storage#object",
+        "md5Hash": "<md5Hash>",
+        "mediaLink": "<mediaLink>",
+        "metageneration": "<metageneration>",
+        "name": "hello.txt",
+        "selfLink": "<selfLink>",
+        "size": "15",
+        "storageClass": "STANDARD",
+        "timeCreated": "<time>",
+        "timeFinalized": "<time>",
+        "timeStorageClassUpdated": "<time>",
+        "updated": "<time>"
+      }
+    ],
+    "kind": "storage#objects"
+  }
+}
+

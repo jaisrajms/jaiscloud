@@ -1,0 +1,16 @@
+{
+  "index": 21,
+  "service": "pubsub",
+  "op": "sub_get_missing",
+  "method": "GET",
+  "path": "/v1/projects/<project>/subscriptions/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "Resource not found (resource=<missing>).",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

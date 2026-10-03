@@ -1,0 +1,532 @@
+{
+  "version": 1,
+  "project": "<project>",
+  "ops": 85,
+  "services": [
+    "bigquery",
+    "compute",
+    "dns",
+    "firestore",
+    "iam",
+    "kms",
+    "pubsub",
+    "redis",
+    "secretmanager",
+    "sqladmin",
+    "storage",
+    "workflows"
+  ],
+  "files": [
+    {
+      "file": "000-storage-bucket_create.json",
+      "op": "bucket_create",
+      "sha256": "9926f23159d9f3b9b72af75ff6288fcfa01926ef0bead608d8502727cb74955a",
+      "status": 200
+    },
+    {
+      "file": "001-storage-bucket_get.json",
+      "op": "bucket_get",
+      "sha256": "4f35c07286f4223e61a4881bcd4bfbaa4b1e130733ddba0ede04825655767c96",
+      "status": 200
+    },
+    {
+      "file": "002-storage-buckets_list.json",
+      "op": "buckets_list",
+      "sha256": "b2f5bd523f588ff9fd22c1205d6d9e153204bfd3e184d6e2f2d6cb5a26a4a79c",
+      "status": 200
+    },
+    {
+      "file": "003-storage-object_upload.json",
+      "op": "object_upload",
+      "sha256": "9776794917bbc1c9d5d449879bd73aadf6132413249c08c15d7b1b7954ac7efe",
+      "status": 200
+    },
+    {
+      "file": "004-storage-object_get.json",
+      "op": "object_get",
+      "sha256": "9d2a979d08c136f5a598683e516f48ff4b30407616b5bcb40d52a5da78af2786",
+      "status": 200
+    },
+    {
+      "file": "005-storage-objects_list.json",
+      "op": "objects_list",
+      "sha256": "79d41ca44e6833f0d802b54835d236dd356e7d0aaf774779a1cd2c76a0f1b9ed",
+      "status": 200
+    },
+    {
+      "file": "006-storage-object_get_missing.json",
+      "op": "object_get_missing",
+      "sha256": "a0d9da749dc3b4517fcbe229c2f979229cabf5fd8677cf0d6f1fa2618f79b2cb",
+      "status": 404
+    },
+    {
+      "file": "007-storage-object_delete.json",
+      "op": "object_delete",
+      "sha256": "10dbda86f29bded1cbd72de367284d9f55e72fc1b19ed99a6e6c21c518a2f672",
+      "status": 204
+    },
+    {
+      "file": "008-storage-bucket_delete.json",
+      "op": "bucket_delete",
+      "sha256": "06ccc5fd8001d8e96befe24cd7dae8c65536ce23c7c99a5bc01ff7b4f9a433d8",
+      "status": 204
+    },
+    {
+      "file": "009-storage-bucket_get_deleted.json",
+      "op": "bucket_get_deleted",
+      "sha256": "1611f3ecbcb3792d12eff44a186ea9bc93e1bbffb4a9219f73fd1d0128becf27",
+      "status": 404
+    },
+    {
+      "file": "010-pubsub-topic_create.json",
+      "op": "topic_create",
+      "sha256": "4da3c0fc60e1fbab64f68d768b19dd43b420984b29da080ec27777b9fa8503b7",
+      "status": 200
+    },
+    {
+      "file": "011-pubsub-topic_get.json",
+      "op": "topic_get",
+      "sha256": "7e20512722cf359be4ce49235499f85ef22e8fe85d14286553170dc34fbc5592",
+      "status": 200
+    },
+    {
+      "file": "012-pubsub-topics_list.json",
+      "op": "topics_list",
+      "sha256": "ce581c0e5163ca46e77f89d9d92a906e942f077fcd40ddcad67519b23ac0a6e2",
+      "status": 200
+    },
+    {
+      "file": "013-pubsub-topic_get_missing.json",
+      "op": "topic_get_missing",
+      "sha256": "f147b5f2696b60b133985cf3c0482a4bb782b6a6385582e64e878c8c7bda306c",
+      "status": 404
+    },
+    {
+      "file": "014-pubsub-sub_create.json",
+      "op": "sub_create",
+      "sha256": "7c1d95bb99e0a6e21329775b6e1a94add1c56657dce8d834091c9a4c7a468a41",
+      "status": 200
+    },
+    {
+      "file": "015-pubsub-sub_get.json",
+      "op": "sub_get",
+      "sha256": "1c8c68d14a7be39de965a2ceceed05d6e03a3eab00f8367dcee688385aebdad5",
+      "status": 200
+    },
+    {
+      "file": "016-pubsub-subs_list.json",
+      "op": "subs_list",
+      "sha256": "461cf13fc245e12bc0282b798f5ca523601b7ceca92047ea0854032d989a2815",
+      "status": 200
+    },
+    {
+      "file": "017-pubsub-topic_publish.json",
+      "op": "topic_publish",
+      "sha256": "a04d6819a089e9a18494c903cbdc5f126160abf554b281fb176af945b6b465d5",
+      "status": 200
+    },
+    {
+      "file": "018-pubsub-sub_pull.json",
+      "op": "sub_pull",
+      "sha256": "5e30174a61e4334801bbab7f7190f7f751364a6aea4444635efc18d4e8b95bfd",
+      "status": 200
+    },
+    {
+      "file": "019-pubsub-sub_delete.json",
+      "op": "sub_delete",
+      "sha256": "a20c70c514508ede0c6c3d733e64e56fe7711f2b9efe2fd692f1ac5d022e366d",
+      "status": 200
+    },
+    {
+      "file": "020-pubsub-topic_delete.json",
+      "op": "topic_delete",
+      "sha256": "4d3518bc7fdee545f5c532791f0f989714e512c4118d046836c55bee83e33fe3",
+      "status": 200
+    },
+    {
+      "file": "021-pubsub-sub_get_missing.json",
+      "op": "sub_get_missing",
+      "sha256": "46cf5febeb88e392fb9e54f38d4ddc389610ff3dee36971ae4904a49779c13e4",
+      "status": 404
+    },
+    {
+      "file": "022-secretmanager-secret_create.json",
+      "op": "secret_create",
+      "sha256": "494f745c26fda14e7a65aee2b3f2a35dbd7ae457d06b479c9e0159fbcd870829",
+      "status": 200
+    },
+    {
+      "file": "023-secretmanager-secret_get.json",
+      "op": "secret_get",
+      "sha256": "7fd92d017c4296deb141defc5617760e4fd119aee8bcc4415e33da220689a62c",
+      "status": 200
+    },
+    {
+      "file": "024-secretmanager-secrets_list.json",
+      "op": "secrets_list",
+      "sha256": "3766272f1a14be671869df4cc6e8fa5723ae2bfe10df14902da48f769eaa08ab",
+      "status": 200
+    },
+    {
+      "file": "025-secretmanager-secret_add_version.json",
+      "op": "secret_add_version",
+      "sha256": "3ace66364465815210f545427455e10de200f39cec34f689b36b92f0b27ded71",
+      "status": 200
+    },
+    {
+      "file": "026-secretmanager-secret_access_version.json",
+      "op": "secret_access_version",
+      "sha256": "19a5f49ddd4cf78ae6eee1a28c4958e9cfe75ec60973918b6ac79ea7843250e6",
+      "status": 200
+    },
+    {
+      "file": "027-secretmanager-secret_versions_list.json",
+      "op": "secret_versions_list",
+      "sha256": "2588023ebeb9102e5d5937b89274ed6263977eb003651a01a0f0171d3b37dffe",
+      "status": 200
+    },
+    {
+      "file": "028-secretmanager-secret_get_missing.json",
+      "op": "secret_get_missing",
+      "sha256": "c1d6381860c09639e438ca6e8c2fc58b5a71ceb4db2aca1e0f3cab9dc632d88b",
+      "status": 404
+    },
+    {
+      "file": "029-secretmanager-secret_delete.json",
+      "op": "secret_delete",
+      "sha256": "13788dddee1cde5f7bfd2b8baf41231d0e37877116e01faa1fab2cada738e5f8",
+      "status": 200
+    },
+    {
+      "file": "030-kms-keyring_get.json",
+      "op": "keyring_get",
+      "sha256": "ba03d7eb29cf02a03e89787973aca7eb2132ce52e21a5154db8d625a069d2f41",
+      "status": 200
+    },
+    {
+      "file": "031-kms-keyrings_list.json",
+      "op": "keyrings_list",
+      "sha256": "5a88a67a75b56d2318e1d573b595b6349327fdfff2d63eef36b691dd48d7583d",
+      "status": 200
+    },
+    {
+      "file": "032-kms-cryptokey_get.json",
+      "op": "cryptokey_get",
+      "sha256": "d7a371df63699aebed67d0b21bd66fd83c912736418197ab641103896fcc90cf",
+      "status": 200
+    },
+    {
+      "file": "033-kms-cryptokeys_list.json",
+      "op": "cryptokeys_list",
+      "sha256": "f6cfbfbb1c761abf34929f3535e472e8cabf12d91982b76a870f87b535c4b84d",
+      "status": 200
+    },
+    {
+      "file": "034-kms-cryptokey_encrypt.json",
+      "op": "cryptokey_encrypt",
+      "sha256": "8f591472f630ba814ff31e91df3ba41e86af1b3ce139bb333ea84ebd6324f73e",
+      "status": 200
+    },
+    {
+      "file": "035-kms-cryptokey_decrypt.json",
+      "op": "cryptokey_decrypt",
+      "sha256": "64ffe098f985181385cb6bfbde0788404286bd94a5991d5e3202f54b8b84792d",
+      "status": 200
+    },
+    {
+      "file": "036-kms-keyring_iam_get.json",
+      "op": "keyring_iam_get",
+      "sha256": "a79570ef0466c5b0e8be1b164124d7f797d58f7aa0a71fd03bbcee3ec19f2514",
+      "status": 200
+    },
+    {
+      "file": "037-kms-cryptokey_get_missing.json",
+      "op": "cryptokey_get_missing",
+      "sha256": "4fc4859c1341d18d8f8e27d9bd0943938a2371d075b6c4335836be677e99fc51",
+      "status": 404
+    },
+    {
+      "file": "038-bigquery-dataset_create.json",
+      "op": "dataset_create",
+      "sha256": "04646932f3dac9f396e0d72f0b09dff515a1f74d5b63fefa16e42bef9ee70980",
+      "status": 200
+    },
+    {
+      "file": "039-bigquery-dataset_get.json",
+      "op": "dataset_get",
+      "sha256": "2f27f39ce746aaf75269ae161d4eb9824a66da5584a0e2ae0af00a6f8aa419c4",
+      "status": 200
+    },
+    {
+      "file": "040-bigquery-datasets_list.json",
+      "op": "datasets_list",
+      "sha256": "95b1ecbf779eb26dda5ce8faf7456d69aed669275b005942f7731aaacc358281",
+      "status": 200
+    },
+    {
+      "file": "041-bigquery-table_create.json",
+      "op": "table_create",
+      "sha256": "9a7202e39eeb500bc7dc2557e5de59f5e25d39b493badbbeb4ff82140f20e3e5",
+      "status": 200
+    },
+    {
+      "file": "042-bigquery-table_get.json",
+      "op": "table_get",
+      "sha256": "2d677ab1134aa37c5972af62f08abbb6db75372709a18eac5766795970d38fa6",
+      "status": 200
+    },
+    {
+      "file": "043-bigquery-tables_list.json",
+      "op": "tables_list",
+      "sha256": "469fd8feb5645ea826c19c80bf7ebc7b265ee6fc7059c91a4a5a4fd36c9e3b41",
+      "status": 200
+    },
+    {
+      "file": "044-bigquery-tabledata_insert_all.json",
+      "op": "tabledata_insert_all",
+      "sha256": "30ad7303bbfd2a0c30d75a025203c1bc0c50cce783e174c7af0dad0701440586",
+      "status": 200
+    },
+    {
+      "file": "045-bigquery-tabledata_list.json",
+      "op": "tabledata_list",
+      "sha256": "6558734749d9c31bb9121f0257fa6d79335c4142cbb775c480e728fa6bcb72db",
+      "status": 200
+    },
+    {
+      "file": "046-bigquery-query.json",
+      "op": "query",
+      "sha256": "0e5ed9d409efe5ad3d50217fd4adbfc18efee54d94805a2c91303c73cbabdd79",
+      "status": 200
+    },
+    {
+      "file": "047-bigquery-dataset_get_missing.json",
+      "op": "dataset_get_missing",
+      "sha256": "8563bb8c298e70a108e500d7a4e407b5c93a1347c5ca27ce194c3038dac6d9ad",
+      "status": 404
+    },
+    {
+      "file": "048-bigquery-table_delete.json",
+      "op": "table_delete",
+      "sha256": "03fd6584c9260600b60f23ff6b2f1e3f6d169649184a5cc31ac03f5b48f60557",
+      "status": 204
+    },
+    {
+      "file": "049-bigquery-dataset_delete.json",
+      "op": "dataset_delete",
+      "sha256": "a3306554886d1cc3da194fcdb1ee36cb8be1e596dde2f76a60a9cf4f3027b631",
+      "status": 204
+    },
+    {
+      "file": "050-dns-zone_create.json",
+      "op": "zone_create",
+      "sha256": "0fff50b71186d2d102be46c39441c4912b44f2e9342a1ef7650d9cef027e6ee3",
+      "status": 200
+    },
+    {
+      "file": "051-dns-zone_get.json",
+      "op": "zone_get",
+      "sha256": "b222287ed0785414e8570b2fa0d03603c1f38888ee729a079d4f46dbaef79677",
+      "status": 200
+    },
+    {
+      "file": "052-dns-zones_list.json",
+      "op": "zones_list",
+      "sha256": "2e1a45f501cb2117d31dc8a839cffdf342e45c1996c100d15e385dd1afddf8bc",
+      "status": 200
+    },
+    {
+      "file": "053-dns-change_create.json",
+      "op": "change_create",
+      "sha256": "27ef7537d659335fd5f9e857798df26662a80050afb20d55281d1073a2a91452",
+      "status": 200
+    },
+    {
+      "file": "054-dns-change_get.json",
+      "op": "change_get",
+      "sha256": "cbca3274aeb32446a5d28e5e9c1c9b56746b4c9cdb801bd2120d800f1a3c45b6",
+      "status": 200
+    },
+    {
+      "file": "055-dns-rrsets_list.json",
+      "op": "rrsets_list",
+      "sha256": "2e439f0ec80c9ff0fcc09678f4f8b10fb3eaf862b97ead06c5a9cd3ea843e990",
+      "status": 200
+    },
+    {
+      "file": "056-dns-rrset_get.json",
+      "op": "rrset_get",
+      "sha256": "f7d688c74699a8f461430f5c9f8478a017bae11667be48635ea870d04fd12197",
+      "status": 200
+    },
+    {
+      "file": "057-dns-zone_get_missing.json",
+      "op": "zone_get_missing",
+      "sha256": "af49a18db120ea6d6c0cda67abe40dd9165d5acff5e2150e15e5706825a636a7",
+      "status": 404
+    },
+    {
+      "file": "058-workflows-workflow_create.json",
+      "op": "workflow_create",
+      "sha256": "370951acbd6da72c123dbb21179f4ca22f4e35bb5c4210b8a8f7218893bbc936",
+      "status": 200
+    },
+    {
+      "file": "059-workflows-workflow_wait.json",
+      "op": "workflow_wait",
+      "sha256": "3fe3aa585b14604df1413a1e29d3a37d4d85e6d28ae534f3f5002a2d9aa05681",
+      "status": 200
+    },
+    {
+      "file": "060-workflows-workflow_get.json",
+      "op": "workflow_get",
+      "sha256": "29c6fd0773912a6f03b595df1fd098acb633699fb44a5f9d3edf38261ddd9756",
+      "status": 200
+    },
+    {
+      "file": "061-workflows-workflows_list.json",
+      "op": "workflows_list",
+      "sha256": "a54aa17bfab453ba609596d8b7bb387637980ab6e2ea8c5f8ea2021f48d3d2fc",
+      "status": 200
+    },
+    {
+      "file": "062-workflows-workflow_get_missing.json",
+      "op": "workflow_get_missing",
+      "sha256": "4fc525b6f75292cb22fd426d81f5fa263b0d364b5072b8336568a0f99b94b6b0",
+      "status": 404
+    },
+    {
+      "file": "063-workflows-workflow_delete.json",
+      "op": "workflow_delete",
+      "sha256": "b0e4fe2d5142a392bc410211a43de14b1e6043fe269ede661da161391158cd25",
+      "status": 200
+    },
+    {
+      "file": "064-iam-sa_create.json",
+      "op": "sa_create",
+      "sha256": "a2b8af960c09d231153238eeadc511f3e519b8930e278e07b14008c3388f869e",
+      "status": 200
+    },
+    {
+      "file": "065-iam-sa_get.json",
+      "op": "sa_get",
+      "sha256": "317dbed0facf6fd8af24676f4f8fb4b62ed08060683feff82ee2ca59090f9741",
+      "status": 200
+    },
+    {
+      "file": "066-iam-sas_list.json",
+      "op": "sas_list",
+      "sha256": "e093eb3222dc6dca2d83e1f12aea426d45fafea57a62a18500a809e202e2bd98",
+      "status": 200
+    },
+    {
+      "file": "067-iam-sa_iam_get.json",
+      "op": "sa_iam_get",
+      "sha256": "796f8e2488d3ce0b78a37adc4e84c25cdad80ca4f20ae86b872466e4f331637d",
+      "status": 200
+    },
+    {
+      "file": "068-iam-sa_get_missing.json",
+      "op": "sa_get_missing",
+      "sha256": "819917c321404ce2e3334891f3a256898bb03288120b1d210119e79ff54e5411",
+      "status": 404
+    },
+    {
+      "file": "069-iam-sa_delete.json",
+      "op": "sa_delete",
+      "sha256": "31b0e64c2934df908697ffc0df54a4d6c6eb57e0c86629f996a000ab86a86dd6",
+      "status": 200
+    },
+    {
+      "file": "070-firestore-fs_doc_create.json",
+      "op": "fs_doc_create",
+      "sha256": "66c6772a997dd32bf3d2f1def7963ca81a4f9b7cd4ce85581dbcae9d9c762afc",
+      "status": 200
+    },
+    {
+      "file": "071-firestore-fs_doc_get.json",
+      "op": "fs_doc_get",
+      "sha256": "7a694608db001eb18bf400f0e759ccb4d3d8f0392ed56710008ee6873e0af2fc",
+      "status": 200
+    },
+    {
+      "file": "072-firestore-fs_docs_list.json",
+      "op": "fs_docs_list",
+      "sha256": "e956ac5ac4936f6f42ac31cad43b3c669678972e3ee13903974cac0e5ee931ed",
+      "status": 200
+    },
+    {
+      "file": "073-firestore-fs_doc_get_missing.json",
+      "op": "fs_doc_get_missing",
+      "sha256": "f623d47c2ea813459af90fc4f41e37b8ff02368546c27e1b8760a0354159e8eb",
+      "status": 404
+    },
+    {
+      "file": "074-firestore-fs_doc_delete.json",
+      "op": "fs_doc_delete",
+      "sha256": "4193d621c27c5ec2a0fc4ed43374e5746d9d803e9e9a69b01a12257db14f6196",
+      "status": 200
+    },
+    {
+      "file": "075-compute-compute_instances_list.json",
+      "op": "compute_instances_list",
+      "sha256": "ac0cc21f1f29ca65b80a3b695224b2b60ffdb1ad1b158d4e05534d90882eff79",
+      "status": 200
+    },
+    {
+      "file": "076-compute-compute_instance_get_missing.json",
+      "op": "compute_instance_get_missing",
+      "sha256": "70fdeb624f804c2c6e76bc68d7a5d158d395d4235c68162373fe8fe88fd9b8c1",
+      "status": 404
+    },
+    {
+      "file": "077-sqladmin-sql_instances_list.json",
+      "op": "sql_instances_list",
+      "sha256": "d1c2aaf4e0784c3e2443d0465febaa392ba32f05a799e93371c94f0dc11a992f",
+      "status": 200
+    },
+    {
+      "file": "078-sqladmin-sql_instance_get_missing.json",
+      "op": "sql_instance_get_missing",
+      "sha256": "78dabb6196ab0136cd3cf9288bf4493196fc778ce128b6a38b6204038ac4a821",
+      "status": 404
+    },
+    {
+      "file": "079-redis-redis_instances_list.json",
+      "op": "redis_instances_list",
+      "sha256": "bc1b9a0ca7e4f8bbdb093f8f896860b5baa95ddd3b5b2c0fdd4259a1ae5237e6",
+      "status": 200
+    },
+    {
+      "file": "080-redis-redis_instance_get_missing.json",
+      "op": "redis_instance_get_missing",
+      "sha256": "a151911fb0f081062e467fd2c72ce5cfd9a12a429013f96e8eba82da455f2a1f",
+      "status": 404
+    },
+    {
+      "file": "081-storage-storage_buckets_list_noauth.json",
+      "op": "storage_buckets_list_noauth",
+      "sha256": "b6eb395d8405bb95ffe70b83d42db98e2df1ec64c9ba3d951b682ec44e8a7a2b",
+      "status": 401
+    },
+    {
+      "file": "082-compute-compute_instances_list_noauth.json",
+      "op": "compute_instances_list_noauth",
+      "sha256": "4c610e116dba560b347d9536e1f9ef13ed8bd9381e542f8a5ed416fa41c35594",
+      "status": 401
+    },
+    {
+      "file": "083-sqladmin-sql_instances_list_noauth.json",
+      "op": "sql_instances_list_noauth",
+      "sha256": "66a180e08b56b7db2b2ffea00eefe157116cd31781964642dbac34bafd4aa18b",
+      "status": 401
+    },
+    {
+      "file": "084-redis-redis_instances_list_noauth.json",
+      "op": "redis_instances_list_noauth",
+      "sha256": "aac982731e697c75d447a29736a4f98efc3f07d86d4abb5137fe8cb398defa5f",
+      "status": 401
+    }
+  ]
+}
+

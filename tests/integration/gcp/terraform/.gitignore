@@ -1,0 +1,7 @@
+# Terraform / OpenTofu working state — never commit.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log

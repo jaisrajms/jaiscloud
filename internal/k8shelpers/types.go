@@ -40,6 +40,11 @@ const (
 	LogKindMain
 	LogKindSidecar
 	LogKindAll
+	// LogKindMainRaw tails only the main container with no line prefix. It is
+	// used when the stream is persisted as the job's own output (e.g. Dataproc
+	// driver output) rather than multiplexed to a terminal, where the "[main] "
+	// marker LogKindMain adds would be noise.
+	LogKindMainRaw
 )
 
 // Snapshot is persisted to store.ResourceStore when a job terminates,

@@ -42,11 +42,10 @@ func startCmd() *cobra.Command {
 			viper.BindPFlag("mode", cmd.Flags().Lookup("mode"))
 			viper.BindPFlag("log_level", cmd.Flags().Lookup("log-level"))
 
-			cfg, err := config.Load()
+			cfg, err := config.Load(model.CloudAzure)
 			if err != nil {
 				return err
 			}
-			cfg.Cloud = model.CloudAzure
 
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			var certs certstore.CertStore

@@ -91,3 +91,19 @@ func TestLambdaConfigFrom_PreservesBaseFields(t *testing.T) {
 		t.Errorf("Region: got %q, want eu-west-1", got.Region)
 	}
 }
+
+// TestDefaultLambdaConfigCodeURL locks the generic CodeURL plumbing: the K8s
+// code-fetch init container is enabled only when JAISCLOUD_LAMBDA_CODE_URL is
+// set, and a trailing slash is trimmed so the executor can append
+// /lambda/code/... without a double separator.
+func TestDefaultLambdaConfigCodeURL(t *testing.T) {
+	t.Setenv("JAISCLOUD_LAMBDA_CODE_URL", "")
+	if got := lambdaexec.DefaultLambdaConfig().CodeURL; got != "" {
+		t.Errorf("CodeURL: got %q, want empty (code mount disabled)", got)
+	}
+
+	t.Setenv("JAISCLOUD_LAMBDA_CODE_URL", "http://jaiscloud:8080/_jaiscloud/")
+	if got := lambdaexec.DefaultLambdaConfig().CodeURL; got != "http://jaiscloud:8080/_jaiscloud" {
+		t.Errorf("CodeURL: got %q, want http://jaiscloud:8080/_jaiscloud", got)
+	}
+}

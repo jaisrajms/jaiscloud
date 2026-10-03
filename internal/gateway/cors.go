@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -113,4 +114,91 @@ func intFromAny(v any) (int, bool) {
 		return int(n), true
 	}
 	return 0, false
+}
+
+// ─── GCS bucket CORS ──────────────────────────────────────────────────────────
+
+// gcsCORSExtractBucket pulls the GCS bucket name from a request path. The JSON
+// API paths are /storage/v1/b/{bucket}/..., /upload/storage/v1/b/{bucket}/...,
+// and /download/storage/v1/b/{bucket}/...; raw media downloads use
+// /{bucket}/{object...}. The bucket name may be percent-encoded.
+func gcsCORSExtractBucket(r *http.Request) string {
+	p := r.URL.EscapedPath()
+	for _, prefix := range []string{"/storage/v1/b/", "/download/storage/v1/b/", "/upload/storage/v1/b/"} {
+		if strings.HasPrefix(p, prefix) {
+			return unescapeFirstSegment(strings.TrimPrefix(p, prefix))
+		}
+	}
+	return unescapeFirstSegment(strings.TrimPrefix(p, "/"))
+}
+
+// unescapeFirstSegment returns the first path segment of p, percent-decoded.
+func unescapeFirstSegment(p string) string {
+	if i := strings.IndexByte(p, '/'); i >= 0 {
+		p = p[:i]
+	}
+	if u, err := url.PathUnescape(p); err == nil {
+		return u
+	}
+	return p
+}
+
+// gcsCORSMatchRule returns the first GCS CORS rule that allows the given origin
+// and method. GCS rule keys are lowercase (origin/method/responseHeader/
+// maxAgeSeconds); an empty method skips method matching (regular responses). A
+// "*" in origins or methods matches anything.
+func gcsCORSMatchRule(rules []map[string]any, origin, method string) (map[string]any, bool) {
+	for _, rule := range rules {
+		if !corsMatchOrigin(origin, anySlice(rule["origin"])) {
+			continue
+		}
+		if method != "" && !gcsCORSMatchMethod(method, anySlice(rule["method"])) {
+			continue
+		}
+		return rule, true
+	}
+	return nil, false
+}
+
+func gcsCORSMatchMethod(method string, allowed []string) bool {
+	for _, a := range allowed {
+		if a == "*" || strings.EqualFold(a, method) {
+			return true
+		}
+	}
+	return false
+}
+
+// gcsCORSPreflightHeaders writes the Access-Control-* headers for an OPTIONS
+// preflight that matched a GCS CORS rule. Access-Control-Allow-Headers reflects
+// the client's requested headers (GCS has no allow-list for request headers);
+// Access-Control-Max-Age comes from the rule's maxAgeSeconds.
+func gcsCORSPreflightHeaders(w http.ResponseWriter, rule map[string]any, origin, reqHeaders string) {
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Vary", "Origin")
+	if methods := strings.Join(anySlice(rule["method"]), ", "); methods != "" {
+		h.Set("Access-Control-Allow-Methods", methods)
+	}
+	if reqHeaders != "" {
+		h.Set("Access-Control-Allow-Headers", reqHeaders)
+	}
+	if age, ok := intFromAny(rule["maxAgeSeconds"]); ok && age > 0 {
+		h.Set("Access-Control-Max-Age", strconv.Itoa(age))
+	}
+}
+
+// gcsCORSAddResponseHeaders adds the CORS headers for a regular (non-preflight)
+// GCS response when Origin is present and a matching rule exists. The rule's
+// responseHeader list becomes Access-Control-Expose-Headers.
+func gcsCORSAddResponseHeaders(h http.Header, rules []map[string]any, origin string) {
+	rule, ok := gcsCORSMatchRule(rules, origin, "")
+	if !ok {
+		return
+	}
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Vary", "Origin")
+	if expose := strings.Join(anySlice(rule["responseHeader"]), ", "); expose != "" {
+		h.Set("Access-Control-Expose-Headers", expose)
+	}
 }

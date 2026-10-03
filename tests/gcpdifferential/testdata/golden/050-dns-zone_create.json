@@ -1,0 +1,29 @@
+{
+  "index": 50,
+  "service": "dns",
+  "op": "zone_create",
+  "method": "POST",
+  "path": "/dns/v1/projects/<project>/managedZones",
+  "status": 200,
+  "request": {
+    "description": "jaiscloud differential",
+    "dnsName": "<dnsName>",
+    "name": "<dnsZone>"
+  },
+  "response": {
+    "cloudLoggingConfig": {
+      "kind": "dns#managedZoneCloudLoggingConfig"
+    },
+    "creationTime": "<time>",
+    "description": "jaiscloud differential",
+    "dnsName": "<dnsName>",
+    "id": "<id>",
+    "kind": "dns#managedZone",
+    "name": "<dnsZone>",
+    "nameServers": [
+      "<nameServer>"
+    ],
+    "visibility": "public"
+  }
+}
+

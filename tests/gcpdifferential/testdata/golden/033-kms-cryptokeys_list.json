@@ -1,0 +1,32 @@
+{
+  "index": 33,
+  "service": "kms",
+  "op": "cryptokeys_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys",
+  "status": 200,
+  "response": {
+    "cryptoKeys": [
+      {
+        "createTime": "<time>",
+        "destroyScheduledDuration": "2592000s",
+        "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>",
+        "primary": {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "createTime": "<time>",
+          "generateTime": "<time>",
+          "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+          "protectionLevel": "SOFTWARE",
+          "state": "ENABLED"
+        },
+        "purpose": "ENCRYPT_DECRYPT",
+        "versionTemplate": {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protectionLevel": "SOFTWARE"
+        }
+      }
+    ],
+    "totalSize": "<totalSize>"
+  }
+}
+

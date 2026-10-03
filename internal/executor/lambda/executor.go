@@ -24,6 +24,21 @@ type InvokeRequest struct {
 	AccountID    string
 	Layers       []LayerInfo // resolved layer zip blobs to mount at /opt
 	LogType      string      // "Tail" → executor captures last 4 KiB of stdout into LogTail
+	// CodeKey is an optional code identifier passed to the CodeLoader in place
+	// of FunctionName. Emulators whose function identity is scoped beyond
+	// (account, name) — e.g. GCP Cloud Functions' project+location+id — set it
+	// so the loader can resolve the right archive. Empty falls back to
+	// FunctionName (AWS Lambda behavior).
+	CodeKey string
+}
+
+// codeKey returns the identifier the CodeLoader should resolve for req, falling
+// back to FunctionName when no explicit CodeKey is set.
+func codeKey(req InvokeRequest) string {
+	if req.CodeKey != "" {
+		return req.CodeKey
+	}
+	return req.FunctionName
 }
 
 // InvokeResult holds the function response payload and optional log tail.

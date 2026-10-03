@@ -1,0 +1,22 @@
+{
+  "index": 9,
+  "service": "storage",
+  "op": "bucket_get_deleted",
+  "method": "GET",
+  "path": "/storage/v1/b/<bucket>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "The specified bucket does not exist.",
+          "reason": "notFound"
+        }
+      ],
+      "message": "The specified bucket does not exist."
+    }
+  }
+}
+

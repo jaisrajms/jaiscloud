@@ -109,6 +109,9 @@ type Handler struct {
 	clockMode        string // "real" | "fixed" | "offset"; "" means real
 	ttlSweeper       TTLSweeper
 	ebScheduler      EBSchedulerTicker
+	schedulerTicker  SchedulerTicker
+	tasksTicker      TasksTicker
+	throttle         ThrottleController
 }
 
 func NewHandler() *Handler {
@@ -400,11 +403,11 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	}
 
 	env := version.Envelope{
-		SchemaVersion:  version.CodeSnapshotVersion,
-		InstanceID:     meta.InstanceID,
-		Cloud:          meta.Cloud,
-		Region:         meta.Region,
-		AccountID:      meta.AccountID,
+		SchemaVersion: version.CodeSnapshotVersion,
+		InstanceID:    meta.InstanceID,
+		Cloud:         meta.Cloud,
+		Region:        meta.Region,
+		AccountID:     meta.AccountID,
 		// not the emulated service time.
 		CreatedAt:      clock.RealNow(),
 		KEKFingerprint: kekFP,

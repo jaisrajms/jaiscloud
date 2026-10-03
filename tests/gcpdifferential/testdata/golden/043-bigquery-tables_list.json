@@ -1,0 +1,27 @@
+{
+  "index": 43,
+  "service": "bigquery",
+  "op": "tables_list",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables",
+  "status": 200,
+  "response": {
+    "etag": "<etag>",
+    "kind": "bigquery#tableList",
+    "tables": [
+      {
+        "creationTime": "<time>",
+        "id": "<project>:<dataset>.<table>",
+        "kind": "bigquery#table",
+        "tableReference": {
+          "datasetId": "<dataset>",
+          "projectId": "<project>",
+          "tableId": "<table>"
+        },
+        "type": "TABLE"
+      }
+    ],
+    "totalItems": 1
+  }
+}
+

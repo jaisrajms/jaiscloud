@@ -1,0 +1,10 @@
+{
+  "index": 19,
+  "service": "pubsub",
+  "op": "sub_delete",
+  "method": "DELETE",
+  "path": "/v1/projects/<project>/subscriptions/<subscription>",
+  "status": 200,
+  "response": {}
+}
+

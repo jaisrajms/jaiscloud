@@ -1,0 +1,24 @@
+{
+  "index": 55,
+  "service": "dns",
+  "op": "rrsets_list",
+  "method": "GET",
+  "path": "/dns/v1/projects/<project>/managedZones/<dnsZone>/rrsets",
+  "status": 200,
+  "response": {
+    "kind": "dns#resourceRecordSetsListResponse",
+    "rrsets": [
+      {
+        "kind": "dns#resourceRecordSet",
+        "name": "<rrset>",
+        "rrdatas": [
+          "192.0.2.1"
+        ],
+        "signatureRrdatas": [],
+        "ttl": 300,
+        "type": "A"
+      }
+    ]
+  }
+}
+

@@ -204,6 +204,117 @@ func TestSubmitClientMode_CustomSparkSubmitPath(t *testing.T) {
 	assert.Equal(t, []string{"/opt/spark/bin/spark-submit"}, k8sJob.Spec.Template.Spec.Containers[0].Command)
 }
 
+// TestBuildClientModeArgs_SQL verifies argv for a SQL entry point: --jars and
+// --hivevar precede the -e query, and no primary resource is set.
+func TestBuildClientModeArgs_SQL(t *testing.T) {
+	job := ClientModeJob{
+		JobID:     "sql-job",
+		Namespace: "spark",
+		EntryPoint: SqlEntryPoint{
+			Queries:     []string{"SELECT 1", "SELECT 2"},
+			JarFileURIs: []string{"gs://b/dep.jar"},
+			HiveVars:    map[string]string{"b": "2", "a": "1"},
+		},
+	}
+
+	args := BuildClientModeArgs(job)
+
+	// The SQL argv still carries the standard k8s client-mode flags.
+	assert.Equal(t, "--master", args[0])
+	assert.Equal(t, defaultMaster, args[1])
+	assert.Equal(t, "--deploy-mode", args[2])
+	assert.Equal(t, "client", args[3])
+
+	n := len(args)
+	assert.Equal(t, "-e", args[n-2])
+	assert.Equal(t, "SELECT 1;\nSELECT 2", args[n-1])
+	// --jars and sorted --hivevar pairs precede the query.
+	assert.Contains(t, args, "--jars")
+	assert.Contains(t, args, "gs://b/dep.jar")
+	assert.Contains(t, args, "--hivevar")
+	assert.Equal(t, []string{"--jars", "gs://b/dep.jar", "--hivevar", "a=1", "--hivevar", "b=2", "-e", "SELECT 1;\nSELECT 2"}, args[n-8:])
+}
+
+// TestBuildClientModeArgs_SQL_FileURI verifies -f for a queryFileUri job.
+func TestBuildClientModeArgs_SQL_FileURI(t *testing.T) {
+	args := BuildClientModeArgs(ClientModeJob{
+		JobID:      "sql-file-job",
+		Namespace:  "spark",
+		EntryPoint: SqlEntryPoint{FileURI: "gs://b/q.sql"},
+	})
+	n := len(args)
+	assert.Equal(t, "-f", args[n-2])
+	assert.Equal(t, "gs://b/q.sql", args[n-1])
+}
+
+// TestSubmitClientMode_CustomSparkSqlPath verifies a custom spark-sql binary is
+// used as the driver command for a SQL entry point.
+func TestSubmitClientMode_CustomSparkSqlPath(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	ctx := context.Background()
+
+	job := ClientModeJob{
+		JobID:        "sql-path-job",
+		Namespace:    "jaiscloud",
+		Image:        "spark-test:latest",
+		EntryPoint:   SqlEntryPoint{Queries: []string{"SELECT 1"}},
+		SparkSqlPath: "/opt/custom/bin/spark-sql",
+	}
+
+	handle, err := SubmitClientMode(ctx, k8s, job)
+	require.NoError(t, err)
+
+	k8sJob, err := k8s.BatchV1().Jobs(job.Namespace).Get(ctx, handle.JobName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, k8sJob.Spec.Template.Spec.Containers, 1)
+	assert.Equal(t, []string{"/opt/custom/bin/spark-sql"}, k8sJob.Spec.Template.Spec.Containers[0].Command)
+}
+
+// TestSubmitClientMode_SparkSqlPathDerivedFromSubmitPath verifies spark-sql is
+// derived as a sibling of the spark-submit path when no explicit path is set.
+func TestSubmitClientMode_SparkSqlPathDerivedFromSubmitPath(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	ctx := context.Background()
+
+	job := ClientModeJob{
+		JobID:           "sql-derive-job",
+		Namespace:       "jaiscloud",
+		Image:           "spark-test:latest",
+		EntryPoint:      SqlEntryPoint{Queries: []string{"SELECT 1"}},
+		SparkSubmitPath: "/opt/spark/bin/spark-submit",
+	}
+
+	handle, err := SubmitClientMode(ctx, k8s, job)
+	require.NoError(t, err)
+
+	k8sJob, err := k8s.BatchV1().Jobs(job.Namespace).Get(ctx, handle.JobName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, k8sJob.Spec.Template.Spec.Containers, 1)
+	assert.Equal(t, []string{"/opt/spark/bin/spark-sql"}, k8sJob.Spec.Template.Spec.Containers[0].Command)
+}
+
+// TestSubmitClientMode_SQLDefaultPath verifies the default spark-sql binary
+// when neither path is configured.
+func TestSubmitClientMode_SQLDefaultPath(t *testing.T) {
+	k8s := fake.NewSimpleClientset()
+	ctx := context.Background()
+
+	job := ClientModeJob{
+		JobID:      "sql-default-job",
+		Namespace:  "jaiscloud",
+		Image:      "spark-test:latest",
+		EntryPoint: SqlEntryPoint{Queries: []string{"SELECT 1"}},
+	}
+
+	handle, err := SubmitClientMode(ctx, k8s, job)
+	require.NoError(t, err)
+
+	k8sJob, err := k8s.BatchV1().Jobs(job.Namespace).Get(ctx, handle.JobName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, k8sJob.Spec.Template.Spec.Containers, 1)
+	assert.Equal(t, []string{"spark-sql"}, k8sJob.Spec.Template.Spec.Containers[0].Command)
+}
+
 // ─── new BuildClientModeArgs tests ───────────────────────────────────────────
 
 // TestBuildClientModeArgs_PodTemplateContainerName verifies the executor pod

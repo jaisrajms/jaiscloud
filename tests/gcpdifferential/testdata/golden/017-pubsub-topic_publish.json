@@ -1,0 +1,21 @@
+{
+  "index": 17,
+  "service": "pubsub",
+  "op": "topic_publish",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/<topic>:publish",
+  "status": 200,
+  "request": {
+    "messages": [
+      {
+        "data": "aGVsbG8="
+      }
+    ]
+  },
+  "response": {
+    "messageIds": [
+      "<messageId>"
+    ]
+  }
+}
+

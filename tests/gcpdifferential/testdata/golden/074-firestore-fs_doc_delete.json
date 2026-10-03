@@ -1,0 +1,10 @@
+{
+  "index": 74,
+  "service": "firestore",
+  "op": "fs_doc_delete",
+  "method": "DELETE",
+  "path": "/v1/projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+  "status": 200,
+  "response": {}
+}
+

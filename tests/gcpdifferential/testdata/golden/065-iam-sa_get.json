@@ -1,0 +1,18 @@
+{
+  "index": 65,
+  "service": "iam",
+  "op": "sa_get",
+  "method": "GET",
+  "path": "/v1/projects/<project>/serviceAccounts/<serviceAccount>",
+  "status": 200,
+  "response": {
+    "displayName": "jaiscloud differential",
+    "email": "<serviceAccount>",
+    "etag": "<etag>",
+    "name": "projects/<project>/serviceAccounts/<serviceAccount>",
+    "oauth2ClientId": "<oauth2ClientId>",
+    "projectId": "<project>",
+    "uniqueId": "<uniqueId>"
+  }
+}
+

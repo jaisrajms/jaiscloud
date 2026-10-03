@@ -1,0 +1,40 @@
+{
+  "index": 53,
+  "service": "dns",
+  "op": "change_create",
+  "method": "POST",
+  "path": "/dns/v1/projects/<project>/managedZones/<dnsZone>/changes",
+  "status": 200,
+  "request": {
+    "additions": [
+      {
+        "name": "<rrset>",
+        "rrdatas": [
+          "192.0.2.1"
+        ],
+        "ttl": 300,
+        "type": "A"
+      }
+    ]
+  },
+  "response": {
+    "additions": [
+      {
+        "kind": "dns#resourceRecordSet",
+        "name": "<rrset>",
+        "rrdatas": [
+          "192.0.2.1"
+        ],
+        "signatureRrdatas": [],
+        "ttl": 300,
+        "type": "A"
+      }
+    ],
+    "deletions": [],
+    "id": "<id>",
+    "kind": "dns#change",
+    "startTime": "<time>",
+    "status": "pending"
+  }
+}
+

@@ -1,0 +1,12 @@
+{
+  "index": 11,
+  "service": "pubsub",
+  "op": "topic_get",
+  "method": "GET",
+  "path": "/v1/projects/<project>/topics/<topic>",
+  "status": 200,
+  "response": {
+    "name": "projects/<project>/topics/<topic>"
+  }
+}
+

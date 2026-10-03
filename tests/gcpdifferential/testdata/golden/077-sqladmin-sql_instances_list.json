@@ -1,0 +1,10 @@
+{
+  "index": 77,
+  "service": "sqladmin",
+  "op": "sql_instances_list",
+  "method": "GET",
+  "path": "/sql/v1beta4/projects/<project>/instances",
+  "status": 200,
+  "response": {}
+}
+

@@ -1,0 +1,18 @@
+{
+  "index": 35,
+  "service": "kms",
+  "op": "cryptokey_decrypt",
+  "method": "POST",
+  "path": "/v1/projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>:decrypt",
+  "status": 200,
+  "request": {
+    "ciphertext": "<ciphertext>"
+  },
+  "response": {
+    "plaintext": "aGVsbG8=",
+    "plaintextCrc32c": "2591144780",
+    "protectionLevel": "SOFTWARE",
+    "usedPrimary": true
+  }
+}
+

@@ -1,0 +1,55 @@
+{
+  "index": 41,
+  "service": "bigquery",
+  "op": "table_create",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables",
+  "status": 200,
+  "request": {
+    "schema": {
+      "fields": [
+        {
+          "mode": "REQUIRED",
+          "name": "id",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    "tableReference": {
+      "datasetId": "<dataset>",
+      "projectId": "<project>",
+      "tableId": "<table>"
+    }
+  },
+  "response": {
+    "creationTime": "<time>",
+    "etag": "<etag>",
+    "id": "<project>:<dataset>.<table>",
+    "kind": "bigquery#table",
+    "lastModifiedTime": "<time>",
+    "location": "US",
+    "numActiveLogicalBytes": "0",
+    "numBytes": "0",
+    "numLongTermBytes": "0",
+    "numLongTermLogicalBytes": "0",
+    "numRows": "0",
+    "numTotalLogicalBytes": "0",
+    "schema": {
+      "fields": [
+        {
+          "mode": "REQUIRED",
+          "name": "id",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    "selfLink": "<selfLink>",
+    "tableReference": {
+      "datasetId": "<dataset>",
+      "projectId": "<project>",
+      "tableId": "<table>"
+    },
+    "type": "TABLE"
+  }
+}
+

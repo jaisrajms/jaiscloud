@@ -1,0 +1,24 @@
+{
+  "index": 58,
+  "service": "workflows",
+  "op": "workflow_create",
+  "method": "POST",
+  "path": "/v1/projects/<project>/locations/us-central1/workflows?workflowId=<workflow>",
+  "status": 200,
+  "request": {
+    "description": "jaiscloud differential",
+    "sourceContents": "main:\n  steps:\n    - r:\n        return: 1\n"
+  },
+  "response": {
+    "done": false,
+    "metadata": {
+      "@type": "type.googleapis.com/google.cloud.workflows.v1.OperationMetadata",
+      "apiVersion": "v1",
+      "createTime": "<time>",
+      "target": "projects/<project>/locations/us-central1/workflows/<workflow>",
+      "verb": "create"
+    },
+    "name": "projects/<project>/locations/us-central1/operations/<operation>"
+  }
+}
+

@@ -1,0 +1,32 @@
+{
+  "index": 70,
+  "service": "firestore",
+  "op": "fs_doc_create",
+  "method": "POST",
+  "path": "/v1/projects/<project>/databases/(default)/documents/<fsCollection>?documentId=<fsDoc>",
+  "status": 200,
+  "request": {
+    "fields": {
+      "count": {
+        "integerValue": "1"
+      },
+      "greeting": {
+        "stringValue": "hello"
+      }
+    }
+  },
+  "response": {
+    "createTime": "<time>",
+    "fields": {
+      "count": {
+        "integerValue": "1"
+      },
+      "greeting": {
+        "stringValue": "hello"
+      }
+    },
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+    "updateTime": "<time>"
+  }
+}
+

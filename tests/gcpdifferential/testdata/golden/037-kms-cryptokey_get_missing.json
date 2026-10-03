@@ -1,0 +1,16 @@
+{
+  "index": 37,
+  "service": "kms",
+  "op": "cryptokey_get_missing",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "CryptoKey projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<missing> not found.",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

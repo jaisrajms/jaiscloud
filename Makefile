@@ -1,6 +1,27 @@
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 .DEFAULT_GOAL := help
 
+# Python interpreter used to build the client-conformance venv (see
+# test-gcp-python-conformance). Override with `make ... PYTHON=python3.12`.
+PYTHON ?= python3
+
+# Plan families in priority order for `make gcp-status-next` (comma-separated);
+# other families sort after these, alphabetically. ledger-integrity runs first
+# (it repairs merge-link accuracy so the planned list can be trusted), then
+# dataproc-gke (the Dataproc-on-GKE completion work), then the Java-compat effort
+# owns waves W1–W3. The AWS-parity families run next; the BigQuery engine decision
+# (bigquery-ga) is deliberately deprioritized behind them.
+SERIES ?= ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga
+
+# Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
+# Set MATRIX= to disable.
+MATRIX ?= 1
+
+# Ledger resolution overlay: rows whose implementing PR merged but whose source
+# doc (gitignored plan_docs/ scratch) was never updated. A row is closed only
+# when the referenced PR is actually merged. Set RESOLVED= to disable.
+RESOLVED ?= docs/gcpstatus-resolved.yaml
+
 # ─── Version ──────────────────────────────────────────────────────────────────
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
              grep -oP 'const version = "\K[^"]+' cmd/jaiscloud-aws/main.go 2>/dev/null || \
@@ -17,6 +38,31 @@ SPARK_IMAGE             ?= apache/spark:3.5.0
 LAMBDA_IMAGE            ?= public.ecr.aws/lambda/python:3.12
 # Custom Iceberg-enabled Spark image (must be built locally before use)
 SPARK_E2E_ICEBERG_IMAGE ?= spark-iceberg-test
+# GCP variant: apache/spark:3.5.0 + iceberg-spark-runtime + gcs-connector (hadoop3);
+# the data path is HadoopFileIO, so the iceberg-gcp-bundle is intentionally absent.
+SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
+
+# GCP emulator image deployed to the k3d cluster (deploy/k8s/jaiscloud-gcp.yaml).
+# `test-e2e-lakehouse-k3d` rebuilds + pushes it before every run so the pipeline
+# is never validated against a stale emulator binary.
+GCP_REGISTRY   ?= 10.0.100.21:5050
+GCP_IMAGE      ?= $(GCP_REGISTRY)/jaiscloud-gcp:compat
+# k3d's registry is plain HTTP; buildah defaults to HTTPS, so disable verify.
+GCP_PUSH_FLAGS ?= --tls-verify=false
+# Seed size for the k3d Lakehouse pipeline e2e. Rendered into the pipeline Job's
+# RECORDS env and asserted by the test, so override on the command line:
+#   make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=1000000
+LAKEHOUSE_RECORDS ?= 100
+
+# Spring Cloud GCP sample applications (deploy/k8s/gcp-samples) used by the
+# application-level emulator e2e. The manifest hardcodes
+# <registry>/jaiscloud-sample-<svc>:<tag>; keep GCP_SAMPLES_TAG in sync with it
+# when bumping the upstream release.
+GCP_SAMPLES_REGISTRY ?= $(GCP_REGISTRY)
+GCP_SAMPLES_TAG      ?= 8.2.1
+GCP_SAMPLES_MODULES  := pubsub:spring-cloud-gcp-pubsub-sample \
+                        firestore:spring-cloud-gcp-data-firestore-sample \
+                        datastore:spring-cloud-gcp-data-datastore-basic-sample
 
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
@@ -53,20 +99,33 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build build-ui test docker clean \
+.PHONY: lint lint-pagination help build build-all build-ui docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
+        server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration \
+        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
         test-e2e-cloudformation test-e2e-kms test-e2e-ssm test-e2e-dynamodb test-e2e-persistence \
-        test-e2e-iceberg \
-        test-e2e-docker-all test-e2e-k8s-all test-e2e test-all \
+        test-e2e-s3-streaming test-e2e-kinesis test-e2e-ecr test-e2e-sfn \
+        test-e2e-gcp-persistence test-e2e-iceberg test-e2e-iceberg-gcp \
+        test-e2e-lakehouse-k3d \
+        test-e2e-gcp-samples-k3d \
+        test-dataproc-streaming-k8s test-dataproc-streaming-kafka \
+        test-managedkafka-broker-k8s \
+        test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
-        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq
+        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
+        _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
+        test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
+        test-gcp-gcloud-conformance test-gcp-python-conformance \
+        test-gcp-differential record-gcp-differential \
+        test-gcp-terraform test-gcp-opentofu \
+        gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
+        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -127,6 +186,19 @@ ifdef REGISTRY
 	docker tag jaiscloud-$*:latest     $(REGISTRY)/jaiscloud-$*:latest
 endif
 
+docker-gcp-samples: ## Build+push the Spring Cloud GCP sample images (pin: GCP_SAMPLES_TAG)
+	@for pair in $(GCP_SAMPLES_MODULES); do \
+	  name=$${pair%%:*}; mod=$${pair#*:}; \
+	  echo "== build jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) ($$mod) =="; \
+	  docker build --build-arg MODULE=$$mod \
+	    -t jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) \
+	    -f deploy/docker/gcp-samples/Dockerfile deploy/docker/gcp-samples || exit 1; \
+	  docker tag jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) \
+	    $(GCP_SAMPLES_REGISTRY)/jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG); \
+	  docker push $(GCP_PUSH_FLAGS) \
+	    $(GCP_SAMPLES_REGISTRY)/jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) || exit 1; \
+	done
+
 clean: ## Remove compiled binaries
 	rm -f jaiscloud-aws jaiscloud-azure jaiscloud-gcp
 
@@ -135,13 +207,26 @@ lint: ## Run ARN lint guard + go vet
 	@go vet ./...
 
 lint-pagination: ## Heuristic check that List*/Describe* provider methods use pagination
-	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/...
+	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/... ./internal/gcp/provider/...
 
 ##@ Unit tests
 
 test: ## Run all unit tests with the race detector  (no server needed)
 	go clean -testcache
 	go test -race ./internal/...
+
+test-aws: ## Run AWS + shared unit tests (excludes internal/gcp — mirrors CI test-aws)
+	go test -race $$(go list ./internal/... | grep -v '/internal/gcp/')
+
+test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
+	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
+
+test-dataproc-streaming: ## Dataproc streaming/restart contract tests (scheduling, long-running lifecycle, restart loop, jarFileUris)
+	go test -race -count=1 -timeout 120s -run '(?i)(Scheduling|LongRunning|RestartPolicy|Restartable|NonRestartable|JarFileUri)' \
+	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
+
+test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
 
 ##@ Server — foreground (Ctrl-C to stop)
 
@@ -160,6 +245,18 @@ server-ephemeral: build ## Ephemeral mode: no persistence, clean slate on every 
 server-postgres: build ## Postgres backend, mock executors — requires JAISCLOUD_DSN
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
 	  ./jaiscloud-aws start --dsn "$(JAISCLOUD_DSN)"
+
+server-gcp: build-gcp ## GCP default mode: memory stores + periodic state.json saves
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-gcp start
+
+server-gcp-ephemeral: build-gcp ## GCP ephemeral mode: no persistence (CI/tests)
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-gcp start --ephemeral
+
+server-gcp-postgres: build-gcp ## GCP Postgres backend — requires JAISCLOUD_DSN
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-gcp start --dsn "$(JAISCLOUD_DSN)"
 
 server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda via Docker (docker-compose, Ctrl-C to stop)
 	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
@@ -456,12 +553,371 @@ test-e2e-sfn: ## Step Functions persistent mode e2e tests — tests/persistent_m
 
 test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + KMS persistence tests
 
+test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence tests (requires Docker for Postgres)
+	JAISCLOUD_DSN=$(JAISCLOUD_DSN) JAISCLOUD_GCP_PERSIST_PORT=8099 \
+	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./tests/persistent_mode/gcp/...
+	JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
+	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m \
+	    ./internal/gcp/provider/bigquery/... ./internal/gcp/store/bigquery/...
+	cd tests/persistent_mode/gcp/parity-grpc && JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
+	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./...
+	cd tests/persistent_mode/gcp/hms && JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
+	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./...
+
+test-e2e-functions-docker: _check-docker-prereq build-gcp ## Cloud Functions source execution under Docker — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
+	@docker pull $(LAMBDA_IMAGE) > /dev/null
+	@docker network inspect jaiscloud-net > /dev/null 2>&1 || docker network create jaiscloud-net > /dev/null
+	@set -e; \
+	  JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_FUNCTIONS_IMAGE=$(LAMBDA_IMAGE) \
+	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-functions.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { kill "$$pid" 2>/dev/null || true; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-functions.log; exit 1; fi; sleep 1; \
+	  done; \
+	  FUNCTIONS_E2E_DOCKER_IMAGE=$(LAMBDA_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
+	    go test -v -tags functions_e2e -timeout 5m ./tests/persistent_mode/gcp/functions/
+
+test-e2e-functions-k8s: _check-gcp-samples-prereq ## Cloud Functions source execution under K8s — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
+	@echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."
+	docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile .
+	docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE)
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	  JAISCLOUD_LAMBDA_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_LAMBDA_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_K8S=1 \
+	  go test -v -tags functions_e2e -timeout 15m -run TestFunctionSourceCodeMountK8s ./tests/persistent_mode/gcp/functions/
+
+##@ GCP integration tests
+
+test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an ephemeral server (REST :8080 + gRPC :8081)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  JAISCLOUD_DATAPROC_EVENTS_TOPIC=jaiscloud-dataproc-events \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  echo "Running raw-HTTP integration tests..."; \
+	  go test -race -count=1 -timeout 120s ./tests/integration/gcp/; \
+	  echo "Running REST SDK suites..."; \
+	  ( cd tests/integration/gcp/sdk && STORAGE_EMULATOR_HOST=http://localhost:8080 go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-rest && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-workflows && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-dataproc && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ JAISCLOUD_DATAPROC_EVENTS_TOPIC=jaiscloud-dataproc-events go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-bigquery && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-metastore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-clouddns && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-memorystore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-compute && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  echo "Running gRPC SDK suites..."; \
+	  ( cd tests/integration/gcp/sdk-firestore && FIRESTORE_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... )
+
+test-lro-async-gcp: build-gcp ## Run the opt-in async-LRO live e2e gate (JAISCLOUD_LRO_MODE=async, delay 2s)
+	@echo "Starting jaiscloud-gcp (ephemeral, async LROs)..."
+	@set -e; \
+	  JAISCLOUD_LRO_MODE=async JAISCLOUD_LRO_DELAY=2s JAISCLOUD_GCP_PROJECT_ID=proj \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-lro.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-lro.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081, async LRO delay 2s)"; \
+	  JAISCLOUD_LRO_ASYNC=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestLROAsync
+
+test-throttle-gcp: build-gcp ## Run the opt-in throttle/quota injection live e2e gate (fault mode, storage-scoped)
+	@echo "Starting jaiscloud-gcp (ephemeral, throttle fault injection)..."
+	@set -e; \
+	  JAISCLOUD_GCP_THROTTLE=fault JAISCLOUD_GCP_THROTTLE_FAIL_FIRST=1 \
+	  JAISCLOUD_GCP_THROTTLE_SERVICES=storage JAISCLOUD_GCP_PROJECT_ID=throttle-proj \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-throttle.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-throttle.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081, throttle fault injection scoped to storage)"; \
+	  JAISCLOUD_THROTTLE=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestThrottle
+
+test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
+	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
+
+record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral emulator, then stop it
+	@echo "Building jaiscloud-gcp..."
+	@go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  GCP_CONFORMANCE_RECORD=1 GCP_CONFORMANCE_ENDPOINT=http://localhost:8080 go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
+
+# Differential (record/replay) harness: commit goldens captured from REAL GCP,
+# then replay them offline against the emulator and report divergences.
+#
+# Capture requires Application Default Credentials (`gcloud auth
+# application-default login`) and a real project with the relevant APIs enabled.
+# Override the project with:
+#   GCP_DIFFERENTIAL_PROJECT=<project>  (default: parity-diff-jaiscloud)
+#   GCP_DIFFERENTIAL_PROJECT_NUMBER=<number>
+# All operations are global or multi-region (KMS location=global, BigQuery US,
+# Cloud DNS global, Cloud Workflows us-central1), so no region override is
+# needed. Dataproc is intentionally excluded. The recorder cleans up every
+# created resource except a single fixed KMS keyring/key, which GCP cannot
+# delete.
+#
+# The curated scenario list may grow ahead of a recording: any scenario without
+# a committed golden is reported as "pending recording" and skipped by the
+# offline replay, so `make test-gcp-differential` stays green until the next
+# capture folds it into a golden. Run this target to record (or refresh) all of
+# them at once.
+record-gcp-differential: ## Capture differential goldens from REAL GCP (needs ADC; see comment for project env)
+	@echo "Recording differential goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
+	go test -tags gcp_differential -count=1 -v -run TestRecord ./tests/gcpdifferential/ -record
+
+test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
+	@echo "Building jaiscloud-gcp..."
+	@go build -o /tmp/jc-differential ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  /tmp/jc-differential start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
+
+# Opt-in Terraform / OpenTofu compatibility suites — drive the real
+# hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).
+# Skipped when the toolchain is absent, so they are safe to invoke unconditionally.
+test-gcp-terraform: ## Opt-in GCP Terraform compat suite (requires terraform; skips if absent)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN=terraform tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+
+test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
+	@set -e; \
+	  command -v tofu >/dev/null 2>&1 || { echo "SKIP: tofu not installed"; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-opentofu.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-opentofu.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+
+test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via the official Google clients (tests/gcpconformance/grpc)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-grpc-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8081 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-grpc-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  ( cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 go test -count=1 -v -timeout 180s ./... )
+
+test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs ephemeral emulator (tag: gcloud_conformance)
+	@echo "Building jaiscloud-gcp -> /tmp/jc-gcloud ..."
+	@go build -o /tmp/jc-gcloud ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  /tmp/jc-gcloud start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-gcloud-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-gcloud-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  ( cd tests/gcpconformance/gcloud && GCP_EMULATOR_ENDPOINT=http://localhost:8080 go test -tags gcloud_conformance -count=1 -v -timeout 600s ./... )
+
+test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite vs ephemeral emulator (tests/clients/python)
+	@echo "Creating Python venv -> tests/clients/python/.venv ..."
+	@rm -rf tests/clients/python/.venv
+	@$(PYTHON) -m venv tests/clients/python/.venv >/dev/null 2>&1 && [ -x tests/clients/python/.venv/bin/pip ] \
+	  || (echo "  ensurepip unavailable; falling back to virtualenv"; rm -rf tests/clients/python/.venv; virtualenv -q tests/clients/python/.venv)
+	@tests/clients/python/.venv/bin/python -m pip install -q --upgrade pip
+	@tests/clients/python/.venv/bin/python -m pip install -q -r tests/clients/python/requirements.txt
+	@echo "Building jaiscloud-gcp -> /tmp/jc-py ..."
+	@go build -o /tmp/jc-py ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  /tmp/jc-py start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-python-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-python-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python
+
+gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
+	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity
+
+check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fidelity matrix is stale (regenerate + git diff)
+	$(MAKE) gen-gcp-fidelity-matrix
+	@git diff --exit-code -- docs/fidelity || \
+	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
+
+gcp-status: ## Rebuild the GCP parity status ledger (plan_docs/STATUS.md + status.json) from all plan docs + git/GitHub state
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json -series "$(SERIES)" -resolved "$(RESOLVED)" $(if $(MATRIX),-from-matrix,)
+
+gcp-status-check: ## Assess a proposed change against known state: Q="<keywords>" [SERVICE=<svc>] [include-archive=1]; exit 2 = already done, 3 = in flight
+	@test -n "$(Q)$(SERVICE)" || { echo 'usage: make gcp-status-check Q="<keywords>" [SERVICE=<svc>]'; exit 2; }
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -query "$(Q)" -service "$(SERVICE)" -resolved "$(RESOLVED)" -check $(if $(include-archive),-include-archive,)
+
+gcp-status-audit: ## Classify not-done items: oversight? / unowned / stale-doc / abandoned / claimed-done / unscheduled / scheduled / intentional
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -audit -resolved "$(RESOLVED)" -matrix docs/fidelity/fidelity-matrix.json $(if $(MATRIX),-from-matrix,) $(if $(include-archive),-include-archive,)
+
+gcp-status-coverage: ## Fail if any plan_docs file has status markers but produced no ledger rows (audit blind spots)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -coverage -resolved "$(RESOLVED)" $(if $(include-archive),-include-archive,)
+
+gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=wave|pri, SERIES=a,b)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) -series "$(SERIES)" -resolved "$(RESOLVED)" $(if $(include-archive),-include-archive,)
+
+gcp-status-lint-plans: ## Fail if any plan-shaped file under plan_docs has no parseable index/detail (skipped the template)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -docs plan_docs -lint-plans $(if $(include-archive),-include-archive,)
+
+gcp-matrix-diff: ## Fail if the fidelity matrix regressed vs REF (default upstream/gcp)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -matrix-diff "$(if $(REF),$(REF),upstream/gcp)" -matrix docs/fidelity/fidelity-matrix.json
+
+gcp-plan-new: ## Scaffold a preview->GA wave plan from the fidelity matrix: SERVICE=<svc> [EFFORT=ga] [FORCE=1]
+	@test -n "$(SERVICE)" || { echo 'usage: make gcp-plan-new SERVICE=<service> [EFFORT=ga]'; exit 2; }
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -new-plan "$(SERVICE)" -effort "$(if $(EFFORT),$(EFFORT),ga)" $(if $(FORCE),-force,)
+
+gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md ID=<J-id> [PR=<n>] [SLUG=...] [DRY=1] [OPS=1]
+	@test -n "$(PLAN)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id> [PR=<n>] [SLUG=...]'; exit 2; }
+	@test -n "$(ID)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id> [PR=<n>]'; exit 2; }
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -finalize "$(PLAN)" -id "$(ID)" -finalize-pr "$(if $(PR),$(PR),0)" $(if $(SLUG),-slug "$(SLUG)",) $(if $(DRY),-dry,)
+	@if [ -z "$(DRY)" ]; then \
+	  $(MAKE) --no-print-directory gcp-status gcp-status-lint-plans gcp-status-coverage; \
+	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/gcp; fi; \
+	fi
+
+# One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
+# The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
+# gcloud self-skips when it is not on PATH. Persistence/e2e are intentionally excluded.
+ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
+	@echo ""
+	@echo "GA gate: offline + client conformance passed"
+	@echo "  (grpc/gcloud targets build + boot an ephemeral emulator; this can take a few minutes)"
+	@echo "  (persistence/e2e need Docker/Postgres/k8s: make test-e2e-gcp-persistence / test-e2e-lakehouse-k3d)"
+
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/persistent_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	SPARK_E2E_ICEBERG_IMAGE=$(SPARK_E2E_ICEBERG_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags iceberg_e2e -timeout 30m ./tests/persistent_mode/aws/iceberg/
 	$(MAKE) down-docker
+
+# Iceberg-on-Dataproc E2E — external Docker Spark against the emulator's Hive
+# Metastore Thrift listener (:9083) + GCS (:8080). The tests run under the
+# iceberg_e2e tag and require the Thrift listener, which serves a single global
+# catalog. Works against a remote Docker daemon too: SQL is passed via spark-sql
+# -e, not a bind mount.
+test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tests — tests/persistent_mode/gcp/iceberg/ (tag: iceberg_e2e)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-iceberg.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-iceberg.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"
+	go clean -testcache
+	SPARK_E2E_ICEBERG_GCP_IMAGE=$(SPARK_E2E_ICEBERG_GCP_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
+	  go test -v -tags iceberg_e2e -timeout 30m ./tests/persistent_mode/gcp/iceberg/
+	@echo "Stopping jaiscloud-gcp..."
+	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
+##@ k3d (Kubernetes) e2e
+
+test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medallion ELT pipeline e2e on k3d — rebuilds the emulator image first (tag: lakehouse_e2e)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) LAKEHOUSE_RECORDS=$(LAKEHOUSE_RECORDS) \
+	  go test -v -tags lakehouse_e2e -timeout 20m ./tests/persistent_mode/gcp/lakehouse/
+
+test-e2e-gcp-samples-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Spring Cloud GCP sample apps e2e on k3d (tag: gcpsamples_e2e; run `make docker-gcp-samples` first; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags gcpsamples_e2e -timeout 15m ./tests/persistent_mode/gcp/gcpsamples/
+
+test-dataproc-streaming-k8s: _check-dataproc-streaming-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc Structured Streaming smoke on k3d (tag: dataproc_streaming_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocStreamingK3d$$' -timeout 20m ./tests/persistent_mode/gcp/dataproc-streaming/
+
+test-dataproc-streaming-kafka: _check-dataproc-streaming-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc Kafka-source streaming e2e on k3d (tag: dataproc_streaming_e2e; needs JAISCLOUD_KAFKA_BROKER_MODE=k8s; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocKafkaStreamingK3d$$' -timeout 25m ./tests/persistent_mode/gcp/dataproc-streaming/
+
+test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags managedkafka_broker_e2e -timeout 20m ./tests/persistent_mode/gcp/managedkafka-broker/
+
+# Rebuild the emulator image from the working tree and roll the deployment so the
+# pipeline always runs against the code under test, not whatever happens to be in
+# the cluster. A stale image silently broke this suite once already.
+# Set SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed image.
+_refresh-gcp-image:
+	@if [ "$(SKIP_GCP_IMAGE_REBUILD)" = "1" ]; then \
+	  echo "SKIP_GCP_IMAGE_REBUILD=1 — reusing deployed $(GCP_IMAGE)"; \
+	else \
+	  echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."; \
+	  docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile . && \
+	  docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE) && \
+	  kubectl -n $(K8S_NAMESPACE) rollout restart deployment/jaiscloud-gcp && \
+	  kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s; \
+	fi
 
 ##@ Aggregate test targets
 
@@ -472,6 +928,8 @@ test-e2e-k8s-all: test-e2e-emrcontainers-k8s test-e2e-dpc-k8s test-e2e-lambda-k8
 test-e2e: test-e2e-docker-all test-e2e-k8s-all test-e2e-persistence test-e2e-iceberg ## All e2e suites (Docker + K8s + Persistence + Iceberg)
 
 test-all: test test-integration test-e2e ## Unit tests + integration tests + all e2e suites
+
+test-all-gcp: test-gcp test-integration-gcp test-e2e-gcp-persistence ## GCP unit + integration + persistence
 
 # ─── Internal helpers (not shown in help) ────────────────────────────────────
 
@@ -534,3 +992,35 @@ _check-k8s-prereq:
 _check-iceberg-prereq:
 	@docker image inspect $(SPARK_E2E_ICEBERG_IMAGE) > /dev/null 2>&1 || \
 	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_IMAGE)' not found — build or pull it first"; exit 1)
+
+_check-iceberg-gcp-prereq:
+	@docker image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
+	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found — build or pull it first"; exit 1)
+
+_check-lakehouse-k3d-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
+
+_check-gcp-samples-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
+
+_check-dataproc-streaming-k8s-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
+
+_check-managedkafka-broker-k8s-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)

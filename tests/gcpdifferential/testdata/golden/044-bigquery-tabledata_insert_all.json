@@ -1,0 +1,22 @@
+{
+  "index": 44,
+  "service": "bigquery",
+  "op": "tabledata_insert_all",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables/<table>/insertAll",
+  "status": 200,
+  "request": {
+    "rows": [
+      {
+        "insertId": "1",
+        "json": {
+          "id": "1"
+        }
+      }
+    ]
+  },
+  "response": {
+    "kind": "bigquery#tableDataInsertAllResponse"
+  }
+}
+

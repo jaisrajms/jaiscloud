@@ -1,0 +1,24 @@
+{
+  "index": 61,
+  "service": "workflows",
+  "op": "workflows_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/us-central1/workflows",
+  "status": 200,
+  "response": {
+    "workflows": [
+      {
+        "createTime": "<time>",
+        "description": "jaiscloud differential",
+        "name": "projects/<project>/locations/us-central1/workflows/<workflow>",
+        "revisionCreateTime": "<time>",
+        "revisionId": "<revisionId>",
+        "serviceAccount": "<serviceAccount>",
+        "sourceContents": "main:\n  steps:\n    - r:\n        return: 1\n",
+        "state": "ACTIVE",
+        "updateTime": "<time>"
+      }
+    ]
+  }
+}
+

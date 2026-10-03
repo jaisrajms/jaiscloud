@@ -1,0 +1,508 @@
+# Curated fidelity overrides for the GCP emulator — the published contract.
+#
+# tools/fidelitygen merges these over the state it derives from the emulator's
+# registries and wire-conformance evidence. Overrides may only DOWNGRADE a cell
+# unless `allow_upgrade: true` is set.
+#
+# Rules enforced by the generator (it fails on violation):
+#   - every service / operation must exist in the enumerated registry;
+#   - `state` must be one of: ga | limited | preview | unsupported;
+#   - any non-`ga` state MUST carry a `reason`;
+#   - any `ga` override MUST set `allow_upgrade: true`.
+
+# Applied to every operation of a service unless overridden per-operation.
+defaults:
+  bigquery:
+    state: limited
+    reason: "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+  cloudsql:
+    state: limited
+    reason: "metadata-only over ResourceStore (no control plane)"
+  compute:
+    state: limited
+    reason: "metadata-only over ResourceStore (no control plane)"
+  clouddns:
+    state: limited
+    reason: "metadata-only over ResourceStore (no private DNS resolution)"
+  memorystore:
+    state: limited
+    reason: "metadata-only over ResourceStore (no data plane)"
+  iceberg:
+    state: preview
+    reason: "BigLake Iceberg REST catalog; no official Discovery document"
+  # Firestore Admin gRPC: only composite-index CRUD is implemented; every other
+  # RPC (Databases, Backups, User Creds, Schedules, Fields, Export/Import) is
+  # inherited from UnimplementedFirestoreAdminServer and fails loud.
+  firestoreadmin:
+    state: unsupported
+    reason: "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)"
+
+operations:
+  - service: dataproc
+    operation: Dataproc.SubmitJob
+    state: ga
+    allow_upgrade: true
+    reason: "covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"
+
+  # Firestore Admin composite-index CRUD: verified end-to-end by the official
+  # cloud.google.com/go/firestore/apiv1/admin client conformance suite.
+  - service: firestoreadmin
+    operation: CreateIndex
+    state: ga
+    allow_upgrade: true
+    reason: "covered by the official admin-client gRPC conformance suite"
+  - service: firestoreadmin
+    operation: GetIndex
+    state: ga
+    allow_upgrade: true
+    reason: "covered by the official admin-client gRPC conformance suite"
+  - service: firestoreadmin
+    operation: ListIndexes
+    state: ga
+    allow_upgrade: true
+    reason: "covered by the official admin-client gRPC conformance suite"
+  - service: firestoreadmin
+    operation: DeleteIndex
+    state: ga
+    allow_upgrade: true
+    reason: "covered by the official admin-client gRPC conformance suite"
+
+  # Explicit Unimplemented stubs: enumerated but not implemented.
+  - service: clouddns
+    operation: CloudDNS.Unimplemented
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: cloudsql
+    operation: CloudSQL.Unimplemented
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: compute
+    operation: Compute.Unimplemented
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.ExportMetadata
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.RestoreService
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.QueryMetadata
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.MoveTableToDatabase
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.AlterMetadataResourceLocation
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: dataproc
+    operation: Dataproc.DiagnoseCluster
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  # gRPC DiagnoseCluster is the same explicit Unimplemented stub over the
+  # ClusterController surface (the descriptor name carries no "Dataproc." prefix).
+  - service: dataproc
+    operation: DiagnoseCluster
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  # Cloud Functions v2 ListRuntimes is implemented over the shared runtime
+  # catalog on both transports (REST GET /v2/.../runtimes + gRPC ListRuntimes),
+  # verified by the official gRPC client conformance suite, so it needs no
+  # override.
+  #
+  # Cloud Functions REST common-API methods: GetLocation is the shared
+  # google.cloud.location.Locations method and CancelOperation/DeleteOperation/
+  # WaitOperation are the shared google.longrunning.Operations methods (the Cloud
+  # Functions RPC reference lists both interfaces). The service Discovery
+  # document deliberately does not enumerate common-API methods, so the
+  # classifier reports these as limited ("no matching Discovery method") even
+  # though the handlers are served and wire-tested (DELETE /v2/.../operations/{id},
+  # POST /v2/.../operations/{id}:cancel, POST /v2/.../operations/{id}:wait,
+  # GET /v1/projects/{p}/locations/{l}); the cells are therefore upgraded to ga.
+  # WaitOperation is gRPC-only in the canonical proto (no HTTP annotation); REST
+  # :wait is an emulator extension, kept for symmetry with the other LRO verbs.
+  - service: functions
+    operation: Function.GetLocation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested"
+  - service: functions
+    operation: Function.CancelOperation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested"
+  - service: functions
+    operation: Function.DeleteOperation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested"
+  - service: functions
+    operation: Function.WaitOperation
+    state: ga
+    allow_upgrade: true
+    reason: "google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it"
+  # A deployed function's HTTPS-trigger URL is a data-plane endpoint, not a
+  # Discovery method: the client addresses it at the synthesized host
+  # "{location}-{project}.cloudfunctions.net/{functionId}", so there is no
+  # service method to enumerate. The endpoint is served and wire-tested, hence
+  # ga.
+  - service: functions
+    operation: Function.InvokeTrigger
+    state: ga
+    allow_upgrade: true
+    reason: "deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested"
+  # Service Usage gRPC is control-plane only: the service/get/list/enable/disable
+  # surface is implemented, while BatchGetServices is an explicit Unimplemented
+  # stub (the REST surface does not implement it either).
+  - service: serviceusage
+    operation: BatchGetServices
+    state: unsupported
+    reason: "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub"
+  # Cloud Workflows gRPC is control-plane only: ListWorkflowRevisions has no
+  # emulator implementation (workflow revision history is not modelled), so it
+  # is an explicit Unimplemented stub.
+  - service: workflows
+    operation: ListWorkflowRevisions
+    state: unsupported
+    reason: "workflow revision history is not modelled; explicit Unimplemented stub"
+  # Cloud Resource Manager v3 gRPC is control-plane only: GetProject and the
+  # project IAM methods are implemented, while the project lifecycle/lookup RPCs
+  # are explicit Unimplemented stubs. The emulator never creates, moves, or
+  # deletes projects (every project id resolves to a synthesized ACTIVE
+  # project), and the v1 REST surface does not implement them either.
+  - service: resourcemanager
+    operation: ListProjects
+    state: unsupported
+    reason: "projects are synthesized, never created; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: SearchProjects
+    state: unsupported
+    reason: "projects are synthesized, never created; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: CreateProject
+    state: unsupported
+    reason: "projects are synthesized, never created; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: UpdateProject
+    state: unsupported
+    reason: "project metadata is not modelled; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: MoveProject
+    state: unsupported
+    reason: "project parent/ancestry is not modelled; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: DeleteProject
+    state: unsupported
+    reason: "projects are synthesized, never deleted; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: UndeleteProject
+    state: unsupported
+    reason: "projects are synthesized, never deleted; explicit Unimplemented stub"
+  # REST operations deliberately left limited: implemented to the extent the
+  # emulator models the subsystem, with the missing plane named in the reason.
+  - service: managedkafka
+    operation: ManagedKafka.GetOperation
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+  - service: managedkafka
+    operation: ManagedKafka.ListOperations
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+
+  # Metastore's operations surface shares the locations/{location}/operations
+  # path with Cloud Workflows and routes to workflows on the single emulator
+  # host, so the Get/List handlers are reachable only by direct dispatch
+  # (mutations return operations inline done:true, so no client needs to poll).
+  - service: metastore
+    operation: Metastore.GetOperation
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+  - service: metastore
+    operation: Metastore.ListOperations
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+
+  # Dataproc Metastore gRPC is control-plane only: the deferred control-plane
+  # RPCs (export/restore/query/move/alter) are gated on a Hive Thrift data plane
+  # the emulator does not model per service, so each is an explicit
+  # Unimplemented stub.
+  - service: metastore
+    operation: ExportMetadata
+    state: unsupported
+    reason: "Hive Thrift metadata export is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: RestoreService
+    state: unsupported
+    reason: "Hive Thrift metadata restore is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: QueryMetadata
+    state: unsupported
+    reason: "the gRPC metadata query plane is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: MoveTableToDatabase
+    state: unsupported
+    reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: AlterMetadataResourceLocation
+    state: unsupported
+    reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
+
+  # Eventarc gRPC is trigger/channel/provider control-plane only: the emulator
+  # models no event-delivery engine, so every other Eventarc RPC is an explicit
+  # Unimplemented stub. (Trigger/Channel IAM is served through the shared
+  # google.iam.v1.IAMPolicy router.)
+  - service: eventarc
+    operation: GetChannelConnection
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListChannelConnections
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateChannelConnection
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteChannelConnection
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetGoogleChannelConfig
+    state: unsupported
+    reason: "Google-channel CMEK config is not modelled; explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateGoogleChannelConfig
+    state: unsupported
+    reason: "Google-channel CMEK config is not modelled; explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListMessageBuses
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListMessageBusEnrollments
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListEnrollments
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetPipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListPipelines
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreatePipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdatePipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeletePipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListGoogleApiSources
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+
+  # gRPC methods deliberately left limited: each is gated on a subsystem the
+  # emulator does not model, so implementing it would fabricate a wire-divergent
+  # result. They fail loudly with codes.Unimplemented rather than silently
+  # succeeding.
+  - service: kms
+    operation: ImportCryptoKeyVersion
+    state: limited
+    reason: "key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping"
+  - service: kms
+    operation: ImportTrustedKeyWrappedCryptoKeyVersion
+    state: limited
+    reason: "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
+  - service: kms
+    operation: ExportTrustedKeyWrappedCryptoKeyVersion
+    state: limited
+    reason: "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
+  - service: kms
+    operation: Decapsulate
+    state: limited
+    reason: "KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate"
+  - service: secretmanager
+    operation: RotateSecret
+    state: limited
+    reason: "the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane"
+  - service: secretmanager
+    operation: EnableManagedRotation
+    state: limited
+    reason: "managed rotation needs a rotation Cloud Function and config the emulator does not model"
+  - service: logging
+    operation: TailLogEntries
+    state: limited
+    reason: "bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists"
+
+  # Cloud Logging gRPC ConfigServiceV2 is implemented for sinks + exclusions.
+  # The log-bucket / view / link storage plane, CMEK/settings, and the
+  # cross-project CopyLogEntries operation are not modelled and are explicit
+  # Unimplemented stubs inherited from UnimplementedConfigServiceV2Server.
+  - service: logging
+    operation: ListBuckets
+    state: unsupported
+    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: GetBucket
+    state: unsupported
+    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: CreateBucket
+    state: unsupported
+    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: UpdateBucket
+    state: unsupported
+    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: DeleteBucket
+    state: unsupported
+    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: UndeleteBucket
+    state: unsupported
+    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: CreateBucketAsync
+    state: unsupported
+    reason: "asynchronous log-bucket creation is not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: UpdateBucketAsync
+    state: unsupported
+    reason: "asynchronous log-bucket updates are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: ListViews
+    state: unsupported
+    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: GetView
+    state: unsupported
+    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: CreateView
+    state: unsupported
+    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: UpdateView
+    state: unsupported
+    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: DeleteView
+    state: unsupported
+    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
+  - service: logging
+    operation: ListLinks
+    state: unsupported
+    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: GetLink
+    state: unsupported
+    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: CreateLink
+    state: unsupported
+    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: DeleteLink
+    state: unsupported
+    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: GetCmekSettings
+    state: unsupported
+    reason: "Logging CMEK settings are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: UpdateCmekSettings
+    state: unsupported
+    reason: "Logging CMEK settings are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: GetSettings
+    state: unsupported
+    reason: "Logging service settings are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: UpdateSettings
+    state: unsupported
+    reason: "Logging service settings are not modelled; explicit Unimplemented stub"
+  - service: logging
+    operation: CopyLogEntries
+    state: unsupported
+    reason: "cross-project log copy is not modelled; explicit Unimplemented stub"
+
+  # BigQuery routines/models/rowAccessPolicies are deliberate 501 stubs (the
+  # SQL engine covers datasets/tables/jobs/rows); the rest of the service is
+  # graded `limited` by the bigquery default override above.
+  - service: bigquery
+    operation: BigQuery.Routines
+    state: unsupported
+    reason: "dataset routines are not modelled; explicit Unimplemented (501) stub"
+  - service: bigquery
+    operation: BigQuery.Models
+    state: unsupported
+    reason: "models are not modelled; explicit Unimplemented (501) stub"
+  - service: bigquery
+    operation: BigQuery.RowAccessPolicies
+    state: unsupported
+    reason: "row access policies are not modelled; explicit Unimplemented (501) stub"

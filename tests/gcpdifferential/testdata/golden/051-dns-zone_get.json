@@ -1,0 +1,24 @@
+{
+  "index": 51,
+  "service": "dns",
+  "op": "zone_get",
+  "method": "GET",
+  "path": "/dns/v1/projects/<project>/managedZones/<dnsZone>",
+  "status": 200,
+  "response": {
+    "cloudLoggingConfig": {
+      "kind": "dns#managedZoneCloudLoggingConfig"
+    },
+    "creationTime": "<time>",
+    "description": "jaiscloud differential",
+    "dnsName": "<dnsName>",
+    "id": "<id>",
+    "kind": "dns#managedZone",
+    "name": "<dnsZone>",
+    "nameServers": [
+      "<nameServer>"
+    ],
+    "visibility": "public"
+  }
+}
+

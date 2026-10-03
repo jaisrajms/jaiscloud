@@ -1,0 +1,24 @@
+{
+  "index": 18,
+  "service": "pubsub",
+  "op": "sub_pull",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/<subscription>:pull",
+  "status": 200,
+  "request": {
+    "maxMessages": 10
+  },
+  "response": {
+    "receivedMessages": [
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "data": "aGVsbG8=",
+          "messageId": "<messageId>",
+          "publishTime": "<time>"
+        }
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,9 @@
+{
+  "index": 49,
+  "service": "bigquery",
+  "op": "dataset_delete",
+  "method": "DELETE",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>?deleteContents=true",
+  "status": 204
+}
+

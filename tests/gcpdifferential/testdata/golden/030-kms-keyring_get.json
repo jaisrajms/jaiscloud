@@ -1,0 +1,13 @@
+{
+  "index": 30,
+  "service": "kms",
+  "op": "keyring_get",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/global/keyRings/<keyRing>",
+  "status": 200,
+  "response": {
+    "createTime": "<time>",
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>"
+  }
+}
+

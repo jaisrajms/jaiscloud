@@ -1,0 +1,22 @@
+{
+  "index": 76,
+  "service": "compute",
+  "op": "compute_instance_get_missing",
+  "method": "GET",
+  "path": "/compute/v1/projects/<project>/zones/us-central1-a/instances/<computeInstance>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "The resource 'projects/<project>/zones/us-central1-a/instances/<computeInstance>' was not found",
+          "reason": "notFound"
+        }
+      ],
+      "message": "The resource 'projects/<project>/zones/us-central1-a/instances/<computeInstance>' was not found"
+    }
+  }
+}
+

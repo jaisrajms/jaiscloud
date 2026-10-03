@@ -1,0 +1,22 @@
+{
+  "index": 78,
+  "service": "sqladmin",
+  "op": "sql_instance_get_missing",
+  "method": "GET",
+  "path": "/sql/v1beta4/projects/<project>/instances/<sqlInstance>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "The Cloud SQL instance does not exist.",
+          "reason": "instanceDoesNotExist"
+        }
+      ],
+      "message": "The Cloud SQL instance does not exist."
+    }
+  }
+}
+

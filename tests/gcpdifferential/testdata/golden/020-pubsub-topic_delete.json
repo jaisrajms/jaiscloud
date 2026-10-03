@@ -1,0 +1,10 @@
+{
+  "index": 20,
+  "service": "pubsub",
+  "op": "topic_delete",
+  "method": "DELETE",
+  "path": "/v1/projects/<project>/topics/<topic>",
+  "status": 200,
+  "response": {}
+}
+

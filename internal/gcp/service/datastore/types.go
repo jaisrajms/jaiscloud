@@ -1,0 +1,246 @@
+package datastore
+
+import (
+	"time"
+
+	dsstore "jaiscloud/internal/gcp/store/datastore"
+)
+
+// Key is a transport-neutral Datastore key. The final path element is held in
+// the flat Kind/ID/Name fields, with completeness expressed by HasID/HasName; a
+// key with neither is incomplete (used by AllocateIds and by insert/upsert
+// mutations that want a server-allocated numeric ID). Ancestors holds the
+// parent elements from root to immediate parent (empty for a root entity), and
+// Namespace/Database are the key's partition dimensions ("" for the default
+// namespace / default database).
+type Key struct {
+	Kind    string
+	ID      int64
+	Name    string
+	HasID   bool
+	HasName bool
+
+	Ancestors []dsstore.PathElement
+	Namespace string
+	Database  string
+}
+
+// Complete reports whether the key's final element names a concrete entity
+// (numeric ID or name).
+func (k Key) Complete() bool { return k.HasID || k.HasName }
+
+// PathElements returns the key's full path: its ancestors followed by the
+// final element. It is exported so transports can rebuild their wire key.
+func (k Key) PathElements() []dsstore.PathElement { return k.path() }
+
+// ValidateKeyPath checks that a decoded key path is structurally well-formed:
+// every element must have a non-empty kind and every ancestor element (all but
+// the final one) must be complete. The final element may be incomplete (an
+// insert/upsert key awaiting a server-allocated ID). An empty path means "no
+// key" and is allowed. Transports call this after decoding, so a malformed key
+// is rejected consistently rather than diverging between store backends.
+func ValidateKeyPath(path []dsstore.PathElement) error {
+	for i, e := range path {
+		if e.Kind == "" {
+			return invalidArgument("key path element has an empty kind")
+		}
+		if i < len(path)-1 && !e.HasID && !e.HasName {
+			return invalidArgument("ancestor key is incomplete")
+		}
+	}
+	return nil
+}
+
+// path returns the key's full path: its ancestors followed by the final
+// element.
+func (k Key) path() []dsstore.PathElement {
+	final := dsstore.PathElement{Kind: k.Kind, ID: k.ID, Name: k.Name, HasID: k.HasID, HasName: k.HasName}
+	if len(k.Ancestors) == 0 {
+		return []dsstore.PathElement{final}
+	}
+	out := make([]dsstore.PathElement, 0, len(k.Ancestors)+1)
+	out = append(out, k.Ancestors...)
+	out = append(out, final)
+	return out
+}
+
+// MutationOp identifies a single Datastore mutation.
+type MutationOp int
+
+const (
+	MutationInsert MutationOp = iota
+	MutationUpdate
+	MutationUpsert
+	MutationDelete
+)
+
+// Mutation is one transport-neutral mutation. Key is the target entity's key
+// for Insert/Update/Upsert; it may be incomplete (no final id/name) for
+// Insert/Upsert, in which case the core allocates one. Entity carries the
+// properties for those operations (its Key is filled by the core from Key).
+// DeleteKey is the entity to delete. Precondition is the optional
+// conflict-detection condition (base_version/update_time).
+type Mutation struct {
+	Op           MutationOp
+	Key          Key
+	Entity       dsstore.Entity
+	DeleteKey    Key
+	Precondition *dsstore.Precondition
+}
+
+// CommitMode mirrors Datastore's CommitRequest.Mode.
+type CommitMode int
+
+const (
+	// CommitModeUnspecified means: transactional iff a transaction handle is
+	// present.
+	CommitModeUnspecified CommitMode = iota
+	CommitModeTransactional
+	CommitModeNonTransactional
+)
+
+// CommitRequest is a transport-neutral Commit call.
+type CommitRequest struct {
+	Mode        CommitMode
+	Transaction []byte
+	Mutations   []Mutation
+}
+
+// MutationResult is the transport-neutral result of one mutation.
+type MutationResult struct {
+	Version          int64
+	Key              *Key // non-nil when an ID was allocated for the mutation
+	ConflictDetected bool
+	// UpdateTime is the server-stamped entity update time: the new stamp after
+	// an applied insert/update/upsert, the current entity's stamp when a
+	// mutation is rejected (conflict_detected — the mutation changed nothing),
+	// and zero for a delete (which leaves update_time unset). It is one of the
+	// optimistic-concurrency tokens a client can pass forward as a
+	// Mutation.update_time precondition.
+	UpdateTime time.Time
+}
+
+// CommitResponse is the transport-neutral result of a Commit.
+type CommitResponse struct {
+	Results []MutationResult
+	// CommitTime is zero for a non-transactional commit (the proto omits it).
+	CommitTime time.Time
+}
+
+// EntityResult is a found entity plus its per-entity version.
+type EntityResult struct {
+	Entity  dsstore.Entity
+	Version int64
+}
+
+// LookupResult is the transport-neutral result of a Lookup.
+type LookupResult struct {
+	Found   []EntityResult
+	Missing []Key
+}
+
+// MoreResults mirrors Datastore's QueryResultBatch.MoreResults for the two
+// states the emulator emits.
+type MoreResults int
+
+const (
+	MoreResultsNoMoreResults MoreResults = iota
+	MoreResultsAfterLimit
+)
+
+// Query is a transport-neutral Datastore query. Both the structured form and
+// the GQL form (parsed by ParseGQL) resolve to this type, so the two share one
+// execution engine.
+type Query struct {
+	Kind   string
+	Filter *Filter
+	Offset int
+	Limit  *int // nil = unbounded
+	// Namespace and Database scope the query's partition ("" = default).
+	Namespace string
+	Database  string
+}
+
+// QueryResult is the transport-neutral result of RunQuery.
+type QueryResult struct {
+	Entities    []EntityResult
+	Skipped     int
+	MoreResults MoreResults
+}
+
+// PropertyOp is a transport-neutral PropertyFilter operator. Unsupported and
+// unspecified operators are represented explicitly so the core can fail closed.
+type PropertyOp int
+
+const (
+	PropertyUnspecified PropertyOp = iota
+	PropertyEqual
+	PropertyNotEqual
+	PropertyIn
+	PropertyLessThan
+	PropertyLessThanOrEqual
+	PropertyGreaterThan
+	PropertyGreaterThanOrEqual
+	// PropertyHasAncestor is the special "__key__ HAS ANCESTOR" operator. Its
+	// property name must be "__key__" and its value a key; it matches entities
+	// whose key path has that key as a proper prefix.
+	PropertyHasAncestor
+)
+
+// CompositeOp is a transport-neutral CompositeFilter operator.
+type CompositeOp int
+
+const (
+	CompositeUnspecified CompositeOp = iota
+	CompositeAnd
+	CompositeOr
+)
+
+// PropertyFilter is a transport-neutral property filter.
+type PropertyFilter struct {
+	Property string
+	Op       PropertyOp
+	Value    dsstore.Value
+}
+
+// CompositeFilter is a transport-neutral composite filter.
+type CompositeFilter struct {
+	Op      CompositeOp
+	Filters []*Filter
+}
+
+// Filter is either a property filter or a composite filter.
+type Filter struct {
+	Property  *PropertyFilter
+	Composite *CompositeFilter
+}
+
+// AggOp is a transport-neutral aggregation operator.
+type AggOp int
+
+const (
+	AggUnspecified AggOp = iota
+	AggCount
+	AggSum
+	AggAvg
+)
+
+// Aggregation is a transport-neutral aggregation.
+type Aggregation struct {
+	Op       AggOp
+	Alias    string
+	Property string
+	UpTo     *int64 // Count only
+}
+
+// AggregationQuery wraps a nested query and its aggregations.
+type AggregationQuery struct {
+	Nested       Query
+	Aggregations []Aggregation
+}
+
+// AggregationResult carries one aggregate value per alias plus the read time.
+type AggregationResult struct {
+	Aggregates map[string]dsstore.Value
+	ReadTime   time.Time
+}

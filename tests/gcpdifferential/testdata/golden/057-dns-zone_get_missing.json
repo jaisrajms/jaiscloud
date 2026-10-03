@@ -1,0 +1,22 @@
+{
+  "index": 57,
+  "service": "dns",
+  "op": "zone_get_missing",
+  "method": "GET",
+  "path": "/dns/v1/projects/<project>/managedZones/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "The 'parameters.managedZone' resource named '<missing>' does not exist.",
+          "reason": "notFound"
+        }
+      ],
+      "message": "The 'parameters.managedZone' resource named '<missing>' does not exist."
+    }
+  }
+}
+

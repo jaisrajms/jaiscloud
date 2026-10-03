@@ -1,0 +1,23 @@
+{
+  "index": 47,
+  "service": "bigquery",
+  "op": "dataset_get_missing",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/datasets/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "Not found: Dataset <project>:<missing>",
+          "reason": "notFound"
+        }
+      ],
+      "message": "Not found: Dataset <project>:<missing>",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

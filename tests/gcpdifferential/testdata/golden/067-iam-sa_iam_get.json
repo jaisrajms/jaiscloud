@@ -1,0 +1,12 @@
+{
+  "index": 67,
+  "service": "iam",
+  "op": "sa_iam_get",
+  "method": "POST",
+  "path": "/v1/projects/<project>/serviceAccounts/<serviceAccount>:getIamPolicy",
+  "status": 200,
+  "response": {
+    "etag": "<etag>"
+  }
+}
+

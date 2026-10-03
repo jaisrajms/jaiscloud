@@ -1,0 +1,30 @@
+{
+  "index": 3,
+  "service": "storage",
+  "op": "object_upload",
+  "method": "POST",
+  "path": "/upload/storage/v1/b/<bucket>/o?uploadType=media&name=hello.txt",
+  "status": 200,
+  "request": "hello jaiscloud",
+  "response": {
+    "bucket": "<bucket>",
+    "contentType": "text/plain",
+    "crc32c": "<crc32c>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "id": "<bucket>/hello.txt/<generation>",
+    "kind": "storage#object",
+    "md5Hash": "<md5Hash>",
+    "mediaLink": "<mediaLink>",
+    "metageneration": "<metageneration>",
+    "name": "hello.txt",
+    "selfLink": "<selfLink>",
+    "size": "15",
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "timeFinalized": "<time>",
+    "timeStorageClassUpdated": "<time>",
+    "updated": "<time>"
+  }
+}
+

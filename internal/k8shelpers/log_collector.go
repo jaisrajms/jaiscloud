@@ -29,6 +29,12 @@ func TailLogs(ctx context.Context, k8s kubernetes.Interface, handle JobHandle, k
 		}
 		return streamLogs(ctx, k8s, handle.Namespace, pod.Name, pod.Spec.Containers[0].Name, "[main] ", sink)
 
+	case LogKindMainRaw:
+		if len(pod.Spec.Containers) == 0 {
+			return fmt.Errorf("k8shelpers: no main containers in pod %s", pod.Name)
+		}
+		return streamLogs(ctx, k8s, handle.Namespace, pod.Name, pod.Spec.Containers[0].Name, "", sink)
+
 	case LogKindInit:
 		if len(pod.Spec.InitContainers) == 0 {
 			return nil

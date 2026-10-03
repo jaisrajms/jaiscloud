@@ -1,0 +1,182 @@
+# Ledger resolution overlay for tools/gcpstatus (see plan_docs ledger-integrity).
+#
+# Closes ledger rows whose implementing PR merged but whose source doc was never
+# updated. Most source docs live under the gitignored plan_docs/ scratch tree, so
+# the durable fix is this committed overlay rather than editing them in place.
+#
+# Every entry is EVIDENCE-GATED: a matching row is marked done only when the
+# referenced PR is actually MERGED. An entry can therefore never mark unmade work
+# as done; a reverted/closed PR leaves the row open.
+#
+# Fields:
+#   source: optional substring that must appear in the row's source doc path
+#   match:  required — case-insensitive substring of the row's id/aliases/gap
+#   pr:     required — the merged PR that implemented the work
+#   note:   optional — recorded on the row
+#
+# Disable with `make ... RESOLVED=` or `-resolved ''`.
+
+entries:
+  # #151 shipped project-level IAM (resourcemanager projects.* IAM) — the source
+  # finding (gcp-terraform-compat-2026-09-22.md) still reads "not implemented".
+  - match: "cloud-resource-manager-project-level-iam"
+    pr: 151
+    note: "resolved: project-level IAM shipped in #151"
+
+  # #151 also shipped Service Usage v1 (Enable/Disable/BatchEnable/Get/List). The
+  # floci/terraform findings still list Service Usage as missing; the bundled
+  # "Cloud Run/Tasks/Scheduler/Service Usage" row is intentionally NOT matched
+  # (those other services are still absent).
+  - match: "service-usage-not-implemented"
+    pr: 151
+    note: "resolved: Service Usage v1 shipped in #151"
+
+  # #168 shipped the Pub/Sub cross-stream ack reconciliation registry
+  # (internal/gcp/grpc/pubsub/acktrack.go); the debt-plan remainder still lists it.
+  - source: "gcp-deferred-debt-plan"
+    match: "pub-sub-cross-stream-ack"
+    pr: 168
+    note: "resolved: cross-stream ack reconciliation shipped in #168"
+
+  # FU1/FU2 merged (#211/#212); the finalized FD14 index rows still read open.
+  - source: "final/FD14"
+    match: "FU1"
+    pr: 211
+    note: "resolved: Cloud Functions gRPC CallFunction shipped in #211"
+  - source: "final/FD14"
+    match: "FU2"
+    pr: 212
+    note: "resolved: v2 ListRuntimes shipped in #212"
+
+  # Combined grouped PRs: their per-item declared branches never existed, so the
+  # overlay is the link between the merged PR and each backlog ID. Evidence-gated
+  # like every entry here (a row only closes once the PR is actually merged).
+
+  # 260 — fix/gcp-storage-parity-sweep (one combined storage PR).
+  - match: "J31"
+    pr: 260
+    note: "resolved: GCS notification metadata/finalize events in #260"
+  - match: "J37"
+    pr: 260
+    note: "resolved: CSEK metadata hash withholding in #260"
+  - match: "J57"
+    pr: 260
+    note: "resolved: object metadata target-generation update in #260"
+  - match: "J61"
+    pr: 260
+    note: "resolved: XML API error documents in #260"
+  - match: "J62"
+    pr: 260
+    note: "resolved: gRPC CSEK request-param validation in #260"
+  - match: "J63"
+    pr: 260
+    note: "resolved: gRPC customer_encryption mapping in #260"
+  - match: "J69"
+    pr: 260
+    note: "resolved: XML media headers in #260"
+
+  # 261 — feat/gcp-iam-lifecycle (one combined IAM PR).
+  - match: "J45"
+    pr: 261
+    note: "resolved: service-account key disable/enable in #261"
+  - match: "J46"
+    pr: 261
+    note: "resolved: service-account disable/enable/undelete in #261"
+  - match: "J65"
+    pr: 261
+    note: "resolved: iamcredentials getAllowedLocations in #261"
+
+  # 263 — feat/gcp-operations-resolver (combined long-running operations PR).
+  - match: "J58"
+    pr: 263
+    note: "resolved: typed gRPC longrunning operations resolver in #263"
+  - match: "J60"
+    pr: 263
+    note: "resolved: v1 top-level function operation names in #263"
+
+  # 264 — fix/gcp-monitoring-aggregation-extras (monitoring aggregation PR).
+  - match: "J43"
+    pr: 264
+    note: "resolved: aggregation secondary pass/intervals/metric kind/orderBy in #264"
+
+  # 265 — feat/gcp-kms-key-policy (KMS cryptoKey resource-policy hook + the
+  # "authz accepted, not enforced" posture decision). G1's source doc
+  # (gcp-future-work.md) is gitignored scratch, so this commits the closure.
+  - source: "gcp-future-work"
+    match: "Authz not enforced"
+    pr: 265
+    note: "resolved: authz accepted, not enforced, matching AWS; KMS cryptoKey resource policy enforced default-permissively (#265)"
+
+  # 266/267/268/269 — the LRO async-timing wave. #269 is the closing PR (live e2e
+  # + docs), so G2's row closes when it merges. G2's source doc
+  # (gcp-future-work.md) is gitignored scratch, so this commits the closure.
+  # The deferred follow-ups landed separately: serviceusage (#270, LRO4) and the
+  # generic operations registry + strict async contract (#271, LRO5).
+  - source: "gcp-future-work"
+    match: "LROs complete synchronously"
+    pr: 269
+    note: "resolved: opt-in async LRO timing (JAISCLOUD_LRO_MODE=async) for workflows/functions/metastore/managedkafka over REST+gRPC (#266/#267/#268/#269); serviceusage (#270/LRO4) and generic operations (#271/LRO5) follow-ups"
+
+  # 273 — fix/gcp-iceberg-statistics-metrics (BigLake Iceberg table statistics +
+  # metrics report). The debt-plan §3.11 rows and the §7 remainder entry live in
+  # gitignored scratch, so this commits the closure; evidence-gated on #273.
+  - source: "gcp-deferred-debt-plan"
+    match: "remove-partition-statistics no-o"
+    pr: 273
+    note: "resolved: Iceberg statistics persist to TableMetadata.statistics/partition-statistics, upsert/remove by snapshot-id (ICE1) in #273"
+  - source: "gcp-deferred-debt-plan"
+    match: "metrics → 501"
+    pr: 273
+    note: "resolved: Iceberg reportMetrics is POST -> 204, 404 for an unknown table (ICE2) in #273"
+  - source: "gcp-deferred-debt-plan"
+    match: "BigLake"
+    pr: 273
+    note: "resolved: BigLake set-statistics/remove-statistics + metrics report (ICE1/ICE2) in #273"
+
+  # 274/275 — the Dataproc WorkflowTemplateService wave (DPW1 CRUD over REST+gRPC
+  # in #274, DPW2 instantiate/inline instantiate in #275). The debt-plan §3.4 and
+  # §7 rows live in gitignored scratch, so this commits the closure; #275 is the
+  # completing PR. DPW3 (workflowTemplates IAM) remains an optional deferral.
+  - source: "gcp-deferred-debt-plan"
+    match: "Dataproc WorkflowTemplateService"
+    pr: 275
+    note: "resolved: WorkflowTemplateService CRUD + instantiate/inline instantiate over the job core (#274/#275); IAM trio deferred (DPW3, optional)"
+
+  # MP1/MP2 shipped the HMS partition store + methods (#234) and the Hive-3.x
+  # get_table_meta / alter_table_with_cascade paths (#235). The debt-plan §3.10/§7
+  # rows live in gitignored scratch, so this commits the closure; #235 is the
+  # completing PR (MP5's off-the-shelf HMS-client lifecycle test covers it).
+  - source: "gcp-deferred-debt-plan"
+    match: "jc_hms_partitions"
+    pr: 235
+    note: "resolved: HMS partition CRUD over jc_hms_partitions (MP1 #234) + get_table_meta/alter_table_with_cascade (MP2 #235); MP5 client lifecycle test"
+
+  # G5 (Functions v2 deploy unsupported) shipped in the FD14 functions GA wave:
+  # FU2 #212 (v2 ListRuntimes) + FU4/W4.1 #216 (GCS-backed source upload,
+  # storageSource, build/stage, per-deploy revisions). The source doc
+  # (gcp-future-work.md) is gitignored scratch and was never updated, so this
+  # commits the closure; evidence-gated on #216 (the completing PR).
+  - source: "gcp-future-work"
+    match: "Functions v2 deploy"
+    pr: 216
+    note: "resolved: v2 deploy end-to-end (GCS source upload + storageSource + build/stage + revisions) in #216; v2 ListRuntimes in #212"
+
+  # #291 implemented Cloud Scheduler v1 (SCH1) and explicitly documented the
+  # remaining unimplemented services — Cloud Tasks, Firebase Auth, GKE — as out
+  # of scope (SCH2). The floci compat report is HISTORICAL/superseded: the local
+  # scratch copy now carries `<!-- gcpstatus: superseded -->` so its prose findings
+  # contribute no live backlog, but these evidence-gated entries stay as the durable
+  # closure for copies where the marker is absent. Cloud Tasks v2 landed in #292
+  # (CT1/CT2) + #293 (CT3).
+  - source: "gcp-floci-compat-results"
+    match: "implement-or-explicitly-document-the-rem"
+    pr: 291
+    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries in #293 (CT3); Firebase Auth/GKE documented out of scope in #291 (SCH2)"
+  - source: "gcp-floci-compat-results"
+    match: "scheduler-4-cloud-scheduler-not-implemen"
+    pr: 291
+    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1)"
+  - source: "gcp-floci-compat-results"
+    match: "not-implemented-cloud-tasks-cloud-schedu"
+    pr: 291
+    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries in #293 (CT3)"

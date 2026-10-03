@@ -1,0 +1,9 @@
+{
+  "index": 7,
+  "service": "storage",
+  "op": "object_delete",
+  "method": "DELETE",
+  "path": "/storage/v1/b/<bucket>/o/hello.txt",
+  "status": 204
+}
+

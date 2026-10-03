@@ -1,0 +1,9 @@
+{
+  "index": 8,
+  "service": "storage",
+  "op": "bucket_delete",
+  "method": "DELETE",
+  "path": "/storage/v1/b/<bucket>",
+  "status": 204
+}
+

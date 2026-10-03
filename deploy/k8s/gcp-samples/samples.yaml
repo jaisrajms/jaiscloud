@@ -1,0 +1,258 @@
+---
+# Official Spring Cloud GCP sample applications, pointed at the in-cluster
+# jaiscloud-gcp emulator. These are the "high-confidence" emulator-supported
+# starters: Pub/Sub, Firestore (Native) and Datastore — each auto-configuration
+# switches to NoCredentials when an emulator host/port is supplied, so no
+# credentials are needed and no sample source is modified.
+#
+# Images are built from the pinned upstream tag by deploy/docker/gcp-samples:
+#   make docker-gcp-samples
+#
+# Emulator endpoints (see deploy/k8s/jaiscloud-gcp.yaml):
+#   REST  : http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+#   gRPC  : jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+#
+# Project IDs are arbitrary here — the emulator maps project -> account.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gcp-samples-env
+  namespace: jaiscloud
+  labels:
+    app.kubernetes.io/part-of: gcp-samples
+data:
+  # Shared by every sample. The Java clients read these as relaxed-binding
+  # equivalents of spring.cloud.gcp.* properties.
+  SPRING_CLOUD_GCP_PROJECT_ID: jaiscloud-project
+  # Keep each JVM inside its container limit; these are small apps.
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC"
+  # Not emulated (no endpoint override) — leave the Micrometer Stackdriver
+  # exporter off everywhere.
+  SPRING_CLOUD_GCP_METRICS_ENABLED: "false"
+  SPRING_CLOUD_GCP_TRACE_ENABLED: "false"
+---
+# ── Pub/Sub ───────────────────────────────────────────────────────────────────
+# Sample: spring-cloud-gcp-pubsub-sample
+#   POST /createTopic        (topicName)
+#   POST /createSubscription (topicName, subscriptionName)
+#   GET  /postMessage        (topicName, message, count)
+#   GET  /pull               (subscription1)
+#   GET  /subscribe          (subscription)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gcp-sample-pubsub
+  namespace: jaiscloud
+  labels:
+    app: gcp-sample-pubsub
+    app.kubernetes.io/part-of: gcp-samples
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gcp-sample-pubsub
+  template:
+    metadata:
+      labels:
+        app: gcp-sample-pubsub
+    spec:
+      containers:
+        - name: app
+          image: 10.0.100.21:5050/jaiscloud-sample-pubsub:8.2.1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: gcp-samples-env
+          env:
+            - name: SPRING_CLOUD_GCP_PUBSUB_EMULATOR_HOST
+              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 24
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gcp-sample-pubsub
+  namespace: jaiscloud
+  labels:
+    app: gcp-sample-pubsub
+spec:
+  type: ClusterIP
+  selector:
+    app: gcp-sample-pubsub
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# ── Firestore (Native) ────────────────────────────────────────────────────────
+# Sample: spring-cloud-gcp-data-firestore-sample
+#   POST /users/saveUser (form: name, age, pets, phones)
+#   GET  /users
+#   GET  /users/age?age=N
+#   GET  /users/phones?name=N
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gcp-sample-firestore
+  namespace: jaiscloud
+  labels:
+    app: gcp-sample-firestore
+    app.kubernetes.io/part-of: gcp-samples
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gcp-sample-firestore
+  template:
+    metadata:
+      labels:
+        app: gcp-sample-firestore
+    spec:
+      containers:
+        - name: app
+          image: 10.0.100.21:5050/jaiscloud-sample-firestore:8.2.1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: gcp-samples-env
+          env:
+            # emulator.enabled also makes the sample contribute a
+            # NoCredentialsProvider bean; host-port is the gRPC endpoint.
+            - name: SPRING_CLOUD_GCP_FIRESTORE_EMULATOR_ENABLED
+              value: "true"
+            - name: SPRING_CLOUD_GCP_FIRESTORE_HOST_PORT
+              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+            # The Firestore EMULATOR auto-configuration ignores the shared
+            # spring.cloud.gcp.project-id and defaults to the literal "unused"
+            # when the firestore-specific project is unset
+            # (GcpFirestoreEmulatorAutoConfiguration). Set it explicitly so
+            # gRPC and the REST API address the same project.
+            - name: SPRING_CLOUD_GCP_FIRESTORE_PROJECT_ID
+              value: jaiscloud-project
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 24
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gcp-sample-firestore
+  namespace: jaiscloud
+  labels:
+    app: gcp-sample-firestore
+spec:
+  type: ClusterIP
+  selector:
+    app: gcp-sample-firestore
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# ── Datastore mode ────────────────────────────────────────────────────────────
+# Sample: spring-cloud-gcp-data-datastore-basic-sample
+#   POST   /saveBook                (JSON {title,author,year})
+#   GET    /findAllBooks
+#   GET    /findByAuthor?author=N
+#   GET    /findByYearGreaterThan?year=N
+#   DELETE /removeAllBooks
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gcp-sample-datastore
+  namespace: jaiscloud
+  labels:
+    app: gcp-sample-datastore
+    app.kubernetes.io/part-of: gcp-samples
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gcp-sample-datastore
+  template:
+    metadata:
+      labels:
+        app: gcp-sample-datastore
+    spec:
+      containers:
+        - name: app
+          image: 10.0.100.21:5050/jaiscloud-sample-datastore:8.2.1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: gcp-samples-env
+          env:
+            # Setting host (not emulator.enabled) selects the manually started
+            # emulator and the autoconfiguration uses NoCredentials.
+            - name: SPRING_CLOUD_GCP_DATASTORE_HOST
+              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+            # The sample's application.properties hardcodes
+            # spring.cloud.gcp.datastore.namespace=spring-demo. The emulator
+            # rejects namespaced keys (INVALID_ARGUMENT: namespaced keys are
+            # not supported), so override it to empty. See README.md.
+            - name: SPRING_CLOUD_GCP_DATASTORE_NAMESPACE
+              value: ""
+          readinessProbe:
+            # Queries Datastore, so readiness also proves the data path.
+            httpGet:
+              path: /findAllBooks
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 24
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gcp-sample-datastore
+  namespace: jaiscloud
+  labels:
+    app: gcp-sample-datastore
+spec:
+  type: ClusterIP
+  selector:
+    app: gcp-sample-datastore
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

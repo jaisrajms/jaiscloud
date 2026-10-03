@@ -1,0 +1,16 @@
+{
+  "index": 73,
+  "service": "firestore",
+  "op": "fs_doc_get_missing",
+  "method": "GET",
+  "path": "/v1/projects/<project>/databases/(default)/documents/<fsCollection>/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "Document \"projects/<project>/databases/(default)/documents/<fsCollection>/<missing>\" not found.",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

@@ -1,0 +1,24 @@
+{
+  "index": 16,
+  "service": "pubsub",
+  "op": "subs_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/subscriptions",
+  "status": 200,
+  "response": {
+    "subscriptions": [
+      {
+        "ackDeadlineSeconds": 10,
+        "expirationPolicy": {
+          "ttl": "2678400s"
+        },
+        "messageRetentionDuration": "604800s",
+        "name": "projects/<project>/subscriptions/<subscription>",
+        "pushConfig": {},
+        "state": "ACTIVE",
+        "topic": "projects/<project>/topics/<topic>"
+      }
+    ]
+  }
+}
+

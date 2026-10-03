@@ -17,17 +17,24 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 // paginationKeywords are substrings whose presence in a method body's raw
 // source text indicates the implementation handles pagination in some form.
+// AWS idioms: Paginate (helper), Marker (S3/DynamoDB cursor), NextToken,
+// IsTruncated, pagination. (package). GCP idioms: paging. (the shared
+// internal/gcp/paging helper) and the pageToken/nextPageToken cursor fields.
 var paginationKeywords = []string{
 	"Paginate",
 	"Marker",
 	"NextToken",
 	"IsTruncated",
 	"pagination.",
+	"paging.",
+	"nextPageToken",
+	"pageToken",
 }
 
 func main() {
@@ -54,8 +61,10 @@ func main() {
 	}
 }
 
-// check walks root recursively, parses every non-test .go file, and returns
-// one diagnostic string per method that appears to be missing pagination.
+// check walks root recursively, parses every non-test .go file in the tree
+// together (so cross-file helper delegation is visible), and returns one
+// diagnostic string per List/Describe method that appears to be missing
+// pagination.
 func check(root string) ([]string, error) {
 	fset := token.NewFileSet()
 
@@ -80,87 +89,101 @@ func check(root string) ([]string, error) {
 		return nil, fmt.Errorf("walking %q: %w", root, err)
 	}
 
-	var violations []string
+	// Aggregate all *Provider methods across the tree: method name → body
+	// source + receiver variable name. A List/Describe method in one file may
+	// delegate pagination to a helper in another file.
+	providerMethods := map[string]string{}
+	recvNames := map[string]string{}
+	type listMethod struct{ fd *ast.FuncDecl }
+	var listMethods []listMethod
+
 	for _, path := range goFiles {
-		vs, err := checkFile(fset, path)
+		src, err := os.ReadFile(path)
 		if err != nil {
-			// Non-fatal: report and continue.
+			fmt.Fprintf(os.Stderr, "paginationcheck: read error in %s: %v\n", path, err)
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "paginationcheck: parse error in %s: %v\n", path, err)
 			continue
 		}
-		violations = append(violations, vs...)
+		ast.Inspect(f, func(n ast.Node) bool {
+			fd, ok := n.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 {
+				return true
+			}
+			if !strings.HasSuffix(extractTypeName(fd.Recv.List[0].Type), "Provider") {
+				return true
+			}
+			providerMethods[fd.Name.Name] = bodySource(fset, src, fd.Body)
+			if len(fd.Recv.List[0].Names) > 0 {
+				recvNames[fd.Name.Name] = fd.Recv.List[0].Names[0].Name
+			}
+			if (strings.HasPrefix(fd.Name.Name, "List") || strings.HasPrefix(fd.Name.Name, "Describe")) &&
+				fd.Body != nil && len(fd.Body.List) > 0 {
+				listMethods = append(listMethods, listMethod{fd: fd})
+			}
+			return true
+		})
+	}
+
+	var violations []string
+	for _, lm := range listMethods {
+		if hasPagination(providerMethods, recvNames[lm.fd.Name.Name], providerMethods[lm.fd.Name.Name], map[string]bool{}) {
+			continue
+		}
+		pos := fset.Position(lm.fd.Pos())
+		violations = append(violations, fmt.Sprintf(
+			"%s:%d: %s may be missing pagination",
+			pos.Filename, pos.Line, lm.fd.Name.Name,
+		))
 	}
 	return violations, nil
 }
 
-// checkFile parses a single Go source file and returns one diagnostic per
-// List*/Describe* method on a *Provider receiver that lacks pagination keywords.
-// The raw source bytes are used for keyword matching so that indirect helpers
-// (e.g. a field named "cursor") are also detected.
-func checkFile(fset *token.FileSet, path string) ([]string, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// hasPagination reports whether a method body contains a pagination keyword,
+// or delegates to a same-receiver helper method that does (transitively, with a
+// visited set to avoid cycles).
+func hasPagination(methods map[string]string, recv, body string, visited map[string]bool) bool {
+	for _, kw := range paginationKeywords {
+		if strings.Contains(body, kw) {
+			return true
+		}
 	}
-
-	f, err := parser.ParseFile(fset, path, src, 0)
-	if err != nil {
-		return nil, err
+	if recv == "" {
+		return false
 	}
-
-	var violations []string
-
-	ast.Inspect(f, func(n ast.Node) bool {
-		fd, ok := n.(*ast.FuncDecl)
+	// Follow same-receiver helper calls: recv.methodName(
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(recv) + `\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(`)
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		name := m[1]
+		if visited[name] {
+			continue
+		}
+		helperBody, ok := methods[name]
 		if !ok {
+			continue
+		}
+		visited[name] = true
+		if hasPagination(methods, recv, helperBody, visited) {
 			return true
 		}
+	}
+	return false
+}
 
-		// Must be a method (has a receiver).
-		if fd.Recv == nil || len(fd.Recv.List) == 0 {
-			return true
-		}
-
-		// Method name must start with List or Describe.
-		if !strings.HasPrefix(fd.Name.Name, "List") && !strings.HasPrefix(fd.Name.Name, "Describe") {
-			return true
-		}
-
-		// Receiver type must end in "Provider" (pointer or value).
-		recvType := extractTypeName(fd.Recv.List[0].Type)
-		if !strings.HasSuffix(recvType, "Provider") {
-			return true
-		}
-
-		// Body must exist and be non-trivial.
-		if fd.Body == nil || len(fd.Body.List) == 0 {
-			return true
-		}
-
-		// Slice the raw source to get the body text.
-		bodyStart := fset.Position(fd.Body.Pos()).Offset
-		bodyEnd := fset.Position(fd.Body.End()).Offset
-		if bodyEnd > len(src) {
-			bodyEnd = len(src)
-		}
-		bodyText := string(src[bodyStart:bodyEnd])
-
-		for _, kw := range paginationKeywords {
-			if strings.Contains(bodyText, kw) {
-				return true // pagination found — not a violation
-			}
-		}
-
-		pos := fset.Position(fd.Pos())
-		violations = append(violations, fmt.Sprintf(
-			"%s:%d: %s may be missing pagination",
-			pos.Filename, pos.Line, fd.Name.Name,
-		))
-
-		return true
-	})
-
-	return violations, nil
+// bodySource returns the raw source text of a block statement.
+func bodySource(fset *token.FileSet, src []byte, body *ast.BlockStmt) string {
+	if body == nil {
+		return ""
+	}
+	bodyStart := fset.Position(body.Pos()).Offset
+	bodyEnd := fset.Position(body.End()).Offset
+	if bodyEnd > len(src) {
+		bodyEnd = len(src)
+	}
+	return string(src[bodyStart:bodyEnd])
 }
 
 // extractTypeName returns the base identifier from a receiver type expression.

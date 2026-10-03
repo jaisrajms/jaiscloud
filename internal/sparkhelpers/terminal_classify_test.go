@@ -114,6 +114,26 @@ func TestWaitTerminal_OOMKilled_SparkFailed(t *testing.T) {
 	assert.Equal(t, "OOMKilled", f.SparkReason)
 }
 
+// TestClassify_StrictExitCode_SQLFailure verifies that a Spark SQL CLI failure
+// (non-zero exit, a clean "Shutdown hook called" tail, but no "ERROR" line) is
+// reported as a failure when StrictExitCode is set — and would be
+// misclassified as success by the lenient rule alone.
+func TestClassify_StrictExitCode_SQLFailure(t *testing.T) {
+	base := k8shelpers.Final{Succeeded: false, ExitCode: 1, Reason: "Error"}
+	logs := []string{
+		"24/01/01 12:00:00 INFO SparkContext: Running Spark",
+		"org.apache.spark.sql.AnalysisException: Table or view not found: nope",
+		"24/01/01 12:00:01 INFO ShutdownHookManager: Shutdown hook called",
+	}
+
+	lenient := classify(base, logs, TerminalOptions{})
+	assert.True(t, lenient.SparkSucceeded, "lenient rule 3 reports success")
+
+	strict := classify(base, logs, TerminalOptions{StrictExitCode: true})
+	assert.False(t, strict.SparkSucceeded, "strict exit-code classification must report failure")
+	assert.NotEmpty(t, strict.SparkReason)
+}
+
 // TestClassificationHelpers tests internal helpers used for log-based classification.
 func TestContainsLine(t *testing.T) {
 	lines := []string{

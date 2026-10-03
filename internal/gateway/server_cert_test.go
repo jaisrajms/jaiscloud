@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/clock"
-		"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 
 	"github.com/stretchr/testify/require"

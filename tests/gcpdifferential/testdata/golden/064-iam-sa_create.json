@@ -1,0 +1,21 @@
+{
+  "index": 64,
+  "service": "iam",
+  "op": "sa_create",
+  "method": "POST",
+  "path": "/v1/projects/<project>/serviceAccounts?accountId=<serviceAccountId>",
+  "status": 200,
+  "request": {
+    "serviceAccount": "<serviceAccount>"
+  },
+  "response": {
+    "displayName": "jaiscloud differential",
+    "email": "<serviceAccount>",
+    "etag": "<etag>",
+    "name": "projects/<project>/serviceAccounts/<serviceAccount>",
+    "oauth2ClientId": "<oauth2ClientId>",
+    "projectId": "<project>",
+    "uniqueId": "<uniqueId>"
+  }
+}
+

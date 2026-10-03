@@ -47,17 +47,18 @@ type warmContainer struct {
 // Each distinct function name gets one container reused across invocations
 // until it has been idle for cfg.KeepaliveSecs seconds.
 type DockerExecutor struct {
-	cfg         LambdaConfig
-	platform    *platform.PlatformConfig
-	client      *http.Client // talks to Docker socket
-	mu          sync.Mutex
-	containers  map[string]*warmContainer // functionName → container
-	nextPort    int
-	done        chan struct{}
-	wg          sync.WaitGroup
-	codeLoader  CodeLoader      // optional; nil in tests
-	layerLoader LayerBlobLoader // optional; nil = no layer mounting
-	logsAPI     LogsIngestor    // optional; nil in tests
+	cfg          LambdaConfig
+	platform     *platform.PlatformConfig
+	client       *http.Client // talks to Docker socket
+	invokeClient *http.Client // talks to the container's published RIE port over TCP
+	mu           sync.Mutex
+	containers   map[string]*warmContainer // functionName → container
+	nextPort     int
+	done         chan struct{}
+	wg           sync.WaitGroup
+	codeLoader   CodeLoader      // optional; nil in tests
+	layerLoader  LayerBlobLoader // optional; nil = no layer mounting
+	logsAPI      LogsIngestor    // optional; nil in tests
 }
 
 // SetCodeLoader injects the code loader used to mount /var/task into containers.
@@ -86,6 +87,9 @@ func NewDockerExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *DockerE
 				},
 			},
 		},
+		// The invoke request goes to the container's published port over TCP,
+		// NOT through the Docker API socket the `client` above dials.
+		invokeClient: &http.Client{Timeout: 16 * time.Minute},
 	}
 	e.cleanupOrphans()
 	e.wg.Add(1)
@@ -108,7 +112,7 @@ func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeR
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := e.client.Do(httpReq)
+	resp, err := e.invokeClient.Do(httpReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
@@ -234,25 +238,7 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	pfx := instancePrefix(e.cfg.InstanceID)
 	name := pfx + sanitizeName(req.FunctionName) + "-" + shortID()
 
-	env := []string{
-		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", req.FunctionName),
-		fmt.Sprintf("AWS_DEFAULT_REGION=%s", regionOrDefault(e.cfg.Region)),
-		fmt.Sprintf("AWS_REGION=%s", regionOrDefault(e.cfg.Region)),
-		fmt.Sprintf("_HANDLER=%s", req.Handler),
-		fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", req.AccountID),
-		"AWS_SECRET_ACCESS_KEY=test",
-		"AWS_SESSION_TOKEN=test",
-		"LAMBDA_TASK_ROOT=/var/task",
-		"LAMBDA_RUNTIME_DIR=/var/runtime",
-		"AWS_LAMBDA_RUNTIME_API=127.0.0.1:9001",
-	}
-	if e.cfg.JaisCloudEndpoint != "" {
-		env = append(env, "AWS_ENDPOINT_URL="+e.cfg.JaisCloudEndpoint)
-		env = append(env, "JAISCLOUD_ENDPOINT="+e.cfg.JaisCloudEndpoint)
-	}
-	for k, v := range req.EnvVars {
-		env = append(env, k+"="+v)
-	}
+	env := dockerRuntimeEnv(e.cfg, req)
 
 	// Platform layer: TLS PEM bundle + extra env for this container.
 	var binds []string
@@ -272,8 +258,8 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	}
 
 	// Extract and mount function code into /var/task when a code loader is available.
-	if e.codeLoader != nil && req.AccountID != "" && req.FunctionName != "" {
-		if zipBytes, loadErr := e.codeLoader.LoadCode(context.Background(), req.AccountID, req.FunctionName, "$LATEST"); loadErr == nil && len(zipBytes) > 0 {
+	if e.codeLoader != nil && req.AccountID != "" && codeKey(req) != "" {
+		if zipBytes, loadErr := e.codeLoader.LoadCode(context.Background(), req.AccountID, codeKey(req), "$LATEST"); loadErr == nil && len(zipBytes) > 0 {
 			if dir, mkErr := os.MkdirTemp("", "lambda-code-*"); mkErr == nil {
 				if extErr := ExtractZip(zipBytes, dir); extErr == nil {
 					codeDir = dir
@@ -330,14 +316,22 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 		hostConfig["Binds"] = binds
 	}
 
-	body, _ := json.Marshal(map[string]any{
+	createBody := map[string]any{
 		"Image": image,
 		"Env":   env,
 		"ExposedPorts": map[string]any{
 			fmt.Sprintf("%d/tcp", invocationPort): map[string]any{},
 		},
 		"HostConfig": hostConfig,
-	})
+	}
+	// The Lambda base-image entrypoint (/lambda-entrypoint.sh) requires the
+	// handler as its first argument (it starts the RIE when
+	// AWS_LAMBDA_RUNTIME_API is unset and passes the handler to the runtime
+	// bootstrap). Without it the container exits 142 and invocation fails.
+	if req.Handler != "" {
+		createBody["Cmd"] = []string{req.Handler}
+	}
+	body, _ := json.Marshal(createBody)
 
 	createURL := fmt.Sprintf("http://localhost/v1.41/containers/create?name=%s", name)
 	respBody, statusCode, createErr := e.dockerCall(ctx, http.MethodPost, createURL, body)

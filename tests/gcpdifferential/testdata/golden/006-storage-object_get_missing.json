@@ -1,0 +1,22 @@
+{
+  "index": 6,
+  "service": "storage",
+  "op": "object_get_missing",
+  "method": "GET",
+  "path": "/storage/v1/b/<bucket>/o/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "No such object: <bucket>/<missing>",
+          "reason": "notFound"
+        }
+      ],
+      "message": "No such object: <bucket>/<missing>"
+    }
+  }
+}
+

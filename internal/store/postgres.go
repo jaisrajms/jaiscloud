@@ -159,6 +159,99 @@ func (s *PostgresResourceStore) Update(ctx context.Context, account, region stri
 	return nil
 }
 
+// UpsertAtomic mirrors MemoryResourceStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the entry for the
+// duration of mutate, so a concurrent writer on the same key blocks (or, for
+// the narrow case of two concurrent first-writes racing on a not-yet-existing
+// row, is retried) instead of silently overwriting this call's result. See
+// gcp/store/firestore/postgres.go's Commit for the same convention.
+func (s *PostgresResourceStore) UpsertAtomic(ctx context.Context, account, region, resourceType, id string, mutate func(current ResourceEntry, exists bool) (ResourceEntry, error)) (ResourceEntry, error) {
+	if region == "" {
+		return ResourceEntry{}, fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", resourceType, id)
+	}
+	const maxAttempts = 5
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		entry, err := s.upsertAtomicOnce(ctx, account, region, resourceType, id, mutate)
+		if err == nil {
+			return entry, nil
+		}
+		if !isSerializationFailure(err) {
+			return ResourceEntry{}, err
+		}
+		lastErr = err
+	}
+	return ResourceEntry{}, lastErr
+}
+
+func (s *PostgresResourceStore) upsertAtomicOnce(ctx context.Context, account, region, resourceType, id string, mutate func(current ResourceEntry, exists bool) (ResourceEntry, error)) (ResourceEntry, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return ResourceEntry{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var current ResourceEntry
+	var data []byte
+	err = tx.QueryRow(ctx, `
+		SELECT resource_type, id, data, created_at, updated_at, seeded
+		FROM jc_resources
+		WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND id=$4
+		FOR UPDATE
+	`, account, region, resourceType, id).Scan(&current.Type, &current.ID, &data, &current.CreatedAt, &current.UpdatedAt, &current.Seeded)
+	exists := true
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		exists = false
+	case err != nil:
+		return ResourceEntry{}, wrapPgError("UpsertAtomic", err)
+	default:
+		current.Data = json.RawMessage(data)
+	}
+
+	next, err := mutate(current, exists)
+	if err != nil {
+		return ResourceEntry{}, err
+	}
+
+	now := clock.Now()
+	if exists {
+		next.CreatedAt = current.CreatedAt
+	} else {
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	next.Type = resourceType
+	next.ID = id
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at, seeded)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (account_id, region, resource_type, id)
+		DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at, seeded = EXCLUDED.seeded
+	`, account, region, resourceType, id, json.RawMessage(next.Data), next.CreatedAt, next.UpdatedAt, next.Seeded)
+	if err != nil {
+		return ResourceEntry{}, wrapPgError("UpsertAtomic", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ResourceEntry{}, wrapPgError("UpsertAtomic commit", err)
+	}
+	return next, nil
+}
+
+// isSerializationFailure returns true when err is a PostgreSQL serialization
+// failure (SQLSTATE 40001 — could not serialize access), which can occur when
+// two UpsertAtomic calls race to create the same not-yet-existing key (no row
+// exists for SELECT ... FOR UPDATE to lock, so both transactions proceed to
+// INSERT and Postgres's serializable snapshot isolation aborts one of them).
+func isSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40001"
+	}
+	return false
+}
+
 func (s *PostgresResourceStore) Delete(ctx context.Context, account, region, resourceType, id string) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM jc_resources WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND id=$4

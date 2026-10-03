@@ -1,0 +1,20 @@
+{
+  "index": 63,
+  "service": "workflows",
+  "op": "workflow_delete",
+  "method": "DELETE",
+  "path": "/v1/projects/<project>/locations/us-central1/workflows/<workflow>",
+  "status": 200,
+  "response": {
+    "done": false,
+    "metadata": {
+      "@type": "type.googleapis.com/google.cloud.workflows.v1.OperationMetadata",
+      "apiVersion": "v1",
+      "createTime": "<time>",
+      "target": "projects/<project>/locations/us-central1/workflows/<workflow>",
+      "verb": "delete"
+    },
+    "name": "projects/<project>/locations/us-central1/operations/<operation>"
+  }
+}
+

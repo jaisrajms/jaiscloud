@@ -1,0 +1,901 @@
+service,operation,transport,state,reason
+bigquery,BigQuery.CancelJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.CreateDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.CreateTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.DeleteDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.DeleteJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.DeleteTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetQueryResults,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetServiceAccount,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.InsertAll,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.InsertJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListDatasets,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListJobs,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListRows,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListTables,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.Models,rest,unsupported,models are not modelled; explicit Unimplemented (501) stub
+bigquery,BigQuery.Query,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.Routines,rest,unsupported,dataset routines are not modelled; explicit Unimplemented (501) stub
+bigquery,BigQuery.RowAccessPolicies,rest,unsupported,row access policies are not modelled; explicit Unimplemented (501) stub
+bigquery,BigQuery.UpdateDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.UpdateTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+clouddns,CloudDNS.ChangeCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ChangeGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ChangeList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneDelete,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZonePatch,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneUpdate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ProjectGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetDelete,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetPatch,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.Unimplemented,rest,unsupported,explicit Unimplemented stub
+cloudsql,CloudSQL.ConnectGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesPatch,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesUpdate,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.FlagsList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesPatch,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesRestart,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesUpdate,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.OperationsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.OperationsList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.TiersList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.Unimplemented,rest,unsupported,explicit Unimplemented stub
+cloudsql,CloudSQL.UsersDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersUpdate,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesAggregatedList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesReset,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesStart,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesStop,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.MachineTypesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.MachineTypesList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.OperationsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.OperationsList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.RegionsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.RegionsList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.Unimplemented,rest,unsupported,explicit Unimplemented stub
+compute,Compute.ZonesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.ZonesList,rest,limited,metadata-only over ResourceStore (no control plane)
+container,Container.CreateCluster,rest,ga,
+container,Container.DeleteCluster,rest,ga,
+container,Container.GetCluster,rest,ga,
+container,Container.GetOperation,rest,ga,
+container,Container.ListClusters,rest,ga,
+container,Container.ListOperations,rest,ga,
+dataproc,CancelJob,grpc,ga,
+dataproc,CreateCluster,grpc,ga,
+dataproc,CreateWorkflowTemplate,grpc,ga,
+dataproc,Dataproc.CancelJob,rest,ga,
+dataproc,Dataproc.CreateCluster,rest,ga,
+dataproc,Dataproc.CreateWorkflowTemplate,rest,ga,
+dataproc,Dataproc.DeleteCluster,rest,ga,
+dataproc,Dataproc.DeleteJob,rest,ga,
+dataproc,Dataproc.DeleteWorkflowTemplate,rest,ga,
+dataproc,Dataproc.DiagnoseCluster,rest,unsupported,explicit Unimplemented stub
+dataproc,Dataproc.GetCluster,rest,ga,
+dataproc,Dataproc.GetJob,rest,ga,
+dataproc,Dataproc.GetOperation,rest,ga,
+dataproc,Dataproc.GetWorkflowTemplate,rest,ga,
+dataproc,Dataproc.InstantiateInlineWorkflowTemplate,rest,ga,
+dataproc,Dataproc.InstantiateWorkflowTemplate,rest,ga,
+dataproc,Dataproc.ListClusters,rest,ga,
+dataproc,Dataproc.ListJobs,rest,ga,
+dataproc,Dataproc.ListWorkflowTemplates,rest,ga,
+dataproc,Dataproc.StartCluster,rest,ga,
+dataproc,Dataproc.StopCluster,rest,ga,
+dataproc,Dataproc.SubmitJob,rest,ga,"covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"
+dataproc,Dataproc.SubmitJobAsOperation,rest,ga,
+dataproc,Dataproc.UpdateCluster,rest,ga,
+dataproc,Dataproc.UpdateWorkflowTemplate,rest,ga,
+dataproc,DeleteCluster,grpc,ga,
+dataproc,DeleteJob,grpc,ga,
+dataproc,DeleteWorkflowTemplate,grpc,ga,
+dataproc,DiagnoseCluster,grpc,unsupported,explicit Unimplemented stub
+dataproc,GetCluster,grpc,ga,
+dataproc,GetJob,grpc,ga,
+dataproc,GetWorkflowTemplate,grpc,ga,
+dataproc,InstantiateInlineWorkflowTemplate,grpc,ga,
+dataproc,InstantiateWorkflowTemplate,grpc,ga,
+dataproc,ListClusters,grpc,ga,
+dataproc,ListJobs,grpc,ga,
+dataproc,ListWorkflowTemplates,grpc,ga,
+dataproc,StartCluster,grpc,ga,
+dataproc,StopCluster,grpc,ga,
+dataproc,SubmitJob,grpc,ga,
+dataproc,SubmitJobAsOperation,grpc,ga,
+dataproc,UpdateCluster,grpc,ga,
+dataproc,UpdateJob,grpc,ga,
+dataproc,UpdateWorkflowTemplate,grpc,ga,
+datastore,AllocateIds,grpc,ga,
+datastore,BeginTransaction,grpc,ga,
+datastore,Commit,grpc,ga,
+datastore,Datastore.AllocateIds,rest,ga,
+datastore,Datastore.BeginTransaction,rest,ga,
+datastore,Datastore.Commit,rest,ga,
+datastore,Datastore.Lookup,rest,ga,
+datastore,Datastore.ReserveIds,rest,ga,
+datastore,Datastore.Rollback,rest,ga,
+datastore,Datastore.RunAggregationQuery,rest,ga,
+datastore,Datastore.RunQuery,rest,ga,
+datastore,Lookup,grpc,ga,
+datastore,ReserveIds,grpc,ga,
+datastore,Rollback,grpc,ga,
+datastore,RunAggregationQuery,grpc,ga,
+datastore,RunQuery,grpc,ga,
+eventarc,CreateChannel,grpc,ga,
+eventarc,CreateChannelConnection,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
+eventarc,CreateEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,CreateGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,CreateMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,CreatePipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,CreateTrigger,grpc,ga,
+eventarc,DeleteChannel,grpc,ga,
+eventarc,DeleteChannelConnection,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
+eventarc,DeleteEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,DeleteGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,DeleteMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,DeletePipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,DeleteTrigger,grpc,ga,
+eventarc,Eventarc.ChannelGetIamPolicy,rest,ga,
+eventarc,Eventarc.ChannelSetIamPolicy,rest,ga,
+eventarc,Eventarc.ChannelTestIamPermissions,rest,ga,
+eventarc,Eventarc.CreateChannel,rest,ga,
+eventarc,Eventarc.CreateTrigger,rest,ga,
+eventarc,Eventarc.DeleteChannel,rest,ga,
+eventarc,Eventarc.DeleteTrigger,rest,ga,
+eventarc,Eventarc.GetChannel,rest,ga,
+eventarc,Eventarc.GetProvider,rest,ga,
+eventarc,Eventarc.GetTrigger,rest,ga,
+eventarc,Eventarc.ListChannels,rest,ga,
+eventarc,Eventarc.ListProviders,rest,ga,
+eventarc,Eventarc.ListTriggers,rest,ga,
+eventarc,Eventarc.TriggerGetIamPolicy,rest,ga,
+eventarc,Eventarc.TriggerSetIamPolicy,rest,ga,
+eventarc,Eventarc.TriggerTestIamPermissions,rest,ga,
+eventarc,Eventarc.UpdateChannel,rest,ga,
+eventarc,Eventarc.UpdateTrigger,rest,ga,
+eventarc,GetChannel,grpc,ga,
+eventarc,GetChannelConnection,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
+eventarc,GetEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,GetGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,GetGoogleChannelConfig,grpc,unsupported,Google-channel CMEK config is not modelled; explicit Unimplemented stub
+eventarc,GetMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,GetPipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,GetProvider,grpc,ga,
+eventarc,GetTrigger,grpc,ga,
+eventarc,ListChannelConnections,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
+eventarc,ListChannels,grpc,ga,
+eventarc,ListEnrollments,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,ListGoogleApiSources,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,ListMessageBusEnrollments,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,ListMessageBuses,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,ListPipelines,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,ListProviders,grpc,ga,
+eventarc,ListTriggers,grpc,ga,
+eventarc,UpdateChannel,grpc,ga,
+eventarc,UpdateEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,UpdateGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,UpdateGoogleChannelConfig,grpc,unsupported,Google-channel CMEK config is not modelled; explicit Unimplemented stub
+eventarc,UpdateMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,UpdatePipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,UpdateTrigger,grpc,ga,
+firestore,BatchGetDocuments,grpc,ga,
+firestore,BatchWrite,grpc,ga,
+firestore,BeginTransaction,grpc,ga,
+firestore,Commit,grpc,ga,
+firestore,CreateDocument,grpc,ga,
+firestore,DeleteDocument,grpc,ga,
+firestore,ExecutePipeline,grpc,ga,
+firestore,Firestore.BatchGet,rest,ga,
+firestore,Firestore.BatchWrite,rest,ga,
+firestore,Firestore.BeginTransaction,rest,ga,
+firestore,Firestore.Commit,rest,ga,
+firestore,Firestore.CreateDocument,rest,ga,
+firestore,Firestore.CreateIndex,rest,ga,
+firestore,Firestore.DeleteDocument,rest,ga,
+firestore,Firestore.DeleteIndex,rest,ga,
+firestore,Firestore.GetDocument,rest,ga,
+firestore,Firestore.GetIndex,rest,ga,
+firestore,Firestore.ListCollectionIds,rest,ga,
+firestore,Firestore.ListDocuments,rest,ga,
+firestore,Firestore.ListIndexes,rest,ga,
+firestore,Firestore.PatchDocument,rest,ga,
+firestore,Firestore.Rollback,rest,ga,
+firestore,Firestore.RunQuery,rest,ga,
+firestore,GetDocument,grpc,ga,
+firestore,ListCollectionIds,grpc,ga,
+firestore,ListDocuments,grpc,ga,
+firestore,Listen,grpc,ga,
+firestore,PartitionQuery,grpc,ga,
+firestore,Rollback,grpc,ga,
+firestore,RunAggregationQuery,grpc,ga,
+firestore,RunQuery,grpc,ga,
+firestore,UpdateDocument,grpc,ga,
+firestore,Write,grpc,ga,
+firestoreadmin,BulkDeleteDocuments,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CloneDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CreateBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CreateDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CreateIndex,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,CreateUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteBackup,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteIndex,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,DeleteUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DisableUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,EnableUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ExportDocuments,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetBackup,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetField,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetIndex,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,GetUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ImportDocuments,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListBackupSchedules,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListBackups,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListDatabases,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListFields,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListIndexes,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,ListUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ResetUserPassword,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,RestoreDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,UpdateBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,UpdateDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,UpdateField,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+functions,CallFunction,grpc,ga,
+functions,CreateFunction,grpc,ga,
+functions,DeleteFunction,grpc,ga,
+functions,Function.AbortFunctionUpgrade,rest,ga,
+functions,Function.CallFunction,rest,ga,
+functions,Function.CancelOperation,rest,ga,"shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested"
+functions,Function.CommitFunctionUpgrade,rest,ga,
+functions,Function.CommitFunctionUpgradeAsGen2,rest,ga,
+functions,Function.CreateFunction,rest,ga,
+functions,Function.DeleteFunction,rest,ga,
+functions,Function.DeleteOperation,rest,ga,"shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested"
+functions,Function.DetachFunction,rest,ga,
+functions,Function.FunctionGetIamPolicy,rest,ga,
+functions,Function.FunctionSetIamPolicy,rest,ga,
+functions,Function.FunctionTestIamPermissions,rest,ga,
+functions,Function.GenerateDownloadUrl,rest,ga,
+functions,Function.GenerateUploadUrl,rest,ga,
+functions,Function.GetFunction,rest,ga,
+functions,Function.GetLocation,rest,ga,"shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested"
+functions,Function.GetOperation,rest,ga,
+functions,Function.InvokeTrigger,rest,ga,"deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested"
+functions,Function.ListFunctions,rest,ga,
+functions,Function.ListLocations,rest,ga,
+functions,Function.ListOperations,rest,ga,
+functions,Function.ListRuntimes,rest,ga,
+functions,Function.RedirectFunctionUpgradeTraffic,rest,ga,
+functions,Function.RollbackFunctionUpgradeTraffic,rest,ga,
+functions,Function.SetupFunctionUpgradeConfig,rest,ga,
+functions,Function.UpdateFunction,rest,ga,
+functions,Function.WaitOperation,rest,ga,google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it
+functions,GenerateDownloadUrl,grpc,ga,
+functions,GenerateUploadUrl,grpc,ga,
+functions,GetFunction,grpc,ga,
+functions,GetIamPolicy,grpc,ga,
+functions,ListFunctions,grpc,ga,
+functions,ListRuntimes,grpc,ga,
+functions,SetIamPolicy,grpc,ga,
+functions,TestIamPermissions,grpc,ga,
+functions,UpdateFunction,grpc,ga,
+iam,GetIamPolicy,grpc,ga,
+iam,IAM.ServiceAccountCreate,rest,ga,
+iam,IAM.ServiceAccountDelete,rest,ga,
+iam,IAM.ServiceAccountDisable,rest,ga,
+iam,IAM.ServiceAccountEnable,rest,ga,
+iam,IAM.ServiceAccountGet,rest,ga,
+iam,IAM.ServiceAccountGetIamPolicy,rest,ga,
+iam,IAM.ServiceAccountKeyCreate,rest,ga,
+iam,IAM.ServiceAccountKeyDelete,rest,ga,
+iam,IAM.ServiceAccountKeyDisable,rest,ga,
+iam,IAM.ServiceAccountKeyEnable,rest,ga,
+iam,IAM.ServiceAccountKeyGet,rest,ga,
+iam,IAM.ServiceAccountKeyList,rest,ga,
+iam,IAM.ServiceAccountList,rest,ga,
+iam,IAM.ServiceAccountPatch,rest,ga,
+iam,IAM.ServiceAccountSetIamPolicy,rest,ga,
+iam,IAM.ServiceAccountSignBlob,rest,ga,
+iam,IAM.ServiceAccountSignJwt,rest,ga,
+iam,IAM.ServiceAccountTestIamPermissions,rest,ga,
+iam,IAM.ServiceAccountUndelete,rest,ga,
+iam,IAM.ServiceAccountUpdate,rest,ga,
+iam,SetIamPolicy,grpc,ga,
+iam,TestIamPermissions,grpc,ga,
+iamcredentials,GenerateAccessToken,grpc,ga,
+iamcredentials,GenerateIdToken,grpc,ga,
+iamcredentials,IAMCredentials.GenerateAccessToken,rest,ga,
+iamcredentials,IAMCredentials.GenerateIdToken,rest,ga,
+iamcredentials,IAMCredentials.GetAllowedLocations,rest,ga,
+iamcredentials,SignBlob,grpc,ga,
+iamcredentials,SignJwt,grpc,ga,
+iceberg,Iceberg.CommitTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.CreateNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.CreateTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.DropNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.DropTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.GetConfig,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.GetNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.ListNamespaces,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.ListTables,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.LoadTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.NamespaceExists,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.RenameTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.TableMetrics,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.UpdateNamespaceProperties,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+kms,AsymmetricDecrypt,grpc,ga,
+kms,AsymmetricSign,grpc,ga,
+kms,CreateCryptoKey,grpc,ga,
+kms,CreateCryptoKeyVersion,grpc,ga,
+kms,CreateImportJob,grpc,ga,
+kms,CreateKeyRing,grpc,ga,
+kms,Decapsulate,grpc,limited,KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate
+kms,Decrypt,grpc,ga,
+kms,DeleteCryptoKey,grpc,ga,
+kms,DeleteCryptoKeyVersion,grpc,ga,
+kms,DestroyCryptoKeyVersion,grpc,ga,
+kms,Encrypt,grpc,ga,
+kms,ExportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,"HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
+kms,GenerateRandomBytes,grpc,ga,
+kms,GetCryptoKey,grpc,ga,
+kms,GetCryptoKeyVersion,grpc,ga,
+kms,GetImportJob,grpc,ga,
+kms,GetKeyRing,grpc,ga,
+kms,GetPublicKey,grpc,ga,
+kms,GetRetiredResource,grpc,ga,
+kms,ImportCryptoKeyVersion,grpc,limited,key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping
+kms,ImportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,"HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
+kms,KMS.CryptoKeyCreate,rest,ga,
+kms,KMS.CryptoKeyDecrypt,rest,ga,
+kms,KMS.CryptoKeyEncrypt,rest,ga,
+kms,KMS.CryptoKeyGet,rest,ga,
+kms,KMS.CryptoKeyGetIamPolicy,rest,ga,
+kms,KMS.CryptoKeyList,rest,ga,
+kms,KMS.CryptoKeySetIamPolicy,rest,ga,
+kms,KMS.CryptoKeyTestIamPermissions,rest,ga,
+kms,KMS.CryptoKeyUpdatePrimaryVersion,rest,ga,
+kms,KMS.CryptoKeyVersionAsymmetricDecrypt,rest,ga,
+kms,KMS.CryptoKeyVersionAsymmetricSign,rest,ga,
+kms,KMS.CryptoKeyVersionCreate,rest,ga,
+kms,KMS.CryptoKeyVersionDestroy,rest,ga,
+kms,KMS.CryptoKeyVersionGet,rest,ga,
+kms,KMS.CryptoKeyVersionGetPublicKey,rest,ga,
+kms,KMS.CryptoKeyVersionList,rest,ga,
+kms,KMS.CryptoKeyVersionMacSign,rest,ga,
+kms,KMS.CryptoKeyVersionMacVerify,rest,ga,
+kms,KMS.CryptoKeyVersionUpdate,rest,ga,
+kms,KMS.KeyRingCreate,rest,ga,
+kms,KMS.KeyRingGet,rest,ga,
+kms,KMS.KeyRingGetIamPolicy,rest,ga,
+kms,KMS.KeyRingList,rest,ga,
+kms,KMS.KeyRingSetIamPolicy,rest,ga,
+kms,KMS.KeyRingTestIamPermissions,rest,ga,
+kms,ListCryptoKeyVersions,grpc,ga,
+kms,ListCryptoKeys,grpc,ga,
+kms,ListImportJobs,grpc,ga,
+kms,ListKeyRings,grpc,ga,
+kms,ListRetiredResources,grpc,ga,
+kms,MacSign,grpc,ga,
+kms,MacVerify,grpc,ga,
+kms,RawDecrypt,grpc,ga,
+kms,RawEncrypt,grpc,ga,
+kms,RestoreCryptoKeyVersion,grpc,ga,
+kms,UpdateCryptoKey,grpc,ga,
+kms,UpdateCryptoKeyPrimaryVersion,grpc,ga,
+kms,UpdateCryptoKeyVersion,grpc,ga,
+logging,CopyLogEntries,grpc,unsupported,cross-project log copy is not modelled; explicit Unimplemented stub
+logging,CreateBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,CreateBucketAsync,grpc,unsupported,asynchronous log-bucket creation is not modelled; explicit Unimplemented stub
+logging,CreateExclusion,grpc,ga,
+logging,CreateLink,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
+logging,CreateLogMetric,grpc,ga,
+logging,CreateSink,grpc,ga,
+logging,CreateView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,DeleteBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,DeleteExclusion,grpc,ga,
+logging,DeleteLink,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
+logging,DeleteLog,grpc,ga,
+logging,DeleteLogMetric,grpc,ga,
+logging,DeleteSink,grpc,ga,
+logging,DeleteView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,GetBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,GetCmekSettings,grpc,unsupported,Logging CMEK settings are not modelled; explicit Unimplemented stub
+logging,GetExclusion,grpc,ga,
+logging,GetLink,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
+logging,GetLogMetric,grpc,ga,
+logging,GetSettings,grpc,unsupported,Logging service settings are not modelled; explicit Unimplemented stub
+logging,GetSink,grpc,ga,
+logging,GetView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,ListBuckets,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,ListExclusions,grpc,ga,
+logging,ListLinks,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
+logging,ListLogEntries,grpc,ga,
+logging,ListLogMetrics,grpc,ga,
+logging,ListLogs,grpc,ga,
+logging,ListMonitoredResourceDescriptors,grpc,ga,
+logging,ListSinks,grpc,ga,
+logging,ListViews,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,Logging.EntryList,rest,ga,
+logging,Logging.EntryWrite,rest,ga,
+logging,Logging.ExclusionCreate,rest,ga,
+logging,Logging.ExclusionDelete,rest,ga,
+logging,Logging.ExclusionGet,rest,ga,
+logging,Logging.ExclusionList,rest,ga,
+logging,Logging.ExclusionPatch,rest,ga,
+logging,Logging.LogDelete,rest,ga,
+logging,Logging.LogList,rest,ga,
+logging,Logging.MetricCreate,rest,ga,
+logging,Logging.MetricDelete,rest,ga,
+logging,Logging.MetricGet,rest,ga,
+logging,Logging.MetricList,rest,ga,
+logging,Logging.MetricUpdate,rest,ga,
+logging,Logging.MonitoredResourceDescriptorList,rest,ga,
+logging,Logging.SinkCreate,rest,ga,
+logging,Logging.SinkDelete,rest,ga,
+logging,Logging.SinkGet,rest,ga,
+logging,Logging.SinkList,rest,ga,
+logging,Logging.SinkPatch,rest,ga,
+logging,Logging.SinkUpdate,rest,ga,
+logging,TailLogEntries,grpc,limited,bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists
+logging,UndeleteBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,UpdateBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,UpdateBucketAsync,grpc,unsupported,asynchronous log-bucket updates are not modelled; explicit Unimplemented stub
+logging,UpdateCmekSettings,grpc,unsupported,Logging CMEK settings are not modelled; explicit Unimplemented stub
+logging,UpdateExclusion,grpc,ga,
+logging,UpdateLogMetric,grpc,ga,
+logging,UpdateSettings,grpc,unsupported,Logging service settings are not modelled; explicit Unimplemented stub
+logging,UpdateSink,grpc,ga,
+logging,UpdateView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,WriteLogEntries,grpc,ga,
+managedkafka,AddAclEntry,grpc,ga,
+managedkafka,CreateAcl,grpc,ga,
+managedkafka,CreateCluster,grpc,ga,
+managedkafka,CreateTopic,grpc,ga,
+managedkafka,DeleteAcl,grpc,ga,
+managedkafka,DeleteCluster,grpc,ga,
+managedkafka,DeleteConsumerGroup,grpc,ga,
+managedkafka,DeleteTopic,grpc,ga,
+managedkafka,GetAcl,grpc,ga,
+managedkafka,GetCluster,grpc,ga,
+managedkafka,GetConsumerGroup,grpc,ga,
+managedkafka,GetTopic,grpc,ga,
+managedkafka,ListAcls,grpc,ga,
+managedkafka,ListClusters,grpc,ga,
+managedkafka,ListConsumerGroups,grpc,ga,
+managedkafka,ListTopics,grpc,ga,
+managedkafka,ManagedKafka.AddAclEntry,rest,ga,
+managedkafka,ManagedKafka.CreateAcl,rest,ga,
+managedkafka,ManagedKafka.CreateCluster,rest,ga,
+managedkafka,ManagedKafka.CreateTopic,rest,ga,
+managedkafka,ManagedKafka.DeleteAcl,rest,ga,
+managedkafka,ManagedKafka.DeleteCluster,rest,ga,
+managedkafka,ManagedKafka.DeleteConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.DeleteTopic,rest,ga,
+managedkafka,ManagedKafka.GetAcl,rest,ga,
+managedkafka,ManagedKafka.GetCluster,rest,ga,
+managedkafka,ManagedKafka.GetConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.GetOperation,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
+managedkafka,ManagedKafka.GetTopic,rest,ga,
+managedkafka,ManagedKafka.ListAcls,rest,ga,
+managedkafka,ManagedKafka.ListClusters,rest,ga,
+managedkafka,ManagedKafka.ListConsumerGroups,rest,ga,
+managedkafka,ManagedKafka.ListOperations,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
+managedkafka,ManagedKafka.ListTopics,rest,ga,
+managedkafka,ManagedKafka.RemoveAclEntry,rest,ga,
+managedkafka,ManagedKafka.UpdateAcl,rest,ga,
+managedkafka,ManagedKafka.UpdateCluster,rest,ga,
+managedkafka,ManagedKafka.UpdateConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.UpdateTopic,rest,ga,
+managedkafka,RemoveAclEntry,grpc,ga,
+managedkafka,UpdateAcl,grpc,ga,
+managedkafka,UpdateCluster,grpc,ga,
+managedkafka,UpdateConsumerGroup,grpc,ga,
+managedkafka,UpdateTopic,grpc,ga,
+memorystore,Memorystore.CreateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.DeleteInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.GetInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.GetLocation,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.ListInstances,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.ListLocations,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.UpdateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.UpgradeInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+metastore,AlterMetadataResourceLocation,grpc,unsupported,the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub
+metastore,CreateBackup,grpc,ga,
+metastore,CreateMetadataImport,grpc,ga,
+metastore,CreateService,grpc,ga,
+metastore,DeleteBackup,grpc,ga,
+metastore,DeleteService,grpc,ga,
+metastore,ExportMetadata,grpc,unsupported,Hive Thrift metadata export is not modelled; explicit Unimplemented stub
+metastore,GetBackup,grpc,ga,
+metastore,GetMetadataImport,grpc,ga,
+metastore,GetService,grpc,ga,
+metastore,ListBackups,grpc,ga,
+metastore,ListMetadataImports,grpc,ga,
+metastore,ListServices,grpc,ga,
+metastore,Metastore.AlterMetadataResourceLocation,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.CreateBackup,rest,ga,
+metastore,Metastore.CreateMetadataImport,rest,ga,
+metastore,Metastore.CreateService,rest,ga,
+metastore,Metastore.DeleteBackup,rest,ga,
+metastore,Metastore.DeleteService,rest,ga,
+metastore,Metastore.ExportMetadata,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.GetBackup,rest,ga,
+metastore,Metastore.GetMetadataImport,rest,ga,
+metastore,Metastore.GetOperation,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
+metastore,Metastore.GetService,rest,ga,
+metastore,Metastore.ListBackups,rest,ga,
+metastore,Metastore.ListMetadataImports,rest,ga,
+metastore,Metastore.ListOperations,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
+metastore,Metastore.ListServices,rest,ga,
+metastore,Metastore.MoveTableToDatabase,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.QueryMetadata,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.RestoreService,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.UpdateMetadataImport,rest,ga,
+metastore,Metastore.UpdateService,rest,ga,
+metastore,MoveTableToDatabase,grpc,unsupported,the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub
+metastore,QueryMetadata,grpc,unsupported,the gRPC metadata query plane is not modelled; explicit Unimplemented stub
+metastore,RestoreService,grpc,unsupported,Hive Thrift metadata restore is not modelled; explicit Unimplemented stub
+metastore,UpdateMetadataImport,grpc,ga,
+metastore,UpdateService,grpc,ga,
+monitoring,CreateAlertPolicy,grpc,ga,
+monitoring,CreateMetricDescriptor,grpc,ga,
+monitoring,CreateNotificationChannel,grpc,ga,
+monitoring,CreateService,grpc,ga,
+monitoring,CreateServiceLevelObjective,grpc,ga,
+monitoring,CreateServiceTimeSeries,grpc,ga,
+monitoring,CreateTimeSeries,grpc,ga,
+monitoring,DeleteAlertPolicy,grpc,ga,
+monitoring,DeleteMetricDescriptor,grpc,ga,
+monitoring,DeleteNotificationChannel,grpc,ga,
+monitoring,DeleteService,grpc,ga,
+monitoring,DeleteServiceLevelObjective,grpc,ga,
+monitoring,GetAlertPolicy,grpc,ga,
+monitoring,GetMetricDescriptor,grpc,ga,
+monitoring,GetMonitoredResourceDescriptor,grpc,ga,
+monitoring,GetNotificationChannel,grpc,ga,
+monitoring,GetNotificationChannelDescriptor,grpc,ga,
+monitoring,GetNotificationChannelVerificationCode,grpc,ga,
+monitoring,GetService,grpc,ga,
+monitoring,GetServiceLevelObjective,grpc,ga,
+monitoring,ListAlertPolicies,grpc,ga,
+monitoring,ListMetricDescriptors,grpc,ga,
+monitoring,ListMonitoredResourceDescriptors,grpc,ga,
+monitoring,ListNotificationChannelDescriptors,grpc,ga,
+monitoring,ListNotificationChannels,grpc,ga,
+monitoring,ListServiceLevelObjectives,grpc,ga,
+monitoring,ListServices,grpc,ga,
+monitoring,ListTimeSeries,grpc,ga,
+monitoring,Monitoring.CreateAlertPolicy,rest,ga,
+monitoring,Monitoring.CreateMetricDescriptor,rest,ga,
+monitoring,Monitoring.CreateNotificationChannel,rest,ga,
+monitoring,Monitoring.CreateService,rest,ga,
+monitoring,Monitoring.CreateServiceLevelObjective,rest,ga,
+monitoring,Monitoring.CreateServiceTimeSeries,rest,ga,
+monitoring,Monitoring.CreateTimeSeries,rest,ga,
+monitoring,Monitoring.DeleteAlertPolicy,rest,ga,
+monitoring,Monitoring.DeleteMetricDescriptor,rest,ga,
+monitoring,Monitoring.DeleteNotificationChannel,rest,ga,
+monitoring,Monitoring.DeleteService,rest,ga,
+monitoring,Monitoring.DeleteServiceLevelObjective,rest,ga,
+monitoring,Monitoring.GetAlertPolicy,rest,ga,
+monitoring,Monitoring.GetMetricDescriptor,rest,ga,
+monitoring,Monitoring.GetMonitoredResourceDescriptor,rest,ga,
+monitoring,Monitoring.GetNotificationChannel,rest,ga,
+monitoring,Monitoring.GetNotificationChannelDescriptor,rest,ga,
+monitoring,Monitoring.GetNotificationChannelVerificationCode,rest,ga,
+monitoring,Monitoring.GetService,rest,ga,
+monitoring,Monitoring.GetServiceLevelObjective,rest,ga,
+monitoring,Monitoring.ListAlertPolicies,rest,ga,
+monitoring,Monitoring.ListMetricDescriptors,rest,ga,
+monitoring,Monitoring.ListMonitoredResourceDescriptors,rest,ga,
+monitoring,Monitoring.ListNotificationChannelDescriptors,rest,ga,
+monitoring,Monitoring.ListNotificationChannels,rest,ga,
+monitoring,Monitoring.ListServiceLevelObjectives,rest,ga,
+monitoring,Monitoring.ListServices,rest,ga,
+monitoring,Monitoring.ListTimeSeries,rest,ga,
+monitoring,Monitoring.SendNotificationChannelVerificationCode,rest,ga,
+monitoring,Monitoring.UpdateAlertPolicy,rest,ga,
+monitoring,Monitoring.UpdateNotificationChannel,rest,ga,
+monitoring,Monitoring.UpdateService,rest,ga,
+monitoring,Monitoring.UpdateServiceLevelObjective,rest,ga,
+monitoring,Monitoring.VerifyNotificationChannel,rest,ga,
+monitoring,SendNotificationChannelVerificationCode,grpc,ga,
+monitoring,UpdateAlertPolicy,grpc,ga,
+monitoring,UpdateNotificationChannel,grpc,ga,
+monitoring,UpdateService,grpc,ga,
+monitoring,UpdateServiceLevelObjective,grpc,ga,
+monitoring,VerifyNotificationChannel,grpc,ga,
+operations,CancelOperation,grpc,ga,
+operations,DeleteOperation,grpc,ga,
+operations,GetOperation,grpc,ga,
+operations,ListOperations,grpc,ga,
+operations,WaitOperation,grpc,ga,
+pubsub,Acknowledge,grpc,ga,
+pubsub,CreateSnapshot,grpc,ga,
+pubsub,CreateSubscription,grpc,ga,
+pubsub,CreateTopic,grpc,ga,
+pubsub,DeleteSnapshot,grpc,ga,
+pubsub,DeleteSubscription,grpc,ga,
+pubsub,DeleteTopic,grpc,ga,
+pubsub,DetachSubscription,grpc,ga,
+pubsub,GetSnapshot,grpc,ga,
+pubsub,GetSubscription,grpc,ga,
+pubsub,GetTopic,grpc,ga,
+pubsub,ListSnapshots,grpc,ga,
+pubsub,ListSubscriptions,grpc,ga,
+pubsub,ListTopicSnapshots,grpc,ga,
+pubsub,ListTopicSubscriptions,grpc,ga,
+pubsub,ListTopics,grpc,ga,
+pubsub,ModifyAckDeadline,grpc,ga,
+pubsub,ModifyPushConfig,grpc,ga,
+pubsub,PubSub.SubscriptionAcknowledge,rest,ga,
+pubsub,PubSub.SubscriptionCreate,rest,ga,
+pubsub,PubSub.SubscriptionDelete,rest,ga,
+pubsub,PubSub.SubscriptionDetach,rest,ga,
+pubsub,PubSub.SubscriptionGet,rest,ga,
+pubsub,PubSub.SubscriptionGetIamPolicy,rest,ga,
+pubsub,PubSub.SubscriptionList,rest,ga,
+pubsub,PubSub.SubscriptionModifyAckDeadline,rest,ga,
+pubsub,PubSub.SubscriptionPull,rest,ga,
+pubsub,PubSub.SubscriptionSetIamPolicy,rest,ga,
+pubsub,PubSub.SubscriptionTestIamPermissions,rest,ga,
+pubsub,PubSub.SubscriptionUpdate,rest,ga,
+pubsub,PubSub.TopicCreate,rest,ga,
+pubsub,PubSub.TopicDelete,rest,ga,
+pubsub,PubSub.TopicGet,rest,ga,
+pubsub,PubSub.TopicGetIamPolicy,rest,ga,
+pubsub,PubSub.TopicList,rest,ga,
+pubsub,PubSub.TopicPublish,rest,ga,
+pubsub,PubSub.TopicSetIamPolicy,rest,ga,
+pubsub,PubSub.TopicTestIamPermissions,rest,ga,
+pubsub,Publish,grpc,ga,
+pubsub,Pull,grpc,ga,
+pubsub,Seek,grpc,ga,
+pubsub,StreamingPull,grpc,ga,
+pubsub,UpdateSnapshot,grpc,ga,
+pubsub,UpdateSubscription,grpc,ga,
+pubsub,UpdateTopic,grpc,ga,
+resourcemanager,CreateProject,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
+resourcemanager,DeleteProject,grpc,unsupported,"projects are synthesized, never deleted; explicit Unimplemented stub"
+resourcemanager,GetIamPolicy,grpc,ga,
+resourcemanager,GetProject,grpc,ga,
+resourcemanager,ListProjects,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
+resourcemanager,MoveProject,grpc,unsupported,project parent/ancestry is not modelled; explicit Unimplemented stub
+resourcemanager,ResourceManager.ProjectGet,rest,ga,
+resourcemanager,ResourceManager.ProjectGetIamPolicy,rest,ga,
+resourcemanager,ResourceManager.ProjectSetIamPolicy,rest,ga,
+resourcemanager,ResourceManager.ProjectTestIamPermissions,rest,ga,
+resourcemanager,SearchProjects,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
+resourcemanager,SetIamPolicy,grpc,ga,
+resourcemanager,TestIamPermissions,grpc,ga,
+resourcemanager,UndeleteProject,grpc,unsupported,"projects are synthesized, never deleted; explicit Unimplemented stub"
+resourcemanager,UpdateProject,grpc,unsupported,project metadata is not modelled; explicit Unimplemented stub
+run,Run.CancelOperation,rest,limited,no matching Discovery method (unverified against the official schema)
+run,Run.CreateService,rest,ga,
+run,Run.DeleteOperation,rest,ga,
+run,Run.DeleteService,rest,ga,
+run,Run.GetIamPolicy,rest,ga,
+run,Run.GetOperation,rest,ga,
+run,Run.GetRevision,rest,ga,
+run,Run.GetService,rest,ga,
+run,Run.Invoke,rest,limited,no matching Discovery method (unverified against the official schema)
+run,Run.ListOperations,rest,ga,
+run,Run.ListRevisions,rest,ga,
+run,Run.ListServices,rest,ga,
+run,Run.SetIamPolicy,rest,ga,
+run,Run.TestIamPermissions,rest,ga,
+run,Run.UpdateService,rest,ga,
+run,Run.WaitOperation,rest,ga,
+scheduler,CreateJob,grpc,ga,
+scheduler,DeleteJob,grpc,ga,
+scheduler,GetJob,grpc,ga,
+scheduler,ListJobs,grpc,ga,
+scheduler,PauseJob,grpc,ga,
+scheduler,ResumeJob,grpc,ga,
+scheduler,RunJob,grpc,ga,
+scheduler,Scheduler.JobsCreate,rest,ga,
+scheduler,Scheduler.JobsDelete,rest,ga,
+scheduler,Scheduler.JobsGet,rest,ga,
+scheduler,Scheduler.JobsList,rest,ga,
+scheduler,Scheduler.JobsPatch,rest,ga,
+scheduler,Scheduler.JobsPause,rest,ga,
+scheduler,Scheduler.JobsResume,rest,ga,
+scheduler,Scheduler.JobsRun,rest,ga,
+scheduler,UpdateJob,grpc,ga,
+secretmanager,AccessSecretVersion,grpc,ga,
+secretmanager,AddSecretVersion,grpc,ga,
+secretmanager,CreateSecret,grpc,ga,
+secretmanager,DeleteSecret,grpc,ga,
+secretmanager,DestroySecretVersion,grpc,ga,
+secretmanager,DisableSecretVersion,grpc,ga,
+secretmanager,EnableManagedRotation,grpc,limited,managed rotation needs a rotation Cloud Function and config the emulator does not model
+secretmanager,EnableSecretVersion,grpc,ga,
+secretmanager,GetIamPolicy,grpc,ga,
+secretmanager,GetSecret,grpc,ga,
+secretmanager,GetSecretVersion,grpc,ga,
+secretmanager,ListSecretVersions,grpc,ga,
+secretmanager,ListSecrets,grpc,ga,
+secretmanager,RotateSecret,grpc,limited,the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane
+secretmanager,Secret.Access,rest,ga,
+secretmanager,Secret.AddVersion,rest,ga,
+secretmanager,Secret.Create,rest,ga,
+secretmanager,Secret.Delete,rest,ga,
+secretmanager,Secret.DestroyVersion,rest,ga,
+secretmanager,Secret.DisableVersion,rest,ga,
+secretmanager,Secret.EnableVersion,rest,ga,
+secretmanager,Secret.Get,rest,ga,
+secretmanager,Secret.GetIamPolicy,rest,ga,
+secretmanager,Secret.GetVersion,rest,ga,
+secretmanager,Secret.List,rest,ga,
+secretmanager,Secret.ListVersions,rest,ga,
+secretmanager,Secret.SetIamPolicy,rest,ga,
+secretmanager,Secret.TestIamPermissions,rest,ga,
+secretmanager,Secret.Update,rest,ga,
+secretmanager,SetIamPolicy,grpc,ga,
+secretmanager,TestIamPermissions,grpc,ga,
+secretmanager,UpdateSecret,grpc,ga,
+serviceusage,BatchEnableServices,grpc,ga,
+serviceusage,BatchGetServices,grpc,unsupported,not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub
+serviceusage,DisableService,grpc,ga,
+serviceusage,EnableService,grpc,ga,
+serviceusage,GetService,grpc,ga,
+serviceusage,ListServices,grpc,ga,
+serviceusage,ServiceUsage.ServicesBatchEnable,rest,ga,
+serviceusage,ServiceUsage.ServicesDisable,rest,ga,
+serviceusage,ServiceUsage.ServicesEnable,rest,ga,
+serviceusage,ServiceUsage.ServicesGet,rest,ga,
+serviceusage,ServiceUsage.ServicesList,rest,ga,
+storage,BidiReadObject,grpc,ga,
+storage,BidiWriteObject,grpc,ga,
+storage,CancelResumableWrite,grpc,ga,
+storage,ComposeObject,grpc,ga,
+storage,CreateBucket,grpc,ga,
+storage,DeleteBucket,grpc,ga,
+storage,DeleteObject,grpc,ga,
+storage,GetBucket,grpc,ga,
+storage,GetIamPolicy,grpc,ga,
+storage,GetObject,grpc,ga,
+storage,ListBuckets,grpc,ga,
+storage,ListObjects,grpc,ga,
+storage,LockBucketRetentionPolicy,grpc,ga,
+storage,MoveObject,grpc,ga,
+storage,QueryWriteStatus,grpc,ga,
+storage,ReadObject,grpc,ga,
+storage,RestoreObject,grpc,ga,
+storage,RewriteObject,grpc,ga,
+storage,SetIamPolicy,grpc,ga,
+storage,StartResumableWrite,grpc,ga,
+storage,Storage.BucketACLInsert,rest,ga,
+storage,Storage.BucketACLList,rest,ga,
+storage,Storage.BucketsDelete,rest,ga,
+storage,Storage.BucketsGet,rest,ga,
+storage,Storage.BucketsGetIamPolicy,rest,ga,
+storage,Storage.BucketsGetStorageLayout,rest,ga,
+storage,Storage.BucketsInsert,rest,ga,
+storage,Storage.BucketsList,rest,ga,
+storage,Storage.BucketsLockRetentionPolicy,rest,ga,
+storage,Storage.BucketsSetIamPolicy,rest,ga,
+storage,Storage.BucketsUpdate,rest,ga,
+storage,Storage.NotificationsDelete,rest,ga,
+storage,Storage.NotificationsGet,rest,ga,
+storage,Storage.NotificationsInsert,rest,ga,
+storage,Storage.NotificationsList,rest,ga,
+storage,Storage.ObjectACLInsert,rest,ga,
+storage,Storage.ObjectACLList,rest,ga,
+storage,Storage.ObjectsCompose,rest,ga,
+storage,Storage.ObjectsCopy,rest,ga,
+storage,Storage.ObjectsDelete,rest,ga,
+storage,Storage.ObjectsGet,rest,ga,
+storage,Storage.ObjectsGetIamPolicy,rest,ga,
+storage,Storage.ObjectsGetMedia,rest,ga,
+storage,Storage.ObjectsInsert,rest,ga,
+storage,Storage.ObjectsInsertResumable,rest,ga,
+storage,Storage.ObjectsInsertStartResumable,rest,ga,
+storage,Storage.ObjectsList,rest,ga,
+storage,Storage.ObjectsMove,rest,ga,
+storage,Storage.ObjectsPatch,rest,ga,
+storage,Storage.ObjectsRestore,rest,ga,
+storage,Storage.ObjectsRewrite,rest,ga,
+storage,Storage.ObjectsSetIamPolicy,rest,ga,
+storage,Storage.ObjectsUpdate,rest,ga,
+storage,TestIamPermissions,grpc,ga,
+storage,UpdateBucket,grpc,ga,
+storage,UpdateObject,grpc,ga,
+storage,WriteObject,grpc,ga,
+tasks,CreateQueue,grpc,ga,
+tasks,CreateTask,grpc,ga,
+tasks,DeleteQueue,grpc,ga,
+tasks,DeleteTask,grpc,ga,
+tasks,GetIamPolicy,grpc,ga,
+tasks,GetQueue,grpc,ga,
+tasks,GetTask,grpc,ga,
+tasks,ListQueues,grpc,ga,
+tasks,ListTasks,grpc,ga,
+tasks,PauseQueue,grpc,ga,
+tasks,PurgeQueue,grpc,ga,
+tasks,ResumeQueue,grpc,ga,
+tasks,RunTask,grpc,ga,
+tasks,SetIamPolicy,grpc,ga,
+tasks,Tasks.QueuesCreate,rest,ga,
+tasks,Tasks.QueuesDelete,rest,ga,
+tasks,Tasks.QueuesGet,rest,ga,
+tasks,Tasks.QueuesGetIamPolicy,rest,ga,
+tasks,Tasks.QueuesList,rest,ga,
+tasks,Tasks.QueuesPatch,rest,ga,
+tasks,Tasks.QueuesPause,rest,ga,
+tasks,Tasks.QueuesPurge,rest,ga,
+tasks,Tasks.QueuesResume,rest,ga,
+tasks,Tasks.QueuesSetIamPolicy,rest,ga,
+tasks,Tasks.QueuesTestIamPermissions,rest,ga,
+tasks,Tasks.TasksBatchCreate,rest,ga,
+tasks,Tasks.TasksBatchDelete,rest,ga,
+tasks,Tasks.TasksCreate,rest,ga,
+tasks,Tasks.TasksDelete,rest,ga,
+tasks,Tasks.TasksGet,rest,ga,
+tasks,Tasks.TasksList,rest,ga,
+tasks,Tasks.TasksRun,rest,ga,
+tasks,TestIamPermissions,grpc,ga,
+tasks,UpdateQueue,grpc,ga,
+workflowexecutions,CancelExecution,grpc,ga,
+workflowexecutions,CreateExecution,grpc,ga,
+workflowexecutions,GetExecution,grpc,ga,
+workflowexecutions,ListExecutions,grpc,ga,
+workflowexecutions,WorkflowExecution.CancelExecution,rest,ga,
+workflowexecutions,WorkflowExecution.CreateExecution,rest,ga,
+workflowexecutions,WorkflowExecution.GetExecution,rest,ga,
+workflowexecutions,WorkflowExecution.ListExecutions,rest,ga,
+workflows,CreateWorkflow,grpc,ga,
+workflows,DeleteWorkflow,grpc,ga,
+workflows,GetWorkflow,grpc,ga,
+workflows,ListWorkflowRevisions,grpc,unsupported,workflow revision history is not modelled; explicit Unimplemented stub
+workflows,ListWorkflows,grpc,ga,
+workflows,UpdateWorkflow,grpc,ga,
+workflows,Workflow.CreateWorkflow,rest,ga,
+workflows,Workflow.DeleteWorkflow,rest,ga,
+workflows,Workflow.GetOperation,rest,ga,
+workflows,Workflow.GetWorkflow,rest,ga,
+workflows,Workflow.ListWorkflows,rest,ga,
+workflows,Workflow.UpdateWorkflow,rest,ga,

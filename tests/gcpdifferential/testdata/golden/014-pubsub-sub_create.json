@@ -1,0 +1,25 @@
+{
+  "index": 14,
+  "service": "pubsub",
+  "op": "sub_create",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/subscriptions/<subscription>",
+  "status": 200,
+  "request": {
+    "ackDeadlineSeconds": 10,
+    "name": "projects/<project>/subscriptions/<subscription>",
+    "topic": "projects/<project>/topics/<topic>"
+  },
+  "response": {
+    "ackDeadlineSeconds": 10,
+    "expirationPolicy": {
+      "ttl": "2678400s"
+    },
+    "messageRetentionDuration": "604800s",
+    "name": "projects/<project>/subscriptions/<subscription>",
+    "pushConfig": {},
+    "state": "ACTIVE",
+    "topic": "projects/<project>/topics/<topic>"
+  }
+}
+

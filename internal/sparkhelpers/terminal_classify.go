@@ -12,44 +12,66 @@ import (
 	"jaiscloud/internal/k8shelpers"
 )
 
+// TerminalOptions tunes Spark terminal-state classification.
+type TerminalOptions struct {
+	// StrictExitCode disables the lenient "non-zero exit + clean shutdown hook
+	// = success" rule (rule 3). It is set for drivers, like spark-sql, that
+	// reliably exit non-zero on failure but print the failure without an
+	// "ERROR" log line; for those the exit code is authoritative.
+	StrictExitCode bool
+}
+
 // WaitTerminal wraps k8shelpers.WaitTerminal with Spark-specific classification.
 //
 // Classification rules (in priority order):
 //  1. Pod Succeeded (exit 0)                                              → SparkSucceeded=true
 //  2. Pod exit 143/129/130 AND logs contain "SparkContext stopped successfully" → SparkSucceeded=true
 //  3. Pod exit non-zero AND logs contain "Shutdown hook called" AND no ERROR in last 200 lines → SparkSucceeded=true
+//     (skipped when TerminalOptions.StrictExitCode is set)
 //  4. Otherwise SparkSucceeded=false, SparkReason from last ERROR line or pod Reason
 func WaitTerminal(ctx context.Context, k8s kubernetes.Interface, handle k8shelpers.JobHandle) (Final, error) {
+	return WaitTerminalWith(ctx, k8s, handle, TerminalOptions{})
+}
+
+// WaitTerminalWith is WaitTerminal with classification options.
+func WaitTerminalWith(ctx context.Context, k8s kubernetes.Interface, handle k8shelpers.JobHandle, opts TerminalOptions) (Final, error) {
 	base, err := k8shelpers.WaitTerminal(ctx, k8s, handle)
 	if err != nil {
 		return Final{}, err
 	}
+	return classify(base, collectLogs(ctx, k8s, handle), opts), nil
+}
 
+// classify applies the Spark classification rules to a pod-level result and the
+// driver log lines. Split out from WaitTerminalWith so the rules are unit
+// testable without a fake log source.
+func classify(base k8shelpers.Final, logLines []string, opts TerminalOptions) Final {
 	f := Final{Final: base}
 
 	// Rule 1: exit 0.
 	if base.Succeeded && base.ExitCode == 0 {
 		f.SparkSucceeded = true
 		f.SparkReason = "exit 0"
-		return f, nil
+		return f
 	}
-
-	// Collect logs for further classification (best-effort, ignore errors).
-	logLines := collectLogs(ctx, k8s, handle)
 
 	// Rule 2: signal exit codes + SparkContext stopped marker.
 	if (base.ExitCode == 143 || base.ExitCode == 129 || base.ExitCode == 130) &&
 		containsLine(logLines, "SparkContext stopped successfully") {
 		f.SparkSucceeded = true
 		f.SparkReason = "SparkContext stopped successfully"
-		return f, nil
+		return f
 	}
 
-	// Rule 3: Shutdown hook + no ERROR in last 200 lines.
-	if base.ExitCode != 0 && containsLine(logLines, "Shutdown hook called") && !hasErrorInTail(logLines, 200) {
+	// Rule 3: Shutdown hook + no ERROR in last 200 lines. Skipped when the
+	// caller declares the exit code authoritative (StrictExitCode): the Spark
+	// SQL CLI prints a failed query's message without any "ERROR" line, so this
+	// rule would otherwise report a failed query as success.
+	if !opts.StrictExitCode && base.ExitCode != 0 &&
+		containsLine(logLines, "Shutdown hook called") && !hasErrorInTail(logLines, 200) {
 		f.SparkSucceeded = true
 		f.SparkReason = "Shutdown hook called (no errors in tail)"
-		return f, nil
+		return f
 	}
 
 	// Rule 4: failure.
@@ -58,7 +80,7 @@ func WaitTerminal(ctx context.Context, k8s kubernetes.Interface, handle k8shelpe
 	if f.SparkReason == "" {
 		f.SparkReason = base.Reason
 	}
-	return f, nil
+	return f
 }
 
 // collectLogs fetches logs from the main container of the job's pod.

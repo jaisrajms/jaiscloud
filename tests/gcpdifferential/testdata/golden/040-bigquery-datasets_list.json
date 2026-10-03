@@ -1,0 +1,25 @@
+{
+  "index": 40,
+  "service": "bigquery",
+  "op": "datasets_list",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/datasets",
+  "status": 200,
+  "response": {
+    "datasets": [
+      {
+        "datasetReference": {
+          "datasetId": "<dataset>",
+          "projectId": "<project>"
+        },
+        "id": "<project>:<dataset>",
+        "kind": "bigquery#dataset",
+        "location": "US",
+        "type": "DEFAULT"
+      }
+    ],
+    "etag": "<etag>",
+    "kind": "bigquery#datasetList"
+  }
+}
+

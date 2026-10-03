@@ -1,0 +1,10 @@
+{
+  "index": 69,
+  "service": "iam",
+  "op": "sa_delete",
+  "method": "DELETE",
+  "path": "/v1/projects/<project>/serviceAccounts/<serviceAccount>",
+  "status": 200,
+  "response": {}
+}
+

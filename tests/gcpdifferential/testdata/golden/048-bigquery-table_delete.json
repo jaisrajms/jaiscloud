@@ -1,0 +1,9 @@
+{
+  "index": 48,
+  "service": "bigquery",
+  "op": "table_delete",
+  "method": "DELETE",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables/<table>",
+  "status": 204
+}
+

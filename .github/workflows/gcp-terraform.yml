@@ -1,0 +1,90 @@
+name: GCP Terraform Compatibility
+
+# Opt-in: run manually from the Actions tab, or `gh workflow run gcp-terraform.yml`.
+# Not wired into pull_request — it downloads the hashicorp/google provider on
+# first init and drives a full apply/destroy cycle.
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    name: Terraform (hashicorp/google) vs jaiscloud-gcp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.3'
+          terraform_wrapper: false
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run GCP Terraform compatibility suite
+        run: make test-gcp-terraform
+
+      - name: Upload emulator log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jaiscloud-gcp-terraform-log
+          path: /tmp/jaiscloud-gcp-terraform.log
+          if-no-files-found: ignore
+
+  opentofu:
+    name: OpenTofu vs jaiscloud-gcp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: '1.12.6'
+          tofu_wrapper: false
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run GCP OpenTofu compatibility suite
+        run: make test-gcp-opentofu
+
+      - name: Upload emulator log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jaiscloud-gcp-opentofu-log
+          path: /tmp/jaiscloud-gcp-opentofu.log
+          if-no-files-found: ignore

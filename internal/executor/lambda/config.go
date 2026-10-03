@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // LambdaConfig holds executor-wide configuration shared by all functions.
@@ -34,7 +35,10 @@ type LambdaConfig struct {
 	InstanceID string
 
 	// CodeURL is the base URL of the JaisCloud admin endpoint reachable from K8s
-	// init containers (e.g. http://jaiscloud:4566). Used to fetch Lambda zip bytes.
+	// init containers, including the /_jaiscloud prefix (e.g.
+	// http://jaiscloud:8080/_jaiscloud). The executor appends
+	// /lambda/code/{account}/{key}/$LATEST to it, which matches the admin route
+	// registered under /_jaiscloud. Empty disables the code-fetch init container.
 	CodeURL string
 	// InitImage is the container image used in the code-fetch init container.
 	// Defaults to "alpine:latest" when empty.
@@ -75,6 +79,9 @@ func DefaultLambdaConfig() LambdaConfig {
 	}
 	if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
 		cfg.ServiceAccount = v
+	}
+	if v := os.Getenv("JAISCLOUD_LAMBDA_CODE_URL"); v != "" {
+		cfg.CodeURL = strings.TrimRight(v, "/")
 	}
 	return cfg
 }

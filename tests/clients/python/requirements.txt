@@ -1,0 +1,8 @@
+# Python google-cloud-* client conformance suite.
+# Versions pinned to the set verified against the emulator (Python 3.12).
+google-cloud-storage==3.14.1
+google-cloud-pubsub==2.41.0
+google-cloud-secret-manager==2.30.0
+google-cloud-kms==3.17.0
+google-cloud-firestore==2.31.0
+pytest==9.1.1

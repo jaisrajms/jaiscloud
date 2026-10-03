@@ -1,0 +1,12 @@
+{
+  "index": 36,
+  "service": "kms",
+  "op": "keyring_iam_get",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/global/keyRings/<keyRing>:getIamPolicy",
+  "status": 200,
+  "response": {
+    "etag": "<etag>"
+  }
+}
+

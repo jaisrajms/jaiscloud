@@ -1,0 +1,14 @@
+{
+  "index": 75,
+  "service": "compute",
+  "op": "compute_instances_list",
+  "method": "GET",
+  "path": "/compute/v1/projects/<project>/zones/us-central1-a/instances",
+  "status": 200,
+  "response": {
+    "id": "projects/<project>/zones/us-central1-a/instances",
+    "kind": "compute#instanceList",
+    "selfLink": "<selfLink>"
+  }
+}
+

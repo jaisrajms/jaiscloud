@@ -1,0 +1,26 @@
+{
+  "index": 72,
+  "service": "firestore",
+  "op": "fs_docs_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/databases/(default)/documents/<fsCollection>",
+  "status": 200,
+  "response": {
+    "documents": [
+      {
+        "createTime": "<time>",
+        "fields": {
+          "count": {
+            "integerValue": "1"
+          },
+          "greeting": {
+            "stringValue": "hello"
+          }
+        },
+        "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+        "updateTime": "<time>"
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,18 @@
+{
+  "index": 34,
+  "service": "kms",
+  "op": "cryptokey_encrypt",
+  "method": "POST",
+  "path": "/v1/projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>:encrypt",
+  "status": 200,
+  "request": {
+    "plaintext": "aGVsbG8="
+  },
+  "response": {
+    "ciphertext": "<ciphertext>",
+    "ciphertextCrc32c": "<crc32c>",
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+    "protectionLevel": "SOFTWARE"
+  }
+}
+

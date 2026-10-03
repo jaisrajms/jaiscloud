@@ -21,10 +21,10 @@ import (
 	"syscall"
 	"time"
 
-	"jaiscloud/internal/clock"
-		"jaiscloud/internal/adapter"
+	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/certstore"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway/middleware"
 	"jaiscloud/internal/model"
@@ -46,8 +46,16 @@ type Server struct {
 	// corsLookup returns the stored CORS rules for a given S3 bucket name.
 	// If nil, CORS preflight handling is disabled.
 	corsLookup func(bucket string) []map[string]any
+	// gcsCorsLookup returns the stored CORS rules for a given GCS bucket name.
+	// If nil, GCS CORS preflight handling is disabled. Only the GCP binary
+	// wires this, so S3/AWS behavior is unaffected.
+	gcsCorsLookup func(bucket string) []map[string]any
 	// barrier gates cloud requests during import/reset (503 while write-lock held).
 	barrier middleware.BarrierMiddleware
+	// cloudRoutesDisabled suppresses the cloud catch-all route, leaving only the
+	// admin/control plane on this listener. The GCP binary sets it when the REST
+	// transport is disabled (gRPC-only deployment).
+	cloudRoutesDisabled bool
 }
 
 // WithBarrier wires the persistence barrier into the gateway.
@@ -67,12 +75,34 @@ func WithExtraRoutes(attach func(chi.Router)) func(*Server) {
 	}
 }
 
+// WithCloudRoutesDisabled suppresses the cloud catch-all route so this listener
+// serves only the admin/control plane (/_jaiscloud/*, /metrics). The GCP binary
+// uses it when the REST transport is disabled, so a gRPC-only deployment never
+// exposes the GCP REST API. Default (unset) keeps the cloud routes, so the AWS
+// binary is unaffected.
+func WithCloudRoutesDisabled() func(*Server) {
+	return func(s *Server) {
+		s.cloudRoutesDisabled = true
+	}
+}
+
 // WithCORSLookup wires in a function that returns stored S3 CORS rules for a
 // bucket. When set, the server intercepts OPTIONS preflight requests and adds
 // Access-Control-* headers to regular S3 responses that carry an Origin header.
 func WithCORSLookup(fn func(bucket string) []map[string]any) func(*Server) {
 	return func(s *Server) {
 		s.corsLookup = fn
+	}
+}
+
+// WithGCSCORSLookup wires in a function that returns stored GCS bucket CORS
+// rules (GCS's Bucket.cors shape). When set, the server intercepts OPTIONS
+// preflight requests on GCS paths and adds Access-Control-* headers to regular
+// GCS responses that carry an Origin header. It is independent of
+// WithCORSLookup, so wiring it never alters S3/AWS CORS behavior.
+func WithGCSCORSLookup(fn func(bucket string) []map[string]any) func(*Server) {
+	return func(s *Server) {
+		s.gcsCorsLookup = fn
 	}
 }
 
@@ -113,8 +143,12 @@ func (s *Server) buildRouter() {
 		r.Post("/cw-evaluate", s.adminHandler.CWEvaluateHandler)
 		r.Post("/clock", s.adminHandler.SetClock)
 		r.Get("/clock", s.adminHandler.GetClock)
+		r.Post("/throttle", s.adminHandler.SetThrottle)
+		r.Get("/throttle", s.adminHandler.GetThrottle)
 		r.Post("/ttl-sweep", s.adminHandler.TTLSweepHandler)
 		r.Post("/eb-tick", s.adminHandler.EBTickHandler)
+		r.Post("/scheduler-tick", s.adminHandler.SchedulerTickHandler)
+		r.Post("/tasks-tick", s.adminHandler.TasksTickHandler)
 		// Managed snapshot endpoints (Phase 10).
 		r.Post("/snapshot", s.adminHandler.SnapshotCreate)
 		r.Get("/snapshots", s.adminHandler.SnapshotList)
@@ -144,11 +178,13 @@ func (s *Server) buildRouter() {
 	}
 
 	// Cloud catch-all: wrap with barrier middleware when configured.
-	var cloudHandler http.Handler = http.HandlerFunc(s.handleCloudRequest)
-	if s.barrier != nil {
-		cloudHandler = middleware.Persistence(s.barrier)(cloudHandler)
+	if !s.cloudRoutesDisabled {
+		var cloudHandler http.Handler = http.HandlerFunc(s.handleCloudRequest)
+		if s.barrier != nil {
+			cloudHandler = middleware.Persistence(s.barrier)(cloudHandler)
+		}
+		r.Handle("/*", cloudHandler)
 	}
-	r.Handle("/*", cloudHandler)
 
 	s.router = r
 }
@@ -190,6 +226,26 @@ func isS3StreamingUpload(r *http.Request) bool {
 	return idx >= 0 && len(path) > idx+1
 }
 
+// isGCSStreamingUpload returns true for GCS uploads whose body is raw object
+// data that should be streamed, not buffered. Detection is purely from
+// path/method/query so no body is read first. Both simple media uploads and
+// multipart/related uploads stream (multipart metadata is small and read first;
+// the media part is streamed). Resumable chunks are bounded and excluded here —
+// their accumulation is handled by the provider's spill-to-file session.
+func isGCSStreamingUpload(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	if !strings.HasPrefix(r.URL.Path, "/upload/storage/v1/") {
+		return false
+	}
+	switch r.URL.Query().Get("uploadType") {
+	case "media", "multipart":
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	// P2-6: CORS preflight — intercept before DetectAndDecode since OPTIONS
 	// requests have no SigV4 auth and would fail service detection.
@@ -209,8 +265,24 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// GCS bucket CORS preflight (independent of the S3 path above).
+	if s.gcsCorsLookup != nil {
+		origin := r.Header.Get("Origin")
+		if origin != "" && r.Method == http.MethodOptions {
+			reqMethod := r.Header.Get("Access-Control-Request-Method")
+			bucket := gcsCORSExtractBucket(r)
+			rule, ok := gcsCORSMatchRule(s.gcsCorsLookup(bucket), origin, reqMethod)
+			if !ok {
+				http.Error(w, "CORS request not allowed", http.StatusForbidden)
+				return
+			}
+			gcsCORSPreflightHeaders(w, rule, origin, r.Header.Get("Access-Control-Request-Headers"))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
 
-	streaming := isS3StreamingUpload(r)
+	streaming := isS3StreamingUpload(r) || isGCSStreamingUpload(r)
 
 	// For streaming S3 uploads we intentionally leave r.Body unread here so
 	// the provider can stream directly from it. Always drain+close on exit so
@@ -245,6 +317,54 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Optional cloud batch endpoint (e.g. GCP's POST /batch/{service}/{version}).
+	// Intercept before service detection: the adapter parses the multipart
+	// envelope and formats the multiplexed response, while the gateway runs each
+	// embedded sub-request through the normal detect → dispatch → encode
+	// pipeline. Clouds without a batch surface (AWS) do not implement
+	// BatchHandler, so their behaviour is unchanged.
+	if bh, ok := s.cloudAdapter.(BatchHandler); ok && bh.IsBatchRequest(r) {
+		bh.ServeBatch(r.Context(), w, r, body, func(ctx context.Context, sr *http.Request, sb []byte) (int, http.Header, []byte) {
+			status, headers, respBody, stream := s.processCloudRequest(ctx, sr, sb)
+			if stream != nil {
+				defer stream.Close()
+				respBody, _ = io.ReadAll(io.LimitReader(stream, maxBatchSubResponseBytes))
+			}
+			return status, headers, respBody
+		})
+		return
+	}
+
+	status, headers, respBody, stream := s.processCloudRequest(r.Context(), r, body)
+	// P2-6: Attach CORS headers to regular responses when Origin is present.
+	if s.corsLookup != nil {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			bucket := corsExtractBucket(r)
+			rules := s.corsLookup(bucket)
+			CORSAddResponseHeaders(headers, rules, origin)
+		}
+	}
+	if s.gcsCorsLookup != nil {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			gcsCORSAddResponseHeaders(headers, s.gcsCorsLookup(gcsCORSExtractBucket(r)), origin)
+		}
+	}
+	if stream != nil {
+		defer stream.Close()
+		writeStreamResponse(w, status, headers, stream)
+		return
+	}
+	writeResponse(w, status, headers, respBody)
+}
+
+// processCloudRequest runs one request through the cloud adapter's
+// detect → enrich → dispatch → encode pipeline and returns the encoded
+// response. It backs both the normal request path and each embedded sub-request
+// of a cloud batch request. When the provider returned a streaming body, stream
+// is non-nil and respBody is empty; the caller owns closing it. ctx carries the
+// metric labels for the originating request (the labelsHolder is a pointer, so
+// mutating it is visible to the metrics middleware).
+func (s *Server) processCloudRequest(ctx context.Context, r *http.Request, body []byte) (status int, headers http.Header, respBody []byte, stream io.ReadCloser) {
 	nr, codec, detectErr := s.cloudAdapter.DetectAndDecode(r, body)
 	if detectErr != nil {
 		if pe, ok := detectErr.(*model.ProviderError); ok {
@@ -255,9 +375,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 				"path", r.URL.Path,
 				"request_id", middleware.GetRequestID(r.Context()),
 			)
-			status, headers, respBody := encodeErrorFallback(codec, nil, pe)
-			writeResponse(w, status, headers, respBody)
-			return
+			status, headers, respBody = encodeErrorFallback(codec, nil, pe)
+			return status, headers, respBody, nil
 		}
 		slog.Error("service detection failed",
 			"err", detectErr,
@@ -265,8 +384,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			"path", r.URL.Path,
 			"request_id", middleware.GetRequestID(r.Context()),
 		)
-		http.Error(w, detectErr.Error(), http.StatusBadRequest)
-		return
+		status, headers, respBody = plainErrorResponse(detectErr.Error(), http.StatusBadRequest)
+		return status, headers, respBody, nil
 	}
 
 	// Inject gateway context — each cloud adapter extracts identity from the request
@@ -280,12 +399,31 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	nr.Cloud = s.cloudAdapter.Cloud()
 	nr.ResourceID = s.cloudAdapter.ResourceIDFor(region, accountID)
 
-	// Attach labels for Prometheus metrics middleware
-	r = r.WithContext(middleware.WithRequestLabels(r.Context(), string(nr.Cloud), nr.Service, nr.Action))
+	// Attach labels for Prometheus metrics middleware.
+	ctx = middleware.WithRequestLabels(ctx, string(nr.Cloud), nr.Service, nr.Action)
+
+	// Opt-in request filter (e.g. GCP throttle/quota injection). Type-asserted
+	// off the adapter like BatchHandler, so clouds that do not implement it are
+	// unaffected. The service's own codec encodes the error, so the envelope
+	// matches the service; DecorateError then adds transport retry hints.
+	if filter, ok := s.cloudAdapter.(RequestFilter); ok {
+		if pe := filter.FilterRequest(nr); pe != nil {
+			slog.Warn("request filtered before dispatch",
+				"code", pe.Code,
+				"status", pe.HTTPStatus,
+				"service", nr.Service,
+				"action", nr.Action,
+				"request_id", middleware.GetRequestID(ctx),
+			)
+			status, headers, respBody = codec.EncodeError(nr, pe)
+			status, headers, respBody = filter.DecorateError(nr, pe, status, headers, respBody)
+			return status, headers, respBody, nil
+		}
+	}
 
 	providerKey := s.cloudAdapter.ServiceToProvider(nr.Service) + "." + nr.Action
 
-	resp, dispatchErr := s.registry.Dispatch(r.Context(), providerKey, nr)
+	resp, dispatchErr := s.registry.Dispatch(ctx, providerKey, nr)
 	if dispatchErr != nil {
 		if pe, ok := dispatchErr.(*model.ProviderError); ok {
 			logFn := slog.Error
@@ -302,9 +440,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 				"region", nr.Region,
 				"request_id", middleware.GetRequestID(r.Context()),
 			)
-			status, headers, respBody := codec.EncodeError(nr, pe)
-			writeResponse(w, status, headers, respBody)
-			return
+			status, headers, respBody = codec.EncodeError(nr, pe)
+			return status, headers, respBody, nil
 		}
 		slog.Error("dispatch error",
 			"key", providerKey,
@@ -315,25 +452,24 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			"err", dispatchErr,
 			"request_id", middleware.GetRequestID(r.Context()),
 		)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		status, headers, respBody = plainErrorResponse("internal error", http.StatusInternalServerError)
+		return status, headers, respBody, nil
 	}
 
-	status, headers, respBody := codec.Encode(nr, resp)
-	// P2-6: Attach CORS headers to regular responses when Origin is present.
-	if s.corsLookup != nil {
-		if origin := r.Header.Get("Origin"); origin != "" {
-			bucket := corsExtractBucket(r)
-			rules := s.corsLookup(bucket)
-			CORSAddResponseHeaders(headers, rules, origin)
-		}
+	status, headers, respBody = codec.Encode(nr, resp)
+	if resp != nil {
+		stream, _ = resp.Data["_stream"].(io.ReadCloser)
 	}
-	if stream, ok := resp.Data["_stream"].(io.ReadCloser); ok {
-		defer stream.Close()
-		writeStreamResponse(w, status, headers, stream)
-		return
-	}
-	writeResponse(w, status, headers, respBody)
+	return status, headers, respBody, stream
+}
+
+// plainErrorResponse mirrors http.Error's headers/body shape so responses
+// produced by the extracted pipeline match the previous inline handler.
+func plainErrorResponse(msg string, status int) (int, http.Header, []byte) {
+	h := http.Header{}
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	return status, h, []byte(msg + "\n")
 }
 
 func encodeErrorFallback(codec adapter.Codec, nr *model.NormalizedRequest, pe *model.ProviderError) (int, http.Header, []byte) {
@@ -505,6 +641,7 @@ func cloudDNSNames(cloud, region string) []string {
 			"storage.googleapis.com",
 			"compute.googleapis.com",
 			"cloudfunctions.googleapis.com",
+			"*.cloudfunctions.net",
 			"run.googleapis.com",
 			"firestore.googleapis.com",
 			"secretmanager.googleapis.com",

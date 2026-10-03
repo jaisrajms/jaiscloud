@@ -1,0 +1,133 @@
+---
+# PersistentVolumeClaim — object bytes survive pod restarts. Metadata lives in
+# Postgres, so an ephemeral blob dir lets a rolled pod leave behind objects
+# whose metadata outlives their bytes (a media read then 404s). The k3d test's
+# preflight rolls this Deployment every run, so persistence is required.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaiscloud-gcp-blobs-pvc
+  namespace: jaiscloud
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Deployment — the GCP emulator (REST :8080, gRPC :8081) with the Dataproc
+# Spark-on-Kubernetes executor wired to the in-cluster GCS endpoint.
+#
+# The image is the same multi-cloud binary as the AWS deployment, built with
+# CLOUD=gcp:  make docker-gcp  (or  REGISTRY=10.0.100.21:5050 make docker-gcp).
+# Spark drivers/executors are launched as pods in this namespace using
+# JAISCLOUD_K8S_SPARK_IMAGE, so the pod's ServiceAccount needs the
+# jaiscloud-executor Role from rbac.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaiscloud-gcp
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-gcp
+spec:
+  replicas: 1
+  # Single writer to Postgres: replace the old pod before starting the new one
+  # so two instances never race on the shared store during a rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jaiscloud-gcp
+  template:
+    metadata:
+      labels:
+        app: jaiscloud-gcp
+    spec:
+      serviceAccountName: jaiscloud
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: jaiscloud-gcp
+          image: 10.0.100.21:5050/jaiscloud-gcp:compat
+          imagePullPolicy: Always
+          args:
+            - start
+            - --port
+            - "8080"
+            - --grpc-port
+            - "8081"
+            - --dsn
+            - postgres://jaiscloud:jaiscloud@postgres.jaiscloud.svc.cluster.local:5432/jaiscloud
+            - --blob-dir
+            - /data/blobs
+          ports:
+            - name: rest
+              containerPort: 8080
+            - name: grpc
+              containerPort: 8081
+          volumeMounts:
+            - name: blobs
+              mountPath: /data/blobs
+          env:
+            # Dataproc submits Spark jobs as client-mode pods in this namespace.
+            - name: JAISCLOUD_SPARK_EXECUTOR_MODE
+              value: k8s
+            - name: JAISCLOUD_K8S_SPARK_IMAGE
+              value: 10.0.100.21:5050/spark-gcs:3.5.0
+            - name: JAISCLOUD_K8S_SPARK_SUBMIT_PATH
+              value: /opt/spark/bin/spark-submit
+            # Spark reads/writes GCS through the emulator's own in-cluster Service.
+            - name: JAISCLOUD_GCS_EMULATOR_ENDPOINT
+              value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+            - name: JAISCLOUD_PLATFORM_TLS_ENABLED
+              value: "false"
+            # Managed Kafka broker topology: k8s starts a single-node Redpanda
+            # (rpk) Pod + Service per cluster (namespace jaiscloud) and renders
+            # its in-cluster endpoint as bootstrapAddress. The jaiscloud
+            # ServiceAccount already has pod/service create+delete from
+            # rbac.yaml, and the emulator's in-cluster config supplies the
+            # client. Set to mock to disable (no broker; synthesized cloud.goog
+            # address).
+            - name: JAISCLOUD_KAFKA_BROKER_MODE
+              value: k8s
+          readinessProbe:
+            httpGet:
+              path: /_jaiscloud/health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: jaiscloud-gcp-blobs-pvc
+---
+# Service — REST + gRPC entry point. Spark drivers/executors and the Lakehouse
+# pipeline Job address the emulator through this DNS name:
+#   http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+# From the host:
+#   kubectl port-forward -n jaiscloud svc/jaiscloud-gcp 8080:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaiscloud-gcp
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-gcp
+spec:
+  type: ClusterIP
+  selector:
+    app: jaiscloud-gcp
+  ports:
+    - name: rest
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      port: 8081
+      targetPort: 8081
