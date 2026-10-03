@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -17,6 +16,7 @@ import {
   Textarea,
   Toggle,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listTopics, createTopic, deleteTopic, publish, type Topic } from '../../../api/sns'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
@@ -33,7 +33,7 @@ export function SNSList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['sns', 'topics'],
     queryFn: () => listTopics(),
   })
@@ -135,11 +135,11 @@ export function SNSList() {
   return (
     <ContentLayout header={<Header variant="h1">SNS topics</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load topics">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load topics" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="sns"
+          favorite={(t) => ({ id: t.arn, label: t.name, href: '/aws/sns/' + encodeURIComponent(t.arn), type: 'topic' })}
           items={topics}
           columns={columns}
           trackBy={(t) => t.arn}

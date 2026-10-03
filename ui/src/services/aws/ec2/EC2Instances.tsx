@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -12,6 +11,8 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listInstances,
   terminateInstance,
@@ -31,7 +32,7 @@ export function EC2Instances() {
   const [details, setDetails] = useState<Instance | null>(null)
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['ec2', 'instances'],
     queryFn: () => listInstances(),
   })
@@ -111,7 +112,7 @@ export function EC2Instances() {
       filterValue: (i) => i.instanceType,
       cell: (i) => i.instanceType,
     },
-    { id: 'image', header: 'AMI ID', cell: (i) => <Box variant="code">{i.imageId}</Box> },
+    { id: 'image', header: 'AMI ID', cell: (i) => <CopyText value={i.imageId} label="AMI ID" /> },
     { id: 'private', header: 'Private IP', cell: (i) => <Box variant="code">{i.privateIp || '—'}</Box> },
     { id: 'public', header: 'Public IP', cell: (i) => <Box variant="code">{i.publicIp || '—'}</Box> },
     {
@@ -131,11 +132,11 @@ export function EC2Instances() {
   return (
     <ContentLayout header={<Header variant="h1">Instances</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load instances">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load instances" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="ec2"
+          favorite={(i) => ({ id: i.id, label: i.id, href: '/aws/ec2/instances', type: 'instance' })}
           items={items}
           columns={columns}
           trackBy={(i) => i.id}

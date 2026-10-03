@@ -16,6 +16,8 @@ import {
   Tabs,
   Textarea,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listRoles,
   createRole,
@@ -120,7 +122,7 @@ function RolesTab() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (r) => <Box variant="code">{r.arn}</Box>,
+      cell: (r) => <CopyText value={r.arn} label="role ARN" />,
     },
     {
       id: 'created',
@@ -141,11 +143,11 @@ function RolesTab() {
   return (
     <SpaceBetween size="m">
       {error ? (
-        <Alert type="error" header="Failed to load roles">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load roles" message={(error as Error).message} />
       ) : (
         <ResourceTable
+          favoriteService="iam"
+          favorite={(r) => ({ id: r.arn, label: r.roleName, href: '/aws/iam', type: 'role' })}
           items={roles}
           columns={columns}
           trackBy={(r) => r.arn}
@@ -320,7 +322,7 @@ function UsersTab() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (u) => <Box variant="code">{u.arn}</Box>,
+      cell: (u) => <CopyText value={u.arn} label="user ARN" />,
     },
     {
       id: 'created',
@@ -348,11 +350,11 @@ function UsersTab() {
   return (
     <SpaceBetween size="m">
       {error ? (
-        <Alert type="error" header="Failed to load users">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load users" message={(error as Error).message} />
       ) : (
         <ResourceTable
+          favoriteService="iam"
+          favorite={(u) => ({ id: u.arn, label: u.userName, href: '/aws/iam', type: 'user' })}
           items={users}
           columns={columns}
           trackBy={(u) => u.arn}
@@ -588,7 +590,7 @@ function PoliciesTab() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (p) => <Box variant="code">{p.arn}</Box>,
+      cell: (p) => <CopyText value={p.arn} label="policy ARN" />,
     },
     {
       id: 'attachmentCount',
@@ -614,11 +616,11 @@ function PoliciesTab() {
   return (
     <SpaceBetween size="m">
       {error ? (
-        <Alert type="error" header="Failed to load policies">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load policies" message={(error as Error).message} />
       ) : (
         <ResourceTable
+          favoriteService="iam"
+          favorite={(p) => ({ id: p.arn, label: p.policyName, href: '/aws/iam', type: 'policy' })}
           items={policies}
           columns={columns}
           trackBy={(p) => p.arn}

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -16,6 +15,7 @@ import {
   StatusIndicator,
   Table,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listClusters,
@@ -58,7 +58,7 @@ export function ECSClusters() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['ecs', 'clusters'],
     queryFn: listClusters,
   })
@@ -122,12 +122,12 @@ export function ECSClusters() {
   return (
     <ContentLayout header={<Header variant="h1">ECS clusters</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load clusters">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="ecs"
+            favorite={(c) => ({ id: c.name, label: c.name, href: '/aws/ecs/clusters', type: 'cluster' })}
             items={items}
             columns={columns}
             trackBy={(c) => c.name}

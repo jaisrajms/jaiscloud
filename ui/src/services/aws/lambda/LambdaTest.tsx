@@ -176,13 +176,15 @@ export function LambdaTest({ name }: Props) {
                 </pre>
                 {result.requestId && (
                   <Button
+                    iconName="angle-right"
+                    iconAlign="right"
                     onClick={() =>
                       navigate(
                         `${logGroupPath}?requestId=${encodeURIComponent(result.requestId!)}`,
                       )
                     }
                   >
-                    View logs for this invocation →
+                    View logs for this invocation
                   </Button>
                 )}
               </SpaceBetween>

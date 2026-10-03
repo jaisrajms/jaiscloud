@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -18,6 +17,8 @@ import {
   StatusIndicator,
   Textarea,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listStateMachines,
   createStateMachine,
@@ -45,7 +46,7 @@ export function SFNStateMachines() {
   const [form, setForm] = useState({ name: '', definition: '', roleArn: '', type: 'STANDARD' })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['sfn', 'state-machines'],
     queryFn: () => listStateMachines(),
   })
@@ -114,7 +115,7 @@ export function SFNStateMachines() {
         <StatusIndicator type={resourceStatus(sm.status)}>{sm.status || '—'}</StatusIndicator>
       ),
     },
-    { id: 'arn', header: 'ARN', cell: (sm) => <Box variant="code">{sm.arn}</Box> },
+    { id: 'arn', header: 'ARN', cell: (sm) => <CopyText value={sm.arn} label="state machine ARN" /> },
     {
       id: 'actions',
       header: '',
@@ -131,11 +132,11 @@ export function SFNStateMachines() {
   return (
     <ContentLayout header={<Header variant="h1">Step Functions state machines</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load state machines">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load state machines" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="sfn"
+          favorite={(sm) => ({ id: sm.arn, label: sm.name, href: '/aws/sfn/state-machines', type: 'state machine' })}
           items={machines}
           columns={columns}
           trackBy={(sm) => sm.arn}

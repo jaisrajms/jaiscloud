@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -14,6 +13,8 @@ import {
   SpaceBetween,
   Textarea,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listEventBuses,
   createEventBus,
@@ -38,7 +39,7 @@ export function EventBridgeBuses() {
   const [details, setDetails] = useState<EventBus | null>(null)
   const [eventForm, setEventForm] = useState(EMPTY_EVENT_FORM)
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['eventbridge', 'buses'],
     queryFn: () => listEventBuses(),
   })
@@ -105,7 +106,7 @@ export function EventBridgeBuses() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (b) => (b.arn ? <Box variant="code">{b.arn}</Box> : '—'),
+      cell: (b) => (b.arn ? <CopyText value={b.arn} label="event bus ARN" /> : '—'),
     },
     {
       id: 'actions',
@@ -121,11 +122,11 @@ export function EventBridgeBuses() {
   return (
     <ContentLayout header={<Header variant="h1">Event buses</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load event buses">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load event buses" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="eventbridge"
+          favorite={(b) => ({ id: b.name, label: b.name, href: '/aws/eventbridge/buses', type: 'event bus' })}
           items={buses}
           columns={columns}
           trackBy={(b) => b.name}

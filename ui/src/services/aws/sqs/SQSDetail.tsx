@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQueue, purgeQueue, listDLQSources, getTags, tagQueue, untagQueue, peekMessages, type PeekedMessage } from '../../../api/sqs'
 import {
-  Alert,
   AttributeEditor,
   Badge,
   Box,
@@ -20,6 +19,7 @@ import {
   Table,
   Tabs,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import { formatDate } from '../../../lib/date'
 import { useNotifications } from '../../../components/notifications'
@@ -122,9 +122,7 @@ export function SQSDetail() {
   if (error || !queue) {
     return (
       <ContentLayout header={<Header variant="h1">Queue</Header>}>
-        <Alert type="error" header="Queue not found">
-          {error ? (error as Error).message : 'Queue not found.'}
-        </Alert>
+        <ErrorState header="Queue not found" message={error ? (error as Error).message : 'Queue not found.'} />
       </ContentLayout>
     )
   }

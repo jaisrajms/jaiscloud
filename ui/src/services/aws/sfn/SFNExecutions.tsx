@@ -18,6 +18,7 @@ import {
   Table,
   Textarea,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listExecutions,
@@ -50,7 +51,7 @@ export function SFNExecutions() {
   const [form, setForm] = useState({ name: '', input: '{}' })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['sfn', 'executions', smArn],
     queryFn: () => listExecutions(smArn),
     enabled: !!smArn,
@@ -91,8 +92,8 @@ export function SFNExecutions() {
     return (
       <ContentLayout header={<Header variant="h1">Executions</Header>}>
         <SpaceBetween size="l">
-          <Button variant="link" onClick={() => navigate('../state-machines')}>
-            ← State machines
+          <Button variant="link" iconName="angle-left" onClick={() => navigate('../state-machines')}>
+            State machines
           </Button>
           <Alert type="info" header="No state machine selected">
             Open a state machine to view and start its executions.
@@ -128,7 +129,7 @@ export function SFNExecutions() {
           description={<Box variant="code">{smArn}</Box>}
           actions={
             <SpaceBetween direction="horizontal" size="xs">
-              <Button onClick={() => navigate('../state-machines')}>← State machines</Button>
+              <Button iconName="angle-left" onClick={() => navigate('../state-machines')}>State machines</Button>
               <Button variant="primary" onClick={() => setStartOpen(true)}>
                 Start execution
               </Button>
@@ -140,12 +141,12 @@ export function SFNExecutions() {
       }
     >
       {error ? (
-        <Alert type="error" header="Failed to load executions">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load executions" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="sfn"
+            favorite={(e) => ({ id: e.arn, label: e.name, href: '/aws/sfn/executions', type: 'execution' })}
             items={executions}
             columns={columns}
             trackBy={(e) => e.arn}

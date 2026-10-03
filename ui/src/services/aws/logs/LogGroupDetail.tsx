@@ -1,13 +1,13 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   ContentLayout,
   Header,
   Link,
   Table,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listLogStreams, type LogStream } from '../../../api/logs'
 import { formatDate } from '../../../lib/date'
 
@@ -16,7 +16,7 @@ export function LogGroupDetail() {
   const groupName = encodedName ? decodeURIComponent(encodedName) : ''
   const navigate = useNavigate()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['logs', 'streams', groupName],
     queryFn: () => listLogStreams(groupName),
     enabled: !!groupName,
@@ -33,9 +33,7 @@ export function LogGroupDetail() {
       }
     >
       {error ? (
-        <Alert type="error" header="Failed to load log streams">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load log streams" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <Table
           items={streams}

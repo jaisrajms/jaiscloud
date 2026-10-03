@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -16,6 +15,8 @@ import {
   SpaceBetween,
   Table,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listZones,
@@ -44,7 +45,7 @@ export function Route53Zones() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['route53', 'zones'],
     queryFn: listZones,
   })
@@ -87,7 +88,7 @@ export function Route53Zones() {
 
   const columns: ResourceColumn<HostedZone>[] = [
     { id: 'name', header: 'Name', filterLabel: 'Name', filterValue: (z) => z.name, cell: (z) => z.name },
-    { id: 'id', header: 'ID', cell: (z) => <Box variant="code">{z.id}</Box> },
+    { id: 'id', header: 'ID', cell: (z) => <CopyText value={z.id} label="hosted zone ID" /> },
     {
       id: 'private',
       header: 'Visibility',
@@ -101,12 +102,12 @@ export function Route53Zones() {
   return (
     <ContentLayout header={<Header variant="h1">Route 53 hosted zones</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load hosted zones">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load hosted zones" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="route53"
+            favorite={(z) => ({ id: z.id, label: z.name, href: '/aws/route53/zones', type: 'hosted zone' })}
             items={items}
             columns={columns}
             trackBy={(z) => z.id}

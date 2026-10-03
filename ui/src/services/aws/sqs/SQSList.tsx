@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -13,6 +12,7 @@ import {
   Modal,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listQueues, deleteQueue, type Queue } from '../../../api/sqs'
 import { formatDate } from '../../../lib/date'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
@@ -27,7 +27,7 @@ export function SQSList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['sqs', 'queues'],
     queryFn: () => listQueues(),
   })
@@ -92,11 +92,11 @@ export function SQSList() {
   return (
     <ContentLayout header={<Header variant="h1">SQS queues</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load queues">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load queues" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="sqs"
+          favorite={(q) => ({ id: q.url, label: q.name, href: '/aws/sqs/' + encodeURIComponent(q.url), type: 'queue' })}
           items={queues}
           columns={columns}
           trackBy={(q) => q.url}

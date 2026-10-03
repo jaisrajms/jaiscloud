@@ -3,6 +3,7 @@ import { Alert, Box, ContentLayout, Header, Spinner } from '@cloudscape-design/c
 import { useMeta } from './hooks/useMeta'
 import { Layout } from './components/Layout'
 import { ConsoleHome } from './components/ConsoleHome'
+import { ResourceFavorites } from './components/ResourceFavorites'
 import { AzureRoutes } from './services/azure'
 import { GCPRoutes } from './services/gcp'
 import { SQSRoutes } from './services/aws/sqs'
@@ -62,6 +63,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/azure" replace />} />
           <Route path="/azure/*" element={<AzureRoutes />} />
+          <Route path="/favorites" element={<ResourceFavorites />} />
           <Route path="/admin" element={<AdminPanel />} />
           <Route path="*" element={<Navigate to="/azure" replace />} />
         </Routes>
@@ -75,6 +77,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/gcp" replace />} />
           <Route path="/gcp/*" element={<GCPRoutes />} />
+          <Route path="/favorites" element={<ResourceFavorites />} />
           <Route path="/admin" element={<AdminPanel />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
@@ -114,6 +117,7 @@ export default function App() {
         <Route path="/aws/firehose/*" element={<FirehoseRoutes />} />
         <Route path="/aws/ses/*" element={<SESRoutes />} />
         <Route path="/aws/elbv2/*" element={<ELBv2Routes />} />
+        <Route path="/favorites" element={<ResourceFavorites />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

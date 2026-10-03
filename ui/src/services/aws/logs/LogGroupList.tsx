@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -15,6 +14,7 @@ import {
   Modal,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listLogGroups, createLogGroup, deleteLogGroup, type LogGroup } from '../../../api/logs'
 import { formatDate } from '../../../lib/date'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
@@ -37,7 +37,7 @@ export function LogGroupList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['logs', 'groups'],
     queryFn: () => listLogGroups(),
   })
@@ -105,11 +105,11 @@ export function LogGroupList() {
   return (
     <ContentLayout header={<Header variant="h1">CloudWatch log groups</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load log groups">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load log groups" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="logs"
+          favorite={(g) => ({ id: g.name, label: g.name, href: '/aws/logs/groups/' + encodeURIComponent(g.name), type: 'log group' })}
           items={groups}
           columns={columns}
           trackBy={(g) => g.arn || g.name}

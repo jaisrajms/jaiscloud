@@ -2,12 +2,12 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   Container,
   ContentLayout,
   Header,
+  Icon,
   KeyValuePairs,
   Link,
   Select,
@@ -16,6 +16,7 @@ import {
   Table,
   Tabs,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import { getFunction, type LambdaFunction } from '../../../api/lambda'
 import { listLogStreams, getLogEvents } from '../../../api/logs'
@@ -54,9 +55,7 @@ export function LambdaDetail() {
   if (error || !fn) {
     return (
       <ContentLayout header={<Header variant="h1">Lambda function</Header>}>
-        <Alert type="error" header="Failed to load function">
-          {error ? (error as Error).message : 'Function not found.'}
-        </Alert>
+        <ErrorState header="Failed to load function" message={error ? (error as Error).message : 'Function not found.'} />
       </ContentLayout>
     )
   }
@@ -74,7 +73,7 @@ export function LambdaDetail() {
                 navigate('/aws/lambda')
               }}
             >
-              ← Lambda functions
+              <Icon name="angle-left" /> Lambda functions
             </Link>
           }
           actions={<StatusIndicator type={resourceStatus(fn.state)}>{fn.state}</StatusIndicator>}

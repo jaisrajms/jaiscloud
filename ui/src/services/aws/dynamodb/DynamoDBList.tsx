@@ -18,6 +18,7 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listTables,
   createTable,
@@ -43,7 +44,7 @@ export function DynamoDBList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dynamodb', 'tables'],
     queryFn: () => listTables(),
   })
@@ -110,11 +111,11 @@ export function DynamoDBList() {
   return (
     <ContentLayout header={<Header variant="h1">DynamoDB tables</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load tables">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load tables" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="dynamodb"
+          favorite={(t) => ({ id: t.name, label: t.name, href: '/aws/dynamodb/' + encodeURIComponent(t.name), type: 'table' })}
           items={tables}
           columns={columns}
           trackBy={(t) => t.name}

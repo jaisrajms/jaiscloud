@@ -15,6 +15,7 @@ import {
   StatusIndicator,
   Toggle,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { getLogEvents, filterLogEvents, type LogEvent } from '../../../api/logs'
 
 type Preset = '5m' | '15m' | '1h' | '24h'
@@ -138,9 +139,7 @@ export function LogStreamView() {
         </SpaceBetween>
 
         {error && (
-          <Alert type="error" header="Failed to load log events">
-            {(error as Error).message}
-          </Alert>
+          <ErrorState header="Failed to load log events" message={(error as Error).message} />
         )}
 
         <Container header={<Header variant="h2">Log events</Header>}>

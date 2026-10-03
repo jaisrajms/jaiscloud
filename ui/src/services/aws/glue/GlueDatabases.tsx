@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -16,6 +15,7 @@ import {
   Table,
   TreeView,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listDatabases,
@@ -156,11 +156,11 @@ export function GlueDatabases() {
     <ContentLayout header={<Header variant="h1">Glue databases</Header>}>
       <SpaceBetween size="l">
         {error ? (
-          <Alert type="error" header="Failed to load databases">
-            {(error as Error).message}
-          </Alert>
+          <ErrorState header="Failed to load databases" message={(error as Error).message} />
         ) : (
           <ResourceTable
+            favoriteService="glue"
+            favorite={(d) => ({ id: d.name, label: d.name, href: '/aws/glue/databases', type: 'database' })}
             items={databases}
             columns={columns}
             trackBy={(db) => db.name}

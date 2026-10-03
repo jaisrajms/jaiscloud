@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ContentLayout,
@@ -14,6 +13,8 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listKeys,
   createKey,
@@ -54,7 +55,7 @@ export function KMSList() {
   const qc = useQueryClient()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['kms', 'keys'],
     queryFn: () => listKeys(),
   })
@@ -124,7 +125,7 @@ export function KMSList() {
       header: 'Key ID',
       filterLabel: 'Key ID',
       filterValue: (k) => k.keyId,
-      cell: (k) => <Box variant="code">{k.keyId}</Box>,
+      cell: (k) => <CopyText value={k.keyId} label="key ID" />,
     },
     {
       id: 'description',
@@ -192,11 +193,11 @@ export function KMSList() {
   return (
     <ContentLayout header={<Header variant="h1">KMS keys</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load keys">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load keys" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="kms"
+          favorite={(k) => ({ id: k.keyId, label: k.description || k.keyId, href: '/aws/kms', type: 'key' })}
           items={keys}
           columns={columns}
           trackBy={(k) => k.keyId}

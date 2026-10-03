@@ -9,12 +9,14 @@ import {
   ContentLayout,
   FileUpload,
   Header,
+  Icon,
   Input,
   Link,
   Modal,
   SpaceBetween,
   Table,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listObjects,
@@ -48,7 +50,7 @@ export function S3Detail() {
   const [files, setFiles] = useState<File[]>([])
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['s3', 'objects', bucket, prefix],
     queryFn: () => listObjects(bucket, { prefix, delimiter: '/' }),
   })
@@ -153,7 +155,7 @@ export function S3Detail() {
                 navigate('/aws/s3')
               }}
             >
-              ← All buckets
+              <Icon name="angle-left" /> All buckets
             </Link>
           }
           actions={
@@ -223,9 +225,7 @@ export function S3Detail() {
         )}
 
         {error && (
-          <Alert type="error" header="Failed to load objects">
-            {(error as Error).message}
-          </Alert>
+          <ErrorState header="Failed to load objects" message={(error as Error).message} onRetry={() => void refetch()} />
         )}
 
         {!error && prefixes.length > 0 && (

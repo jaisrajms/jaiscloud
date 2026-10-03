@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -14,6 +13,7 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listCrawlers,
   createCrawler,
@@ -37,7 +37,7 @@ export function GlueCrawlers() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['glue', 'crawlers'],
     queryFn: () => listCrawlers(),
   })
@@ -137,11 +137,11 @@ export function GlueCrawlers() {
   return (
     <ContentLayout header={<Header variant="h1">Glue crawlers</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load crawlers">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load crawlers" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="glue"
+          favorite={(c) => ({ id: c.name, label: c.name, href: '/aws/glue/crawlers', type: 'crawler' })}
           items={crawlers}
           columns={columns}
           trackBy={(c) => c.name}

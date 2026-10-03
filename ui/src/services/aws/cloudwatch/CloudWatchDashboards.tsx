@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -17,6 +16,7 @@ import {
   Spinner,
   Tabs,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   getMetricStatistics,
   listDashboards,
@@ -45,7 +45,7 @@ export function CloudWatchDashboards() {
   const qc = useQueryClient()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['cloudwatch', 'dashboards'],
     queryFn: listDashboards,
   })
@@ -130,11 +130,11 @@ export function CloudWatchDashboards() {
   return (
     <ContentLayout header={<Header variant="h1">CloudWatch dashboards</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load dashboards">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load dashboards" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="cloudwatch"
+          favorite={(d) => ({ id: d.dashboardName, label: d.dashboardName, href: '/aws/cloudwatch/dashboards', type: 'dashboard' })}
           items={dashboards}
           columns={columns}
           trackBy={(d) => d.dashboardName}

@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Box,
   Button,
   ContentLayout,
@@ -15,6 +14,7 @@ import {
   SpaceBetween,
   Textarea,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listSecrets, createSecret, deleteSecret, type Secret } from '../../../api/secretsmanager'
 import { formatDate } from '../../../lib/date'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
@@ -30,7 +30,7 @@ export function SecretsList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['secretsmanager', 'secrets'],
     queryFn: () => listSecrets(),
   })
@@ -113,11 +113,11 @@ export function SecretsList() {
   return (
     <ContentLayout header={<Header variant="h1">Secrets Manager</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load secrets">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load secrets" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="secretsmanager"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/secretsmanager/' + encodeURIComponent(s.name), type: 'secret' })}
           items={secrets}
           columns={columns}
           trackBy={(s) => s.arn}

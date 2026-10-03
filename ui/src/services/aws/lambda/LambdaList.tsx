@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -13,6 +12,7 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listFunctions, deleteFunction, type LambdaFunction } from '../../../api/lambda'
 import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
@@ -26,7 +26,7 @@ export function LambdaList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['lambda', 'functions'],
     queryFn: () => listFunctions(),
   })
@@ -87,11 +87,11 @@ export function LambdaList() {
   return (
     <ContentLayout header={<Header variant="h1">Lambda functions</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load functions">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load functions" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="lambda"
+          favorite={(fn) => ({ id: fn.name, label: fn.name, href: '/aws/lambda/' + encodeURIComponent(fn.name), type: 'function' })}
           items={functions}
           columns={columns}
           trackBy={(fn) => fn.arn}

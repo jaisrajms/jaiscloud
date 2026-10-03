@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -17,6 +16,7 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listVirtualClusters,
   createVirtualCluster,
@@ -41,7 +41,7 @@ export function EMRContainersList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['emrc', 'virtual-clusters', stateFilter],
     queryFn: () => listVirtualClusters(stateFilter ? { state: stateFilter } : undefined),
   })
@@ -121,11 +121,11 @@ export function EMRContainersList() {
   return (
     <ContentLayout header={<Header variant="h1">EMR on EKS virtual clusters</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load virtual clusters">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load virtual clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="emr-containers"
+          favorite={(vc) => ({ id: vc.id, label: vc.name, href: '/aws/emr-containers/' + encodeURIComponent(vc.id), type: 'virtual cluster' })}
           items={virtualClusters}
           columns={columns}
           trackBy={(vc) => vc.id}

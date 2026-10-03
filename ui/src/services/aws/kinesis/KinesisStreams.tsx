@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -14,6 +13,8 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import { listStreams, createStream, deleteStream, type Stream } from '../../../api/kinesis'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
@@ -29,7 +30,7 @@ export function KinesisStreams() {
   const [form, setForm] = useState({ name: '', shardCount: 1 })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['kinesis', 'streams'],
     queryFn: listStreams,
   })
@@ -73,7 +74,7 @@ export function KinesisStreams() {
       ),
     },
     { id: 'mode', header: 'Mode', filterLabel: 'Mode', filterValue: (s) => s.mode, cell: (s) => s.mode || '—' },
-    { id: 'arn', header: 'ARN', cell: (s) => <Box variant="code">{s.arn || '—'}</Box> },
+    { id: 'arn', header: 'ARN', cell: (s) => <CopyText value={s.arn} label="stream ARN" /> },
     {
       id: 'actions',
       header: '',
@@ -88,11 +89,11 @@ export function KinesisStreams() {
   return (
     <ContentLayout header={<Header variant="h1">Kinesis streams</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load streams">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load streams" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="kinesis"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/kinesis/streams', type: 'stream' })}
           items={items}
           columns={columns}
           trackBy={(s) => s.name}

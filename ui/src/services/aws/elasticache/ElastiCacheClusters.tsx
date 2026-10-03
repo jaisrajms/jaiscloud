@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -15,6 +14,8 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listClusters,
   createCluster,
@@ -40,7 +41,7 @@ export function ElastiCacheClusters() {
   const [form, setForm] = useState({ id: '', engine: 'redis', nodeType: 'cache.t3.micro', numNodes: 1 })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['elasticache', 'clusters'],
     queryFn: listClusters,
   })
@@ -98,7 +99,7 @@ export function ElastiCacheClusters() {
     },
     { id: 'nodeType', header: 'Node type', cell: (c) => c.nodeType },
     { id: 'nodes', header: 'Nodes', cell: (c) => c.numNodes },
-    { id: 'endpoint', header: 'Endpoint', cell: (c) => <Box variant="code">{c.endpoint || '—'}</Box> },
+    { id: 'endpoint', header: 'Endpoint', cell: (c) => <CopyText value={c.endpoint} label="endpoint" /> },
     {
       id: 'actions',
       header: '',
@@ -113,11 +114,11 @@ export function ElastiCacheClusters() {
   return (
     <ContentLayout header={<Header variant="h1">ElastiCache clusters</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load clusters">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="elasticache"
+          favorite={(c) => ({ id: c.id, label: c.id, href: '/aws/elasticache/clusters', type: 'cluster' })}
           items={items}
           columns={columns}
           trackBy={(c) => c.id}

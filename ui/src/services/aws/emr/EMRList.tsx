@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -17,6 +16,8 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listClusters,
   runJobFlow,
@@ -49,7 +50,7 @@ export function EMRList() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['emr', 'clusters', stateFilter],
     queryFn: () => listClusters(stateFilter ? { state: stateFilter } : undefined),
   })
@@ -98,7 +99,7 @@ export function EMRList() {
       header: 'Cluster ID',
       filterLabel: 'Cluster ID',
       filterValue: (c) => c.id,
-      cell: (c) => <Box variant="code">{c.id}</Box>,
+      cell: (c) => <CopyText value={c.id} label="cluster ID" />,
     },
     {
       id: 'name',
@@ -129,11 +130,11 @@ export function EMRList() {
   return (
     <ContentLayout header={<Header variant="h1">EMR clusters</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load clusters">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="emr"
+          favorite={(c) => ({ id: c.id, label: c.name, href: '/aws/emr/' + encodeURIComponent(c.id), type: 'cluster' })}
           items={clusters}
           columns={columns}
           trackBy={(c) => c.id}

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -17,6 +16,8 @@ import {
   Tabs,
   Textarea,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listRestAPIs,
@@ -67,7 +68,7 @@ export function APIGatewayAPIs() {
   const [deployForm, setDeployForm] = useState({ stageName: '', description: '' })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['apigw', 'apis'],
     queryFn: () => listRestAPIs(),
   })
@@ -141,18 +142,18 @@ export function APIGatewayAPIs() {
 
   const columns: ResourceColumn<RestAPI>[] = [
     { id: 'name', header: 'Name', filterLabel: 'Name', filterValue: (a) => a.name, cell: (a) => a.name },
-    { id: 'id', header: 'ID', cell: (a) => <Box variant="code">{a.id}</Box> },
+    { id: 'id', header: 'ID', cell: (a) => <CopyText value={a.id} label="API ID" /> },
   ]
 
   return (
     <ContentLayout header={<Header variant="h1">API Gateway</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load REST APIs">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load REST APIs" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="apigateway"
+            favorite={(a) => ({ id: a.id, label: a.name, href: '/aws/apigateway/apis', type: 'REST API' })}
             items={apis}
             columns={columns}
             trackBy={(a) => a.id}

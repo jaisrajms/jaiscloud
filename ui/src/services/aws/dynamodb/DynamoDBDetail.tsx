@@ -7,6 +7,7 @@ import {
   Button,
   ContentLayout,
   Header,
+  Icon,
   Link,
   Modal,
   Select,
@@ -14,6 +15,7 @@ import {
   Table,
   Textarea,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import { JsonEditor } from '../../../components/JsonEditor'
 import { scanTable, deleteItem, putItem, type ScanResponse } from '../../../api/dynamodb'
@@ -164,7 +166,7 @@ export function DynamoDBDetail() {
                 navigate('/aws/dynamodb')
               }}
             >
-              ← All tables
+              <Icon name="angle-left" /> All tables
             </Link>
           }
           actions={
@@ -185,9 +187,7 @@ export function DynamoDBDetail() {
       }
     >
       {error ? (
-        <Alert type="error" header="Failed to scan table">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to scan table" message={(error as Error).message} />
       ) : (
         <Table
           items={rows}

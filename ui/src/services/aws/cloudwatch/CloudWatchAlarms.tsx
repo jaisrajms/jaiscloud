@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -16,6 +15,7 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { StatusIndicatorProps } from '@cloudscape-design/components'
 import {
   listAlarms,
@@ -87,7 +87,7 @@ export function CloudWatchAlarms() {
   const qc = useQueryClient()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['cloudwatch', 'alarms', stateFilter],
     queryFn: () => listAlarms(stateFilter ? { stateValue: stateFilter } : undefined),
   })
@@ -215,11 +215,11 @@ export function CloudWatchAlarms() {
   return (
     <ContentLayout header={<Header variant="h1">CloudWatch alarms</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load alarms">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load alarms" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="cloudwatch"
+          favorite={(a) => ({ id: a.alarmName, label: a.alarmName, href: '/aws/cloudwatch/alarms', type: 'alarm' })}
           items={alarms}
           columns={columns}
           trackBy={(a) => a.alarmName}

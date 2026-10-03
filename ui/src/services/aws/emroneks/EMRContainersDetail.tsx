@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   Container,
@@ -10,6 +9,7 @@ import {
   Form,
   FormField,
   Header,
+  Icon,
   Input,
   KeyValuePairs,
   Link,
@@ -19,6 +19,7 @@ import {
   Table,
   Tabs,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   describeVirtualCluster,
@@ -93,9 +94,7 @@ export function EMRContainersDetail() {
   if (error || !vc) {
     return (
       <ContentLayout header={<Header variant="h1">Virtual cluster</Header>}>
-        <Alert type="error" header="Failed to load virtual cluster">
-          {error ? (error as Error).message : 'Virtual cluster not found.'}
-        </Alert>
+        <ErrorState header="Failed to load virtual cluster" message={error ? (error as Error).message : 'Virtual cluster not found.'} />
       </ContentLayout>
     )
   }
@@ -137,7 +136,7 @@ export function EMRContainersDetail() {
                   navigate('/aws/emr-containers/clusters')
                 }}
               >
-                ← Virtual clusters
+                <Icon name="angle-left" /> Virtual clusters
               </Link>
               <SpaceBetween direction="horizontal" size="xs">
                 <StatusIndicator type={resourceStatus(vc.state)}>{vc.state}</StatusIndicator>

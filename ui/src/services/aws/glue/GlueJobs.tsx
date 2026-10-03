@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -16,6 +15,7 @@ import {
   StatusIndicator,
   Table,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listJobs,
@@ -127,11 +127,11 @@ export function GlueJobs() {
     <ContentLayout header={<Header variant="h1">Glue jobs</Header>}>
       <SpaceBetween size="l">
         {error ? (
-          <Alert type="error" header="Failed to load jobs">
-            {(error as Error).message}
-          </Alert>
+          <ErrorState header="Failed to load jobs" message={(error as Error).message} />
         ) : (
           <ResourceTable
+            favoriteService="glue"
+            favorite={(j) => ({ id: j.name, label: j.name, href: '/aws/glue/jobs', type: 'job' })}
             items={jobs}
             columns={columns}
             trackBy={(j) => j.name}

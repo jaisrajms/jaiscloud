@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -15,6 +14,7 @@ import {
   StatusIndicator,
   Textarea,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listStacks, createStack, deleteStack, type Stack } from '../../../api/cfn'
 import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
@@ -37,7 +37,7 @@ export function CFNStacks() {
   const [form, setForm] = useState({ name: '', templateBody: DEFAULT_TEMPLATE })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['cfn', 'stacks'],
     queryFn: listStacks,
   })
@@ -96,11 +96,11 @@ export function CFNStacks() {
   return (
     <ContentLayout header={<Header variant="h1">CloudFormation stacks</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load stacks">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load stacks" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="cloudformation"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/cloudformation/stacks', type: 'stack' })}
           items={items}
           columns={columns}
           trackBy={(s) => s.name}

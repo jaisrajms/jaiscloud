@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -14,6 +13,8 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listInstances,
   createInstance,
@@ -42,7 +43,7 @@ export function RDSInstances() {
   })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['rds', 'instances'],
     queryFn: listInstances,
   })
@@ -113,7 +114,7 @@ export function RDSInstances() {
     {
       id: 'endpoint',
       header: 'Endpoint',
-      cell: (i) => <Box variant="code">{i.endpoint ? `${i.endpoint}:${i.port}` : '—'}</Box>,
+      cell: (i) => <CopyText value={i.endpoint ? `${i.endpoint}:${i.port}` : undefined} label="endpoint" />,
     },
     {
       id: 'actions',
@@ -132,11 +133,11 @@ export function RDSInstances() {
   return (
     <ContentLayout header={<Header variant="h1">RDS instances</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load RDS instances">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load RDS instances" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="rds"
+          favorite={(i) => ({ id: i.id, label: i.id, href: '/aws/rds/instances', type: 'database' })}
           items={items}
           columns={columns}
           trackBy={(i) => i.id}

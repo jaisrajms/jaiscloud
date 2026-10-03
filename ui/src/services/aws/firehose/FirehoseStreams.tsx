@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -14,6 +13,7 @@ import {
   Select,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listDeliveryStreams,
   createDeliveryStream,
@@ -38,7 +38,7 @@ export function FirehoseStreams() {
   const [form, setForm] = useState({ name: '', type: 'DirectPut' })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['firehose', 'streams'],
     queryFn: listDeliveryStreams,
   })
@@ -92,11 +92,11 @@ export function FirehoseStreams() {
   return (
     <ContentLayout header={<Header variant="h1">Firehose delivery streams</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load delivery streams">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load delivery streams" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="firehose"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/firehose/streams', type: 'delivery stream' })}
           items={items}
           columns={columns}
           trackBy={(s) => s.name}

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -15,6 +14,8 @@ import {
   SpaceBetween,
   Textarea,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listParameters,
   putParameter,
@@ -45,7 +46,7 @@ export function SSMList() {
   const qc = useQueryClient()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['ssm', 'parameters', pathFilter],
     queryFn: () => listParameters(pathFilter ? { path: pathFilter } : undefined),
   })
@@ -101,7 +102,7 @@ export function SSMList() {
       header: 'Name',
       filterLabel: 'Name',
       filterValue: (p) => p.name,
-      cell: (p) => <Box variant="code">{p.name}</Box>,
+      cell: (p) => <CopyText value={p.name} label="parameter name" />,
     },
     {
       id: 'type',
@@ -143,9 +144,7 @@ export function SSMList() {
   return (
     <ContentLayout header={<Header variant="h1">SSM Parameter Store</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load parameters">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load parameters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="m">
           <FormField label="Path prefix" description="Filter parameters by path prefix, e.g. /myapp/">
@@ -157,6 +156,8 @@ export function SSMList() {
             />
           </FormField>
           <ResourceTable
+            favoriteService="ssm"
+            favorite={(p) => ({ id: p.name, label: p.name, href: '/aws/ssm', type: 'parameter' })}
             items={params}
             columns={columns}
             trackBy={(p) => p.name}

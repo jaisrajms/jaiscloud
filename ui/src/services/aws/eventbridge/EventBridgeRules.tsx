@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -17,6 +16,7 @@ import {
   StatusIndicator,
   Table,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listRules,
@@ -53,7 +53,7 @@ export function EventBridgeRules() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [targetForm, setTargetForm] = useState(EMPTY_TARGET_FORM)
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['eventbridge', 'rules'],
     queryFn: () => listRules(),
   })
@@ -178,11 +178,11 @@ export function EventBridgeRules() {
     <ContentLayout header={<Header variant="h1">EventBridge rules</Header>}>
       <SpaceBetween size="l">
         {error ? (
-          <Alert type="error" header="Failed to load rules">
-            {(error as Error).message}
-          </Alert>
+          <ErrorState header="Failed to load rules" message={(error as Error).message} onRetry={() => void refetch()} />
         ) : (
           <ResourceTable
+            favoriteService="eventbridge"
+            favorite={(r) => ({ id: r.name, label: r.name, href: '/aws/eventbridge/rules', type: 'rule' })}
             items={rules}
             columns={columns}
             trackBy={(r) => r.name}

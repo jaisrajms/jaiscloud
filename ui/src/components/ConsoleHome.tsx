@@ -1,5 +1,6 @@
 import {
   Box,
+  Button,
   Cards,
   Container,
   ContentLayout,
@@ -8,6 +9,7 @@ import {
   SpaceBetween,
 } from '@cloudscape-design/components'
 import { useNavigate } from 'react-router-dom'
+import { useFavorites } from '../hooks/useFavorites'
 import { useServices } from '../hooks/useServices'
 import { groupByCategory, type NavSection } from './nav'
 import { ServiceTierBadge } from './ServiceTierBadge'
@@ -21,19 +23,21 @@ function recentIds(): string[] {
 }
 
 /**
- * Console Home landing page: recently visited services plus all supported
- * services grouped by AWS category. The service list is provided by the
- * backend, so only services this build supports are shown.
+ * Console Home landing page: favourites and recently visited services plus all
+ * supported services grouped by AWS category. The service list is provided by
+ * the backend, so only services this build supports are shown.
  */
 export function ConsoleHome() {
   const navigate = useNavigate()
   const { data } = useServices()
   const services = data?.services ?? []
+  const { isFavorite, toggle } = useFavorites()
 
   const recent = recentIds()
     .map((id) => services.find((service) => service.id === id))
     .filter((service): service is NavSection => service != null)
 
+  const favorites = services.filter((service) => isFavorite(service.id))
   const groups = groupByCategory(services)
 
   const renderLink = (service: NavSection) => (
@@ -48,6 +52,29 @@ export function ConsoleHome() {
     </Link>
   )
 
+  const renderStar = (service: NavSection) => {
+    const favorited = isFavorite(service.id)
+    return (
+      <Button
+        variant="icon"
+        iconName={favorited ? 'star-filled' : 'star'}
+        ariaLabel={favorited ? `Remove ${service.label} from favorites` : `Add ${service.label} to favorites`}
+        onClick={() => toggle(service.id)}
+      />
+    )
+  }
+
+  const renderService = (service: NavSection) => (
+    <span
+      key={service.id}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+    >
+      {renderLink(service)}
+      <ServiceTierBadge service={service} />
+      {renderStar(service)}
+    </span>
+  )
+
   return (
     <ContentLayout
       header={
@@ -57,6 +84,23 @@ export function ConsoleHome() {
       }
     >
       <SpaceBetween size="l">
+        {favorites.length > 0 && (
+          <Container
+            key="favorites"
+            header={<Header variant="h2">Favorites</Header>}
+          >
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: '0.75rem',
+              }}
+            >
+              {favorites.map(renderService)}
+            </div>
+          </Container>
+        )}
+
         {recent.length > 0 && (
           <Cards
             items={recent}
@@ -65,6 +109,7 @@ export function ConsoleHome() {
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
                   {renderLink(item)}
                   <ServiceTierBadge service={item} />
+                  {renderStar(item)}
                 </span>
               ),
               sections: [
@@ -95,15 +140,7 @@ export function ConsoleHome() {
                 gap: '0.75rem',
               }}
             >
-              {group.services.map((service) => (
-                <span
-                  key={service.id}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-                >
-                  {renderLink(service)}
-                  <ServiceTierBadge service={service} />
-                </span>
-              ))}
+              {group.services.map(renderService)}
             </div>
           </Container>
         ))}

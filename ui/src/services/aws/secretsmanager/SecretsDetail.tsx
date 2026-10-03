@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   Container,
@@ -17,6 +16,7 @@ import {
   Tabs,
   Textarea,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   getSecretValue,
   putSecretValue,
@@ -127,9 +127,7 @@ export function SecretsDetail() {
           ) : isLoading ? (
             <Box color="text-status-inactive">Loading…</Box>
           ) : error ? (
-            <Alert type="error" header="Could not retrieve secret value">
-              {(error as Error).message}
-            </Alert>
+            <ErrorState header="Could not retrieve secret value" message={(error as Error).message} />
           ) : (
             <Box variant="pre">{valueData?.SecretString ?? '(binary)'}</Box>
           )}

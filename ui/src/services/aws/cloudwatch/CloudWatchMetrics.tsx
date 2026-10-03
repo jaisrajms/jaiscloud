@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Alert,
   Container,
   ContentLayout,
   DateRangePicker,
@@ -9,6 +8,7 @@ import {
   LineChart,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { DateRangePickerProps } from '@cloudscape-design/components'
 import { listMetrics, getMetricStatistics, type CWMetric } from '../../../api/cloudwatch'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
@@ -22,7 +22,7 @@ export function CloudWatchMetrics() {
     unit: 'hour',
   })
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['cloudwatch', 'metrics'],
     queryFn: () => listMetrics(),
   })
@@ -84,12 +84,12 @@ export function CloudWatchMetrics() {
   return (
     <ContentLayout header={<Header variant="h1">CloudWatch metrics</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load metrics">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load metrics" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="cloudwatch"
+            favorite={(m) => ({ id: m.namespace + '/' + m.metricName, label: m.namespace + '/' + m.metricName, href: '/aws/cloudwatch/metrics', type: 'metric' })}
             items={metrics}
             columns={columns}
             trackBy={(m) => `${m.namespace}/${m.metricName}`}
