@@ -9,11 +9,14 @@ import {
   Table,
 } from '@cloudscape-design/components'
 import type { TableProps } from '@cloudscape-design/components'
+import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useFavorites } from '../hooks/useFavorites'
 import { useResourceFavorites, type ResourceFavorite } from '../hooks/useResourceFavorites'
 import { useServices } from '../hooks/useServices'
+import { lookupResourceIds } from '../lib/resourceLookup'
 import { serviceIconName } from './serviceIcons'
+import { useNotifications } from './notifications'
 import type { NavSection } from './nav'
 
 /** Starred services and resources, with deep links and remove actions. */
@@ -23,6 +26,45 @@ export function ResourceFavorites() {
   const services = data?.services ?? []
   const { favorites: serviceIds, toggle: toggleService } = useFavorites()
   const { favorites: resources, remove } = useResourceFavorites()
+  const { notify } = useNotifications()
+
+  // Prune favourites whose resource no longer exists. Runs once on mount; only
+  // services whose current ids can be read are checked, others are left alone.
+  const resourcesRef = useRef(resources)
+  resourcesRef.current = resources
+  const removeRef = useRef(remove)
+  removeRef.current = remove
+  const notifyRef = useRef(notify)
+  notifyRef.current = notify
+
+  useEffect(() => {
+    let cancelled = false
+    const favorites = resourcesRef.current
+    const servicesToCheck = [...new Set(favorites.map((favorite) => favorite.service))]
+    void Promise.all(
+      servicesToCheck.map(async (service) => [service, await lookupResourceIds(service)] as const),
+    ).then((entries) => {
+      if (cancelled) return
+      const idMaps = new Map(entries)
+      const missing = favorites.filter((favorite) => {
+        const idMap = idMaps.get(favorite.service)
+        if (!idMap) return false
+        const live = idMap.get(favorite.type ?? '')
+        if (!live) return false
+        return !live.has(favorite.id)
+      })
+      if (missing.length === 0) return
+      missing.forEach((favorite) => removeRef.current(favorite.service, favorite.id))
+      notifyRef.current({
+        type: 'info',
+        header: 'Favorites updated',
+        content: `Removed ${missing.length} favorite${missing.length === 1 ? '' : 's'} that no longer exist${missing.length === 1 ? 's' : ''}.`,
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const serviceLabel = (id: string) => services.find((service) => service.id === id)?.label ?? id
   const favoriteServices = serviceIds
