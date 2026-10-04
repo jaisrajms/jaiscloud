@@ -69,6 +69,38 @@ func TestTypeMatches(t *testing.T) {
 	}
 }
 
+// TestIsCloudStorageEventType covers the broader validation set: every Cloud
+// Storage spelling (including archived/metadataUpdated, which the delivery
+// matcher's IsStorageEventType does not recognize) is a Cloud Storage event,
+// while Pub/Sub and unknown types are not.
+func TestIsCloudStorageEventType(t *testing.T) {
+	storage := []string{
+		"google.cloud.storage.object.v1.finalized",
+		"google.cloud.storage.object.v1.deleted",
+		"google.cloud.storage.object.v1.archived",
+		"google.cloud.storage.object.v1.metadataUpdated",
+		"google.storage.object.finalize",
+		"google.storage.object.delete",
+		"google.storage.object.archive",
+		"google.storage.object.metadataUpdate",
+		"providers/cloud.storage/eventTypes/object.change",
+	}
+	for _, in := range storage {
+		if !IsCloudStorageEventType(in) {
+			t.Errorf("IsCloudStorageEventType(%q) = false, want true", in)
+		}
+	}
+	for _, in := range []string{"google.cloud.pubsub.topic.v1.messagePublished", "google.pubsub.topic.publish", "example.custom.event", ""} {
+		if IsCloudStorageEventType(in) {
+			t.Errorf("IsCloudStorageEventType(%q) = true, want false", in)
+		}
+	}
+	// The delivery matcher stays narrow: it does not execute archived events.
+	if IsStorageEventType("google.cloud.storage.object.v1.archived") {
+		t.Error("IsStorageEventType must not claim the archived event the emulator does not produce")
+	}
+}
+
 func TestResourceID(t *testing.T) {
 	cases := map[string]string{
 		"projects/p/topics/t":  "t",

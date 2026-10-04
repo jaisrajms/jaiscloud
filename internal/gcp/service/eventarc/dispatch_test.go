@@ -148,8 +148,11 @@ func TestDispatchEventPostsCloudEventToHTTPEndpoint(t *testing.T) {
 func TestDispatchEventTypeMismatchDoesNotDeliver(t *testing.T) {
 	sink := newRequestSink(t)
 	svc := newDispatchService(t, sink)
-	// A storage-typed filter on a Pub/Sub transport must not match a Pub/Sub event.
-	createHTTPTrigger(t, svc, "trig1", sink.URL, `[{"attribute":"type","value":"google.storage.object.finalize"}]`)
+	// A storage-typed filter on a Pub/Sub transport must not match a Pub/Sub
+	// event. A Cloud Storage trigger also needs a bucket filter, but that does
+	// not make it match a Pub/Sub event.
+	createHTTPTrigger(t, svc, "trig1", sink.URL,
+		`[{"attribute":"type","value":"google.storage.object.finalize"},{"attribute":"bucket","value":"b"}]`)
 
 	svc.DispatchEvent(context.Background(), pubsubEvent())
 	svc.waitDeliveries()

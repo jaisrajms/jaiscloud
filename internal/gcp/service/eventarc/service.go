@@ -408,12 +408,16 @@ func validateCloudRunDestination(project string, m map[string]any) error {
 // validateFilters enforces the eventFilters contract: at least one filter,
 // each with a non-empty attribute and value, and at least one filter whose
 // attribute is "type" — real Eventarc requires a type filter on every trigger.
+// A trigger whose type filter names a Cloud Storage event is a Cloud Storage
+// trigger and must additionally declare a non-empty "bucket" filter; real
+// Eventarc rejects a Cloud Storage trigger without one, and accepting it would
+// deliver events from every bucket.
 func validateFilters(body map[string]any) error {
 	filters, ok := body["eventFilters"].([]any)
 	if !ok || len(filters) == 0 {
 		return invalidArgument("eventFilters is required")
 	}
-	hasType := false
+	hasType, hasBucket, storageType := false, false, false
 	for _, f := range filters {
 		fm, ok := f.(map[string]any)
 		if !ok {
@@ -423,16 +427,27 @@ func validateFilters(body map[string]any) error {
 		if attr == "" {
 			return invalidArgument("eventFilters[].attribute is required")
 		}
-		value, _ := fm["value"].(string)
-		if _, ok := fm["value"].(string); !ok {
+		value, ok := fm["value"].(string)
+		if !ok {
 			return invalidArgument("eventFilters[].value is required")
 		}
-		if attr == "type" && value != "" {
-			hasType = true
+		switch {
+		case attr == "type":
+			if value != "" {
+				hasType = true
+			}
+			if eventing.IsCloudStorageEventType(value) {
+				storageType = true
+			}
+		case attr == "bucket" && value != "":
+			hasBucket = true
 		}
 	}
 	if !hasType {
 		return invalidArgument(`eventFilters must contain a filter with attribute "type"`)
+	}
+	if storageType && !hasBucket {
+		return invalidArgument(`Cloud Storage triggers must contain a filter with attribute "bucket"`)
 	}
 	return nil
 }

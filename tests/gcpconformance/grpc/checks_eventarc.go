@@ -76,8 +76,9 @@ func eventarcChannelName(cfg Config, id string) string {
 }
 
 // eventarcTriggerProto builds a minimal valid trigger body: an httpEndpoint
-// destination plus the required eventFilters type filter. It avoids depending
-// on any other service's fixture.
+// destination plus the required eventFilters. It uses a Cloud Storage event
+// type, which real Eventarc requires to be paired with a bucket filter, so the
+// fixture declares both. It avoids depending on any other service's fixture.
 func eventarcTriggerProto() *eventarcpb.Trigger {
 	return &eventarcpb.Trigger{
 		Destination: &eventarcpb.Destination{
@@ -87,6 +88,7 @@ func eventarcTriggerProto() *eventarcpb.Trigger {
 		},
 		EventFilters: []*eventarcpb.EventFilter{
 			{Attribute: "type", Value: "google.cloud.storage.object.v1.finalized"},
+			{Attribute: "bucket", Value: "conformance-bucket"},
 		},
 	}
 }

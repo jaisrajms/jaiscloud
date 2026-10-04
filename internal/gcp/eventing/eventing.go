@@ -162,14 +162,32 @@ type FunctionTriggerSpec struct {
 func IsPubSubEventType(t string) bool { return NormalizeEventType(t) == TypePubSubPublish }
 
 // IsStorageEventType reports whether a declared event type names a Cloud Storage
-// object event: a v2 CloudEvent, a v1 finalize/delete, or the v1 object.change
-// catch-all.
+// object event the emulator materializes/executes: a v2 CloudEvent, a v1
+// finalize/delete, or the v1 object.change catch-all. It is deliberately the
+// narrower set the delivery engine supports.
 func IsStorageEventType(t string) bool {
 	switch NormalizeEventType(t) {
 	case TypeStorageFinalize, TypeStorageDelete, legacyStorageObjectChange:
 		return true
 	}
 	return false
+}
+
+// IsCloudStorageEventType reports whether a declared event type names a Cloud
+// Storage object event in any of the v1, v2, or CloudEvent spellings, including
+// the archived/metadataUpdated types the emulator does not itself produce. Real
+// Eventarc requires a Cloud Storage trigger to also declare a bucket filter, so
+// trigger validation keys off this broader set than the delivery matcher's
+// IsStorageEventType.
+func IsCloudStorageEventType(t string) bool {
+	switch NormalizeEventType(t) {
+	case TypeStorageFinalize, TypeStorageDelete, legacyStorageObjectChange:
+		return true
+	}
+	t = strings.TrimSpace(t)
+	return strings.HasPrefix(t, "google.cloud.storage.object.") ||
+		strings.HasPrefix(t, "google.storage.object.") ||
+		strings.HasPrefix(t, "providers/cloud.storage/eventTypes/")
 }
 
 // TriggerProvisioner materializes and removes the backing Eventarc trigger of a
