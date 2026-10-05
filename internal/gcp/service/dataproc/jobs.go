@@ -94,8 +94,8 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 
 	// Mock mode: the job stays PENDING and advances through SETUP_DONE /
 	// RUNNING / DONE lazily on reads (advanceJob), so pollers observe the state
-	// machine. K8s mode: run it for real and let the driver signals drive it.
-	if s.k8sClient == nil {
+	// machine. A real executor runs the job and lets the driver signals drive it.
+	if s.mockMode() {
 		return j, nil
 	}
 

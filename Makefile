@@ -135,6 +135,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-dataproc-namespace-k8s \
         test-managedkafka-broker-k8s \
         test-e2e-cloudrun-k8s test-e2e-cloudrun-java test-e2e-cloudrun-docker \
+        test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
@@ -964,6 +965,24 @@ test-e2e-cloudrun-docker: _check-docker-prereq build-gcp ## Cloud Run container 
 	  done; \
 	  CLOUDRUN_E2E_DOCKER=1 JAISCLOUD_HOST=http://localhost:8080 \
 	    go test -v -tags cloudrun_e2e -run TestCloudRunDockerExecution -timeout 10m ./tests/persistent_mode/gcp/cloudrun/
+
+test-e2e-dataproc-docker: _check-docker-prereq _check-iceberg-gcp-prereq build-gcp ## Dataproc Spark jobs under Docker — tests/persistent_mode/gcp/dataproc/ (tag: dataproc_docker_e2e; needs the local Docker daemon + the docker group, and the GCS-connector Spark image)
+	go clean -testcache
+	@set -e; \
+	  JAISCLOUD_SPARK_EXECUTOR_MODE=docker \
+	    JAISCLOUD_K8S_SPARK_IMAGE=$(SPARK_E2E_ICEBERG_GCP_IMAGE) \
+	    JAISCLOUD_K8S_SPARK_SUBMIT_PATH=/opt/spark/bin/spark-submit \
+	    JAISCLOUD_K8S_SPARK_SQL_PATH=/opt/spark/bin/spark-sql \
+	    STORAGE_EMULATOR_HOST=http://localhost:8080 \
+	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-dataproc-docker.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { kill "$$pid" 2>/dev/null || true; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-dataproc-docker.log; exit 1; fi; sleep 1; \
+	  done; \
+	  DATAPROC_DOCKER_E2E=1 JAISCLOUD_HOST=http://localhost:8080 \
+	    go test -v -tags dataproc_docker_e2e -run TestDataprocDockerExecution -timeout 20m ./tests/persistent_mode/gcp/dataproc/
 
 test-e2e-eventarc-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Eventarc delivery e2e on k3d — tests/persistent_mode/gcp/eventarc/ (tag: eventarc_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache

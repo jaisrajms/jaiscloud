@@ -43,11 +43,15 @@ type Service struct {
 	store     dpstore.Store
 	resources store.ResourceStore // terminal snapshots (rehydrate after k8s Job GC)
 
-	k8sClient   kubernetes.Interface // nil = mock execution
+	k8sClient   kubernetes.Interface // nil = no k8s namespace provisioning
 	platformCfg *platform.PlatformConfig
 	namespace   string
 	sparkImage  string
 	gcpEmulator *sparkgcp.GCPEmulatorConfig
+
+	// executor is the driver-submission backend. nil means mock mode: no driver
+	// runs and a job settles lazily in the store.
+	executor driverExecutor
 
 	sparkSubmitPath string
 	sparkSqlPath    string
@@ -141,14 +145,19 @@ const defaultOperationTTL = 24 * time.Hour
 type Option func(*Service)
 
 // WithK8s attaches a Kubernetes client and platform config for real Spark
-// execution (mock mode when nil).
+// execution (mock mode when nil). It also installs the k8s driver executor.
 func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platform.PlatformConfig) Option {
 	return func(s *Service) {
 		s.k8sClient = client
 		s.namespace = namespace
 		s.platformCfg = platformCfg
+		s.executor = k8sDriver{client: client}
 	}
 }
+
+// mockMode reports whether no real driver backend is configured. The job state
+// machine settles lazily on reads in mock mode.
+func (s *Service) mockMode() bool { return s.executor == nil }
 
 // WithSparkImage sets the container image used for spark-submit driver pods.
 func WithSparkImage(image string) Option {
@@ -285,6 +294,9 @@ func (s *Service) Shutdown(_ context.Context) {
 func (s *Service) Reset(ctx context.Context) {
 	s.store.Reset(ctx)
 	s.sweepOwnedNamespaces(ctx)
+	if s.executor != nil {
+		s.executor.Reset(ctx)
+	}
 }
 
 // randomHex returns n random hexadecimal characters.

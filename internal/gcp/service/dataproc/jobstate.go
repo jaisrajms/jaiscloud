@@ -106,7 +106,7 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 		if !jobTransitional(cur.Status.State) || clock.Now().UTC().Before(cur.Status.StateStartTime.Add(s.jobStateDelay)) {
 			return cur, nil
 		}
-		next := jobNextState(cur.Status.State, cur.LongRunning, s.k8sClient == nil)
+		next := jobNextState(cur.Status.State, cur.LongRunning, s.mockMode())
 		if next == cur.Status.State {
 			return cur, nil
 		}

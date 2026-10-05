@@ -208,10 +208,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 	// Engine-capable services report full fidelity when a real engine is
 	// configured, and their documented shape-only/metadata status otherwise.
 	// Each service honours a specific set of engine modes: Kafka k8s/native,
-	// Spark k8s only (docker falls back to mock), Lambda docker/k8s, Cloud Run
-	// docker/k8s.
+	// Spark docker/k8s, Lambda docker/k8s, Cloud Run docker/k8s.
 	kafkaOn := engineBacked(r.modes.KafkaBroker, "k8s", "native")
-	sparkOn := engineBacked(r.modes.Spark, "k8s")
+	sparkOn := engineBacked(r.modes.Spark, "k8s", "docker")
 	lambdaOn := engineBacked(r.modes.Lambda, "docker", "k8s")
 	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s", "docker")
 
@@ -226,9 +225,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 		{Name: "docker", Supported: true, Note: "warm container pool"},
 		{Name: "k8s", Supported: true, Note: "warm Pod + Service; survives restarts"},
 	})
-	dataprocEngine := engineInfo(r.modes.Spark, r.modes.SparkSource, []string{"k8s"}, []coreui.EngineMode{
+	dataprocEngine := engineInfo(r.modes.Spark, r.modes.SparkSource, []string{"k8s", "docker"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "jobs simulated"},
-		{Name: "docker", Supported: false, Note: "not wired; falls back to mock"},
+		{Name: "docker", Supported: true, Note: "containerized spark-submit (local[*])"},
 		{Name: "k8s", Supported: true, Note: "real Spark driver pods"},
 	})
 	kafkaEngine := engineInfo(r.modes.KafkaBroker, r.modes.KafkaBrokerSource, []string{"k8s", "native"}, []coreui.EngineMode{

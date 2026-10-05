@@ -521,8 +521,8 @@ func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 
 // Configuring a real engine upgrades an otherwise shape-only service to full
 // with a note naming the engine, mirroring the AWS executorNote behaviour. Each
-// service honours only the modes it actually supports (Dataproc does not support
-// docker; Cloud Run and Functions support docker and k8s).
+// service honours only the modes it actually supports (Dataproc, Cloud Run and
+// Functions support docker and k8s; Kafka k8s/native).
 func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 	engineReg := func(modes ServiceModes) (tiers, notes map[string]string) {
 		t.Helper()
@@ -551,19 +551,17 @@ func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 		}
 	})
 
-	t.Run("docker upgrades functions and run", func(t *testing.T) {
-		// Dataproc does not support docker (it falls back to mock); Functions
-		// and Cloud Run execute real workloads under docker.
+	t.Run("docker upgrades dataproc, functions and run", func(t *testing.T) {
+		// Dataproc, Functions and Cloud Run all execute real workloads under
+		// docker; Managed Kafka's k8s-free engine is native, not docker.
 		tiers, _ := engineReg(ServiceModes{KafkaBroker: "docker", Spark: "docker", Lambda: "docker", CloudRun: "docker"})
-		for _, id := range []string{"functions", "run"} {
+		for _, id := range []string{"dataproc", "functions", "run"} {
 			if tiers[id] != "full" {
 				t.Errorf("%s: tier = %q, want full under docker", id, tiers[id])
 			}
 		}
-		for id, want := range map[string]string{"dataproc": "shape", "managedkafka": "metadata"} {
-			if tiers[id] != want {
-				t.Errorf("%s: tier = %q, want %q (docker unsupported)", id, tiers[id], want)
-			}
+		if want := "metadata"; tiers["managedkafka"] != want {
+			t.Errorf("managedkafka: tier = %q, want %q (docker unsupported)", tiers["managedkafka"], want)
 		}
 	})
 }
@@ -590,17 +588,22 @@ func TestRegistrar_EngineDescriptorAndOrchestratorParity(t *testing.T) {
 		return coreui.ServiceDescriptor{}
 	}
 
-	// Dataproc docker is unwired: it must read as inactive with an unsupported
-	// docker backend (falls back to mock), not as engine-backed.
-	dataproc := descriptor(ServiceModes{Spark: "docker"}, "dataproc")
-	if dataproc.Engine == nil {
+	// Dataproc honours both docker and k8s; docker must read as an active,
+	// supported backend and its tier must not depend on the orchestrator (docker
+	// and k8s are interchangeable implementations of one executor seam).
+	dataprocDocker := descriptor(ServiceModes{Spark: "docker"}, "dataproc")
+	dataprocK8s := descriptor(ServiceModes{Spark: "k8s"}, "dataproc")
+	if dataprocDocker.Engine == nil {
 		t.Fatal("dataproc: Engine is nil")
 	}
-	if dataproc.Engine.Active || dataproc.Engine.Mode != "" {
-		t.Errorf("dataproc docker: active=%v mode=%q, want inactive", dataproc.Engine.Active, dataproc.Engine.Mode)
+	if !dataprocDocker.Engine.Active || dataprocDocker.Engine.Mode != "docker" {
+		t.Errorf("dataproc docker: active=%v mode=%q, want active docker", dataprocDocker.Engine.Active, dataprocDocker.Engine.Mode)
 	}
-	if len(dataproc.Engine.Modes) != 3 || dataproc.Engine.Modes[1].Name != "docker" || dataproc.Engine.Modes[1].Supported {
-		t.Errorf("dataproc backends = %+v, want docker unsupported", dataproc.Engine.Modes)
+	if len(dataprocDocker.Engine.Modes) != 3 || dataprocDocker.Engine.Modes[1].Name != "docker" || !dataprocDocker.Engine.Modes[1].Supported {
+		t.Errorf("dataproc backends = %+v, want docker supported", dataprocDocker.Engine.Modes)
+	}
+	if dataprocDocker.Tier != dataprocK8s.Tier || dataprocDocker.Tier != "full" {
+		t.Errorf("dataproc tier docker=%q k8s=%q, want identical 'full'", dataprocDocker.Tier, dataprocK8s.Tier)
 	}
 
 	// A k8s engine reads as active with the mode reported.

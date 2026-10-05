@@ -172,10 +172,11 @@ func (s *Service) stopNamespacePatchers() {
 }
 
 // dispatchClusterTeardown runs teardownClusterNamespace in the background so a
-// cluster read (GetCluster/ListClusters) never blocks on namespace deletion. The
-// goroutine is tracked by s.wg so Shutdown waits for in-flight teardowns.
+// cluster read (GetCluster/ListClusters) never blocks on namespace or container
+// teardown. The goroutine is tracked by s.wg so Shutdown waits for in-flight
+// teardowns.
 func (s *Service) dispatchClusterTeardown(c dpstore.Cluster) {
-	if s.k8sClient == nil || c.Namespace == "" {
+	if s.mockMode() {
 		return
 	}
 	s.wg.Add(1)
@@ -185,16 +186,29 @@ func (s *Service) dispatchClusterTeardown(c dpstore.Cluster) {
 	}()
 }
 
-// teardownClusterNamespace removes a deleted cluster's workloads and, when the
-// emulator owns the namespace, the namespace itself. A pre-existing adopted
-// namespace is left in place. It is best-effort and bounded; the caller
-// (advanceCluster) may run on a request context.
+// teardownClusterNamespace reaps a deleted cluster's drivers and, when the
+// emulator owns the namespace, the namespace itself. It is backend-agnostic for
+// the driver reap (k8s Jobs, or Docker containers) and k8s-specific for the
+// namespace. A pre-existing adopted namespace is left in place. It is
+// best-effort and bounded; the caller (advanceCluster) may run on a request
+// context.
 func (s *Service) teardownClusterNamespace(ctx context.Context, c dpstore.Cluster) {
-	if s.k8sClient == nil || c.Namespace == "" {
+	if s.mockMode() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceTeardownTimeout)
 	defer cancel()
+
+	// The executor owns backend-specific driver teardown: Docker sweeps this
+	// cluster's containers; the k8s executor is a no-op here because the Jobs
+	// are reaped (or the namespace deleted, cascading them) below.
+	if s.executor != nil {
+		s.executor.ReapCluster(ctx, c.ProjectID, c.Region, c.Name)
+	}
+
+	if s.k8sClient == nil || c.Namespace == "" {
+		return
+	}
 
 	s.unregisterNamespacePatcher(c.Namespace)
 	s.deleteClusterJobs(ctx, c)

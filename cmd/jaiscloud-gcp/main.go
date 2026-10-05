@@ -417,18 +417,17 @@ func startCmd() *cobra.Command {
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
-			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
-			// for Spark is out of scope (Phase A) — mock only. The core (and its
-			// K8s client) is only built when dataproc is enabled, and it is
-			// shared by the REST provider and the gRPC adapter below so both
-			// transports own one cluster/job state and one executor.
+			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE, or Docker on the
+			// local daemon. The core (and its K8s client) is only built when
+			// dataproc is enabled, and it is shared by the REST provider and the
+			// gRPC adapter below so both transports own one cluster/job state and
+			// one executor.
 			var dataprocCore *dataproccore.Service
 			if serviceEnabled("dataproc") {
 				sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
-				if sparkMode == "docker" {
-					slog.Warn("dataproc: docker Spark executor not supported, falling back to mock")
-					sparkMode = "mock"
-				}
+				// effectiveSparkMode tracks a fallback to mock so the startup log
+				// reports the backend actually used, not just the requested one.
+				effectiveSparkMode := sparkMode
 				dataprocOpts := []dataproccore.Option{
 					dataproccore.WithInstanceID(instanceID),
 					dataproccore.WithProjectID(cfg.ProjectID),
@@ -470,6 +469,12 @@ func startCmd() *cobra.Command {
 				} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
 					gcpEmulatorCfg.GCSEndpoint = v
 				}
+				if sparkMode == "docker" {
+					// A driver container cannot reach the emulator on the host's
+					// loopback address; rewrite it to the host.docker.internal
+					// alias the container's ExtraHosts maps to the host.
+					gcpEmulatorCfg.GCSEndpoint = dockerReachableEndpoint(gcpEmulatorCfg.GCSEndpoint)
+				}
 				dataprocOpts = append(dataprocOpts, dataproccore.WithGCPEmulator(gcpEmulatorCfg))
 				// Cluster mutations are asynchronous and settle lazily on a read.
 				// The default (zero) settles on the first read; a positive value
@@ -508,13 +513,45 @@ func startCmd() *cobra.Command {
 					}
 					if k8sClient, err := buildK8sClient(); err != nil {
 						slog.Warn("dataproc: failed to build k8s client; falling back to mock", "err", err)
+						effectiveSparkMode = "mock"
 					} else {
 						dataprocOpts = append(dataprocOpts, dataproccore.WithK8s(k8sClient, k8sNS, platformCfg))
+					}
+				} else if sparkMode == "docker" {
+					sparkImage := cfg.K8sSparkImage
+					if sparkImage == "" {
+						// A docker Spark driver needs an explicit image; without
+						// one, fall back to mock rather than fail startup (a
+						// global JAISCLOUD_EXECUTOR_MODE=docker must not break a
+						// dataproc deployment that never configured a Spark image).
+						slog.Warn("dataproc: JAISCLOUD_K8S_SPARK_IMAGE is required for docker mode; falling back to mock")
+						effectiveSparkMode = "mock"
+					} else {
+						dataprocOpts = append(dataprocOpts, dataproccore.WithSparkImage(sparkImage))
+						// The docker executor needs the local Docker daemon; if
+						// none is reachable, fall back to mock (a job submit would
+						// otherwise fail) rather than run blind. A platform load
+						// failure (bad TLS/volume config) is not fatal.
+						pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						pingErr := dataproccore.DockerPing(pingCtx, "")
+						cancel()
+						if pingErr != nil {
+							slog.Warn("dataproc: docker daemon unreachable; falling back to mock", "err", pingErr)
+							effectiveSparkMode = "mock"
+						} else {
+							dockerCfg := dataproccore.DockerConfig{Logger: slog.Default(), InstanceID: instanceID}
+							if platformCfg, err := platform.LoadFromEnv(); err != nil {
+								slog.Warn("dataproc: platform config failed; continuing without it", "err", err)
+							} else {
+								dockerCfg.Platform = platformCfg
+							}
+							dataprocOpts = append(dataprocOpts, dataproccore.WithDocker(dockerCfg))
+						}
 					}
 				} else if sparkImage := cfg.K8sSparkImage; sparkImage != "" {
 					dataprocOpts = append(dataprocOpts, dataproccore.WithSparkImage(sparkImage))
 				}
-				slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
+				slog.Info("dataproc executor", "mode", effectiveSparkMode, "requested", sparkMode, "source", sparkModeSrc)
 				dataprocCore = dataproccore.NewService(stores.dataproc, stores.resources, dataprocOpts...)
 				// Deliver lifecycle events directly to functions whose
 				// eventTrigger names a Dataproc state-change type (independent
@@ -1731,6 +1768,21 @@ func buildManagedKafkaBroker(cfg *config.Config) kafkabroker.Broker {
 // bootstrap.
 func buildK8sClient() (kubernetes.Interface, error) {
 	return k8shelpers.NewClient()
+}
+
+// dockerReachableEndpoint rewrites a loopback endpoint (e.g. a
+// STORAGE_EMULATOR_HOST of localhost:8080) to the host.docker.internal alias a
+// Driver/runner container resolves to the host, whose ExtraHosts maps
+// host.docker.internal to the host gateway. A non-loopback or empty endpoint is
+// unchanged.
+func dockerReachableEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return endpoint
+	}
+	return strings.NewReplacer(
+		"localhost", "host.docker.internal",
+		"127.0.0.1", "host.docker.internal",
+	).Replace(endpoint)
 }
 
 func envCmd() *cobra.Command {

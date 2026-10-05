@@ -126,10 +126,10 @@ func TestClassify_StrictExitCode_SQLFailure(t *testing.T) {
 		"24/01/01 12:00:01 INFO ShutdownHookManager: Shutdown hook called",
 	}
 
-	lenient := classify(base, logs, TerminalOptions{})
+	lenient := Classify(base, logs, TerminalOptions{})
 	assert.True(t, lenient.SparkSucceeded, "lenient rule 3 reports success")
 
-	strict := classify(base, logs, TerminalOptions{StrictExitCode: true})
+	strict := Classify(base, logs, TerminalOptions{StrictExitCode: true})
 	assert.False(t, strict.SparkSucceeded, "strict exit-code classification must report failure")
 	assert.NotEmpty(t, strict.SparkReason)
 }
