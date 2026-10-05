@@ -10,7 +10,7 @@ import (
 
 	"jaiscloud/internal/aws/provider/lambda"
 	"jaiscloud/internal/clock"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 

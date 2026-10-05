@@ -4,7 +4,7 @@
 // path, AWS_LAMBDA_* / LAMBDA_TASK_ROOT environment, /var/task code layout,
 // layer mounting, Lambda public images, and Lambda workload naming) and thin
 // constructors so existing AWS callers are unchanged.
-package lambda
+package awslambda
 
 import (
 	"fmt"

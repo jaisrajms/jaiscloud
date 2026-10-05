@@ -597,7 +597,7 @@ test-e2e-functions-docker: _check-docker-prereq build-gcp ## Cloud Functions sou
 	@docker pull $(LAMBDA_IMAGE) > /dev/null
 	@docker network inspect jaiscloud-net > /dev/null 2>&1 || docker network create jaiscloud-net > /dev/null
 	@set -e; \
-	  JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_FUNCTIONS_IMAGE=$(LAMBDA_IMAGE) \
+	  JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_FUNCTIONS_EXECUTOR=lambda JAISCLOUD_FUNCTIONS_IMAGE=$(LAMBDA_IMAGE) \
 	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-functions.log 2>&1 & \
 	  pid=$$!; \
 	  cleanup() { kill "$$pid" 2>/dev/null || true; }; \
@@ -613,8 +613,9 @@ test-e2e-functions-k8s: _check-gcp-samples-prereq ## Cloud Functions source exec
 	docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile .
 	docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE)
 	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
-	  JAISCLOUD_LAMBDA_EXECUTOR_MODE=k8s \
-	  JAISCLOUD_LAMBDA_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud
+	  JAISCLOUD_FUNCTIONS_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_FUNCTIONS_EXECUTOR=lambda \
+	  JAISCLOUD_FUNCTIONS_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud
 	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_K8S=1 \
 	  go test -v -tags functions_e2e -timeout 15m -run TestFunctionSourceCodeMountK8s ./tests/persistent_mode/gcp/functions/

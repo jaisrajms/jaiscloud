@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/gcperr"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
@@ -28,15 +28,15 @@ func newBlockingExecutor() *blockingExecutor {
 	return &blockingExecutor{release: make(chan struct{})}
 }
 
-func (e *blockingExecutor) Invoke(ctx context.Context, req lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
+func (e *blockingExecutor) Invoke(ctx context.Context, req container.Request) (container.Result, error) {
 	e.mu.Lock()
 	e.entered++
 	e.mu.Unlock()
 	select {
 	case <-e.release:
-		return lambdaexec.InvokeResult{Payload: req.Payload}, nil
+		return container.Result{Payload: req.Payload}, nil
 	case <-ctx.Done():
-		return lambdaexec.InvokeResult{}, ctx.Err()
+		return container.Result{}, ctx.Err()
 	}
 }
 func (e *blockingExecutor) DeleteFunction(context.Context, string) {}
@@ -118,20 +118,20 @@ func TestCallFunctionThrottlesAtFunctionCapacity(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", "first"); err != nil {
+		if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", CallInput{Data: "first"}); err != nil {
 			t.Errorf("first call: %v", err)
 		}
 	}()
 	waitEntered(t, ex, 1)
 
-	_, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", "second")
+	_, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", CallInput{Data: "second"})
 	assertResourceExhausted(t, err)
 
 	ex.releaseAll()
 	<-done
 
 	// The slot was released: the next invocation is admitted.
-	if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", "third"); err != nil {
+	if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", CallInput{Data: "third"}); err != nil {
 		t.Fatalf("call after release: %v", err)
 	}
 }
@@ -155,14 +155,14 @@ func TestCallFunctionCapacityIncludesPerInstanceConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", "in"); err != nil {
+			if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", CallInput{Data: "in"}); err != nil {
 				t.Errorf("admitted call: %v", err)
 			}
 		}()
 	}
 	waitEntered(t, ex, 2)
 
-	_, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", "over")
+	_, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", CallInput{Data: "over"})
 	assertResourceExhausted(t, err)
 
 	ex.releaseAll()
@@ -184,7 +184,7 @@ func TestCallFunctionUnlimitedWhenUnconfigured(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", "x"); err != nil {
+			if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "fn", CallInput{Data: "x"}); err != nil {
 				t.Errorf("unconfigured call: %v", err)
 			}
 		}()
@@ -208,13 +208,13 @@ func TestCallFunctionAccountCapThrottles(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "a", "x"); err != nil {
+		if _, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "a", CallInput{Data: "x"}); err != nil {
 			t.Errorf("first call: %v", err)
 		}
 	}()
 	waitEntered(t, ex, 1)
 
-	_, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "b", "y")
+	_, _, _, err := s.CallFunction(context.Background(), "proj", "us-central1", "b", CallInput{Data: "y"})
 	assertResourceExhausted(t, err)
 
 	ex.releaseAll()

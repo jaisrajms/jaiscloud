@@ -136,7 +136,7 @@ func (p *Provider) DeleteFunction(ctx context.Context, project, location, id str
 
 // CallFunction implements ProviderInterface.
 func (p *Provider) CallFunction(ctx context.Context, project, location, id, data string) (string, string, string, error) {
-	return p.svc.CallFunction(ctx, project, location, id, data)
+	return p.svc.CallFunction(ctx, project, location, id, functionscore.CallInput{Data: data})
 }
 
 // GetIamPolicy implements ProviderInterface.

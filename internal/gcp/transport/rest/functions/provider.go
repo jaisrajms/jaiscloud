@@ -209,7 +209,7 @@ func (p *Provider) CallFunction(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	executionID, result, invokeErr, err := p.core.CallFunction(ctx, p.project(nr), location, id, bodyString(bodyOf(nr), "data"))
+	executionID, result, invokeErr, err := p.core.CallFunction(ctx, p.project(nr), location, id, core.CallInput{Data: bodyString(bodyOf(nr), "data")})
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +243,7 @@ func (p *Provider) InvokeTrigger(ctx context.Context, nr *model.NormalizedReques
 		// Event-triggered functions have no HTTPS endpoint.
 		return nil, triggerNotFound()
 	}
-	_, result, invokeErr, err := p.core.CallFunction(ctx, project, f.Location, id, strParam(nr, "payload"))
+	_, result, invokeErr, err := p.core.CallFunction(ctx, project, f.Location, id, core.CallInput{Data: strParam(nr, "payload")})
 	if err != nil {
 		return nil, err
 	}

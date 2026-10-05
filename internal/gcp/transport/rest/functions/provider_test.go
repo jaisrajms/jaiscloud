@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/blobfs"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"

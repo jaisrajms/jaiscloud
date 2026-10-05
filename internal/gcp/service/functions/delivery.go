@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
@@ -161,7 +162,11 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 		if !e.active(ctx, job.gen) {
 			return
 		}
-		_, result, invokeErr, err := e.svc.CallFunction(ctx, rec.Project, rec.Location, rec.FunctionID, rec.Data)
+		_, result, invokeErr, err := e.svc.CallFunction(ctx, rec.Project, rec.Location, rec.FunctionID, CallInput{
+			Data:          rec.Data,
+			SignatureType: "cloudevent",
+			Event:         deliveryCloudEvent(rec),
+		})
 		if err == nil && invokeErr == "" {
 			rec.Attempts = attempt
 			rec.UpdateTime = now()
@@ -349,6 +354,24 @@ func newDelivery(ev eventing.Event, t deliveryTarget) functionsstore.Delivery {
 		Status:     functionsstore.DeliveryPending,
 		CreateTime: now(),
 		UpdateTime: now(),
+	}
+}
+
+// deliveryCloudEvent maps a delivery record onto the CloudEvent metadata the
+// GCP profile sends (binary content mode).
+func deliveryCloudEvent(rec functionsstore.Delivery) *container.CloudEvent {
+	source := rec.Source
+	if source == "" {
+		source = rec.Resource
+	}
+	return &container.CloudEvent{
+		SpecVersion: "1.0",
+		ID:          rec.EventID,
+		Source:      source,
+		Type:        rec.EventType,
+		Data:        []byte(rec.Data),
+		Attributes:  rec.Attributes,
+		Time:        rec.UpdateTime,
 	}
 }
 

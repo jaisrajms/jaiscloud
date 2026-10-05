@@ -78,7 +78,7 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
 	ecsexec "jaiscloud/internal/executor/ecs"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 	"jaiscloud/internal/gateway"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"

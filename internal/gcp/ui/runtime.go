@@ -14,11 +14,11 @@ import (
 )
 
 // dockerSocket is the socket the emulator's Docker executors use. They hardcode
-// the local socket (internal/executor/lambda/docker.go, internal/executor/ecs/
-// docker.go, and the shared internal/docker client used by the Cloud Run and
-// Dataproc executors) and ignore DOCKER_HOST, so the health probe deliberately
-// matches them rather than the developer's `docker` CLI context (which may be a
-// remote SSH/tcp context the emulator cannot reach).
+// the local socket (the ECS executor's internal/executor/ecs/docker.go and the
+// shared internal/docker client used by the container, Cloud Run and Dataproc
+// executors) and ignore DOCKER_HOST, so the health probe deliberately matches
+// them rather than the developer's `docker` CLI context (which may be a remote
+// SSH/tcp context the emulator cannot reach).
 const dockerSocket = docker.DefaultSocket
 
 // k8sSATokenPath is where an in-cluster service account token is mounted.

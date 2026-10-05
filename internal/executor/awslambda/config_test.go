@@ -1,9 +1,9 @@
-package lambda_test
+package awslambda_test
 
 import (
 	"testing"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 )
 
 func TestLambdaConfigFrom_Defaults(t *testing.T) {

@@ -83,3 +83,17 @@ func Int64Env(name string, def int64) int64 {
 	}
 	return n
 }
+
+// NewExecutor constructs the appropriate Executor for the given mode and
+// profile. A profile that manages a platform config should use
+// NewK8sExecutor / NewDockerExecutor directly.
+func NewExecutor(cfg Config, profile Profile) Executor {
+	switch cfg.Mode {
+	case "docker":
+		return NewDockerExecutor(cfg, profile, nil)
+	case "k8s":
+		return NewK8sExecutor(cfg, profile, nil)
+	default:
+		return &MockExecutor{}
+	}
+}

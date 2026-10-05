@@ -193,7 +193,7 @@ func (s *Service) discardSource(ctx context.Context, blobKey string) {
 }
 
 // codeKeySeparator joins a function's location and id into the single opaque
-// CodeKey string the shared Lambda executor's CodeLoader receives (the executor
+// CodeKey string the shared container executor's CodeLoader receives (the executor
 // interface carries account + one name, not a location). It is "." rather than
 // "/" so the key is safe both as a Docker container-name fragment and as the
 // K8s pod/route identifier. Neither GCP locations nor function ids may contain
@@ -212,7 +212,7 @@ func splitCodeKey(key string) (location, id string, ok bool) {
 	return key[:i], key[i+1:], true
 }
 
-// LoadCode implements lambdaexec.CodeLoader for Cloud Functions. funcName is
+// LoadCode implements container.CodeLoader for Cloud Functions. funcName is
 // the composite CodeKey ("location.id") set by CallFunction; the version
 // argument is unused because a GCP function has one stored revision. A function
 // with no persisted source yields (nil, nil), so the executor mounts nothing

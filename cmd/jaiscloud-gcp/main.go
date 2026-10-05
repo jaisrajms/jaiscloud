@@ -21,7 +21,9 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/awslambda"
+	"jaiscloud/internal/executor/container"
+	"jaiscloud/internal/executor/gcf"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	gcauth "jaiscloud/internal/gcp/auth"
@@ -331,38 +333,34 @@ func startCmd() *cobra.Command {
 			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
-			// Cloud Functions reuses the Lambda executor: mock echo by default,
-			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The transport-neutral
-			// core is shared by the REST provider and the gRPC adapter below, so
-			// both transports own one function store and one executor. The
-			// executor (warm container pool / K8s client) is only built when
-			// functions is enabled.
+			// Cloud Functions runs on the shared, cloud-neutral container
+			// executor: mock echo by default, Docker/K8s under
+			// JAISCLOUD_FUNCTIONS_EXECUTOR_MODE / JAISCLOUD_EXECUTOR_MODE. The
+			// transport-neutral core is shared by the REST provider and the gRPC
+			// adapter below, so both transports own one function store and one
+			// executor. The runtime profile is the GCP Functions Framework by
+			// default; JAISCLOUD_FUNCTIONS_EXECUTOR=lambda selects the legacy
+			// Lambda-RIE contract for back-compat.
 			var functionsCore *functionscore.Service
 			if serviceEnabled("functions") {
-				lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
-				lambdaCfg := lambdaexec.DefaultLambdaConfig()
-				lambdaCfg.Mode = lambdaMode
-				lambdaCfg.Region = cfg.Region
-				lambdaCfg.InstanceID = instanceID
-				lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
+				funcMode, funcModeSrc := config.ExecutorMode("functions", "mock")
+				funcCfg := gcf.DefaultConfig()
+				funcCfg.Mode = funcMode
+				funcCfg.Region = cfg.Region
+				funcCfg.InstanceID = instanceID
 				// K8s mode mounts source archives via a code-fetch init container,
 				// which downloads them from the admin API. Prefer an explicit
-				// JAISCLOUD_LAMBDA_CODE_URL (already read into lambdaCfg), else
+				// JAISCLOUD_FUNCTIONS_CODE_URL (already read into funcCfg), else
 				// derive it from a cluster-reachable emulator origin.
-				if lambdaCfg.CodeURL == "" {
-					lambdaCfg.CodeURL = lambdaCodeURL()
+				if funcCfg.CodeURL == "" {
+					funcCfg.CodeURL = lambdaCodeURL()
 				}
-				lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
-				defer lambdaExec.Close()
-				slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
-				// The core is its own lambdaexec.CodeLoader: it resolves a
-				// function's persisted source archive (FD1) from the blob store
-				// so Docker/K8s mode mounts and runs real code (mock stays the
-				// default). It reads GCS source references (v1 sourceArchiveUrl /
-				// v2 storageSource) through the storage provider, which owns
-				// object decryption.
-				functionsCore = functionscore.NewService(stores.functions, stores.resources,
-					functionscore.WithExecutor(lambdaExec),
+				profile := functionsRuntimeProfile()
+				funcExec := container.NewExecutor(funcCfg, profile)
+				defer funcExec.Close()
+				slog.Info("functions executor", "mode", funcMode, "source", funcModeSrc, "profile", profile.Name())
+				serviceOpts := []functionscore.Option{
+					functionscore.WithExecutor(funcExec),
 					functionscore.WithBlobs(stores.blobs),
 					functionscore.WithSourceFetcher(storageP),
 					functionscore.WithSourceBuckets(storageP),
@@ -371,13 +369,25 @@ func startCmd() *cobra.Command {
 					functionscore.WithLROMode(lroMode),
 					// The executor is the shared concurrency resource, so its
 					// account-level cap is also the project-wide admission cap
-					// (FP1). JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT, default 1000.
-					functionscore.WithAccountConcurrencyLimit(lambdaCfg.ConcurrencyLimit),
-				)
-				if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
+					// (FP1). JAISCLOUD_FUNCTIONS_CONCURRENCY_LIMIT, default 1000.
+					functionscore.WithAccountConcurrencyLimit(funcCfg.ConcurrencyLimit),
+				}
+				if strings.EqualFold(os.Getenv("JAISCLOUD_FUNCTIONS_EXECUTOR"), "lambda") {
+					// The legacy Lambda-RIE contract maps GCP runtimes onto
+					// Lambda images; the native profile resolves its own images.
+					serviceOpts = append(serviceOpts, functionscore.WithRuntimeImageResolver(legacyLambdaRuntimeImage))
+				}
+				// The core is its own container.CodeLoader: it resolves a
+				// function's persisted source archive (FD1) from the blob store
+				// so Docker/K8s mode mounts and runs real code (mock stays the
+				// default). It reads GCS source references (v1 sourceArchiveUrl /
+				// v2 storageSource) through the storage provider, which owns
+				// object decryption.
+				functionsCore = functionscore.NewService(stores.functions, stores.resources, serviceOpts...)
+				if dockerExec, ok := funcExec.(*container.DockerExecutor); ok {
 					dockerExec.SetCodeLoader(functionsCore)
 				}
-				if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
+				if k8sExec, ok := funcExec.(*container.K8sExecutor); ok {
 					k8sExec.SetCodeLoader(functionsCore)
 				}
 			}
@@ -1405,7 +1415,7 @@ func startCmd() *cobra.Command {
 				// an engine-capable service is shown as engine-backed rather
 				// than shape-only (see gcpui.ServiceModes).
 				sparkExec, sparkSrc := config.ExecutorMode("spark", "mock")
-				lambdaExec, lambdaSrc := config.ExecutorMode("lambda", "mock")
+				lambdaExec, lambdaSrc := config.ExecutorMode("functions", "mock")
 				cloudRunExec, cloudRunSrc := config.ExecutorMode("cloudrun", "mock")
 				kafkaBrokerMode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
 				kafkaBrokerSrc := "default"
@@ -2154,14 +2164,24 @@ func functionsUploadOrigin(port int) string {
 	return fmt.Sprintf("http://localhost:%d", port)
 }
 
+// functionsRuntimeProfile selects the Cloud Functions runtime profile: the GCP
+// Functions Framework by default, the legacy AWS Lambda-RIE contract when
+// JAISCLOUD_FUNCTIONS_EXECUTOR=lambda (back-compat for existing setups).
+func functionsRuntimeProfile() container.Profile {
+	if strings.EqualFold(os.Getenv("JAISCLOUD_FUNCTIONS_EXECUTOR"), "lambda") {
+		return awslambda.NewLambdaProfile()
+	}
+	return gcf.NewFunctionsFrameworkProfile()
+}
+
 // lambdaCodeURL returns the admin base a K8s code-fetch init container uses to
 // download a Cloud Function's source archive, including the /_jaiscloud prefix
 // (the executor appends /lambda/code/{account}/{key}/$LATEST). It derives the
 // base from the cluster-reachable JAISCLOUD_GCS_EMULATOR_ENDPOINT (the in-cluster
 // Service DNS name) and returns "" when it is unset, so the code mount stays
 // disabled rather than guessing an unreachable localhost address.
-// JAISCLOUD_LAMBDA_CODE_URL takes precedence and is applied earlier (the executor
-// reads it in DefaultLambdaConfig).
+// JAISCLOUD_FUNCTIONS_CODE_URL takes precedence and is applied earlier (the gcf
+// profile reads it in DefaultConfig).
 func lambdaCodeURL() string {
 	v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT")
 	if v == "" {

@@ -1,10 +1,10 @@
-package lambda_test
+package awslambda_test
 
 import (
 	"context"
 	"testing"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,7 +1,7 @@
 // Package functions is the transport-neutral core of Cloud Functions
 // (cloudfunctions.googleapis.com, both v1 and v2). It owns all function,
 // location, IAM, and long-running-operation business logic over
-// internal/gcp/store/functions, and it owns the Lambda executor that backs
+// internal/gcp/store/functions, and it owns the runtime executor that backs
 // synchronous CallFunction invocation (mock echo by default, Docker/K8s under
 // JAISCLOUD_EXECUTOR_MODE).
 //
@@ -28,7 +28,7 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
@@ -98,7 +98,7 @@ const defaultFunctionTimeout = 60 * time.Second
 type Service struct {
 	functions     functionsstore.Store
 	resources     store.ResourceStore // IAM policies (control plane)
-	executor      lambdaexec.LambdaExecutor
+	executor      container.Executor
 	blobs         blobfs.BlobStore // deployed source archives (functions-source)
 	sourceFetcher SourceFetcher    // resolves GCS source references; nil = disabled
 	sourceBuckets SourceBucketEnsurer
@@ -124,14 +124,19 @@ type Service struct {
 	// matching the v1.1.0 contract. An enabled mode stores operations
 	// done=false and settles them lazily on read (see settle).
 	lroMode lro.Mode
+	// runtimeImage optionally pre-resolves a function's container image before
+	// the executor profile sees it. nil (the default) leaves resolution to the
+	// profile. The legacy Lambda-RIE back-compat path sets it to map GCP
+	// runtimes onto Lambda images.
+	runtimeImage func(functionsstore.Function) string
 }
 
 // Option configures Service.
 type Option func(*Service)
 
-// WithExecutor sets the Lambda executor backing CallFunction. A nil executor
-// falls back to a MockExecutor (echo) so CallFunction works out of the box.
-func WithExecutor(e lambdaexec.LambdaExecutor) Option {
+// WithExecutor sets the executor backing CallFunction. A nil executor falls
+// back to a MockExecutor (echo) so CallFunction works out of the box.
+func WithExecutor(e container.Executor) Option {
 	return func(s *Service) { s.executor = e }
 }
 
@@ -182,7 +187,7 @@ func WithSubscriptions(p eventing.SubscriptionProvisioner) Option {
 // invocations (the GCP analogue of Lambda's account concurrency limit). A value
 // <= 0 means unlimited, which is the default for a core-only construction; the
 // Cloud Functions binary wires the shared executor's configured account cap
-// (JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT, default 1000). The gate stays inert only
+// (JAISCLOUD_FUNCTIONS_CONCURRENCY_LIMIT, default 1000). The gate stays inert only
 // when a function has no configured maxInstanceCount and the project cap is
 // unlimited.
 func WithAccountConcurrencyLimit(limit int64) Option {
@@ -197,15 +202,24 @@ func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
 }
 
+// WithRuntimeImageResolver sets a pre-resolution hook that maps a function onto
+// a container image before the executor profile resolves one itself. It exists
+// for the legacy Lambda-RIE back-compat path, where a GCP runtime must be
+// translated to a Lambda image; the default (nil) leaves resolution to the
+// profile.
+func WithRuntimeImageResolver(fn func(functionsstore.Function) string) Option {
+	return func(s *Service) { s.runtimeImage = fn }
+}
+
 // NewService returns a Functions core backed by the given store. resources backs
 // the function IAM policy surface. The executor defaults to a MockExecutor.
 func NewService(fs functionsstore.Store, resources store.ResourceStore, opts ...Option) *Service {
-	s := &Service{functions: fs, resources: resources, executor: &lambdaexec.MockExecutor{}}
+	s := &Service{functions: fs, resources: resources, executor: &container.MockExecutor{}}
 	for _, o := range opts {
 		o(s)
 	}
 	if s.executor == nil {
-		s.executor = &lambdaexec.MockExecutor{}
+		s.executor = &container.MockExecutor{}
 	}
 	s.deliveries = newDeliveryEngine(s)
 	s.gate = newConcurrencyGate()

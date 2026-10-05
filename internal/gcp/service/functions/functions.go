@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/paging"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
@@ -202,12 +202,29 @@ func (s *Service) DeleteFunction(ctx context.Context, project, location, id stri
 	return op, nil
 }
 
-// CallFunction invokes a function synchronously via the Lambda executor. The
-// executor (mock echo by default, Docker/K8s under JAISCLOUD_EXECUTOR_MODE)
-// runs the function's entryPoint and returns the result as a string. An executor
-// failure is reported as invokeErr with a nil error so the wire response carries
-// it (matching real Cloud Functions, which returns the function error in-band).
-func (s *Service) CallFunction(ctx context.Context, project, location, id, data string) (executionID, result, invokeErr string, err error) {
+// CallInput is the transport-neutral input for one function invocation. The
+// invocation kind (HTTP vs CloudEvent) and any event metadata reach the executor
+// through this value, so the REST/gRPC CallFunction, the HTTPS trigger and the
+// event delivery engine cannot drift.
+type CallInput struct {
+	// Data is the invocation payload: the raw HTTP body for an HTTP-signed
+	// function, or the event data for a CloudEvent-signed one.
+	Data string
+	// SignatureType is "http" or "cloudevent". Empty derives it from the
+	// function's trigger (HTTP trigger → http, event trigger → cloudevent).
+	SignatureType string
+	// Event carries producer event metadata for an event-driven invocation. It
+	// is nil for a plain payload invocation.
+	Event *container.CloudEvent
+}
+
+// CallFunction invokes a function synchronously via the shared container
+// executor. The executor (mock echo by default, Docker/K8s under
+// JAISCLOUD_EXECUTOR_MODE) runs the function's entryPoint and returns the result
+// as a string. An executor failure is reported as invokeErr with a nil error so
+// the wire response carries it (matching real Cloud Functions, which returns the
+// function error in-band).
+func (s *Service) CallFunction(ctx context.Context, project, location, id string, in CallInput) (executionID, result, invokeErr string, err error) {
 	f, err := s.GetFunction(ctx, project, location, id)
 	if err != nil {
 		return "", "", "", err
@@ -230,28 +247,52 @@ func (s *Service) CallFunction(ctx context.Context, project, location, id, data 
 	invCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req := lambdaexec.InvokeRequest{
+	// The execution id is generated before the request so a profile can expose it
+	// to the workload (e.g. GCP LOG_EXECUTION_ID).
+	executionID = newUUID()
+
+	// A configured resolver (the legacy Lambda back-compat path) pre-resolves
+	// the image; otherwise the executor profile resolves it.
+	var image string
+	if s.runtimeImage != nil {
+		image = s.runtimeImage(f)
+	}
+
+	req := container.Request{
 		FunctionName: f.ID,
 		// CodeKey carries project+location+id to the shared executor's
-		// CodeLoader (whose interface has only account+name); Image maps the
-		// GCP runtime onto the executor's container image. Both are no-ops in
-		// mock mode, which stays the default.
-		CodeKey:     CodeKey(location, id),
-		Image:       RuntimeImage(f.Runtime),
-		Runtime:     f.Runtime,
-		Handler:     f.EntryPoint,
-		EnvVars:     f.EnvironmentVariables,
-		Payload:     []byte(data),
-		AccountID:   project,
-		MemoryMB:    f.AvailableMemoryMB,
-		TimeoutSecs: int(timeout.Seconds()),
+		// CodeLoader (whose interface has only account+name).
+		CodeKey:       CodeKey(location, id),
+		Runtime:       f.Runtime,
+		Handler:       f.EntryPoint,
+		Image:         image,
+		EnvVars:       f.EnvironmentVariables,
+		Payload:       []byte(in.Data),
+		AccountID:     project,
+		MemoryMB:      f.AvailableMemoryMB,
+		TimeoutSecs:   int(timeout.Seconds()),
+		SignatureType: signatureType(f, in.SignatureType),
+		ExecutionID:   executionID,
+		Event:         in.Event,
 	}
-	executionID = newUUID()
 	res, ierr := s.executor.Invoke(invCtx, req)
 	if ierr != nil {
 		return executionID, "", ierr.Error(), nil
 	}
 	return executionID, string(res.Payload), "", nil
+}
+
+// signatureType resolves the function's invocation signature: an explicit input
+// wins, else an event-triggered function is cloudevent and an HTTP-triggered one
+// is http.
+func signatureType(f functionsstore.Function, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if f.EventTrigger != nil {
+		return "cloudevent"
+	}
+	return "http"
 }
 
 // GenerateDownloadURL returns a fake signed download URL for a function's source

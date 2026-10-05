@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
@@ -16,9 +16,9 @@ import (
 // failingExecutor always fails an invocation, for retry/dead-letter tests.
 type failingExecutor struct{ calls int }
 
-func (e *failingExecutor) Invoke(context.Context, lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
+func (e *failingExecutor) Invoke(context.Context, container.Request) (container.Result, error) {
 	e.calls++
-	return lambdaexec.InvokeResult{}, errors.New("boom")
+	return container.Result{}, errors.New("boom")
 }
 func (e *failingExecutor) DeleteFunction(context.Context, string) {}
 func (e *failingExecutor) Reset(context.Context)                  {}

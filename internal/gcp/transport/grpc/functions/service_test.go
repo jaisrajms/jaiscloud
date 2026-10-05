@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"jaiscloud/internal/blobfs"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/store"
