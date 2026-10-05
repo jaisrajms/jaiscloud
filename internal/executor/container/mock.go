@@ -1,4 +1,4 @@
-package lambda
+package container
 
 import "context"
 
@@ -6,8 +6,8 @@ import "context"
 // Used in memory mode and as the default when no executor mode is configured.
 type MockExecutor struct{}
 
-func (e *MockExecutor) Invoke(_ context.Context, req InvokeRequest) (InvokeResult, error) {
-	return InvokeResult{Payload: req.Payload}, nil
+func (e *MockExecutor) Invoke(_ context.Context, req Request) (Result, error) {
+	return Result{Payload: req.Payload}, nil
 }
 
 func (e *MockExecutor) DeleteFunction(_ context.Context, _ string) {}

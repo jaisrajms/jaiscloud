@@ -12,11 +12,6 @@ import (
 	"jaiscloud/internal/logstream"
 )
 
-// LogsIngestor is the interface the Lambda executor uses to write CW log events.
-// It is satisfied structurally by the CloudWatch Logs provider via the logstream
-// adapter in internal/aws/provider/cloudwatch/logs/internal_api.go.
-type LogsIngestor = logstream.Ingestor
-
 // ringBuffer keeps the last cap bytes of data (drops oldest on overflow).
 type ringBuffer struct {
 	mu   sync.Mutex
@@ -44,7 +39,8 @@ func (r *ringBuffer) Bytes() []byte {
 	return out
 }
 
-// LogStreamer tails an io.Reader, writes lines to CloudWatch Logs, and keeps a 4 KiB tail ring.
+// LogStreamer tails an io.Reader, writes lines to CloudWatch Logs, and keeps a
+// 4 KiB tail ring.
 type LogStreamer struct {
 	logsAPI       LogsIngestor
 	ring          *ringBuffer

@@ -1,10 +1,8 @@
-package lambda
+package container
 
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,42 +23,25 @@ import (
 	"jaiscloud/internal/platform"
 )
 
-const (
-	riePort  = 8080
-	riePath  = "/2015-03-31/functions/function/invocations"
-	labelApp = "jaiscloud-lambda"
-	// k8sReadyTimeout bounds EnsureWorkload's wait for a warm pod's endpoint.
-	k8sReadyTimeout = 90 * time.Second
-)
-
-// instancePrefix returns the instance-scoped pod/service prefix.
-// Format: jc-lambda-<instanceID[:8]>-
-// Falls back to "jc-lambda-" when InstanceID is empty (dev/test mode).
-func instancePrefix(instanceID string) string {
-	if len(instanceID) >= 8 {
-		return "jc-lambda-" + instanceID[:8] + "-"
-	}
-	if instanceID != "" {
-		return "jc-lambda-" + instanceID + "-"
-	}
-	return "jc-lambda-"
-}
+// k8sReadyTimeout bounds EnsureWorkload's wait for a warm pod's endpoint.
+const k8sReadyTimeout = 90 * time.Second
 
 type warmPod struct {
 	name     string // shared Pod + ClusterIP Service name
-	endpoint string // http://<name>.<ns>.svc.cluster.local:8080; empty = sentinel (being created)
+	endpoint string // http://<name>.<ns>.svc.cluster.local:<port>; empty = sentinel (being created)
 	lastUsed time.Time
 }
 
-// K8sExecutor manages warm Pods per Lambda function using the Lambda RIE HTTP
-// protocol. The Kubernetes control plane (Pod + ClusterIP Service create,
+// K8sExecutor manages warm Pods per function using the profile's HTTP invocation
+// contract. The Kubernetes control plane (Pod + ClusterIP Service create,
 // readiness, delete, sweep) goes through internal/k8shelpers; only the
-// invocation path (the RIE HTTP call to the pod) uses a plain HTTP client.
+// invocation path (the HTTP call to the pod) uses a plain HTTP client.
 type K8sExecutor struct {
-	cfg        LambdaConfig
+	cfg        Config
+	profile    Profile
 	platform   *platform.PlatformConfig
 	client     kubernetes.Interface // talks to the K8s API server (client-go)
-	invoke     *http.Client         // talks to Lambda RIE pods (16min timeout)
+	invoke     *http.Client         // talks to warm pods
 	probe      func(string) bool    // endpoint readiness probe; nil = TCP dial (tests inject)
 	mu         sync.Mutex
 	pods       map[string]*warmPod // functionName -> warm pod
@@ -85,24 +66,32 @@ func WithWorkloadProbe(probe func(string) bool) K8sExecutorOption {
 	return func(e *K8sExecutor) { e.probe = probe }
 }
 
-// SetCodeLoader injects the code loader for /var/task init-container mounting.
+// SetCodeLoader injects the code loader for the code-fetch init container.
 func (e *K8sExecutor) SetCodeLoader(l CodeLoader) { e.codeLoader = l }
 
-// SetLogsAPI injects the CloudWatch Logs ingestor for pod log streaming.
+// SetLogsAPI injects the workload log ingestor.
 func (e *K8sExecutor) SetLogsAPI(l LogsIngestor) { e.logsAPI = l }
 
+// SetProfile overrides the runtime profile.
+func (e *K8sExecutor) SetProfile(p Profile) { e.profile = p }
+
+// SetProfile overrides the runtime profile.
+func (e *DockerExecutor) SetProfile(p Profile) { e.profile = p }
+
 // NewK8sExecutor creates a K8sExecutor with warm-pod-per-function architecture.
-// plat may be nil. A Kubernetes client is built from the in-cluster config /
-// JAISCLOUD_K8S_* environment unless WithK8sClient injects one.
-func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig, opts ...K8sExecutorOption) *K8sExecutor {
+// profile supplies the per-cloud runtime contract; plat may be nil. A Kubernetes
+// client is built from the in-cluster config / JAISCLOUD_K8S_* environment
+// unless WithK8sClient injects one.
+func NewK8sExecutor(cfg Config, profile Profile, plat *platform.PlatformConfig, opts ...K8sExecutorOption) *K8sExecutor {
 	if cfg.Namespace == "" {
 		cfg.Namespace = "jaiscloud"
 	}
 
 	e := &K8sExecutor{
 		cfg:      cfg,
+		profile:  profile,
 		platform: plat,
-		invoke:   &http.Client{Timeout: 16 * time.Minute},
+		invoke:   &http.Client{Timeout: dockerInvokeTimeout},
 		pods:     make(map[string]*warmPod),
 		done:     make(chan struct{}),
 	}
@@ -112,7 +101,7 @@ func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig, opts ...K8s
 	if e.client == nil {
 		client, err := k8shelpers.NewClient()
 		if err != nil {
-			slog.Warn("lambda k8s: cannot build Kubernetes client; k8s execution disabled", "err", err)
+			slog.Warn("executor k8s: cannot build Kubernetes client; k8s execution disabled", "err", err)
 		} else {
 			e.client = client
 		}
@@ -123,16 +112,16 @@ func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig, opts ...K8s
 	return e
 }
 
-// Invoke obtains a warm pod for the function (creating one if needed) and
-// POSTs the payload via the Lambda RIE HTTP protocol.
-func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error) {
+// Invoke obtains a warm pod for the function (creating one if needed) and sends
+// the profile's invocation request.
+func (e *K8sExecutor) Invoke(ctx context.Context, req Request) (Result, error) {
 	pod, err := e.getOrCreate(ctx, req)
 	if err != nil {
-		return InvokeResult{}, fmt.Errorf("lambda k8s: get/create pod: %w", err)
+		return Result{}, fmt.Errorf("executor k8s: get/create pod: %w", err)
 	}
 
-	url := pod.endpoint + riePath
-	var payload []byte
+	inv := e.profile.Invocation(req)
+	url := pod.endpoint + inv.Path
 	backoff := time.Second
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
@@ -141,7 +130,7 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResu
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 					go e.removePod(context.Background(), req.FunctionName)
 				}
-				return InvokeResult{}, ctx.Err()
+				return Result{}, ctx.Err()
 			case <-time.After(backoff):
 				if backoff < 4*time.Second {
 					backoff += time.Second
@@ -149,26 +138,33 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResu
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Payload))
+		httpReq, err := http.NewRequestWithContext(ctx, inv.Method, url, bytes.NewReader(inv.Body))
 		if err != nil {
-			return InvokeResult{}, fmt.Errorf("lambda k8s: build request: %w", err)
+			return Result{}, fmt.Errorf("executor k8s: build request: %w", err)
 		}
-		httpReq.Header.Set("Content-Type", "application/json")
+		for k, v := range inv.Header {
+			httpReq.Header.Set(k, v)
+		}
 
 		resp, err := e.invoke.Do(httpReq)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				go e.removePod(context.Background(), req.FunctionName)
-				return InvokeResult{}, ctx.Err()
+				return Result{}, ctx.Err()
 			}
-			slog.Warn("lambda k8s: invoke attempt failed", "attempt", attempt+1, "err", err)
+			slog.Warn("executor k8s: invoke attempt failed", "attempt", attempt+1, "err", err)
 			continue
 		}
-		payload, err = io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if err != nil {
-			slog.Warn("lambda k8s: read response failed", "attempt", attempt+1, "err", err)
+		if readErr != nil {
+			slog.Warn("executor k8s: read response failed", "attempt", attempt+1, "err", readErr)
 			continue
+		}
+		payload, derr := e.profile.DecodeResponse(resp.StatusCode, body)
+		if derr != nil {
+			e.removePod(ctx, req.FunctionName)
+			return Result{}, fmt.Errorf("executor k8s: %w", derr)
 		}
 
 		e.mu.Lock()
@@ -176,11 +172,11 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResu
 			p.lastUsed = clock.RealNow()
 		}
 		e.mu.Unlock()
-		return InvokeResult{Payload: payload}, nil
+		return Result{Payload: payload}, nil
 	}
 
 	e.removePod(ctx, req.FunctionName)
-	return InvokeResult{}, fmt.Errorf("lambda k8s: all invoke attempts failed for %s", req.FunctionName)
+	return Result{}, fmt.Errorf("executor k8s: all invoke attempts failed for %s", req.FunctionName)
 }
 
 // DeleteFunction tears down the warm pod for the named function.
@@ -189,8 +185,8 @@ func (e *K8sExecutor) DeleteFunction(ctx context.Context, name string) {
 }
 
 // Reset destroys all warm pods (called on /_jaiscloud/reset).
-// After clearing the in-memory map it performs a label-filtered sweep to
-// catch any pods that are live on the cluster but missing from the map (LG5).
+// After clearing the in-memory map it performs a label-filtered sweep to catch
+// any pods that are live on the cluster but missing from the map.
 func (e *K8sExecutor) Reset(_ context.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -221,7 +217,7 @@ func (e *K8sExecutor) Close() error {
 
 // ─── internal ────────────────────────────────────────────────────────────────
 
-func (e *K8sExecutor) getOrCreate(ctx context.Context, req InvokeRequest) (*warmPod, error) {
+func (e *K8sExecutor) getOrCreate(ctx context.Context, req Request) (*warmPod, error) {
 	for {
 		e.mu.Lock()
 		if p, ok := e.pods[req.FunctionName]; ok {
@@ -264,19 +260,19 @@ func (e *K8sExecutor) getOrCreate(ctx context.Context, req InvokeRequest) (*warm
 // passing it through the environment (and quoting the reference) keeps the
 // shell from expanding that token to an empty string, which would request
 // `.../{key}/` and 404.
-const codeArchiveEnvName = "JAISCLOUD_LAMBDA_CODE_ARCHIVE_URL"
+const codeArchiveEnvName = "JAISCLOUD_CODE_ARCHIVE_URL"
 
 // applyCodeMount injects the source code-fetch init container into a pod spec
 // when both a CodeLoader and a CodeURL base are configured. The init container
 // downloads the archive over the admin HTTP API and unpacks it into a shared
-// emptyDir mounted (read-only) at /var/task in the runtime container.
+// emptyDir mounted (read-only) at mountDir in the runtime container.
 //
 // The URL is {CodeURL}/lambda/code/{account}/{codeKey}/$LATEST; CodeURL must
-// therefore be the admin base including the /_jaiscloud prefix (see
-// LambdaConfig.CodeURL). A nil loader or empty CodeURL is a no-op, leaving the
-// mock/mounted-elsewhere behavior unchanged.
-func applyCodeMount(spec *k8stypes.PodSpec, cfg LambdaConfig, req InvokeRequest, loader CodeLoader) {
-	if loader == nil || cfg.CodeURL == "" || len(spec.Containers) == 0 {
+// therefore be the admin base including the /_jaiscloud prefix. A nil loader or
+// empty CodeURL is a no-op, leaving the mock/mounted-elsewhere behavior
+// unchanged.
+func applyCodeMount(spec *k8stypes.PodSpec, cfg Config, req Request, loader CodeLoader, mountDir string) {
+	if loader == nil || cfg.CodeURL == "" || len(spec.Containers) == 0 || mountDir == "" {
 		return
 	}
 	codeURL := fmt.Sprintf("%s/lambda/code/%s/%s/$LATEST", cfg.CodeURL, req.AccountID, codeKey(req))
@@ -290,23 +286,25 @@ func applyCodeMount(spec *k8stypes.PodSpec, cfg LambdaConfig, req InvokeRequest,
 		Name:         "code-fetch",
 		Image:        cfg.InitImage,
 		Command:      []string{"/bin/sh", "-c"},
-		Args:         []string{`wget -qO /tmp/code.zip "$` + codeArchiveEnvName + `" && unzip /tmp/code.zip -d /var/task`},
+		Args:         []string{`wget -qO /tmp/code.zip "$` + codeArchiveEnvName + `" && unzip /tmp/code.zip -d ` + mountDir},
 		Env:          []k8stypes.EnvVar{{Name: codeArchiveEnvName, Value: codeURL}},
-		VolumeMounts: []k8stypes.VolumeMount{{Name: "code", MountPath: "/var/task"}},
+		VolumeMounts: []k8stypes.VolumeMount{{Name: "code", MountPath: mountDir}},
 	})
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts,
-		k8stypes.VolumeMount{Name: "code", MountPath: "/var/task", ReadOnly: true},
+		k8stypes.VolumeMount{Name: "code", MountPath: mountDir, ReadOnly: true},
 	)
 }
 
-func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPod, error) {
+func (e *K8sExecutor) createPod(ctx context.Context, req Request) (*warmPod, error) {
 	if e.client == nil {
-		return nil, fmt.Errorf("lambda k8s: no Kubernetes client configured")
+		return nil, fmt.Errorf("executor k8s: no Kubernetes client configured")
 	}
 	ns := e.cfg.Namespace
-	image := ImageForRuntime(req, e.cfg)
+	image := e.profile.ImageForRuntime(e.cfg, req)
+	port := e.profile.InvocationPort()
+	label := e.profile.WorkloadLabel()
 	sanitized := sanitizePodName(req.FunctionName)
-	pfx := instancePrefix(e.cfg.InstanceID)
+	pfx := e.profile.WorkloadNamePrefix(e.cfg.InstanceID)
 	// k8shelpers uses one name for the Pod and its ClusterIP Service, and a
 	// Service name is a DNS-1123 label (<=63 chars). Bound the function segment
 	// so the unique "-<id>" suffix always fits; the function label keeps the
@@ -318,12 +316,8 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	}
 	name := pfx + base + "-" + idSuffix
 
-	env := k8sRuntimeEnv(e.cfg, req)
-
-	var args []string
-	if req.Handler != "" {
-		args = []string{req.Handler}
-	}
+	env := K8sEnv(e.profile.RuntimeEnv(e.cfg, req))
+	args := e.profile.ContainerArgs(req)
 
 	memMB := req.MemoryMB
 	if memMB < 128 {
@@ -334,18 +328,18 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		RestartPolicy:      "Never",
 		ServiceAccountName: e.cfg.ServiceAccount,
 		Containers: []k8stypes.Container{{
-			Name:            "lambda",
+			Name:            "function",
 			Image:           image,
 			ImagePullPolicy: "IfNotPresent",
 			Args:            args,
 			Env:             env,
-			Ports:           []k8stypes.ContainerPort{{ContainerPort: riePort}},
+			Ports:           []k8stypes.ContainerPort{{ContainerPort: port}},
 			Resources: &k8stypes.Resources{
 				Requests: map[string]string{"cpu": "100m", "memory": "64Mi"},
 				Limits:   map[string]string{"cpu": "1", "memory": fmt.Sprintf("%dMi", memMB)},
 			},
 			ReadinessProbe: &k8stypes.Probe{
-				TCPSocket:           &k8stypes.TCPSocketAction{Port: riePort},
+				TCPSocket:           &k8stypes.TCPSocketAction{Port: port},
 				InitialDelaySeconds: 1,
 				PeriodSeconds:       1,
 				FailureThreshold:    30,
@@ -360,9 +354,9 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		}
 	}
 
-	// Code volume: inject an init container that fetches the zip and unpacks it
-	// into /var/task via a shared emptyDir when a code URL base is configured.
-	applyCodeMount(&podSpec, e.cfg, req, e.codeLoader)
+	// Code volume: inject an init container that fetches the archive and unpacks
+	// it into the profile's code mount dir via a shared emptyDir.
+	applyCodeMount(&podSpec, e.cfg, req, e.codeLoader, e.profile.CodeMountDir())
 
 	coreSpec, err := coreV1PodSpec(podSpec)
 	if err != nil {
@@ -370,7 +364,7 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	}
 
 	podLabels := map[string]string{
-		"app":                      labelApp,
+		"app":                      label,
 		"function":                 sanitized,
 		"jaiscloud.io/instance-id": e.cfg.InstanceID,
 	}
@@ -385,14 +379,14 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 			"function":                 sanitized,
 			"jaiscloud.io/instance-id": e.cfg.InstanceID,
 		},
-		Ports:        []k8shelpers.ServicePort{{Name: "http", Port: riePort, TargetPort: riePort}},
+		Ports:        []k8shelpers.ServicePort{{Name: "http", Port: int32(port), TargetPort: int32(port)}},
 		ReadyTimeout: k8sReadyTimeout,
 		Probe:        e.probe,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ensure workload: %w", err)
 	}
-	slog.Info("lambda k8s: pod created", "pod", name, "function", req.FunctionName)
+	slog.Info("executor k8s: pod created", "pod", name, "function", req.FunctionName)
 
 	return &warmPod{
 		name:     name,
@@ -428,10 +422,10 @@ func (e *K8sExecutor) removePod(ctx context.Context, functionName string) {
 		return
 	}
 	if err := k8shelpers.DeleteWorkload(ctx, e.client, e.cfg.Namespace, pod.name); err != nil {
-		slog.Warn("lambda k8s: remove pod/service failed", "function", functionName, "err", err)
+		slog.Warn("executor k8s: remove pod/service failed", "function", functionName, "err", err)
 		return
 	}
-	slog.Info("lambda k8s: removed pod and service", "function", functionName)
+	slog.Info("executor k8s: removed pod and service", "function", functionName)
 }
 
 func (e *K8sExecutor) gcLoop() {
@@ -466,28 +460,28 @@ func (e *K8sExecutor) gcOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for _, name := range toRemove {
-		slog.Info("lambda k8s: GC idle pod", "function", name)
+		slog.Info("executor k8s: GC idle pod", "function", name)
 		e.removePod(ctx, name)
 	}
 }
 
 // orphanSelector matches every workload this deployment owns, across functions.
 func (e *K8sExecutor) orphanSelector() string {
-	return fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", labelApp, e.cfg.InstanceID)
+	return fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", e.profile.WorkloadLabel(), e.cfg.InstanceID)
 }
 
 // cleanupOrphans deletes pods and services from previous runs on startup.
-// Only resources labeled with this instance's ID are touched (LG1 / LR2).
+// Only resources labeled with this instance's ID are touched.
 func (e *K8sExecutor) cleanupOrphans() {
 	if e.client == nil {
 		return
 	}
 	n, err := k8shelpers.SweepWorkloads(context.Background(), e.client, e.cfg.Namespace, e.orphanSelector())
 	if err != nil {
-		slog.Warn("lambda k8s: cleanupOrphans sweep failed", "err", err)
+		slog.Warn("executor k8s: cleanupOrphans sweep failed", "err", err)
 	}
 	if n > 0 {
-		slog.Info("lambda k8s: cleaned up orphans", "count", n)
+		slog.Info("executor k8s: cleaned up orphans", "count", n)
 	}
 }
 
@@ -497,7 +491,7 @@ func (e *K8sExecutor) sweepOrphans(ctx context.Context) {
 		return
 	}
 	if _, err := k8shelpers.SweepWorkloads(ctx, e.client, e.cfg.Namespace, e.orphanSelector()); err != nil {
-		slog.Warn("lambda k8s: reset sweep failed", "err", err)
+		slog.Warn("executor k8s: reset sweep failed", "err", err)
 	}
 }
 
@@ -516,12 +510,4 @@ func sanitizePodName(name string) string {
 		s = s[:40]
 	}
 	return s
-}
-
-func shortID() string {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%08x", clock.RealNow().UnixNano()&0xffffffff)
-	}
-	return hex.EncodeToString(b)
 }

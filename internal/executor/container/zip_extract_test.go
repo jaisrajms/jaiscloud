@@ -1,4 +1,4 @@
-package lambda
+package container
 
 import (
 	"archive/zip"

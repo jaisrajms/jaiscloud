@@ -1,4 +1,4 @@
-package lambda
+package container
 
 import (
 	"context"
@@ -19,26 +19,81 @@ import (
 	"jaiscloud/internal/k8stypes"
 )
 
+// testProfile is a minimal Profile for the executor mechanics tests. It mirrors
+// the shape the AWS Lambda profile produces (port 8080, /var/task, handler arg,
+// jc-lambda- workload names) without importing the Lambda package.
+type testProfile struct{}
+
+func (testProfile) Name() string { return "test" }
+
+func (testProfile) InvocationPort() int { return 8080 }
+
+func (testProfile) Invocation(req Request) Invocation {
+	return Invocation{Method: http.MethodPost, Path: "/invoke", Header: map[string]string{"Content-Type": "application/json"}, Body: req.Payload}
+}
+
+func (testProfile) DecodeResponse(_ int, body []byte) ([]byte, error) { return body, nil }
+
+func (testProfile) RuntimeEnv(_ Config, req Request) []EnvVar {
+	return []EnvVar{{Name: "HANDLER", Value: req.Handler}, {Name: "AWS_LAMBDA_FUNCTION_NAME", Value: req.FunctionName}}
+}
+
+func (testProfile) CodeMountDir() string  { return "/var/task" }
+func (testProfile) LayerMountDir() string { return "/opt" }
+
+func (testProfile) WorkloadLabel() string { return "jaiscloud-lambda" }
+
+func (testProfile) WorkloadNamePrefix(instanceID string) string {
+	if len(instanceID) >= 8 {
+		return "jc-lambda-" + instanceID[:8] + "-"
+	}
+	if instanceID != "" {
+		return "jc-lambda-" + instanceID + "-"
+	}
+	return "jc-lambda-"
+}
+
+func (testProfile) ContainerArgs(req Request) []string {
+	if req.Handler == "" {
+		return nil
+	}
+	return []string{req.Handler}
+}
+
+func (testProfile) ImageForRuntime(cfg Config, req Request) string {
+	if req.Image != "" {
+		return req.Image
+	}
+	if cfg.DefaultImage != "" {
+		return cfg.DefaultImage
+	}
+	if req.Runtime == "python3.12" {
+		return "public.ecr.aws/lambda/python:3.12"
+	}
+	return "public.ecr.aws/lambda/provided:al2"
+}
+
 // newTestK8sExecutor builds a K8sExecutor backed by a kubernetes/fake client.
 // The workload probe always succeeds — the fake cluster has no live endpoints.
 func newTestK8sExecutor(t *testing.T, client *fake.Clientset) *K8sExecutor {
 	t.Helper()
 	return &K8sExecutor{
-		cfg: LambdaConfig{
+		cfg: Config{
 			Namespace:     "jaiscloud",
 			InstanceID:    "testinst",
 			KeepaliveSecs: 300,
 		},
-		client: client,
-		invoke: &http.Client{Timeout: 5 * time.Second},
-		probe:  func(string) bool { return true },
-		pods:   make(map[string]*warmPod),
-		done:   make(chan struct{}),
+		profile: testProfile{},
+		client:  client,
+		invoke:  &http.Client{Timeout: 5 * time.Second},
+		probe:   func(string) bool { return true },
+		pods:    make(map[string]*warmPod),
+		done:    make(chan struct{}),
 	}
 }
 
 func ownedLabels() map[string]string {
-	return map[string]string{"app": labelApp, "jaiscloud.io/instance-id": "testinst"}
+	return map[string]string{"app": "jaiscloud-lambda", "jaiscloud.io/instance-id": "testinst"}
 }
 
 func TestK8sLambda_Close_DeletesAllWarmPods(t *testing.T) {
@@ -83,7 +138,7 @@ func TestK8sLambda_CleanupOrphans_DeletesOrphanedPodsAndServices(t *testing.T) {
 }
 
 func TestK8sLambda_CleanupOrphans_LeavesOtherInstancesAndUnlabeled(t *testing.T) {
-	other := map[string]string{"app": labelApp, "jaiscloud.io/instance-id": "someone-else"}
+	other := map[string]string{"app": "jaiscloud-lambda", "jaiscloud.io/instance-id": "someone-else"}
 	client := fake.NewSimpleClientset(
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "other-instance", Namespace: "jaiscloud", Labels: other}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "unlabeled", Namespace: "jaiscloud"}},
@@ -131,7 +186,7 @@ func TestK8sLambda_CreatePod_EnsuresWorkload(t *testing.T) {
 	e := newTestK8sExecutor(t, client)
 	e.cfg.ServiceAccount = "executor-sa"
 
-	pod, err := e.createPod(context.Background(), InvokeRequest{
+	pod, err := e.createPod(context.Background(), Request{
 		FunctionName: "MyFn",
 		Runtime:      "python3.12",
 		Handler:      "app.handler",
@@ -158,7 +213,7 @@ func TestK8sLambda_CreatePod_EnsuresWorkload(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, corev1.ServiceTypeClusterIP, svc.Spec.Type)
 	require.Len(t, svc.Spec.Ports, 1)
-	assert.Equal(t, int32(riePort), svc.Spec.Ports[0].Port)
+	assert.Equal(t, int32(8080), svc.Spec.Ports[0].Port)
 	assert.Equal(t, "myfn", svc.Spec.Selector["function"])
 	assert.Equal(t, "testinst", svc.Spec.Selector["jaiscloud.io/instance-id"])
 
@@ -170,7 +225,7 @@ func TestK8sLambda_CreatePod_EnsuresWorkload(t *testing.T) {
 func TestNewK8sExecutor_InjectsClientAndProbe(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	probe := func(string) bool { return true }
-	e := NewK8sExecutor(LambdaConfig{Namespace: "jaiscloud", InstanceID: "inst"}, nil,
+	e := NewK8sExecutor(Config{Namespace: "jaiscloud", InstanceID: "inst"}, testProfile{}, nil,
 		WithK8sClient(client), WithWorkloadProbe(probe))
 	defer e.Close()
 
@@ -187,7 +242,7 @@ func TestK8sLambda_CreatePod_BoundsWorkloadName(t *testing.T) {
 	e := newTestK8sExecutor(t, client)
 	e.cfg.InstanceID = "0123456789abcdef"
 
-	pod, err := e.createPod(context.Background(), InvokeRequest{
+	pod, err := e.createPod(context.Background(), Request{
 		FunctionName: strings.Repeat("LongFunctionName", 5),
 		Runtime:      "python3.12",
 	})
@@ -200,8 +255,7 @@ func TestK8sLambda_CreatePod_BoundsWorkloadName(t *testing.T) {
 }
 
 // TestK8sLambda_CreatePod_NotReady_Reaps asserts a readiness failure propagates
-// and leaves no Pod/Service behind (EnsureWorkload's own reap), which the old
-// raw-HTTP path did not do.
+// and leaves no Pod/Service behind (EnsureWorkload's own reap).
 func TestK8sLambda_CreatePod_NotReady_Reaps(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	e := newTestK8sExecutor(t, client)
@@ -209,7 +263,7 @@ func TestK8sLambda_CreatePod_NotReady_Reaps(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err := e.createPod(ctx, InvokeRequest{FunctionName: "Fn", Runtime: "python3.12"})
+	_, err := e.createPod(ctx, Request{FunctionName: "Fn", Runtime: "python3.12"})
 	require.Error(t, err)
 
 	list, err := client.CoreV1().Pods("jaiscloud").List(context.Background(), metav1.ListOptions{})
@@ -229,7 +283,7 @@ func TestCoreV1PodSpec_ConvertsPlatformFields(t *testing.T) {
 		ServiceAccountName: "executor-sa",
 		InitContainers:     []k8stypes.Container{{Name: "code-fetch", Image: "alpine:latest"}},
 		Containers: []k8stypes.Container{{
-			Name:  "lambda",
+			Name:  "function",
 			Image: "img:1",
 			Env: []k8stypes.EnvVar{
 				{Name: "PLAIN", Value: "v"},
@@ -238,7 +292,7 @@ func TestCoreV1PodSpec_ConvertsPlatformFields(t *testing.T) {
 				}},
 			},
 			Resources:      &k8stypes.Resources{Limits: map[string]string{"memory": "256Mi"}},
-			ReadinessProbe: &k8stypes.Probe{TCPSocket: &k8stypes.TCPSocketAction{Port: riePort}},
+			ReadinessProbe: &k8stypes.Probe{TCPSocket: &k8stypes.TCPSocketAction{Port: 8080}},
 		}},
 		Volumes: []k8stypes.Volume{
 			{Name: "code", EmptyDir: &k8stypes.EmptyDirVol{}},
@@ -261,7 +315,7 @@ func TestCoreV1PodSpec_ConvertsPlatformFields(t *testing.T) {
 	assert.Equal(t, "s", out.Containers[0].Env[1].ValueFrom.SecretKeyRef.Name)
 	require.NotNil(t, out.Containers[0].ReadinessProbe)
 	require.NotNil(t, out.Containers[0].ReadinessProbe.TCPSocket)
-	assert.Equal(t, int32(riePort), out.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal)
+	assert.Equal(t, int32(8080), out.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal)
 	assert.Equal(t, "256Mi", out.Containers[0].Resources.Limits.Memory().String())
 	require.Len(t, out.Volumes, 2)
 	assert.NotNil(t, out.Volumes[0].EmptyDir)
@@ -280,13 +334,13 @@ func (fakeCodeLoader) LoadCode(context.Context, string, string, string) ([]byte,
 // TestApplyCodeMount_InjectsInitContainer is the FD7 regression: with a
 // CodeLoader and a CodeURL configured, the pod spec carries a code-fetch init
 // container that downloads the function archive from the admin API into a
-// shared emptyDir mounted read-only at /var/task.
+// shared emptyDir mounted read-only at the profile's code mount dir.
 func TestApplyCodeMount_InjectsInitContainer(t *testing.T) {
-	spec := k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "lambda"}}}
-	cfg := LambdaConfig{CodeURL: "http://jaiscloud:8080/_jaiscloud", InitImage: "alpine:latest"}
-	req := InvokeRequest{FunctionName: "fn", AccountID: "proj", CodeKey: "us-central1.hello"}
+	spec := k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "function"}}}
+	cfg := Config{CodeURL: "http://jaiscloud:8080/_jaiscloud", InitImage: "alpine:latest"}
+	req := Request{FunctionName: "fn", AccountID: "proj", CodeKey: "us-central1.hello"}
 
-	applyCodeMount(&spec, cfg, req, fakeCodeLoader{})
+	applyCodeMount(&spec, cfg, req, fakeCodeLoader{}, "/var/task")
 
 	require.Len(t, spec.InitContainers, 1)
 	ic := spec.InitContainers[0]
@@ -319,12 +373,11 @@ func TestApplyCodeMount_InjectsInitContainer(t *testing.T) {
 }
 
 // TestApplyCodeMount_CodeKeyFallsBackToFunctionName asserts the archive key used
-// in the URL falls back to FunctionName when no explicit CodeKey is set (the AWS
-// Lambda behavior), and that a missing loader or empty CodeURL disables the
-// mount entirely.
+// in the URL falls back to FunctionName when no explicit CodeKey is set, and that
+// a missing loader or empty CodeURL disables the mount entirely.
 func TestApplyCodeMount_CodeKeyFallsBackToFunctionName(t *testing.T) {
-	spec := k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "lambda"}}}
-	applyCodeMount(&spec, LambdaConfig{CodeURL: "http://x/_jaiscloud"}, InvokeRequest{AccountID: "acct", FunctionName: "my-fn"}, fakeCodeLoader{})
+	spec := k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "function"}}}
+	applyCodeMount(&spec, Config{CodeURL: "http://x/_jaiscloud"}, Request{AccountID: "acct", FunctionName: "my-fn"}, fakeCodeLoader{}, "/var/task")
 
 	require.Len(t, spec.InitContainers, 1)
 	assert.Contains(t, spec.InitContainers[0].Env[0].Value, "/lambda/code/acct/my-fn/$LATEST")
@@ -332,17 +385,17 @@ func TestApplyCodeMount_CodeKeyFallsBackToFunctionName(t *testing.T) {
 
 func TestApplyCodeMount_DisabledWithoutLoaderOrURL(t *testing.T) {
 	base := func() k8stypes.PodSpec {
-		return k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "lambda"}}}
+		return k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "function"}}}
 	}
 
 	spec := base()
-	applyCodeMount(&spec, LambdaConfig{CodeURL: "http://x/_jaiscloud"}, InvokeRequest{}, nil)
+	applyCodeMount(&spec, Config{CodeURL: "http://x/_jaiscloud"}, Request{}, nil, "/var/task")
 	assert.Empty(t, spec.InitContainers)
 	assert.Empty(t, spec.Volumes)
 	assert.Empty(t, spec.Containers[0].VolumeMounts)
 
 	spec = base()
-	applyCodeMount(&spec, LambdaConfig{}, InvokeRequest{}, fakeCodeLoader{})
+	applyCodeMount(&spec, Config{}, Request{}, fakeCodeLoader{}, "/var/task")
 	assert.Empty(t, spec.InitContainers)
 	assert.Empty(t, spec.Volumes)
 	assert.Empty(t, spec.Containers[0].VolumeMounts)
@@ -352,10 +405,10 @@ func TestApplyCodeMount_DisabledWithoutLoaderOrURL(t *testing.T) {
 // TLS (or other) init containers added before the code mount must survive.
 func TestApplyCodeMount_PreservesExistingInitContainers(t *testing.T) {
 	spec := k8stypes.PodSpec{
-		Containers:     []k8stypes.Container{{Name: "lambda"}},
+		Containers:     []k8stypes.Container{{Name: "function"}},
 		InitContainers: []k8stypes.Container{{Name: "tls-materialize"}},
 	}
-	applyCodeMount(&spec, LambdaConfig{CodeURL: "http://x/_jaiscloud"}, InvokeRequest{AccountID: "p", FunctionName: "fn"}, fakeCodeLoader{})
+	applyCodeMount(&spec, Config{CodeURL: "http://x/_jaiscloud"}, Request{AccountID: "p", FunctionName: "fn"}, fakeCodeLoader{}, "/var/task")
 
 	require.Len(t, spec.InitContainers, 2)
 	assert.Equal(t, "tls-materialize", spec.InitContainers[0].Name)
@@ -372,8 +425,7 @@ func writeExec(t *testing.T, path, script string) {
 
 // TestApplyCodeMount_CommandKeepsLatestQualifier runs the generated init
 // command under a real shell with stub wget/unzip on PATH, proving the literal
-// "$LATEST" qualifier reaches wget intact. Before the fix the shell expanded it
-// to empty and wget requested the wrong (404) URL.
+// "$LATEST" qualifier reaches wget intact.
 func TestApplyCodeMount_CommandKeepsLatestQualifier(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
@@ -384,8 +436,8 @@ func TestApplyCodeMount_CommandKeepsLatestQualifier(t *testing.T) {
 	writeExec(t, filepath.Join(dir, "wget"), "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nprintf '%s' \"$last\" > "+record+"\n")
 	writeExec(t, filepath.Join(dir, "unzip"), "#!/bin/sh\nexit 0\n")
 
-	spec := k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "lambda"}}}
-	applyCodeMount(&spec, LambdaConfig{CodeURL: "http://x/_jaiscloud"}, InvokeRequest{AccountID: "p", CodeKey: "us-central1.hello"}, fakeCodeLoader{})
+	spec := k8stypes.PodSpec{Containers: []k8stypes.Container{{Name: "function"}}}
+	applyCodeMount(&spec, Config{CodeURL: "http://x/_jaiscloud"}, Request{AccountID: "p", CodeKey: "us-central1.hello"}, fakeCodeLoader{}, "/var/task")
 	require.Len(t, spec.InitContainers, 1)
 	ic := spec.InitContainers[0]
 

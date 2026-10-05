@@ -6,29 +6,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/executor/container"
 )
 
 // TestCommonRuntimeEnv_DoesNotSetLambdaRuntimeAPI is the FD14 regression guard:
 // AWS_LAMBDA_RUNTIME_API must never be injected, because the Lambda base image's
 // entrypoint starts its bundled RIE only when the variable is unset. Setting it
 // suppresses the RIE, so the runtime bootstrap exits and the container/pod never
-// serves. It must hold for both the Docker and K8s env builders.
+// serves. It must hold for both the Docker and K8s env renderings.
 func TestCommonRuntimeEnv_DoesNotSetLambdaRuntimeAPI(t *testing.T) {
 	cfg := LambdaConfig{Region: "us-east-1", JaisCloudEndpoint: "http://jc:8080"}
 	req := InvokeRequest{FunctionName: "fn", Handler: "app.handler", AccountID: "acct"}
 
-	for _, env := range [][]runtimeEnvVar{commonRuntimeEnv(cfg, req), runtimeEnvPairs(cfg, req)} {
+	for _, env := range [][]container.EnvVar{commonRuntimeEnv(cfg, req), runtimeEnvPairs(cfg, req)} {
 		for _, kv := range env {
 			assert.NotEqual(t, "AWS_LAMBDA_RUNTIME_API", kv.Name,
 				"AWS_LAMBDA_RUNTIME_API must not be set: it stops the base image entrypoint from starting the RIE")
 		}
 	}
 
-	for _, kv := range dockerRuntimeEnv(cfg, req) {
+	for _, kv := range container.DockerEnv(runtimeEnvPairs(cfg, req)) {
 		assert.False(t, strings.HasPrefix(kv, "AWS_LAMBDA_RUNTIME_API="),
 			"docker env must not set AWS_LAMBDA_RUNTIME_API")
 	}
-	for _, kv := range k8sRuntimeEnv(cfg, req) {
+	for _, kv := range container.K8sEnv(runtimeEnvPairs(cfg, req)) {
 		assert.NotEqual(t, "AWS_LAMBDA_RUNTIME_API", kv.Name,
 			"k8s env must not set AWS_LAMBDA_RUNTIME_API")
 	}
@@ -64,12 +66,12 @@ func TestRuntimeEnv_BaseContents(t *testing.T) {
 	assert.Equal(t, "my-value", got["MY_VAR"])
 
 	// The Docker and K8s renderings carry the same names/values.
-	dockerEnv := dockerRuntimeEnv(cfg, req)
+	dockerEnv := container.DockerEnv(pairs)
 	require.Len(t, dockerEnv, len(pairs))
 	for i, kv := range pairs {
 		assert.Equal(t, kv.Name+"="+kv.Value, dockerEnv[i])
 	}
-	k8sEnv := k8sRuntimeEnv(cfg, req)
+	k8sEnv := container.K8sEnv(pairs)
 	require.Len(t, k8sEnv, len(pairs))
 	for i, kv := range pairs {
 		assert.Equal(t, kv.Name, k8sEnv[i].Name)
