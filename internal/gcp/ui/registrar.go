@@ -315,7 +315,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Category: "Compute",
 			RootPath: "/gcp/functions",
 			Tier:     statusTier(lambdaOn, coreui.TierShape),
-			Note:     engineNote(lambdaOn, "code executor", r.modes.Lambda, "Shape only — GCS-source execution (Docker/K8s); no container build"),
+			Note:     engineNote(lambdaOn, "Functions Framework executor", r.modes.Lambda, "Shape only — GCS-source execution runs the GCP Functions Framework (Docker/K8s); no container build"),
 			Engine:   functionsEngine,
 			Children: []coreui.ServiceChild{{Label: "Functions", Path: "/gcp/functions"}},
 		})

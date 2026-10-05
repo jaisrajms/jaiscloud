@@ -35,8 +35,12 @@ REGISTRY ?=
 # ─── Container images ─────────────────────────────────────────────────────────
 # Matches const DefaultImage in internal/executor/spark/config.go
 SPARK_IMAGE             ?= apache/spark:3.5.0
-# Matches python3.12 entry in internal/executor/lambda/config.go runtimeImages
+# Matches python3.12 entry in internal/executor/awslambda/profile.go runtimeImages
 LAMBDA_IMAGE            ?= public.ecr.aws/lambda/python:3.12
+# Functions-Framework image for the Cloud Functions native-executor e2e gates
+# (built from tests/persistent_mode/gcp/functions/ff-image).
+FUNCTIONS_FF_IMAGE       ?= jaiscloud-functions-framework-python:latest
+FUNCTIONS_FF_IMAGE_K8S   ?= $(GCP_REGISTRY)/jaiscloud-functions-framework-python:latest
 # Custom Iceberg-enabled Spark image (must be built locally before use)
 SPARK_E2E_ICEBERG_IMAGE ?= spark-iceberg-test
 # GCP variant: apache/spark:3.5.0 + iceberg-spark-runtime + gcs-connector (hadoop3);
@@ -594,8 +598,8 @@ test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence test
 	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./...
 
 test-e2e-functions-docker: _check-docker-prereq build-gcp ## Cloud Functions source execution under Docker — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
-	@docker pull $(LAMBDA_IMAGE) > /dev/null
-	@docker network inspect jaiscloud-net > /dev/null 2>&1 || docker network create jaiscloud-net > /dev/null
+	@docker --context default pull $(LAMBDA_IMAGE) > /dev/null
+	@docker --context default network inspect jaiscloud-net > /dev/null 2>&1 || docker --context default network create jaiscloud-net > /dev/null
 	@set -e; \
 	  JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_FUNCTIONS_EXECUTOR=lambda JAISCLOUD_FUNCTIONS_IMAGE=$(LAMBDA_IMAGE) \
 	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-functions.log 2>&1 & \
@@ -619,6 +623,45 @@ test-e2e-functions-k8s: _check-gcp-samples-prereq ## Cloud Functions source exec
 	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_K8S=1 \
 	  go test -v -tags functions_e2e -timeout 15m -run TestFunctionSourceCodeMountK8s ./tests/persistent_mode/gcp/functions/
+
+test-e2e-functions-framework-docker: _check-docker-prereq build-gcp ## Cloud Functions native Functions-Framework execution under Docker — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
+	@docker --context default image inspect $(FUNCTIONS_FF_IMAGE) > /dev/null 2>&1 || \
+	  docker --context default build -t $(FUNCTIONS_FF_IMAGE) tests/persistent_mode/gcp/functions/ff-image
+	@docker --context default network inspect jaiscloud-net > /dev/null 2>&1 || docker --context default network create jaiscloud-net > /dev/null
+	@set -e; \
+	  JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_FUNCTIONS_IMAGE=$(FUNCTIONS_FF_IMAGE) \
+	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-functions-ff.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { kill "$$pid" 2>/dev/null || true; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-functions-ff.log; exit 1; fi; sleep 1; \
+	  done; \
+	  FUNCTIONS_E2E_FF_IMAGE=$(FUNCTIONS_FF_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
+	    go test -v -tags functions_e2e -timeout 5m -run TestFunctionsFrameworkHTTP ./tests/persistent_mode/gcp/functions/
+
+test-e2e-functions-framework-k8s: _check-gcp-samples-prereq ## Cloud Functions native Functions-Framework execution under K8s — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
+	@docker build -t $(FUNCTIONS_FF_IMAGE) tests/persistent_mode/gcp/functions/ff-image
+	docker tag $(FUNCTIONS_FF_IMAGE) $(FUNCTIONS_FF_IMAGE_K8S)
+	docker push $(GCP_PUSH_FLAGS) $(FUNCTIONS_FF_IMAGE_K8S)
+	@echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."
+	docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile .
+	docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE)
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	  JAISCLOUD_FUNCTIONS_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_FUNCTIONS_EXECUTOR=functions-framework \
+	  JAISCLOUD_FUNCTIONS_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud \
+	  JAISCLOUD_FUNCTIONS_IMAGE=$(FUNCTIONS_FF_IMAGE_K8S)
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@set -e; \
+	  kubectl -n $(K8S_NAMESPACE) port-forward deployment/jaiscloud-gcp $(JAISCLOUD_PORT):8080 > /tmp/jaiscloud-gcp-ff-port-forward.log 2>&1 & \
+	  pf=$$!; \
+	  trap 'kill $$pf 2>/dev/null || true' EXIT INT TERM; \
+	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: port-forward not ready"; cat /tmp/jaiscloud-gcp-ff-port-forward.log; exit 1; fi; sleep 1; \
+	  done; \
+	  JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_FF_IMAGE=$(FUNCTIONS_FF_IMAGE_K8S) \
+	    go test -v -tags functions_e2e -timeout 15m -run TestFunctionsFrameworkHTTP ./tests/persistent_mode/gcp/functions/
 
 ##@ GCP integration tests
 

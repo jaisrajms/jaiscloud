@@ -234,7 +234,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   registers both `google.cloud.functions.v1.CloudFunctionsService` and
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
-  (runtime invocation) is served over the shared core's Lambda executor on both transports.
+  (runtime invocation) is served over the shared cloud-neutral container executor on both
+  transports: by default it runs the **GCP Functions Framework** contract (`POST /` on `$PORT`,
+  source mounted at `/workspace`, `FUNCTION_TARGET`/`FUNCTION_SIGNATURE_TYPE`/`LOG_EXECUTION_ID`
+  injected), and `JAISCLOUD_FUNCTIONS_EXECUTOR=lambda` selects the legacy Lambda-RIE contract.
 - **gRPC** — **7** of **458** cells remain `limited`: verified against proto descriptors only.
   The other **332** are `ga` and **119** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
