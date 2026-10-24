@@ -22,6 +22,7 @@ var (
 	ErrNoSuchService        = errors.New("NoSuchService")
 	ErrNoSuchBackup         = errors.New("NoSuchBackup")
 	ErrNoSuchMetadataImport = errors.New("NoSuchMetadataImport")
+	ErrNoSuchFederation     = errors.New("NoSuchFederation")
 	ErrNoSuchOperation      = errors.New("NoSuchOperation")
 	ErrAlreadyExists        = errors.New("AlreadyExists")
 )
@@ -80,6 +81,22 @@ type MetadataImport struct {
 	EndTime     time.Time       `json:"endTime"`
 }
 
+// Federation is a logical Dataproc Metastore federation
+// (projects/{project}/locations/{location}/federations/{federation}). Config
+// holds the wire request body (version, backendMetastores, ...) verbatim as
+// JSON; Labels are the extracted labels map. State is output-only and always
+// ACTIVE (the emulator completes federation mutations synchronously).
+type Federation struct {
+	ProjectID  string            `json:"projectId"`
+	Location   string            `json:"location"`
+	Name       string            `json:"federationName"`
+	Config     json.RawMessage   `json:"config,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	State      string            `json:"state"`
+	CreateTime time.Time         `json:"createTime"`
+	UpdateTime time.Time         `json:"updateTime"`
+}
+
 // Operation is a done long-running operation. Metadata and Response are the
 // already-rendered JSON wire objects (Metadata carries its @type) stored
 // verbatim, mirroring the Dataproc operation shape.
@@ -121,6 +138,15 @@ type Store interface {
 	// import under a service.
 	UpdateMetadataImportAtomic(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error)
 	ListMetadataImports(ctx context.Context, projectID, location, serviceName string) ([]MetadataImport, error)
+
+	CreateFederation(ctx context.Context, projectID, location string, f Federation) error
+	GetFederation(ctx context.Context, projectID, location, name string) (Federation, error)
+	// UpdateFederationAtomic reads, mutates, and writes a federation under one
+	// lock (memory) or a Serializable SELECT ... FOR UPDATE transaction
+	// (postgres), mirroring UpdateServiceAtomic.
+	UpdateFederationAtomic(ctx context.Context, projectID, location, name string, mutate func(Federation) (Federation, error)) (Federation, error)
+	DeleteFederation(ctx context.Context, projectID, location, name string) error
+	ListFederations(ctx context.Context, projectID, location string) ([]Federation, error)
 
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
 	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)

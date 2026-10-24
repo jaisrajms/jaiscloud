@@ -2,6 +2,7 @@
 // (serviceusage.googleapis.com/v1), which manages a project's enabled APIs:
 //
 //	GET  /v1/projects/{project}/services
+//	GET  /v1/projects/{project}/services:batchGet
 //	GET  /v1/projects/{project}/services/{service}
 //	POST /v1/projects/{project}/services:batchEnable
 //	POST /v1/projects/{project}/services/{service}:enable
@@ -67,6 +68,11 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
 	queryToParams(r, nr.Params)
+	// `names` is a repeated query parameter (services:batchGet); keep every
+	// value, not just the first, so the handler sees the whole batch.
+	if names, ok := r.URL.Query()["names"]; ok {
+		nr.Params["names"] = names
+	}
 	m, err := parseJSON(body)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
@@ -108,6 +114,8 @@ func serviceUsageAction(rest []string, custom, method string) string {
 	switch {
 	case len(rest) == 1 && custom == "" && method == http.MethodGet:
 		return "ServicesList"
+	case len(rest) == 1 && custom == "batchGet" && method == http.MethodGet:
+		return "ServicesBatchGet"
 	case len(rest) == 1 && custom == "batchEnable" && method == http.MethodPost:
 		return "ServicesBatchEnable"
 	case len(rest) == 2 && custom == "" && method == http.MethodGet:

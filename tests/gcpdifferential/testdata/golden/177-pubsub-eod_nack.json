@@ -1,0 +1,16 @@
+{
+  "index": 177,
+  "service": "pubsub",
+  "op": "eod_nack",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-eod-sub-<suffix>:modifyAckDeadline",
+  "status": 200,
+  "request": {
+    "ackDeadlineSeconds": 0,
+    "ackIds": [
+      "<ackId>"
+    ]
+  },
+  "response": {}
+}
+

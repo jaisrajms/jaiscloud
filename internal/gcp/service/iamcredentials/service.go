@@ -5,10 +5,10 @@
 // over this core, so both produce identical credentials.
 //
 // Credentials are emulator stubs, not real Google tokens: the access token is
-// the documented emulator prefix plus a well-formed RS256 JWT signed by the
-// account's emulator key, so internal/gcp/identity can recover the caller
-// identity from it and impersonation flows keep working. Real GCP returns an
-// opaque token instead.
+// an opaque RS256 JWT signed by the account's emulator key, so
+// internal/gcp/identity can recover the caller identity from it and
+// impersonation flows keep working. Real GCP returns an opaque token; the
+// emulator's is likewise opaque to clients — it carries no recognizable prefix.
 package iamcredentials
 
 import (
@@ -22,11 +22,6 @@ import (
 )
 
 const (
-	// AccessTokenPrefix is the emulator's impersonation-token convention,
-	// mirroring downscope.TokenPrefix. The floci-gcp compatibility suite
-	// asserts this prefix.
-	AccessTokenPrefix = "floci-gcp-impersonated-"
-
 	// defaultLifetime is the token lifetime when the request omits one.
 	defaultLifetime = time.Hour
 	// idTokenLifetime is the fixed lifetime of a generated ID token.
@@ -111,7 +106,7 @@ func (s *Service) GenerateAccessToken(ctx context.Context, account, email string
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return AccessTokenPrefix + jwt, expires, nil
+	return jwt, expires, nil
 }
 
 // GenerateIDToken mints an OpenID Connect ID token for email. audience is

@@ -84,7 +84,7 @@ func TestPatchDocument_ConcurrentWriteDetected(t *testing.T) {
 	// stale base it read), losing the concurrent update with no error.
 	_, err := p.PatchDocument(ctx, "proj", "(default)", "cities/SF",
 		map[string]*firestorestore.Value{"name": firestorestore.StringVal("San Francisco")},
-		[]string{"name"}, nil)
+		&UpdateMask{Paths: []string{"name"}}, nil)
 	if err == nil {
 		t.Fatal("expected the concurrent write to be detected (ABORTED), got nil error")
 	}

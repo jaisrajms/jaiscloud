@@ -1,0 +1,26 @@
+{
+  "index": 1,
+  "service": "storage",
+  "op": "error_bucket_already_exists",
+  "method": "POST",
+  "path": "/storage/v1/b?project=<project>",
+  "status": 409,
+  "request": {
+    "location": "US",
+    "name": "<bucket>"
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "Your previous request to create the named bucket succeeded and you already own it.",
+          "reason": "conflict"
+        }
+      ],
+      "message": "Your previous request to create the named bucket succeeded and you already own it."
+    }
+  }
+}
+

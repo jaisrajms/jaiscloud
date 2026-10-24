@@ -206,7 +206,10 @@ func route(rest, method string, nr *model.NormalizedRequest) (string, bool) {
 		}
 		return "", false
 	case strings.HasSuffix(rest, "/timeSeries"):
-		if !setParent(nr, rest, "/timeSeries") {
+		// timeSeries.list is the one Monitoring method declared on the
+		// folders scope as well as projects; the create sibling stays
+		// project-only, so the two methods resolve their parent differently.
+		if !setTimeSeriesParent(nr, rest, method) {
 			return "", false
 		}
 		switch method {
@@ -311,6 +314,23 @@ func setParent(nr *model.NormalizedRequest, rest, collection string) bool {
 	}
 	nr.Params["parent"] = parent
 	nr.Params["project"] = project
+	return true
+}
+
+// setTimeSeriesParent resolves the parent of the timeSeries collection: a
+// projects/{p} parent for both verbs, or a folders/{f} parent for list (the
+// folders arm is read-only). The store scope key lands in "project".
+func setTimeSeriesParent(nr *model.NormalizedRequest, rest, method string) bool {
+	parent := strings.TrimSuffix(rest, "/timeSeries")
+	scope, ok := core.ScopeFromResourceName(parent)
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(scope, "folders/") && method != http.MethodGet {
+		return false
+	}
+	nr.Params["parent"] = parent
+	nr.Params["project"] = scope
 	return true
 }
 

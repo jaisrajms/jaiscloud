@@ -18,6 +18,15 @@ func TaskName(project, location, queue, task string) string {
 	return resource.ResourceID(project)("tasks-task", location+"/"+queue+"/"+task)
 }
 
+// OperationName returns the canonical Cloud Tasks long-running operation
+// resource name (projects/{project}/locations/{location}/operations/{id}). The
+// REST batchCreate/batchDelete methods return a google.longrunning.Operation in
+// this namespace; the emulator performs the work inline and returns a done
+// operation, so the id is ephemeral.
+func OperationName(project, location, id string) string {
+	return resource.ResourceID(project)("tasks-operation", location+"/"+id)
+}
+
 // ParseQueueName splits a canonical queue name into its parts. It returns
 // ok=false when the name is not a
 // projects/{p}/locations/{l}/queues/{q} path.

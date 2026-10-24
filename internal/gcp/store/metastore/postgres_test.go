@@ -5,23 +5,36 @@ package metastore
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
-	"reflect"
 	"testing"
 
 	gcpstore "jaiscloud/internal/gcp/store"
 	"jaiscloud/internal/store"
 )
 
-// jsonEqual reports whether two JSON documents are semantically equal, ignoring
-// object key order (JSONB normalizes key order on the round trip).
-func jsonEqual(a, b string) bool {
-	var av, bv any
-	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
-		return false
+// TestPostgresStore runs the shared store matrix against the Postgres backend so
+// the two backends are held to the identical contract (the matrix covers the
+// CRUD + atomic-update paths; the snapshot round trip has its own test below).
+func TestPostgresStore(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres store test")
 	}
-	return reflect.DeepEqual(av, bv)
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	runStoreTests(t, s)
 }
 
 // TestPostgresStoreSnapshotVerbatim verifies that service config, backup
@@ -60,6 +73,10 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 		t.Fatalf("create import: %v", err)
 	}
 	_ = s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op1", Done: true, Metadata: `{"@type":"t"}`})
+	const fConfig = `{"version":"3.1.2"}`
+	if err := s.CreateFederation(ctx, "proj", "us-central1", Federation{Name: "f1", Config: []byte(fConfig), Labels: map[string]string{"k": "v"}, State: "ACTIVE"}); err != nil {
+		t.Fatalf("create federation: %v", err)
+	}
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -89,5 +106,10 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	gotM, err := s.GetMetadataImport(ctx, "proj", "us-central1", "s1", "m1")
 	if err != nil || gotM.State != "SUCCEEDED" || !jsonEqual(string(gotM.Config), mConfig) {
 		t.Fatalf("import lost after restore: %v %+v", err, gotM)
+	}
+
+	gotF, err := s.GetFederation(ctx, "proj", "us-central1", "f1")
+	if err != nil || gotF.State != "ACTIVE" || !jsonEqual(string(gotF.Config), fConfig) {
+		t.Fatalf("federation lost after restore: %v %+v", err, gotF)
 	}
 }

@@ -1,0 +1,33 @@
+# gcplint allowlist — justified exceptions to the GCP house conventions.
+#
+# Format:   <path>:<rule>   # required reason
+# Paths are matched by suffix against the diagnostic (or type) file. Every entry
+# MUST carry a trailing "# reason"; an entry without one is reported and skipped.
+# Prefer an inline "//gcplint:ignore[-file] <rule>" comment in the source when
+# the exception is local; use this file for cross-file rules and for a whole
+# file of deliberate, documented deviations.
+
+# reset-registration — these cores delegate Reset to a store that is itself
+# registered (or embed a registered Service), so their state is reset through it.
+internal/gcp/provider/firestore/service.go:reset-registration   # firestoreP (embeds Service) + firestoreGRPC are registered and reset it
+internal/gcp/service/eventarc/service.go:reset-registration     # Reset delegates to the registered eventarc store
+internal/gcp/service/metastore/service.go:reset-registration    # Reset delegates to the registered metastore store
+internal/gcp/provider/iceberg/iceberg.go:reset-registration     # Reset delegates to the registered iceberg store
+
+# resource-prefix — prefixes, parse-derived names, or resources with no shared
+# formatter in internal/gcp/resource.
+internal/gcp/downscope/downscope.go:resource-prefix          # expected IAM condition prefix for validation, not a response name
+internal/gcp/service/logging/logname.go:resource-prefix      # rebuilds the project parent from a parsed log name
+internal/gcp/store/firestore/memory.go:resource-prefix       # document path prefix used for listing
+internal/gcp/store/firestore/store.go:resource-prefix        # parse-derived parent path
+internal/gcp/provider/firestore/indexes.go:resource-prefix   # no firestore-index formatter in the shared catalog
+internal/gcp/grpc/firestore/listen.go:resource-prefix        # document parent prefix built from parsed segments
+internal/gcp/grpc/pubsub/service.go:resource-prefix          # snapshot name; no pubsub-snapshot formatter
+internal/gcp/transport/grpc/logging/admin.go:resource-prefix # project global-location parent; no formatter
+
+# unsafe-assert — assertions on keys the producer always populates.
+internal/gcp/store/gcs/memory.go:unsafe-assert                  # sort key "name" is set by every object encoder
+internal/gcp/service/functions/locations.go:unsafe-assert       # LocationJSON always sets "locationId"
+internal/gcp/workflows/expr/eval.go:unsafe-assert               # r is already typed string by the enclosing type switch
+internal/gcp/transport/grpc/functions/transcode.go:unsafe-assert # FunctionJSON always sets "name"
+internal/gcp/ui/uihelper/uihelper.go:unsafe-assert              # middleware always sets the region/account context keys

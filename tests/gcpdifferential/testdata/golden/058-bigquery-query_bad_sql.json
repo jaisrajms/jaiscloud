@@ -1,0 +1,28 @@
+{
+  "index": 58,
+  "service": "bigquery",
+  "op": "query_bad_sql",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 400,
+  "request": {
+    "query": "SELECT FROM"
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "q",
+          "locationType": "parameter",
+          "message": "Syntax error: SELECT list must not be empty at [1:8]",
+          "reason": "invalidQuery"
+        }
+      ],
+      "message": "Syntax error: SELECT list must not be empty at [1:8]",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

@@ -1,7 +1,9 @@
 package tasks
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -9,9 +11,56 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/resource"
+	core "jaiscloud/internal/gcp/service/tasks"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
+
+// Operation type URLs for the Cloud Tasks batch long-running operations. Real
+// cloudtasks/v2 declares tasks:batchCreate and tasks:batchDelete as
+// google.longrunning.Operations whose response is a BatchCreateTasksResponse or
+// google.protobuf.Empty, with BatchCreateTasksMetadata / BatchDeleteTasksMetadata
+// metadata. The emulator runs them inline and returns a done operation carrying
+// the typed response, so a client that reads the operation (rather than polling)
+// sees the documented shape.
+const (
+	batchCreateResponseType = "type.googleapis.com/google.cloud.tasks.v2.BatchCreateTasksResponse"
+	batchCreateMetadataType = "type.googleapis.com/google.cloud.tasks.v2.BatchCreateTasksMetadata"
+	batchDeleteMetadataType = "type.googleapis.com/google.cloud.tasks.v2.BatchDeleteTasksMetadata"
+	emptyTypeURL            = "type.googleapis.com/google.protobuf.Empty"
+)
+
+// batchOperationJSON renders a completed (done=true) google.longrunning
+// .Operation for a synchronous batch mutation. name is the location-scoped
+// operation name; metadataType is the operation's metadata type URL; response
+// is the already-typed result envelope.
+func batchOperationJSON(project, location, metadataType string, response map[string]any) map[string]any {
+	now := timestamp.Canonical(clock.Now())
+	return map[string]any{
+		"name": core.OperationName(project, location, randomHex(12)),
+		"done": true,
+		"metadata": map[string]any{
+			"@type":     metadataType,
+			"state":     "SUCCEEDED",
+			"startTime": now,
+			"endTime":   now,
+		},
+		"response": response,
+	}
+}
+
+// randomHex returns n random hexadecimal characters for an ephemeral operation
+// id (zero-filled on RNG failure, which never blocks a mutation).
+func randomHex(n int) string {
+	b := make([]byte, (n+1)/2)
+	if _, err := rand.Read(b); err != nil {
+		return strings.Repeat("0", n)
+	}
+	return hex.EncodeToString(b)[:n]
+}
 
 // ─── request helpers ──────────────────────────────────────────────────────────
 
@@ -319,13 +368,13 @@ func queueToJSON(q tasksstore.Queue) map[string]any {
 		out["stackdriverLoggingConfig"] = map[string]any{"samplingRatio": q.StackdriverLoggingConfig.SamplingRatio}
 	}
 	if !q.PurgeTime.IsZero() {
-		out["purgeTime"] = q.PurgeTime.UTC().Format(time.RFC3339Nano)
+		out["purgeTime"] = timestamp.Canonical(q.PurgeTime)
 	}
 	return out
 }
 
 func queueResourceName(q tasksstore.Queue) string {
-	return "projects/" + q.ProjectID + "/locations/" + q.Location + "/queues/" + q.Name
+	return resource.ResourceID(q.ProjectID)("tasks-queue", q.Location+"/"+q.Name)
 }
 
 func taskToJSON(t tasksstore.Task) map[string]any {
@@ -341,10 +390,10 @@ func taskToJSON(t tasksstore.Task) map[string]any {
 		}
 	}
 	if !t.ScheduleTime.IsZero() {
-		out["scheduleTime"] = t.ScheduleTime.UTC().Format(time.RFC3339Nano)
+		out["scheduleTime"] = timestamp.Canonical(t.ScheduleTime)
 	}
 	if !t.CreateTime.IsZero() {
-		out["createTime"] = t.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(t.CreateTime)
 	}
 	if t.DispatchDeadline > 0 {
 		out["dispatchDeadline"] = formatDuration(t.DispatchDeadline)
@@ -365,7 +414,7 @@ func taskToJSON(t tasksstore.Task) map[string]any {
 }
 
 func taskResourceName(t tasksstore.Task) string {
-	return "projects/" + t.ProjectID + "/locations/" + t.Location + "/queues/" + t.Queue + "/tasks/" + t.Name
+	return resource.ResourceID(t.ProjectID)("tasks-task", t.Location+"/"+t.Queue+"/"+t.Name)
 }
 
 func httpRequestToJSON(r *tasksstore.HttpRequest) map[string]any {
@@ -434,13 +483,13 @@ func appEngineRoutingToJSON(r *tasksstore.AppEngineRouting) map[string]any {
 func attemptToJSON(a *tasksstore.Attempt) map[string]any {
 	out := map[string]any{}
 	if !a.ScheduleTime.IsZero() {
-		out["scheduleTime"] = a.ScheduleTime.UTC().Format(time.RFC3339Nano)
+		out["scheduleTime"] = timestamp.Canonical(a.ScheduleTime)
 	}
 	if !a.DispatchTime.IsZero() {
-		out["dispatchTime"] = a.DispatchTime.UTC().Format(time.RFC3339Nano)
+		out["dispatchTime"] = timestamp.Canonical(a.DispatchTime)
 	}
 	if !a.ResponseTime.IsZero() {
-		out["responseTime"] = a.ResponseTime.UTC().Format(time.RFC3339Nano)
+		out["responseTime"] = timestamp.Canonical(a.ResponseTime)
 	}
 	if a.ResponseStatus != nil {
 		out["responseStatus"] = map[string]any{"code": a.ResponseStatus.Code, "message": a.ResponseStatus.Message}

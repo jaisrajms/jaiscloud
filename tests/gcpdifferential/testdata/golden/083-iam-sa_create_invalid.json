@@ -1,0 +1,19 @@
+{
+  "index": 83,
+  "service": "iam",
+  "op": "sa_create_invalid",
+  "method": "POST",
+  "path": "/v1/projects/<project>/serviceAccounts?accountId=Invalid_Account_ID",
+  "status": 400,
+  "request": {
+    "serviceAccount": "<serviceAccount>"
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "message": "Invalid_Account_ID does not match [a-zA-Z][a-zA-Z\\d\\-]*[a-zA-Z\\d].",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

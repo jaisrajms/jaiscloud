@@ -10,6 +10,7 @@ import (
 
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // Provider handles the Cloud Monitoring v3 REST data plane. It is a thin
@@ -82,8 +83,12 @@ func (p *Provider) project(nr *model.NormalizedRequest) string {
 
 func (p *Provider) ListMetricDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListMetricDescriptors(ctx, project,
-		strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -152,8 +157,12 @@ func (p *Provider) ListTimeSeries(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListTimeSeries(ctx, project, strParam(nr, "filter"), interval, aggregation, secondary, strParam(nr, "orderBy"), headersOnly,
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +210,12 @@ func (p *Provider) writeTimeSeries(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *Provider) ListMonitoredResourceDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListMonitoredResourceDescriptors(ctx, project,
-		strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +249,11 @@ func (p *Provider) GetMonitoredResourceDescriptor(ctx context.Context, nr *model
 
 func (p *Provider) ListAlertPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, total, next, err := p.core.ListAlertPolicies(ctx, project, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, total, next, err := p.core.ListAlertPolicies(ctx, project, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +322,11 @@ func (p *Provider) DeleteAlertPolicy(ctx context.Context, nr *model.NormalizedRe
 
 func (p *Provider) ListNotificationChannels(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, total, next, err := p.core.ListNotificationChannels(ctx, project, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, total, next, err := p.core.ListNotificationChannels(ctx, project, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +393,11 @@ func (p *Provider) DeleteNotificationChannel(ctx context.Context, nr *model.Norm
 
 func (p *Provider) ListNotificationChannelDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListNotificationChannelDescriptors(ctx, project, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListNotificationChannelDescriptors(ctx, project, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +455,7 @@ func (p *Provider) GetNotificationChannelVerificationCode(ctx context.Context, n
 	}
 	return provider.OK(map[string]any{
 		"code":       code,
-		"expireTime": expireTime.UTC().Format(time.RFC3339Nano),
+		"expireTime": timestamp.Canonical(expireTime),
 	}), nil
 }
 
@@ -450,8 +475,12 @@ func (p *Provider) VerifyNotificationChannel(ctx context.Context, nr *model.Norm
 
 func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, _, next, err := p.core.ListServices(ctx, project, strParam(nr, "filter"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -518,8 +547,12 @@ func (p *Provider) DeleteService(ctx context.Context, nr *model.NormalizedReques
 func (p *Provider) ListServiceLevelObjectives(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	service := strParam(nr, "service")
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, _, next, err := p.core.ListServiceLevelObjectives(ctx, project, service, strParam(nr, "filter"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

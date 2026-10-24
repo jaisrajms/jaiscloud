@@ -14,8 +14,12 @@ package eventing
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"time"
+
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // Canonical event types emitted by the emulator's producers. Cloud Functions
@@ -63,6 +67,86 @@ func EventarcTopicID(location, triggerID string) string {
 	return "eventarc-" + location + "-" + triggerID
 }
 
+// FunctionTriggerID is the deterministic Eventarc trigger id the emulator
+// provisions for a Cloud Functions event trigger (real GCP materializes one
+// Eventarc trigger per event-triggered function). Both the Eventarc provisioner
+// and the Cloud Functions delivery engine use it, so the backing trigger name
+// and the CloudEvent's subscription reference cannot drift.
+func FunctionTriggerID(functionID string) string {
+	return "functions-" + functionID
+}
+
+// PubSubSource builds the CloudEvent source of a Pub/Sub message-published
+// event for a source resource ("projects/{project}/topics/{topic}"):
+// //pubsub.googleapis.com/projects/{project}/topics/{topic}. Both the Eventarc
+// dispatcher and the Cloud Functions delivery engine emit it, so the two
+// cannot drift.
+func PubSubSource(resource string) string {
+	return "//pubsub.googleapis.com/" + resource
+}
+
+// StorageSource builds the CloudEvent source of a Cloud Storage object event
+// for a source resource ("projects/_/buckets/{bucket}"):
+// //storage.googleapis.com/projects/_/buckets/{bucket}. Shared by the Eventarc
+// dispatcher and the Cloud Functions delivery engine.
+func StorageSource(resource string) string {
+	return "//storage.googleapis.com/" + resource
+}
+
+// StorageCloudEventType maps a Cloud Storage object event type onto the
+// Eventarc CloudEvents spelling a receiver sees
+// (google.cloud.storage.object.v1.finalized | ...deleted), normalizing the
+// producer's v1/v2 spelling first. A type with no Eventarc spelling is returned
+// normalized. Shared by the Eventarc dispatcher and the Cloud Functions
+// delivery engine.
+func StorageCloudEventType(eventType string) string {
+	switch NormalizeEventType(eventType) {
+	case TypeStorageFinalize:
+		return "google.cloud.storage.object.v1.finalized"
+	case TypeStorageDelete:
+		return "google.cloud.storage.object.v1.deleted"
+	}
+	return NormalizeEventType(eventType)
+}
+
+// StorageObjectSubject returns the CloudEvent `subject` of a Cloud Storage
+// object event ("objects/{object}") from the event's objectId attribute, or ""
+// when the event carries no object name (the attribute may be absent on an
+// aggregated/prefix event). Real Eventarc sets subject to the object's name
+// prefixed with "objects/".
+func StorageObjectSubject(attributes map[string]string) string {
+	if object := attributes["objectId"]; object != "" {
+		return "objects/" + object
+	}
+	return ""
+}
+
+// PubSubMessagePublished builds the MessagePublishedData JSON body real gen2
+// Cloud Functions and Eventarc deliver as the data of a
+// google.cloud.pubsub.topic.v1.messagePublished CloudEvent: the message
+// (messageId, publishTime, base64 data, attributes) wrapped with the full
+// resource name of the subscription it arrived on. data may be empty for an
+// attributes-only message. Shared by the Eventarc dispatcher and the Cloud
+// Functions delivery engine so the envelope cannot drift.
+func PubSubMessagePublished(messageID string, publishTime time.Time, data []byte, attributes map[string]string, subscription string) []byte {
+	message := map[string]any{
+		"messageId":   messageID,
+		"publishTime": timestamp.Canonical(publishTime),
+	}
+	if len(data) > 0 {
+		message["data"] = base64.StdEncoding.EncodeToString(data)
+	}
+	if len(attributes) > 0 {
+		message["attributes"] = attributes
+	}
+	payload := map[string]any{
+		"message":      message,
+		"subscription": subscription,
+	}
+	body, _ := json.Marshal(payload)
+	return body
+}
+
 // Source identifies the producer that raised an Event.
 const (
 	SourcePubSub   = "pubsub"
@@ -92,6 +176,25 @@ type Event struct {
 // never import another service's core. A nil Dispatcher disables delivery.
 type Dispatcher interface {
 	DispatchEvent(ctx context.Context, ev Event)
+}
+
+// Fanout delivers each event to every member in order. Producers hold a single
+// Dispatcher; the binary composes the Cloud Functions and Eventarc delivery
+// engines with a Fanout so both observe the event without either core importing
+// the other. Nil members (a disabled service) are skipped, and a nil Fanout
+// delivers nothing.
+type Fanout []Dispatcher
+
+// DispatchEvent calls each non-nil member's DispatchEvent. Each engine filters
+// the event to its own destination kind, so an event is never delivered twice
+// by two engines.
+func (f Fanout) DispatchEvent(ctx context.Context, ev Event) {
+	for _, d := range f {
+		if d == nil {
+			continue
+		}
+		d.DispatchEvent(ctx, ev)
+	}
 }
 
 // Target is a Cloud Functions function that an external trigger (an Eventarc
@@ -143,14 +246,32 @@ type FunctionTriggerSpec struct {
 func IsPubSubEventType(t string) bool { return NormalizeEventType(t) == TypePubSubPublish }
 
 // IsStorageEventType reports whether a declared event type names a Cloud Storage
-// object event: a v2 CloudEvent, a v1 finalize/delete, or the v1 object.change
-// catch-all.
+// object event the emulator materializes/executes: a v2 CloudEvent, a v1
+// finalize/delete, or the v1 object.change catch-all. It is deliberately the
+// narrower set the delivery engine supports.
 func IsStorageEventType(t string) bool {
 	switch NormalizeEventType(t) {
 	case TypeStorageFinalize, TypeStorageDelete, legacyStorageObjectChange:
 		return true
 	}
 	return false
+}
+
+// IsCloudStorageEventType reports whether a declared event type names a Cloud
+// Storage object event in any of the v1, v2, or CloudEvent spellings, including
+// the archived/metadataUpdated types the emulator does not itself produce. Real
+// Eventarc requires a Cloud Storage trigger to also declare a bucket filter, so
+// trigger validation keys off this broader set than the delivery matcher's
+// IsStorageEventType.
+func IsCloudStorageEventType(t string) bool {
+	switch NormalizeEventType(t) {
+	case TypeStorageFinalize, TypeStorageDelete, legacyStorageObjectChange:
+		return true
+	}
+	t = strings.TrimSpace(t)
+	return strings.HasPrefix(t, "google.cloud.storage.object.") ||
+		strings.HasPrefix(t, "google.storage.object.") ||
+		strings.HasPrefix(t, "providers/cloud.storage/eventTypes/")
 }
 
 // TriggerProvisioner materializes and removes the backing Eventarc trigger of a

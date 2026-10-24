@@ -3,9 +3,23 @@ package dataproc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
+
+// jsonEqual reports whether two JSON documents are semantically equal, ignoring
+// object key order and whitespace. The memory store keeps raw bytes while
+// Postgres stores config as JSONB (which canonicalizes both), so byte equality
+// is not part of the store contract — value equality is.
+func jsonEqual(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
 // (memory/postgres) call this so both implement the identical contract.
@@ -40,10 +54,10 @@ func runStoreTests(t *testing.T, s Store) {
 	if got.Status.State != "CREATING" || got.ClusterUUID != "uuid-1" {
 		t.Fatalf("cluster fields lost: %+v", got)
 	}
-	if string(got.Config) != `{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}` {
+	if !jsonEqual(string(got.Config), `{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}`) {
 		t.Fatalf("config not verbatim: %s", got.Config)
 	}
-	if !got.IsGKEBacked() || string(got.VirtualClusterConfig) != vccJSON {
+	if !got.IsGKEBacked() || !jsonEqual(string(got.VirtualClusterConfig), vccJSON) {
 		t.Fatalf("virtualClusterConfig not verbatim: %s", got.VirtualClusterConfig)
 	}
 
@@ -177,6 +191,81 @@ func runStoreTests(t *testing.T, s Store) {
 	}
 }
 
+// runByProjectTests exercises the cross-region list methods: they must return
+// every resource in the project ordered by region then name/id, and never leak
+// another project's resources.
+func runByProjectTests(t *testing.T, s Store) {
+	ctx := context.Background()
+	defer s.Reset(ctx)
+
+	for _, c := range []struct{ project, region, name string }{
+		{"p", "us-central1", "b"},
+		{"p", "europe-west1", "a"},
+		{"other", "us-central1", "c"},
+	} {
+		if err := s.CreateCluster(ctx, c.project, c.region, Cluster{Name: c.name}); err != nil {
+			t.Fatalf("create cluster %s/%s/%s: %v", c.project, c.region, c.name, err)
+		}
+	}
+	clusters, err := s.ListClustersByProject(ctx, "p")
+	if err != nil {
+		t.Fatalf("ListClustersByProject: %v", err)
+	}
+	if len(clusters) != 2 {
+		t.Fatalf("clusters = %d, want 2 (other project excluded)", len(clusters))
+	}
+	if clusters[0].Region != "europe-west1" || clusters[0].Name != "a" ||
+		clusters[1].Region != "us-central1" || clusters[1].Name != "b" {
+		t.Fatalf("clusters not ordered by region then name: %+v", clusters)
+	}
+
+	for _, j := range []struct{ project, region, id string }{
+		{"p", "us-central1", "j-b"},
+		{"p", "europe-west1", "j-a"},
+		{"other", "us-central1", "j-c"},
+	} {
+		if err := s.CreateJob(ctx, j.project, j.region, Job{JobID: j.id}); err != nil {
+			t.Fatalf("create job %s/%s/%s: %v", j.project, j.region, j.id, err)
+		}
+	}
+	jobs, err := s.ListJobsByProject(ctx, "p")
+	if err != nil {
+		t.Fatalf("ListJobsByProject: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("jobs = %d, want 2 (other project excluded)", len(jobs))
+	}
+	if jobs[0].Region != "europe-west1" || jobs[0].JobID != "j-a" ||
+		jobs[1].Region != "us-central1" || jobs[1].JobID != "j-b" {
+		t.Fatalf("jobs not ordered by region then id: %+v", jobs)
+	}
+
+	for _, tmpl := range []struct{ project, region, id string }{
+		{"p", "us-central1", "t-b"},
+		{"p", "europe-west1", "t-a"},
+		{"other", "us-central1", "t-c"},
+	} {
+		if err := s.CreateWorkflowTemplate(ctx, tmpl.project, tmpl.region, WorkflowTemplate{TemplateID: tmpl.id}); err != nil {
+			t.Fatalf("create template %s/%s/%s: %v", tmpl.project, tmpl.region, tmpl.id, err)
+		}
+	}
+	templates, err := s.ListWorkflowTemplatesByProject(ctx, "p")
+	if err != nil {
+		t.Fatalf("ListWorkflowTemplatesByProject: %v", err)
+	}
+	if len(templates) != 2 {
+		t.Fatalf("templates = %d, want 2 (other project excluded)", len(templates))
+	}
+	if templates[0].Region != "europe-west1" || templates[0].TemplateID != "t-a" ||
+		templates[1].Region != "us-central1" || templates[1].TemplateID != "t-b" {
+		t.Fatalf("templates not ordered by region then id: %+v", templates)
+	}
+}
+
+func TestMemoryStoreByProject(t *testing.T) {
+	runByProjectTests(t, NewMemoryStore())
+}
+
 func TestMemoryStore(t *testing.T) {
 	runStoreTests(t, NewMemoryStore())
 }
@@ -226,14 +315,14 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	if err != nil || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster lost after restore: %v %+v", err, got)
 	}
-	if !got.IsGKEBacked() || string(got.VirtualClusterConfig) != vcc {
+	if !got.IsGKEBacked() || !jsonEqual(string(got.VirtualClusterConfig), vcc) {
 		t.Fatalf("virtualClusterConfig lost after restore: %s", got.VirtualClusterConfig)
 	}
 	if gce, _ := s2.GetCluster(ctx, "p", "r", "gce"); gce.IsGKEBacked() {
 		t.Fatal("GCE cluster became GKE-backed after restore")
 	}
 	gotJob, err := s2.GetJob(ctx, "p", "r", "j")
-	if err != nil || string(gotJob.TypeJob) != `{"mainJarFileUri":"gs://b/a.jar"}` {
+	if err != nil || !jsonEqual(string(gotJob.TypeJob), `{"mainJarFileUri":"gs://b/a.jar"}`) {
 		t.Fatalf("job lost after restore: %v %+v", err, gotJob)
 	}
 	gotOp, err := s2.GetOperation(ctx, "p", "r", "op")

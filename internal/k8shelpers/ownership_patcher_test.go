@@ -64,7 +64,7 @@ func TestStartOwnershipPatcher_ReconcileSweep_PatchesUnowned(t *testing.T) {
 	}
 
 	// reconcileSweep is synchronous.
-	if err := reconcileSweep(ctx, client, cfg); err != nil {
+	if err := reconcileSweep(ctx, client, cfg, cfg.Namespace); err != nil {
 		t.Fatalf("reconcileSweep: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestStartOwnershipPatcher_ResolveOwnerNilSkipsPod(t *testing.T) {
 		},
 	}
 
-	if err := reconcileSweep(ctx, client, cfg); err != nil {
+	if err := reconcileSweep(ctx, client, cfg, cfg.Namespace); err != nil {
 		t.Fatalf("reconcileSweep: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestStartOwnershipPatcher_AlreadyOwnedPodSkipped(t *testing.T) {
 		},
 	}
 
-	if err := reconcileSweep(ctx, client, cfg); err != nil {
+	if err := reconcileSweep(ctx, client, cfg, cfg.Namespace); err != nil {
 		t.Fatalf("reconcileSweep: %v", err)
 	}
 
@@ -181,6 +181,44 @@ func TestCleanupOrphans_OrphanPod_DeletedWhenTrue(t *testing.T) {
 	_, err := client.CoreV1().Pods("default").Get(ctx, "orphan-driver", metav1.GetOptions{})
 	if err == nil {
 		t.Error("expected orphan pod to be deleted")
+	}
+}
+
+func TestCleanupOrphans_MultipleNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+	for _, ns := range []string{"ns-a", "ns-b"} {
+		_, _ = client.BatchV1().Jobs(ns).Create(ctx, makeManagedJob("job-"+ns, ns, false), metav1.CreateOptions{})
+	}
+
+	var swept []string
+	cfg := CleanupConfig{
+		Namespace:  "ns-a",
+		Namespaces: []string{"ns-b"},
+		OnTerminalJob: func(name, state, reason string) {
+			swept = append(swept, name)
+		},
+	}
+	if err := CleanupOrphans(ctx, client, cfg); err != nil {
+		t.Fatalf("CleanupOrphans: %v", err)
+	}
+	if len(swept) != 2 {
+		t.Fatalf("OnTerminalJob called %d times (%v); want 2", len(swept), swept)
+	}
+	for _, ns := range []string{"ns-a", "ns-b"} {
+		if _, err := client.BatchV1().Jobs(ns).Get(ctx, "job-"+ns, metav1.GetOptions{}); err == nil {
+			t.Errorf("terminal job in %s survived the multi-namespace sweep", ns)
+		}
+	}
+}
+
+func TestUniqueNamespaces(t *testing.T) {
+	got := uniqueNamespaces("primary", []string{"", "primary", "extra", "extra"})
+	if len(got) != 2 || got[0] != "primary" || got[1] != "extra" {
+		t.Fatalf("uniqueNamespaces = %v; want [primary extra]", got)
+	}
+	if got := uniqueNamespaces("", nil); len(got) != 0 {
+		t.Fatalf("uniqueNamespaces with no namespaces = %v; want empty", got)
 	}
 }
 

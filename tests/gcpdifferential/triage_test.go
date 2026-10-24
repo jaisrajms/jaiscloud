@@ -49,8 +49,8 @@ func TestApplyTriageMechanism(t *testing.T) {
 	}
 
 	// A declared-by-design finding is accepted...
-	if got := TriageReason(Divergence{Service: "bigquery", Op: "query", Kind: "array_length_mismatch", Location: "response.rows"}); got == "" {
-		t.Error("expected bigquery query rows to be accepted by the shipped rules")
+	if got := TriageReason(Divergence{Service: "workflows", Kind: "value_mismatch", Location: "response.done"}); got == "" {
+		t.Error("expected a workflows LRO completion-timing finding to be accepted by the shipped rules")
 	}
 	// ...but a real bug is not.
 	real := Divergence{Service: "secretmanager", Op: "secret_add_version", Kind: "missing_field", Location: "response.etag"}

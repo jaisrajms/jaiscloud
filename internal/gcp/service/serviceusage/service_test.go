@@ -122,6 +122,66 @@ func TestBatchEnableValidation(t *testing.T) {
 	}
 }
 
+func TestBatchGetAPIs(t *testing.T) {
+	ctx := context.Background()
+	s := newCore()
+
+	if _, _, err := s.EnableAPI(ctx, "proj", "a.googleapis.com"); err != nil {
+		t.Fatalf("EnableAPI: %v", err)
+	}
+	// A mix of an enabled and a never-seen service keeps order and defaults the
+	// unknown one to DISABLED (matching GetAPI, not NotFound).
+	apis, err := s.BatchGetAPIs(ctx, "proj", []string{
+		"projects/proj/services/a.googleapis.com",
+		"projects/proj/services/b.googleapis.com",
+	})
+	if err != nil {
+		t.Fatalf("BatchGetAPIs: %v", err)
+	}
+	if len(apis) != 2 {
+		t.Fatalf("BatchGetAPIs returned %d APIs, want 2", len(apis))
+	}
+	if apis[0].Name != "projects/proj/services/a.googleapis.com" || apis[0].State != StateEnabled {
+		t.Errorf("apis[0] = %+v, want enabled a.googleapis.com", apis[0])
+	}
+	if apis[1].Name != "projects/proj/services/b.googleapis.com" || apis[1].State != StateDisabled {
+		t.Errorf("apis[1] = %+v, want disabled b.googleapis.com", apis[1])
+	}
+	// An empty parent lets each name resolve its own project.
+	if _, err := s.BatchGetAPIs(ctx, "", []string{"projects/other/services/c.googleapis.com"}); err != nil {
+		t.Errorf("BatchGetAPIs with empty parent: %v", err)
+	}
+
+	bad := []struct {
+		name    string
+		project string
+		names   []string
+	}{
+		{"empty", "proj", nil},
+		{"malformed name", "proj", []string{"a.googleapis.com"}},
+		{"parent mismatch", "proj", []string{"projects/other/services/a.googleapis.com"}},
+		{"oversized", "proj", oversizedNames(maxBatchGet + 1)},
+	}
+	for _, tc := range bad {
+		if _, err := s.BatchGetAPIs(ctx, tc.project, tc.names); err == nil {
+			t.Errorf("BatchGetAPIs(%s) succeeded, want InvalidArgument", tc.name)
+		} else {
+			var pe *model.ProviderError
+			if !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+				t.Errorf("BatchGetAPIs(%s) error = %v, want InvalidArgument", tc.name, err)
+			}
+		}
+	}
+}
+
+func oversizedNames(n int) []string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("projects/proj/services/s%d.googleapis.com", i)
+	}
+	return names
+}
+
 func TestListPageSizeBounds(t *testing.T) {
 	ctx := context.Background()
 	s := newCore()
@@ -194,5 +254,26 @@ func TestStorageErrorsPropagate(t *testing.T) {
 	}
 	if _, _, err := s.EnableAPI(ctx, "proj", "a.googleapis.com"); !errors.Is(err, store.ErrStorageUnavailable) {
 		t.Errorf("EnableAPI error = %v, want ErrStorageUnavailable", err)
+	}
+}
+
+// TestListPageSizeNegativeRejected pins AIP-158 on serviceusage's two
+// cursor-paged list surfaces: a negative pageSize is INVALID_ARGUMENT, not a
+// fall-back to the documented default of 50.
+func TestListPageSizeNegativeRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newCore()
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"ListAPIs", func() error { _, _, err := s.ListAPIs(ctx, "proj", FilterAll, -1, ""); return err }},
+		{"ListOperations", func() error { _, _, err := s.ListOperations(ctx, "proj", -1, ""); return err }},
+	}
+	for _, tc := range cases {
+		var pe *model.ProviderError
+		if err := tc.call(); !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
 	}
 }

@@ -15,9 +15,9 @@
 // under a "/container" path prefix. The codec accepts both forms — it locates
 // the projects/{project} segment regardless of what precedes it.
 //
-// Real GKE defaults to gRPC (google.container.v1.ClusterManager); this surface is
-// deliberately REST-only (matching floci-gcp and the HttpJson Java suite), so no
-// gRPC server is registered. The Codec is a NormalizedRequest adapter and the
+// Real GKE defaults to gRPC (google.container.v1.ClusterManager), so this REST
+// surface is paired with the gRPC adapter in internal/gcp/transport/grpc/container
+// over the same core. The Codec is a NormalizedRequest adapter and the
 // Provider holds the routes; both delegate to the transport-neutral core Service
 // (internal/gcp/service/container).
 package container
@@ -25,6 +25,7 @@ package container
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/wire"
@@ -45,8 +46,8 @@ func NewCodec() *Codec { return &Codec{} }
 func (c *Codec) ServiceName() string { return ServiceName }
 
 // Decode parses a GKE v1 path into a NormalizedRequest. Params carry project,
-// location, cluster/operation (item paths), body (POST), plus any query
-// parameters (pageSize, pageToken).
+// location, cluster/nodePool/operation (item paths), body (POST/PUT), plus any
+// query parameters (pageSize, pageToken).
 func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1
@@ -73,50 +74,169 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Params["body"] = m
 	}
 
-	resource := seg[pi+4]
-	if len(seg) >= pi+6 {
-		nr.Params[itemParam(resource)] = seg[pi+5]
+	action, err := routeContainer(seg[pi+4:], r.Method, nr.Params)
+	if err != nil {
+		return nil, err
 	}
-
-	nr.Action = containerAction(resource, len(seg)-(pi+4), r.Method)
-	if nr.Action == "" {
-		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
-	}
+	nr.Action = action
 	return nr, nil
 }
 
-// itemParam maps a collection segment to the path-parameter name.
-func itemParam(resource string) string {
-	if resource == "operations" {
-		return "operation"
+// routeContainer maps the path segments after projects/{p}/locations/{l} and
+// the HTTP method to a provider action, filling the cluster/nodePool/operation
+// path params.
+func routeContainer(rel []string, method string, params map[string]any) (string, error) {
+	switch rel[0] {
+	case "clusters":
+		return routeClusters(rel[1:], method, params)
+	case "operations":
+		return routeOperations(rel[1:], method, params)
 	}
-	return "cluster"
+	return "", model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 }
 
-// containerAction maps the collection segment after projects/{p}/locations/{l},
-// its item depth, and the HTTP method to the provider action.
-func containerAction(resource string, depth int, method string) string {
-	switch resource {
-	case "clusters":
-		switch {
-		case depth == 1 && method == http.MethodGet:
-			return "ListClusters"
-		case depth == 1 && method == http.MethodPost:
-			return "CreateCluster"
-		case depth == 2 && method == http.MethodGet:
-			return "GetCluster"
-		case depth == 2 && method == http.MethodDelete:
-			return "DeleteCluster"
+func routeClusters(rel []string, method string, params map[string]any) (string, error) {
+	if len(rel) == 0 {
+		switch method {
+		case http.MethodGet:
+			return "ListClusters", nil
+		case http.MethodPost:
+			return "CreateCluster", nil
 		}
-	case "operations":
-		switch {
-		case depth == 1 && method == http.MethodGet:
-			return "ListOperations"
-		case depth == 2 && method == http.MethodGet:
-			return "GetOperation"
+		return "", unsupported()
+	}
+	clusterID, suffix := splitAction(rel[0])
+
+	// clusters/{cluster}:action custom methods.
+	if suffix != "" {
+		if len(rel) != 1 {
+			return "", unsupported()
+		}
+		params["cluster"] = clusterID
+		if action := clusterCustomAction(suffix); action != "" && method == http.MethodPost {
+			return action, nil
+		}
+		return "", unsupported()
+	}
+
+	params["cluster"] = clusterID
+	switch {
+	case len(rel) == 1:
+		switch method {
+		case http.MethodGet:
+			return "GetCluster", nil
+		case http.MethodDelete:
+			return "DeleteCluster", nil
+		case http.MethodPut:
+			return "UpdateCluster", nil
+		}
+	case len(rel) == 2 && rel[1] == "nodePools":
+		switch method {
+		case http.MethodGet:
+			return "ListNodePools", nil
+		case http.MethodPost:
+			return "CreateNodePool", nil
+		}
+	case len(rel) == 3 && rel[1] == "nodePools":
+		poolID, poolSuffix := splitAction(rel[2])
+		params["nodepool"] = poolID
+		if poolSuffix != "" {
+			if action := nodePoolCustomAction(poolSuffix); action != "" && method == http.MethodPost {
+				return action, nil
+			}
+			return "", unsupported()
+		}
+		switch method {
+		case http.MethodGet:
+			return "GetNodePool", nil
+		case http.MethodDelete:
+			return "DeleteNodePool", nil
+		case http.MethodPut:
+			return "UpdateNodePool", nil
 		}
 	}
+	return "", unsupported()
+}
+
+func routeOperations(rel []string, method string, params map[string]any) (string, error) {
+	if len(rel) == 0 {
+		if method == http.MethodGet {
+			return "ListOperations", nil
+		}
+		return "", unsupported()
+	}
+	opID, suffix := splitAction(rel[0])
+	params["operation"] = opID
+	if suffix != "" {
+		if suffix == "cancel" && method == http.MethodPost {
+			return "CancelOperation", nil
+		}
+		return "", unsupported()
+	}
+	if len(rel) == 1 && method == http.MethodGet {
+		return "GetOperation", nil
+	}
+	return "", unsupported()
+}
+
+// splitAction splits a "{id}:{action}" segment.
+func splitAction(seg string) (id, action string) {
+	if i := strings.LastIndex(seg, ":"); i >= 0 {
+		return seg[:i], seg[i+1:]
+	}
+	return seg, ""
+}
+
+// clusterCustomAction maps a custom cluster method's action name to a provider
+// action.
+func clusterCustomAction(action string) string {
+	switch action {
+	case "setAddons":
+		return "SetAddonsConfig"
+	case "setResourceLabels":
+		return "SetLabels"
+	case "setLegacyAbac":
+		return "SetLegacyAbac"
+	case "setLocations":
+		return "SetLocations"
+	case "setLogging":
+		return "SetLoggingService"
+	case "setMonitoring":
+		return "SetMonitoringService"
+	case "setNetworkPolicy":
+		return "SetNetworkPolicy"
+	case "setMaintenancePolicy":
+		return "SetMaintenancePolicy"
+	case "setMasterAuth":
+		return "SetMasterAuth"
+	case "updateMaster":
+		return "UpdateMaster"
+	case "startIpRotation":
+		return "StartIPRotation"
+	case "completeIpRotation":
+		return "CompleteIPRotation"
+	}
 	return ""
+}
+
+// nodePoolCustomAction maps a custom node-pool method's action name to a
+// provider action.
+func nodePoolCustomAction(action string) string {
+	switch action {
+	case "setAutoscaling":
+		return "SetNodePoolAutoscaling"
+	case "setSize":
+		return "SetNodePoolSize"
+	case "setManagement":
+		return "SetNodePoolManagement"
+	case "rollback":
+		return "RollbackNodePoolUpgrade"
+	}
+	return ""
+}
+
+func unsupported() error {
+	return model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 }
 
 // Encode serialises a provider response as JSON.

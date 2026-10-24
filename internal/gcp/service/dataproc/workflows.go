@@ -261,18 +261,24 @@ func (s *Service) resolveWorkflowCluster(ctx context.Context, project, region st
 			return "", false, err
 		}
 		now := clock.Now().UTC()
+		ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, ClusterInput{})
 		c := dpstore.Cluster{
-			ProjectID:   project,
-			Region:      region,
-			Name:        name,
-			Labels:      stringMap(mc["labels"]),
-			Status:      dpstore.ClusterStatus{State: "RUNNING", StateStartTime: now},
-			ClusterUUID: randomHex(16),
-			CreateTime:  now,
-			UpdateTime:  now,
+			ProjectID:      project,
+			Region:         region,
+			Name:           name,
+			Labels:         stringMap(mc["labels"]),
+			Status:         dpstore.ClusterStatus{State: "RUNNING", StateStartTime: now},
+			ClusterUUID:    randomHex(16),
+			CreateTime:     now,
+			UpdateTime:     now,
+			Namespace:      ns,
+			NamespaceOwned: nsOwned,
 		}
 		if err := s.store.CreateCluster(ctx, project, region, c); err != nil && !errors.Is(err, dpstore.ErrAlreadyExists) {
+			s.rollbackNamespace(ctx, ns, nsOwned)
 			return "", false, err
+		} else if err == nil {
+			s.registerNamespacePatcher(ns)
 		}
 		return name, true, nil
 	}

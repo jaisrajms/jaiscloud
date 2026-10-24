@@ -1,0 +1,30 @@
+{
+  "index": 65,
+  "service": "dns",
+  "op": "zone_create_invalid",
+  "method": "POST",
+  "path": "/dns/v1/projects/<project>/managedZones",
+  "status": 400,
+  "request": {
+    "name": "conf-invalid-<suffix>"
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "The 'entity.managedZone.dnsName' parameter is required but was missing.",
+          "reason": "required"
+        },
+        {
+          "domain": "global",
+          "message": "The 'entity.managedZone.description' parameter is required but was missing.",
+          "reason": "required"
+        }
+      ],
+      "message": "The 'entity.managedZone.dnsName' parameter is required but was missing."
+    }
+  }
+}
+

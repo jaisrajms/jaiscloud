@@ -123,6 +123,101 @@ func TestAsyncDeleteResolvesToEmpty(t *testing.T) {
 	}
 }
 
+// TestListOperationsRegistry verifies the shared gRPC Operations List surface:
+// a location parent serves the persisted operations, a location with none is
+// declined so the fallback chain can answer, a foreign parent is declined, and
+// a non-empty filter fails loud.
+func TestListOperationsRegistry(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+	ctx := context.Background()
+	s := newAsyncService()
+
+	if _, err := s.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		WorkflowId: "wf1",
+		Workflow:   &workflowspb.Workflow{SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: source}},
+	}); err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+
+	resp, handled, err := s.ListOperations(ctx, "projects/proj/locations/us-central1", 0, "", "")
+	if err != nil || !handled {
+		t.Fatalf("ListOperations: handled=%v err=%v", handled, err)
+	}
+	if len(resp.GetOperations()) != 1 {
+		t.Fatalf("operations = %d, want 1", len(resp.GetOperations()))
+	}
+	if resp.GetOperations()[0].GetDone() {
+		t.Fatalf("in-flight operation listed as done before the delay")
+	}
+
+	// Past the delay the page settles, like GetOperation.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
+	resp, handled, err = s.ListOperations(ctx, "projects/proj/locations/us-central1", 0, "", "")
+	if err != nil || !handled || !resp.GetOperations()[0].GetDone() {
+		t.Fatalf("settled page = handled=%v err=%v op=%v", handled, err, resp.GetOperations())
+	}
+
+	// A location with no workflows operations is declined.
+	if _, handled, err := s.ListOperations(ctx, "projects/proj/locations/europe-west1", 0, "", ""); err != nil || handled {
+		t.Fatalf("empty location: handled=%v err=%v; want decline", handled, err)
+	}
+	// A foreign parent shape is declined.
+	if _, handled, _ := s.ListOperations(ctx, "projects/proj/locations/-", 0, "", ""); handled {
+		t.Fatalf("wildcard parent must not be handled by workflows")
+	}
+	if _, handled, _ := s.ListOperations(ctx, "operations", 0, "", ""); handled {
+		t.Fatalf("top-level parent must not be handled by workflows")
+	}
+	// A non-empty filter fails loud rather than returning unfiltered results.
+	if _, handled, err := s.ListOperations(ctx, "projects/proj/locations/us-central1", 0, "", "done=true"); !handled || err == nil {
+		t.Fatalf("filter: handled=%v err=%v; want a loud error", handled, err)
+	}
+}
+
+// TestDeleteOperationRegistry verifies the shared gRPC Operations delete/cancel
+// surface: an owned operation is removed and a second delete is declined (so
+// the shared strict-mode path reports NotFound); a name workflows does not own
+// is declined, and cancel is always declined (the Discovery declares no cancel).
+func TestDeleteOperationRegistry(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+	ctx := context.Background()
+	s := newAsyncService()
+
+	op, err := s.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		WorkflowId: "wf1",
+		Workflow:   &workflowspb.Workflow{SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: source}},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+
+	if handled, err := s.DeleteOperation(ctx, op.GetName()); err != nil || !handled {
+		t.Fatalf("DeleteOperation: handled=%v err=%v; want handled", handled, err)
+	}
+	if _, handled, _ := s.ResolveOperation(ctx, op.GetName()); handled {
+		t.Fatalf("operation still resolvable after delete")
+	}
+	// A second delete is declined so the shared service decides the wire result.
+	if handled, err := s.DeleteOperation(ctx, op.GetName()); err != nil || handled {
+		t.Fatalf("re-delete: handled=%v err=%v; want decline", handled, err)
+	}
+	// A foreign name in the shared namespace is declined.
+	if handled, _ := s.DeleteOperation(ctx, "projects/proj/locations/us-central1/operations/someone-elses"); handled {
+		t.Fatalf("foreign operation delete must be declined")
+	}
+	if handled, _ := s.DeleteOperation(ctx, "operations/top-level"); handled {
+		t.Fatalf("top-level name delete must be declined")
+	}
+	// Cancel is always declined.
+	if handled, err := s.CancelOperation(ctx, op.GetName()); err != nil || handled {
+		t.Fatalf("CancelOperation: handled=%v err=%v; want decline", handled, err)
+	}
+}
+
 // TestResolveOperationDeclinesUnknownNames verifies the resolver leaves names it
 // does not own to the shared terminal stub: a well-formed but absent operation
 // and a name outside the workflows shape are both handled=false.

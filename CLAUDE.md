@@ -370,6 +370,21 @@ proposed change (exit 2 = already done, 3 = in flight),
 `Pri`, then impact), and `make gcp-status-coverage` fails if any doc has status
 markers but produced no ledger rows. See [AGENTS.md](AGENTS.md).
 
+### GCP source of truth: real GCP, never a sibling emulator
+
+For GCP wire behavior the authority order is: the service's Discovery document
+/ proto and official Google docs → real client-SDK wire behavior → the AWS
+reference implementation (repo conventions only) → jaiscloud's own code →
+jaiscloud's own tests. **floci-gcp and localgcp are optional smoke/interop
+harnesses, never the spec.** When a floci/localgcp expectation disagrees with
+the Discovery document — an emulator-only response field (`keyId` on
+`ServiceAccountKey`), a recognizable token prefix, a response shape — real GCP
+wins. Do not add emulator-only fields or values to make a floci assertion pass:
+classify the assertion TEST-NON-COMPLIANT and record it. The compliance gate is
+the offline conformance harness (`tests/gcpconformance`: vendored Discovery +
+committed transcripts, the official gRPC clients, and the `gcloud`/Python client
+suites), not a sibling emulator's suite.
+
 ### Resource IDs: use nr.ResourceID, never hardcode ARN formats
 
 Providers must use `nr.ResourceID("type", name)` — never `fmt.Sprintf("arn:aws:...")`.
@@ -418,6 +433,13 @@ time.Until(x)                 →    x.Sub(clock.Now())
 - `provider/ecr/registry_proxy.go` — ECR registry proxy container readiness polling
 - `k8shelpers/` — Spark job execution wall time tracking
 - `internal/clock/clock.go` — `OffsetClock` and `RealClock` implementations (the clock package itself)
+
+`gcplint` enforces the split: the `clock` rule rejects bare
+`time.Now()`/`time.Since`/`time.Until`, and the `clock-realnow` rule flags a
+`clock.Now()` that drives a wall-clock wait (a poll-loop condition, a derived
+deadline compared inside a loop, or an argument to
+`time.Sleep`/`After`/`NewTimer`/`NewTicker`/`Tick`/`context.WithDeadline`).
+Documented exceptions go in `tools/lint/gcplint/allowlist.txt`.
 
 ### DynamoDB x-amz-crc32
 
@@ -469,4 +491,5 @@ EMR/EMRContainers providers capture `handlerCtx{cloud, region, accountID}` at ha
 | `/_jaiscloud/clock` | POST | Set clock mode: `{"mode":"fixed","time":"..."}` / `{"mode":"offset","time":"..."}` / `{"mode":"real"}` |
 | `/_jaiscloud/ttl-sweep` | POST | Synchronous DynamoDB TTL sweep (for deterministic tests) |
 | `/_jaiscloud/eb-tick` | POST | Synchronous EventBridge scheduler evaluation (for deterministic tests) |
+| `/_jaiscloud/monitoring-tick` | POST | Synchronous Cloud Monitoring alert-policy evaluation (for deterministic tests) |
 | `/metrics` | GET | Prometheus (requires `--metrics`) |

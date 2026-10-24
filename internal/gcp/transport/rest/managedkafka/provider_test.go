@@ -357,3 +357,44 @@ func hasOffset(partitions map[string]any, key string, want int64) bool {
 	n, err := strconv.ParseInt(got, 10, 64)
 	return err == nil && n == want
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p, _ := newRESTProvider()
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"clusters": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListClusters(ctx, n)
+		},
+		"topics": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListTopics(ctx, n)
+		},
+		"consumerGroups": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListConsumerGroups(ctx, n)
+		},
+		"acls": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListAcls(ctx, n)
+		},
+		"operations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListOperations(ctx, n)
+		},
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(nr(map[string]any{"location": "us-central1", "clusterId": "c1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		// A legal integer is still accepted where the collection needs no seeded
+		// parent (the others answer NotFound before paging, which is not the
+		// contract under test here).
+		if name == "clusters" || name == "operations" {
+			if _, err := call(nr(map[string]any{"location": "us-central1", "pageSize": "5"})); err != nil {
+				t.Errorf("%s pageSize=5: %v", name, err)
+			}
+		}
+	}
+}

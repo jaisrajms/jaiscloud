@@ -36,6 +36,13 @@ func TestBucketsGetStorageLayout(t *testing.T) {
 	if hn == nil || hn["enabled"] != false {
 		t.Errorf("hierarchicalNamespace = %v, want {enabled:false}", resp.Data["hierarchicalNamespace"])
 	}
+	// Real GCS reports the bucket's location and locationType here too.
+	if resp.Data["location"] != "US" {
+		t.Errorf("location = %v, want US", resp.Data["location"])
+	}
+	if resp.Data["locationType"] != "multi-region" {
+		t.Errorf("locationType = %v, want multi-region", resp.Data["locationType"])
+	}
 
 	missing := bucketParams()
 	missing.Params["bucket"] = "no-such-bucket"

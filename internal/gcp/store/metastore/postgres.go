@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -97,6 +98,12 @@ func (s *PostgresStore) UpdateService(ctx context.Context, projectID, location s
 // so a concurrent writer can't land between the read and the write. See
 // store/secretmanager/postgres.go's UpdateSecretAtomic for the reference shape.
 func (s *PostgresStore) UpdateServiceAtomic(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error) {
+	return storeutil.RetrySerializable(ctx, func() (Service, error) {
+		return s.updateServiceAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateServiceAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Service{}, err
@@ -321,6 +328,12 @@ func (s *PostgresStore) UpdateMetadataImport(ctx context.Context, projectID, loc
 
 // UpdateMetadataImportAtomic mirrors UpdateServiceAtomic for a metadata import.
 func (s *PostgresStore) UpdateMetadataImportAtomic(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error) {
+	return storeutil.RetrySerializable(ctx, func() (MetadataImport, error) {
+		return s.updateMetadataImportAtomicOnce(ctx, projectID, location, serviceName, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateMetadataImportAtomicOnce(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return MetadataImport{}, err
@@ -371,6 +384,132 @@ func (s *PostgresStore) ListMetadataImports(ctx context.Context, projectID, loca
 			return nil, err
 		}
 		result = append(result, mi)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, rows.Err()
+}
+
+// --- Federations ---
+
+func (s *PostgresStore) CreateFederation(ctx context.Context, projectID, location string, f Federation) error {
+	if f.CreateTime.IsZero() {
+		f.CreateTime = clock.Now()
+	}
+	if f.UpdateTime.IsZero() {
+		f.UpdateTime = f.CreateTime
+	}
+	labels, _ := json.Marshal(f.Labels)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_metastore_federations
+			(project_id, location, federation_name, config, labels, state, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`, projectID, location, f.Name, nullableJSONRaw(f.Config, "{}"), nullableJSONRaw(labels, "{}"), f.State, f.CreateTime, f.UpdateTime)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func scanFederation(row pgx.Row) (Federation, error) {
+	var f Federation
+	var config, labels []byte
+	err := row.Scan(&f.ProjectID, &f.Location, &f.Name, &config, &labels, &f.State, &f.CreateTime, &f.UpdateTime)
+	if err != nil {
+		return Federation{}, err
+	}
+	f.Config = json.RawMessage(config)
+	json.Unmarshal(labels, &f.Labels)
+	return f, nil
+}
+
+func (s *PostgresStore) GetFederation(ctx context.Context, projectID, location, name string) (Federation, error) {
+	f, err := scanFederation(s.pool.QueryRow(ctx, `
+		SELECT project_id, location, federation_name, config, labels, state, create_time, update_time
+		FROM jc_metastore_federations WHERE project_id=$1 AND location=$2 AND federation_name=$3
+	`, projectID, location, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Federation{}, ErrNoSuchFederation
+	}
+	return f, err
+}
+
+// UpdateFederationAtomic mirrors UpdateServiceAtomic: a Serializable transaction
+// with SELECT ... FOR UPDATE row-locks the federation for the duration of mutate.
+func (s *PostgresStore) UpdateFederationAtomic(ctx context.Context, projectID, location, name string, mutate func(Federation) (Federation, error)) (Federation, error) {
+	return storeutil.RetrySerializable(ctx, func() (Federation, error) {
+		return s.updateFederationAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateFederationAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Federation) (Federation, error)) (Federation, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Federation{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	f, err := scanFederation(tx.QueryRow(ctx, `
+		SELECT project_id, location, federation_name, config, labels, state, create_time, update_time
+		FROM jc_metastore_federations WHERE project_id=$1 AND location=$2 AND federation_name=$3 FOR UPDATE
+	`, projectID, location, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Federation{}, ErrNoSuchFederation
+	}
+	if err != nil {
+		return Federation{}, err
+	}
+
+	next, err := mutate(f)
+	if err != nil {
+		return Federation{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_metastore_federations SET config=$4, labels=$5, state=$6, update_time=$7
+		WHERE project_id=$1 AND location=$2 AND federation_name=$3
+	`, projectID, location, next.Name, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), next.State, next.UpdateTime); err != nil {
+		return Federation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Federation{}, err
+	}
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteFederation(ctx context.Context, projectID, location, name string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_metastore_federations WHERE project_id=$1 AND location=$2 AND federation_name=$3
+	`, projectID, location, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchFederation
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListFederations(ctx context.Context, projectID, location string) ([]Federation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, federation_name, config, labels, state, create_time, update_time
+		FROM jc_metastore_federations WHERE project_id=$1 AND location=$2 ORDER BY federation_name
+	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Federation
+	for rows.Next() {
+		f, err := scanFederation(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, f)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, rows.Err()
@@ -432,6 +571,7 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_metastore_services`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_metastore_backups`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_metastore_metadata_imports`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_metastore_federations`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_metastore_operations`)
 }
 

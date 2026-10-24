@@ -44,6 +44,10 @@ const (
 // google.rpc.Code convention; UNAVAILABLE maps to 503; ABORTED and
 // ALREADY_EXISTS share HTTP 409, so 409 falls back to ALREADY_EXISTS (the more
 // common case) and ABORTED must be selected explicitly via Status or Code.
+//
+// HTTP 502 has no google.rpc.Code; UNAVAILABLE is the closest canonical status
+// for an upstream-gateway failure (the Cloud Run data-plane proxy returns it), so
+// it is mapped here instead of falling through to UNKNOWN.
 func StatusForHTTP(httpStatus int) string {
 	switch httpStatus {
 	case 400:
@@ -66,6 +70,8 @@ func StatusForHTTP(httpStatus int) string {
 		return Internal
 	case 501:
 		return Unimplemented
+	case 502:
+		return Unavailable
 	case 503:
 		return Unavailable
 	case 504:
@@ -110,7 +116,13 @@ func HTTPForStatus(status string) int {
 // aliases used across providers) to a canonical google.rpc status name.
 func AliasForCode(code string) (string, bool) {
 	switch code {
-	case "InvalidArgument", "InvalidRequest", "InvalidParameter":
+	case "InvalidArgument":
+		// InvalidRequest / InvalidParameter deliberately have NO alias: they are
+		// constructed with an explicit HTTP status (400, 404, 429, 503) that
+		// resolves correctly on its own, and aliasing them unconditionally to
+		// INVALID_ARGUMENT produced envelopes like {code:404,status:INVALID_ARGUMENT}
+		// that real GCP never emits (an unknown route is NOT_FOUND, a throttled
+		// upload is RESOURCE_EXHAUSTED).
 		return InvalidArgument, true
 	case "NotFound":
 		return NotFound, true
@@ -130,8 +142,12 @@ func AliasForCode(code string) (string, bool) {
 		return ResourceExhausted, true
 	case "Unavailable", "ServiceUnavailable":
 		return Unavailable, true
-	case "UnsupportedOperation", "UnknownService":
-		return Unimplemented, true
+	// UnsupportedOperation and UnknownService deliberately have NO alias: they
+	// are used both for unimplemented operations (HTTP 501) and for decode/route
+	// misses (HTTP 404). Mapping them unconditionally to UNIMPLEMENTED produced a
+	// 404 envelope carrying status UNIMPLEMENTED, which is not a real GCP pairing
+	// (the conformance validator rejects it). Resolving through the HTTP status
+	// yields UNIMPLEMENTED on 501 and NOT_FOUND on 404.
 	case "Internal", "InternalError":
 		return Internal, true
 	case "DeadlineExceeded":

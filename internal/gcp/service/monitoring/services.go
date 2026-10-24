@@ -138,10 +138,33 @@ var serviceIdentifierMaskRoots = map[string]bool{
 	"gke_service":             true,
 }
 
+// maskFieldSet normalizes Discovery camelCase field names to the snake_case
+// roots normalizeMaskPath produces and returns them as a set.
+func maskFieldSet(names ...string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[normalizeMaskPath(n)] = true
+	}
+	return set
+}
+
+// serviceMaskFields is the full update_mask field set of a Cloud Monitoring
+// Service (Discovery schema google.monitoring.v3.Service), normalized to
+// snake_case roots. A path outside it names no field and is a client error (400
+// INVALID_ARGUMENT, AIP-134/AIP-161); a path inside it that applyServiceMask
+// does not merge is a field the emulator does not write, so it stays a 501
+// UnsupportedOperation rather than being misreported as a client error.
+var serviceMaskFields = maskFieldSet(
+	"displayName", "userLabels", "telemetry", "basicService",
+	"custom", "appEngine", "cloudEndpoints", "clusterIstio", "meshIstio",
+	"istioCanonicalService", "cloudRun", "gkeNamespace", "gkeWorkload",
+	"gkeService", "name",
+)
+
 // applyServiceMask merges an incoming service into the stored service according
 // to the field paths in updateMask. Paths are normalized the same way as
-// applyAlertPolicyMask (camelCase or snake_case); an unsupported path is a 501
-// UnsupportedOperation, matching the rest of the emulator.
+// applyAlertPolicyMask (camelCase or snake_case); a path that names no field is
+// a 400 InvalidArgument, a real-but-unimplemented field a 501.
 func applyServiceMask(stored, incoming monitoringstore.Service, updateMask []string) (monitoringstore.Service, error) {
 	for _, raw := range updateMask {
 		path := normalizeMaskPath(raw)
@@ -157,6 +180,9 @@ func applyServiceMask(stored, incoming monitoringstore.Service, updateMask []str
 		case serviceIdentifierMaskRoots[path]:
 			stored.Identifier = incoming.Identifier
 		default:
+			if !serviceMaskFields[path] {
+				return stored, invalidMaskPath(raw)
+			}
 			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
 		}
 	}
@@ -301,11 +327,21 @@ const (
 	calendarPeriodMonth     int32 = 4
 )
 
+// sloMaskFields is the full update_mask field set of a Cloud Monitoring
+// ServiceLevelObjective (Discovery schema
+// google.monitoring.v3.ServiceLevelObjective), normalized to snake_case roots.
+var sloMaskFields = maskFieldSet(
+	"displayName", "goal", "serviceLevelIndicator", "rollingPeriod",
+	"calendarPeriod", "userLabels", "name",
+)
+
 // applyServiceLevelObjectiveMask merges an incoming SLO into the stored SLO
-// according to the field paths in updateMask.
+// according to the field paths in updateMask. A path that names no field is a
+// 400 InvalidArgument, a real-but-unimplemented field a 501.
 func applyServiceLevelObjectiveMask(stored, incoming monitoringstore.ServiceLevelObjective, updateMask []string) (monitoringstore.ServiceLevelObjective, error) {
 	for _, raw := range updateMask {
-		switch normalizeMaskPath(raw) {
+		path := normalizeMaskPath(raw)
+		switch path {
 		case "display_name":
 			stored.DisplayName = incoming.DisplayName
 		case "goal":
@@ -324,6 +360,9 @@ func applyServiceLevelObjectiveMask(stored, incoming monitoringstore.ServiceLeve
 		case "user_labels":
 			stored.UserLabels = incoming.UserLabels
 		default:
+			if !sloMaskFields[path] {
+				return stored, invalidMaskPath(raw)
+			}
 			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
 		}
 	}

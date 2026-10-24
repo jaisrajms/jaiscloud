@@ -1,0 +1,30 @@
+{
+  "index": 22,
+  "service": "storage",
+  "op": "tour_bq_load_object_upload",
+  "method": "POST",
+  "path": "/upload/storage/v1/b/<bucket>/o?uploadType=media&name=load%2Frows.ndjson",
+  "status": 200,
+  "request": "{\"id\":1,\"name\":\"a\"}\n{\"id\":2,\"name\":\"b\"}",
+  "response": {
+    "bucket": "<bucket>",
+    "contentType": "application/x-ndjson",
+    "crc32c": "<crc32c>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "id": "<bucket>/load/rows.ndjson/<generation>",
+    "kind": "storage#object",
+    "md5Hash": "<md5Hash>",
+    "mediaLink": "<mediaLink>",
+    "metageneration": "<metageneration>",
+    "name": "load/rows.ndjson",
+    "selfLink": "<selfLink>",
+    "size": "40",
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "timeFinalized": "<time>",
+    "timeStorageClassUpdated": "<time>",
+    "updated": "<time>"
+  }
+}
+

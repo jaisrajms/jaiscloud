@@ -1,0 +1,455 @@
+{
+  "version": 1,
+  "project": "<project>",
+  "ops": 74,
+  "services": [
+    "bigquery"
+  ],
+  "files": [
+    {
+      "file": "007-bigquery-bqsql_expr_literal_int.json",
+      "op": "bqsql_expr_literal_int",
+      "sha256": "340daef969d503eb928733930247e6c871803619f44b33a5994f0bb83643e726",
+      "status": 200
+    },
+    {
+      "file": "008-bigquery-bqsql_expr_arith_add.json",
+      "op": "bqsql_expr_arith_add",
+      "sha256": "ab3ab96b1999e12317a5caf9c7d8cb0f1fa0918d48cbcb3b986e4b7e5f9c9ece",
+      "status": 200
+    },
+    {
+      "file": "009-bigquery-bqsql_expr_arith_sub.json",
+      "op": "bqsql_expr_arith_sub",
+      "sha256": "6bb6938d2f3c210961fa9aaf93a07e3e83537588f18f12b9da7a8dd005ffcf01",
+      "status": 200
+    },
+    {
+      "file": "010-bigquery-bqsql_expr_arith_mul.json",
+      "op": "bqsql_expr_arith_mul",
+      "sha256": "e7a60c39d091c24f1b9b96ce321a34494f856481cf1a01234348b91e695ef2a5",
+      "status": 200
+    },
+    {
+      "file": "011-bigquery-bqsql_expr_arith_float_mul.json",
+      "op": "bqsql_expr_arith_float_mul",
+      "sha256": "9d2754a4bb24f355efc0787f155e126c903183bf6fa16d51904033135d258abd",
+      "status": 200
+    },
+    {
+      "file": "012-bigquery-bqsql_expr_arith_div.json",
+      "op": "bqsql_expr_arith_div",
+      "sha256": "18a6194bbad489de7b4c293c336e781a98ea0278ebd36c4e2412421df8ecf4d9",
+      "status": 200
+    },
+    {
+      "file": "013-bigquery-bqsql_expr_arith_div_zero.json",
+      "op": "bqsql_expr_arith_div_zero",
+      "sha256": "f64ee442b193ccd5db67bb81081fe989a86a37cff3a950fb0580e698e414ceeb",
+      "status": 400
+    },
+    {
+      "file": "014-bigquery-bqsql_expr_string_concat_op.json",
+      "op": "bqsql_expr_string_concat_op",
+      "sha256": "e3456061ac2013df059571880df39e888dfb9f31a2d615a44d5abada1ff23a94",
+      "status": 200
+    },
+    {
+      "file": "015-bigquery-bqsql_expr_func_upper.json",
+      "op": "bqsql_expr_func_upper",
+      "sha256": "f783b39139886a4302e6fdd838f9d7ffa66d4b7b9f31c9c1964d3ce2e677ee83",
+      "status": 200
+    },
+    {
+      "file": "016-bigquery-bqsql_expr_func_lower.json",
+      "op": "bqsql_expr_func_lower",
+      "sha256": "04060a8513bb805453ac6b8b6d133ac4798985711823c7114494929a15ace2a3",
+      "status": 200
+    },
+    {
+      "file": "017-bigquery-bqsql_expr_func_length.json",
+      "op": "bqsql_expr_func_length",
+      "sha256": "fc2ff23536d6bb91007e793fd10e4b45a36972feb9e6878be6b0d4118aea7e74",
+      "status": 200
+    },
+    {
+      "file": "018-bigquery-bqsql_expr_func_substr.json",
+      "op": "bqsql_expr_func_substr",
+      "sha256": "efbe8255e925e24cdadf3bc0552ab22fc0623d050a86330a5e5616c364275426",
+      "status": 200
+    },
+    {
+      "file": "019-bigquery-bqsql_expr_func_concat.json",
+      "op": "bqsql_expr_func_concat",
+      "sha256": "ce7ee74c2d8a7d80b14ac46c4161faf4521f1b6c3c79c69a91a1af6ed0a3bcfb",
+      "status": 200
+    },
+    {
+      "file": "020-bigquery-bqsql_expr_func_replace.json",
+      "op": "bqsql_expr_func_replace",
+      "sha256": "87a495051888b9ec1bac7d337a8140dbca88e5864180c0101c6e2c05f1bc3c0e",
+      "status": 200
+    },
+    {
+      "file": "021-bigquery-bqsql_expr_func_trim.json",
+      "op": "bqsql_expr_func_trim",
+      "sha256": "5c1153a9a802c09dff9d2ae91030617ee26f5d23650aabda7d45900673db9eb0",
+      "status": 200
+    },
+    {
+      "file": "022-bigquery-bqsql_expr_func_instr.json",
+      "op": "bqsql_expr_func_instr",
+      "sha256": "f3472acdd3694feef64ee485a456bcc7d3b882d78e795cefcb2b97e265a7114a",
+      "status": 200
+    },
+    {
+      "file": "023-bigquery-bqsql_expr_coalesce.json",
+      "op": "bqsql_expr_coalesce",
+      "sha256": "cbbdfa7326f7e03427c6ca7ab674f041addf1bb3ab7d253f3876f82b9a44c160",
+      "status": 200
+    },
+    {
+      "file": "024-bigquery-bqsql_expr_coalesce_chain.json",
+      "op": "bqsql_expr_coalesce_chain",
+      "sha256": "3615cdc60ce6c9f090aa744bc126b05472794ed51abde04275eaa7511e11291b",
+      "status": 200
+    },
+    {
+      "file": "025-bigquery-bqsql_expr_case.json",
+      "op": "bqsql_expr_case",
+      "sha256": "879d62854dd05b29bcb41dee548ca359351b77e9767bb105158f4f47e33f11dc",
+      "status": 200
+    },
+    {
+      "file": "026-bigquery-bqsql_expr_if.json",
+      "op": "bqsql_expr_if",
+      "sha256": "331508578e88d10f6039cc4e7a92a83572063b0ae4d3916ac6b6cf50d4ab88cb",
+      "status": 200
+    },
+    {
+      "file": "027-bigquery-bqsql_expr_cast_str_int.json",
+      "op": "bqsql_expr_cast_str_int",
+      "sha256": "1a3ea44360c2305c79560cf39d75ec06d9efb85a0af2bd4e5f0e931987be1cba",
+      "status": 200
+    },
+    {
+      "file": "028-bigquery-bqsql_expr_cast_float_int.json",
+      "op": "bqsql_expr_cast_float_int",
+      "sha256": "8ca3b9f2cf49e75868aebe23626794a95e4f79e216540af1e0dedea04d150306",
+      "status": 200
+    },
+    {
+      "file": "029-bigquery-bqsql_expr_cast_int_str.json",
+      "op": "bqsql_expr_cast_int_str",
+      "sha256": "0f9ba549120f6b888dc69ec56ea28cfab34045afe8c98b0d841639e3271fdd69",
+      "status": 200
+    },
+    {
+      "file": "030-bigquery-bqsql_expr_safe_cast.json",
+      "op": "bqsql_expr_safe_cast",
+      "sha256": "736d25c31df03dd7ec42fb89dc43f8da23bfb9af621a3cde1fca6e955e865ca0",
+      "status": 200
+    },
+    {
+      "file": "031-bigquery-bqsql_expr_func_abs.json",
+      "op": "bqsql_expr_func_abs",
+      "sha256": "2b42862688a4869d73e13ee00ef158b73db2a2d64bcb00a0cf02ce8f64d06b6e",
+      "status": 200
+    },
+    {
+      "file": "032-bigquery-bqsql_expr_func_round.json",
+      "op": "bqsql_expr_func_round",
+      "sha256": "e60b93c312f4e032c47a09328a257aef3c2d2e08fcf98762ed8a70a41ead7e43",
+      "status": 200
+    },
+    {
+      "file": "033-bigquery-bqsql_expr_func_mod.json",
+      "op": "bqsql_expr_func_mod",
+      "sha256": "1106f5ffd2360b95ce7cde21a8163f950b6732beb3311e64daf7f040f80e2d4f",
+      "status": 200
+    },
+    {
+      "file": "034-bigquery-bqsql_expr_func_div.json",
+      "op": "bqsql_expr_func_div",
+      "sha256": "f0f1f1610cf69285f328749d1dc60fe40a733fa908c1f5cf35f4b8f8e2bae24c",
+      "status": 200
+    },
+    {
+      "file": "035-bigquery-bqsql_expr_func_starts_with.json",
+      "op": "bqsql_expr_func_starts_with",
+      "sha256": "fdd11cdef0496e10b92a50329c37ed95fb519a949cf547bd10b717d2e40de490",
+      "status": 200
+    },
+    {
+      "file": "036-bigquery-bqsql_expr_func_format.json",
+      "op": "bqsql_expr_func_format",
+      "sha256": "f1bca09f863852bf84ff5d50246e87dc11203217693aa37945b85f760ac23602",
+      "status": 200
+    },
+    {
+      "file": "037-bigquery-bqsql_expr_date_literal.json",
+      "op": "bqsql_expr_date_literal",
+      "sha256": "909197c71f903b35d112cf70619fcd139cdf15a14152718fb2f78a94c74b8af8",
+      "status": 200
+    },
+    {
+      "file": "038-bigquery-bqsql_expr_date_add.json",
+      "op": "bqsql_expr_date_add",
+      "sha256": "254fc5fc4f73df5bba8916841df51d9f1182fa1bd4d1129170b2a69a6aabaf13",
+      "status": 200
+    },
+    {
+      "file": "039-bigquery-bqsql_expr_current_date.json",
+      "op": "bqsql_expr_current_date",
+      "sha256": "c0bef3afa66c3a12c5784e9a3080c9606837eb9fa1b575d969d3969c5bbab578",
+      "status": 200
+    },
+    {
+      "file": "040-bigquery-bqsql_expr_logic_not.json",
+      "op": "bqsql_expr_logic_not",
+      "sha256": "0b0d69a8218dccad965141d45a29d43963e00108025137b5dfd472572eec929f",
+      "status": 200
+    },
+    {
+      "file": "041-bigquery-bqsql_expr_logic_and.json",
+      "op": "bqsql_expr_logic_and",
+      "sha256": "eba7da7094f4f0c83ca6d2387bf02cf9fd2862fa0f912e9c18bbf9b3eb6f554f",
+      "status": 200
+    },
+    {
+      "file": "042-bigquery-bqsql_null_literal.json",
+      "op": "bqsql_null_literal",
+      "sha256": "26e27a8b84eee3548e3f4681eaaef0ed77bf52e99c4b7860892441635f8342d1",
+      "status": 200
+    },
+    {
+      "file": "043-bigquery-bqsql_null_eq_null.json",
+      "op": "bqsql_null_eq_null",
+      "sha256": "8f3073862a21866873b1b15ca1712621597a190564b2c30fa3ceb958bb41fced",
+      "status": 400
+    },
+    {
+      "file": "044-bigquery-bqsql_null_eq_int.json",
+      "op": "bqsql_null_eq_int",
+      "sha256": "c30c6f7152b69c53d2c3f785ce470abe3df0d2cc9203664a2d5e156c75fa53f2",
+      "status": 400
+    },
+    {
+      "file": "045-bigquery-bqsql_null_func_nullif.json",
+      "op": "bqsql_null_func_nullif",
+      "sha256": "2a498f9f267c2b070bc288b32a48f4466a9d06f9616391816314fcb8c98f8e7e",
+      "status": 200
+    },
+    {
+      "file": "046-bigquery-bqsql_null_func_ifnull.json",
+      "op": "bqsql_null_func_ifnull",
+      "sha256": "d7c071bfc5c4c172c55bb20c36cd75cf2f70c829129bf5cae307d97e5b97050d",
+      "status": 200
+    },
+    {
+      "file": "047-bigquery-bqsql_agg_count_star.json",
+      "op": "bqsql_agg_count_star",
+      "sha256": "1f0619a5a7505007d68e40bbded40939bb708eb249190cf5c191912e2cff0f77",
+      "status": 200
+    },
+    {
+      "file": "048-bigquery-bqsql_agg_count_col.json",
+      "op": "bqsql_agg_count_col",
+      "sha256": "aa7b045f78b3b977e2df4a4005fe9544b493a7c19cb48f261fd0deb27464cbc3",
+      "status": 200
+    },
+    {
+      "file": "049-bigquery-bqsql_agg_sum.json",
+      "op": "bqsql_agg_sum",
+      "sha256": "f7ce3029f1f7bacc1a3fc7b88b620ea356a771a7c130de67a58fb6a9c2037cb7",
+      "status": 200
+    },
+    {
+      "file": "050-bigquery-bqsql_agg_avg.json",
+      "op": "bqsql_agg_avg",
+      "sha256": "4b760bedd3494610376816ac6c313edcafa3b750035484d0cb30b6d11411077f",
+      "status": 200
+    },
+    {
+      "file": "051-bigquery-bqsql_agg_min_max.json",
+      "op": "bqsql_agg_min_max",
+      "sha256": "df44c9e6c3730ec86d27d21d92d709fb551445a3ed1772aa821b2bdc67860313",
+      "status": 200
+    },
+    {
+      "file": "052-bigquery-bqsql_agg_countif.json",
+      "op": "bqsql_agg_countif",
+      "sha256": "a4524918cc02b53a04c1df5909c0b0c62c1e218b867339aaae87fd888234ba31",
+      "status": 200
+    },
+    {
+      "file": "053-bigquery-bqsql_agg_distinct.json",
+      "op": "bqsql_agg_distinct",
+      "sha256": "3dcf7f36b2405125e325d99f8a3d9662706c539d850ac0de1a6a801be6cc21f0",
+      "status": 200
+    },
+    {
+      "file": "054-bigquery-bqsql_filter_where_order.json",
+      "op": "bqsql_filter_where_order",
+      "sha256": "29a134513a7efa56ea44374f297c95dfa851c10aef7fe42b176d99c036082c2d",
+      "status": 200
+    },
+    {
+      "file": "055-bigquery-bqsql_filter_order_desc_limit.json",
+      "op": "bqsql_filter_order_desc_limit",
+      "sha256": "130ece7b53ecbfaf2743cc44ccf680145749437599d5e9a4082872bbcfecaea5",
+      "status": 200
+    },
+    {
+      "file": "056-bigquery-bqsql_filter_limit_offset.json",
+      "op": "bqsql_filter_limit_offset",
+      "sha256": "25245ef28b2a288371c60ef70e9ae53d3c790af3400340838fdc46e742d74c11",
+      "status": 200
+    },
+    {
+      "file": "057-bigquery-bqsql_agg_group_by.json",
+      "op": "bqsql_agg_group_by",
+      "sha256": "c6815b03b8b189adcfe613c035280421accf3762a5c977c0b89961f0fa6eced6",
+      "status": 200
+    },
+    {
+      "file": "058-bigquery-bqsql_agg_having.json",
+      "op": "bqsql_agg_having",
+      "sha256": "c8e1f36120fc7d535718e2547fd3893bfbf082b8acc775505a5fa52aef258940",
+      "status": 200
+    },
+    {
+      "file": "059-bigquery-bqsql_join_inner_on.json",
+      "op": "bqsql_join_inner_on",
+      "sha256": "dd5f3250996c94f2000ba6b2c564fbbd354b716677322f8024de138dceb56e25",
+      "status": 200
+    },
+    {
+      "file": "060-bigquery-bqsql_join_inner_kw.json",
+      "op": "bqsql_join_inner_kw",
+      "sha256": "fd42c679b1777799d52a20fc439892e8a0e68e1d1a3a3df62cdc48ac21c7c16d",
+      "status": 200
+    },
+    {
+      "file": "061-bigquery-bqsql_join_left.json",
+      "op": "bqsql_join_left",
+      "sha256": "8ae56cfd4ec233ac501535bcec40dd7e587ac02c27d7d8d72ec34c838056cb0c",
+      "status": 200
+    },
+    {
+      "file": "062-bigquery-bqsql_join_self_multi.json",
+      "op": "bqsql_join_self_multi",
+      "sha256": "941bccb478d1096a33a1fe4a663624b34c151a07092af59dbb97071877de6fe6",
+      "status": 200
+    },
+    {
+      "file": "063-bigquery-bqsql_subq_from.json",
+      "op": "bqsql_subq_from",
+      "sha256": "2208640bf088cb2a457b5af891f43ff9f305a8c4742625aa2b5b20cbe55b26e7",
+      "status": 200
+    },
+    {
+      "file": "064-bigquery-bqsql_subq_cte.json",
+      "op": "bqsql_subq_cte",
+      "sha256": "047e019fc8500682c8aa445435b626fdad6791e1e8313144d53ef3ac1998b5b7",
+      "status": 200
+    },
+    {
+      "file": "065-bigquery-bqsql_subq_in.json",
+      "op": "bqsql_subq_in",
+      "sha256": "8832731303b2160608232b8e0f60d9c8c1138324caa73b09a1bdde7da23f3d9d",
+      "status": 200
+    },
+    {
+      "file": "066-bigquery-bqsql_subq_scalar.json",
+      "op": "bqsql_subq_scalar",
+      "sha256": "80cba0c79764fcce993cd56319556767d14bc291b3adbc5a0ebf97b8b71ff223",
+      "status": 200
+    },
+    {
+      "file": "067-bigquery-bqsql_setop_union_all.json",
+      "op": "bqsql_setop_union_all",
+      "sha256": "6b4cb33a25623718d51b57e03281367b0e047e6a4c2bf6e6d513821788c4bd94",
+      "status": 200
+    },
+    {
+      "file": "068-bigquery-bqsql_setop_union_distinct.json",
+      "op": "bqsql_setop_union_distinct",
+      "sha256": "9ac5483406453854644bfd373160b9f0ea6483bbb0e389f2a1dd399ce69d0099",
+      "status": 200
+    },
+    {
+      "file": "069-bigquery-bqsql_setop_except.json",
+      "op": "bqsql_setop_except",
+      "sha256": "c646e072316577b0ff4906824ce0afabce8ad526269b9a603bb43ff33866e1ef",
+      "status": 200
+    },
+    {
+      "file": "070-bigquery-bqsql_setop_intersect.json",
+      "op": "bqsql_setop_intersect",
+      "sha256": "f640e04e4d72d35223a4f4fd2a89a53d96c5c949b68222229049cbce07721929",
+      "status": 200
+    },
+    {
+      "file": "071-bigquery-bqsql_win_row_number.json",
+      "op": "bqsql_win_row_number",
+      "sha256": "1f5edfb9af0718c716c6d576c1d4b9cbfccfa75e8b3bc63ed0774cd759c1718c",
+      "status": 200
+    },
+    {
+      "file": "072-bigquery-bqsql_win_rank.json",
+      "op": "bqsql_win_rank",
+      "sha256": "3551cd247739b420de01d1fc8fc3fee22bdc364c35c0179927d35b5ffb4ab5d4",
+      "status": 200
+    },
+    {
+      "file": "073-bigquery-bqsql_win_sum_partition.json",
+      "op": "bqsql_win_sum_partition",
+      "sha256": "8a29151c36137c3f3b542fbbb5f0025ec8962ad26971ec62f584e497bb9b11d3",
+      "status": 200
+    },
+    {
+      "file": "074-bigquery-bqsql_win_lag.json",
+      "op": "bqsql_win_lag",
+      "sha256": "c4a6797004caa65670b405a045e4333417024103d34f3b36adc337cd1948e164",
+      "status": 200
+    },
+    {
+      "file": "075-bigquery-bqsql_win_count_over.json",
+      "op": "bqsql_win_count_over",
+      "sha256": "16199ff80d164706f3a1eaa263af9539f84fa9949ba14dfa7b32e537b142cee5",
+      "status": 200
+    },
+    {
+      "file": "076-bigquery-bqsql_win_qualify.json",
+      "op": "bqsql_win_qualify",
+      "sha256": "505dabc45aaf92018fb2387ab8d17450b389d43e1dafd55303df2bcd352a16b9",
+      "status": 200
+    },
+    {
+      "file": "077-bigquery-bqsql_err_missing_table.json",
+      "op": "bqsql_err_missing_table",
+      "sha256": "d3dfe1e7fb8a8d8c14893241938f7db6a973928885d04a802cb27a213cc517a5",
+      "status": 404
+    },
+    {
+      "file": "078-bigquery-bqsql_err_unknown_column.json",
+      "op": "bqsql_err_unknown_column",
+      "sha256": "9d1a89aabcdbfb1129d785f9d0caac6eb1bfdf7aeab5e5c312f2a1d7c189e7b0",
+      "status": 400
+    },
+    {
+      "file": "079-bigquery-bqsql_err_syntax.json",
+      "op": "bqsql_err_syntax",
+      "sha256": "6b64284d4ccbb92a38efea52516f7ebb145b90e20799a1f0034b915cf3888a15",
+      "status": 400
+    },
+    {
+      "file": "080-bigquery-bqsql_err_type_mismatch.json",
+      "op": "bqsql_err_type_mismatch",
+      "sha256": "bc58829fd9491f7e0a310d886fe10f5047ce5a3c3b21779b017c43cc2057ce72",
+      "status": 400
+    }
+  ]
+}
+

@@ -2,6 +2,7 @@ package eventarc
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -254,13 +255,262 @@ func TestTriggerIAM(t *testing.T) {
 	}
 }
 
-// TestUnimplementedRPC verifies the non-trigger/channel/provider surface (e.g.
-// ChannelConnection) falls through to the embedded Unimplemented stub.
-func TestUnimplementedRPC(t *testing.T) {
+// TestListTriggersFilterAndOrderGRPC verifies the proto's filter/order_by
+// fields reach the core (the gRPC adapter previously passed neither on).
+func TestListTriggersFilterAndOrderGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCServiceWithWorkflow(t)
+	parent := "projects/proj/locations/us-central1"
+	create := func(id string, dest *eventarcpb.Destination) {
+		t.Helper()
+		if _, err := s.CreateTrigger(ctx, &eventarcpb.CreateTriggerRequest{
+			Parent: parent, TriggerId: id,
+			Trigger: &eventarcpb.Trigger{
+				Destination:  dest,
+				EventFilters: []*eventarcpb.EventFilter{{Attribute: "type", Value: "x"}},
+			},
+		}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	create("t1", &eventarcpb.Destination{Descriptor_: &eventarcpb.Destination_Workflow{Workflow: "projects/proj/locations/us-central1/workflows/w1"}})
+	create("t2", &eventarcpb.Destination{Descriptor_: &eventarcpb.Destination_CloudRun{CloudRun: &eventarcpb.CloudRun{Service: "svc", Region: "us-central1"}}})
+
+	names := func(req *eventarcpb.ListTriggersRequest) []string {
+		t.Helper()
+		req.Parent = parent
+		list, err := s.ListTriggers(ctx, req)
+		if err != nil {
+			t.Fatalf("ListTriggers %+v: %v", req, err)
+		}
+		out := make([]string, 0, len(list.GetTriggers()))
+		for _, tr := range list.GetTriggers() {
+			out = append(out, tr.GetName())
+		}
+		return out
+	}
+
+	if got := names(&eventarcpb.ListTriggersRequest{Filter: "destination:workflow"}); len(got) != 1 || !strings.HasSuffix(got[0], "/t1") {
+		t.Errorf("filter=destination:workflow = %v", got)
+	}
+	got := names(&eventarcpb.ListTriggersRequest{OrderBy: "name desc"})
+	if len(got) != 2 || !strings.HasSuffix(got[0], "/t2") || !strings.HasSuffix(got[1], "/t1") {
+		t.Errorf("order_by=name desc = %v", got)
+	}
+	if _, err := s.ListTriggers(ctx, &eventarcpb.ListTriggersRequest{Parent: parent, OrderBy: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad order_by: code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.ListTriggers(ctx, &eventarcpb.ListTriggersRequest{Parent: parent, Filter: "bogus=1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad filter: code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestAdvancedSurfaceServed verifies the advanced surface (message buses,
+// enrollments, pipelines, Google API sources, channel connections, Google
+// channel config) is served by the Eventarc service rather than falling through
+// to the embedded Unimplemented stub: a missing message bus is NotFound, not
+// Unimplemented.
+func TestAdvancedSurfaceServed(t *testing.T) {
 	ctx := context.Background()
 	s := newGRPCService()
 	_, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: "projects/proj/locations/us-central1/messageBuses/mb"})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("GetMessageBus code = %v, want Unimplemented", status.Code(err))
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetMessageBus code = %v, want NotFound", status.Code(err))
+	}
+	// A malformed advanced name is InvalidArgument, not Unimplemented.
+	if _, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: "projects/proj/locations/us-central1/messageBuses/"}); status.Code(err) == codes.Unimplemented {
+		t.Fatalf("GetMessageBus on an empty id must not be Unimplemented")
+	}
+}
+
+// TestAdvancedMessageBusGRPC drives the advanced gRPC surface for a message bus
+// (create LRO → get → list → update → delete), plus the Google channel config
+// singleton and the listEnrollments custom method.
+func TestAdvancedMessageBusGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	parent := "projects/proj/locations/us-central1"
+	busName := parent + "/messageBuses/mb1"
+
+	op, err := s.CreateMessageBus(ctx, &eventarcpb.CreateMessageBusRequest{
+		Parent: parent, MessageBusId: "mb1",
+		MessageBus: &eventarcpb.MessageBus{DisplayName: "demo"},
+	})
+	if err != nil {
+		t.Fatalf("CreateMessageBus: %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("create not done")
+	}
+	var created eventarcpb.MessageBus
+	if err := op.GetResponse().UnmarshalTo(&created); err != nil {
+		t.Fatalf("unpack response: %v", err)
+	}
+	if created.GetName() != busName || created.GetUid() == "" {
+		t.Fatalf("created = %+v", &created)
+	}
+
+	got, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: busName})
+	if err != nil || got.GetDisplayName() != "demo" {
+		t.Fatalf("GetMessageBus = %+v, %v", got, err)
+	}
+
+	list, err := s.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{Parent: parent})
+	if err != nil || len(list.GetMessageBuses()) != 1 {
+		t.Fatalf("ListMessageBuses = %+v, %v", list, err)
+	}
+
+	upd, err := s.UpdateMessageBus(ctx, &eventarcpb.UpdateMessageBusRequest{
+		MessageBus: &eventarcpb.MessageBus{Name: busName, Labels: map[string]string{"x": "y"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateMessageBus: %v", err)
+	}
+	var updated eventarcpb.MessageBus
+	if err := upd.GetResponse().UnmarshalTo(&updated); err != nil {
+		t.Fatalf("unpack update: %v", err)
+	}
+	if updated.GetLabels()["x"] != "y" {
+		t.Fatalf("updated labels = %v", updated.GetLabels())
+	}
+
+	// An enrollment attached to the bus is listed by listEnrollments.
+	if _, err := s.CreateEnrollment(ctx, &eventarcpb.CreateEnrollmentRequest{
+		Parent: parent, EnrollmentId: "e1",
+		Enrollment: &eventarcpb.Enrollment{MessageBus: busName},
+	}); err != nil {
+		t.Fatalf("CreateEnrollment: %v", err)
+	}
+	enr, err := s.ListMessageBusEnrollments(ctx, &eventarcpb.ListMessageBusEnrollmentsRequest{Parent: busName})
+	if err != nil || len(enr.GetEnrollments()) != 1 {
+		t.Fatalf("ListMessageBusEnrollments = %+v, %v", enr, err)
+	}
+
+	// Google channel config singleton: default get then update (inline response).
+	cfgName := parent + "/googleChannelConfig"
+	def, err := s.GetGoogleChannelConfig(ctx, &eventarcpb.GetGoogleChannelConfigRequest{Name: cfgName})
+	if err != nil || def.GetName() != cfgName {
+		t.Fatalf("GetGoogleChannelConfig = %+v, %v", def, err)
+	}
+	if _, err := s.UpdateGoogleChannelConfig(ctx, &eventarcpb.UpdateGoogleChannelConfigRequest{
+		GoogleChannelConfig: &eventarcpb.GoogleChannelConfig{Name: cfgName, CryptoKeyName: "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k"},
+		UpdateMask:          &fieldmaskpb.FieldMask{Paths: []string{"crypto_key_name"}},
+	}); err != nil {
+		t.Fatalf("UpdateGoogleChannelConfig: %v", err)
+	}
+
+	del, err := s.DeleteMessageBus(ctx, &eventarcpb.DeleteMessageBusRequest{Name: busName})
+	if err != nil || !del.GetDone() {
+		t.Fatalf("DeleteMessageBus = %+v, %v", del, err)
+	}
+	if _, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: busName}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+}
+
+// TestAdvancedIAMGRPC verifies the IAM router dispatches the advanced-surface
+// families (a message bus here) and reports NotFound for a missing one.
+func TestAdvancedIAMGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	name := "projects/proj/locations/us-central1/messageBuses/mb1"
+	if _, err := s.CreateMessageBus(ctx, &eventarcpb.CreateMessageBusRequest{
+		Parent: "projects/proj/locations/us-central1", MessageBusId: "mb1", MessageBus: &eventarcpb.MessageBus{},
+	}); err != nil {
+		t.Fatalf("CreateMessageBus: %v", err)
+	}
+	if !s.Owns(name) {
+		t.Fatalf("Owns(%q) = false", name)
+	}
+	pol, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: name})
+	if err != nil || len(pol.GetBindings()) != 0 {
+		t.Fatalf("GetIamPolicy = %+v, %v", pol, err)
+	}
+	if _, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{
+		Resource: "projects/proj/locations/us-central1/pipelines/missing",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing pipeline IAM = %v, want NotFound", err)
+	}
+}
+
+// TestListMessageBusesFilterAndOrder verifies the documented filter/orderBy
+// request fields reach the core through gRPC rather than being dropped (TD17).
+func TestListMessageBusesFilterAndOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	parent := "projects/proj/locations/us-central1"
+	for _, mb := range []struct{ id, dn, env string }{
+		{"mb1", "alpha", "test"}, {"mb2", "beta", "prod"}, {"mb3", "gamma", "test"},
+	} {
+		if _, err := s.CreateMessageBus(ctx, &eventarcpb.CreateMessageBusRequest{
+			Parent: parent, MessageBusId: mb.id,
+			MessageBus: &eventarcpb.MessageBus{DisplayName: mb.dn, Labels: map[string]string{"env": mb.env}},
+		}); err != nil {
+			t.Fatalf("CreateMessageBus %s: %v", mb.id, err)
+		}
+	}
+
+	names := func(req *eventarcpb.ListMessageBusesRequest) []string {
+		t.Helper()
+		list, err := s.ListMessageBuses(ctx, req)
+		if err != nil {
+			t.Fatalf("ListMessageBuses(%v): %v", req, err)
+		}
+		out := make([]string, 0, len(list.GetMessageBuses()))
+		for _, mb := range list.GetMessageBuses() {
+			out = append(out, mb.GetName())
+		}
+		return out
+	}
+
+	got := names(&eventarcpb.ListMessageBusesRequest{Parent: parent, Filter: "labels.env=test"})
+	want := []string{
+		"projects/proj/locations/us-central1/messageBuses/mb1",
+		"projects/proj/locations/us-central1/messageBuses/mb3",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("filtered message buses = %v, want %v", got, want)
+	}
+
+	got = names(&eventarcpb.ListMessageBusesRequest{Parent: parent, OrderBy: "name desc"})
+	want = []string{
+		"projects/proj/locations/us-central1/messageBuses/mb3",
+		"projects/proj/locations/us-central1/messageBuses/mb2",
+		"projects/proj/locations/us-central1/messageBuses/mb1",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("message buses orderBy name desc = %v, want %v", got, want)
+	}
+
+	if _, err := s.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{Parent: parent, Filter: "bogus=1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad filter code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestListProvidersFilterAndOrder verifies providers.list honors filter/orderBy
+// through gRPC (TD17).
+func TestListProvidersFilterAndOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	parent := "projects/proj/locations/us-central1"
+
+	list, err := s.ListProviders(ctx, &eventarcpb.ListProvidersRequest{Parent: parent, OrderBy: "displayName desc"})
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if len(list.GetProviders()) < 2 {
+		t.Fatalf("providers = %v", list.GetProviders())
+	}
+	if list.GetProviders()[0].GetDisplayName() != "Cloud Storage" {
+		t.Errorf("first provider = %q, want Cloud Storage", list.GetProviders()[0].GetDisplayName())
+	}
+
+	list, err = s.ListProviders(ctx, &eventarcpb.ListProvidersRequest{Parent: parent, Filter: `displayName:"Storage"`})
+	if err != nil {
+		t.Fatalf("ListProviders filter: %v", err)
+	}
+	if len(list.GetProviders()) != 1 || list.GetProviders()[0].GetDisplayName() != "Cloud Storage" {
+		t.Errorf("filtered providers = %v", list.GetProviders())
 	}
 }

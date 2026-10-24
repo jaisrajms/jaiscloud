@@ -28,13 +28,13 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/sparkgcp"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
-	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
 
@@ -43,11 +43,15 @@ type Service struct {
 	store     dpstore.Store
 	resources store.ResourceStore // terminal snapshots (rehydrate after k8s Job GC)
 
-	k8sClient   kubernetes.Interface // nil = mock execution
+	k8sClient   kubernetes.Interface // nil = no k8s namespace provisioning
 	platformCfg *platform.PlatformConfig
 	namespace   string
 	sparkImage  string
 	gcpEmulator *sparkgcp.GCPEmulatorConfig
+
+	// executor is the driver-submission backend. nil means mock mode: no driver
+	// runs and a job settles lazily in the store.
+	executor driverExecutor
 
 	sparkSubmitPath string
 	sparkSqlPath    string
@@ -99,6 +103,9 @@ type Service struct {
 	// state-change type receives them directly (independent of the Pub/Sub
 	// topic). Nil disables direct delivery.
 	eventDispatcher eventing.Dispatcher
+	// eventBus carries cloud-neutral status events to the console's live
+	// stream. Nil disables them; publishing is best-effort.
+	eventBus *events.EventBus
 
 	// blobSink stages a job's driver output/control files into the emulated
 	// GCS. Nil (unit tests / mock deployments) keeps the advertised URIs but
@@ -116,12 +123,17 @@ type Service struct {
 	// JAISCLOUD_DATAPROC_HMS_ENDPOINT). See WithHMSEndpointOverride.
 	hmsEndpointOverride string
 
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	cancelsMu   sync.Mutex
-	cancels     map[string]context.CancelFunc
-	patcherStop func()
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	cancelsMu sync.Mutex
+	cancels   map[string]context.CancelFunc
+
+	// nsPatchers holds one ownership patcher per workload namespace (the default
+	// plus every per-cluster namespace), so per-cluster namespaces created after
+	// startup are watched and their executor pods get ownerReferences.
+	nsPatchersMu sync.Mutex
+	nsPatchers   map[string]func()
 }
 
 // defaultOperationTTL is how long a completed operation is retained before the
@@ -133,14 +145,19 @@ const defaultOperationTTL = 24 * time.Hour
 type Option func(*Service)
 
 // WithK8s attaches a Kubernetes client and platform config for real Spark
-// execution (mock mode when nil).
+// execution (mock mode when nil). It also installs the k8s driver executor.
 func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platform.PlatformConfig) Option {
 	return func(s *Service) {
 		s.k8sClient = client
 		s.namespace = namespace
 		s.platformCfg = platformCfg
+		s.executor = k8sDriver{client: client}
 	}
 }
+
+// mockMode reports whether no real driver backend is configured. The job state
+// machine settles lazily on reads in mock mode.
+func (s *Service) mockMode() bool { return s.executor == nil }
 
 // WithSparkImage sets the container image used for spark-submit driver pods.
 func WithSparkImage(image string) Option {
@@ -228,6 +245,7 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 		cancel:       cancel,
 		sparkImage:   "spark-dataproc:devbox",
 		cancels:      make(map[string]context.CancelFunc),
+		nsPatchers:   make(map[string]func()),
 		operationTTL: defaultOperationTTL,
 	}
 	for _, o := range opts {
@@ -238,18 +256,21 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 		if ns == "" {
 			ns = "jaiscloud"
 		}
-		stop, err := k8shelpers.StartOwnershipPatcher(svc.ctx, svc.k8sClient, k8shelpers.PatcherConfig{
-			Namespace:     ns,
-			LabelSelector: "spark-role=executor",
-			ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolver(svc.k8sClient, ns),
-		})
-		if err != nil {
-			slog.Warn("dataproc: failed to start ownership patcher", "err", err)
-		} else {
-			svc.patcherStop = stop
+		// Watch the process-wide namespace plus every namespace the emulator owns
+		// for Dataproc (persisted across a --dsn restart). Per-cluster namespaces
+		// created after startup are registered as they are provisioned
+		// (registerNamespacePatcher).
+		owned, listErr := k8shelpers.ListManagedNamespaces(svc.ctx, svc.k8sClient, dataprocService)
+		if listErr != nil {
+			slog.Warn("dataproc: failed to list owned namespaces", "err", listErr)
+		}
+		svc.registerNamespacePatcher(ns)
+		for _, ownedNS := range owned {
+			svc.registerNamespacePatcher(ownedNS)
 		}
 		if err := k8shelpers.CleanupOrphans(svc.ctx, svc.k8sClient, k8shelpers.CleanupConfig{
 			Namespace:       ns,
+			Namespaces:      owned,
 			InstanceID:      svc.instanceID,
 			OrphanSelectors: []string{"spark-role in (driver,executor)"},
 		}); err != nil {
@@ -261,16 +282,22 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 
 // Shutdown cancels the core context and drains in-flight job goroutines.
 func (s *Service) Shutdown(_ context.Context) {
-	if s.patcherStop != nil {
-		s.patcherStop()
-	}
+	s.stopNamespacePatchers()
 	s.cancel()
 	s.wg.Wait()
 }
 
-// Reset wipes the store. The core's own in-flight goroutines are drained by
-// Shutdown; /_jaiscloud/reset does not drain them (documented limitation).
-func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
+// Reset wipes the store and reaps every namespace the emulator owns for
+// Dataproc (deleting a namespace cascades its workloads). The core's own
+// in-flight goroutines are drained by Shutdown; /_jaiscloud/reset does not
+// drain them (documented limitation).
+func (s *Service) Reset(ctx context.Context) {
+	s.store.Reset(ctx)
+	s.sweepOwnedNamespaces(ctx)
+	if s.executor != nil {
+		s.executor.Reset(ctx)
+	}
+}
 
 // randomHex returns n random hexadecimal characters.
 func randomHex(n int) string {

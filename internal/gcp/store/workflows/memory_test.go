@@ -63,6 +63,32 @@ func TestMemoryStoreWorkflowCRUD(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreListWorkflowsByProject(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	_ = s.CreateWorkflow(ctx, "proj", "us-central1", "b", Workflow{ID: "b", Location: "us-central1"})
+	_ = s.CreateWorkflow(ctx, "proj", "europe-west1", "a", Workflow{ID: "a", Location: "europe-west1"})
+	_ = s.CreateWorkflow(ctx, "proj", "us-central1", "a", Workflow{ID: "a", Location: "us-central1"})
+	// Another project must not leak into the aggregation.
+	_ = s.CreateWorkflow(ctx, "other", "us-central1", "z", Workflow{ID: "z", Location: "us-central1"})
+
+	got, err := s.ListWorkflowsByProject(ctx, "proj")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d workflows, want 3: %+v", len(got), got)
+	}
+	// Sorted by location, then ID.
+	want := [][2]string{{"europe-west1", "a"}, {"us-central1", "a"}, {"us-central1", "b"}}
+	for i, w := range want {
+		if got[i].Location != w[0] || got[i].ID != w[1] {
+			t.Fatalf("row %d = %s/%s, want %s/%s", i, got[i].Location, got[i].ID, w[0], w[1])
+		}
+	}
+}
+
 func TestMemoryStoreExecutionCRUD(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
@@ -136,6 +162,97 @@ func TestMemoryStoreOperations(t *testing.T) {
 	}
 	if _, err := s.GetOperation(ctx, "proj", "us-central1", "missing"); err != ErrNoSuchOperation {
 		t.Fatalf("expected ErrNoSuchOperation, got %v", err)
+	}
+
+	// ListOperations returns the location's operations in ID order and never
+	// leaks another location's.
+	for _, id := range []string{"op3", "op2"} {
+		if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: id}); err != nil {
+			t.Fatalf("create op %s: %v", id, err)
+		}
+	}
+	if err := s.CreateOperation(ctx, "proj", "europe-west1", Operation{ID: "other"}); err != nil {
+		t.Fatalf("create other-location op: %v", err)
+	}
+	ops, err := s.ListOperations(ctx, "proj", "us-central1")
+	if err != nil {
+		t.Fatalf("list ops: %v", err)
+	}
+	if len(ops) != 3 || ops[0].ID != "op1" || ops[1].ID != "op2" || ops[2].ID != "op3" {
+		t.Fatalf("list ops = %+v, want op1,op2,op3", ops)
+	}
+
+	// Delete removes it, and a second delete is ErrNoSuchOperation.
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op2"); err != nil {
+		t.Fatalf("delete op: %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op2"); err != ErrNoSuchOperation {
+		t.Fatalf("get deleted op = %v, want ErrNoSuchOperation", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op2"); err != ErrNoSuchOperation {
+		t.Fatalf("re-delete = %v, want ErrNoSuchOperation", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "absent"); err != ErrNoSuchOperation {
+		t.Fatalf("delete absent = %v, want ErrNoSuchOperation", err)
+	}
+}
+
+func TestMemoryStoreRevisions(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	base := Workflow{ID: "a", State: "ACTIVE", SourceContents: "s1", RevisionID: "000001-aaa"}
+	if err := s.CreateWorkflow(ctx, "proj", "us-central1", "a", base); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	revs, err := s.ListRevisions(ctx, "proj", "us-central1", "a")
+	if err != nil {
+		t.Fatalf("list revisions: %v", err)
+	}
+	if len(revs) != 1 || revs[0].RevisionID != "000001-aaa" || revs[0].SourceContents != "s1" {
+		t.Fatalf("after create: %+v", revs)
+	}
+
+	// A non-revision update (same revision id) must not append.
+	upd := base
+	upd.Description = "d"
+	if err := s.UpdateWorkflow(ctx, "proj", "us-central1", "a", upd); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if revs, _ = s.ListRevisions(ctx, "proj", "us-central1", "a"); len(revs) != 1 {
+		t.Fatalf("non-revision update appended: %+v", revs)
+	}
+
+	// A revision-changing atomic update appends, newest first.
+	if _, err := s.UpdateWorkflowAtomic(ctx, "proj", "us-central1", "a", func(w Workflow) (Workflow, error) {
+		w.RevisionID = "000002-bbb"
+		w.SourceContents = "s2"
+		return w, nil
+	}); err != nil {
+		t.Fatalf("atomic update: %v", err)
+	}
+	revs, _ = s.ListRevisions(ctx, "proj", "us-central1", "a")
+	if len(revs) != 2 || revs[0].RevisionID != "000002-bbb" || revs[1].RevisionID != "000001-aaa" {
+		t.Fatalf("after revision update: %+v", revs)
+	}
+
+	got, err := s.GetRevision(ctx, "proj", "us-central1", "a", "000001-aaa")
+	if err != nil {
+		t.Fatalf("get revision: %v", err)
+	}
+	if got.SourceContents != "s1" {
+		t.Fatalf("historical source = %q, want s1", got.SourceContents)
+	}
+	if _, err := s.GetRevision(ctx, "proj", "us-central1", "a", "missing"); err != ErrNoSuchRevision {
+		t.Fatalf("expected ErrNoSuchRevision, got %v", err)
+	}
+
+	// Deleting the workflow cascades its revisions.
+	if err := s.DeleteWorkflow(ctx, "proj", "us-central1", "a"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if revs, _ = s.ListRevisions(ctx, "proj", "us-central1", "a"); len(revs) != 0 {
+		t.Fatalf("revisions survived delete: %+v", revs)
 	}
 }
 

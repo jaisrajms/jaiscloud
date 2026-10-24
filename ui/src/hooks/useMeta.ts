@@ -9,6 +9,8 @@ export interface Meta {
   version: string
   uiVersion: string
   instanceId: string
+  /** Per-process marker; changes on every emulator restart. */
+  bootId: string
 }
 
 export function useMeta() {

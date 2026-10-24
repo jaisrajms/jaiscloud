@@ -72,17 +72,17 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	}
 
 	rest := seg[pi+2:]
-	if len(rest) < 3 || rest[0] != "locations" {
-		return nil, model.NewProviderError("InvalidRequest", "expected locations/{location}/services in metastore path", 404)
+	if len(rest) < 1 || rest[0] != "locations" {
+		return nil, model.NewProviderError("InvalidRequest", "expected locations/{location}/... in metastore path", 404)
+	}
+	if len(rest) < 3 {
+		return nil, model.NewProviderError("InvalidRequest", "missing metastore resource", 404)
 	}
 	nr.Params["location"] = rest[1]
 	tail := rest[2:]
 
-	if len(tail) == 0 {
-		return nil, model.NewProviderError("InvalidRequest", "missing metastore resource", 404)
-	}
-
-	// Strip a trailing custom-method suffix from the last segment.
+	// Strip a trailing custom-method suffix (":getIamPolicy", ":restore", ...)
+	// from the last segment.
 	custom := ""
 	last := tail[len(tail)-1]
 	if i := strings.IndexByte(last, ':'); i >= 0 {
@@ -90,44 +90,72 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		tail[len(tail)-1] = last[:i]
 	}
 
+	// iamName is the full resource name an IAM verb addresses
+	// (projects/{p}/locations/{l}/...); it is the google.iam.v1.IAMPolicy
+	// resource, so it is resolved by the core from the name alone.
+	iamName := strings.Join(seg[pi:], "/")
+
 	var resourceType string
 	isCollection := false
-	switch {
-	case tail[0] == "operations":
+	switch tail[0] {
+	case "operations":
 		resourceType = "operations"
 		if len(tail) >= 2 {
 			nr.Params["operationId"] = tail[1]
 		}
 		isCollection = len(tail) == 1
-	case tail[0] == "services":
-		resourceType = "services"
+	case "federations":
+		resourceType = "federations"
 		switch len(tail) {
 		case 1:
 			isCollection = true
 		case 2:
+			nr.Params["federationId"] = tail[1]
+		default:
+			return nil, model.NewProviderError("InvalidRequest", "unrecognized metastore path", 404)
+		}
+	case "services":
+		switch {
+		case len(tail) == 1:
+			resourceType = "services"
+			isCollection = true
+		case len(tail) == 2:
+			resourceType = "services"
 			nr.Params["serviceId"] = tail[1]
-		case 3:
+		case len(tail) == 3 && (tail[2] == "backups" || tail[2] == "metadataImports"):
 			// services/{id}/backups or services/{id}/metadataImports
 			resourceType = tail[2]
 			nr.Params["serviceId"] = tail[1]
 			isCollection = true
-		case 4:
-			resourceType = tail[2]
+		case len(tail) == 4 && tail[2] == "backups":
+			resourceType = "backups"
 			nr.Params["serviceId"] = tail[1]
-			if tail[2] == "backups" {
-				nr.Params["backupId"] = tail[3]
-			} else if tail[2] == "metadataImports" {
-				nr.Params["metadataImportId"] = tail[3]
-			}
+			nr.Params["backupId"] = tail[3]
+		case len(tail) == 4 && tail[2] == "metadataImports":
+			resourceType = "metadataImports"
+			nr.Params["serviceId"] = tail[1]
+			nr.Params["metadataImportId"] = tail[3]
+		case len(tail) == 4 && tail[2] == "databases":
+			// services/{id}/databases/{db}:{get,set}IamPolicy
+			resourceType = "databases"
+			nr.Params["serviceId"] = tail[1]
+			nr.Params["databaseId"] = tail[3]
+		case len(tail) == 6 && tail[2] == "databases" && tail[4] == "tables":
+			// services/{id}/databases/{db}/tables/{t}:{get,set}IamPolicy
+			resourceType = "tables"
+			nr.Params["serviceId"] = tail[1]
+			nr.Params["databaseId"] = tail[3]
+			nr.Params["tableId"] = tail[5]
 		default:
 			return nil, model.NewProviderError("InvalidRequest", "unrecognized metastore path", 404)
 		}
 	default:
-		return nil, model.NewProviderError("InvalidRequest", "expected services or operations in metastore path", 404)
+		return nil, model.NewProviderError("InvalidRequest", "expected services, federations or operations in metastore path", 404)
 	}
 
 	nr.Params["resourceType"] = resourceType
-	nr.Params["name"] = strings.Join(rest, "/")
+	nr.Params["name"] = iamName
+	nr.Params["iamName"] = iamName
 
 	nr.Action = deriveMetastoreAction(resourceType, isCollection, r.Method, custom)
 	if nr.Action == "" {
@@ -138,11 +166,21 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 
 // deriveMetastoreAction maps (resourceType, isCollection, method, custom) to the
 // action name. Create is POST on a collection; delete is DELETE on a resource;
-// update is PATCH; the custom-method verbs defer to Unimplemented handlers.
+// update is PATCH; the IAM verbs and the deferred service custom-method verbs
+// are handled by the custom switch.
 func deriveMetastoreAction(resourceType string, isCollection bool, method, custom string) string {
 	if custom != "" {
-		switch resourceType {
-		case "services":
+		if prefix, ok := iamActionPrefix(resourceType); ok {
+			switch custom {
+			case "getIamPolicy":
+				return prefix + "GetIamPolicy"
+			case "setIamPolicy":
+				return prefix + "SetIamPolicy"
+			case "testIamPermissions":
+				return prefix + "TestIamPermissions"
+			}
+		}
+		if resourceType == "services" {
 			switch custom {
 			case "exportMetadata":
 				return "ExportMetadata"
@@ -194,6 +232,19 @@ func deriveMetastoreAction(resourceType string, isCollection bool, method, custo
 		case method == http.MethodPatch:
 			return "UpdateMetadataImport"
 		}
+	case "federations":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateFederation"
+		case isCollection && method == http.MethodGet:
+			return "ListFederations"
+		case method == http.MethodGet:
+			return "GetFederation"
+		case method == http.MethodPatch:
+			return "UpdateFederation"
+		case method == http.MethodDelete:
+			return "DeleteFederation"
+		}
 	case "operations":
 		switch {
 		case isCollection && method == http.MethodGet:
@@ -203,6 +254,26 @@ func deriveMetastoreAction(resourceType string, isCollection bool, method, custo
 		}
 	}
 	return ""
+}
+
+// iamActionPrefix maps a metastore resource type to the action-name prefix for
+// its IAM verbs (services → "ServiceGetIamPolicy"). ok is false for the
+// operations collection, which has no IAM surface.
+func iamActionPrefix(resourceType string) (string, bool) {
+	switch resourceType {
+	case "services":
+		return "Service", true
+	case "backups":
+		return "Backup", true
+	case "databases":
+		return "Database", true
+	case "tables":
+		return "Table", true
+	case "federations":
+		return "Federation", true
+	default:
+		return "", false
+	}
 }
 
 // Encode serialises a provider response as JSON.

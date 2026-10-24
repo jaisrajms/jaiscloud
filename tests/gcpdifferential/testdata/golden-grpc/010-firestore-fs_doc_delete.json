@@ -1,0 +1,14 @@
+{
+  "index": 10,
+  "service": "firestore",
+  "op": "fs_doc_delete",
+  "method": "google.firestore.v1.Firestore/DeleteDocument",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>"
+  },
+  "response": {}
+}
+

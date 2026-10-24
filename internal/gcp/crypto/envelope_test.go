@@ -170,6 +170,10 @@ func TestWrap_NoSuchCryptoKey(t *testing.T) {
 	assertInvalidArgument(t, err)
 }
 
+// TestWrap_DisabledVersion: a key whose primary version is disabled cannot
+// encrypt. Wrap keeps the shared consumers' historical INVALID_ARGUMENT;
+// ValidateKey (Secret Manager's create/patch probe) answers the
+// FAILED_PRECONDITION real GCP reports instead — see TestValidateKey.
 func TestWrap_DisabledVersion(t *testing.T) {
 	enc, store := newTestEncryptor()
 	ctx := context.Background()
@@ -227,6 +231,20 @@ func TestUnwrap_TamperedCiphertext(t *testing.T) {
 	assertInvalidArgument(t, err)
 }
 
+func assertFailedPrecondition(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	perr, ok := err.(*model.ProviderError)
+	if !ok {
+		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
+	}
+	if perr.HTTPStatus != 400 || perr.Status != "FAILED_PRECONDITION" {
+		t.Fatalf("expected FAILED_PRECONDITION/400, got %q/%d (%s)", perr.Status, perr.HTTPStatus, perr.Message)
+	}
+}
+
 func assertInvalidArgument(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -264,4 +282,64 @@ func TestParseCryptoKeyName(t *testing.T) {
 				tt.name, proj, loc, kr, key, tt.wantProj, tt.wantLoc, tt.wantKR, tt.wantKey)
 		}
 	}
+}
+
+// TestWrapKeys_PerReplica wraps one DEK under two keys (DC57): both blobs unwrap
+// to the same DEK, each tagged with its own key's primary CryptoKeyVersion.
+func TestWrapKeys_PerReplica(t *testing.T) {
+	enc, store := newTestEncryptor()
+	ctx := context.Background()
+	createTestKey(t, store, "proj1", "us-east1", "ring1", "east")
+	createTestKey(t, store, "proj1", "us-central1", "ring1", "central")
+
+	east := keyName("proj1", "us-east1", "ring1", "east")
+	central := keyName("proj1", "us-central1", "ring1", "central")
+	rawDEK, wrapped, err := enc.WrapKeys(ctx, "proj1", []string{east, central})
+	if err != nil {
+		t.Fatalf("WrapKeys: %v", err)
+	}
+	if len(wrapped) != 2 {
+		t.Fatalf("wrapped = %d blobs, want 2", len(wrapped))
+	}
+	for i, name := range []string{east, central} {
+		got, err := enc.Unwrap(ctx, "proj1", name, wrapped[i])
+		if err != nil {
+			t.Fatalf("unwrap %s: %v", name, err)
+		}
+		if !bytes.Equal(got, rawDEK) {
+			t.Fatalf("%s unwrapped a different DEK", name)
+		}
+	}
+	// No CMEK bindings is the server-DEK path: no wrapped blobs.
+	serverDEK, wrapped, err := enc.WrapKeys(ctx, "proj1", nil)
+	if err != nil || len(serverDEK) == 0 || wrapped != nil {
+		t.Fatalf("WrapKeys(nil) = %x, %v, %v; want the server DEK and no blobs", serverDEK, wrapped, err)
+	}
+}
+
+// TestValidateKey pins create/patch-time key resolution (DC58): an existing
+// enabled key resolves, a missing key is INVALID_ARGUMENT, a disabled primary is
+// FAILED_PRECONDITION, and a non-ENCRYPT_DECRYPT key is INVALID_ARGUMENT.
+func TestValidateKey(t *testing.T) {
+	enc, store := newTestEncryptor()
+	ctx := context.Background()
+	createTestKey(t, store, "proj1", "global", "ring1", "key1")
+	if err := enc.ValidateKey(ctx, "proj1", keyName("proj1", "global", "ring1", "key1")); err != nil {
+		t.Fatalf("ValidateKey(enabled) = %v, want nil", err)
+	}
+	assertInvalidArgument(t, enc.ValidateKey(ctx, "proj1", keyName("proj1", "global", "ring1", "missing")))
+	assertInvalidArgument(t, enc.ValidateKey(ctx, "proj1", "not-a-key"))
+
+	if err := store.UpdateVersionState(ctx, "proj1", "global", "ring1", "key1", "1", "DISABLED"); err != nil {
+		t.Fatalf("UpdateVersionState: %v", err)
+	}
+	assertFailedPrecondition(t, enc.ValidateKey(ctx, "proj1", keyName("proj1", "global", "ring1", "key1")))
+
+	// A key that cannot encrypt a DEK is INVALID_ARGUMENT.
+	if err := store.CreateCryptoKey(ctx, "proj1", "global", "ring1", "signing", kms.CryptoKey{
+		Location: "global", KeyRingID: "ring1", ID: "signing", Purpose: "ASYMMETRIC_SIGN",
+	}); err != nil {
+		t.Fatalf("CreateCryptoKey(signing): %v", err)
+	}
+	assertInvalidArgument(t, enc.ValidateKey(ctx, "proj1", keyName("proj1", "global", "ring1", "signing")))
 }

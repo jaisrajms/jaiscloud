@@ -3,8 +3,34 @@ package managedkafka
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 )
+
+// jsonEqual compares two JSON documents by value. The memory store keeps raw
+// bytes while Postgres stores JSONB (which canonicalizes whitespace and key
+// order), so byte equality is not part of the store contract — value equality
+// is. Both backends must agree semantically. Numbers are decoded as
+// json.Number so "1" and "1.0" stay distinct (no float64 coercion).
+func jsonEqual(a, b []byte) bool {
+	av, aok := decodeJSON(a)
+	bv, bok := decodeJSON(b)
+	if !aok || !bok {
+		return string(a) == string(b)
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
+func decodeJSON(b []byte) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
 // (memory/postgres) call this so both implement the identical contract.
@@ -35,7 +61,7 @@ func runStoreTests(t *testing.T, s Store) {
 	if got.Labels["env"] != "dev" {
 		t.Fatalf("cluster labels lost: %+v", got)
 	}
-	if string(got.Config) != `{"capacityConfig":{"vcpuCount":3,"memoryBytes":3221225472},"gcpConfig":{"accessConfig":{"networkConfigs":[]}}}` {
+	if !jsonEqual(got.Config, []byte(`{"capacityConfig":{"vcpuCount":3,"memoryBytes":3221225472},"gcpConfig":{"accessConfig":{"networkConfigs":[]}}}`)) {
 		t.Fatalf("config not verbatim: %s", got.Config)
 	}
 
@@ -47,8 +73,20 @@ func runStoreTests(t *testing.T, s Store) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list clusters: %v %d", err, len(list))
 	}
-	if string(list[0].Config) != `{"capacityConfig":{"vcpuCount":6,"memoryBytes":6442450944}}` {
+	if !jsonEqual(list[0].Config, []byte(`{"capacityConfig":{"vcpuCount":6,"memoryBytes":6442450944}}`)) {
 		t.Fatalf("update not persisted: %+v", list[0])
+	}
+
+	// Cross-location project listing backs the region-optional console list.
+	if err := s.CreateCluster(ctx, "proj", "europe-west1", Cluster{Name: "eu-cluster"}); err != nil {
+		t.Fatalf("create eu cluster: %v", err)
+	}
+	byLoc, err := s.ListClustersByProject(ctx, "proj")
+	if err != nil || len(byLoc) != 2 {
+		t.Fatalf("list clusters by project: %v %d", err, len(byLoc))
+	}
+	if byLoc[0].Location != "europe-west1" || byLoc[1].Location != "us-central1" {
+		t.Fatalf("clusters not sorted by location: %+v", byLoc)
 	}
 
 	// Topics
@@ -74,6 +112,19 @@ func runStoreTests(t *testing.T, s Store) {
 	if err != nil || len(tlist) != 1 || tlist[0].PartitionCount != 6 {
 		t.Fatalf("list topics: %v %+v", err, tlist)
 	}
+
+	// Cross-cluster project listing backs the region-optional console list.
+	if err := s.CreateTopic(ctx, "proj", "europe-west1", "eu-cluster", Topic{Name: "eu-topic", PartitionCount: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("create eu topic: %v", err)
+	}
+	allTopics, err := s.ListTopicsByProject(ctx, "proj")
+	if err != nil || len(allTopics) != 2 {
+		t.Fatalf("list topics by project: %v %d", err, len(allTopics))
+	}
+	if allTopics[0].Location != "europe-west1" || allTopics[1].Location != "us-central1" {
+		t.Fatalf("topics not sorted by location: %+v", allTopics)
+	}
+
 	if err := s.DeleteTopic(ctx, "proj", "us-central1", "my-cluster", "t1"); err != nil {
 		t.Fatalf("delete topic: %v", err)
 	}

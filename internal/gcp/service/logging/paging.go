@@ -19,5 +19,10 @@ func decodeOffset(token string) int {
 		return 0
 	}
 	n, _ := strconv.Atoi(string(b))
+	if n < 0 {
+		// A negative offset is not a token this service issues; clamp it so a
+		// forged token cannot slice the page below zero.
+		return 0
+	}
 	return n
 }

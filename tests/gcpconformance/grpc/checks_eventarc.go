@@ -32,7 +32,7 @@ import (
 // Enrollment, Pipeline, GoogleApiSource) is an explicit Unimplemented stub and
 // is deliberately not probed.
 func eventarcChecks() []Check {
-	return []Check{
+	base := []Check{
 		{Service: "eventarc", RPC: "CreateTrigger", Method: "CreateTrigger", KeyField: "LRO done + trigger echo", Run: checkEACreateTrigger},
 		{Service: "eventarc", RPC: "GetTrigger", Method: "GetTrigger", KeyField: "name round-trip", Run: checkEAGetTrigger},
 		{Service: "eventarc", RPC: "ListTriggers", Method: "ListTriggers", KeyField: "created trigger present", Run: checkEAListTriggers},
@@ -49,6 +49,7 @@ func eventarcChecks() []Check {
 		{Service: "iam", RPC: "SetIamPolicy (Eventarc trigger)", Method: "SetIamPolicy", KeyField: "binding round-trips through the router", Run: checkEATriggerIAMSet},
 		{Service: "iam", RPC: "TestIamPermissions (Eventarc trigger)", Method: "TestIamPermissions", KeyField: "requested permissions echoed back", Run: checkEATriggerIAMTest},
 	}
+	return append(base, eventarcAdvancedChecks()...)
 }
 
 const eventarcLocation = "us-central1"
@@ -76,8 +77,9 @@ func eventarcChannelName(cfg Config, id string) string {
 }
 
 // eventarcTriggerProto builds a minimal valid trigger body: an httpEndpoint
-// destination plus the required eventFilters type filter. It avoids depending
-// on any other service's fixture.
+// destination plus the required eventFilters. It uses a Cloud Storage event
+// type, which real Eventarc requires to be paired with a bucket filter, so the
+// fixture declares both. It avoids depending on any other service's fixture.
 func eventarcTriggerProto() *eventarcpb.Trigger {
 	return &eventarcpb.Trigger{
 		Destination: &eventarcpb.Destination{
@@ -87,6 +89,7 @@ func eventarcTriggerProto() *eventarcpb.Trigger {
 		},
 		EventFilters: []*eventarcpb.EventFilter{
 			{Attribute: "type", Value: "google.cloud.storage.object.v1.finalized"},
+			{Attribute: "bucket", Value: "conformance-bucket"},
 		},
 	}
 }

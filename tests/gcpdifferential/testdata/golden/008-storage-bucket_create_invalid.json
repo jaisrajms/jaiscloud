@@ -1,0 +1,25 @@
+{
+  "index": 8,
+  "service": "storage",
+  "op": "bucket_create_invalid",
+  "method": "POST",
+  "path": "/storage/v1/b?project=<project>",
+  "status": 400,
+  "request": {
+    "name": "INVALID_BUCKET_NAME"
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "Invalid bucket name: 'INVALID_BUCKET_NAME'",
+          "reason": "invalid"
+        }
+      ],
+      "message": "Invalid bucket name: 'INVALID_BUCKET_NAME'"
+    }
+  }
+}
+

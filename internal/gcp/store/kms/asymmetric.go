@@ -91,6 +91,9 @@ func generateVersionMaterial(algorithm string) (keyMat, privDER, pubDER []byte, 
 	case strings.HasPrefix(algorithm, "EC_SIGN"):
 		privDER, pubDER, err = generateECKeyPair(ecCurve(algorithm))
 		return nil, privDER, pubDER, err
+	case kemAlgorithm(algorithm):
+		privDER, pubDER, err = GenerateKEMKeyPair(algorithm)
+		return nil, privDER, pubDER, err
 	default: // GOOGLE_SYMMETRIC_ENCRYPTION, HMAC_*, or unknown → random 32 bytes
 		keyMat, err = Generate32()
 		return keyMat, nil, nil, err

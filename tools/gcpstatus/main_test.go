@@ -60,7 +60,7 @@ func TestParseDocState(t *testing.T) {
 		want    string
 	}{
 		{"non-compliant section", []string{"check the thing"}, "TEST-NON-COMPLIANT — do NOT change", "deferred"},
-		{"out of scope section", []string{"cloud run"}, "Not planned (out of scope per GA.md §7)", "deferred"},
+		{"out of scope section", []string{"cloud run"}, "Not planned (out of scope per wire contract §5)", "deferred"},
 		{"unimplemented", []string{"Unimplemented"}, "", "open"},
 		{"still open", []string{"still open"}, "", "open"},
 		{"done", []string{"DONE (#127)"}, "", "done"},
@@ -117,6 +117,8 @@ func TestDispositionFrom(t *testing.T) {
 	}{
 		{"fix", "", "fix"},
 		{"fix (follow-up)", "", "follow-up"},
+		{"revisit", "", "revisit"},
+		{"revisit (official SDK)", "", "revisit"},
 		{"**no fix** — accept + document", "", "no-fix"},
 		{"optional", "", "optional"},
 		{"", "TEST-NON-COMPLIANT (real GCP wins)", "no-fix"},
@@ -193,7 +195,10 @@ func TestAssignOrders(t *testing.T) {
 	items := []*Item{
 		{ID: "W1.1", Kind: "wave", Series: "java-compat", Wave: "W1.1"},
 		{ID: "W1.1", Kind: "wave", Series: "bigquery-ga", Wave: "W1.1"},
-		{ID: "B1", Kind: "backlog", Pri: 5}, // no wave -> Order untouched
+		{ID: "B1", Kind: "backlog", Pri: 5}, // no series -> Order untouched
+		// Backlog in a known family is ranked within that family, so an
+		// earlier family's backlog still sorts ahead of a later family's waves.
+		{ID: "UI24", Kind: "backlog", Series: "console-ui"},
 	}
 	assignOrders(items, []string{"java-compat"})
 	if items[0].Order != 101 {
@@ -203,7 +208,12 @@ func TestAssignOrders(t *testing.T) {
 		t.Errorf("bigquery-ga order = %d, want 100101", items[1].Order)
 	}
 	if items[2].Order != 0 {
-		t.Errorf("non-wave order = %d, want 0", items[2].Order)
+		t.Errorf("no-series backlog order = %d, want 0", items[2].Order)
+	}
+	// java-compat ranks 0, then the unlisted families alphabetically:
+	// bigquery-ga = 1, console-ui = 2.
+	if items[3].Order != 299999 || items[3].OrderSource != "backlog" {
+		t.Errorf("console-ui backlog = %d/%q, want 299999/backlog", items[3].Order, items[3].OrderSource)
 	}
 }
 
@@ -300,6 +310,22 @@ func TestMatrixItemsFrom(t *testing.T) {
 	}
 	if got[0].Disposition != "fix" || got[1].Disposition != "unknown" {
 		t.Errorf("dispositions = %q,%q", got[0].Disposition, got[1].Disposition)
+	}
+}
+
+// TestRollupEvidence covers the per-transport verified/total rollup that
+// `make gcp-status` prints and `-evidence` reports on.
+func TestRollupEvidence(t *testing.T) {
+	mf := matrixFile{Cells: []matrixCell{
+		{Service: "a", Operation: "A.Get", Transport: "rest", Verified: true, Discovery: "example.a.get"},
+		{Service: "a", Operation: "A.List", Transport: "rest", Verified: false, Discovery: "example.a.list"},
+		{Service: "b", Operation: "Get", Transport: "grpc", Verified: true},
+		{Service: "b", Operation: "Put", Transport: "grpc", Verified: false},
+		{Service: "b", Operation: "Unrelated", Transport: "other", Verified: true},
+	}}
+	ev := rollupEvidence(mf)
+	if ev.restVerified != 1 || ev.restTotal != 2 || ev.grpcVerified != 1 || ev.grpcTotal != 2 {
+		t.Fatalf("rollup = %+v, want rest 1/2 grpc 1/2", ev)
 	}
 }
 

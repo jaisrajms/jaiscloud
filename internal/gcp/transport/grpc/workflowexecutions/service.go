@@ -72,7 +72,8 @@ func (s *Service) ListExecutions(ctx context.Context, req *executionspb.ListExec
 	location, workflowID, _ := core.ParseName(req.GetParent())
 	project := s.project(ctx, req.GetParent())
 	page, next, err := s.core.ListExecutions(ctx, project, location, workflowID,
-		viewFromProto(req.GetView(), core.ViewBasic), int(req.GetPageSize()), req.GetPageToken())
+		viewFromProto(req.GetView(), core.ViewBasic), req.GetFilter(), req.GetOrderBy(),
+		int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
 	}

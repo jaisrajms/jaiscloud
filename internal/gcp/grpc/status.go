@@ -6,6 +6,7 @@ import (
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/model"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -25,8 +26,23 @@ func GRPCStatus(err error) error {
 		return status.Error(codes.Internal, err.Error())
 	}
 	name, _ := gcperr.Resolve(perr)
-	if c, ok := gcperr.GRPCCodeForStatus(name); ok {
-		return status.Error(c, perr.Message)
+	c, ok := gcperr.GRPCCodeForStatus(name)
+	if !ok {
+		c = codes.Internal
 	}
-	return status.Error(codes.Internal, perr.Message)
+	st := status.New(c, perr.Message)
+	for _, d := range perr.Details {
+		if d.Type != "google.rpc.ErrorInfo" {
+			continue
+		}
+		with, err := st.WithDetails(&errdetails.ErrorInfo{
+			Reason:   d.Reason,
+			Domain:   d.Domain,
+			Metadata: d.Metadata,
+		})
+		if err == nil {
+			st = with
+		}
+	}
+	return st.Err()
 }

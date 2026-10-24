@@ -1,0 +1,10 @@
+{
+  "index": 117,
+  "service": "run",
+  "op": "run_services_list",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/services",
+  "status": 200,
+  "response": {}
+}
+

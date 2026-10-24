@@ -1,0 +1,55 @@
+{
+  "index": 29,
+  "service": "bigquery",
+  "op": "bqsql_expr_cast_int_str",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT CAST(42 AS STRING)",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "1",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "42"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "f0_",
+          "type": "STRING"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "1",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

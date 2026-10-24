@@ -1,0 +1,33 @@
+{
+  "index": 78,
+  "service": "bigquery",
+  "op": "bqsql_err_unknown_column",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 400,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT missing_col FROM nums",
+    "useLegacySql": false
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "q",
+          "locationType": "parameter",
+          "message": "Unrecognized name: missing_col at [1:8]",
+          "reason": "invalidQuery"
+        }
+      ],
+      "message": "Unrecognized name: missing_col at [1:8]",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

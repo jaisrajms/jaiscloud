@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -34,6 +35,27 @@ func nullableJSON(v any) any {
 	return json.RawMessage(b)
 }
 
+// execer is satisfied by *pgxpool.Pool and pgx.Tx, so the revision insert can
+// run either standalone or inside a workflow mutation's transaction.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// insertRevision records one immutable revision snapshot, ignoring a duplicate
+// (ON CONFLICT DO NOTHING) so a replayed mutation is idempotent.
+func insertRevision(ctx context.Context, e execer, projectID, location, workflowID string, r Revision) error {
+	userEnvVars, _ := json.Marshal(r.UserEnvVars)
+	_, err := e.Exec(ctx, `
+		INSERT INTO jc_workflow_revisions
+			(project_id, location, workflow_id, revision_id, revision_create_time, state,
+			 source_contents, service_account, call_log_level, user_env_vars)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT DO NOTHING
+	`, projectID, location, workflowID, r.RevisionID, r.RevisionCreateTime, r.State,
+		r.SourceContents, r.ServiceAccount, r.CallLogLevel, json.RawMessage(userEnvVars))
+	return err
+}
+
 func (s *PostgresStore) CreateWorkflow(ctx context.Context, projectID, location, id string, w Workflow) error {
 	if w.CreateTime.IsZero() {
 		w.CreateTime = clock.Now()
@@ -41,32 +63,44 @@ func (s *PostgresStore) CreateWorkflow(ctx context.Context, projectID, location,
 	if w.UpdateTime.IsZero() {
 		w.UpdateTime = w.CreateTime
 	}
+	if w.RevisionCreateTime.IsZero() {
+		w.RevisionCreateTime = w.UpdateTime
+	}
 	labels, _ := json.Marshal(w.Labels)
 	userEnvVars, _ := json.Marshal(w.UserEnvVars)
 	tags, _ := json.Marshal(w.Tags)
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO jc_workflows
 			(project_id, location, workflow_id, description, labels, service_account, source_contents,
-			 state, revision_id, create_time, update_time, call_log_level, user_env_vars, tags)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			 state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 	`, projectID, location, id, w.Description, json.RawMessage(labels), w.ServiceAccount, w.SourceContents,
-		w.State, w.RevisionID, w.CreateTime, w.UpdateTime, w.CallLogLevel, json.RawMessage(userEnvVars),
-		json.RawMessage(tags))
-	if err != nil {
+		w.State, w.RevisionID, w.CreateTime, w.UpdateTime, w.RevisionCreateTime, w.CallLogLevel, json.RawMessage(userEnvVars),
+		json.RawMessage(tags)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrAlreadyExists
 		}
 		return err
 	}
-	return nil
+	if w.RevisionID != "" {
+		if err := insertRevision(ctx, tx, projectID, location, id, revisionOf(w)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func scanWorkflow(row pgx.Row) (Workflow, error) {
 	var w Workflow
 	var labels, userEnvVars, tags []byte
 	err := row.Scan(&w.ID, &w.Location, &w.Description, &labels, &w.ServiceAccount, &w.SourceContents,
-		&w.State, &w.RevisionID, &w.CreateTime, &w.UpdateTime, &w.CallLogLevel, &userEnvVars, &tags)
+		&w.State, &w.RevisionID, &w.CreateTime, &w.UpdateTime, &w.RevisionCreateTime, &w.CallLogLevel, &userEnvVars, &tags)
 	if err != nil {
 		return Workflow{}, err
 	}
@@ -79,7 +113,7 @@ func scanWorkflow(row pgx.Row) (Workflow, error) {
 func (s *PostgresStore) GetWorkflow(ctx context.Context, projectID, location, id string) (Workflow, error) {
 	w, err := scanWorkflow(s.pool.QueryRow(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 AND location=$2 AND workflow_id=$3
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -92,19 +126,38 @@ func (s *PostgresStore) UpdateWorkflow(ctx context.Context, projectID, location,
 	labels, _ := json.Marshal(w.Labels)
 	userEnvVars, _ := json.Marshal(w.UserEnvVars)
 	tags, _ := json.Marshal(w.Tags)
-	tag, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var prevRevision string
+	if err := tx.QueryRow(ctx,
+		`SELECT revision_id FROM jc_workflows WHERE project_id=$1 AND location=$2 AND workflow_id=$3`,
+		projectID, location, id).Scan(&prevRevision); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoSuchWorkflow
+		}
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE jc_workflows SET description=$4, labels=$5, service_account=$6, source_contents=$7,
-		       state=$8, revision_id=$9, update_time=$10, call_log_level=$11, user_env_vars=$12, tags=$13
+		       state=$8, revision_id=$9, update_time=$10, revision_create_time=$11, call_log_level=$12, user_env_vars=$13, tags=$14
 		WHERE project_id=$1 AND location=$2 AND workflow_id=$3
 	`, projectID, location, id, w.Description, json.RawMessage(labels), w.ServiceAccount, w.SourceContents,
-		w.State, w.RevisionID, w.UpdateTime, w.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
+		w.State, w.RevisionID, w.UpdateTime, revisionCreateTime(w), w.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNoSuchWorkflow
 	}
-	return nil
+	if w.RevisionID != "" && w.RevisionID != prevRevision {
+		if err := insertRevision(ctx, tx, projectID, location, id, revisionOf(w)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // UpdateWorkflowAtomic mirrors MemoryStore's version: a Serializable
@@ -114,6 +167,14 @@ func (s *PostgresStore) UpdateWorkflow(ctx context.Context, projectID, location,
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateWorkflowAtomic(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Workflow, error) {
+		return s.updateWorkflowAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateWorkflowAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Workflow{}, err
@@ -122,7 +183,7 @@ func (s *PostgresStore) UpdateWorkflowAtomic(ctx context.Context, projectID, loc
 
 	current, err := scanWorkflow(tx.QueryRow(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 AND location=$2 AND workflow_id=$3 FOR UPDATE
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -142,15 +203,20 @@ func (s *PostgresStore) UpdateWorkflowAtomic(ctx context.Context, projectID, loc
 	tags, _ := json.Marshal(next.Tags)
 	tag, err := tx.Exec(ctx, `
 		UPDATE jc_workflows SET description=$4, labels=$5, service_account=$6, source_contents=$7,
-		       state=$8, revision_id=$9, update_time=$10, call_log_level=$11, user_env_vars=$12, tags=$13
+		       state=$8, revision_id=$9, update_time=$10, revision_create_time=$11, call_log_level=$12, user_env_vars=$13, tags=$14
 		WHERE project_id=$1 AND location=$2 AND workflow_id=$3
 	`, projectID, location, id, next.Description, json.RawMessage(labels), next.ServiceAccount, next.SourceContents,
-		next.State, next.RevisionID, next.UpdateTime, next.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
+		next.State, next.RevisionID, next.UpdateTime, revisionCreateTime(next), next.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
 	if err != nil {
 		return Workflow{}, err
 	}
 	if tag.RowsAffected() == 0 {
 		return Workflow{}, ErrNoSuchWorkflow
+	}
+	if next.RevisionID != "" && next.RevisionID != current.RevisionID {
+		if err := insertRevision(ctx, tx, projectID, location, id, revisionOf(next)); err != nil {
+			return Workflow{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Workflow{}, err
@@ -176,13 +242,66 @@ func (s *PostgresStore) DeleteWorkflow(ctx context.Context, projectID, location,
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_workflow_executions WHERE project_id=$1 AND location=$2 AND workflow_id=$3`, projectID, location, id); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_workflow_revisions WHERE project_id=$1 AND location=$2 AND workflow_id=$3`, projectID, location, id); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// scanRevision scans one jc_workflow_revisions row.
+func scanRevision(row pgx.Row) (Revision, error) {
+	var r Revision
+	var userEnvVars []byte
+	err := row.Scan(&r.RevisionID, &r.RevisionCreateTime, &r.State, &r.SourceContents,
+		&r.ServiceAccount, &r.CallLogLevel, &userEnvVars)
+	if err != nil {
+		return Revision{}, err
+	}
+	json.Unmarshal(userEnvVars, &r.UserEnvVars)
+	return r, nil
+}
+
+// ListRevisions returns a workflow's revision history, newest first.
+func (s *PostgresStore) ListRevisions(ctx context.Context, projectID, location, workflowID string) ([]Revision, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT revision_id, revision_create_time, state, source_contents, service_account,
+		       call_log_level, user_env_vars
+		FROM jc_workflow_revisions WHERE project_id=$1 AND location=$2 AND workflow_id=$3
+		ORDER BY revision_create_time DESC, revision_id DESC
+	`, projectID, location, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Revision
+	for rows.Next() {
+		r, err := scanRevision(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// GetRevision returns one revision of a workflow, or ErrNoSuchRevision.
+func (s *PostgresStore) GetRevision(ctx context.Context, projectID, location, workflowID, revisionID string) (Revision, error) {
+	r, err := scanRevision(s.pool.QueryRow(ctx, `
+		SELECT revision_id, revision_create_time, state, source_contents, service_account,
+		       call_log_level, user_env_vars
+		FROM jc_workflow_revisions
+		WHERE project_id=$1 AND location=$2 AND workflow_id=$3 AND revision_id=$4
+	`, projectID, location, workflowID, revisionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Revision{}, ErrNoSuchRevision
+	}
+	return r, err
 }
 
 func (s *PostgresStore) ListWorkflows(ctx context.Context, projectID, location string) ([]Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 AND location=$2 ORDER BY workflow_id
 	`, projectID, location)
 	if err != nil {
@@ -198,6 +317,27 @@ func (s *PostgresStore) ListWorkflows(ctx context.Context, projectID, location s
 		result = append(result, w)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) ListWorkflowsByProject(ctx context.Context, projectID string) ([]Workflow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT workflow_id, location, description, labels, service_account, source_contents,
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
+		FROM jc_workflows WHERE project_id=$1 ORDER BY location, workflow_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Workflow
+	for rows.Next() {
+		w, err := scanWorkflow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, w)
+	}
 	return result, rows.Err()
 }
 
@@ -340,8 +480,44 @@ func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, i
 	return op, err
 }
 
+func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location string) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT operation_id, project_id, location, done, response, verb, target, create_time, end_time
+		FROM jc_workflow_operations WHERE project_id=$1 AND location=$2
+		ORDER BY operation_id
+	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Operation
+	for rows.Next() {
+		var op Operation
+		if err := rows.Scan(&op.ID, &op.ProjectID, &op.Location, &op.Done, &op.Response,
+			&op.Verb, &op.Target, &op.CreateTime, &op.EndTime); err != nil {
+			return nil, err
+		}
+		result = append(result, op)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) DeleteOperation(ctx context.Context, projectID, location, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_workflow_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchOperation
+	}
+	return nil
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_workflows`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_workflow_executions`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_workflow_operations`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_workflow_revisions`)
 }

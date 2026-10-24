@@ -12,6 +12,21 @@
 // deferred and route to an explicit Unimplemented (501) rather than the
 // codec's 404.
 //
+// jobs.insert also accepts a configuration.load job: one or more gs:// source
+// objects (a single object, a single-'*' wildcard, or a list; resolved through
+// the injected SourceReader against the emulated GCS) are decoded as
+// NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro — gzip is auto-detected for the
+// text formats — coerced to the destination schema (explicit or autodetected)
+// and written per writeDisposition, synchronously, with statistics.load on the
+// job. The same decoder backs the media-upload endpoint the official clients use
+// for load_table_from_file: a multipart/related jobs.insert, or a resumable
+// session (POST /upload/bigquery/v2/.../jobs then PUT chunks with Content-Range).
+// Everything outside that subset (ORC, partitioning/clustering,
+// schemaUpdateOptions, a non-default quote/encoding, a multi-'*' wildcard)
+// fails loud (400/501); a data-level failure (too many bad records, WRITE_EMPTY
+// on a non-empty table) is reported in status.errorResult like real BigQuery.
+// See load.go.
+//
 // Known limitations (emulator simplifications, documented rather than fixed):
 //   - tabledata.insertAll honors insertId (best-effort duplicate suppression
 //     over a bounded, TTL'd per-table window), skipInvalidRows,
@@ -29,6 +44,14 @@
 //   - List methods emit the Discovery summary subsets: datasets.list uses
 //     DatasetList.datasets, tables.list uses TableList.tables, and jobs.list
 //     uses JobList.jobs (ListFormatJob, which omits etag).
+//   - jobs.query/getQueryResults honor result-set paging: jobs.query honors
+//     maxResults (returning pageRowCount + pageToken) and getQueryResults
+//     honors maxResults/pageToken/startIndex. Like real GCP's jobs.query, an
+//     unset maxResults imposes no row limit (only the engine's scan guard
+//     applies), so the complete bounded result set is returned in one page;
+//     getQueryResults likewise returns the whole set when maxResults is unset.
+//     getQueryResults re-executes the stored query (BQ6: the store stays the
+//     single source of truth, so a write between pages is visible).
 //   - projects.getServiceAccount returns a synthetic
 //     bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com email rather than a
 //     real service account.
@@ -41,10 +64,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -52,6 +78,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/queryengine"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -61,41 +88,62 @@ const kindPrefix = "bigquery#"
 // Provider handles BigQuery datasets, tables, jobs, and tabledata.
 type Provider struct {
 	store bqstore.Store
+	// sourceReader resolves gs:// load-job sources against the emulated GCS.
+	// It is injected by main.go; nil means load jobs fail loud (Unimplemented).
+	sourceReader SourceReader
+
+	// mu guards uploads, the in-progress resumable load-job upload sessions
+	// (load_table_from_file with an unknown size). Sessions are in-memory only:
+	// a load source is decoded from a whole buffer (see BQF3), so a session is
+	// bounded and cleared on Reset.
+	mu      sync.Mutex
+	uploads map[string]*loadUploadSession
 }
 
 // New returns a Provider backed by the given store.
-func New(s bqstore.Store) *Provider {
-	return &Provider{store: s}
+func New(s bqstore.Store, opts ...Option) *Provider {
+	p := &Provider{store: s, uploads: map[string]*loadUploadSession{}}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
-// Reset wipes the store.
-func (p *Provider) Reset(ctx context.Context) { p.store.Reset(ctx) }
+// Reset wipes the store and any in-progress resumable load-job upload sessions.
+func (p *Provider) Reset(ctx context.Context) {
+	p.store.Reset(ctx)
+	p.mu.Lock()
+	p.uploads = map[string]*loadUploadSession{}
+	p.mu.Unlock()
+}
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"BigQuery.CreateDataset":     p.CreateDataset,
-		"BigQuery.GetDataset":        p.GetDataset,
-		"BigQuery.ListDatasets":      p.ListDatasets,
-		"BigQuery.UpdateDataset":     p.UpdateDataset,
-		"BigQuery.DeleteDataset":     p.DeleteDataset,
-		"BigQuery.CreateTable":       p.CreateTable,
-		"BigQuery.GetTable":          p.GetTable,
-		"BigQuery.ListTables":        p.ListTables,
-		"BigQuery.UpdateTable":       p.UpdateTable,
-		"BigQuery.DeleteTable":       p.DeleteTable,
-		"BigQuery.InsertAll":         p.InsertAll,
-		"BigQuery.ListRows":          p.ListRows,
-		"BigQuery.InsertJob":         p.InsertJob,
-		"BigQuery.GetJob":            p.GetJob,
-		"BigQuery.ListJobs":          p.ListJobs,
-		"BigQuery.DeleteJob":         p.DeleteJob,
-		"BigQuery.CancelJob":         p.CancelJob,
-		"BigQuery.Query":             p.Query,
-		"BigQuery.GetQueryResults":   p.GetQueryResults,
-		"BigQuery.GetServiceAccount": p.GetServiceAccount,
-		"BigQuery.Routines":          p.Routines,
-		"BigQuery.Models":            p.Models,
-		"BigQuery.RowAccessPolicies": p.RowAccessPolicies,
+		"BigQuery.CreateDataset":           p.CreateDataset,
+		"BigQuery.GetDataset":              p.GetDataset,
+		"BigQuery.ListDatasets":            p.ListDatasets,
+		"BigQuery.UpdateDataset":           p.UpdateDataset,
+		"BigQuery.DeleteDataset":           p.DeleteDataset,
+		"BigQuery.CreateTable":             p.CreateTable,
+		"BigQuery.GetTable":                p.GetTable,
+		"BigQuery.ListTables":              p.ListTables,
+		"BigQuery.UpdateTable":             p.UpdateTable,
+		"BigQuery.DeleteTable":             p.DeleteTable,
+		"BigQuery.InsertAll":               p.InsertAll,
+		"BigQuery.ListRows":                p.ListRows,
+		"BigQuery.InsertJob":               p.InsertJob,
+		"BigQuery.InsertJobResumableStart": p.InsertJobResumableStart,
+		"BigQuery.InsertJobResumable":      p.InsertJobResumable,
+		"BigQuery.GetJob":                  p.GetJob,
+		"BigQuery.ListJobs":                p.ListJobs,
+		"BigQuery.DeleteJob":               p.DeleteJob,
+		"BigQuery.CancelJob":               p.CancelJob,
+		"BigQuery.Query":                   p.Query,
+		"BigQuery.GetQueryResults":         p.GetQueryResults,
+		"BigQuery.GetServiceAccount":       p.GetServiceAccount,
+		"BigQuery.Routines":                p.Routines,
+		"BigQuery.Models":                  p.Models,
+		"BigQuery.RowAccessPolicies":       p.RowAccessPolicies,
 	}
 }
 
@@ -131,6 +179,40 @@ func mapValue(m map[string]any, key string) map[string]any {
 func strValue(m map[string]any, key string) string {
 	s, _ := m[key].(string)
 	return s
+}
+
+// maxResultsBody parses the optional maxResults field off a decoded jobs.query
+// request body, defaulting to 0 (no page limit). A present but non-integer or
+// negative value is InvalidArgument, matching the real API's rejection.
+func maxResultsBody(m map[string]any) (int, error) {
+	raw, ok := m["maxResults"]
+	if !ok || raw == nil {
+		return 0, nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		if v < 0 || float64(int(v)) != v {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return int(v), nil
+	case int:
+		if v < 0 {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return v, nil
+	case int64:
+		if v < 0 {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return int(v), nil
+	case string:
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return n, nil
+	}
+	return 0, invalidArgument("maxResults must be a non-negative integer")
 }
 
 func stringMap(m map[string]any, key string) map[string]string {
@@ -310,7 +392,18 @@ func (p *Provider) jobMap(projectID string, j bqstore.Job) map[string]any {
 	if _, ok := out["configuration"]; !ok {
 		out["configuration"] = map[string]any{}
 	}
-	out["status"] = map[string]any{"state": "DONE"}
+	// A job is always terminal here (loads/queries run synchronously), but a
+	// data-level failure (WRITE_EMPTY on a non-empty table, maxBadRecords
+	// exceeded) is reported in status.errorResult rather than as an HTTP error,
+	// matching real BigQuery. Preserve it while forcing state=DONE.
+	status := map[string]any{"state": "DONE"}
+	if existing, ok := out["status"].(map[string]any); ok {
+		for k, v := range existing {
+			status[k] = v
+		}
+		status["state"] = "DONE"
+	}
+	out["status"] = status
 	return out
 }
 
@@ -325,18 +418,51 @@ func (p *Provider) jobSummaryMap(projectID string, j bqstore.Job) map[string]any
 
 // pagingParams translates BigQuery's maxResults/pageToken query parameters into
 // the shared paging helper's pageSize/pageToken shape (maxResults is BigQuery's
-// page-size parameter; paging.PageSize reads pageSize).
+// page-size parameter; paging.PageSize reads pageSize). maxResults is validated
+// up front by maxResultsQueryParam — the uint32 binding, so its rejection names
+// `max_results` (DC63) — and a legal value above MaxInt32 is capped for the
+// int-based pager here instead of being handed to PageSize's int32 binding
+// (which would reject it). The `pageSize` arm is the emulator's own alias for
+// maxResults; it is bound as if declared, like the other bespoke pagers.
 func pagingParams(params map[string]any) map[string]any {
 	out := map[string]any{}
 	if v, ok := params["pageToken"]; ok {
 		out["pageToken"] = v
 	}
 	if v, ok := params["maxResults"]; ok {
-		out["pageSize"] = v
+		out["pageSize"] = cappedMaxResults(v)
 	} else if v, ok := params["pageSize"]; ok {
 		out["pageSize"] = v
 	}
 	return out
+}
+
+// cappedMaxResults maps a legal BigQuery maxResults (uint32) onto the shared
+// pager's int without changing its meaning: anything above MaxInt32 is capped
+// there (the page can never exceed the available items anyway). The handlers
+// validate maxResults before calling pagingParams, so a value the uint32 binding
+// would reject never reaches the pager; the pass-through keeps this adapter
+// total if that ever changes.
+func cappedMaxResults(v any) any {
+	switch x := v.(type) {
+	case string:
+		if n, err := strconv.ParseUint(x, 10, 32); err == nil && n > math.MaxInt32 {
+			return int(math.MaxInt32)
+		}
+	case float64:
+		if x == math.Trunc(x) && x > math.MaxInt32 && x <= math.MaxUint32 {
+			return int(math.MaxInt32)
+		}
+	case int:
+		if x > math.MaxInt32 {
+			return int(math.MaxInt32)
+		}
+	case int64:
+		if x > math.MaxInt32 && x <= math.MaxUint32 {
+			return int(math.MaxInt32)
+		}
+	}
+	return v
 }
 
 // --- Datasets ---
@@ -381,11 +507,17 @@ func (p *Provider) GetDataset(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := maxResultsQueryParam(nr); err != nil {
+		return nil, err
+	}
 	datasets, err := p.store.ListDatasets(ctx, projectOf(nr))
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(datasets, func(d bqstore.Dataset) string { return d.DatasetID }, pagingParams(nr.Params))
+	page, next, err := paging.Page(datasets, func(d bqstore.Dataset) string { return d.DatasetID }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, d := range page {
 		items = append(items, p.datasetSummaryMap(projectOf(nr), d))
@@ -499,11 +631,17 @@ func (p *Provider) ListTables(ctx context.Context, nr *model.NormalizedRequest) 
 	if datasetID == "" {
 		return nil, invalidArgument("datasetId is required")
 	}
+	if _, err := maxResultsQueryParam(nr); err != nil {
+		return nil, err
+	}
 	tables, err := p.store.ListTables(ctx, projectOf(nr), datasetID)
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(tables, func(t bqstore.Table) string { return t.TableID }, pagingParams(nr.Params))
+	page, next, err := paging.Page(tables, func(t bqstore.Table) string { return t.TableID }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, t := range page {
 		items = append(items, p.tableSummaryMap(projectOf(nr), t))
@@ -587,7 +725,7 @@ type schemaField struct {
 	Name   string        `json:"name"`
 	Mode   string        `json:"mode"`
 	Type   string        `json:"type"`
-	Fields []schemaField `json:"fields"`
+	Fields []schemaField `json:"fields,omitempty"`
 }
 
 // parseSchemaFields extracts the top-level fields from a table's schema JSON.
@@ -847,8 +985,11 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	if datasetID == "" || tableID == "" {
 		return nil, invalidArgument("datasetId and tableId are required")
 	}
-	startIndex, err := startIndexParam(nr)
+	startIndex, err := nonNegativeIntParam(nr, "startIndex")
 	if err != nil {
+		return nil, err
+	}
+	if _, err := maxResultsQueryParam(nr); err != nil {
 		return nil, err
 	}
 	t, err := p.store.GetTable(ctx, projectOf(nr), datasetID, tableID)
@@ -870,7 +1011,10 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 			rows = rows[startIndex:]
 		}
 	}
-	page, next := paging.Page(rows, func(r bqstore.Row) string { return fmt.Sprintf("%020d", r.Seq) }, pagingParams(nr.Params))
+	page, next, err := paging.Page(rows, func(r bqstore.Row) string { return fmt.Sprintf("%020d", r.Seq) }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, r := range page {
 		items = append(items, rowToTableRow(r.Data, fields))
@@ -886,18 +1030,37 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	return provider.OK(resp), nil
 }
 
-// startIndexParam parses the tabledata.list startIndex query parameter,
-// defaulting to 0. A non-numeric or negative value is InvalidArgument.
-func startIndexParam(nr *model.NormalizedRequest) (int, error) {
-	raw := strParam(nr, "startIndex")
+// nonNegativeIntParam parses an optional non-negative integer query parameter
+// that the Discovery document declares as a *string* (`startIndex` is
+// `format: uint64, type: string`), defaulting to 0 when absent. A non-numeric or
+// negative value is InvalidArgument (real GCP rejects a malformed unsigned
+// integer rather than ignoring it). `maxResults` is a uint32 integer binding and
+// goes through maxResultsQueryParam instead.
+func nonNegativeIntParam(nr *model.NormalizedRequest, key string) (int, error) {
+	raw := strParam(nr, key)
 	if raw == "" {
 		return 0, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 0 {
-		return 0, invalidArgument("startIndex must be a non-negative integer")
+		return 0, invalidArgument(key + " must be a non-negative integer")
 	}
 	return n, nil
+}
+
+// maxResultsQueryParam parses BigQuery's optional maxResults query parameter
+// with the uint32 binding its Discovery document declares on every method that
+// takes it (datasets/tables/tabledata/jobs.list and jobs.getQueryResults),
+// defaulting to 0 when absent. An unparseable, negative or explicitly empty
+// value is the frontend's binding INVALID_ARGUMENT — an empty value is not
+// "absent" (DC63) — and the rejection names `max_results`, the field the
+// parameter binds to, rather than the shared pager's internal pageSize alias.
+func maxResultsQueryParam(nr *model.NormalizedRequest) (int, error) {
+	v, ok := nr.Params["maxResults"]
+	if !ok || v == nil {
+		return 0, nil
+	}
+	return paging.ParseUintSizeNamed(v, "maxResults")
 }
 
 // --- Jobs ---
@@ -911,6 +1074,7 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 	if _, err := p.store.GetJob(ctx, projectOf(nr), jobID); err == nil {
 		return nil, mapErr(bqstore.ErrAlreadyExists)
 	}
+	now := clock.Now().UTC()
 	// A query job is evaluated synchronously (accepted-risk LROs), exactly like
 	// jobs.query, so its statistics are persisted on the job. That also means a
 	// later getQueryResults never re-executes DDL/DML through this path.
@@ -930,7 +1094,28 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 			body["statistics"] = map[string]any{"query": stats}
 		}
 	}
-	now := clock.Now().UTC()
+	// A load job is likewise evaluated synchronously: the source is read from
+	// the emulated GCS (or, for a multipart upload, supplied as the request
+	// media), decoded, coerced to the destination schema and written to the
+	// store before the job is returned (state=DONE). Options outside the
+	// documented subset fail loud (400/501); a data-level failure is reported in
+	// the job's status.errorResult like real BigQuery.
+	if l := mapValue(mapValue(body, "configuration"), "load"); l != nil {
+		source, uploaded, err := p.loadSourceBytes(nr)
+		if err != nil {
+			return nil, err
+		}
+		var loadStats, jobErr map[string]any
+		if uploaded {
+			loadStats, jobErr, err = p.runLoadData(ctx, projectOf(nr), l, source, "0", now)
+		} else {
+			loadStats, jobErr, err = p.runLoad(ctx, projectOf(nr), l, now)
+		}
+		if err != nil {
+			return nil, err
+		}
+		attachLoadStats(body, loadStats, jobErr, now)
+	}
 	j := bqstore.Job{JobID: jobID, CreateTime: now}
 	if body != nil {
 		if data, err := json.Marshal(body); err == nil {
@@ -941,6 +1126,239 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 		return nil, mapErr(err)
 	}
 	return provider.OK(p.jobMap(projectOf(nr), j)), nil
+}
+
+// attachLoadStats stamps a load job body with configuration.jobType and the
+// statistics/status real BigQuery reports for a completed load. loadStats is the
+// statistics.load object; jobErr, when non-nil, is a data-level failure carried
+// in status.errorResult rather than as an HTTP error.
+func attachLoadStats(body map[string]any, loadStats, jobErr map[string]any, now time.Time) {
+	// application/callers expect the job type on the configuration.
+	mapValue(body, "configuration")["jobType"] = "LOAD"
+	body["statistics"] = map[string]any{
+		"creationTime": millis(now),
+		"startTime":    millis(now),
+		"endTime":      millis(now),
+		"load":         loadStats,
+	}
+	if jobErr != nil {
+		body["status"] = map[string]any{"state": "DONE", "errorResult": jobErr, "errors": []any{jobErr}}
+	}
+}
+
+// loadSourceBytes returns the uploaded file bytes carried on the request for a
+// media (multipart) load job, and whether they were present. It reads either the
+// buffered wire.MediaKey or the streamed wire.StreamKey, applying the size cap.
+func (p *Provider) loadSourceBytes(nr *model.NormalizedRequest) ([]byte, bool, error) {
+	if b, ok := nr.Params[wire.MediaKey].([]byte); ok {
+		if len(b) > maxLoadUploadBytes {
+			return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+		}
+		return b, true, nil
+	}
+	if rd, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
+		data, err := io.ReadAll(io.LimitReader(rd, maxLoadUploadBytes+1))
+		if err != nil {
+			return nil, true, invalidArgument("failed to read uploaded load source: " + err.Error())
+		}
+		if len(data) > maxLoadUploadBytes {
+			return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+		}
+		return data, true, nil
+	}
+	return nil, false, nil
+}
+
+// --- Resumable load-job uploads (jobs.insert media, load_table_from_file) ---
+
+const (
+	// maxLoadUploadSessions caps concurrent resumable load-upload sessions.
+	maxLoadUploadSessions = 100
+	// loadUploadSessionTTL bounds how long an inactive session is kept.
+	loadUploadSessionTTL = time.Hour
+	// maxLoadUploadBytes caps an uploaded load source. A load source is decoded
+	// from a whole buffer (BQF3), so the upload is bounded rather than spilled.
+	maxLoadUploadBytes = 256 << 20 // 256 MiB
+)
+
+// loadUploadSession holds the state of an in-progress resumable load-job upload:
+// the Job resource supplied at session start plus the accumulated file bytes.
+type loadUploadSession struct {
+	project    string
+	body       map[string]any
+	data       []byte
+	lastAccess time.Time
+}
+
+// sweepLoadUploads drops sessions idle past loadUploadSessionTTL. The caller must
+// hold p.mu.
+func (p *Provider) sweepLoadUploads(now time.Time) {
+	for id, s := range p.uploads {
+		if now.Sub(s.lastAccess) > loadUploadSessionTTL {
+			delete(p.uploads, id)
+		}
+	}
+}
+
+// InsertJobResumableStart begins a resumable load-job upload. Real BigQuery
+// answers 200 with a Location header (the upload session URI) and no body; the
+// job resource arrives as the initiate request body and is validated here so an
+// unsupported configuration fails before the client uploads any bytes.
+func (p *Provider) InsertJobResumableStart(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyMap(nr)
+	if body == nil {
+		return nil, invalidArgument("a resumable upload requires a job resource body")
+	}
+	if strValue(mapValue(body, "jobReference"), "jobId") == "" {
+		return nil, invalidArgument("jobReference.jobId is required")
+	}
+	l := mapValue(mapValue(body, "configuration"), "load")
+	if l == nil {
+		return nil, invalidArgument("a resumable upload requires a configuration.load job resource")
+	}
+	if err := validateLoadOptions(l); err != nil {
+		return nil, err
+	}
+	if _, err := p.store.GetJob(ctx, projectOf(nr), strValue(mapValue(body, "jobReference"), "jobId")); err == nil {
+		return nil, mapErr(bqstore.ErrAlreadyExists)
+	}
+
+	id := newUploadID()
+	now := clock.RealNow()
+	p.mu.Lock()
+	p.sweepLoadUploads(now)
+	if len(p.uploads) >= maxLoadUploadSessions {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("ResourceExhausted", "too many concurrent load-upload sessions", 429)
+	}
+	p.uploads[id] = &loadUploadSession{project: projectOf(nr), body: body, lastAccess: now}
+	p.mu.Unlock()
+
+	base, _ := nr.Params[wire.BaseURLKey].(string)
+	if base == "" {
+		base = "http://localhost"
+	}
+	loc := fmt.Sprintf("%s/upload/bigquery/v2/projects/%s/jobs?uploadType=resumable&upload_id=%s", base, projectOf(nr), id)
+	return &model.ProviderResponse{HTTPStatus: http.StatusOK, Data: map[string]any{wire.LocationKey: loc}}, nil
+}
+
+// InsertJobResumable appends a chunk to a load-upload session. An incomplete
+// chunk answers 308 with a Range header (bytes=0-N) — the only resume-incomplete
+// shape google-resumable-media accepts. The chunk that completes the source runs
+// the load and returns the completed Job.
+func (p *Provider) InsertJobResumable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	uploadID, _ := nr.Params["upload_id"].(string)
+	media, _ := nr.Params[wire.MediaKey].([]byte)
+	cr, _ := nr.Params["contentRange"].(string)
+	project := projectOf(nr)
+
+	p.mu.Lock()
+	sess, ok := p.uploads[uploadID]
+	if !ok || sess.project != project {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("NotFound", "unknown upload_id", 404)
+	}
+	start, total, hasTotal, perr := parseContentRange(cr)
+	if perr != nil {
+		p.mu.Unlock()
+		return nil, invalidArgument(perr.Error())
+	}
+	received := len(sess.data)
+	// A "bytes */N" status query carries no payload; otherwise the chunk must
+	// begin exactly where the previous one ended (concurrent/misordered chunks
+	// are not modeled — the client is sequential).
+	if start >= 0 && start != int64(received) {
+		p.mu.Unlock()
+		return nil, invalidArgument(fmt.Sprintf("Content-Range start %d does not match the %d bytes received", start, received))
+	}
+	if received+len(media) > maxLoadUploadBytes {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+	}
+	if start >= 0 {
+		sess.data = append(sess.data, media...)
+	}
+	received = len(sess.data)
+	sess.lastAccess = clock.RealNow()
+	done := hasTotal && received == int(total)
+	body := sess.body
+	data := sess.data
+	if done {
+		delete(p.uploads, uploadID)
+	}
+	p.mu.Unlock()
+
+	if !done {
+		// google-resumable-media requires a Range header on every 308 and parses
+		// it as "bytes=0-{end}"; with no bytes received there is no range to
+		// report, so the body stays empty (real GCS does the same).
+		data := map[string]any{}
+		if received > 0 {
+			data[wire.RangeKey] = fmt.Sprintf("bytes=0-%d", received-1)
+		}
+		return &model.ProviderResponse{HTTPStatus: http.StatusPermanentRedirect, Data: data}, nil
+	}
+
+	now := clock.Now().UTC()
+	loadStats, jobErr, err := p.runLoadData(ctx, project, mapValue(mapValue(body, "configuration"), "load"), data, "0", now)
+	if err != nil {
+		return nil, err
+	}
+	attachLoadStats(body, loadStats, jobErr, now)
+	jobID := strValue(mapValue(body, "jobReference"), "jobId")
+	j := bqstore.Job{JobID: jobID, CreateTime: now}
+	if raw, merr := json.Marshal(body); merr == nil {
+		j.Config = raw
+	}
+	if err := p.store.CreateJob(ctx, project, j); err != nil {
+		return nil, mapErr(err)
+	}
+	return provider.OK(p.jobMap(project, j)), nil
+}
+
+// parseContentRange parses a resumable Content-Range header. Forms:
+// "bytes {start}-{end}/{total}", "bytes {start}-{end}/*" (total unknown), and
+// "bytes */{total}" (a status query with no payload, start = -1). hasTotal
+// reports whether a concrete total was given.
+func parseContentRange(cr string) (start, total int64, hasTotal bool, err error) {
+	if cr == "" {
+		return 0, 0, false, errors.New("Content-Range header is required")
+	}
+	if !strings.HasPrefix(cr, "bytes ") {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(cr, "bytes "))
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	span, totalStr := rest[:slash], strings.TrimSpace(rest[slash+1:])
+	if totalStr != "*" {
+		total, err = strconv.ParseInt(totalStr, 10, 64)
+		if err != nil || total < 0 {
+			return 0, 0, false, errors.New("malformed Content-Range header")
+		}
+		hasTotal = true
+	}
+	if span == "*" {
+		return -1, total, hasTotal, nil
+	}
+	dash := strings.IndexByte(span, '-')
+	if dash < 0 {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	start, err = strconv.ParseInt(strings.TrimSpace(span[:dash]), 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	return start, total, hasTotal, nil
+}
+
+// newUploadID returns a random resumable load-upload session id.
+func newUploadID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "bql_" + hex.EncodeToString(b)
 }
 
 func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -956,11 +1374,17 @@ func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := maxResultsQueryParam(nr); err != nil {
+		return nil, err
+	}
 	jobs, err := p.store.ListJobs(ctx, projectOf(nr))
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(jobs, func(j bqstore.Job) string { return j.JobID }, pagingParams(nr.Params))
+	page, next, err := paging.Page(jobs, func(j bqstore.Job) string { return j.JobID }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, j := range page {
 		items = append(items, p.jobSummaryMap(projectOf(nr), j))
@@ -1003,6 +1427,10 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	}
 	if boolValue(body, "useLegacySql") {
 		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
+	}
+	maxResults, err := maxResultsBody(body)
+	if err != nil {
+		return nil, err
 	}
 	if boolValue(body, "dryRun") {
 		// Dry run: validate the query (surfacing the same errors a real run
@@ -1050,13 +1478,31 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if err := p.store.CreateJob(ctx, projectOf(nr), j); err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res, false)), nil
+	resp := encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res, false)
+	// maxResults pages the result set: a truncated first page carries a
+	// pageToken the client passes to getQueryResults for the next page.
+	pageQueryResponse(resp, 0, maxResults, true)
+	return provider.OK(resp), nil
 }
 
 func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	jobID := strParam(nr, "jobId")
 	if jobID == "" {
 		return nil, invalidArgument("jobId is required")
+	}
+	// Validate the paging input up front so it is rejected the same way for a
+	// SELECT job and a DML/DDL job (which returns before executing anything).
+	startIndex, err := nonNegativeIntParam(nr, "startIndex")
+	if err != nil {
+		return nil, err
+	}
+	maxResults, err := maxResultsQueryParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	start, err := resolveResultPageStart(startIndex, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
 	}
 	j, err := p.store.GetJob(ctx, projectOf(nr), jobID)
 	if err != nil {
@@ -1084,7 +1530,9 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res, false)), nil
+	resp := encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res, false)
+	pageQueryResponse(resp, start, maxResults, false)
+	return provider.OK(resp), nil
 }
 
 // jobQueryStats returns the statementType and DML affected-row count persisted

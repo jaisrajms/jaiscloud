@@ -13,10 +13,13 @@ import (
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
 )
 
-// Dispatcher delivers one attempt of a job and reports its outcome. A zero
-// Status{Code: 0} means the attempt succeeded.
+// Dispatcher delivers one attempt of a job and reports its outcome. scheduledFor
+// is the run's scheduled time — the cron slot this attempt serves. Real Cloud
+// Scheduler exposes it to an HTTP target as X-CloudScheduler-ScheduleTime and
+// holds it constant across the run's retries so the target can dedupe them. A
+// zero Status{Code: 0} means the attempt succeeded.
 type Dispatcher interface {
-	Deliver(ctx context.Context, j schedstore.Job) schedstore.Status
+	Deliver(ctx context.Context, j schedstore.Job, scheduledFor time.Time) schedstore.Status
 }
 
 // Publisher publishes a Pub/Sub message for a pubsubTarget. It is injected by
@@ -41,10 +44,10 @@ func NewRunner(publisher Publisher) *Runner {
 }
 
 // Deliver implements Dispatcher.
-func (r *Runner) Deliver(ctx context.Context, j schedstore.Job) schedstore.Status {
+func (r *Runner) Deliver(ctx context.Context, j schedstore.Job, scheduledFor time.Time) schedstore.Status {
 	switch j.Target {
 	case schedstore.TargetHTTP:
-		return r.deliverHTTP(ctx, j)
+		return r.deliverHTTP(ctx, j, scheduledFor)
 	case schedstore.TargetPubSub:
 		return r.deliverPubSub(ctx, j)
 	default:
@@ -55,7 +58,7 @@ func (r *Runner) Deliver(ctx context.Context, j schedstore.Job) schedstore.Statu
 	}
 }
 
-func (r *Runner) deliverHTTP(ctx context.Context, j schedstore.Job) schedstore.Status {
+func (r *Runner) deliverHTTP(ctx context.Context, j schedstore.Job, scheduledFor time.Time) schedstore.Status {
 	t := j.HTTP
 	if t == nil {
 		return schedstore.Status{Code: int32(codes.InvalidArgument), Message: "httpTarget is missing"}
@@ -64,10 +67,16 @@ func (r *Runner) deliverHTTP(ctx context.Context, j schedstore.Job) schedstore.S
 	for k, v := range t.Headers {
 		headers[k] = v
 	}
-	// Headers real Cloud Scheduler attaches to every delivery.
+	// Headers real Cloud Scheduler attaches to every delivery. It computes and
+	// replaces these, so they are set after the user's headers and win.
 	headers["User-Agent"] = "Google-Cloud-Scheduler"
 	headers["X-CloudScheduler"] = "true"
 	headers["X-CloudScheduler-JobName"] = JobName(j.ProjectID, j.Location, j.Name)
+	if !scheduledFor.IsZero() {
+		// RFC3339; constant across a run's retries (the engine passes the same
+		// run slot on every attempt) so the target can dedupe.
+		headers["X-CloudScheduler-ScheduleTime"] = scheduledFor.UTC().Format(time.RFC3339)
+	}
 	if t.OAuthToken != nil || t.OidcToken != nil {
 		// Real Cloud Scheduler mints a Google token; the emulator attaches a
 		// synthetic emulator-local bearer token so a target that only checks the
@@ -112,6 +121,10 @@ type Engine struct {
 
 type retryState struct {
 	attempts int
+	// scheduledAt is the cron slot the run is serving. It is captured on the
+	// run's first failed attempt and reused for every retry so the
+	// X-CloudScheduler-ScheduleTime header stays constant across the run.
+	scheduledAt time.Time
 }
 
 // NewEngine returns an Engine over the store and dispatcher.
@@ -169,7 +182,7 @@ func retryKey(j schedstore.Job) string {
 
 // fire delivers one attempt and persists the updated output-only fields.
 func (e *Engine) fire(ctx context.Context, j schedstore.Job, now time.Time) {
-	status := e.disp.Deliver(ctx, j)
+	status := e.disp.Deliver(ctx, j, e.scheduledFor(j))
 	next := e.nextScheduleTime(j, now, status)
 	_, _ = e.store.UpdateJobAtomic(ctx, j.ProjectID, j.Location, j.Name, func(cur schedstore.Job) (schedstore.Job, error) {
 		cur.LastAttemptTime = now
@@ -182,6 +195,19 @@ func (e *Engine) fire(ctx context.Context, j schedstore.Job, now time.Time) {
 		cur.ScheduleTime = next
 		return cur, nil
 	})
+}
+
+// scheduledFor returns the cron slot the current attempt serves. While a run is
+// being retried it is the slot recorded on the first failure (so the retry
+// carries the same X-CloudScheduler-ScheduleTime); otherwise it is the job's
+// due schedule time.
+func (e *Engine) scheduledFor(j schedstore.Job) time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if st, ok := e.retry[retryKey(j)]; ok && !st.scheduledAt.IsZero() {
+		return st.scheduledAt
+	}
+	return j.ScheduleTime
 }
 
 // nextScheduleTime picks the next fire time after an attempt: a retry with
@@ -210,6 +236,12 @@ func (e *Engine) nextScheduleTime(j schedstore.Job, now time.Time, status scheds
 	}
 	e.mu.Lock()
 	state := e.retry[key]
+	// Record the run's cron slot on its first failed attempt. j.ScheduleTime is
+	// the due slot here; later retries see a backoff-rescheduled j.ScheduleTime,
+	// so only the first failure captures the slot.
+	if state.scheduledAt.IsZero() {
+		state.scheduledAt = j.ScheduleTime
+	}
 	if int32(state.attempts) < retryCount {
 		state.attempts++
 		e.retry[key] = state

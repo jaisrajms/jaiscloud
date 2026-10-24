@@ -13,7 +13,9 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/resource"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -80,17 +82,46 @@ func (s *Service) Reset(_ context.Context) {
 
 // docName builds the full document resource name.
 func docName(project, database, path string) string {
-	return "projects/" + project + "/databases/" + database + "/documents/" + path
+	return resource.ResourceID(project)("firestore-document", "databases/"+database+"/documents/"+path)
 }
 
-// parentDocOfCollection returns the document path that owns a collection path
-// (strip the trailing collection-id segment).
-func parentDocOfCollection(collPath string) string {
-	i := strings.LastIndex(collPath, "/")
-	if i < 0 {
-		return ""
+// subcollectionIDUnder reports whether a document at relative path relDocPath
+// contributes a subcollection to the document parent (also a relative path;
+// empty for the database's documents root). Firestore's listCollectionIds
+// returns a collection id whenever parent/<id> is a prefix of a document path
+// at any depth, so an intermediate document need not exist. Both paths are
+// alternately collection/document segments and end on a document (or are
+// empty), so the segment immediately after parent names a collection.
+func subcollectionIDUnder(relDocPath, parent string) (string, bool) {
+	segs := splitRelativePath(relDocPath)
+	par := splitRelativePath(parent)
+	if len(segs) <= len(par) {
+		return "", false
 	}
-	return collPath[:i]
+	for i := range par {
+		if segs[i] != par[i] {
+			return "", false
+		}
+	}
+	return segs[len(par)], true
+}
+
+// splitRelativePath splits a relative Firestore path into segments; the empty
+// path (the documents root) has no segments.
+func splitRelativePath(path string) []string {
+	if path == "" {
+		return nil
+	}
+	return strings.Split(path, "/")
+}
+
+// validDocumentParent reports whether a relative path is a Firestore document
+// path (an even number of alternating collection/document segments) or the
+// documents root (empty). listCollectionIds requires a document parent; a
+// collection path is rejected instead of being silently misread as one, which
+// is what real Firestore does.
+func validDocumentParent(path string) bool {
+	return len(splitRelativePath(path))%2 == 0
 }
 
 // nextUpdateTime returns the update timestamp to stamp on a write, guaranteed
@@ -256,6 +287,9 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 		return firestorestore.Document{}, err
 	}
 	name := docName(project, database, path+"/"+docID)
+	if err := validateDocumentName(name); err != nil {
+		return firestorestore.Document{}, err
+	}
 	if err := validateFields(fields); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -277,14 +311,44 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 	return doc, nil
 }
 
+// UpdateMask is a *write* mask (Firestore's `update_mask`, which fields to
+// update) together with its presence. Presence is carried separately because
+// the proto's message-presence is what tells an omitted mask from an empty one,
+// and conflating the two silently rewrites data:
+//   - nil: no mask was supplied — the body fields replace the document's fields.
+//   - non-nil with paths: patch — only the listed field paths are written.
+//   - non-nil without paths: AIP-134's no-op — the supplied fields are ignored
+//     and the stored document is returned unmodified (on a missing document the
+//     upsert still creates it, with no fields).
+//
+// This is not Firestore's response mask (`DocumentMask.mask`, "fields to
+// return"), which projects the reply and never restricts the write.
+type UpdateMask struct {
+	Paths []string
+}
+
+// ProjectDocument applies a response field mask (`mask` / `mask.fieldPaths`):
+// the returned document carries only the requested paths. A request without a
+// mask, or with an empty one, returns every field, matching GetDocument.
+func ProjectDocument(doc firestorestore.Document, paths []string) firestorestore.Document {
+	if len(paths) == 0 {
+		return doc
+	}
+	doc.Fields = maskFields(doc, paths)
+	return doc
+}
+
 // PatchDocument upserts a document: a missing document is created. The mask
-// restricts which fields are updated; without it the fields fully replace the
-// document's fields.
-func (s *Service) PatchDocument(ctx context.Context, project, database, path string, fields map[string]*firestorestore.Value, mask []string, pre *firestorestore.Precondition) (firestorestore.Document, error) {
+// restricts which fields are updated (see UpdateMask for the three states);
+// without it the fields fully replace the document's fields.
+func (s *Service) PatchDocument(ctx context.Context, project, database, path string, fields map[string]*firestorestore.Value, mask *UpdateMask, pre *firestorestore.Precondition) (firestorestore.Document, error) {
 	if err := validatePath(path); err != nil {
 		return firestorestore.Document{}, err
 	}
 	name := docName(project, database, path)
+	if err := validateDocumentName(name); err != nil {
+		return firestorestore.Document{}, err
+	}
 	if err := validateFields(fields); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -304,23 +368,53 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		return firestorestore.Document{}, err
 	}
 
-	var base map[string]*firestorestore.Value
-	createTime := now
-	updateTime := now
-	if exists {
-		base = existing.Fields
-		createTime = existing.CreateTime
-		updateTime = nextUpdateTime(existing.UpdateTime, now)
-	}
-	merged := applyMask(fields, mask, base)
-	if err := checkSize(merged); err != nil {
-		return firestorestore.Document{}, err
-	}
-	doc := firestorestore.Document{
-		Name:       name,
-		Fields:     merged,
-		CreateTime: createTime,
-		UpdateTime: updateTime,
+	// Three mask states (UpdateMask): omitted replaces, a populated mask
+	// patches, and a present-but-empty mask is AIP-134's no-op.
+	noop := mask != nil && len(mask.Paths) == 0
+	var doc firestorestore.Document
+	switch {
+	case noop && exists:
+		// Return the stored document untouched: no field applied, no
+		// update_time rotation, no change event. The write below still runs
+		// through store.Commit so the precondition and the implicit read are
+		// re-validated atomically, but it stores identical content — a
+		// concurrent write landing in between therefore surfaces as a
+		// retryable ABORTED rather than being silently ignored.
+		doc = existing
+	case noop:
+		// No-op on a missing document. PATCH is an upsert, so the document is
+		// created — but with no fields: the empty mask discards the body, the
+		// same as the transform-only update path in buildUpdate.
+		doc = firestorestore.Document{
+			Name:       name,
+			Fields:     map[string]*firestorestore.Value{},
+			CreateTime: now,
+			UpdateTime: now,
+		}
+	default:
+		var base map[string]*firestorestore.Value
+		createTime := now
+		updateTime := now
+		if exists {
+			base = existing.Fields
+			createTime = existing.CreateTime
+			updateTime = nextUpdateTime(existing.UpdateTime, now)
+		}
+		var merged map[string]*firestorestore.Value
+		if mask == nil {
+			merged = cloneFields(fields)
+		} else {
+			merged = applyMask(fields, mask.Paths, base)
+		}
+		if err := checkSize(merged); err != nil {
+			return firestorestore.Document{}, err
+		}
+		doc = firestorestore.Document{
+			Name:       name,
+			Fields:     merged,
+			CreateTime: createTime,
+			UpdateTime: updateTime,
+		}
 	}
 	// Route through store.Commit (the same atomic check-and-apply primitive
 	// transactions use) instead of a separate Get-then-Update/Create, so a
@@ -337,6 +431,10 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 	}); err != nil {
 		return firestorestore.Document{}, mapCommitError(err)
 	}
+	if noop && exists {
+		// Nothing changed, so no document change to fan out to listeners.
+		return doc, nil
+	}
 	d := doc
 	s.publishChange(ChangeEvent{Name: d.Name, Doc: &d})
 	return doc, nil
@@ -346,6 +444,9 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 // precondition is set (then it is validated first).
 func (s *Service) DeleteDocument(ctx context.Context, project, database, path string, pre *firestorestore.Precondition) error {
 	name := docName(project, database, path)
+	if err := validateDocumentName(name); err != nil {
+		return err
+	}
 	if pre != nil {
 		existing, err := s.store.GetDocument(ctx, name)
 		exists := err == nil
@@ -363,8 +464,11 @@ func (s *Service) DeleteDocument(ctx context.Context, project, database, path st
 	return nil
 }
 
-// ListDocuments returns the direct children of a collection, paginated.
-func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask []string, page pageParams) ([]firestorestore.Document, string, error) {
+// ListDocuments returns the direct children of a collection, paginated. When
+// showMissing is set, documents that do not exist but have sub-documents nested
+// underneath them are also returned, keyed by name with no fields or timestamps
+// (Firestore's documents.list showMissing semantics).
+func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask []string, showMissing bool, page pageParams) ([]firestorestore.Document, string, error) {
 	if err := s.requireActive(transaction); err != nil {
 		return nil, "", err
 	}
@@ -374,18 +478,44 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 	}
 	coll := docName(project, database, path)
 	children := make([]firestorestore.Document, 0)
+	existing := make(map[string]bool)
 	for _, d := range docs {
 		if d.ParentPath == coll {
 			children = append(children, d)
+			existing[docID(d.Name)] = true
 		}
 	}
-	sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
+	// A missing document is one that has no document but is an ancestor path of a
+	// deeper document: it appears as the first sub-path segment under this
+	// collection. Track it by full name so the read-set records Exists=false.
+	missing := make(map[string]bool)
+	if showMissing {
+		prefix := coll + "/"
+		for _, d := range docs {
+			if !strings.HasPrefix(d.Name, prefix) {
+				continue
+			}
+			id := d.Name[len(prefix):]
+			if i := strings.IndexByte(id, '/'); i >= 0 {
+				id = id[:i]
+			}
+			name := coll + "/" + id
+			if id == "" || existing[id] || missing[name] {
+				continue
+			}
+			missing[name] = true
+			children = append(children, firestorestore.Document{Name: name})
+		}
+	}
 
-	pageDocs, nextToken := paging.Page(children, func(d firestorestore.Document) string { return d.Name }, page.params())
+	pageDocs, nextToken, err := paging.Page(children, func(d firestorestore.Document) string { return d.Name }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 
 	if len(transaction) > 0 {
 		for _, d := range pageDocs {
-			s.recordRead(transaction, d.Name, d, true)
+			s.recordRead(transaction, d.Name, d, !missing[d.Name])
 		}
 	}
 
@@ -397,14 +527,22 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 	return pageDocs, nextToken, nil
 }
 
-// ListCollectionIds returns the distinct subcollection IDs of a document,
-// paginated.
-func (s *Service) ListCollectionIds(ctx context.Context, project, database, path string, page pageParams) ([]string, string, error) {
-	// parentDocOfCollection returns the parent without a trailing slash, so
-	// trim the "/" that docName appends for an empty (top-level) path before
-	// comparing.
-	parent := strings.TrimSuffix(docName(project, database, path), "/")
+// docID returns the final path segment of a document resource name.
+func docID(name string) string {
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
 
+// ListCollectionIds returns the distinct subcollection IDs of a document,
+// paginated. A collection is included whenever its path is a prefix of any
+// document at any depth, even when the document that owns it does not itself
+// exist as a stored document (a "missing" parent Firestore allows).
+func (s *Service) ListCollectionIds(ctx context.Context, project, database, path string, page pageParams) ([]string, string, error) {
+	if !validDocumentParent(path) {
+		return nil, "", model.NewProviderError("InvalidArgument", "invalid parent document path", 400)
+	}
 	docs, err := s.store.ListDocuments(ctx, project, database)
 	if err != nil {
 		return nil, "", err
@@ -412,18 +550,23 @@ func (s *Service) ListCollectionIds(ctx context.Context, project, database, path
 	seen := map[string]bool{}
 	var ids []string
 	for _, d := range docs {
-		if parentDocOfCollection(d.ParentPath) != parent {
+		_, _, rel, ok := firestorestore.ParseDocumentName(d.Name)
+		if !ok {
 			continue
 		}
-		if d.CollectionID == "" || seen[d.CollectionID] {
+		id, ok := subcollectionIDUnder(rel, path)
+		if !ok || seen[id] {
 			continue
 		}
-		seen[d.CollectionID] = true
-		ids = append(ids, d.CollectionID)
+		seen[id] = true
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 
-	pageIDs, nextToken := paging.Page(ids, func(id string) string { return id }, page.params())
+	pageIDs, nextToken, err := paging.Page(ids, func(id string) string { return id }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 	return pageIDs, nextToken, nil
 }
 
@@ -434,7 +577,7 @@ func (s *Service) RunQuery(ctx context.Context, project, database, path string, 
 	if err := s.requireActive(transaction); err != nil {
 		return nil, err
 	}
-	parent := "projects/" + project + "/databases/" + database + "/documents"
+	parent := resource.ResourceID(project)("firestore-document", "databases/"+database+"/documents")
 	if path != "" {
 		parent += "/" + path
 	}
@@ -516,7 +659,7 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 	}
 
 	commitTime := clock.Now()
-	ws, results, implicitReads, err := s.buildWrites(ctx, writes, commitTime)
+	ws, results, implicitReads, changed, err := s.buildWrites(ctx, writes, commitTime)
 	if err != nil {
 		return time.Time{}, nil, err
 	}
@@ -525,7 +668,10 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 		return time.Time{}, nil, mapCommitError(err)
 	}
 	s.clearReadSet(transaction)
-	for _, w := range ws {
+	for i, w := range ws {
+		if !changed[i] {
+			continue
+		}
 		if w.Document == nil {
 			s.publishChange(ChangeEvent{Name: w.Name})
 		} else {
@@ -546,7 +692,7 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 	statuses := make([]any, 0, len(writes))
 	writeResults := make([]any, 0, len(writes))
 	for _, w := range writes {
-		ws, results, implicitReads, err := s.buildWrites(ctx, []*writeWire{w}, now)
+		ws, results, implicitReads, changed, err := s.buildWrites(ctx, []*writeWire{w}, now)
 		if err != nil {
 			statuses = append(statuses, statusWireForWriteError(err))
 			writeResults = append(writeResults, map[string]any{})
@@ -556,6 +702,18 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 			statuses = append(statuses, statusWireForWriteError(err))
 			writeResults = append(writeResults, map[string]any{})
 			continue
+		}
+		// A committed write fans out to listeners, exactly as in Commit: real
+		// Firestore's batchWrite notifies Listen subscribers for every write it
+		// applies (verified against real GCP) and stays silent for the
+		// empty-mask no-op.
+		if changed[0] {
+			if w := ws[0]; w.Document == nil {
+				s.publishChange(ChangeEvent{Name: w.Name})
+			} else {
+				d := *w.Document
+				s.publishChange(ChangeEvent{Name: w.Name, Doc: &d})
+			}
 		}
 		statuses = append(statuses, statusWire(0, ""))
 		writeResults = append(writeResults, results[0])
@@ -582,13 +740,13 @@ func (s *Service) BatchGet(ctx context.Context, documents []string, transaction 
 		if err != nil {
 			if errors.Is(err, firestorestore.ErrDocumentNotFound) {
 				s.recordRead(transaction, name, firestorestore.Document{}, false)
-				item = map[string]any{"missing": name, "readTime": readTime.Format(time.RFC3339Nano)}
+				item = map[string]any{"missing": name, "readTime": timestamp.Canonical(readTime)}
 			} else {
 				return nil, err
 			}
 		} else {
 			s.recordRead(transaction, name, doc, true)
-			item = map[string]any{"found": documentMap(doc), "readTime": readTime.Format(time.RFC3339Nano)}
+			item = map[string]any{"found": documentMap(doc), "readTime": timestamp.Canonical(readTime)}
 		}
 		items = append(items, item)
 	}
@@ -609,68 +767,87 @@ func (s *Service) BatchGet(ctx context.Context, documents []string, transaction 
 // read-set first and then the per-write precondition under its lock, returning
 // the named DocumentMissingError / DocumentExistsError the caller maps to the
 // canonical NOT_FOUND / ALREADY_EXISTS.
-func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, []firestorestore.ReadRef, error) {
+//
+// changed reports, per write, whether the write actually altered the document.
+// It is false only for AIP-134's present-but-empty update mask on an existing
+// document with no field transforms — a no-op that real GCP answers with the
+// stored update_time and does not report to listeners (verified against real
+// Firestore: an empty-mask commit yields no DocumentChange on Listen, while the
+// same commit with a transform or a real field write does). Both transports use
+// it to skip publishChange.
+func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, []firestorestore.ReadRef, []bool, error) {
 	writes := make([]firestorestore.Write, 0, len(wire))
 	results := make([]map[string]any, 0, len(wire))
 	reads := make([]firestorestore.ReadRef, 0, len(wire))
+	changed := make([]bool, 0, len(wire))
 	for _, w := range wire {
 		pre, err := toPrecondition(w.CurrentDocument)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		switch {
 		case w.Delete != "":
+			if err := validateDocumentName(w.Delete); err != nil {
+				return nil, nil, nil, nil, err
+			}
 			writes = append(writes, firestorestore.Write{Name: w.Delete, Precondition: pre})
 			results = append(results, map[string]any{}) // no updateTime after delete
+			changed = append(changed, true)
 
 		case w.Transform != nil:
 			doc, res, readRef, err := s.buildTransform(ctx, w.Transform, pre, now)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
 			results = append(results, res)
 			reads = append(reads, readRef)
+			changed = append(changed, true)
 
 		case w.Update != nil:
-			doc, res, readRef, err := s.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
+			doc, res, readRef, writeChanged, err := s.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
 			results = append(results, res)
 			reads = append(reads, readRef)
+			changed = append(changed, writeChanged)
 
 		default:
-			return nil, nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
+			return nil, nil, nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
 		}
 	}
-	return writes, results, reads, nil
+	return writes, results, reads, changed, nil
 }
 
 // buildUpdate resolves an update (with optional mask + transforms) against the
 // current document. The returned ReadRef is the document state this merge was
 // computed from — the caller must fold it into the read-set passed to
-// store.Commit so a write that lands between this read and the eventual
-// Commit call is detected (ErrAborted) instead of silently overwritten by the
-// merge this function computed from a now-stale base.
-func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, error) {
+// store.Commit so a write that lands between this read and the eventually
+// computed write is detected (ErrAborted) instead of silently overwritten.
+// changed is false for the empty-mask no-op on an existing document (see
+// buildWrites).
+func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, bool, error) {
 	now = now.Truncate(time.Microsecond)
 	if dw.Name == "" {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "update document name is required", 400)
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, model.NewProviderError("InvalidArgument", "update document name is required", 400)
+	}
+	if err := validateDocumentName(dw.Name); err != nil {
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 	if err := validateFields(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 	if err := checkSize(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 
 	existing, err := s.store.GetDocument(ctx, dw.Name)
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 	readRef := firestorestore.ReadRef{Name: dw.Name, Exists: exists, UpdateTime: existing.UpdateTime}
 
@@ -686,6 +863,16 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 	//
 	// applyMask is NOT used for the empty-mask case because its len==0 → replace
 	// contract is REST-patch-specific (it would wipe unrelated fields).
+	//
+	// With no transforms too, the empty mask is AIP-134's no-op on an existing
+	// document: the stored document comes back untouched, update_time does not
+	// rotate, and listeners see no change (real Firestore: the write result
+	// carries the stored update_time and Listen reports only NO_CHANGE). A
+	// missing document is still created, fieldless, as the upsert real GCP does.
+	// This mirrors PatchDocument's no-op branch (DC52).
+	if mask != nil && len(mask.FieldPaths) == 0 && len(transforms) == 0 && exists {
+		return existing, map[string]any{"updateTime": timestamp.Canonical(existing.UpdateTime)}, readRef, false, nil
+	}
 	var merged map[string]*firestorestore.Value
 	switch {
 	case mask == nil:
@@ -702,12 +889,12 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		var res []*firestorestore.Value
 		merged, res, err = applyFieldTransforms(merged, transforms, now)
 		if err != nil {
-			return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+			return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 		}
 		transformResults = res
 	}
 	if err := checkSize(merged); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 
 	createTime := now
@@ -717,7 +904,7 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		updateTime = nextUpdateTime(existing.UpdateTime, now)
 	}
 	doc := firestorestore.Document{Name: dw.Name, Fields: merged, CreateTime: createTime, UpdateTime: updateTime}
-	res := map[string]any{"updateTime": updateTime.Format(time.RFC3339Nano)}
+	res := map[string]any{"updateTime": timestamp.Canonical(updateTime)}
 	if len(transformResults) > 0 {
 		tr := make([]any, 0, len(transformResults))
 		for _, r := range transformResults {
@@ -725,7 +912,7 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		}
 		res["transformResults"] = tr
 	}
-	return doc, res, readRef, nil
+	return doc, res, readRef, true, nil
 }
 
 // buildTransform resolves a document transform against the current document.
@@ -736,6 +923,9 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	now = now.Truncate(time.Microsecond)
 	if tw.Document == "" {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "transform document name is required", 400)
+	}
+	if err := validateDocumentName(tw.Document); err != nil {
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 	existing, err := s.store.GetDocument(ctx, tw.Document)
 	exists := err == nil
@@ -765,7 +955,7 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	for _, r := range transformResults {
 		tr = append(tr, valueWire(r))
 	}
-	return doc, map[string]any{"updateTime": updateTime.Format(time.RFC3339Nano), "transformResults": tr}, readRef, nil
+	return doc, map[string]any{"updateTime": timestamp.Canonical(updateTime), "transformResults": tr}, readRef, nil
 }
 
 // ─── index management ────────────────────────────────────────────────────────
@@ -833,7 +1023,7 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 	}
 	// The operation name is the google.longrunning.Operation the index creation
 	// is wrapped in (done=true); both transports complete it synchronously.
-	opName := "projects/" + project + "/databases/" + database + "/operations/" + randomHex(12)
+	opName := resource.ResourceID(project)("firestore-operation", database+"/"+randomHex(12))
 	return idx, opName, nil
 }
 
@@ -852,9 +1042,18 @@ func (s *Service) CreateIndex(ctx context.Context, project, database, cg string,
 	}, nil
 }
 
-// ListIndexes returns the composite indexes for a collection group, paginated.
+// ListIndexes returns composite indexes, paginated. A specific collection group
+// (cg) lists only that group's indexes; cg == "-" is the AIP-123 wildcard that
+// lists every collection group's indexes, matching the real API behavior used by
+// `gcloud firestore indexes composite list` and the Firestore console.
 func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter string, page pageParams) ([]indexDef, string, error) {
+	// The trailing slash is significant: for a concrete group the prefix is
+	// scoped to that group's /indexes/ collection; for the wildcard it spans
+	// every collectionGroups/*/indexes entry under the database.
 	prefix := "databases/" + database + "/collectionGroups/" + cg + "/indexes/"
+	if cg == "-" {
+		prefix = "databases/" + database + "/collectionGroups/"
+	}
 	var idxs []indexDef
 	if s.resources != nil {
 		entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtIndex, prefix)
@@ -879,7 +1078,10 @@ func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter
 		idxs = kept
 	}
 
-	pageIdxs, nextToken := paging.Page(idxs, func(d indexDef) string { return d.Name }, page.params())
+	pageIdxs, nextToken, err := paging.Page(idxs, func(d indexDef) string { return d.Name }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 	return pageIdxs, nextToken, nil
 }
 

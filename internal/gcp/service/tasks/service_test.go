@@ -2,9 +2,11 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -68,6 +70,95 @@ func TestServiceQueueLifecycle(t *testing.T) {
 	}
 	if _, err := s.GetQueue(ctx, "p", "l", "q1"); err == nil {
 		t.Fatalf("queue survived delete")
+	}
+}
+
+func TestServiceListQueuesFilter(t *testing.T) {
+	ctx := context.Background()
+	s := newService()
+	for _, id := range []string{"alpha", "alphabet", "beta"} {
+		if _, err := s.CreateQueue(ctx, "p", "l", tasksstore.Queue{Name: id}); err != nil {
+			t.Fatalf("CreateQueue(%s): %v", id, err)
+		}
+	}
+	full := func(id string) string { return "projects/p/locations/l/queues/" + id }
+	listIDs := func(filter string) []string {
+		t.Helper()
+		queues, err := s.ListQueues(ctx, "p", "l", filter)
+		if err != nil {
+			t.Fatalf("ListQueues(%q): %v", filter, err)
+		}
+		ids := make([]string, 0, len(queues))
+		for _, q := range queues {
+			ids = append(ids, q.Name)
+		}
+		return ids
+	}
+	eqStrings := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	// "=" is equality on the field value: a full resource name matches exactly
+	// one queue, and the bare id (not the field value) matches none.
+	if got := listIDs(`name="` + full("alpha") + `"`); !eqStrings(got, []string{"alpha"}) {
+		t.Errorf(`name="<full name>" listed %v, want [alpha]`, got)
+	}
+	if got := listIDs(`name="alpha"`); len(got) != 0 {
+		t.Errorf(`name="alpha" listed %v, want none (equality is on the full name)`, got)
+	}
+	// ":" is the contains operator (Stackdriver syntax), not equality.
+	if got := listIDs(`name:"alpha"`); !eqStrings(got, []string{"alpha", "alphabet"}) {
+		t.Errorf(`name:"alpha" listed %v, want [alpha alphabet]`, got)
+	}
+	if got := listIDs(`name:"beta" AND state="RUNNING"`); !eqStrings(got, []string{"beta"}) {
+		t.Errorf(`name:"beta" AND state="RUNNING" listed %v, want [beta]`, got)
+	}
+
+	// state is a documented Queue field; a state: filter is the Discovery
+	// document's own sample.
+	if got := listIDs(`state:RUNNING`); !eqStrings(got, []string{"alpha", "alphabet", "beta"}) {
+		t.Errorf(`state:RUNNING listed %v, want all queues`, got)
+	}
+	if _, err := s.PauseQueue(ctx, "p", "l", "beta"); err != nil {
+		t.Fatalf("PauseQueue: %v", err)
+	}
+	if got := listIDs(`state=PAUSED`); !eqStrings(got, []string{"beta"}) {
+		t.Errorf("state=PAUSED listed %v, want [beta]", got)
+	}
+	if got := listIDs(`state:PAUS`); !eqStrings(got, []string{"beta"}) {
+		t.Errorf("state:PAUS listed %v, want [beta]", got)
+	}
+	// purgeTime is a timestamp field; "*" tests presence, and no queue has been
+	// purged yet.
+	if got := listIDs(`purgeTime:*`); len(got) != 0 {
+		t.Errorf("purgeTime:* listed %v, want none", got)
+	}
+	// An empty filter lists everything.
+	if got := listIDs("  "); len(got) != 3 {
+		t.Errorf("empty filter listed %v, want all three queues", got)
+	}
+
+	// A filter outside the emulator's supported subset is INVALID_ARGUMENT, never
+	// silently ignored (OR/NOT and ordering comparisons are documented but not
+	// implemented — see the DC32 deferral).
+	for _, bad := range []string{`bogus="x"`, `name`, `state<RUNNING`, `name="alpha" OR name="beta"`} {
+		_, err := s.ListQueues(ctx, "p", "l", bad)
+		if err == nil {
+			t.Errorf("ListQueues(%q) accepted a filter outside the supported subset", bad)
+			continue
+		}
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+			t.Errorf("ListQueues(%q) error = %v, want 400 InvalidArgument", bad, err)
+		}
 	}
 }
 

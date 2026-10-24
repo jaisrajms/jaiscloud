@@ -59,6 +59,23 @@ func newTestProvider(t *testing.T) (*Codec, *Provider) {
 	return c, p
 }
 
+// TestRESTLookupSetsReadTime pins the LookupResponse.readTime field that real
+// Datastore returns on every lookup and the differential harness found missing.
+func TestRESTLookupSetsReadTime(t *testing.T) {
+	c, p := newTestProvider(t)
+	resp, err := call(t, c, p, "test", "lookup", map[string]any{"keys": []any{nameKey("Task", "missing")}})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	rt, _ := resp.Data["readTime"].(string)
+	if rt == "" {
+		t.Fatalf("readTime missing from lookup response: %v", resp.Data)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, rt); err != nil {
+		t.Fatalf("readTime %q is not RFC3339: %v", rt, err)
+	}
+}
+
 func upsert(t *testing.T, c *Codec, p *Provider, kind, name string, n int) {
 	t.Helper()
 	body := map[string]any{
@@ -127,6 +144,73 @@ func TestRESTCommitLookupRunQueryRoundTrip(t *testing.T) {
 	}
 	if got := batch["moreResults"]; got != "NO_MORE_RESULTS" {
 		t.Fatalf("moreResults = %v", got)
+	}
+}
+
+// TestRESTRunQueryProjection verifies the REST wire mapping of a query
+// projection: entityResultType reflects the projection and only the projected
+// property is returned.
+func TestRESTRunQueryProjection(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	// Seed an entity with two properties.
+	_, err := call(t, c, p, "test", "commit", map[string]any{
+		"mode": "NON_TRANSACTIONAL",
+		"mutations": []any{
+			map[string]any{"upsert": map[string]any{
+				"key": nameKey("Task", "a"),
+				"properties": map[string]any{
+					"n":    map[string]any{"integerValue": "1"},
+					"desc": map[string]any{"stringValue": "one"},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// A projection names only "desc".
+	q := map[string]any{
+		"query": map[string]any{
+			"kind":       []any{map[string]any{"name": "Task"}},
+			"projection": []any{map[string]any{"property": map[string]any{"name": "desc"}}},
+		},
+	}
+	rq, err := call(t, c, p, "test", "runQuery", q)
+	if err != nil {
+		t.Fatalf("runQuery: %v", err)
+	}
+	batch := rq.Data["batch"].(map[string]any)
+	if got := batch["entityResultType"]; got != "PROJECTION" {
+		t.Fatalf("entityResultType = %v, want PROJECTION", got)
+	}
+	ers, _ := batch["entityResults"].([]any)
+	if len(ers) != 1 {
+		t.Fatalf("entityResults = %v", batch["entityResults"])
+	}
+	ent := ers[0].(map[string]any)["entity"].(map[string]any)
+	props := ent["properties"].(map[string]any)
+	if _, ok := props["n"]; ok {
+		t.Fatal("projected entity must not carry the un-projected property n")
+	}
+	if _, ok := props["desc"]; !ok {
+		t.Fatal("projected entity must carry desc")
+	}
+
+	// A keys-only projection (the clients' "__key__" form) reports KEY_ONLY.
+	kc := map[string]any{
+		"query": map[string]any{
+			"kind":       []any{map[string]any{"name": "Task"}},
+			"projection": []any{map[string]any{"property": map[string]any{"name": "__key__"}}},
+		},
+	}
+	krq, err := call(t, c, p, "test", "runQuery", kc)
+	if err != nil {
+		t.Fatalf("keys-only runQuery: %v", err)
+	}
+	if got := krq.Data["batch"].(map[string]any)["entityResultType"]; got != "KEY_ONLY" {
+		t.Fatalf("keys-only entityResultType = %v, want KEY_ONLY", got)
 	}
 }
 
@@ -311,8 +395,9 @@ func TestRESTTransactionCommitAndRollback(t *testing.T) {
 }
 
 // TestRESTUpdateMissingReturnsEnvelope locks the core/adapter error contract:
-// an Update for a missing entity surfaces as FAILED_PRECONDITION with the
-// canonical HTTP 400 (never 404, which would contradict the status name).
+// an Update for a missing entity surfaces as the documented NOT_FOUND with the
+// canonical HTTP 404 (real Datastore: "the request attempted to update an
+// entity that does not exist").
 func TestRESTUpdateMissingReturnsEnvelope(t *testing.T) {
 	c, p := newTestProvider(t)
 	_, err := call(t, c, p, "test", "commit", map[string]any{
@@ -326,8 +411,8 @@ func TestRESTUpdateMissingReturnsEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("err = %v (%T), want *model.ProviderError", err, err)
 	}
-	if perr.HTTPStatus != 400 || perr.Code != "FailedPrecondition" {
-		t.Fatalf("err = %+v, want 400/FailedPrecondition", perr)
+	if perr.HTTPStatus != 404 || perr.Code != "NotFound" {
+		t.Fatalf("err = %+v, want 404/NotFound", perr)
 	}
 }
 

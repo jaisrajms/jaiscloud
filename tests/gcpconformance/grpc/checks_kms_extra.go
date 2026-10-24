@@ -73,6 +73,12 @@ func kmsExtraChecks() []Check {
 		{Service: "kms", RPC: "CreateImportJob", Method: "CreateImportJob", KeyField: "name/importMethod/state=ACTIVE/publicKey", Run: checkKMSCreateImportJob},
 		{Service: "kms", RPC: "GetImportJob", Method: "GetImportJob", KeyField: "importMethod/state", Run: checkKMSGetImportJob},
 		{Service: "kms", RPC: "ListImportJobs", Method: "ListImportJobs", KeyField: "importJobs[] contains job", Run: checkKMSListImportJobs},
+
+		// ── key import / trusted wrapping / KEM ─────────────────────────────
+		{Service: "kms", RPC: "ImportCryptoKeyVersion", Method: "ImportCryptoKeyVersion", KeyField: "state=ENABLED/importTime", Run: checkKMSImportCryptoKeyVersion},
+		{Service: "kms", RPC: "ImportTrustedKeyWrappedCryptoKeyVersion", Method: "ImportTrustedKeyWrappedCryptoKeyVersion", KeyField: "trustedWrappingEnabled", Run: checkKMSExportImportTrustedKeyWrapped},
+		{Service: "kms", RPC: "ExportTrustedKeyWrappedCryptoKeyVersion", Method: "ExportTrustedKeyWrappedCryptoKeyVersion", KeyField: "wrappedKey round-trips", Run: checkKMSExportImportTrustedKeyWrapped},
+		{Service: "kms", RPC: "Decapsulate", Method: "Decapsulate", KeyField: "shared secret matches encapsulation", Run: checkKMSDecapsulate},
 	}
 }
 

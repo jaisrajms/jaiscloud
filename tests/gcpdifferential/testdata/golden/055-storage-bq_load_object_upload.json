@@ -1,0 +1,32 @@
+{
+  "index": 55,
+  "service": "storage",
+  "op": "bq_load_object_upload",
+  "method": "POST",
+  "path": "/upload/storage/v1/b/<loadBucket>/o?uploadType=media&name=data.ndjson",
+  "status": 200,
+  "request": {
+    "id": 2
+  },
+  "response": {
+    "bucket": "<loadBucket>",
+    "contentType": "application/x-ndjson",
+    "crc32c": "<crc32c>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "id": "<loadBucket>/data.ndjson/<generation>",
+    "kind": "storage#object",
+    "md5Hash": "<md5Hash>",
+    "mediaLink": "<mediaLink>",
+    "metageneration": "<metageneration>",
+    "name": "data.ndjson",
+    "selfLink": "<selfLink>",
+    "size": "9",
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "timeFinalized": "<time>",
+    "timeStorageClassUpdated": "<time>",
+    "updated": "<time>"
+  }
+}
+

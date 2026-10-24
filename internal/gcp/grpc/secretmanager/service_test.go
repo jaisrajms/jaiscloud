@@ -24,10 +24,23 @@ import (
 // secretTestService dials a real in-process gRPC server backed by the memory
 // stores and returns the Secret Manager and IAM clients.
 func secretTestService(t *testing.T) (secretmanagerpb.SecretManagerServiceClient, iampb.IAMPolicyClient, func()) {
+	client, iam, _, cleanup := newSecretTestServer(t)
+	return client, iam, cleanup
+}
+
+// secretTestServiceWithKMS is secretTestService plus the KMS store behind the
+// envelope encryptor, so a test can create real CryptoKeys to wrap versions.
+func secretTestServiceWithKMS(t *testing.T) (secretmanagerpb.SecretManagerServiceClient, kmsstore.Store, func()) {
+	client, _, kmsStore, cleanup := newSecretTestServer(t)
+	return client, kmsStore, cleanup
+}
+
+func newSecretTestServer(t *testing.T) (secretmanagerpb.SecretManagerServiceClient, iampb.IAMPolicyClient, kmsstore.Store, func()) {
 	t.Helper()
 	secrets := secretmanagerstore.NewMemoryStore()
 	resources := store.NewMemoryResourceStore()
-	encryptor := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	kmsStore := kmsstore.NewMemoryStore()
+	encryptor := crypto.NewEnvelopeEncryptor(kmsStore)
 	svc := NewService(secrets, resources, encryptor, "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
@@ -48,7 +61,7 @@ func secretTestService(t *testing.T) (secretmanagerpb.SecretManagerServiceClient
 		conn.Close()
 		srv.Stop()
 	}
-	return secretmanagerpb.NewSecretManagerServiceClient(conn), iampb.NewIAMPolicyClient(conn), cleanup
+	return secretmanagerpb.NewSecretManagerServiceClient(conn), iampb.NewIAMPolicyClient(conn), kmsStore, cleanup
 }
 
 func TestSecretManagerEndToEnd(t *testing.T) {
@@ -430,5 +443,275 @@ func TestSecretManagerLatestAlias(t *testing.T) {
 	}
 	if ver.GetName() != secret+"/versions/2" {
 		t.Fatalf("GetSecretVersion latest name = %q, want %q", ver.GetName(), secret+"/versions/2")
+	}
+}
+
+// TestManagedRotationGRPC covers the Cloud SQL managed-rotation RPCs over the
+// wire: EnableManagedRotation records ACTIVE status + credentials and stores a
+// generated password (version 1); RotateSecret adds version 2; and the
+// preconditions (rotate-before-enable, double-enable) return FailedPrecondition.
+func TestManagedRotationGRPC(t *testing.T) {
+	client, _, cleanup := secretTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const parent = "projects/test/secrets/managed-rot"
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "managed-rot",
+		Secret: &secretmanagerpb.Secret{},
+	}); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	if _, err := client.RotateSecret(ctx, &secretmanagerpb.RotateSecretRequest{Parent: parent}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RotateSecret before enable = %v, want FailedPrecondition", err)
+	}
+
+	// Missing credentials → InvalidArgument.
+	if _, err := client.EnableManagedRotation(ctx, &secretmanagerpb.EnableManagedRotationRequest{Parent: parent}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("EnableManagedRotation without credentials = %v, want InvalidArgument", err)
+	}
+
+	creds := func() *secretmanagerpb.EnableManagedRotationRequest {
+		return &secretmanagerpb.EnableManagedRotationRequest{
+			Parent: parent,
+			Credentials: &secretmanagerpb.EnableManagedRotationRequest_CloudSqlSingleUserCredentials{
+				CloudSqlSingleUserCredentials: &secretmanagerpb.EnableManagedRotationRequest_CloudSQLSingleUserCredentials{
+					InstanceId: "inst", Username: "app",
+				},
+			},
+		}
+	}
+	enabled, err := client.EnableManagedRotation(ctx, creds())
+	if err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	if enabled.GetName() != parent+"/versions/1" {
+		t.Fatalf("EnableManagedRotation version = %q, want %q", enabled.GetName(), parent+"/versions/1")
+	}
+
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: parent})
+	if err != nil {
+		t.Fatalf("GetSecret after enable: %v", err)
+	}
+	if st := got.GetRotation().GetManagedRotationStatus().GetState(); st != secretmanagerpb.Rotation_ManagedRotationStatus_ACTIVE {
+		t.Fatalf("ManagedRotationStatus = %v, want ACTIVE", st)
+	}
+
+	if _, err := client.EnableManagedRotation(ctx, creds()); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("second EnableManagedRotation = %v, want FailedPrecondition", err)
+	}
+
+	rotated, err := client.RotateSecret(ctx, &secretmanagerpb.RotateSecretRequest{Parent: parent})
+	if err != nil {
+		t.Fatalf("RotateSecret: %v", err)
+	}
+	if rotated.GetName() != parent+"/versions/2" {
+		t.Fatalf("RotateSecret version = %q, want %q", rotated.GetName(), parent+"/versions/2")
+	}
+}
+
+// TestSecretManagerCMEKReplication covers DC31 on the gRPC surface: a Secret
+// created or updated with a customer-managed encryption key must echo that key
+// under replication.automatic.customerManagedEncryption.kmsKeyName, and a
+// secret without CMEK must omit the nested message entirely (as real GCP does),
+// so both transports render the same shape.
+func TestSecretManagerCMEKReplication(t *testing.T) {
+	client, kmsStore, cleanup := secretTestServiceWithKMS(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		name  = "projects/test/secrets/cmek-secret"
+		plain = "projects/test/secrets/plain-secret"
+	)
+	// Real GCP resolves the key when the secret is created, so the fixture must
+	// exist (DC58); the emulator used to accept the name and fail at AddVersion.
+	key1, _ := newGRPCTestKey(t, kmsStore, "test", "global", "kr", "key-one")
+	key2, _ := newGRPCTestKey(t, kmsStore, "test", "global", "kr", "key-two")
+	cme := func(key string) *secretmanagerpb.Replication {
+		return &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_Automatic_{
+				Automatic: &secretmanagerpb.Replication_Automatic{
+					CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: key},
+				},
+			},
+		}
+	}
+	assertCMEK := func(what string, sec *secretmanagerpb.Secret, want string) {
+		t.Helper()
+		if got := sec.GetReplication().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyName(); got != want {
+			t.Fatalf("%s CMEK = %q, want %q", what, got, want)
+		}
+	}
+
+	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "cmek-secret",
+		Secret: &secretmanagerpb.Secret{Replication: cme(key1)},
+	})
+	if err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	assertCMEK("CreateSecret", created, key1)
+
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	assertCMEK("GetSecret", got, key1)
+
+	listed, err := client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{Parent: "projects/test"})
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+	if len(listed.GetSecrets()) != 1 {
+		t.Fatalf("ListSecrets returned %d secrets, want 1", len(listed.GetSecrets()))
+	}
+	assertCMEK("ListSecrets", listed.GetSecrets()[0], key1)
+
+	updated, err := client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+		Secret:     &secretmanagerpb.Secret{Name: name, Replication: cme(key2)},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"replication"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSecret: %v", err)
+	}
+	assertCMEK("UpdateSecret", updated, key2)
+	got, err = client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetSecret after update: %v", err)
+	}
+	assertCMEK("GetSecret after update", got, key2)
+
+	// A secret without CMEK omits the nested message rather than sending it empty.
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "plain-secret",
+		Secret: &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_Automatic_{Automatic: &secretmanagerpb.Replication_Automatic{}},
+		}},
+	}); err != nil {
+		t.Fatalf("CreateSecret plain: %v", err)
+	}
+	plainSec, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: plain})
+	if err != nil {
+		t.Fatalf("GetSecret plain: %v", err)
+	}
+	if cme := plainSec.GetReplication().GetAutomatic().GetCustomerManagedEncryption(); cme != nil {
+		t.Fatalf("plain secret customerManagedEncryption = %v, want nil", cme)
+	}
+}
+
+// TestSecretManagerVersionCMEKStatus covers DC44 on the gRPC surface: a version
+// wrapped with a customer-managed key reports the exact CryptoKeyVersion that
+// wrapped its payload under
+// replicationStatus.automatic.customerManagedEncryption.kmsKeyVersionName. The
+// value is per-version — rotating the key's primary only affects versions added
+// afterwards — and a Google-managed secret reports an empty automatic arm.
+func TestSecretManagerVersionCMEKStatus(t *testing.T) {
+	client, kmsStore, cleanup := secretTestServiceWithKMS(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		project = "test"
+		ring    = "sm-cmek"
+		keyID   = "sm-cmek-key"
+	)
+	if err := kmsStore.CreateKeyRing(ctx, project, "global", ring, kmsstore.KeyRing{ID: ring}); err != nil {
+		t.Fatalf("create key ring: %v", err)
+	}
+	if err := kmsStore.CreateCryptoKey(ctx, project, "global", ring, keyID, kmsstore.CryptoKey{ID: keyID, Purpose: "ENCRYPT_DECRYPT"}); err != nil {
+		t.Fatalf("create crypto key: %v", err)
+	}
+	first, err := kmsStore.CreateVersion(ctx, project, "global", ring, keyID, kmsstore.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatalf("create crypto key version: %v", err)
+	}
+	if err := kmsStore.UpdatePrimaryVersion(ctx, project, "global", ring, keyID, first); err != nil {
+		t.Fatalf("set primary version: %v", err)
+	}
+	keyName := "projects/" + project + "/locations/global/keyRings/" + ring + "/cryptoKeys/" + keyID
+
+	secretName := "projects/" + project + "/secrets/version-cmek"
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/" + project, SecretId: "version-cmek",
+		Secret: &secretmanagerpb.Secret{
+			Replication: &secretmanagerpb.Replication{
+				Replication: &secretmanagerpb.Replication_Automatic_{
+					Automatic: &secretmanagerpb.Replication_Automatic{
+						CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: keyName},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	keyVersion := func(v *secretmanagerpb.SecretVersion) string {
+		return v.GetReplicationStatus().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyVersionName()
+	}
+	addVersion := func() *secretmanagerpb.SecretVersion {
+		t.Helper()
+		v, err := client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+			Parent:  secretName,
+			Payload: &secretmanagerpb.SecretPayload{Data: []byte("payload")},
+		})
+		if err != nil {
+			t.Fatalf("AddSecretVersion: %v", err)
+		}
+		return v
+	}
+
+	v1 := addVersion()
+	if got, want := keyVersion(v1), keyName+"/versions/"+first; got != want {
+		t.Fatalf("version 1 kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// Rotate the key's primary version, then add a second version.
+	second, err := kmsStore.CreateVersion(ctx, project, "global", ring, keyID, kmsstore.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatalf("create second crypto key version: %v", err)
+	}
+	if err := kmsStore.UpdatePrimaryVersion(ctx, project, "global", ring, keyID, second); err != nil {
+		t.Fatalf("rotate primary version: %v", err)
+	}
+	v2 := addVersion()
+	if got, want := keyVersion(v2), keyName+"/versions/"+second; got != want {
+		t.Fatalf("version 2 kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// The first version keeps reporting the version that actually wrapped it.
+	gotV1, err := client.GetSecretVersion(ctx, &secretmanagerpb.GetSecretVersionRequest{Name: v1.GetName()})
+	if err != nil {
+		t.Fatalf("GetSecretVersion: %v", err)
+	}
+	if got, want := keyVersion(gotV1), keyName+"/versions/"+first; got != want {
+		t.Fatalf("version 1 after rotation kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// A Google-managed secret's versions report the automatic arm without a
+	// customerManagedEncryption status.
+	plainName := "projects/" + project + "/secrets/version-plain"
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/" + project, SecretId: "version-plain",
+		Secret: &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_Automatic_{Automatic: &secretmanagerpb.Replication_Automatic{}},
+		}},
+	}); err != nil {
+		t.Fatalf("CreateSecret plain: %v", err)
+	}
+	plainVersion, err := client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+		Parent:  plainName,
+		Payload: &secretmanagerpb.SecretPayload{Data: []byte("payload")},
+	})
+	if err != nil {
+		t.Fatalf("AddSecretVersion plain: %v", err)
+	}
+	if plainVersion.GetReplicationStatus().GetAutomatic() == nil {
+		t.Fatalf("plain version replicationStatus.automatic is absent, want the automatic arm")
+	}
+	if cme := plainVersion.GetReplicationStatus().GetAutomatic().GetCustomerManagedEncryption(); cme != nil {
+		t.Fatalf("plain version customerManagedEncryption = %v, want nil", cme)
 	}
 }

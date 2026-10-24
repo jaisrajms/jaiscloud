@@ -46,6 +46,17 @@ func TestGRPCQueueLifecycle(t *testing.T) {
 	if err != nil || len(list.GetQueues()) != 1 {
 		t.Fatalf("ListQueues = %+v, %v", list, err)
 	}
+	// The list filter is the core's (DC16): "=" is equality on the full name and
+	// ":" is contains, on both transports; an unknown field is InvalidArgument.
+	if got, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `name:"` + name + `"`}); err != nil || len(got.GetQueues()) != 1 {
+		t.Fatalf("ListQueues(contains) = %+v, %v", got, err)
+	}
+	if got, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `name="q1"`}); err != nil || len(got.GetQueues()) != 0 {
+		t.Fatalf("ListQueues(bare id equality) = %+v, %v", got, err)
+	}
+	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `bogus="x"`}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListQueues(bad filter) code = %v", status.Code(err))
+	}
 	if _, err := s.UpdateQueue(ctx, &cloudtaskspb.UpdateQueueRequest{
 		Queue:      &cloudtaskspb.Queue{Name: name, RateLimits: &cloudtaskspb.RateLimits{MaxDispatchesPerSecond: 9}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"rate_limits"}},
@@ -127,5 +138,26 @@ func TestGRPCQueueIAM(t *testing.T) {
 	resp, err := s.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{Resource: q.GetName(), Permissions: []string{"cloudtasks.queues.get"}})
 	if err != nil || len(resp.GetPermissions()) != 1 {
 		t.Fatalf("TestIamPermissions = %+v, %v", resp, err)
+	}
+}
+
+// TestGRPCListNegativePageSize pins AIP-158 on the gRPC surface: a negative
+// page_size is INVALID_ARGUMENT on both list methods, and queues.list accepts
+// its documented 9800 ceiling.
+func TestGRPCListNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListQueues(page_size=-1) err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.ListTasks(ctx, &cloudtaskspb.ListTasksRequest{Parent: q.GetName(), PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListTasks(page_size=-1) err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, PageSize: core.MaxQueuesPageSize}); err != nil {
+		t.Fatalf("ListQueues(page_size=9800): %v", err)
 	}
 }

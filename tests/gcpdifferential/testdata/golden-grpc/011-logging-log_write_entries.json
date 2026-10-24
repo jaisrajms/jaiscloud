@@ -1,0 +1,27 @@
+{
+  "index": 11,
+  "service": "logging",
+  "op": "log_write_entries",
+  "method": "google.logging.v2.LoggingServiceV2/WriteLogEntries",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "entries": [
+      {
+        "logName": "projects/<project>/logs/<logName>",
+        "severity": "INFO",
+        "textPayload": "hello jaiscloud"
+      }
+    ],
+    "logName": "projects/<project>/logs/<logName>",
+    "resource": {
+      "labels": {
+        "project_id": "<project>"
+      },
+      "type": "global"
+    }
+  },
+  "response": {}
+}
+

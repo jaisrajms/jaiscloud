@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/eventing"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/model"
 )
 
 // eventsTopicLabel is the cluster label that overrides the default lifecycle
@@ -44,6 +46,17 @@ func WithEventPublisher(p EventPublisher) Option {
 // event publishing; a cluster may override it with the eventsTopicLabel label.
 func WithEventsTopic(topic string) Option {
 	return func(s *Service) { s.eventsTopic = strings.TrimSpace(topic) }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to, so Dataproc job/cluster transitions surface in the UI. Nil
+// (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.eventBus = bus
+		}
+	}
 }
 
 // SetEventDispatcher wires the Cloud Functions event-delivery engine (mirrors
@@ -113,7 +126,7 @@ func dataprocEventSource(resourceName string) string {
 // failure is logged, never returned, so a state transition can never fail
 // because of eventing.
 func (s *Service) emitJobStateChange(ctx context.Context, project, region string, j dpstore.Job, prev dpstore.JobStatus) {
-	if s.eventPublisher == nil && s.eventDispatcher == nil {
+	if s.eventPublisher == nil && s.eventDispatcher == nil && s.eventBus == nil {
 		return
 	}
 	occurred := j.Status.StateStartTime
@@ -155,7 +168,7 @@ func (s *Service) emitJobStateChange(ctx context.Context, project, region string
 // emitClusterStateChange publishes one lifecycle event for a cluster transition
 // from prev to the cluster's current state (best-effort, like the job variant).
 func (s *Service) emitClusterStateChange(ctx context.Context, project, region string, c dpstore.Cluster, prev dpstore.ClusterStatus) {
-	if s.eventPublisher == nil && s.eventDispatcher == nil {
+	if s.eventPublisher == nil && s.eventDispatcher == nil && s.eventBus == nil {
 		return
 	}
 	occurred := c.Status.StateStartTime
@@ -184,9 +197,10 @@ func (s *Service) emitClusterStateChange(ctx context.Context, project, region st
 }
 
 // emit is the shared best-effort delivery: it dispatches the transport-neutral
-// eventing.Event to the Cloud Functions engine (when wired) and publishes the
+// eventing.Event to the Cloud Functions engine (when wired), publishes the
 // structured CloudEvents JSON to the topic (when a topic is configured and the
-// publisher is wired).
+// publisher is wired), and pushes a cloud-neutral status event to the console's
+// live stream (when an event bus is wired).
 func (s *Service) emit(ctx context.Context, project, topic, resource, eventType string, data any, attrs map[string]string, occurred time.Time) {
 	occurred = occurred.UTC()
 	eventID := randomHex(32)
@@ -207,6 +221,9 @@ func (s *Service) emit(ctx context.Context, project, topic, resource, eventType 
 			OccurredAt: occurred,
 		})
 	}
+	if s.eventBus != nil {
+		s.publishStatus(resource, eventType, attrs)
+	}
 	if s.eventPublisher == nil || topic == "" {
 		return
 	}
@@ -226,6 +243,35 @@ func (s *Service) emit(ctx context.Context, project, topic, resource, eventType 
 	if _, err := s.eventPublisher.PublishEvent(ctx, project, topic, body, attrs); err != nil {
 		slog.Warn("dataproc: publish lifecycle event failed", "resource", resource, "topic", topic, "err", err)
 	}
+}
+
+// publishStatus pushes a Dataproc state transition onto the shared event bus
+// for the console's live stream. Keys scope the invalidation to the GCP tree
+// and the Dataproc service; Dataproc has no dedicated console page yet (UI13),
+// so the broad key is intentional. Best-effort, like the other delivery paths.
+func (s *Service) publishStatus(resource, eventType string, attrs map[string]string) {
+	label := "gcp-dataproc"
+	switch eventType {
+	case eventing.TypeDataprocJobStateChange:
+		label = "gcp-dataproc-job"
+	case eventing.TypeDataprocClusterStateChange:
+		label = "gcp-dataproc-cluster"
+	}
+	id := attrs["jobId"]
+	if id == "" {
+		id = attrs["clusterName"]
+	}
+	s.eventBus.Publish(events.Event{
+		Type: events.EventStatus,
+		Payload: events.StatusEvent{
+			Cloud:    model.CloudGCP,
+			Keys:     []string{"gcp", "dataproc"},
+			Resource: label,
+			ID:       id,
+			State:    attrs["state"],
+			Detail:   strings.TrimPrefix(resource, "projects/"),
+		},
+	})
 }
 
 // jobEventsTopic resolves the topic a job's events publish to: the label

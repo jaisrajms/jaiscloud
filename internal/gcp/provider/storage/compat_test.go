@@ -362,7 +362,8 @@ func TestObjectsCopyReturnsObject(t *testing.T) {
 }
 
 // TestMediaHeadersXMLEtag verifies the XML API ETag (quoted lowercase hex MD5)
-// versus the JSON API constant etag, including the no-MD5 fallback.
+// versus the JSON API derived etag, including the no-MD5 and no-identity
+// fallbacks.
 func TestMediaHeadersXMLEtag(t *testing.T) {
 	m := gcsObjectMetaWithMD5("hello")
 	xml := mediaHeaders(m, true)
@@ -372,6 +373,8 @@ func TestMediaHeadersXMLEtag(t *testing.T) {
 	if xml["ETag"] != `"`+md5HexFromB64(t, m.MD5Hash)+`"` {
 		t.Errorf("XML ETag = %q, want quoted hex of %q", xml["ETag"], m.MD5Hash)
 	}
+	// The fixture carries no generation, so the JSON etag is the identity-less
+	// fallback.
 	if got := mediaHeaders(m, false)["ETag"]; got != "CAE=" {
 		t.Errorf("JSON ETag = %q, want CAE=", got)
 	}
@@ -432,7 +435,8 @@ func TestObjectsInsertXMLAPIHeaders(t *testing.T) {
 }
 
 // TestObjectsGetMediaXMLEtag verifies raw XML media downloads carry the quoted
-// hex-MD5 ETag while JSON/download-path media reads keep the constant etag.
+// hex-MD5 ETag while JSON/download-path media reads keep the object's
+// generation/metageneration etag.
 func TestObjectsGetMediaXMLEtag(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
@@ -454,7 +458,8 @@ func TestObjectsGetMediaXMLEtag(t *testing.T) {
 		t.Fatalf("json media: %v", err)
 	}
 	jsonHdr, _ := jsonMedia.Data[wire.HeadersKey].(map[string]string)
-	if jsonHdr == nil || jsonHdr["ETag"] != "CAE=" {
-		t.Fatalf("expected constant JSON ETag, got %v", jsonHdr)
+	want := ObjectEtag(jsonHdr["x-goog-generation"], jsonHdr["x-goog-metageneration"])
+	if jsonHdr == nil || jsonHdr["ETag"] != want {
+		t.Fatalf("JSON ETag = %v, want %q", jsonHdr, want)
 	}
 }

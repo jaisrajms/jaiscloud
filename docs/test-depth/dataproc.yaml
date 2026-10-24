@@ -1,0 +1,27 @@
+# Behavioural depth record - dataproc (TD6).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for. The suite targets the
+# emulator's mock executor (the CI shape); the real-K8s restart/streaming leg
+# stays a local `test-e2e-*` gate (STR3).
+service: dataproc
+classes:
+  p2:
+    state: present
+    suites: [sdk-dataproc]
+    note: "8-way same-jobId submit race (exactly one winner, losers 409) plus parallel distinct submits and concurrent get/cancel churn on one cluster, asserted from a -race test client; every job ends in one terminal state and no listing duplicates a record"
+  p3:
+    state: present
+    suites: [sdk-dataproc]
+    note: "fail-loud unsupported (pigJob/hiveJob/hadoopJob) and malformed sparkJob land on ERROR with a details message, unknown cluster/job 404, duplicate jobId/cluster 409, delete-active-job FAILED_PRECONDITION, both-config-and-virtualClusterConfig 400, invalid filter/jobStateMatcher/pageSize 400, out-of-range scheduling 400"
+  p4:
+    state: present
+    suites: [sdk-dataproc]
+    note: "listJobs by pageSize/pageToken with cross-page stability composed with clusterName, jobStateMatcher and the labels/status.state filter grammar (filter overrides the matcher), and listClusters paging composed with the status.state/clusterName/labels filters"
+  p5:
+    state: present
+    suites: [sdk-dataproc]
+    note: "a streaming pysparkJob stays RUNNING across repeated reads until cancelled, a submitAsOperation LRO tracks the non-terminal job and closes on cancellation with the CANCELLED job as its response, scheduling counters round-trip, and a 12-job listing walks every page"

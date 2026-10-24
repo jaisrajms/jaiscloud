@@ -21,6 +21,11 @@
 //     carries the minimum of the live cursors — resuming from there can replay a
 //     duplicate delta but never skip one. Real Firestore pairs each resume token
 //     with its own target_ids, which a single "all targets" token cannot express.
+//   - Exactly-once delivery per target. A live change whose sequence is at or
+//     below the target's delivered cursor is dropped, so a write that races the
+//     snapshot/replay is not delivered twice. The stream-wide NO_CHANGE token
+//     above remains the one place a duplicate can surface: resuming from the
+//     min-of-cursors token may replay a delta another target already observed.
 //   - Read position. A resume token is a position in the write feed, not a
 //     query-range read position: an incremental resume replays matching deltas
 //     only and does not re-stream the pre-existing result set, so a client must
@@ -35,6 +40,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 
 	"google.golang.org/genproto/googleapis/type/latlng"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -42,53 +48,11 @@ import (
 
 // ─── Value ────────────────────────────────────────────────────────────────────
 
-// decodeValue converts a protobuf Value into the internal store Value.
+// decodeValue converts a protobuf Value into the internal store Value. The one
+// implementation lives in the provider package (shared with the REST
+// ExecutePipeline engine); this delegates so both transports map it identically.
 func decodeValue(pb *firestorepb.Value) (*firestorestore.Value, error) {
-	if pb == nil {
-		return nil, nil
-	}
-	switch tv := pb.ValueType.(type) {
-	case *firestorepb.Value_NullValue:
-		return firestorestore.NullVal(), nil
-	case *firestorepb.Value_BooleanValue:
-		return firestorestore.BoolVal(tv.BooleanValue), nil
-	case *firestorepb.Value_IntegerValue:
-		return firestorestore.IntVal(tv.IntegerValue), nil
-	case *firestorepb.Value_DoubleValue:
-		return firestorestore.DoubleVal(tv.DoubleValue), nil
-	case *firestorepb.Value_TimestampValue:
-		return firestorestore.TimestampVal(tv.TimestampValue.AsTime()), nil
-	case *firestorepb.Value_StringValue:
-		return firestorestore.StringVal(tv.StringValue), nil
-	case *firestorepb.Value_BytesValue:
-		return firestorestore.BytesVal(tv.BytesValue), nil
-	case *firestorepb.Value_ReferenceValue:
-		return firestorestore.ReferenceVal(tv.ReferenceValue), nil
-	case *firestorepb.Value_GeoPointValue:
-		return firestorestore.GeoPointVal(tv.GeoPointValue.GetLatitude(), tv.GeoPointValue.GetLongitude()), nil
-	case *firestorepb.Value_ArrayValue:
-		vals := make([]*firestorestore.Value, 0, len(tv.ArrayValue.GetValues()))
-		for _, e := range tv.ArrayValue.GetValues() {
-			v, err := decodeValue(e)
-			if err != nil {
-				return nil, err
-			}
-			vals = append(vals, v)
-		}
-		return firestorestore.ArrayVal(vals...), nil
-	case *firestorepb.Value_MapValue:
-		fields := make(map[string]*firestorestore.Value, len(tv.MapValue.GetFields()))
-		for k, e := range tv.MapValue.GetFields() {
-			v, err := decodeValue(e)
-			if err != nil {
-				return nil, err
-			}
-			fields[k] = v
-		}
-		return firestorestore.MapVal(fields), nil
-	default:
-		return nil, fmt.Errorf("unsupported Firestore value type %T", pb.ValueType)
-	}
+	return firestoreprovider.ValueFromProto(pb)
 }
 
 // encodeValue converts an internal store Value into a protobuf Value.
@@ -136,20 +100,10 @@ func encodeValue(v *firestorestore.Value) *firestorepb.Value {
 
 // ─── Document ─────────────────────────────────────────────────────────────────
 
-// decodeFields converts a protobuf Document's field map into internal Values.
+// decodeFields converts a protobuf Document's field map into internal Values,
+// delegating to the shared provider decoder.
 func decodeFields(pb *firestorepb.Document) (map[string]*firestorestore.Value, error) {
-	if pb == nil {
-		return map[string]*firestorestore.Value{}, nil
-	}
-	fields := make(map[string]*firestorestore.Value, len(pb.GetFields()))
-	for k, v := range pb.GetFields() {
-		fv, err := decodeValue(v)
-		if err != nil {
-			return nil, err
-		}
-		fields[k] = fv
-	}
-	return fields, nil
+	return firestoreprovider.FieldsFromProto(pb)
 }
 
 // encodeDocument converts an internal store Document into a protobuf Document.
@@ -162,10 +116,10 @@ func encodeDocument(d firestorestore.Document) *firestorepb.Document {
 		}
 	}
 	if !d.CreateTime.IsZero() {
-		doc.CreateTime = timestamppb.New(d.CreateTime)
+		doc.CreateTime = timestamp.Proto(d.CreateTime)
 	}
 	if !d.UpdateTime.IsZero() {
-		doc.UpdateTime = timestamppb.New(d.UpdateTime)
+		doc.UpdateTime = timestamp.Proto(d.UpdateTime)
 	}
 	return doc
 }
@@ -381,19 +335,10 @@ func decodeFieldTransform(pb *firestorepb.DocumentTransform_FieldTransform) (fir
 	return t, nil
 }
 
+// decodeArrayValue converts a protobuf ArrayValue into the internal store
+// ArrayValue, delegating to the shared provider decoder.
 func decodeArrayValue(pb *firestorepb.ArrayValue) (*firestorestore.ArrayValue, error) {
-	av := &firestorestore.ArrayValue{}
-	if pb == nil {
-		return av, nil
-	}
-	for _, v := range pb.GetValues() {
-		dv, err := decodeValue(v)
-		if err != nil {
-			return nil, err
-		}
-		av.Values = append(av.Values, dv)
-	}
-	return av, nil
+	return firestoreprovider.ArrayValueFromProto(pb)
 }
 
 func decodePrecondition(pb *firestorepb.Precondition) (*firestoreprovider.PreconditionWire, error) {

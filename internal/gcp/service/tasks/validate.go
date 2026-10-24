@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/aip160"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
 )
 
@@ -95,17 +96,23 @@ func applyQueueUpdate(cur, upd tasksstore.Queue, set map[string]bool, full bool)
 	return next
 }
 
-// matchQueueFilter applies a Cloud Tasks list filter of the form
-// `name="<substring>"` or a bare substring. Empty filters are handled by the
-// caller.
-func matchQueueFilter(filter string, q tasksstore.Queue) bool {
-	f := strings.TrimSpace(filter)
-	if i := strings.IndexByte(f, '='); i >= 0 {
-		f = strings.TrimSpace(f[i+1:])
-	}
-	f = strings.Trim(f, `"`)
-	if f == "" {
-		return true
-	}
-	return strings.Contains(q.Name, f)
+// queueFilter compiles a Cloud Tasks `projects.locations.queues.list` filter.
+// The Discovery document defers to Stackdriver's Advanced Logs Filters syntax —
+// `=` is equality on the field value, `:` is the contains operator — and allows
+// any Queue field. The emulator implements the scalar Queue fields it renders
+// (name, state and purgeTime) with the shared bounded AIP-160 compiler; a filter
+// outside that subset (an unknown field, OR/NOT, parentheses, ordering
+// comparisons or a nested message field) is INVALID_ARGUMENT rather than
+// silently ignored. An empty filter matches every queue.
+func queueFilter(project, location, filter string) (aip160.Filter[tasksstore.Queue], error) {
+	return aip160.Compile("tasks queues.list", filter, aip160.Fields[tasksstore.Queue]{
+		Desc: "name, state and purgeTime",
+		Name: func(q tasksstore.Queue) string { return QueueName(project, location, q.Name) },
+		Strings: map[string]func(tasksstore.Queue) string{
+			"state": func(q tasksstore.Queue) string { return string(q.State) },
+		},
+		Times: map[string]func(tasksstore.Queue) time.Time{
+			"purgetime": func(q tasksstore.Queue) time.Time { return q.PurgeTime },
+		},
+	})
 }

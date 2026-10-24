@@ -367,7 +367,7 @@ func TestNotificationMetadataUpdateEvent(t *testing.T) {
 func TestNotificationFinalizeOnRestore(t *testing.T) {
 	ctx := context.Background()
 	p, fp := newNotifProvider()
-	createVersionedBucket(t, p, "restore-notif")
+	createSoftDeleteBucket(t, p, "restore-notif")
 	addNotification(t, p, "restore-notif", map[string]any{
 		"topic":       "projects/proj/topics/events",
 		"event_types": []any{"OBJECT_FINALIZE"},

@@ -363,7 +363,10 @@ func TestListTimeSeriesAggregation(t *testing.T) {
 	ctx := context.Background()
 
 	metricType := "custom.googleapis.com/agg_test_metric"
-	end := time.Now().UTC().Truncate(time.Second)
+	// Anchor well inside a 1-hour alignment bucket (the previous hour at :45) so
+	// the points and the query interval always fall in one window regardless of
+	// when the test runs — a wall-clock boundary otherwise splits them.
+	end := time.Now().UTC().Truncate(time.Hour).Add(-15 * time.Minute)
 	write := func(env string, v float64, at time.Time) *monitoringpb.TimeSeries {
 		return &monitoringpb.TimeSeries{
 			Metric:   &metricpb.Metric{Type: metricType, Labels: map[string]string{"env": env}},
@@ -578,14 +581,26 @@ func TestUpdateAlertPolicyUpdateMask(t *testing.T) {
 		t.Fatalf("combiner after masked update = %v, want AND (preserved)", updated.GetCombiner())
 	}
 
-	// An unsupported mask path is rejected with Unimplemented.
+	// A mask path that names no field is a client error (InvalidArgument),
+	// not an unimplemented operation (AIP-134/AIP-161).
 	if _, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"bogus_field"}},
 		AlertPolicy: &monitoringpb.AlertPolicy{
 			Name: created.GetName(),
 		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown mask path err = %v, want InvalidArgument", err)
+	}
+
+	// A real-but-unimplemented field stays Unimplemented: alertStrategy is a
+	// field of AlertPolicy the emulator does not store.
+	if _, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"alert_strategy"}},
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			Name: created.GetName(),
+		},
 	}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("unsupported mask path err = %v, want Unimplemented", err)
+		t.Fatalf("alert_strategy mask err = %v, want Unimplemented", err)
 	}
 }
 
@@ -1063,5 +1078,44 @@ func TestDistributionTimeSeriesRoundTrip(t *testing.T) {
 		if !proto.Equal(got, wantDist) {
 			t.Fatalf("%s: distribution = %+v, want %+v", typ, got, wantDist)
 		}
+	}
+}
+
+// TestListTimeSeriesFolderScope proves the folders arm resolves the scope in the
+// shared core (the same series store as the projects arm) instead of silently
+// falling back to the default project, and that writes stay project-scoped.
+func TestListTimeSeriesFolderScope(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	metricType := "custom.googleapis.com/folder_scope_metric"
+	point := &monitoringpb.TimeSeries{
+		Metric:   &metricpb.Metric{Type: metricType},
+		Resource: &monitoredrespb.MonitoredResource{Type: "global"},
+		Points: []*monitoringpb.Point{{
+			Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(time.Now().UTC().Add(-time.Minute))},
+			Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_Int64Value{Int64Value: 1}},
+		}},
+	}
+	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "projects/test", TimeSeries: []*monitoringpb.TimeSeries{point},
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries: %v", err)
+	}
+	resp, err := mc.ListTimeSeries(ctx, &monitoringpb.ListTimeSeriesRequest{
+		Name:   "folders/123",
+		Filter: `metric.type = "` + metricType + `"`,
+	})
+	if err != nil {
+		t.Fatalf("ListTimeSeries(folders): %v", err)
+	}
+	if len(resp.GetTimeSeries()) != 1 {
+		t.Fatalf("folders arm returned %d series, want the project's series", len(resp.GetTimeSeries()))
+	}
+	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "folders/123", TimeSeries: []*monitoringpb.TimeSeries{point},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("folder-scoped write err = %v, want InvalidArgument", err)
 	}
 }

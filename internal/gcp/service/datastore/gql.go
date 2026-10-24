@@ -360,14 +360,19 @@ func (p *gqlParser) parseQuery() (*Query, error) {
 	if err := p.expectKeyword("SELECT"); err != nil {
 		return nil, err
 	}
+	var projection []string
 	if !p.accept(tokStar) {
-		if _, err := p.expectIdent("a projection property or *"); err != nil {
+		ident, err := p.expectIdent("a projection property or *")
+		if err != nil {
 			return nil, err
 		}
+		projection = append(projection, ident)
 		for p.accept(tokComma) {
-			if _, err := p.expectIdent("a projection property"); err != nil {
+			ident, err := p.expectIdent("a projection property")
+			if err != nil {
 				return nil, err
 			}
+			projection = append(projection, ident)
 		}
 	}
 	if err := p.expectKeyword("FROM"); err != nil {
@@ -378,6 +383,9 @@ func (p *gqlParser) parseQuery() (*Query, error) {
 		return nil, err
 	}
 	q := &Query{Kind: kind}
+	if projection != nil {
+		q.Projection = &Projection{Properties: projection}
+	}
 
 	if p.acceptKeyword("WHERE") {
 		f, err := p.parseExpr()
@@ -696,7 +704,7 @@ func parseGQLDatetime(s string) (string, error) {
 		"2006-01-02",
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC().Format(time.RFC3339Nano), nil
+			return CanonicalTimestamp(t), nil
 		}
 	}
 	return "", fmt.Errorf("expected an RFC 3339 timestamp")

@@ -263,7 +263,7 @@ func TestSubmitJob_InjectsMetastoreConfs(t *testing.T) {
 	var jobName string
 	var args []string
 	require.Eventually(t, func() bool {
-		jobs, err := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
+		jobs, err := client.BatchV1().Jobs("dataproc").List(ctx, metav1.ListOptions{})
 		if err != nil || len(jobs.Items) == 0 {
 			return false
 		}
@@ -320,7 +320,7 @@ func TestSubmitJob_CallerMetastoreConfWins(t *testing.T) {
 	var jobName string
 	var args []string
 	require.Eventually(t, func() bool {
-		jobs, err := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
+		jobs, err := client.BatchV1().Jobs("dataproc").List(ctx, metav1.ListOptions{})
 		if err != nil || len(jobs.Items) == 0 {
 			return false
 		}

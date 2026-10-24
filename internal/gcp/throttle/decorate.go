@@ -36,10 +36,14 @@ func DecorateError(perr *model.ProviderError, status int, headers http.Header, b
 	if !ok {
 		return status, headers, body
 	}
-	errObj["details"] = []any{map[string]any{
+	// Preserve any details already present (e.g. a google.rpc.ErrorInfo the
+	// codec rendered from ProviderError.Details) and append the RetryInfo.
+	details, _ := errObj["details"].([]any)
+	details = append(details, map[string]any{
 		"@type":      retryInfoType,
 		"retryDelay": formatProtoDuration(perr.RetryAfter),
-	}}
+	})
+	errObj["details"] = details
 	out, err := json.Marshal(env)
 	if err != nil {
 		return status, headers, body

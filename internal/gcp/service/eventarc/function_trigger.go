@@ -18,7 +18,7 @@ import (
 // for a Cloud Functions Pub/Sub event trigger (real GCP materializes one
 // Eventarc trigger per Pub/Sub-triggered function and sets the function's
 // output-only eventTrigger.trigger to it).
-func FunctionTriggerName(functionID string) string { return "functions-" + functionID }
+func FunctionTriggerName(functionID string) string { return eventing.FunctionTriggerID(functionID) }
 
 // EnsureFunctionTrigger materializes (or updates) the backing Eventarc trigger
 // for a function's event trigger and provisions its transport Pub/Sub
@@ -133,21 +133,9 @@ func (s *Service) EnsureFunctionTrigger(ctx context.Context, spec eventing.Funct
 // directly and never evaluates them).
 func storageEventFilters(resource, eventType string) []any {
 	return []any{
-		map[string]any{"attribute": "type", "value": storageFilterType(eventing.NormalizeEventType(eventType))},
+		map[string]any{"attribute": "type", "value": eventing.StorageCloudEventType(eventType)},
 		map[string]any{"attribute": "bucket", "value": eventing.ResourceID(resource)},
 	}
-}
-
-// storageFilterType maps a normalized storage event type onto its Eventarc
-// CloudEvent spelling.
-func storageFilterType(normalized string) string {
-	switch normalized {
-	case eventing.TypeStorageFinalize:
-		return "google.cloud.storage.object.v1.finalized"
-	case eventing.TypeStorageDelete:
-		return "google.cloud.storage.object.v1.deleted"
-	}
-	return normalized
 }
 
 // DeleteFunctionTrigger removes a function's backing Eventarc trigger, its

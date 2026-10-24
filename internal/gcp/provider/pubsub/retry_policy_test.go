@@ -119,6 +119,39 @@ func TestSubscriptionCreateRejectsBadRetryPolicy(t *testing.T) {
 	}
 }
 
+// TestSubscriptionCreateNullRetryPolicy covers the hashicorp/google provider
+// shape: a JSON null for an absent nested block means "unset" and must be
+// accepted (real GCP treats null as unset), unlike a non-null non-object.
+func TestSubscriptionCreateNullRetryPolicy(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	mustTopic(t, p, "src")
+
+	// The provider emits an explicit null for every absent nested block.
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/null-sub",
+		"body": map[string]any{
+			"topic":            "projects/proj/topics/src",
+			"retryPolicy":      nil,
+			"deadLetterPolicy": nil,
+			"expirationPolicy": nil,
+		},
+	})); err != nil {
+		t.Fatalf("create with retryPolicy:null: %v", err)
+	}
+	if rp := retryPolicyOf(t, p, "null-sub"); rp != nil {
+		t.Fatalf("retryPolicy = %v, want unset", rp)
+	}
+
+	// An array is still a type error (not a message).
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/arr-sub",
+		"body": map[string]any{"topic": "projects/proj/topics/src", "retryPolicy": []any{}},
+	})); err == nil {
+		t.Fatal("expected InvalidArgument for an array retryPolicy")
+	}
+}
+
 // retryPolicyOf reads a subscription's persisted retryPolicy (nil when unset).
 func retryPolicyOf(t *testing.T, p *Provider, sub string) map[string]any {
 	t.Helper()

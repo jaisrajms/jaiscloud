@@ -1,19 +1,26 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 337,
-  "passed": 337,
+  "total": 487,
+  "passed": 487,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 23,
-    "checks": 337,
-    "passed": 337,
+    "services": 25,
+    "checks": 487,
+    "passed": 487,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
   },
   "services": [
+    {
+      "service": "container",
+      "total": 30,
+      "passed": 30,
+      "failed": 0,
+      "unimplemented": 0
+    },
     {
       "service": "dataproc",
       "total": 26,
@@ -30,8 +37,8 @@
     },
     {
       "service": "eventarc",
-      "total": 12,
-      "passed": 12,
+      "total": 39,
+      "passed": 39,
       "failed": 0,
       "unimplemented": 0
     },
@@ -44,8 +51,8 @@
     },
     {
       "service": "firestoreadmin",
-      "total": 4,
-      "passed": 4,
+      "total": 27,
+      "passed": 27,
       "failed": 0,
       "unimplemented": 0
     },
@@ -58,8 +65,8 @@
     },
     {
       "service": "iam",
-      "total": 6,
-      "passed": 6,
+      "total": 12,
+      "passed": 12,
       "failed": 0,
       "unimplemented": 0
     },
@@ -72,15 +79,15 @@
     },
     {
       "service": "kms",
-      "total": 31,
-      "passed": 31,
+      "total": 35,
+      "passed": 35,
       "failed": 0,
       "unimplemented": 0
     },
     {
       "service": "logging",
-      "total": 21,
-      "passed": 21,
+      "total": 42,
+      "passed": 42,
       "failed": 0,
       "unimplemented": 0
     },
@@ -93,8 +100,8 @@
     },
     {
       "service": "metastore",
-      "total": 13,
-      "passed": 13,
+      "total": 18,
+      "passed": 18,
       "failed": 0,
       "unimplemented": 0
     },
@@ -107,8 +114,8 @@
     },
     {
       "service": "operations",
-      "total": 5,
-      "passed": 5,
+      "total": 10,
+      "passed": 10,
       "failed": 0,
       "unimplemented": 0
     },
@@ -121,8 +128,15 @@
     },
     {
       "service": "resourcemanager",
-      "total": 4,
-      "passed": 4,
+      "total": 11,
+      "passed": 11,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "run",
+      "total": 15,
+      "passed": 15,
       "failed": 0,
       "unimplemented": 0
     },
@@ -135,15 +149,15 @@
     },
     {
       "service": "secretmanager",
-      "total": 16,
-      "passed": 16,
+      "total": 21,
+      "passed": 21,
       "failed": 0,
       "unimplemented": 0
     },
     {
       "service": "serviceusage",
-      "total": 5,
-      "passed": 5,
+      "total": 6,
+      "passed": 6,
       "failed": 0,
       "unimplemented": 0
     },
@@ -170,8 +184,8 @@
     },
     {
       "service": "workflows",
-      "total": 5,
-      "passed": 5,
+      "total": 6,
+      "passed": 6,
       "failed": 0,
       "unimplemented": 0
     }
@@ -563,6 +577,34 @@
       "key_field": "importJobs[] contains job"
     },
     {
+      "service": "kms",
+      "rpc": "ImportCryptoKeyVersion",
+      "method": "ImportCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "state=ENABLED/importTime"
+    },
+    {
+      "service": "kms",
+      "rpc": "ImportTrustedKeyWrappedCryptoKeyVersion",
+      "method": "ImportTrustedKeyWrappedCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "trustedWrappingEnabled"
+    },
+    {
+      "service": "kms",
+      "rpc": "ExportTrustedKeyWrappedCryptoKeyVersion",
+      "method": "ExportTrustedKeyWrappedCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "wrappedKey round-trips"
+    },
+    {
+      "service": "kms",
+      "rpc": "Decapsulate",
+      "method": "Decapsulate",
+      "status": "pass",
+      "key_field": "shared secret matches encapsulation"
+    },
+    {
       "service": "secretmanager",
       "rpc": "CreateSecret",
       "method": "CreateSecret",
@@ -575,6 +617,27 @@
       "method": "GetSecret",
       "status": "pass",
       "key_field": "name"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "GetSecret",
+      "method": "GetSecret",
+      "status": "pass",
+      "key_field": "replication.automatic.customerManagedEncryption.kmsKeyName"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "GetSecret",
+      "method": "GetSecret",
+      "status": "pass",
+      "key_field": "replication.userManaged.replicas[].location"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "AddSecretVersion",
+      "method": "AddSecretVersion",
+      "status": "pass",
+      "key_field": "replicationStatus.automatic.customerManagedEncryption.kmsKeyVersionName"
     },
     {
       "service": "secretmanager",
@@ -673,6 +736,20 @@
       "method": "DeleteSecret",
       "status": "pass",
       "key_field": "fixture secret absent after delete"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "EnableManagedRotation",
+      "method": "EnableManagedRotation",
+      "status": "pass",
+      "key_field": "new ENABLED version + managed_rotation_status ACTIVE"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "RotateSecret",
+      "method": "RotateSecret",
+      "status": "pass",
+      "key_field": "second ENABLED version created"
     },
     {
       "service": "pubsub",
@@ -889,7 +966,7 @@
       "rpc": "UpdateDocument (update_mask)",
       "method": "UpdateDocument",
       "status": "pass",
-      "key_field": "masked field updated, unmasked preserved"
+      "key_field": "masked field updated, unmasked preserved, empty mask no-op, mask=response projection"
     },
     {
       "service": "firestore",
@@ -938,7 +1015,7 @@
       "rpc": "BatchWrite",
       "method": "BatchWrite",
       "status": "pass",
-      "key_field": "write_results[] + OK statuses"
+      "key_field": "write_results[] + OK statuses + empty-mask no-op"
     },
     {
       "service": "firestore",
@@ -1002,6 +1079,167 @@
       "method": "DeleteIndex",
       "status": "pass",
       "key_field": "index absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateDatabase",
+      "method": "CreateDatabase",
+      "status": "pass",
+      "key_field": "operation done=true; database name; edition-default concurrency_mode; earliest_version_time about now-1h"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetDatabase",
+      "method": "GetDatabase",
+      "status": "pass",
+      "key_field": "database name/uid/timestamps/etag + (default) materialized with stable output fields"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListDatabases",
+      "method": "ListDatabases",
+      "status": "pass",
+      "key_field": "created database present + (default) with output fields"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "UpdateDatabase",
+      "method": "UpdateDatabase",
+      "status": "pass",
+      "key_field": "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteDatabase",
+      "method": "DeleteDatabase",
+      "status": "pass",
+      "key_field": "stale etag -\u003e FailedPrecondition; delete protection -\u003e FailedPrecondition; operation response carries database; absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "UpdateField",
+      "method": "UpdateField",
+      "status": "pass",
+      "key_field": "operation done=true; index_config under mask with OUTPUT_ONLY members derived + index_config/ttl_config under an omitted mask + empty mask is a no-op"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetField",
+      "method": "GetField",
+      "status": "pass",
+      "key_field": "index_config round-trip with derived ancestor/uses_ancestor_config + ttl state ACTIVE"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListFields",
+      "method": "ListFields",
+      "status": "pass",
+      "key_field": "field present under wildcard group"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateUserCreds",
+      "method": "CreateUserCreds",
+      "status": "pass",
+      "key_field": "secure_password returned once"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetUserCreds",
+      "method": "GetUserCreds",
+      "status": "pass",
+      "key_field": "name; no secure_password"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListUserCreds",
+      "method": "ListUserCreds",
+      "status": "pass",
+      "key_field": "user creds present"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DisableUserCreds",
+      "method": "DisableUserCreds",
+      "status": "pass",
+      "key_field": "state DISABLED"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "EnableUserCreds",
+      "method": "EnableUserCreds",
+      "status": "pass",
+      "key_field": "state ENABLED"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ResetUserPassword",
+      "method": "ResetUserPassword",
+      "status": "pass",
+      "key_field": "new secure_password"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteUserCreds",
+      "method": "DeleteUserCreds",
+      "status": "pass",
+      "key_field": "user creds absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateBackupSchedule",
+      "method": "CreateBackupSchedule",
+      "status": "pass",
+      "key_field": "schedule name/retention"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetBackupSchedule",
+      "method": "GetBackupSchedule",
+      "status": "pass",
+      "key_field": "retention round-trip"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListBackupSchedules",
+      "method": "ListBackupSchedules",
+      "status": "pass",
+      "key_field": "schedule present"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "UpdateBackupSchedule",
+      "method": "UpdateBackupSchedule",
+      "status": "pass",
+      "key_field": "retention under mask + retention/recurrence under an omitted mask + empty mask is a no-op"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteBackupSchedule",
+      "method": "DeleteBackupSchedule",
+      "status": "pass",
+      "key_field": "schedule absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListBackups",
+      "method": "ListBackups",
+      "status": "pass",
+      "key_field": "empty list (no create path)"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetBackup",
+      "method": "GetBackup",
+      "status": "pass",
+      "key_field": "missing backup -\u003e NotFound"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteBackup",
+      "method": "DeleteBackup",
+      "status": "pass",
+      "key_field": "missing backup -\u003e NotFound"
     },
     {
       "service": "datastore",
@@ -1256,6 +1494,153 @@
       "key_field": "metric absent from ListLogMetrics after delete"
     },
     {
+      "service": "logging",
+      "rpc": "CreateBucket",
+      "method": "CreateBucket",
+      "status": "pass",
+      "key_field": "bucket name/retentionDays/lifecycleState"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetBucket",
+      "method": "GetBucket",
+      "status": "pass",
+      "key_field": "bucket by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListBuckets",
+      "method": "ListBuckets",
+      "status": "pass",
+      "key_field": "buckets[] contains the created bucket"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateBucket",
+      "method": "UpdateBucket",
+      "status": "pass",
+      "key_field": "masked description update preserves retention"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateBucketAsync",
+      "method": "CreateBucketAsync",
+      "status": "pass",
+      "key_field": "operation completes with the created bucket"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateBucketAsync",
+      "method": "UpdateBucketAsync",
+      "status": "pass",
+      "key_field": "operation completes with the updated bucket"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteBucket",
+      "method": "DeleteBucket",
+      "status": "pass",
+      "key_field": "lifecycleState becomes DELETE_REQUESTED"
+    },
+    {
+      "service": "logging",
+      "rpc": "UndeleteBucket",
+      "method": "UndeleteBucket",
+      "status": "pass",
+      "key_field": "lifecycleState returns to ACTIVE"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateView",
+      "method": "CreateView",
+      "status": "pass",
+      "key_field": "view name/filter round-trip"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetView",
+      "method": "GetView",
+      "status": "pass",
+      "key_field": "view by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListViews",
+      "method": "ListViews",
+      "status": "pass",
+      "key_field": "views[] contains the created view"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateView",
+      "method": "UpdateView",
+      "status": "pass",
+      "key_field": "masked description update"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteView",
+      "method": "DeleteView",
+      "status": "pass",
+      "key_field": "view absent after delete"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateLink",
+      "method": "CreateLink",
+      "status": "pass",
+      "key_field": "operation completes with the created link"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetLink",
+      "method": "GetLink",
+      "status": "pass",
+      "key_field": "link by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListLinks",
+      "method": "ListLinks",
+      "status": "pass",
+      "key_field": "links[] contains the created link"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteLink",
+      "method": "DeleteLink",
+      "status": "pass",
+      "key_field": "operation completes and the link is gone"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetSettings",
+      "method": "GetSettings",
+      "status": "pass",
+      "key_field": "settings with a service account id"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateSettings",
+      "method": "UpdateSettings",
+      "status": "pass",
+      "key_field": "masked storageLocation update"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetCmekSettings",
+      "method": "GetCmekSettings",
+      "status": "pass",
+      "key_field": "cmek settings with a service account id"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateCmekSettings",
+      "method": "UpdateCmekSettings",
+      "status": "pass",
+      "key_field": "masked kmsKeyName update"
+    },
+    {
       "service": "operations",
       "rpc": "GetOperation",
       "method": "GetOperation",
@@ -1289,6 +1674,41 @@
       "method": "WaitOperation",
       "status": "pass",
       "key_field": "name round-trips with done=true"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (metastore endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (managedkafka endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (run endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (cloudfunctions endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (workflows endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List+Delete, sibling isolated"
     },
     {
       "service": "monitoring",
@@ -1592,6 +2012,13 @@
       "key_field": "LRO done + subsequent get NotFound"
     },
     {
+      "service": "workflows",
+      "rpc": "ListWorkflowRevisions",
+      "method": "ListWorkflowRevisions",
+      "status": "pass",
+      "key_field": "one revision on create, second on source update (newest first)"
+    },
+    {
       "service": "serviceusage",
       "rpc": "EnableService",
       "method": "EnableService",
@@ -1611,6 +2038,13 @@
       "method": "ListServices",
       "status": "pass",
       "key_field": "enabled service present"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "BatchGetServices",
+      "method": "BatchGetServices",
+      "status": "pass",
+      "key_field": "enabled + absent states, order preserved"
     },
     {
       "service": "serviceusage",
@@ -1796,10 +2230,59 @@
     },
     {
       "service": "resourcemanager",
+      "rpc": "CreateProject",
+      "method": "CreateProject",
+      "status": "pass",
+      "key_field": "operation done, project ACTIVE"
+    },
+    {
+      "service": "resourcemanager",
       "rpc": "GetProject",
       "method": "GetProject",
       "status": "pass",
       "key_field": "name/projectId/state ACTIVE round-trip"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "ListProjects",
+      "method": "ListProjects",
+      "status": "pass",
+      "key_field": "created project listed"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "SearchProjects",
+      "method": "SearchProjects",
+      "status": "pass",
+      "key_field": "query matches created project"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "UpdateProject",
+      "method": "UpdateProject",
+      "status": "pass",
+      "key_field": "display_name/labels updated"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "MoveProject",
+      "method": "MoveProject",
+      "status": "pass",
+      "key_field": "parent reparented"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "DeleteProject",
+      "method": "DeleteProject",
+      "status": "pass",
+      "key_field": "state DELETE_REQUESTED"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "UndeleteProject",
+      "method": "UndeleteProject",
+      "status": "pass",
+      "key_field": "state ACTIVE restored"
     },
     {
       "service": "resourcemanager",
@@ -2061,6 +2544,62 @@
       "key_field": "LRO done + NotFound after"
     },
     {
+      "service": "metastore",
+      "rpc": "CreateFederation",
+      "method": "CreateFederation",
+      "status": "pass",
+      "key_field": "LRO done + ACTIVE federation"
+    },
+    {
+      "service": "metastore",
+      "rpc": "GetFederation",
+      "method": "GetFederation",
+      "status": "pass",
+      "key_field": "name/state round-trip"
+    },
+    {
+      "service": "metastore",
+      "rpc": "ListFederations",
+      "method": "ListFederations",
+      "status": "pass",
+      "key_field": "created federation present"
+    },
+    {
+      "service": "metastore",
+      "rpc": "UpdateFederation",
+      "method": "UpdateFederation",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "metastore",
+      "rpc": "DeleteFederation",
+      "method": "DeleteFederation",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy (metastore)",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "metastore resource policy present, empty by default"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy (metastore)",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "metastore role+member binding round-trips"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions (metastore)",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back for a metastore resource"
+    },
+    {
       "service": "eventarc",
       "rpc": "CreateTrigger",
       "method": "CreateTrigger",
@@ -2161,6 +2700,216 @@
     {
       "service": "iam",
       "rpc": "TestIamPermissions (Eventarc trigger)",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateMessageBus",
+      "method": "CreateMessageBus",
+      "status": "pass",
+      "key_field": "LRO done + message bus echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetMessageBus",
+      "method": "GetMessageBus",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListMessageBuses",
+      "method": "ListMessageBuses",
+      "status": "pass",
+      "key_field": "created bus present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateMessageBus",
+      "method": "UpdateMessageBus",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteMessageBus",
+      "method": "DeleteMessageBus",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListMessageBusEnrollments",
+      "method": "ListMessageBusEnrollments",
+      "status": "pass",
+      "key_field": "enrollment name listed"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateEnrollment",
+      "method": "CreateEnrollment",
+      "status": "pass",
+      "key_field": "LRO done + enrollment echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetEnrollment",
+      "method": "GetEnrollment",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListEnrollments",
+      "method": "ListEnrollments",
+      "status": "pass",
+      "key_field": "created enrollment present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateEnrollment",
+      "method": "UpdateEnrollment",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteEnrollment",
+      "method": "DeleteEnrollment",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreatePipeline",
+      "method": "CreatePipeline",
+      "status": "pass",
+      "key_field": "LRO done + pipeline echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetPipeline",
+      "method": "GetPipeline",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListPipelines",
+      "method": "ListPipelines",
+      "status": "pass",
+      "key_field": "created pipeline present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdatePipeline",
+      "method": "UpdatePipeline",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeletePipeline",
+      "method": "DeletePipeline",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateGoogleApiSource",
+      "method": "CreateGoogleApiSource",
+      "status": "pass",
+      "key_field": "LRO done + source echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetGoogleApiSource",
+      "method": "GetGoogleApiSource",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListGoogleApiSources",
+      "method": "ListGoogleApiSources",
+      "status": "pass",
+      "key_field": "created source present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateGoogleApiSource",
+      "method": "UpdateGoogleApiSource",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteGoogleApiSource",
+      "method": "DeleteGoogleApiSource",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateChannelConnection",
+      "method": "CreateChannelConnection",
+      "status": "pass",
+      "key_field": "LRO done + connection echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetChannelConnection",
+      "method": "GetChannelConnection",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListChannelConnections",
+      "method": "ListChannelConnections",
+      "status": "pass",
+      "key_field": "created connection present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteChannelConnection",
+      "method": "DeleteChannelConnection",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetGoogleChannelConfig",
+      "method": "GetGoogleChannelConfig",
+      "status": "pass",
+      "key_field": "singleton name"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateGoogleChannelConfig",
+      "method": "UpdateGoogleChannelConfig",
+      "status": "pass",
+      "key_field": "cryptoKeyName round-trip"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy (Eventarc message bus)",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "empty policy on a fresh bus"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy (Eventarc message bus)",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trips through the router"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions (Eventarc message bus)",
       "method": "TestIamPermissions",
       "status": "pass",
       "key_field": "requested permissions echoed back"
@@ -2348,6 +3097,321 @@
       "key_field": "stored template + parameters run to DONE"
     },
     {
+      "service": "container",
+      "rpc": "CreateCluster",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "CREATE_CLUSTER operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "GetCluster",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "name/status/currentMasterVersion round-trip"
+    },
+    {
+      "service": "container",
+      "rpc": "GetCluster (legacy project/zone)",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "legacy project_id/zone/cluster_id addressing"
+    },
+    {
+      "service": "container",
+      "rpc": "ListClusters",
+      "method": "ListClusters",
+      "status": "pass",
+      "key_field": "created cluster present"
+    },
+    {
+      "service": "container",
+      "rpc": "GetOperation",
+      "method": "GetOperation",
+      "status": "pass",
+      "key_field": "operation name/type round-trip"
+    },
+    {
+      "service": "container",
+      "rpc": "ListOperations",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "created operation present"
+    },
+    {
+      "service": "container",
+      "rpc": "DeleteCluster",
+      "method": "DeleteCluster",
+      "status": "pass",
+      "key_field": "DELETE_CLUSTER DONE + NotFound after"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateNodePool",
+      "method": "CreateNodePool",
+      "status": "pass",
+      "key_field": "CREATE_NODE_POOL operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "GetNodePool",
+      "method": "GetNodePool",
+      "status": "pass",
+      "key_field": "node pool name/status round-trip"
+    },
+    {
+      "service": "container",
+      "rpc": "ListNodePools",
+      "method": "ListNodePools",
+      "status": "pass",
+      "key_field": "created node pool present"
+    },
+    {
+      "service": "container",
+      "rpc": "DeleteNodePool",
+      "method": "DeleteNodePool",
+      "status": "pass",
+      "key_field": "DELETE_NODE_POOL DONE + NotFound after"
+    },
+    {
+      "service": "container",
+      "rpc": "UpdateNodePool",
+      "method": "UpdateNodePool",
+      "status": "pass",
+      "key_field": "UPGRADE_NODES DONE + version applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNodePoolAutoscaling",
+      "method": "SetNodePoolAutoscaling",
+      "status": "pass",
+      "key_field": "operation DONE + autoscaling applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNodePoolManagement",
+      "method": "SetNodePoolManagement",
+      "status": "pass",
+      "key_field": "SET_NODE_POOL_MANAGEMENT DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNodePoolSize",
+      "method": "SetNodePoolSize",
+      "status": "pass",
+      "key_field": "SET_NODE_POOL_SIZE DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "RollbackNodePoolUpgrade",
+      "method": "RollbackNodePoolUpgrade",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetAddonsConfig",
+      "method": "SetAddonsConfig",
+      "status": "pass",
+      "key_field": "operation DONE + addons applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLegacyAbac",
+      "method": "SetLegacyAbac",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLocations",
+      "method": "SetLocations",
+      "status": "pass",
+      "key_field": "operation DONE + locations applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLoggingService",
+      "method": "SetLoggingService",
+      "status": "pass",
+      "key_field": "operation DONE + logging applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetMonitoringService",
+      "method": "SetMonitoringService",
+      "status": "pass",
+      "key_field": "operation DONE + monitoring applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNetworkPolicy",
+      "method": "SetNetworkPolicy",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetMaintenancePolicy",
+      "method": "SetMaintenancePolicy",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetMasterAuth",
+      "method": "SetMasterAuth",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLabels",
+      "method": "SetLabels",
+      "status": "pass",
+      "key_field": "operation DONE + labels applied"
+    },
+    {
+      "service": "container",
+      "rpc": "UpdateCluster",
+      "method": "UpdateCluster",
+      "status": "pass",
+      "key_field": "UPDATE_CLUSTER DONE + field applied"
+    },
+    {
+      "service": "container",
+      "rpc": "UpdateMaster",
+      "method": "UpdateMaster",
+      "status": "pass",
+      "key_field": "UPGRADE_MASTER DONE + version applied"
+    },
+    {
+      "service": "container",
+      "rpc": "StartIPRotation",
+      "method": "StartIPRotation",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "CompleteIPRotation",
+      "method": "CompleteIPRotation",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "CancelOperation",
+      "method": "CancelOperation",
+      "status": "pass",
+      "key_field": "cancel of an existing operation succeeds"
+    },
+    {
+      "service": "run",
+      "rpc": "CreateService",
+      "method": "CreateService",
+      "status": "pass",
+      "key_field": "done operation response = Service (Ready/uri/latestReadyRevision)"
+    },
+    {
+      "service": "run",
+      "rpc": "GetService",
+      "method": "GetService",
+      "status": "pass",
+      "key_field": "name/uri round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "ListServices",
+      "method": "ListServices",
+      "status": "pass",
+      "key_field": "created service present"
+    },
+    {
+      "service": "run",
+      "rpc": "UpdateService",
+      "method": "UpdateService",
+      "status": "pass",
+      "key_field": "template change mints the next revision"
+    },
+    {
+      "service": "run",
+      "rpc": "GetRevision",
+      "method": "GetRevision",
+      "status": "pass",
+      "key_field": "service + containers[0].image round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "ListRevisions",
+      "method": "ListRevisions",
+      "status": "pass",
+      "key_field": "first revision present"
+    },
+    {
+      "service": "run",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "policy round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteRevision (retired)",
+      "method": "DeleteRevision",
+      "status": "pass",
+      "key_field": "retired revision deleted; NotFound after"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteRevision (serving)",
+      "method": "DeleteRevision",
+      "status": "pass",
+      "key_field": "serving revision rejected FailedPrecondition"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteService",
+      "method": "DeleteService",
+      "status": "pass",
+      "key_field": "done operation; NotFound after"
+    },
+    {
+      "service": "run",
+      "rpc": "CreateService (validateOnly)",
+      "method": "CreateService",
+      "status": "pass",
+      "key_field": "dry-run previews; not persisted"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteService (etag)",
+      "method": "DeleteService",
+      "status": "pass",
+      "key_field": "stale etag rejected Aborted"
+    },
+    {
+      "service": "run",
+      "rpc": "UpdateService (allowMissing)",
+      "method": "UpdateService",
+      "status": "pass",
+      "key_field": "upserts missing service"
+    },
+    {
       "service": "functions",
       "rpc": "CreateFunction (v1)",
       "method": "CreateFunction",
@@ -2513,7 +3577,7 @@
       "rpc": "GenerateAccessToken",
       "method": "GenerateAccessToken",
       "status": "pass",
-      "key_field": "accessToken carries the emulator prefix; expireTime is in the future"
+      "key_field": "accessToken is a non-empty opaque token; expireTime is in the future"
     },
     {
       "service": "iamcredentials",

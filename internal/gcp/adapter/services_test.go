@@ -27,6 +27,17 @@ func TestDetectServiceDatastoreVerbs(t *testing.T) {
 	}
 }
 
+// TestDetectServiceResourceManagerCollection locks the REST collection route:
+// GET/POST /v1/projects resolve to "resourcemanager" (projects.list/create).
+func TestDetectServiceResourceManagerCollection(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		r, _ := http.NewRequest(method, "/v1/projects", nil)
+		if svc, _ := DetectService(r); svc != "resourcemanager" {
+			t.Errorf("%s /v1/projects detected as %q, want resourcemanager", method, svc)
+		}
+	}
+}
+
 // TestDetectServiceLoggingAndFunctionsV2 locks the /v2/ namespace split: Cloud
 // Logging's entries/logs/descriptors paths resolve to "logging", while Cloud
 // Functions v2's project-location paths still resolve to "functions".
@@ -46,6 +57,19 @@ func TestDetectServiceLoggingAndFunctionsV2(t *testing.T) {
 		{http.MethodGet, "/v2/projects/p/metrics/nginx%2Frequests"},
 		{http.MethodPut, "/v2/organizations/12/metrics/m"},
 		{http.MethodDelete, "/v2/folders/9/metrics/a/b"},
+		// Admin v2: buckets/views/links/logScopes and settings/cmekSettings must
+		// not fall through to Cloud Functions' project-location namespace.
+		{http.MethodGet, "/v2/projects/p/locations/global/buckets"},
+		{http.MethodPost, "/v2/projects/p/locations/global/buckets"},
+		{http.MethodPost, "/v2/projects/p/locations/global/buckets:createAsync"},
+		{http.MethodGet, "/v2/projects/p/locations/global/buckets/b1"},
+		{http.MethodGet, "/v2/organizations/12/locations/global/buckets/b1/views"},
+		{http.MethodGet, "/v2/folders/9/locations/global/buckets/b1/links/l1"},
+		{http.MethodGet, "/v2/billingAccounts/b/locations/global/logScopes"},
+		{http.MethodGet, "/v2/projects/p/settings"},
+		{http.MethodPatch, "/v2/projects/p/settings"},
+		{http.MethodGet, "/v2/projects/p/locations/global/settings"},
+		{http.MethodGet, "/v2/projects/p/cmekSettings"},
 	}
 	for _, tc := range loggingPaths {
 		r, _ := http.NewRequest(tc.method, tc.path, nil)

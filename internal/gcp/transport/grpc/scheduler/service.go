@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/paging"
 	core "jaiscloud/internal/gcp/service/scheduler"
 	"jaiscloud/internal/model"
 )
@@ -53,9 +54,9 @@ func (s *Service) ListJobs(ctx context.Context, req *schedulerpb.ListJobsRequest
 	if err != nil {
 		return nil, mapError(err)
 	}
-	pageSize := int(req.GetPageSize())
-	if pageSize <= 0 || pageSize > 500 {
-		pageSize = 500
+	pageSize, err := paging.Size(int(req.GetPageSize()), core.MaxPageSize)
+	if err != nil {
+		return nil, mapError(err)
 	}
 	offset := 0
 	if t := req.GetPageToken(); t != "" {

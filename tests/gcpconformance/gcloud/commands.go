@@ -44,8 +44,9 @@ type Command struct {
 const ConformanceText = "jaiscloud gcloud conformance"
 
 // WorkflowSource is a minimal, valid workflow definition accepted by the
-// emulator's workflows provider.
-const WorkflowSource = "main:\n  steps:\n  - return: ok\n"
+// emulator's workflows provider. The step body must be a mapping (a bare
+// `- return: ok` shorthand is not a valid definition and create rejects it).
+const WorkflowSource = "main:\n  steps:\n  - done:\n      return: ok\n"
 
 // fixtures are the per-run values baked into the command table. Resource names
 // are suffixed with a run-unique ID so the suite is safe to run against a
@@ -75,6 +76,7 @@ func commands(f fixtures) []Command {
 	dataset := f.sid + "_ds"
 	cluster := f.sid + "-dp"
 	fn := f.sid + "-fn"
+	fsDB := f.sid + "-db"
 
 	return []Command{
 		// ── Cloud Storage ────────────────────────────────────────────────────
@@ -357,6 +359,30 @@ func commands(f fixtures) []Command {
 			Name: "dataproc clusters list (after create)", Service: "dataproc",
 			Args:   []string{"dataproc", "clusters", "list", "--region=us-central1", "--format=json"},
 			Assert: contains(cluster), Expect: ExpectPass,
+		},
+
+		// ── Firestore databases ──────────────────────────────────────────────
+		// The Admin control plane over REST (firestore.googleapis.com/v1); the
+		// create round-trips a LongRunningOperation and db is described/deleted.
+		{
+			Name: "firestore databases list", Service: "firestore",
+			Args:   []string{"firestore", "databases", "list", "--format=json"},
+			Assert: jsonArray, Expect: ExpectPass,
+		},
+		{
+			Name: "firestore databases create", Service: "firestore",
+			Args:   []string{"firestore", "databases", "create", "--database=" + fsDB, "--location=nam5", "--format=json"},
+			Assert: jsonObject, Expect: ExpectPass,
+		},
+		{
+			Name: "firestore databases describe", Service: "firestore",
+			Args:   []string{"firestore", "databases", "describe", "--database=" + fsDB, "--format=json"},
+			Assert: jsonObject, Expect: ExpectPass,
+		},
+		{
+			Name: "firestore databases delete", Service: "firestore",
+			Args:   []string{"firestore", "databases", "delete", "--database=" + fsDB, "--quiet"},
+			Expect: ExpectPass,
 		},
 	}
 }

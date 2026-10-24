@@ -1,0 +1,16 @@
+{
+  "index": 16,
+  "service": "pubsub",
+  "op": "tour_pubsub_topic_create",
+  "method": "google.pubsub.v1.Publisher/CreateTopic",
+  "path": "projects/<project>/topics/<topic>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/topics/<topic>"
+  },
+  "response": {
+    "name": "projects/<project>/topics/<topic>"
+  }
+}
+

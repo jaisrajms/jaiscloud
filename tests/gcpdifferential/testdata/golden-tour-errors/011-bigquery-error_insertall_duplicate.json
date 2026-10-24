@@ -1,0 +1,23 @@
+{
+  "index": 11,
+  "service": "bigquery",
+  "op": "error_insertall_duplicate",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables/<table>/insertAll",
+  "status": 200,
+  "request": {
+    "rows": [
+      {
+        "insertId": "idem-1",
+        "json": {
+          "id": "1",
+          "name": "a"
+        }
+      }
+    ]
+  },
+  "response": {
+    "kind": "bigquery#tableDataInsertAllResponse"
+  }
+}
+

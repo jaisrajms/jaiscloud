@@ -9,11 +9,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	core "jaiscloud/internal/gcp/service/managedkafka"
 	mkstore "jaiscloud/internal/gcp/store/managedkafka"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (which
@@ -23,10 +23,14 @@ var protojsonOpts = protojson.UnmarshalOptions{DiscardUnknown: true}
 // clusterToProto renders a stored cluster as the proto Cluster.
 //
 // It cannot populate bootstrapAddress: the pinned
-// cloud.google.com/go/managedkafka proto does not define
-// Cluster.bootstrap_address, so a gRPC caller does not see the field the REST
-// transport renders in core.ClusterJSON. That is an upstream-proto gap, not a
-// state divergence — both transports share the same core.
+// cloud.google.com/go/managedkafka proto (v1.1.0; v1.2.0, the latest tagged
+// release, is field-identical, and googleapis / google-cloud-go main matches)
+// does not define Cluster.bootstrap_address, so a gRPC caller does not see the
+// field the REST transport renders in core.ClusterJSON. Tracked as J55 /
+// AUD3-11 and closed as "no fix": it is an upstream-proto gap, not a state
+// divergence — both transports share the same core.
+// TestPinnedProtoLacksBootstrapAddress is the canary that fires when a
+// published proto gains the field.
 func clusterToProto(c mkstore.Cluster, project string) *managedkafkapb.Cluster {
 	out := &managedkafkapb.Cluster{}
 	if len(c.Config) > 0 {
@@ -35,8 +39,8 @@ func clusterToProto(c mkstore.Cluster, project string) *managedkafkapb.Cluster {
 	out.Name = core.ClusterName(project, c.Location, c.Name)
 	out.State = managedkafkapb.Cluster_ACTIVE
 	out.Labels = c.Labels
-	out.CreateTime = timestamppb.New(c.CreateTime)
-	out.UpdateTime = timestamppb.New(c.UpdateTime)
+	out.CreateTime = timestamp.Proto(c.CreateTime)
+	out.UpdateTime = timestamp.Proto(c.UpdateTime)
 	return out
 }
 
@@ -124,13 +128,13 @@ func consumerGroupInputFromProto(g *managedkafkapb.ConsumerGroup) core.ConsumerG
 // exactly.
 func operationToProto(op mkstore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
 	meta := &managedkafkapb.OperationMetadata{
-		CreateTime: timestamppb.New(op.CreateTime),
+		CreateTime: timestamp.Proto(op.CreateTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
 	}
 	if op.Done {
-		meta.EndTime = timestamppb.New(op.EndTime)
+		meta.EndTime = timestamp.Proto(op.EndTime)
 	}
 	metadata, err := anypb.New(meta)
 	if err != nil {

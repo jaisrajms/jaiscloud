@@ -1,0 +1,16 @@
+{
+  "index": 105,
+  "service": "dataproc",
+  "op": "dataproc_cluster_get_missing",
+  "method": "GET",
+  "path": "/v1/projects/<project>/regions/us-central1/clusters/<dataprocCluster>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "Not found: Cluster projects/<project>/regions/us-central1/clusters/<dataprocCluster>",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

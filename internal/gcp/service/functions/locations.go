@@ -48,13 +48,16 @@ func LocationJSON(project, location string) map[string]any {
 
 // ListLocations returns the synthesized function region set, honoring
 // pageSize/pageToken via the shared paging helper.
-func (s *Service) ListLocations(project string, pageSize int, pageToken string) ([]map[string]any, string) {
+func (s *Service) ListLocations(project string, pageSize int, pageToken string) ([]map[string]any, string, error) {
 	locations := make([]map[string]any, 0, len(functionRegions))
 	for _, r := range functionRegions {
 		locations = append(locations, LocationJSON(project, r))
 	}
-	page, next := paging.Page(locations, func(m map[string]any) string { return m["locationId"].(string) }, pageParams(pageSize, pageToken))
-	return page, next
+	page, next, err := paging.Page(locations, func(m map[string]any) string { return m["locationId"].(string) }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
+	return page, next, nil
 }
 
 // GetLocation returns a synthesized google.cloud.location.Location for a region.

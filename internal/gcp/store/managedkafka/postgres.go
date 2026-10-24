@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -93,6 +94,12 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, location s
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	return storeutil.RetrySerializable(ctx, func() (Cluster, error) {
+		return s.updateClusterAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateClusterAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Cluster{}, err
@@ -176,6 +183,28 @@ func (s *PostgresStore) ListClusters(ctx context.Context, projectID, location st
 	return result, rows.Err()
 }
 
+// ListClustersByProject returns every cluster in a project across all
+// locations, ordered by location then name.
+func (s *PostgresStore) ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, cluster_name, config, labels, create_time, update_time
+		FROM jc_mk_clusters WHERE project_id=$1 ORDER BY location, cluster_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Cluster
+	for rows.Next() {
+		c, err := scanCluster(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
 // --- Topics ---
 
 func (s *PostgresStore) CreateTopic(ctx context.Context, projectID, location, clusterName string, t Topic) error {
@@ -243,6 +272,12 @@ func (s *PostgresStore) UpdateTopic(ctx context.Context, projectID, location, cl
 // silently overwrite this call's write. See store/firestore/postgres.go's
 // Commit for the same convention.
 func (s *PostgresStore) UpdateTopicAtomic(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error) {
+	return storeutil.RetrySerializable(ctx, func() (Topic, error) {
+		return s.updateTopicAtomicOnce(ctx, projectID, location, clusterName, topicName, mutate)
+	})
+}
+
+func (s *PostgresStore) updateTopicAtomicOnce(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Topic{}, err
@@ -313,6 +348,28 @@ func (s *PostgresStore) ListTopics(ctx context.Context, projectID, location, clu
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, rows.Err()
+}
+
+// ListTopicsByProject returns every topic in a project across all locations
+// and clusters, ordered by location, cluster, then name.
+func (s *PostgresStore) ListTopicsByProject(ctx context.Context, projectID string) ([]Topic, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, cluster_name, topic_name, partition_count, replication_factor, config, create_time, update_time
+		FROM jc_mk_topics WHERE project_id=$1 ORDER BY location, cluster_name, topic_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Topic
+	for rows.Next() {
+		t, err := scanTopic(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
 	return result, rows.Err()
 }
 
@@ -432,6 +489,12 @@ func (s *PostgresStore) UpdateAcl(ctx context.Context, projectID, location, clus
 }
 
 func (s *PostgresStore) UpdateAclAtomic(ctx context.Context, projectID, location, clusterName, name string, mutate func(Acl) (Acl, error)) (Acl, error) {
+	return storeutil.RetrySerializable(ctx, func() (Acl, error) {
+		return s.updateAclAtomicOnce(ctx, projectID, location, clusterName, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateAclAtomicOnce(ctx context.Context, projectID, location, clusterName, name string, mutate func(Acl) (Acl, error)) (Acl, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Acl{}, err

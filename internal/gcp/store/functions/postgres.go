@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -141,6 +142,14 @@ func (s *PostgresStore) UpdateFunction(ctx context.Context, projectID, location,
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateFunctionAtomic(ctx context.Context, projectID, location, id string, mutate func(Function) (Function, error)) (Function, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Function, error) {
+		return s.updateFunctionAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateFunctionAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Function) (Function, error)) (Function, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Function{}, err
@@ -359,6 +368,28 @@ func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location 
 		SELECT operation_id, location, done, verb, target, function, create_time, end_time
 		FROM jc_functions_operations WHERE project_id=$1 AND location=$2 ORDER BY operation_id
 	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, op)
+	}
+	return result, rows.Err()
+}
+
+// ListOperationsAllLocations returns every operation for projectID across all
+// locations, ordered by id.
+func (s *PostgresStore) ListOperationsAllLocations(ctx context.Context, projectID string) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT operation_id, location, done, verb, target, function, create_time, end_time
+		FROM jc_functions_operations WHERE project_id=$1 ORDER BY operation_id
+	`, projectID)
 	if err != nil {
 		return nil, err
 	}

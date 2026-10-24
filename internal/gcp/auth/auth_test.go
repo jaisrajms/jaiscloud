@@ -358,8 +358,8 @@ func TestServeTokenExchange(t *testing.T) {
 			t.Fatalf("%s: expected 200, got %d: %s", path, rec.Code, rec.Body.String())
 		}
 		resp := decodeSTSResponse(t, rec)
-		if !strings.HasPrefix(resp.AccessToken, downscope.TokenPrefix) {
-			t.Errorf("%s: access_token %q does not carry the downscoped prefix", path, resp.AccessToken)
+		if _, downscoped := downscope.RulesFromAuthorization("Bearer " + resp.AccessToken); !downscoped {
+			t.Errorf("%s: access_token %q is not a downscoped credential", path, resp.AccessToken)
 		}
 		if resp.IssuedTokenType != TokenTypeAccessToken {
 			t.Errorf("issued_token_type = %q", resp.IssuedTokenType)
@@ -465,13 +465,9 @@ func TestServeTokenExchangeErrors(t *testing.T) {
 func TestMintDownscopedTokenIsWellFormed(t *testing.T) {
 	rules := []downscope.Rule{{Bucket: "bkt", ObjectPrefix: "allowed/", Permissions: []string{downscope.PermissionObjectViewer}}}
 	token := MintDownscopedToken("sa@example.com", "proj", rules)
-	if !strings.HasPrefix(token, downscope.TokenPrefix) {
-		t.Fatalf("token %q lacks the downscoped prefix", token)
-	}
-	rest := strings.TrimPrefix(token, downscope.TokenPrefix)
-	parts := strings.Split(rest, ".")
+	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
+		t.Fatalf("expected an opaque 3-part JWT, got %q", token)
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {

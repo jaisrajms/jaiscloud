@@ -24,22 +24,41 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/store"
 )
 
 // Service is the transport-neutral Cloud Logging service over the shared store.
 type Service struct {
 	store       loggingstore.Store
+	resources   store.ResourceStore
 	defaultProj string
+}
+
+// Option configures the logging core.
+type Option func(*Service)
+
+// WithResources supplies the store.ResourceStore that backs the log-view IAM
+// policy surface (getIamPolicy / setIamPolicy / testIamPermissions). Without
+// it the entry/sink/metric/bucket planes work unchanged and only view IAM is
+// unavailable.
+func WithResources(s store.ResourceStore) Option {
+	return func(svc *Service) { svc.resources = s }
 }
 
 // NewService returns a Logging core backed by the shared store. defaultProj is
 // the config-default project; transports use it when a request carries no
 // project/scope.
-func NewService(store loggingstore.Store, defaultProj string) *Service {
-	return &Service{store: store, defaultProj: defaultProj}
+func NewService(store loggingstore.Store, defaultProj string, opts ...Option) *Service {
+	svc := &Service{store: store, defaultProj: defaultProj}
+	for _, o := range opts {
+		o(svc)
+	}
+	return svc
 }
 
 // ─── write path ───────────────────────────────────────────────────────────────
@@ -76,8 +95,21 @@ func (s *Service) WriteEntries(ctx context.Context, req *WriteRequest) error {
 				}
 			}
 		}
+		// Output-only fields real Cloud Logging assigns: a server-generated
+		// insertId when the client omitted one, and the receive time. Both are
+		// stamped once at write so every later ListLogEntries returns the same
+		// values; when the client omitted timestamp, the default is this same
+		// receive instant (Cloud Logging sets timestamp to the receive time
+		// when it is omitted).
+		now := clock.Now()
 		if e.Timestamp.IsZero() {
-			e.Timestamp = clock.Now()
+			e.Timestamp = now
+		}
+		if e.InsertID == "" {
+			e.InsertID = newInsertID()
+		}
+		if e.ReceiveTimestamp.IsZero() {
+			e.ReceiveTimestamp = now
 		}
 		scope, logID, err := ParseLogName(e.LogName)
 		if err != nil {
@@ -106,6 +138,12 @@ func (s *Service) WriteEntries(ctx context.Context, req *WriteRequest) error {
 	}
 	return nil
 }
+
+// newInsertID returns a unique insert_id for an entry that omitted one, matching
+// Cloud Logging's documented behavior ("If the insert_id is omitted when writing
+// a log entry, the Logging API assigns its own unique identifier in this
+// field"). The value is opaque to clients and used only for ordering/dedup.
+func newInsertID() string { return uuid.NewString() }
 
 // ─── read path ────────────────────────────────────────────────────────────────
 
@@ -183,8 +221,17 @@ func (s *Service) ListLogs(ctx context.Context, parent, defaultScope string, pag
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(names, func(n string) string { return n },
+	// logs.list's Discovery document says non-positive page sizes are ignored
+	// (a documented exception to AIP-158), so a negative size takes the default
+	// rather than raising InvalidArgument.
+	if pageSize < 0 {
+		pageSize = 0
+	}
+	page, next, err := paging.Page(names, func(n string) string { return n },
 		map[string]any{"pageSize": pageSize, "pageToken": pageToken})
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -250,5 +297,11 @@ func ValidateOrderBy(orderBy string) error {
 }
 
 func paginateEntries(entries []loggingstore.LogEntry, pageSize int, token string) ([]loggingstore.LogEntry, string, error) {
-	return paginateConfig(entries, pageSize, token)
+	// entries.list is the documented exception: "If the value is negative or
+	// exceeds 1000, the request is rejected."
+	if pageSize < 0 || pageSize > 1000 {
+		return nil, "", invalidArgument("page_size must be between 0 and 1000")
+	}
+	page, next := paginateConfig(entries, pageSize, token)
+	return page, next, nil
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 )
 
 // grpcReport is the subset of the gRPC conformance report
@@ -64,7 +65,8 @@ type grpcCoverage struct {
 	passed int
 	failed int
 	total  int
-	label  string // human RPC label of the last matching result, for findings
+	label  string   // human RPC label of the last matching result, for findings
+	labels []string // distinct human RPC labels covering the method, sorted
 }
 
 // coverage returns the aggregated conformance results for (service, method).
@@ -74,17 +76,28 @@ func (r *grpcReport) coverage(service, method string) grpcCoverage {
 	if r == nil {
 		return cov
 	}
+	labels := map[string]bool{}
 	for _, res := range r.Results {
 		if res.Service != service || res.methodName() != method {
 			continue
 		}
 		cov.total++
 		cov.label = res.RPC
+		if res.RPC != "" {
+			labels[res.RPC] = true
+		}
 		if res.Status == "pass" {
 			cov.passed++
 		} else {
 			cov.failed++
 		}
+	}
+	if len(labels) > 0 {
+		cov.labels = make([]string, 0, len(labels))
+		for l := range labels {
+			cov.labels = append(cov.labels, l)
+		}
+		sort.Strings(cov.labels)
 	}
 	return cov
 }

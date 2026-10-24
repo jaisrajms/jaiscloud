@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -105,6 +106,28 @@ func (s *MemoryStore) ListQueues(_ context.Context, projectID, location string) 
 		result = append(result, q)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func (s *MemoryStore) ListQueuesByProject(_ context.Context, projectID string) ([]Queue, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Queue
+	for key, byName := range s.queues {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, q := range byName {
+			result = append(result, q)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
 	return result, nil
 }
 

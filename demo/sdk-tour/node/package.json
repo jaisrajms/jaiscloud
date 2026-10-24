@@ -1,0 +1,21 @@
+{
+  "name": "jaiscloud-demo-sdk-tour-node",
+  "version": "1.0.0",
+  "private": true,
+  "description": "jaiscloud-gcp SDK tour - Node leg (official @google-cloud clients)",
+  "main": "sdk_tour.js",
+  "scripts": {
+    "start": "node sdk_tour.js"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^9.2.0",
+    "@google-cloud/dataproc": "^7.1.1",
+    "@google-cloud/firestore": "^9.3.1",
+    "@google-cloud/kms": "^6.2.1",
+    "@google-cloud/logging": "^12.2.0",
+    "@google-cloud/pubsub": "^6.2.0",
+    "@google-cloud/secret-manager": "^7.1.1",
+    "@google-cloud/storage": "^8.4.0",
+    "@grpc/grpc-js": "^1.14.6"
+  }
+}

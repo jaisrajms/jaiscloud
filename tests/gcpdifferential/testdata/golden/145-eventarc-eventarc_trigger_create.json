@@ -1,0 +1,41 @@
+{
+  "index": 145,
+  "service": "eventarc",
+  "op": "eventarc_trigger_create",
+  "method": "POST",
+  "path": "/v1/projects/<project>/locations/us-central1/triggers?triggerId=<trigger>",
+  "status": 200,
+  "request": {
+    "destination": {
+      "cloudRun": {
+        "region": "us-central1",
+        "service": "<runService>"
+      }
+    },
+    "eventFilters": [
+      {
+        "attribute": "type",
+        "value": "google.cloud.storage.object.v1.finalized"
+      },
+      {
+        "attribute": "bucket",
+        "value": "<eventBucket>"
+      }
+    ],
+    "name": "projects/<project>/locations/us-central1/triggers/<trigger>",
+    "serviceAccount": "<serviceAccount>"
+  },
+  "response": {
+    "done": false,
+    "metadata": {
+      "@type": "type.googleapis.com/google.cloud.eventarc.v1.OperationMetadata",
+      "apiVersion": "v1",
+      "createTime": "<time>",
+      "requestedCancellation": false,
+      "target": "projects/<project>/locations/us-central1/triggers/<trigger>",
+      "verb": "create"
+    },
+    "name": "projects/<project>/locations/us-central1/operations/<operation>"
+  }
+}
+

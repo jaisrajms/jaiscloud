@@ -14,11 +14,67 @@ import (
 // PostgresStore implements Store against jc_log_entries.
 type PostgresStore struct {
 	pool *pgxpool.Pool
+	adminRecords
 }
 
 // NewPostgresStore returns a Postgres-backed store.
 func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
-	return &PostgresStore{pool: pool}
+	s := &PostgresStore{pool: pool}
+	s.backend = s
+	return s
+}
+
+// ─── admin backend ────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) putAdmin(ctx context.Context, collection, scope, id string, rec adminRecord) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_log_admin_records (collection, scope, id, data)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (collection, scope, id) DO UPDATE SET data=EXCLUDED.data
+	`, collection, scope, id, nullableJSON(json.RawMessage(rec.Data)))
+	return err
+}
+
+func (s *PostgresStore) getAdmin(ctx context.Context, collection, scope, id string) (adminRecord, bool, error) {
+	var data []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT data FROM jc_log_admin_records WHERE collection=$1 AND scope=$2 AND id=$3
+	`, collection, scope, id).Scan(&data)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return adminRecord{}, false, nil
+		}
+		return adminRecord{}, false, err
+	}
+	return adminRecord{Data: append(json.RawMessage(nil), data...)}, true, nil
+}
+
+func (s *PostgresStore) listAdmin(ctx context.Context, collection, scope string) (map[string]adminRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, data FROM jc_log_admin_records WHERE collection=$1 AND scope=$2 ORDER BY id
+	`, collection, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]adminRecord{}
+	for rows.Next() {
+		var id string
+		var data []byte
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
+		}
+		out[id] = adminRecord{Data: append(json.RawMessage(nil), data...)}
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) deleteAdmin(ctx context.Context, collection, scope, id string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_log_admin_records WHERE collection=$1 AND scope=$2 AND id=$3`, collection, scope, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func nullableJSON(v any) any {
@@ -33,18 +89,21 @@ func (s *PostgresStore) Write(ctx context.Context, scope string, e LogEntry) err
 	if e.Timestamp.IsZero() {
 		e.Timestamp = clock.Now()
 	}
+	if e.ReceiveTimestamp.IsZero() {
+		e.ReceiveTimestamp = e.Timestamp
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_log_entries
-			(project_id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(project_id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`, scope, e.LogName, e.ResourceType, nullableJSON(e.ResourceLabels), e.Severity, e.PayloadType, e.TextPayload,
-		nullableJSON(e.JsonPayload), e.Timestamp, e.InsertID, nullableJSON(e.Labels))
+		nullableJSON(e.JsonPayload), e.Timestamp, e.ReceiveTimestamp, e.InsertID, nullableJSON(e.Labels))
 	return err
 }
 
 func (s *PostgresStore) List(ctx context.Context, scope string) ([]LogEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels
+		SELECT id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels
 		FROM jc_log_entries WHERE project_id=$1 ORDER BY timestamp, id
 	`, scope)
 	if err != nil {
@@ -55,7 +114,7 @@ func (s *PostgresStore) List(ctx context.Context, scope string) ([]LogEntry, err
 	for rows.Next() {
 		var e LogEntry
 		var jsonPayload, resourceLabels, labels []byte
-		if err := rows.Scan(&e.ID, &e.LogName, &e.ResourceType, &resourceLabels, &e.Severity, &e.PayloadType, &e.TextPayload, &jsonPayload, &e.Timestamp, &e.InsertID, &labels); err != nil {
+		if err := rows.Scan(&e.ID, &e.LogName, &e.ResourceType, &resourceLabels, &e.Severity, &e.PayloadType, &e.TextPayload, &jsonPayload, &e.Timestamp, &e.ReceiveTimestamp, &e.InsertID, &labels); err != nil {
 			return nil, err
 		}
 		if len(jsonPayload) > 0 {
@@ -105,10 +164,12 @@ func (s *PostgresStore) CreateSink(ctx context.Context, scope string, sink LogSi
 	}
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_log_sinks
-			(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+			 intercept_children, output_version_format, bigquery_options, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (project_id, name) DO NOTHING
-	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren, sink.CreateTime, sink.UpdateTime)
+	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren,
+		sink.InterceptChildren, sink.OutputVersionFormat, sinkBigQueryOptionsArg(sink.BigQueryOptions), sink.CreateTime, sink.UpdateTime)
 	if err != nil {
 		return err
 	}
@@ -120,7 +181,8 @@ func (s *PostgresStore) CreateSink(ctx context.Context, scope string, sink LogSi
 
 func (s *PostgresStore) GetSink(ctx context.Context, scope, name string) (LogSink, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+		       intercept_children, output_version_format, bigquery_options, create_time, update_time
 		FROM jc_log_sinks WHERE project_id=$1 AND name=$2
 	`, scope, name)
 	return scanSink(row)
@@ -128,7 +190,8 @@ func (s *PostgresStore) GetSink(ctx context.Context, scope, name string) (LogSin
 
 func (s *PostgresStore) ListSinks(ctx context.Context, scope string) ([]LogSink, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+		       intercept_children, output_version_format, bigquery_options, create_time, update_time
 		FROM jc_log_sinks WHERE project_id=$1 ORDER BY name
 	`, scope)
 	if err != nil {
@@ -153,9 +216,11 @@ func (s *PostgresStore) UpdateSink(ctx context.Context, scope string, sink LogSi
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_log_sinks
-		SET destination=$3, filter=$4, description=$5, disabled=$6, exclusions=$7, writer_identity=$8, include_children=$9, update_time=$10
+		SET destination=$3, filter=$4, description=$5, disabled=$6, exclusions=$7, writer_identity=$8, include_children=$9,
+		    intercept_children=$10, output_version_format=$11, bigquery_options=$12, update_time=$13
 		WHERE project_id=$1 AND name=$2
-	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren, sink.UpdateTime)
+	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren,
+		sink.InterceptChildren, sink.OutputVersionFormat, sinkBigQueryOptionsArg(sink.BigQueryOptions), sink.UpdateTime)
 	if err != nil {
 		return err
 	}
@@ -184,9 +249,10 @@ type sinkScanner interface {
 
 func scanSink(row sinkScanner) (LogSink, error) {
 	var sink LogSink
-	var exclusions []byte
+	var exclusions, bigQueryOptions []byte
 	err := row.Scan(&sink.Name, &sink.Destination, &sink.Filter, &sink.Description, &sink.Disabled,
-		&exclusions, &sink.WriterIdentity, &sink.IncludeChildren, &sink.CreateTime, &sink.UpdateTime)
+		&exclusions, &sink.WriterIdentity, &sink.IncludeChildren,
+		&sink.InterceptChildren, &sink.OutputVersionFormat, &bigQueryOptions, &sink.CreateTime, &sink.UpdateTime)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return LogSink{}, ErrSinkNotFound
@@ -196,6 +262,9 @@ func scanSink(row sinkScanner) (LogSink, error) {
 	if len(exclusions) > 0 {
 		_ = json.Unmarshal(exclusions, &sink.Exclusions)
 	}
+	if len(bigQueryOptions) > 0 && string(bigQueryOptions) != "null" {
+		_ = json.Unmarshal(bigQueryOptions, &sink.BigQueryOptions)
+	}
 	return sink, nil
 }
 
@@ -204,6 +273,15 @@ func nonNilExclusions(in []LogExclusion) []LogExclusion {
 		return []LogExclusion{}
 	}
 	return in
+}
+
+// sinkBigQueryOptionsArg renders a sink's BigQueryOptions for the JSONB column:
+// SQL NULL when absent, so a scan of an empty column leaves the pointer nil.
+func sinkBigQueryOptionsArg(o *LogBigQueryOptions) any {
+	if o == nil {
+		return nil
+	}
+	return nullableJSON(o)
 }
 
 // ─── exclusions ───────────────────────────────────────────────────────────────
@@ -418,4 +496,5 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_sinks`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_exclusions`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_metrics`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_admin_records`)
 }

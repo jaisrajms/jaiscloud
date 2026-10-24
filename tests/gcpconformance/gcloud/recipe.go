@@ -41,6 +41,9 @@ var endpointOverrideServices = []string{
 	"CLOUDFUNCTIONS",
 	"WORKFLOWS",
 	"DATAPROC",
+	// The Firestore Admin control plane (databases/fields/backups/user creds) is
+	// served over REST at firestore.googleapis.com/v1.
+	"FIRESTORE",
 	// Cloud Functions' gen2 deploy checks that the Cloud Run/Cloud Build/
 	// Artifact Registry APIs are enabled (Service Usage) and resolves the
 	// project number (Resource Manager); both are emulated and must route here.

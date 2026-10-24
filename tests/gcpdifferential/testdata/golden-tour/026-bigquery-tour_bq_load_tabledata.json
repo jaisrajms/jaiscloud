@@ -1,0 +1,36 @@
+{
+  "index": 26,
+  "service": "bigquery",
+  "op": "tour_bq_load_tabledata",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables/<table>_load/data",
+  "status": 200,
+  "response": {
+    "etag": "<etag>",
+    "kind": "bigquery#tableDataList",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "1"
+          },
+          {
+            "v": "a"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "2"
+          },
+          {
+            "v": "b"
+          }
+        ]
+      }
+    ],
+    "totalRows": "2"
+  }
+}
+

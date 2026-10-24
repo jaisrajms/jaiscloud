@@ -3,6 +3,7 @@ package dataproc
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -108,6 +109,30 @@ func (s *MemoryStore) ListClusters(_ context.Context, projectID, region string) 
 	return result, nil
 }
 
+// ListClustersByProject returns every cluster in a project across all regions,
+// sorted by region then name.
+func (s *MemoryStore) ListClustersByProject(_ context.Context, projectID string) ([]Cluster, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Cluster
+	for key, m := range s.clusters {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, c := range m {
+			result = append(result, c)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Region != result[j].Region {
+			return result[i].Region < result[j].Region
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
 func (s *MemoryStore) CreateJob(_ context.Context, projectID, region string, j Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,6 +213,30 @@ func (s *MemoryStore) ListJobs(_ context.Context, projectID, region string) ([]J
 	return result, nil
 }
 
+// ListJobsByProject returns every job in a project across all regions, sorted
+// by region then job id.
+func (s *MemoryStore) ListJobsByProject(_ context.Context, projectID string) ([]Job, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Job
+	for key, m := range s.jobs {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, j := range m {
+			result = append(result, j)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Region != result[j].Region {
+			return result[i].Region < result[j].Region
+		}
+		return result[i].JobID < result[j].JobID
+	})
+	return result, nil
+}
+
 // --- Workflow templates ---
 
 func (s *MemoryStore) CreateWorkflowTemplate(_ context.Context, projectID, region string, t WorkflowTemplate) error {
@@ -254,6 +303,30 @@ func (s *MemoryStore) ListWorkflowTemplates(_ context.Context, projectID, region
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].TemplateID < result[j].TemplateID })
+	return result, nil
+}
+
+// ListWorkflowTemplatesByProject returns every workflow template in a project
+// across all regions, sorted by region then template id.
+func (s *MemoryStore) ListWorkflowTemplatesByProject(_ context.Context, projectID string) ([]WorkflowTemplate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []WorkflowTemplate
+	for key, m := range s.templates {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, t := range m {
+			result = append(result, t)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Region != result[j].Region {
+			return result[i].Region < result[j].Region
+		}
+		return result[i].TemplateID < result[j].TemplateID
+	})
 	return result, nil
 }
 

@@ -1,0 +1,27 @@
+{
+  "index": 38,
+  "service": "kms",
+  "op": "keyring_create_dup",
+  "method": "POST",
+  "path": "/v1/projects/<project>/locations/global/keyRings?keyRingId=<keyRing>",
+  "status": 409,
+  "request": {},
+  "response": {
+    "error": {
+      "code": 409,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "domain": "cloudkms.googleapis.com",
+          "metadata": {
+            "resource_name": "projects/<project>/locations/global/keyRings/<keyRing>"
+          },
+          "reason": "RESOURCE_ALREADY_EXISTS"
+        }
+      ],
+      "message": "KeyRing projects/<project>/locations/global/keyRings/<keyRing> already exists.",
+      "status": "ALREADY_EXISTS"
+    }
+  }
+}
+

@@ -1,0 +1,47 @@
+{
+  "index": 2,
+  "service": "datastore",
+  "op": "ds_lookup_missing",
+  "method": "google.datastore.v1.Datastore/Lookup",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "keys": [
+      {
+        "partitionId": {
+          "projectId": "<project>"
+        },
+        "path": [
+          {
+            "kind": "<dsKind>",
+            "name": "<missing>"
+          }
+        ]
+      }
+    ],
+    "projectId": "<project>"
+  },
+  "response": {
+    "missing": [
+      {
+        "entity": {
+          "key": {
+            "partitionId": {
+              "projectId": "<project>"
+            },
+            "path": [
+              {
+                "kind": "<dsKind>",
+                "name": "<missing>"
+              }
+            ]
+          }
+        },
+        "version": "<version>"
+      }
+    ],
+    "readTime": "<time>"
+  }
+}
+

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/blobfs"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/container"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/store"
@@ -32,20 +32,20 @@ func (f *fakeFetcher) FetchObjectBytes(_ context.Context, bucket, object string)
 
 // recordingExecutor captures the last InvokeRequest and echoes the payload.
 type recordingExecutor struct {
-	req     lambdaexec.InvokeRequest
+	req     container.Request
 	invoked int
 }
 
-func (e *recordingExecutor) Invoke(_ context.Context, req lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
+func (e *recordingExecutor) Invoke(_ context.Context, req container.Request) (container.Result, error) {
 	e.req = req
 	e.invoked++
-	return lambdaexec.InvokeResult{Payload: req.Payload}, nil
+	return container.Result{Payload: req.Payload}, nil
 }
 func (e *recordingExecutor) DeleteFunction(context.Context, string) {}
 func (e *recordingExecutor) Reset(context.Context)                  {}
 func (e *recordingExecutor) Close() error                           { return nil }
 
-func newSourceTestService(t *testing.T, blobs blobfs.BlobStore, f SourceFetcher, ex lambdaexec.LambdaExecutor) *Service {
+func newSourceTestService(t *testing.T, blobs blobfs.BlobStore, f SourceFetcher, ex container.Executor) *Service {
 	t.Helper()
 	opts := []Option{WithBlobs(blobs), WithSourceFetcher(f)}
 	if ex != nil {
@@ -89,17 +89,50 @@ func TestCreateFunctionPersistsSourceAndInvokesWithCode(t *testing.T) {
 
 	// CallFunction hands the executor the composite CodeKey and the runtime
 	// image mapped from the GCP runtime.
-	if _, _, _, err := s.CallFunction(ctx, "proj", "us-central1", "hello", `{"x":1}`); err != nil {
+	if _, _, _, err := s.CallFunction(ctx, "proj", "us-central1", "hello", CallInput{Data: `{"x":1}`}); err != nil {
 		t.Fatalf("CallFunction: %v", err)
 	}
 	if exec.req.CodeKey != "us-central1.hello" {
 		t.Fatalf("CodeKey = %q, want us-central1.hello", exec.req.CodeKey)
 	}
-	if exec.req.Image != "public.ecr.aws/lambda/python:3.12" {
-		t.Fatalf("Image = %q", exec.req.Image)
+	if exec.req.Image != "" {
+		t.Fatalf("Image = %q, want empty (the profile resolves the image, not the core)", exec.req.Image)
+	}
+	if exec.req.Runtime != "python312" {
+		t.Fatalf("Runtime = %q, want python312", exec.req.Runtime)
 	}
 	if exec.req.FunctionName != "hello" {
 		t.Fatalf("FunctionName = %q, want hello", exec.req.FunctionName)
+	}
+}
+
+func TestCreateFunctionInlineArchivePersistsSource(t *testing.T) {
+	ctx := context.Background()
+	blobs := blobfs.NewMemoryBlobStore()
+	zip := []byte("PK\x03\x04 inline console archive")
+	// The fetcher is wired AND a resolvable gs:// reference is present, so this
+	// proves the inline archive takes precedence over the GCS fetch path.
+	fetched := []byte("PK\x03\x04 fetched archive")
+	fetcher := &fakeFetcher{objects: map[string][]byte{"b/o.zip": fetched}}
+	s := newSourceTestService(t, blobs, fetcher, nil)
+
+	f, _, err := s.CreateFunction(ctx, "proj", "us-central1", "inline",
+		FunctionInput{
+			Runtime:       "nodejs20",
+			EntryPoint:    "handler",
+			SourceArchive: zip,
+			SourceBucket:  "b",
+			SourceObject:  "o.zip",
+		}, V2)
+	if err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	wantSHA := sha256hex(zip)
+	if f.SourceSHA256 != wantSHA || f.SourceSize != int64(len(zip)) || f.SourceBlobKey == "" {
+		t.Fatalf("source metadata = sha=%q size=%d key=%q", f.SourceSHA256, f.SourceSize, f.SourceBlobKey)
+	}
+	if got, err := blobs.Get(ctx, functionsSourceBucket, f.SourceBlobKey); err != nil || string(got) != string(zip) {
+		t.Fatalf("stored source = %q, err=%v; want the inline archive, not the fetched one", got, err)
 	}
 }
 

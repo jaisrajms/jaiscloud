@@ -275,3 +275,22 @@ func (s *MemoryStore) ListOperations(_ context.Context, projectID, location stri
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
 }
+
+// ListOperationsAllLocations returns every operation for projectID across all
+// locations, ordered by id.
+func (s *MemoryStore) ListOperationsAllLocations(_ context.Context, projectID string) ([]Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Operation
+	for key, m := range s.operations {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, op := range m {
+			result = append(result, op)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}

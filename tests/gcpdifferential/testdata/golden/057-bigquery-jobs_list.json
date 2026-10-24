@@ -1,0 +1,56 @@
+{
+  "index": 57,
+  "service": "bigquery",
+  "op": "jobs_list",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/jobs?projection=full&maxResults=10",
+  "status": 200,
+  "response": {
+    "etag": "<etag>",
+    "jobs": [
+      {
+        "configuration": {
+          "jobType": "LOAD",
+          "load": {
+            "destinationTable": {
+              "datasetId": "<dataset>",
+              "projectId": "<project>",
+              "tableId": "<table>"
+            },
+            "schema": {
+              "fields": [
+                {
+                  "mode": "REQUIRED",
+                  "name": "id",
+                  "type": "INTEGER"
+                }
+              ]
+            },
+            "sourceFormat": "NEWLINE_DELIMITED_JSON",
+            "sourceUris": [
+              "gs://<loadBucket>/data.ndjson"
+            ],
+            "writeDisposition": "WRITE_APPEND"
+          }
+        },
+        "id": "<project>:US.<jobId>",
+        "jobReference": {},
+        "kind": "bigquery#job",
+        "principal_subject": "<principalSubject>",
+        "state": "RUNNING",
+        "statistics": {
+          "creationTime": "<time>",
+          "reservation_id": "default-pipeline",
+          "startTime": "<time>"
+        },
+        "status": {
+          "state": "RUNNING"
+        },
+        "user_email": "<userEmail>"
+      }
+    ],
+    "kind": "bigquery#jobList",
+    "nextPageToken": "<nextPageToken>"
+  }
+}
+

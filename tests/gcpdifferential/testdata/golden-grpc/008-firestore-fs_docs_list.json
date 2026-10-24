@@ -1,0 +1,31 @@
+{
+  "index": 8,
+  "service": "firestore",
+  "op": "fs_docs_list",
+  "method": "google.firestore.v1.Firestore/ListDocuments",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "collectionId": "<fsCollection>",
+    "parent": "projects/<project>/databases/(default)/documents"
+  },
+  "response": {
+    "documents": [
+      {
+        "createTime": "<time>",
+        "fields": {
+          "count": {
+            "integerValue": "1"
+          },
+          "greeting": {
+            "stringValue": "hello"
+          }
+        },
+        "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+        "updateTime": "<time>"
+      }
+    ]
+  }
+}
+

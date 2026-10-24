@@ -1,0 +1,48 @@
+{
+  "index": 128,
+  "service": "storage",
+  "op": "bucket_create_cmek",
+  "method": "POST",
+  "path": "/storage/v1/b?project=<project>",
+  "status": 200,
+  "request": {
+    "encryption": {
+      "defaultKmsKeyName": "projects/<project>/locations/us/keyRings/<keyRing>/cryptoKeys/<cryptoKey>"
+    },
+    "location": "US",
+    "name": "<bucket>"
+  },
+  "response": {
+    "encryption": {
+      "defaultKmsKeyName": "projects/<project>/locations/us/keyRings/<keyRing>/cryptoKeys/<cryptoKey>"
+    },
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "iamConfiguration": {
+      "bucketPolicyOnly": {
+        "enabled": false
+      },
+      "publicAccessPrevention": "inherited",
+      "uniformBucketLevelAccess": {
+        "enabled": false
+      }
+    },
+    "id": "<bucket>",
+    "kind": "storage#bucket",
+    "location": "US",
+    "locationType": "multi-region",
+    "metageneration": "<metageneration>",
+    "name": "<bucket>",
+    "projectNumber": "<project>",
+    "rpo": "DEFAULT",
+    "selfLink": "<selfLink>",
+    "softDeletePolicy": {
+      "effectiveTime": "<time>",
+      "retentionDurationSeconds": "604800"
+    },
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "updated": "<time>"
+  }
+}
+

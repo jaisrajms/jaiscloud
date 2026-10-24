@@ -72,7 +72,7 @@ func TestCreateCluster_GKEVirtualClusterConfigRoundTrip(t *testing.T) {
 		t.Fatalf("auxiliaryServicesConfig lost: %v", gotVCC["auxiliaryServicesConfig"])
 	}
 
-	list, _, err := p.ListClusters(ctx, "proj", "us-central1", 0, "")
+	list, _, err := p.ListClusters(ctx, "proj", "us-central1", "", 0, "")
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListClusters: %v %d", err, len(list))
 	}

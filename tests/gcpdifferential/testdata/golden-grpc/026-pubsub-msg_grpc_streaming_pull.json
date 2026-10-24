@@ -1,0 +1,22 @@
+{
+  "index": 26,
+  "service": "pubsub",
+  "op": "msg_grpc_streaming_pull",
+  "method": "google.pubsub.v1.Subscriber/StreamingPull",
+  "path": "projects/<project>/subscriptions/<subscription>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {
+    "messages": [
+      {
+        "data": "Z3JwYy1zdHJlYW0=",
+        "messageId": "<messageId>",
+        "publishTime": "<time>"
+      }
+    ]
+  }
+}
+

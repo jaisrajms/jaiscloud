@@ -1,0 +1,15 @@
+{
+  "index": 133,
+  "service": "pubsub",
+  "op": "mon_notify_topic_create",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/topics/<notifyTopic>",
+  "status": 200,
+  "request": {
+    "name": "projects/<project>/topics/<notifyTopic>"
+  },
+  "response": {
+    "name": "projects/<project>/topics/<notifyTopic>"
+  }
+}
+

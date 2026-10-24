@@ -16,6 +16,14 @@ func notFound(msg string) error {
 	return model.NewProviderError("NotFound", msg, 404)
 }
 
+// invalidMaskPath reports an update_mask path that names no field of the
+// resource. Real GCP validates the mask against the resource's field set and
+// answers INVALID_ARGUMENT (AIP-134 / AIP-161), not an unimplemented operation,
+// so an unmappable path is a client error rather than a 501.
+func invalidMaskPath(path string) error {
+	return invalidArgument("unsupported update_mask path: " + path)
+}
+
 // mapStoreError translates the store's sentinel errors into transport-neutral
 // ProviderErrors. Both transports get identical errors, so the gRPC status and
 // the REST envelope cannot drift.

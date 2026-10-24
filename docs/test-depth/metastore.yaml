@@ -1,0 +1,30 @@
+# Behavioural depth record - metastore (TD1, filled in by TD8).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+#
+# The control plane is driven through the official REST apiary client and the
+# Hive Metastore Thrift serving plane (:9083) through an independent Go HMS
+# client (github.com/slachiewicz/hms-client-go) plus its generated Thrift
+# package for the declared exception types; both run in CI under -race.
+service: metastore
+classes:
+  p2:
+    state: present
+    suites: [sdk-metastore]
+    note: "eight parallel DDL writers each create their own database+table (all visible afterwards); eight goroutines race one database name so exactly one wins and the rest get AlreadyExists; concurrent partition adds on one table with disjoint values all land exactly once; and eight goroutines churn the Iceberg commit lock (each granted its own LockStateAcquired id, CheckLock reflects held/released, an unknown id is NotAcquired) — the client runs under -race"
+  p3:
+    state: present
+    suites: [sdk-metastore]
+    note: "declared HMS exceptions on the Thrift plane, asserted by type via the generated client: duplicate create_database/table -> AlreadyExistsException, missing get_database -> NoSuchObjectException, create_table into a missing database -> NoSuchObjectException, empty database name -> InvalidObjectException, drop of a non-empty database -> InvalidOperationException (then cascade succeeds), get_table_req missing -> NoSuchObjectException, listing a missing table's partitions -> NOT_FOUND; the REST control plane rejects a duplicate serviceId with 409 and get-after-delete with 404"
+  p4:
+    state: present
+    suites: [sdk-metastore]
+    note: "partition listing/paging: get_partitions and get_partition_names cap at max_parts and return all for -1, get_partitions_ps/get_partition_names_ps select by value prefix then apply max_parts, get_partitions_by_filter composes a predicate with the cap, get_all_databases/get_all_tables include the new objects; the REST control plane pages services and backups with pageSize=2 over every item exactly once (terminating with an empty nextPageToken) and echoes no token for an over-large pageSize"
+  p5:
+    state: present
+    suites: [sdk-metastore]
+    note: "a table with 200 columns round-trips its full schema, and 300 partitions (100 partitions x 3 regions) add, list, filter (region='us' -> 100) and re-list identically across calls with no duplicates"

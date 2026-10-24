@@ -17,11 +17,11 @@
 // dual-protocol invariant: one core, one piece of state, so the transports
 // cannot drift.
 //
-// The emulator never stands up an event-delivery engine, so a Trigger/Channel
-// is a stored metadata record. Source/destination references are validated
-// structurally (a transport.pubsub.topic must name an existing Pub/Sub topic; a
-// destination.workflow must name an existing Workflow), and any real Eventarc
-// method not implemented fails loud with Unimplemented at the transport.
+// The core also owns event delivery for non-function destinations: on a Pub/Sub
+// publish it matches triggers and sends a binary-mode CloudEvents request to
+// destination.httpEndpoint or destination.cloudRun (a later phase adds Cloud
+// Storage sources). Cloud Functions destinations are delivered by the functions
+// engine; this package only routes to them via eventing.TargetIndex.
 package eventarc
 
 import (
@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/eventing"
@@ -68,17 +69,31 @@ type Service struct {
 	resources     store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
 	workflows     workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
 	functions     FunctionExister      // Cloud Functions existence (destination.cloudFunction)
+	cloudRun      CloudRunInvoker      // Cloud Run delivery seam (destination.cloudRun)
 	subscriptions eventing.SubscriptionProvisioner
+	httpClient    httpDoer       // outbound delivery client; nil disables delivery
+	deliveryWG    sync.WaitGroup // tracks in-flight fire-and-forget deliveries (tests)
 }
 
-// NewService returns an Eventarc core backed by the given stores.
+// NewService returns an Eventarc core backed by the given stores. Outbound
+// event delivery is enabled with a bounded default HTTP client.
 func NewService(s eventarcstore.Store, resources store.ResourceStore, workflows workflowsstore.Store) *Service {
-	return &Service{store: s, resources: resources, workflows: workflows}
+	return &Service{
+		store:      s,
+		resources:  resources,
+		workflows:  workflows,
+		httpClient: eventarcHTTPClient(),
+	}
 }
 
 // SetFunctionExister wires the Cloud Functions existence check used to validate
 // a destination.cloudFunction. A nil exister (the default) skips the check.
 func (s *Service) SetFunctionExister(f FunctionExister) { s.functions = f }
+
+// SetCloudRunInvoker wires the Cloud Run delivery seam used by a
+// destination.cloudRun trigger. A nil invoker (the default) logs-and-drops
+// cloudRun deliveries, matching a destination the emulator cannot reach.
+func (s *Service) SetCloudRunInvoker(inv CloudRunInvoker) { s.cloudRun = inv }
 
 // SetSubscriptionProvisioner wires the Pub/Sub provisioner that creates the
 // transport subscription backing an Eventarc trigger (its dead-letter surface).
@@ -144,10 +159,13 @@ func labelsFromConfig(raw json.RawMessage) map[string]string {
 // field directly).
 func BodyEtag(body map[string]any) string { return bodyString(body, "etag") }
 
-// pageParams builds the shared cursor-pagination parameter map.
+// pageParams builds the shared cursor-pagination parameter map. A non-zero
+// pageSize is forwarded as-is — including a negative value, which the shared
+// pager rejects with INVALID_ARGUMENT (AIP-158) rather than coercing to the
+// default; zero means "unset" and takes the default.
 func pageParams(pageSize int, pageToken string) map[string]any {
 	params := map[string]any{}
-	if pageSize > 0 {
+	if pageSize != 0 {
 		params["pageSize"] = pageSize
 	}
 	if pageToken != "" {
@@ -162,6 +180,13 @@ func pageParams(pageSize int, pageToken string) map[string]any {
 // transports map onto their wire status.
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// invalidMaskPath reports an update_mask path that names no field of the
+// resource. Real GCP validates the mask against the resource's field set and
+// answers INVALID_ARGUMENT (AIP-134 / AIP-161), not an unimplemented operation.
+func invalidMaskPath(path string) error {
+	return invalidArgument("unsupported update_mask path: " + path)
 }
 
 // InvalidIAMResource is the canonical InvalidArgument error for an IAM request
@@ -237,6 +262,35 @@ func normalizeMaskField(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
 }
 
+// maskFieldSet normalizes Discovery camelCase field names to the keys
+// normalizeMaskField produces and returns them as a set.
+func maskFieldSet(names ...string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[normalizeMaskField(n)] = true
+	}
+	return set
+}
+
+// triggerMaskFields is the full update_mask field set of an Eventarc Trigger
+// (Discovery schema google.cloud.eventarc.v1.Trigger), normalized. A mask root
+// outside it names no field (400 INVALID_ARGUMENT); a root inside it but absent
+// from triggerMaskCanonical (output-only fields such as conditions or uid) is a
+// field the emulator does not write, so it stays a 501 UnsupportedOperation.
+var triggerMaskFields = maskFieldSet(
+	"destination", "eventFilters", "serviceAccount", "transport", "channel",
+	"labels", "eventDataContentType", "retryPolicy",
+	"conditions", "createTime", "etag", "satisfiesPzs", "uid", "updateTime", "name",
+)
+
+// channelMaskFields is the full update_mask field set of an Eventarc Channel
+// (Discovery schema google.cloud.eventarc.v1.Channel), normalized.
+var channelMaskFields = maskFieldSet(
+	"provider", "cryptoKeyName", "labels",
+	"activationToken", "createTime", "pubsubTopic", "satisfiesPzs", "state",
+	"uid", "updateTime", "name",
+)
+
 // triggerMaskCanonical maps a normalized update_mask root to the canonical
 // camelCase JSON key of an updatable Trigger field. Output-only fields are
 // intentionally absent so a mask naming one fails loud rather than silently
@@ -263,7 +317,8 @@ var channelMaskCanonical = map[string]string{
 // applyTriggerMask merges an incoming Trigger body into the stored body
 // according to the updateMask paths: a masked path takes the incoming value,
 // every unmasked path retains the stored value. An empty mask merges every body
-// field. An unsupported path fails loud with Unimplemented.
+// field. A path that names no field of a Trigger is a 400 InvalidArgument; a
+// real-but-unimplemented field a 501.
 func applyTriggerMask(stored, incoming map[string]any, paths []string) (map[string]any, error) {
 	merged := make(map[string]any, len(stored)+len(incoming))
 	for k, v := range stored {
@@ -276,8 +331,12 @@ func applyTriggerMask(stored, incoming map[string]any, paths []string) (map[stri
 		return merged, nil
 	}
 	for _, path := range paths {
-		canon, ok := triggerMaskCanonical[normalizeMaskField(maskRoot(path))]
+		root := normalizeMaskField(maskRoot(path))
+		canon, ok := triggerMaskCanonical[root]
 		if !ok {
+			if !triggerMaskFields[root] {
+				return nil, invalidMaskPath(path)
+			}
 			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
 		}
 		if v, present := incoming[canon]; present {
@@ -300,8 +359,12 @@ func applyChannelMask(stored, incoming map[string]any, paths []string) (map[stri
 		return merged, nil
 	}
 	for _, path := range paths {
-		canon, ok := channelMaskCanonical[normalizeMaskField(maskRoot(path))]
+		root := normalizeMaskField(maskRoot(path))
+		canon, ok := channelMaskCanonical[root]
 		if !ok {
+			if !channelMaskFields[root] {
+				return nil, invalidMaskPath(path)
+			}
 			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
 		}
 		if v, present := incoming[canon]; present {
@@ -317,16 +380,18 @@ func applyChannelMask(stored, incoming map[string]any, paths []string) (map[stri
 // cloudFunction / cloudRun / gke / workflow / httpEndpoint must be set. A
 // destination.cloudFunction names a deployed function (as the Cloud Functions
 // service itself sets when it provisions an Eventarc trigger); the existence
-// check lives in validateReferences.
-func validateDestination(dest map[string]any) error {
+// check lives in validateReferences. A destination.cloudRun must carry its
+// required fields (see validateCloudRunDestination).
+func validateDestination(project string, dest map[string]any) error {
 	if dest == nil {
 		return invalidArgument("destination is required")
 	}
+	cloudRunDest, _ := dest["cloudRun"].(map[string]any)
 	set := 0
 	if cf, _ := dest["cloudFunction"].(string); cf != "" {
 		set++
 	}
-	if m, _ := dest["cloudRun"].(map[string]any); m != nil {
+	if cloudRunDest != nil {
 		set++
 	}
 	if m, _ := dest["gke"].(map[string]any); m != nil {
@@ -344,18 +409,71 @@ func validateDestination(dest map[string]any) error {
 	if set > 1 {
 		return invalidArgument("destination must specify exactly one of cloudFunction, cloudRun, gke, workflow, or httpEndpoint")
 	}
+	if cloudRunDest != nil {
+		return validateCloudRunDestination(project, cloudRunDest)
+	}
+	return nil
+}
+
+// validateCloudRunDestination enforces the required shape of a
+// destination.cloudRun, matching the Eventarc v1 CloudRun schema: service and
+// region are both required, and the service must live in the trigger's project.
+// A full service resource name (projects/{p}/locations/{l}/services/{s}) is
+// accepted leniently: when region is omitted it is derived from the name's
+// location, but any other slash-containing value is rejected and an explicit
+// region that disagrees with the name's location is rejected. The short-id
+// form ({"service":"svc","region":"us-central1"}) is accepted as-is.
+//
+// This is intentionally stricter than cloudRunDestination (delivery.go), which
+// stays lenient so state stored before this validation existed can still be
+// delivered.
+func validateCloudRunDestination(project string, m map[string]any) error {
+	service := strings.TrimSpace(bodyString(m, "service"))
+	if service == "" {
+		return invalidArgument("destination.cloudRun.service is required")
+	}
+	region := strings.TrimSpace(bodyString(m, "region"))
+	if strings.Contains(service, "/") {
+		name := ParseName(service)
+		if name.Project == "" || name.Location == "" {
+			return invalidArgument("destination.cloudRun.service is not a valid service resource name")
+		}
+		if project != "" && name.Project != project {
+			return invalidArgument("destination.cloudRun.service must be in the trigger's project: " + project)
+		}
+		if region == "" {
+			region = name.Location
+		} else if region != name.Location {
+			return invalidArgument("destination.cloudRun.region disagrees with destination.cloudRun.service location")
+		}
+	}
+	if region == "" {
+		return invalidArgument("destination.cloudRun.region is required")
+	}
 	return nil
 }
 
 // validateFilters enforces the eventFilters contract: at least one filter,
 // each with a non-empty attribute and value, and at least one filter whose
 // attribute is "type" — real Eventarc requires a type filter on every trigger.
+// A trigger whose type filter names a Cloud Storage event is a Cloud Storage
+// trigger and must additionally declare a non-empty "bucket" filter; real
+// Eventarc rejects a Cloud Storage trigger without one, and accepting it would
+// deliver events from every bucket.
+//
+// The filter attributes must also be defined by the trigger's source: "bucket"
+// and "object" only apply to a Cloud Storage trigger, and "topic" does not apply
+// to a Cloud Storage trigger. Real Eventarc rejects such cross-source filters at
+// create with INVALID_ARGUMENT rather than silently ignoring them at match time.
+// The open-ended case — an arbitrary unknown attribute for an arbitrary
+// provider — is deliberately not validated.
 func validateFilters(body map[string]any) error {
 	filters, ok := body["eventFilters"].([]any)
 	if !ok || len(filters) == 0 {
 		return invalidArgument("eventFilters is required")
 	}
-	hasType := false
+	hasType, storageType := false, false
+	hasBucket, hasObject, hasTopic := false, false, false
 	for _, f := range filters {
 		fm, ok := f.(map[string]any)
 		if !ok {
@@ -365,16 +483,37 @@ func validateFilters(body map[string]any) error {
 		if attr == "" {
 			return invalidArgument("eventFilters[].attribute is required")
 		}
-		value, _ := fm["value"].(string)
-		if _, ok := fm["value"].(string); !ok {
+		value, ok := fm["value"].(string)
+		if !ok {
 			return invalidArgument("eventFilters[].value is required")
 		}
-		if attr == "type" && value != "" {
-			hasType = true
+		switch {
+		case attr == "type":
+			if value != "" {
+				hasType = true
+			}
+			if eventing.IsCloudStorageEventType(value) {
+				storageType = true
+			}
+		case attr == "bucket" && value != "":
+			hasBucket = true
+		case attr == "object" && value != "":
+			hasObject = true
+		case attr == "topic" && value != "":
+			hasTopic = true
 		}
 	}
 	if !hasType {
 		return invalidArgument(`eventFilters must contain a filter with attribute "type"`)
+	}
+	if storageType && !hasBucket {
+		return invalidArgument(`Cloud Storage triggers must contain a filter with attribute "bucket"`)
+	}
+	if (hasBucket || hasObject) && !storageType {
+		return invalidArgument(`eventFilters "bucket"/"object" attributes are only valid for Cloud Storage triggers`)
+	}
+	if hasTopic && storageType {
+		return invalidArgument(`eventFilters "topic" attribute is not valid for Cloud Storage triggers`)
 	}
 	return nil
 }
@@ -439,7 +578,7 @@ func (s *Service) validateTrigger(ctx context.Context, project string, body map[
 	if err := validateFilters(body); err != nil {
 		return err
 	}
-	if err := validateDestination(bodyMap(body, "destination")); err != nil {
+	if err := validateDestination(project, bodyMap(body, "destination")); err != nil {
 		return err
 	}
 	return s.validateReferences(ctx, project, body)
@@ -493,7 +632,12 @@ func (s *Service) CreateTrigger(ctx context.Context, project, location, triggerI
 	if err := s.SyncTriggerSubscription(ctx, project, t); err != nil {
 		return eventarcstore.Trigger{}, Operation{}, err
 	}
-	return t, newOperation(location, "create", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "create", target),
+		OperationResponse(TriggerTypeURL, TriggerJSON(project, t)))
+	if err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
+	return t, op, nil
 }
 
 // GetTrigger returns one trigger.
@@ -508,17 +652,51 @@ func (s *Service) GetTrigger(ctx context.Context, project, location, triggerID s
 	return t, nil
 }
 
-// ListTriggers returns a cursor page of the triggers in a location.
-func (s *Service) ListTriggers(ctx context.Context, project, location string, pageSize int, pageToken string) ([]eventarcstore.Trigger, string, error) {
+// ListTriggers returns a cursor page of the triggers in a location, restricted
+// by the AIP-160 filter and ordered by orderBy (both documented on
+// triggers.list; see triggerlist.go). An empty filter matches every trigger and
+// an empty orderBy is the default ascending-by-name order.
+func (s *Service) ListTriggers(ctx context.Context, project, location, filter, orderBy string, pageSize int, pageToken string) ([]eventarcstore.Trigger, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	compiledFilter, err := compileTriggerListFilter(filter)
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := compileTriggerOrder(orderBy)
+	if err != nil {
+		return nil, "", err
 	}
 	triggers, err := s.store.ListTriggers(ctx, project, location)
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(triggers, func(t eventarcstore.Trigger) string { return t.Name }, pageParams(pageSize, pageToken))
+	filtered := make([]eventarcstore.Trigger, 0, len(triggers))
+	for _, t := range triggers {
+		if compiledFilter.match(t) {
+			filtered = append(filtered, t)
+		}
+	}
+	// The page cursor is applied after the filter and in the caller's order, so
+	// paginating a filtered/ordered list never resumes in a different one.
+	page, next, err := paging.PageOrdered(orderTriggers(filtered, order), pageParams(pageSize, pageToken),
+		order.cursor, order.afterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// ListTriggersByProject returns every trigger in a project across all
+// locations, sorted by location then id. It backs the location-optional
+// console list (the REST/gRPC ListTriggers method is per-location).
+func (s *Service) ListTriggersByProject(ctx context.Context, project string) ([]eventarcstore.Trigger, error) {
+	triggers, err := s.store.ListTriggersAllLocations(ctx, project)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return triggers, nil
 }
 
 // UpdateTrigger merges the caller's fields into the stored trigger and returns
@@ -576,7 +754,12 @@ func (s *Service) UpdateTrigger(ctx context.Context, project, location, triggerI
 	if err := s.SyncTriggerSubscription(ctx, project, updated); err != nil {
 		return eventarcstore.Trigger{}, Operation{}, err
 	}
-	return updated, newOperation(location, "update", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "update", target),
+		OperationResponse(TriggerTypeURL, TriggerJSON(project, updated)))
+	if err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
+	return updated, op, nil
 }
 
 // mergeTriggerBody applies a Trigger PATCH body to the stored trigger under the
@@ -629,7 +812,12 @@ func (s *Service) DeleteTrigger(ctx context.Context, project, location, triggerI
 		return eventarcstore.Trigger{}, Operation{}, mapErr(err)
 	}
 	s.DeleteTriggerSubscription(ctx, project, deleted)
-	return deleted, newOperation(location, "delete", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "delete", target),
+		OperationResponse(TriggerTypeURL, TriggerJSON(project, deleted)))
+	if err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
+	return deleted, op, nil
 }
 
 // --- Channels ---
@@ -670,7 +858,12 @@ func (s *Service) CreateChannel(ctx context.Context, project, location, channelI
 	if err := s.store.CreateChannel(ctx, project, location, c); err != nil {
 		return eventarcstore.Channel{}, Operation{}, mapErr(err)
 	}
-	return c, newOperation(location, "create", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "create", target),
+		OperationResponse(ChannelTypeURL, ChannelJSON(project, c)))
+	if err != nil {
+		return eventarcstore.Channel{}, Operation{}, err
+	}
+	return c, op, nil
 }
 
 // GetChannel returns one channel.
@@ -685,17 +878,38 @@ func (s *Service) GetChannel(ctx context.Context, project, location, channelID s
 	return c, nil
 }
 
-// ListChannels returns a cursor page of the channels in a location.
-func (s *Service) ListChannels(ctx context.Context, project, location string, pageSize int, pageToken string) ([]eventarcstore.Channel, string, error) {
+// ListChannels returns a cursor page of the channels in a location, ordered by
+// the documented channels.list orderBy (see listparams.go). An empty orderBy is
+// the default ascending-by-name order.
+func (s *Service) ListChannels(ctx context.Context, project, location, orderBy string, pageSize int, pageToken string) ([]eventarcstore.Channel, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	order, err := channelOrderSpec.Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument("eventarc ListChannels orderBy: " + err.Error())
 	}
 	channels, err := s.store.ListChannels(ctx, project, location)
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(channels, func(c eventarcstore.Channel) string { return c.Name }, pageParams(pageSize, pageToken))
+	order.Sort(channels)
+	page, next, err := paging.PageOrdered(channels, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// ListChannelsByProject returns every channel in a project across all
+// locations, sorted by location then id. It backs the location-optional
+// console list (the REST/gRPC ListChannels method is per-location).
+func (s *Service) ListChannelsByProject(ctx context.Context, project string) ([]eventarcstore.Channel, error) {
+	channels, err := s.store.ListChannelsAllLocations(ctx, project)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return channels, nil
 }
 
 // UpdateChannel merges the caller's fields into the stored channel and returns
@@ -746,7 +960,12 @@ func (s *Service) UpdateChannel(ctx context.Context, project, location, channelI
 	if err != nil {
 		return eventarcstore.Channel{}, Operation{}, mapErr(err)
 	}
-	return updated, newOperation(location, "update", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "update", target),
+		OperationResponse(ChannelTypeURL, ChannelJSON(project, updated)))
+	if err != nil {
+		return eventarcstore.Channel{}, Operation{}, err
+	}
+	return updated, op, nil
 }
 
 // mergeChannelBody applies a Channel PATCH body to the stored channel under the
@@ -798,7 +1017,12 @@ func (s *Service) DeleteChannel(ctx context.Context, project, location, channelI
 	}); err != nil {
 		return eventarcstore.Channel{}, Operation{}, mapErr(err)
 	}
-	return deleted, newOperation(location, "delete", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "delete", target),
+		OperationResponse(ChannelTypeURL, ChannelJSON(project, deleted)))
+	if err != nil {
+		return eventarcstore.Channel{}, Operation{}, err
+	}
+	return deleted, op, nil
 }
 
 // --- IAM (triggers / channels) ---
@@ -873,25 +1097,22 @@ func (s *Service) ChannelTestIamPermissions(ctx context.Context, project, locati
 // --- event delivery ---
 
 // TargetsForEvent returns the Cloud Functions functions that Eventarc triggers
-// route an event to. Eventarc delivery is a metadata-driven match: for a
-// Pub/Sub event, every trigger whose transport.pubsub.topic names the event's
-// topic and whose destination.cloudFunction names a function produces one
-// target, provided the trigger's type/attribute eventFilters match. Triggers
-// with non-function destinations (Cloud Run, Workflows, GKE, HTTP) are ignored:
-// the emulator only executes Cloud Functions. It implements eventing.TargetIndex
-// so the functions delivery engine never imports this package.
+// route an event to. Eventarc delivery is a metadata-driven match: a Pub/Sub
+// event routes to every trigger whose transport.pubsub.topic names the event's
+// topic (and whose eventFilters match); a Cloud Storage event routes to every
+// trigger whose eventFilters select the object event. In both cases the
+// trigger's destination.cloudFunction must name a function. Triggers with
+// non-function destinations (Cloud Run, Workflows, GKE, HTTP) are ignored: the
+// emulator only executes Cloud Functions. It implements eventing.TargetIndex so
+// the functions delivery engine never imports this package.
 func (s *Service) TargetsForEvent(ctx context.Context, ev eventing.Event) []eventing.Target {
-	if ev.Source != eventing.SourcePubSub {
-		// Eventarc triggers are backed by a Pub/Sub topic; the emulator's
-		// storage producer does not (yet) publish to the Eventarc-provisioned
-		// topic, so only Pub/Sub events route through Eventarc.
+	if ev.Source != eventing.SourcePubSub && ev.Source != eventing.SourceStorage {
 		return nil
 	}
 	triggers, err := s.store.ListTriggersAllLocations(ctx, ev.Project)
 	if err != nil {
 		return nil
 	}
-	topic := eventing.ResourceID(ev.Resource)
 	var out []eventing.Target
 	for _, t := range triggers {
 		body := decodeBody(t.Config)
@@ -900,23 +1121,26 @@ func (s *Service) TargetsForEvent(ctx context.Context, ev eventing.Event) []even
 		if cf == "" {
 			continue
 		}
-		if !eventarcSourceMatches(body, topic) {
-			continue
-		}
-		if !eventarcFiltersMatch(body, ev) {
+		if !eventarcEventMatches(body, ev) {
 			continue
 		}
 		loc, id := locationOf(cf), lastSegment(cf)
 		if loc == "" || id == "" {
 			continue
 		}
-		out = append(out, eventing.Target{
-			Project:      ev.Project,
-			Location:     loc,
-			FunctionID:   id,
-			Retry:        eventarcRetries(body),
-			Subscription: eventing.EventarcSubscriptionID(t.Location, t.Name),
-		})
+		target := eventing.Target{
+			Project:    ev.Project,
+			Location:   loc,
+			FunctionID: id,
+			Retry:      eventarcRetries(body),
+		}
+		// The emulator provisions a backing subscription only for a trigger
+		// whose transport.pubsub.topic is set (SyncTriggerSubscription); do not
+		// advertise a dead-letter surface that does not exist.
+		if triggerTransportTopic(body) != "" {
+			target.Subscription = eventing.EventarcSubscriptionID(t.Location, t.Name)
+		}
+		out = append(out, target)
 	}
 	return out
 }
@@ -939,13 +1163,14 @@ func eventarcSourceMatches(body map[string]any, topic string) bool {
 	return eventing.ResourceID(src) == topic
 }
 
-// eventarcFiltersMatch evaluates a trigger's eventFilters against an event. An
-// empty operator is an exact match; "match-path-pattern" is a prefix match on
-// the value (GCP treats the rest as a path wildcard). The required "type" filter
-// is compared through the shared event-type normalization so a trigger may name
-// either the CloudEvent type or a Cloud Functions alias.
-func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
-	filters, _ := body["eventFilters"].([]any)
+// filtersMatch evaluates a trigger's eventFilters against an attribute map and
+// an event type. An empty operator is an exact match; "match-path-pattern" is a
+// prefix match on the value (GCP treats the rest as a path wildcard). The
+// required "type" filter is compared through the shared event-type
+// normalization so a trigger may name either the CloudEvent type or a Cloud
+// Functions alias. topic/bucket values additionally match by last path segment
+// (attributeValueMatches), so short and fully-qualified forms are equivalent.
+func filtersMatch(filters []any, attrs map[string]string, eventType string) bool {
 	for _, f := range filters {
 		fm, ok := f.(map[string]any)
 		if !ok {
@@ -958,12 +1183,12 @@ func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
 			continue
 		}
 		if attr == "type" {
-			if !eventing.TypeMatches(value, ev.EventType) {
+			if !eventing.TypeMatches(value, eventType) {
 				return false
 			}
 			continue
 		}
-		got := ev.Attributes[attr]
+		got, _ := attrs[attr]
 		if operator == "match-path-pattern" {
 			// GCP's match-path-pattern treats the trailing segment(s) as a
 			// wildcard; the emulator compares the literal prefix.
@@ -972,11 +1197,25 @@ func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
 			}
 			continue
 		}
-		if got != value {
+		if !attributeValueMatches(attr, value, got) {
 			return false
 		}
 	}
 	return true
+}
+
+// attributeValueMatches compares a filter value to an actual event attribute.
+// topic and bucket values fall back to a last-segment comparison so a short
+// value ("my-topic") and a fully-qualified one ("projects/p/topics/my-topic")
+// both match.
+func attributeValueMatches(name, filterVal, actualVal string) bool {
+	if filterVal == actualVal {
+		return true
+	}
+	if name == "topic" || name == "bucket" {
+		return eventing.ResourceID(filterVal) == eventing.ResourceID(actualVal)
+	}
+	return false
 }
 
 // eventarcRetries reports whether a trigger's retryPolicy retries a failed

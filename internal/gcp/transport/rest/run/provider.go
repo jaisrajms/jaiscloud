@@ -36,6 +36,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Run.TestIamPermissions": p.TestIamPermissions,
 		"Run.ListRevisions":      p.ListRevisions,
 		"Run.GetRevision":        p.GetRevision,
+		"Run.DeleteRevision":     p.DeleteRevision,
 		"Run.GetOperation":       p.GetOperation,
 		"Run.ListOperations":     p.ListOperations,
 		"Run.WaitOperation":      p.WaitOperation,
@@ -50,7 +51,7 @@ func (p *Provider) Reset(ctx context.Context) { p.core.Reset(ctx) }
 
 func (p *Provider) CreateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	op, err := p.core.CreateService(ctx, strParam(nr, "project"), strParam(nr, "location"),
-		strParam(nr, "serviceId"), bodyOf(nr))
+		strParam(nr, "serviceId"), bodyOf(nr), boolParam(nr, "validateOnly"))
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,10 @@ func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(svcs, func(s runstore.Service) string { return s.ID }, nr.Params)
+	page, next, err := paging.Page(svcs, func(s runstore.Service) string { return s.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, s := range page {
 		items = append(items, core.ServiceJSON(s))
@@ -84,7 +88,8 @@ func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *Provider) UpdateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	op, err := p.core.UpdateService(ctx, strParam(nr, "project"), strParam(nr, "location"),
-		strParam(nr, "service"), bodyOf(nr), strParam(nr, "updateMask"))
+		strParam(nr, "service"), bodyOf(nr), strParam(nr, "updateMask"),
+		boolParam(nr, "validateOnly"), boolParam(nr, "allowMissing"))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +97,8 @@ func (p *Provider) UpdateService(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *Provider) DeleteService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	op, err := p.core.DeleteService(ctx, strParam(nr, "project"), strParam(nr, "location"), strParam(nr, "service"))
+	op, err := p.core.DeleteService(ctx, strParam(nr, "project"), strParam(nr, "location"),
+		strParam(nr, "service"), boolParam(nr, "validateOnly"), strParam(nr, "etag"))
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +135,10 @@ func (p *Provider) ListRevisions(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(revs, func(r runstore.Revision) string { return r.ID }, nr.Params)
+	page, next, err := paging.Page(revs, func(r runstore.Revision) string { return r.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, r := range page {
 		items = append(items, core.RevisionJSON(r))
@@ -150,6 +159,15 @@ func (p *Provider) GetRevision(ctx context.Context, nr *model.NormalizedRequest)
 	return provider.OK(core.RevisionJSON(rev)), nil
 }
 
+func (p *Provider) DeleteRevision(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	op, err := p.core.DeleteRevision(ctx, strParam(nr, "project"), strParam(nr, "location"),
+		strParam(nr, "service"), strParam(nr, "revision"), boolParam(nr, "validateOnly"), strParam(nr, "etag"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op)), nil
+}
+
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	op, err := p.core.GetOperation(ctx, strParam(nr, "project"), strParam(nr, "location"), strParam(nr, "operation"))
 	if err != nil {
@@ -159,11 +177,31 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// Parse the query binding before the store lookup: real GCP rejects an
+	// unparseable pageSize regardless of whether the parent exists.
+	// run.projects.locations.operations.list documents "If not set or set to
+	// less than or equal to 0, the default page size is 100" — a documented
+	// exception to AIP-158's reject-negative rule, so a non-positive size is
+	// cleared to the default rather than raising InvalidArgument. (The shared
+	// pager's actual default is 1000, a pre-existing divergence not changed
+	// here.) The raw value is still parsed strictly first: a non-integer
+	// pageSize is INVALID_ARGUMENT (the int32 binding), never silently cleared
+	// as if absent.
+	pageSize, err := paging.ParseSize(nr.Params["pageSize"])
+	if err != nil {
+		return nil, err
+	}
+	if pageSize < 0 {
+		nr.Params["pageSize"] = 0
+	}
 	ops, err := p.core.ListOperations(ctx, strParam(nr, "project"), strParam(nr, "location"))
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(ops, func(o runstore.Operation) string { return o.ID }, nr.Params)
+	page, next, err := paging.Page(ops, func(o runstore.Operation) string { return o.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, op := range page {
 		items = append(items, core.OperationJSON(op))
@@ -203,14 +241,28 @@ func (p *Provider) Invoke(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if r == nil {
 		return nil, model.NewProviderError("InvalidRequest", "missing raw request", 400)
 	}
-	inv, err := p.core.Invoke(ctx, core.InvocationRequest{
+	invReq := core.InvocationRequest{
 		Host:    r.Host,
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Query:   r.URL.RawQuery,
 		Headers: forwardHeaders(r),
 		Body:    bodyBytes(nr),
-	})
+	}
+	// Legacy path-form invocation (/run/v2/.../services/{svc}/<subpath>) carries
+	// the target service explicitly; the runtime resolves it by service rather
+	// than by Host. Host-routed invocation leaves Service unset.
+	if svcID := strParam(nr, "service"); svcID != "" {
+		svc, err := p.core.GetService(ctx, strParam(nr, "project"), strParam(nr, "location"), svcID)
+		if err != nil {
+			return nil, err
+		}
+		invReq.Service = svc
+		if pth := strParam(nr, "invokePath"); pth != "" {
+			invReq.Path = pth
+		}
+	}
+	inv, err := p.core.Invoke(ctx, invReq)
 	if err != nil {
 		if errors.Is(err, core.ErrNoReadyRuntime) {
 			return nil, model.NewProviderError("Unavailable", err.Error(), 503)

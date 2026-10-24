@@ -1,0 +1,36 @@
+{
+  "index": 148,
+  "service": "compute",
+  "op": "compute_instances_list_noauth",
+  "method": "GET",
+  "path": "/compute/v1/projects/<project>/zones/us-central1-a/instances",
+  "status": 401,
+  "response": {
+    "error": {
+      "code": 401,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "domain": "googleapis.com",
+          "metadata": {
+            "method": "compute.v1.InstancesService.List",
+            "service": "compute.googleapis.com"
+          },
+          "reason": "CREDENTIALS_MISSING"
+        }
+      ],
+      "errors": [
+        {
+          "domain": "global",
+          "location": "Authorization",
+          "locationType": "header",
+          "message": "Login Required.",
+          "reason": "required"
+        }
+      ],
+      "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+      "status": "UNAUTHENTICATED"
+    }
+  }
+}
+

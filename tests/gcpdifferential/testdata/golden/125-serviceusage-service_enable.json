@@ -1,0 +1,115 @@
+{
+  "index": 125,
+  "service": "serviceusage",
+  "op": "service_enable",
+  "method": "POST",
+  "path": "/v1/projects/<project>/services/run.googleapis.com:enable",
+  "status": 200,
+  "response": {
+    "done": true,
+    "name": "operations/<operation>",
+    "response": {
+      "@type": "type.googleapis.com/google.api.serviceusage.v1.EnableServiceResponse",
+      "service": {
+        "config": {
+          "authentication": {},
+          "documentation": {
+            "summary": "Deploy and manage user provided container images that scale automatically based on incoming requests. The Cloud Run Admin API v1 follows the Knative Serving API specification, while v2 is aligned with Google Cloud AIP-based API standards, as described in https://google.aip.dev/."
+          },
+          "monitoredResources": [
+            {
+              "labels": [
+                {
+                  "key": "run.googleapis.com/service_name"
+                },
+                {
+                  "key": "run.googleapis.com/revision_name"
+                },
+                {
+                  "key": "run.googleapis.com/location"
+                },
+                {
+                  "key": "run.googleapis.com/configuration_name"
+                }
+              ],
+              "type": "cloud_run_revision"
+            },
+            {
+              "labels": [
+                {
+                  "key": "cloudresourcemanager.googleapis.com/cai_resource_type"
+                },
+                {
+                  "key": "cloudresourcemanager.googleapis.com/unique_id"
+                },
+                {
+                  "key": "cloudresourcemanager.googleapis.com/create_time"
+                },
+                {
+                  "key": "/resource_id"
+                },
+                {
+                  "key": "/resource_type"
+                },
+                {
+                  "key": "/accelerator_type"
+                },
+                {
+                  "key": "/accelerator_shape"
+                },
+                {
+                  "key": "serving.knative.dev/service"
+                },
+                {
+                  "key": "serving.knative.dev/revision"
+                },
+                {
+                  "key": "cloud.googleapis.com/location"
+                },
+                {
+                  "key": "/one_platform_service_name"
+                },
+                {
+                  "key": "cloudfunctions.googleapis.com/function_name"
+                },
+                {
+                  "key": "cloudbilling.googleapis.com/resource_info"
+                },
+                {
+                  "key": "cloudbilling.googleapis.com/resource_name"
+                },
+                {
+                  "key": "cloudbilling.googleapis.com/user_provided_name"
+                },
+                {
+                  "key": "/bc_pool"
+                },
+                {
+                  "key": "/redundancy_type"
+                },
+                {
+                  "key": "/disk_type"
+                }
+              ],
+              "type": "cloud_run_billing"
+            }
+          ],
+          "monitoring": {},
+          "name": "run.googleapis.com",
+          "quota": {},
+          "title": "Cloud Run Admin API",
+          "usage": {
+            "requirements": [
+              "serviceusage.googleapis.com/tos/cloud",
+              "serviceusage.googleapis.com/billing-enabled"
+            ]
+          }
+        },
+        "name": "projects/<project>/services/run.googleapis.com",
+        "parent": "projects/<project>",
+        "state": "ENABLED"
+      }
+    }
+  }
+}
+

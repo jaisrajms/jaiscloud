@@ -149,6 +149,7 @@ func (s *Server) buildRouter() {
 		r.Post("/eb-tick", s.adminHandler.EBTickHandler)
 		r.Post("/scheduler-tick", s.adminHandler.SchedulerTickHandler)
 		r.Post("/tasks-tick", s.adminHandler.TasksTickHandler)
+		r.Post("/monitoring-tick", s.adminHandler.MonitoringTickHandler)
 		// Managed snapshot endpoints (Phase 10).
 		r.Post("/snapshot", s.adminHandler.SnapshotCreate)
 		r.Get("/snapshots", s.adminHandler.SnapshotList)

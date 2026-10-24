@@ -1,0 +1,87 @@
+{
+  "voice": "en-US-AriaNeural",
+  "google_voice": "en-US-Journey-F",
+  "rate": "-6%",
+  "pronounce": { "jaiscloud": "Jays cloud" },
+  "beats": [
+    {
+      "id": "01-intro",
+      "text": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients and real Terraform at it, and run one crypto data product through its whole life: provision, ingest, process, serve, observe and automate.",
+      "ssml": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients and real Terraform at it, and run one crypto data product through its whole life: provision, ingest, process, serve, observe and automate.",
+      "console": [
+        { "route": "/gcp" }
+      ]
+    },
+    {
+      "id": "02-provision",
+      "text": "Provision starts with Terraform. It creates the project's Cloud Storage buckets, then a Cloud KMS key ring and key for encryption, then the Secret Manager entry the bridge reads, a Pub/Sub topic for events, and the demo service account.",
+      "ssml": "Provision starts with Terraform. It creates the project's <mark name=\"buckets\"/>Cloud Storage buckets, then a <mark name=\"kms\"/>Cloud KMS key ring and key for encryption, then the <mark name=\"secret\"/>Secret Manager entry the bridge reads, a <mark name=\"pubsub\"/>Pub/Sub topic for events, and the demo <mark name=\"iam\"/>service account.",
+      "console": [
+        { "mark": "buckets", "route": "/gcp/storage/buckets" },
+        { "mark": "kms", "route": "/gcp/kms/keyrings/us-central1/crypto-medallion" },
+        { "mark": "secret", "route": "/gcp/secretmanager/secrets" },
+        { "mark": "pubsub", "route": "/gcp/pubsub/topics" },
+        { "mark": "iam", "route": "/gcp/iam/service-accounts" }
+      ]
+    },
+    {
+      "id": "03-platform",
+      "text": "Then gcloud creates the data platform: the Managed Kafka cluster and its trades topic, and the Dataproc cluster the Spark jobs run on.",
+      "ssml": "Then gcloud creates the data platform: the <mark name=\"kafka\"/>Managed Kafka cluster and its <mark name=\"topic\"/>trades topic, and the <mark name=\"dataproc\"/>Dataproc cluster the Spark jobs run on.",
+      "console": [
+        { "mark": "kafka", "route": "/gcp/managedkafka/clusters/us-central1/cm-trades" },
+        { "mark": "topic", "route": "/gcp/managedkafka/clusters/us-central1/cm-trades/topics/trades" },
+        { "mark": "dataproc", "route": "/gcp/dataproc/clusters" }
+      ]
+    },
+    {
+      "id": "04-ingest",
+      "text": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to Managed Kafka. Every run also writes the raw stream to this capture bucket.",
+      "ssml": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to <mark name=\"topic\"/>Managed Kafka. Every run also writes the raw stream to this <mark name=\"capture\"/>capture bucket.",
+      "console": [
+        { "mark": "topic", "route": "/gcp/managedkafka/clusters/us-central1/cm-trades/topics/trades" },
+        { "mark": "capture", "route": "/gcp/storage/buckets/crypto-medallion-capture" }
+      ]
+    },
+    {
+      "id": "05-process",
+      "text": "Process. One always-on Dataproc job reads the topic and writes the medallion: raw bronze, parsed silver, and a windowed gold table in Iceberg on the Hive Metastore.",
+      "ssml": "Process. One always-on <mark name=\"job\"/>Dataproc job reads the topic and writes the medallion: raw bronze, parsed silver, and a windowed <mark name=\"gold\"/>gold table in Iceberg on the Hive Metastore.",
+      "console": [
+        { "mark": "job", "route": "/gcp/dataproc/jobs/us-central1/{streaming_job}" },
+        { "mark": "gold", "route": "/gcp/storage/buckets/crypto-medallion-gold" }
+      ]
+    },
+    {
+      "id": "06-serve",
+      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore for the live read model, and into BigQuery for the warehouse. This leaderboard re-sorts as each window lands.",
+      "ssml": "Serve. Every gold rollup fires <mark name=\"eventarc\"/>Eventarc, which drives a <mark name=\"run\"/>Cloud Run publisher into <mark name=\"firestore\"/>Firestore for the live read model, and into <mark name=\"bigquery\"/>BigQuery for the warehouse. This leaderboard re-sorts as each window lands.",
+      "console": [
+        { "mark": "eventarc", "route": "/gcp/eventarc/triggers" },
+        { "mark": "run", "route": "/gcp/run/services" },
+        { "mark": "firestore", "route": "/gcp/firestore/collections/leaderboard" },
+        { "mark": "bigquery", "route": "/gcp/bigquery/datasets/crypto_medallion" }
+      ]
+    },
+    {
+      "id": "07-observe",
+      "text": "Observe. A custom metric, trades per minute, crosses an alert policy and opens an incident, delivered as a message on the Pub/Sub subscription.",
+      "ssml": "Observe. A custom <mark name=\"metric\"/>metric, trades per minute, crosses an <mark name=\"alert\"/>alert policy and opens an incident, delivered as a <mark name=\"message\"/>message on the Pub/Sub subscription.",
+      "console": [
+        { "mark": "metric", "route": "/gcp/monitoring/metrics" },
+        { "mark": "alert", "route": "/gcp/monitoring/alerting" },
+        { "mark": "message", "route": "/gcp/pubsub/subscriptions/crypto-medallion-events-sub" }
+      ]
+    },
+    {
+      "id": "08-automate",
+      "text": "Automate. Cloud Scheduler submits the batch rollup on a cron, the load job lands it in BigQuery, and every component writes structured entries to Cloud Logging. And it all runs locally.",
+      "ssml": "Automate. <mark name=\"scheduler\"/>Cloud Scheduler submits the batch rollup on a cron, the <mark name=\"bqjobs\"/>load job lands it in BigQuery, and every component writes structured entries to <mark name=\"logging\"/>Cloud Logging. And it all runs locally.",
+      "console": [
+        { "mark": "scheduler", "route": "/gcp/scheduler/jobs" },
+        { "mark": "bqjobs", "route": "/gcp/bigquery/jobs" },
+        { "mark": "logging", "route": "/gcp/logging/entries" }
+      ]
+    }
+  ]
+}

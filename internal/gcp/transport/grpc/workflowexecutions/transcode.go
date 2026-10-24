@@ -7,9 +7,9 @@ import (
 
 	core "jaiscloud/internal/gcp/service/workflowexecutions"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/timestamp"
 
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // viewFromProto maps the proto ExecutionView to the core view, falling back to
@@ -56,10 +56,10 @@ func executionToProto(e workflowsstore.Execution, project string) *executionspb.
 		Labels:             e.Labels,
 	}
 	if !e.StartTime.IsZero() {
-		out.StartTime = timestamppb.New(e.StartTime)
+		out.StartTime = timestamp.Proto(e.StartTime)
 	}
 	if !e.EndTime.IsZero() {
-		out.EndTime = timestamppb.New(e.EndTime)
+		out.EndTime = timestamp.Proto(e.EndTime)
 	}
 	if e.Duration != "" {
 		if d, err := time.ParseDuration(e.Duration); err == nil {

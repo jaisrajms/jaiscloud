@@ -8,26 +8,52 @@
 **Toolchain:** OpenCode sessions do not have `go` on `PATH`. Before any `go`,
 `gofmt`, or `make gcp-status*` command, run
 `export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH` (`go` is
-`/tmp/opencode/go/bin/go`). For the Java/SDK compat gate also export
-`JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
+`/tmp/opencode/go/bin/go`). For the **optional** floci Java interop suite also
+export `JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
 `/tmp/opencode/toolchain/maven/bin`.
 
-**e2e environment:** the provided dev environment also has a working k3d
-cluster and a remote Docker context, so cluster-/image-based gates (`*-k3d`,
-k8s executor modes) are runnable — the contexts and commands are in the
-`gcp-phase-workflow` skill's Environment section.
+**GCP source of truth — real GCP, not a sibling emulator.** The authority order
+for GCP wire behavior is: the service's Discovery document / proto and official
+Google docs → real client-SDK wire behavior → the AWS reference implementation
+(repo conventions only) → jaiscloud's own code → jaiscloud's own tests.
+**floci-gcp and localgcp are optional smoke/interop harnesses, never the spec.**
+When a floci/localgcp expectation disagrees with the Discovery document (an
+emulator-only response field, a token prefix, a response shape), real GCP wins:
+do not add emulator-only fields/values to make a floci assertion pass — classify
+it TEST-NON-COMPLIANT and record it. The compliance gate is the offline
+conformance harness (`tests/gcpconformance`: vendored Discovery + committed
+transcripts, the official gRPC clients, and the `gcloud`/Python client suites).
+
+**e2e environment:** the provided dev environment has a working k3d cluster and
+a Docker daemon, so cluster-/image-based gates (`*-k3d`, k8s executor modes) and
+docker-executor gates (`test-e2e-*-docker`, `test-e2e-cloudrun-docker`) are
+runnable — the contexts and commands are in the `gcp-phase-workflow` skill's
+Environment section. The `docker` CLI's active context is `remote` (SSH to the
+build host) for image builds; the emulator and the docker-executor gates use the
+**local** daemon at `/var/run/docker.sock` (`docker --context default`), so the
+invoking shell must be in the `docker` group (or `sg docker -c '…'`).
+
+**Starting a session (`/gcp:new`):** the command first runs
+`make gcp-session-start`, which aborts if the current checkout has uncommitted
+changes (commit or stash a previous or concurrent session's work first),
+otherwise `git fetch upstream --prune` and fast-forwards the local `gcp` base
+from `upstream/gcp` (`--ff-only`, so a diverged base fails loudly rather than
+resetting), then rebuilds the ledger. Branch the item's `Branch` off the
+refreshed `gcp`. Always refresh from `upstream` — `origin` is a fork and its
+`gcp` is stale.
 
 The GCP backlog spans many plan docs and PRs. Do not rely on memory or chat
 history to decide what is implemented.
 
 **Any GCP plan you write must follow
-[`docs/gcp-wave-plan-template.md`](docs/gcp-wave-plan-template.md):** a wave index
+[`docs/gcp/wave-plan-template.md`](docs/gcp/wave-plan-template.md):** a wave index
 with `Session` / `IDs` / `Branch` columns, a detail table, and one session = one
 branch = one PR. The ledger parses it automatically; a plan without those
 headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
 Plans are independent *families* (default: the filename) and order via
 `SERIES` (e.g. `make gcp-status-next SERIES="java-compat,bigquery-ga"`); the
-Makefile default keeps `java-compat` first. Scaffold a new plan with
+Makefile default keeps `ga-fidelity` first (the current priority), then
+`console-ui`. Scaffold a new plan with
 `make gcp-plan-new SERVICE=<svc>` (pre-fills that service's non-`ga` fidelity
 cells), and `make gcp-status-lint-plans` fails any plan-shaped doc that lacks a
 parseable index/detail.

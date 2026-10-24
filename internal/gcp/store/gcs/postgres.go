@@ -126,12 +126,17 @@ func (s *PostgresObjectStore) UpdateBucketMetaAtomic(ctx context.Context, name s
 }
 
 func (s *PostgresObjectStore) DeleteBucket(ctx context.Context, name string) error {
+	// Only live and noncurrent generations block deletion; a bucket holding
+	// nothing but soft-deleted objects can be deleted (their rows go with it).
 	var count int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_gcs_objects WHERE bucket=$1`, name).Scan(&count); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_gcs_objects WHERE bucket=$1 AND NOT soft_deleted`, name).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
 		return ErrBucketNotEmpty
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1`, name); err != nil {
+		return err
 	}
 	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_buckets WHERE name=$1`, name)
 	if err != nil {
@@ -185,7 +190,8 @@ func (s *PostgresObjectStore) PutObjectMeta(ctx context.Context, bucket, name st
 	meta.Bucket = bucket
 	meta.Name = name
 	normalizeMeta(&meta)
-	// Replace semantics: drop prior generations, insert one live generation.
+	// Replace semantics: drop the live generation, insert one live generation.
+	// Retained noncurrent/soft-deleted rows stay.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -194,7 +200,7 @@ func (s *PostgresObjectStore) PutObjectMeta(ctx context.Context, bucket, name st
 	if err := ensureBucketExists(ctx, tx, bucket); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL`, bucket, name); err != nil {
 		return err
 	}
 	if err := insertObjectGeneration(ctx, tx, meta); err != nil {
@@ -237,11 +243,12 @@ func insertObjectGeneration(ctx context.Context, tx pgx.Tx, meta ObjectMeta) err
 	timeDeleted := nullableTime(meta.TimeDeleted)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO jc_gcs_objects
-		  (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count, content_encoding)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+		  (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count, content_encoding, soft_deleted, hard_delete_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 	`, meta.Bucket, meta.Name, meta.Generation, meta.Metageneration, meta.ContentType, meta.Size, meta.MD5Hash, meta.CRC32C,
 		meta.StorageClass, json.RawMessage(metaRaw), meta.TimeCreated, meta.Updated, retainUntil, retentionMode,
-		meta.TemporaryHold, meta.EventBasedHold, timeDeleted, meta.KmsKeyName, meta.WrappedDEK, meta.CSEKeySHA256, meta.ComponentCount, meta.ContentEncoding)
+		meta.TemporaryHold, meta.EventBasedHold, timeDeleted, meta.KmsKeyName, meta.WrappedDEK, meta.CSEKeySHA256, meta.ComponentCount, meta.ContentEncoding,
+		meta.SoftDeleted, nullableTime(&meta.HardDeleteTime))
 	if err != nil {
 		return err
 	}
@@ -249,7 +256,7 @@ func insertObjectGeneration(ctx context.Context, tx pgx.Tx, meta ObjectMeta) err
 }
 
 // objectCols is the shared SELECT column list for object rows.
-const objectCols = "bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count, content_encoding"
+const objectCols = "bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count, content_encoding, soft_deleted, hard_delete_time"
 
 // scanObject scans the objectCols columns into an ObjectMeta.
 func scanObject(scan func(...any) error) (ObjectMeta, error) {
@@ -258,8 +265,10 @@ func scanObject(scan func(...any) error) (ObjectMeta, error) {
 	var retentionMode string
 	var retainUntil pgtype.Timestamptz
 	var timeDeleted pgtype.Timestamptz
+	var hardDeleteTime pgtype.Timestamptz
 	err := scan(&m.Bucket, &m.Name, &m.Generation, &m.Metageneration, &m.ContentType, &m.Size, &m.MD5Hash, &m.CRC32C,
-		&m.StorageClass, &metaRaw, &m.TimeCreated, &m.Updated, &retainUntil, &retentionMode, &m.TemporaryHold, &m.EventBasedHold, &timeDeleted, &m.KmsKeyName, &m.WrappedDEK, &m.CSEKeySHA256, &m.ComponentCount, &m.ContentEncoding)
+		&m.StorageClass, &metaRaw, &m.TimeCreated, &m.Updated, &retainUntil, &retentionMode, &m.TemporaryHold, &m.EventBasedHold, &timeDeleted, &m.KmsKeyName, &m.WrappedDEK, &m.CSEKeySHA256, &m.ComponentCount, &m.ContentEncoding,
+		&m.SoftDeleted, &hardDeleteTime)
 	if err != nil {
 		return ObjectMeta{}, err
 	}
@@ -270,6 +279,9 @@ func scanObject(scan func(...any) error) (ObjectMeta, error) {
 	if timeDeleted.Valid {
 		t := timeDeleted.Time
 		m.TimeDeleted = &t
+	}
+	if hardDeleteTime.Valid {
+		m.HardDeleteTime = hardDeleteTime.Time
 	}
 	return m, nil
 }
@@ -339,7 +351,9 @@ func (s *PostgresObjectStore) PutObjectMetaChecked(ctx context.Context, bucket, 
 		if !objectPreconditionMatches(current, exists, precondition) {
 			return ErrPreconditionFailed
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2`, bucket, name); err != nil {
+		// Replace only the live generation: retained noncurrent/soft-deleted
+		// copies must survive an overwrite in a non-versioned bucket.
+		if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL`, bucket, name); err != nil {
 			return err
 		}
 		if err := insertObjectGeneration(ctx, tx, meta); err != nil {
@@ -499,7 +513,7 @@ func (s *PostgresObjectStore) DeleteObjectMetaChecked(ctx context.Context, bucke
 	})
 }
 
-func (s *PostgresObjectStore) TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error) {
+func (s *PostgresObjectStore) TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, opts TombstoneOptions, precondition *Precondition) (ObjectMeta, error) {
 	return retrySerializable(ctx, func() (ObjectMeta, error) {
 		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 		if err != nil {
@@ -518,8 +532,9 @@ func (s *PostgresObjectStore) TombstoneObjectMetaChecked(ctx context.Context, bu
 		}
 		now := clock.Now()
 		tag, err := tx.Exec(ctx, `
-			UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND generation=$4
-		`, bucket, name, now, m.Generation)
+			UPDATE jc_gcs_objects SET time_deleted=$3, soft_deleted=$5, hard_delete_time=$6
+			WHERE bucket=$1 AND name=$2 AND generation=$4
+		`, bucket, name, now, m.Generation, opts.SoftDeleted, nullableTime(&opts.HardDeleteTime))
 		if err != nil {
 			return ObjectMeta{}, err
 		}
@@ -530,63 +545,12 @@ func (s *PostgresObjectStore) TombstoneObjectMetaChecked(ctx context.Context, bu
 			return ObjectMeta{}, err
 		}
 		m.TimeDeleted = &now
+		m.SoftDeleted = opts.SoftDeleted
+		m.HardDeleteTime = time.Time{}
+		if opts.SoftDeleted {
+			m.HardDeleteTime = opts.HardDeleteTime
+		}
 		return m, nil
-	})
-}
-
-// RestoreObjectGeneration makes generation live again inside one Serializable
-// transaction: it locks the current live generation (validating precondition)
-// and the target row, marks the current live generation non-live, then clears
-// the target's time_deleted and bumps its metageneration.
-func (s *PostgresObjectStore) RestoreObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error) {
-	return retrySerializable(ctx, func() (ObjectMeta, error) {
-		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-		if err != nil {
-			return ObjectMeta{}, err
-		}
-		defer tx.Rollback(ctx)
-		current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
-		if err != nil {
-			return ObjectMeta{}, err
-		}
-		if !objectPreconditionMatches(current, exists, precondition) {
-			return ObjectMeta{}, ErrPreconditionFailed
-		}
-		row := tx.QueryRow(ctx, `
-			SELECT `+objectCols+`
-			FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND generation=$3
-			FOR UPDATE
-		`, bucket, name, generation)
-		target, err := scanObject(row.Scan)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ObjectMeta{}, ErrNoSuchObject
-		}
-		if err != nil {
-			return ObjectMeta{}, err
-		}
-		if target.TimeDeleted == nil {
-			// The target is already live: restore is a no-op.
-			return target, nil
-		}
-		now := clock.Now()
-		if _, err := tx.Exec(ctx, `
-			UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL
-		`, bucket, name, now); err != nil {
-			return ObjectMeta{}, err
-		}
-		target.Metageneration = nextMetageneration(target.Metageneration)
-		if _, err := tx.Exec(ctx, `
-			UPDATE jc_gcs_objects SET time_deleted=NULL, updated=$3, metageneration=$4
-			WHERE bucket=$1 AND name=$2 AND generation=$5
-		`, bucket, name, now, target.Metageneration, generation); err != nil {
-			return ObjectMeta{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return ObjectMeta{}, err
-		}
-		target.TimeDeleted = nil
-		target.Updated = now
-		return target, nil
 	})
 }
 
@@ -626,7 +590,7 @@ func (s *PostgresObjectStore) DeleteObjectMeta(ctx context.Context, bucket, name
 	return nil
 }
 
-func (s *PostgresObjectStore) TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error) {
+func (s *PostgresObjectStore) TombstoneObjectMeta(ctx context.Context, bucket, name string, opts TombstoneOptions) (ObjectMeta, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return ObjectMeta{}, err
@@ -646,8 +610,9 @@ func (s *PostgresObjectStore) TombstoneObjectMeta(ctx context.Context, bucket, n
 	}
 	now := clock.Now()
 	tag, err := tx.Exec(ctx, `
-		UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND generation=$4
-	`, bucket, name, now, m.Generation)
+		UPDATE jc_gcs_objects SET time_deleted=$3, soft_deleted=$5, hard_delete_time=$6
+		WHERE bucket=$1 AND name=$2 AND generation=$4
+	`, bucket, name, now, m.Generation, opts.SoftDeleted, nullableTime(&opts.HardDeleteTime))
 	if err != nil {
 		return ObjectMeta{}, err
 	}
@@ -658,6 +623,11 @@ func (s *PostgresObjectStore) TombstoneObjectMeta(ctx context.Context, bucket, n
 		return ObjectMeta{}, err
 	}
 	m.TimeDeleted = &now
+	m.SoftDeleted = opts.SoftDeleted
+	m.HardDeleteTime = time.Time{}
+	if opts.SoftDeleted {
+		m.HardDeleteTime = opts.HardDeleteTime
+	}
 	return m, nil
 }
 

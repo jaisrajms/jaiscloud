@@ -1,10 +1,12 @@
 // Package firestoreadmin implements the Firestore Admin gRPC surface
-// (google.firestore.admin.v1.FirestoreAdmin), covering collection-group
-// composite-index CRUD. Every other FirestoreAdmin RPC (databases, backups,
-// user creds, schedules, fields, export/import) is inherited from
-// adminpb.UnimplementedFirestoreAdminServer and fails loud with Unimplemented.
+// (google.firestore.admin.v1.FirestoreAdmin): collection-group composite-index
+// CRUD (service.go) plus the control plane (admin.go) — databases,
+// collection-group fields, backup schedules, backups and user creds. The
+// data-plane / disaster-recovery RPCs (ExportDocuments, ImportDocuments,
+// RestoreDatabase, CloneDatabase, BulkDeleteDocuments) are inherited from
+// adminpb.UnimplementedFirestoreAdminServer and fail loud with Unimplemented.
 //
-// The transport-agnostic index logic lives in the shared
+// The transport-agnostic domain logic lives in the shared
 // provider/firestore.Service, so this gRPC surface and the REST adapter
 // (projects.databases.collectionGroups.indexes) share one resource store and
 // one set of pagination/sort semantics.

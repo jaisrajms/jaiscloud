@@ -23,6 +23,15 @@ func alreadyExists(msg string) error {
 	return model.NewProviderError("AlreadyExists", msg, 409)
 }
 
+// notFound reports a write that addressed an absent entity. Real Datastore
+// documents NOT_FOUND for exactly one case: "the request attempted to update an
+// entity that does not exist" (Firestore in Datastore mode, "Errors and Error
+// Handling"). Reads report a miss as an empty Lookup result, and a delete of an
+// absent entity is idempotent, so this status only comes from an update.
+func notFound(msg string) error {
+	return model.NewProviderError("NotFound", msg, 404)
+}
+
 func aborted(msg string) error {
 	return model.NewProviderError("Aborted", msg, 409)
 }
@@ -39,7 +48,7 @@ func mapStoreError(err error) error {
 	case errors.Is(err, dsstore.ErrEntityExists):
 		return alreadyExists("entity already exists")
 	case errors.Is(err, dsstore.ErrEntityNotFound):
-		return failedPrecondition("entity not found", 400)
+		return notFound("entity not found")
 	case errors.Is(err, dsstore.ErrInvalidKey):
 		return invalidArgument("invalid key")
 	default:

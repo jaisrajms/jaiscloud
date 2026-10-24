@@ -1,0 +1,22 @@
+{
+  "index": 170,
+  "service": "pubsub",
+  "op": "order_publish_2",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/<topic>:publish",
+  "status": 200,
+  "request": {
+    "messages": [
+      {
+        "data": "a2V5LTI=",
+        "orderingKey": "key"
+      }
+    ]
+  },
+  "response": {
+    "messageIds": [
+      "<messageId>"
+    ]
+  }
+}
+

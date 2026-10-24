@@ -1,0 +1,26 @@
+{
+  "index": 90,
+  "service": "firestore",
+  "op": "fs_doc_create_dup",
+  "method": "POST",
+  "path": "/v1/projects/<project>/databases/(default)/documents/<fsCollection>?documentId=<fsDoc>",
+  "status": 409,
+  "request": {
+    "fields": {
+      "count": {
+        "integerValue": "1"
+      },
+      "greeting": {
+        "stringValue": "hello"
+      }
+    }
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "message": "Document already exists: projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+      "status": "ALREADY_EXISTS"
+    }
+  }
+}
+

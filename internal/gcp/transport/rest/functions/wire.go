@@ -4,8 +4,16 @@ import (
 	"strconv"
 	"strings"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 )
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Cloud Functions
+// Discovery document declares; a non-integer value is INVALID_ARGUMENT rather
+// than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 // resourceName returns the "name" path param, or InvalidArgument when absent.
 func resourceName(nr *model.NormalizedRequest) (string, error) {
@@ -73,21 +81,6 @@ func bodyString(body map[string]any, key string) string {
 	}
 	s, _ := body[key].(string)
 	return s
-}
-
-// intFrom coerces a decoded numeric/string param to an int.
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }
 
 // splitMask splits a comma-separated updateMask (REST query form) into paths.

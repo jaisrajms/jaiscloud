@@ -1,0 +1,19 @@
+{
+  "index": 18,
+  "service": "pubsub",
+  "op": "tour_pubsub_iam_get",
+  "method": "google.iam.v1.IAMPolicy/GetIamPolicy",
+  "path": "projects/<project>/topics/<topic>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "options": {
+      "requestedPolicyVersion": 3
+    },
+    "resource": "projects/<project>/topics/<topic>"
+  },
+  "response": {
+    "etag": "<etag>"
+  }
+}
+

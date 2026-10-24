@@ -16,12 +16,13 @@ type memorySnapshot struct {
 	Sinks      map[string]map[string]LogSink      `json:"sinks,omitempty"`
 	Exclusions map[string]map[string]LogExclusion `json:"exclusions,omitempty"`
 	Metrics    map[string]map[string]LogMetric    `json:"metrics,omitempty"`
+	Admin      map[string]map[string]adminRecord  `json:"admin,omitempty"`
 }
 
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.entries) == 0 && len(s.sinks) == 0 && len(s.exclusions) == 0 && len(s.metrics) == 0, nil
+	return len(s.entries) == 0 && len(s.sinks) == 0 && len(s.exclusions) == 0 && len(s.metrics) == 0 && len(s.admin) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
@@ -32,6 +33,7 @@ func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 		Sinks:      s.sinks,
 		Exclusions: s.exclusions,
 		Metrics:    s.metrics,
+		Admin:      s.admin,
 	})
 }
 
@@ -67,19 +69,29 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	if snap.Metrics == nil {
 		snap.Metrics = make(map[string]map[string]LogMetric)
 	}
+	if snap.Admin == nil {
+		snap.Admin = make(map[string]map[string]adminRecord)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = snap.Entries
 	s.sinks = snap.Sinks
 	s.exclusions = snap.Exclusions
 	s.metrics = snap.Metrics
+	s.admin = snap.Admin
 	var maxID int64
-	for _, entries := range snap.Entries {
-		for _, e := range entries {
-			if e.ID > maxID {
-				maxID = e.ID
+	for scope, entries := range snap.Entries {
+		for i := range entries {
+			// Backfill receive_timestamp for a snapshot written before it was
+			// tracked, so a restored entry never surfaces a zero receive time.
+			if entries[i].ReceiveTimestamp.IsZero() {
+				entries[i].ReceiveTimestamp = entries[i].Timestamp
+			}
+			if entries[i].ID > maxID {
+				maxID = entries[i].ID
 			}
 		}
+		snap.Entries[scope] = entries
 	}
 	s.nextID = maxID + 1
 	return nil
@@ -100,6 +112,7 @@ func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 		     + (SELECT count(*) FROM jc_log_sinks)
 		     + (SELECT count(*) FROM jc_log_exclusions)
 		     + (SELECT count(*) FROM jc_log_metrics)
+		     + (SELECT count(*) FROM jc_log_admin_records)
 	`).Scan(&n); err != nil {
 		return false, err
 	}
@@ -126,12 +139,18 @@ type pgSnapshot struct {
 		ProjectID string    `json:"projectId"`
 		Metric    LogMetric `json:"metric"`
 	} `json:"metrics,omitempty"`
+	Admin []struct {
+		Collection string      `json:"collection"`
+		Scope      string      `json:"scope"`
+		ID         string      `json:"id"`
+		Record     adminRecord `json:"record"`
+	} `json:"admin,omitempty"`
 }
 
 func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	var snap pgSnapshot
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels
+		SELECT project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels
 		FROM jc_log_entries ORDER BY project_id, id
 	`)
 	if err != nil {
@@ -143,7 +162,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			Entry     LogEntry `json:"entry"`
 		}
 		var jsonPayload, resourceLabels, labels []byte
-		if err := rows.Scan(&r.ProjectID, &r.Entry.ID, &r.Entry.LogName, &r.Entry.ResourceType, &resourceLabels, &r.Entry.Severity, &r.Entry.PayloadType, &r.Entry.TextPayload, &jsonPayload, &r.Entry.Timestamp, &r.Entry.InsertID, &labels); err != nil {
+		if err := rows.Scan(&r.ProjectID, &r.Entry.ID, &r.Entry.LogName, &r.Entry.ResourceType, &resourceLabels, &r.Entry.Severity, &r.Entry.PayloadType, &r.Entry.TextPayload, &jsonPayload, &r.Entry.Timestamp, &r.Entry.ReceiveTimestamp, &r.Entry.InsertID, &labels); err != nil {
 			rows.Close()
 			return err
 		}
@@ -164,7 +183,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	sinkRows, err := s.pool.Query(ctx, `
-		SELECT project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		SELECT project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+		       intercept_children, output_version_format, bigquery_options, create_time, update_time
 		FROM jc_log_sinks ORDER BY project_id, name
 	`)
 	if err != nil {
@@ -175,14 +195,18 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			ProjectID string  `json:"projectId"`
 			Sink      LogSink `json:"sink"`
 		}
-		var exclusions []byte
+		var exclusions, bigQueryOptions []byte
 		if err := sinkRows.Scan(&r.ProjectID, &r.Sink.Name, &r.Sink.Destination, &r.Sink.Filter, &r.Sink.Description,
-			&r.Sink.Disabled, &exclusions, &r.Sink.WriterIdentity, &r.Sink.IncludeChildren, &r.Sink.CreateTime, &r.Sink.UpdateTime); err != nil {
+			&r.Sink.Disabled, &exclusions, &r.Sink.WriterIdentity, &r.Sink.IncludeChildren,
+			&r.Sink.InterceptChildren, &r.Sink.OutputVersionFormat, &bigQueryOptions, &r.Sink.CreateTime, &r.Sink.UpdateTime); err != nil {
 			sinkRows.Close()
 			return err
 		}
 		if len(exclusions) > 0 {
 			_ = json.Unmarshal(exclusions, &r.Sink.Exclusions)
+		}
+		if len(bigQueryOptions) > 0 && string(bigQueryOptions) != "null" {
+			_ = json.Unmarshal(bigQueryOptions, &r.Sink.BigQueryOptions)
 		}
 		snap.Sinks = append(snap.Sinks, r)
 	}
@@ -250,6 +274,32 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		return err
 	}
 
+	adminRows, err := s.pool.Query(ctx, `
+		SELECT collection, scope, id, data FROM jc_log_admin_records ORDER BY collection, scope, id
+	`)
+	if err != nil {
+		return err
+	}
+	for adminRows.Next() {
+		var r struct {
+			Collection string      `json:"collection"`
+			Scope      string      `json:"scope"`
+			ID         string      `json:"id"`
+			Record     adminRecord `json:"record"`
+		}
+		var data []byte
+		if err := adminRows.Scan(&r.Collection, &r.Scope, &r.ID, &data); err != nil {
+			adminRows.Close()
+			return err
+		}
+		r.Record.Data = append(json.RawMessage(nil), data...)
+		snap.Admin = append(snap.Admin, r)
+	}
+	adminRows.Close()
+	if err := adminRows.Err(); err != nil {
+		return err
+	}
+
 	return json.NewEncoder(w).Encode(snap)
 }
 
@@ -275,23 +325,35 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_metrics`); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_admin_records`); err != nil {
+		return err
+	}
 	for _, r := range snap.Entries {
+		// Backfill receive_timestamp for a snapshot written before it was
+		// tracked.
+		receiveTimestamp := r.Entry.ReceiveTimestamp
+		if receiveTimestamp.IsZero() {
+			receiveTimestamp = r.Entry.Timestamp
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_log_entries
-				(project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+				(project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		`, r.ProjectID, r.Entry.ID, r.Entry.LogName, r.Entry.ResourceType, nullableJSON(r.Entry.ResourceLabels), r.Entry.Severity, r.Entry.PayloadType,
-			r.Entry.TextPayload, nullableJSON(r.Entry.JsonPayload), r.Entry.Timestamp, r.Entry.InsertID, nullableJSON(r.Entry.Labels)); err != nil {
+			r.Entry.TextPayload, nullableJSON(r.Entry.JsonPayload), r.Entry.Timestamp, receiveTimestamp, r.Entry.InsertID, nullableJSON(r.Entry.Labels)); err != nil {
 			return err
 		}
 	}
 	for _, r := range snap.Sinks {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_log_sinks
-				(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+				 intercept_children, output_version_format, bigquery_options, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		`, r.ProjectID, r.Sink.Name, r.Sink.Destination, r.Sink.Filter, r.Sink.Description, r.Sink.Disabled,
-			nullableJSON(nonNilExclusions(r.Sink.Exclusions)), r.Sink.WriterIdentity, r.Sink.IncludeChildren, r.Sink.CreateTime, r.Sink.UpdateTime); err != nil {
+			nullableJSON(nonNilExclusions(r.Sink.Exclusions)), r.Sink.WriterIdentity, r.Sink.IncludeChildren,
+			r.Sink.InterceptChildren, r.Sink.OutputVersionFormat, sinkBigQueryOptionsArg(r.Sink.BigQueryOptions),
+			r.Sink.CreateTime, r.Sink.UpdateTime); err != nil {
 			return err
 		}
 	}
@@ -315,6 +377,14 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		`, r.ProjectID, r.Metric.Name, r.Metric.Description, r.Metric.Filter, r.Metric.Disabled, r.Metric.BucketName,
 			r.Metric.ValueExtractor, labelExtractors, bucketOptions, descriptor, r.Metric.CreateTime, r.Metric.UpdateTime); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.Admin {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_log_admin_records (collection, scope, id, data)
+			VALUES ($1,$2,$3,$4)
+		`, r.Collection, r.Scope, r.ID, nullableJSON(json.RawMessage(r.Record.Data))); err != nil {
 			return err
 		}
 	}

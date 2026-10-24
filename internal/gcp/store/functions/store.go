@@ -204,6 +204,12 @@ type Store interface {
 	DeleteOperationByID(ctx context.Context, id string) error
 	DeleteOperation(ctx context.Context, projectID, location, id string) error
 	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
+	// ListOperationsAllLocations returns every operation for a project across
+	// all locations. The v1 Cloud Functions operations collection is top-level
+	// (operations/{id}, no location segment), and its ListOperations parent may
+	// be "operations" / "projects/{p}" / "projects/{p}/locations/-" to read
+	// across locations.
+	ListOperationsAllLocations(ctx context.Context, projectID string) ([]Operation, error)
 
 	// Deliveries persist one event-trigger delivery per (project, location,
 	// function). They are project+location scoped and keyed by their opaque id;

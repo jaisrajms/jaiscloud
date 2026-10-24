@@ -332,6 +332,64 @@ func TestGCSCodecEncodeErrorReason(t *testing.T) {
 	}
 }
 
+// TestGCSCodecEncodeErrorLocation verifies a provider-supplied parameter name is
+// rendered on the errors[] entry as location/locationType (GCS also reports the
+// offending parameter for a bad query binding — DC68), and that an error
+// without one gains neither field.
+func TestGCSCodecEncodeErrorLocation(t *testing.T) {
+	c := &GCSCodec{}
+	perr := model.NewProviderError("InvalidRequest",
+		"Invalid unsigned integer value: '-1'.", 400).
+		WithData(map[string]any{
+			"reason":       "invalidParameter",
+			"location":     "maxResults",
+			"locationType": "parameter",
+		})
+	status, _, body := c.EncodeError(nil, perr)
+	if status != 400 {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	errObj, _ := env["error"].(map[string]any)
+	if errObj["message"] != "Invalid unsigned integer value: '-1'." {
+		t.Errorf("message = %v, want the GCS binding text", errObj["message"])
+	}
+	errorsArr, _ := errObj["errors"].([]any)
+	if len(errorsArr) == 0 {
+		t.Fatal("expected errors[] array")
+	}
+	first, _ := errorsArr[0].(map[string]any)
+	if first["reason"] != "invalidParameter" {
+		t.Errorf("reason = %v, want invalidParameter", first["reason"])
+	}
+	if first["location"] != "maxResults" {
+		t.Errorf("location = %v, want maxResults", first["location"])
+	}
+	if first["locationType"] != "parameter" {
+		t.Errorf("locationType = %v, want parameter", first["locationType"])
+	}
+
+	plain, _, body := c.EncodeError(nil, model.NewProviderError("NotFound", "object not found", 404))
+	if plain != 404 {
+		t.Fatalf("expected 404, got %d", plain)
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	errObj, _ = env["error"].(map[string]any)
+	errorsArr, _ = errObj["errors"].([]any)
+	first, _ = errorsArr[0].(map[string]any)
+	if _, ok := first["location"]; ok {
+		t.Error("an error without a location must not gain a location field")
+	}
+	if _, ok := first["locationType"]; ok {
+		t.Error("an error without a location must not gain a locationType field")
+	}
+}
+
 func TestGCSCodecRewriteRouting(t *testing.T) {
 	c := &GCSCodec{}
 	r := httptest.NewRequest("POST", "/storage/v1/b/srcbkt/o/dir/src.txt/rewriteTo/b/dstbkt/o/dir/dst.txt", nil)

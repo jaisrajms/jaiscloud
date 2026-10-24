@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"jaiscloud/internal/gcp/resource"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/model"
 )
 
 const simpleSource = "main:\n  steps:\n    - r:\n        return: 1\n"
@@ -167,7 +169,7 @@ func TestWorkflowCRUDAndLRO(t *testing.T) {
 	}
 
 	// List.
-	page, _, err := s.ListWorkflows(ctx, "proj", "us-central1", 0, "")
+	page, _, err := s.ListWorkflows(ctx, "proj", "us-central1", "", "", 0, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -316,5 +318,255 @@ func TestUpdateWorkflowMaskAcceptsProtoAndJSONPaths(t *testing.T) {
 		ID: "wf1", UpdateMask: "bogusField", Description: "x",
 	}); err == nil {
 		t.Errorf("expected error for unknown updateMask field")
+	}
+}
+
+func TestListWorkflowsByProjectAggregatesLocations(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	for _, in := range []struct {
+		id, location string
+	}{
+		{"alpha", "us-central1"},
+		{"beta", "europe-west1"},
+		{"alpha", "europe-west1"},
+	} {
+		if _, _, err := s.CreateWorkflow(ctx, "proj", in.location, CreateInput{ID: in.id, SourceContents: simpleSource}); err != nil {
+			t.Fatalf("create %s/%s: %v", in.location, in.id, err)
+		}
+	}
+	// An unrelated project is not aggregated.
+	if _, _, err := s.CreateWorkflow(ctx, "other", "us-central1", CreateInput{ID: "zzz", SourceContents: simpleSource}); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+
+	got, err := s.ListWorkflowsByProject(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ListWorkflowsByProject: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d workflows, want 3", len(got))
+	}
+	// Sorted by location then ID.
+	want := [][2]string{{"europe-west1", "alpha"}, {"europe-west1", "beta"}, {"us-central1", "alpha"}}
+	for i, w := range want {
+		if got[i].Location != w[0] || got[i].ID != w[1] {
+			t.Fatalf("row %d = %s/%s, want %s/%s", i, got[i].Location, got[i].ID, w[0], w[1])
+		}
+	}
+}
+
+// TestListWorkflowRevisions verifies revision history accumulates on create and
+// on each revision-changing update (newest first), that a description-only
+// update does not mint a revision, and that revision-scoped GetWorkflow and
+// paging behave.
+func TestListWorkflowRevisions(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{
+		ID: "wf1", Description: "orig", SourceContents: simpleSource,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	revs, _, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 0, "")
+	if err != nil {
+		t.Fatalf("listRevisions: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Fatalf("revisions = %d, want 1", len(revs))
+	}
+	firstRev := revs[0].RevisionID
+	if firstRev == "" || revs[0].SourceContents != simpleSource || revs[0].Workflow.Description != "orig" {
+		t.Fatalf("first revision = %+v", revs[0])
+	}
+
+	// A description-only update is workflow-wide: no new revision.
+	if _, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "description", Description: "new",
+	}); err != nil {
+		t.Fatalf("description update: %v", err)
+	}
+	revs, _, err = s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 0, "")
+	if err != nil {
+		t.Fatalf("listRevisions after description update: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Fatalf("revisions after description-only update = %d, want 1", len(revs))
+	}
+	if revs[0].Workflow.Description != "new" {
+		t.Fatalf("workflow-wide description = %q, want new", revs[0].Workflow.Description)
+	}
+
+	// A source update mints a new revision, newest first, old source preserved.
+	if _, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "sourceContents", SourceContents: "main:\n  steps:\n    - r:\n        return: 2\n",
+	}); err != nil {
+		t.Fatalf("source update: %v", err)
+	}
+	revs, _, err = s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 0, "")
+	if err != nil {
+		t.Fatalf("listRevisions after source update: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("revisions after source update = %d, want 2", len(revs))
+	}
+	if revs[0].RevisionID == firstRev || revs[1].RevisionID != firstRev {
+		t.Fatalf("ordering wrong: %s, %s", revs[0].RevisionID, revs[1].RevisionID)
+	}
+	if revs[1].SourceContents != simpleSource {
+		t.Fatalf("old source not preserved: %q", revs[1].SourceContents)
+	}
+
+	// revision-scoped get returns the historical revision.
+	got, err := s.GetWorkflowRevision(ctx, "proj", "us-central1", "wf1", firstRev)
+	if err != nil {
+		t.Fatalf("get revision: %v", err)
+	}
+	if got.SourceContents != simpleSource || got.RevisionID != firstRev {
+		t.Fatalf("get revision = %+v", got)
+	}
+
+	// An unknown workflow is NotFound.
+	if _, _, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "missing", 0, ""); err == nil {
+		t.Fatalf("expected NotFound for missing workflow")
+	}
+	// An unknown revision is NotFound.
+	if _, err := s.GetWorkflowRevision(ctx, "proj", "us-central1", "wf1", "000999-zzz"); err == nil {
+		t.Fatalf("expected NotFound for unknown revision")
+	}
+}
+
+// TestListWorkflowRevisionsPaging verifies the newest-first cursor pagination
+// and the default/max page sizes.
+func TestListWorkflowRevisionsPaging(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{ID: "wf1", SourceContents: simpleSource}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for i := 2; i <= 3; i++ {
+		if _, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+			ID: "wf1", UpdateMask: "sourceContents",
+			SourceContents: fmt.Sprintf("main:\n  steps:\n    - r:\n        return: %d\n", i),
+		}); err != nil {
+			t.Fatalf("update %d: %v", i, err)
+		}
+	}
+	all, _, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 0, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("revisions = %d, want 3", len(all))
+	}
+	page, next, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 1, "")
+	if err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	if len(page) != 1 || page[0].RevisionID != all[0].RevisionID || next == "" {
+		t.Fatalf("page 1 = %+v next=%q", page, next)
+	}
+	page2, next2, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 10, next)
+	if err != nil {
+		t.Fatalf("page 2: %v", err)
+	}
+	if len(page2) != 2 || page2[0].RevisionID != all[1].RevisionID || next2 != "" {
+		t.Fatalf("page 2 = %+v next=%q", page2, next2)
+	}
+}
+
+// TestCurrentRevisionConsistency verifies that after a workflow-wide
+// (non-revision) update the live workflow, the newest listed revision and a
+// revision-scoped get of the current revision agree, and that the revision
+// creation time does not advance without a new revision.
+func TestCurrentRevisionConsistency(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{
+		ID: "wf1", Description: "orig", SourceContents: simpleSource, UserEnvVars: map[string]string{"A": "1"},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	live, err := s.GetWorkflow(ctx, "proj", "us-central1", "wf1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	createdRevTime := live.RevisionCreateTime
+	if createdRevTime.IsZero() {
+		t.Fatalf("RevisionCreateTime not set on create")
+	}
+
+	// A userEnvVars-only + description-only update keeps the revision but
+	// changes revision-scoped and workflow-wide fields.
+	if _, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "userEnvVars,description",
+		UserEnvVars: map[string]string{"A": "2"}, Description: "new",
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	live, err = s.GetWorkflow(ctx, "proj", "us-central1", "wf1")
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	if !live.RevisionCreateTime.Equal(createdRevTime) {
+		t.Fatalf("revisionCreateTime advanced without a new revision: %v -> %v", createdRevTime, live.RevisionCreateTime)
+	}
+
+	revs, _, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", 0, "")
+	if err != nil {
+		t.Fatalf("listRevisions: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Fatalf("revisions = %d, want 1", len(revs))
+	}
+	newest := revs[0]
+	if newest.UserEnvVars["A"] != "2" || newest.Workflow.Description != "new" {
+		t.Fatalf("newest revision not live: %+v", newest)
+	}
+	if !newest.RevisionCreateTime.Equal(live.RevisionCreateTime) {
+		t.Fatalf("newest revisionCreateTime %v != live %v", newest.RevisionCreateTime, live.RevisionCreateTime)
+	}
+
+	cur, err := s.GetWorkflowRevision(ctx, "proj", "us-central1", "wf1", live.RevisionID)
+	if err != nil {
+		t.Fatalf("get current revision: %v", err)
+	}
+	if cur.UserEnvVars["A"] != "2" || !cur.RevisionCreateTime.Equal(live.RevisionCreateTime) {
+		t.Fatalf("current revision get disagrees with live: %+v", cur)
+	}
+
+	// A source update mints a new revision whose creation time advances.
+	prevRevTime := live.RevisionCreateTime
+	if _, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "sourceContents", SourceContents: "main:\n  steps:\n    - r:\n        return: 9\n",
+	}); err != nil {
+		t.Fatalf("source update: %v", err)
+	}
+	live, _ = s.GetWorkflow(ctx, "proj", "us-central1", "wf1")
+	if !live.RevisionCreateTime.After(prevRevTime) {
+		t.Fatalf("revisionCreateTime did not advance on a new revision: %v -> %v", prevRevTime, live.RevisionCreateTime)
+	}
+}
+
+// TestListWorkflowRevisionsRejectsNegativePageSize pins listRevisions' cursor
+// contract: a negative pageSize is INVALID_ARGUMENT, not a slice panic. This
+// surface has its own newest-first pager (not the shared cursor), so it
+// validates the AIP-158 rule itself.
+func TestListWorkflowRevisionsRejectsNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{ID: "wf1", SourceContents: simpleSource}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, _, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", -1, "")
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+		t.Fatalf("ListWorkflowRevisions(pageSize=-1) = %v, want InvalidArgument", err)
 	}
 }

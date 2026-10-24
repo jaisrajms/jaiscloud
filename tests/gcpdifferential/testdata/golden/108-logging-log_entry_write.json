@@ -1,0 +1,22 @@
+{
+  "index": 108,
+  "service": "logging",
+  "op": "log_entry_write",
+  "method": "POST",
+  "path": "/v2/entries:write",
+  "status": 200,
+  "request": {
+    "entries": [
+      {
+        "logName": "projects/<project>/logs/<logName>",
+        "resource": {
+          "type": "global"
+        },
+        "severity": "INFO",
+        "textPayload": "hello jaiscloud"
+      }
+    ]
+  },
+  "response": {}
+}
+

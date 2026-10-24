@@ -35,8 +35,8 @@ func TestGenerateAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAccessToken: %v", err)
 	}
-	if !strings.HasPrefix(resp.GetAccessToken(), core.AccessTokenPrefix) {
-		t.Errorf("accessToken = %q", resp.GetAccessToken())
+	if got := resp.GetAccessToken(); strings.Count(got, ".") != 2 {
+		t.Errorf("accessToken = %q, want an opaque 3-part JWT", got)
 	}
 	if resp.GetExpireTime() == nil || !resp.GetExpireTime().AsTime().After(time.Now()) {
 		t.Errorf("expireTime = %v", resp.GetExpireTime())

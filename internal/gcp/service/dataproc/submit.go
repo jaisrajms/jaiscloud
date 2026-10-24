@@ -64,13 +64,13 @@ var waitTerminalFn = sparkhelpers.WaitTerminalWith
 // synchronously before runJobWithCtx blocks (or, when called from submitJob,
 // before the executor goroutine is launched), so a CancelJob racing job
 // submission always finds the cancel func.
-func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
+func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string) {
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	key := cancelKey(project, region, j.JobID)
 	s.registerCancel(key, runCancel)
 	defer s.unregisterCancel(key)
-	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint)
+	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, namespace)
 }
 
 // registerCancel records a running job's cancel func so a racing CancelJob
@@ -93,7 +93,8 @@ func (s *Service) unregisterCancel(key string) {
 // persisted for post-GC rehydration parity. metastoreEndpoint is the cluster's
 // Hive Metastore thrift endpoint ("" when the cluster has no attachment); it is
 // injected as a spark-submit conf so driver and executor pods share the
-// attachment.
+// attachment. namespace is the cluster's effective workload namespace ("" falls
+// back to the process-wide one).
 //
 // The caller owns ctx's cancel func and its registration in s.cancels. submitJob
 // registers before launching the goroutine so a CancelJob landing in the
@@ -103,7 +104,7 @@ func (s *Service) unregisterCancel(key string) {
 // restarts the driver within maxFailuresPerHour/maxFailuresTotal and the
 // documented thrash rule (>4 non-zero exits in a 10-minute window). Success is
 // strictly driver exit 0. Only k8s mode runs here; mock mode has no executor.
-func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
+func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string) {
 	jobID := j.JobID
 	runCtx := ctx
 
@@ -131,9 +132,9 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 	// exits, so success is only exit 0.
 	_, isSQLJob := ep.(sparkhelpers.SqlEntryPoint)
 
-	ns := s.namespace
+	ns := namespace
 	if ns == "" {
-		ns = "jaiscloud"
+		ns = s.defaultNamespace()
 	}
 
 	var identityMutator k8shelpers.IdentityMutator
@@ -201,7 +202,7 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 		}
 		clientJob.Attempt = attempt
 
-		handle, err := sparkhelpers.SubmitClientMode(runCtx, s.k8sClient, clientJob)
+		handle, err := s.executor.Submit(runCtx, clientJob)
 		if err != nil {
 			if runCtx.Err() != nil {
 				return // cancelled by CancelJob
@@ -226,21 +227,20 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 			s.setJobState(runCtx, project, region, jobID, map[string]bool{jobStateAttemptFail: true}, jobStateRunning, "")
 		}
 
-		final, err := waitTerminalFn(runCtx, s.k8sClient, handle, sparkhelpers.TerminalOptions{StrictExitCode: strict})
+		final, err := s.executor.WaitTerminal(runCtx, handle, sparkhelpers.TerminalOptions{StrictExitCode: strict})
 		if err != nil {
 			if runCtx.Err() != nil {
 				// Cancelled (CancelJob, or service shutdown): the driver is
-				// still running, so delete its client-mode k8s Job (and pod)
-				// before returning — otherwise the driver keeps executing after
-				// the job reports CANCELLED.
-				s.reapDriver(handle)
+				// still running, so reap it before returning — otherwise the
+				// driver keeps executing after the job reports CANCELLED.
+				s.executor.Reap(handle)
 				return
 			}
 			// The wait itself failed (e.g. the pod watch could not be
 			// established) while the context is still live: the driver may
 			// still be running, so reap it before reporting ERROR rather than
 			// leaking it — the same class of leak STR3 fixed on the cancel path.
-			s.reapDriver(handle)
+			s.executor.Reap(handle)
 			slog.Warn("dataproc: WaitTerminal failed", "job", jobID, "attempt", attempt, "err", err)
 			s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
 			s.finishJob(project, region, j, jobStateError, err.Error(), driverLog.Bytes())
@@ -251,8 +251,8 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 		// job's GCS driver-output object at terminal state. The capture is
 		// byte-capped so a chatty driver cannot exhaust emulator memory.
 		tailCtx, tailCancel := context.WithTimeout(ctx, tailLogsTimeout)
-		if tailErr := k8shelpers.TailLogs(tailCtx, s.k8sClient, handle, k8shelpers.LogKindMainRaw, driverLog); tailErr != nil {
-			slog.Warn("dataproc: TailLogs failed", "job", jobID, "attempt", attempt, "err", tailErr)
+		if tailErr := s.executor.StreamLogs(tailCtx, handle, driverLog); tailErr != nil {
+			slog.Warn("dataproc: StreamLogs failed", "job", jobID, "attempt", attempt, "err", tailErr)
 		}
 		tailCancel()
 
@@ -286,31 +286,11 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 		if runCtx.Err() != nil {
 			return
 		}
-		// Reap the failed attempt's k8s objects (its Job, and — via the Job's
-		// ownerReference — the executor-template ConfigMap and failed pod) so a
-		// long restart chain does not accumulate one Job/ConfigMap/pod per
-		// attempt.
-		if cancelErr := k8shelpers.Cancel(runCtx, s.k8sClient, handle); cancelErr != nil {
-			slog.Warn("dataproc: failed to reap restart attempt", "job", jobID, "attempt", attempt, "err", cancelErr)
-		}
-	}
-}
-
-// reapDriver deletes the client-mode k8s Job (and, via cascade, the driver
-// pod). It is called when a running job's context is cancelled (CancelJob, or
-// service shutdown) and when the wait itself fails while the context is still
-// live; in both cases the driver may still be executing and must be stopped.
-// The reap runs on a fresh bounded background context (the job context may
-// already be cancelled) and is best-effort and logged, matching the EMR-on-EKS
-// cancel path.
-func (s *Service) reapDriver(handle k8shelpers.JobHandle) {
-	if handle.JobName == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), driverReapTimeout)
-	defer cancel()
-	if err := k8shelpers.Cancel(ctx, s.k8sClient, handle); err != nil {
-		slog.Warn("dataproc: failed to delete cancelled driver job", "job", handle.JobName, "err", err)
+		// Reap the failed attempt's driver (its k8s Job, and — via the Job's
+		// ownerReference — the executor-template ConfigMap and failed pod, or its
+		// Docker container) so a long restart chain does not accumulate one
+		// resource per attempt.
+		s.executor.Reap(handle)
 	}
 }
 

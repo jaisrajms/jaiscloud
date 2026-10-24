@@ -37,6 +37,16 @@ func OperationName(project, location, id string) string {
 	return resource.ResourceID(project)("managedkafka-operation", location+"/"+id)
 }
 
+// ParseParent splits a location parent name projects/{p}/locations/{l}. ok is
+// false for any other shape (e.g. a resource name or a collection-less path).
+func ParseParent(parent string) (project, location string, ok bool) {
+	segs := strings.Split(strings.Trim(parent, "/"), "/")
+	if len(segs) != 4 || segs[0] != "projects" || segs[2] != "locations" {
+		return "", "", false
+	}
+	return segs[1], segs[3], true
+}
+
 // BootstrapAddress is the synthesized bootstrap address of the mock topology:
 // when no real broker is running (the default), the emulator returns the
 // documented legacy GCP format but nothing listens at it:

@@ -1,0 +1,83 @@
+{
+  "index": 74,
+  "service": "bigquery",
+  "op": "bqsql_win_lag",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT id, LAG(id) OVER (ORDER BY id) lg FROM nums ORDER BY id",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "3",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "1"
+          },
+          {
+            "v": null
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "2"
+          },
+          {
+            "v": "1"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "3"
+          },
+          {
+            "v": "2"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "mode": "NULLABLE",
+          "name": "lg",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "3",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

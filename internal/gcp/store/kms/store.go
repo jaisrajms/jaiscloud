@@ -49,6 +49,12 @@ type CryptoKey struct {
 	// NextRotationTime is when the next rotation is scheduled. Zero means no
 	// rotation is scheduled (RotationPeriod is zero).
 	NextRotationTime time.Time
+
+	// ProtectionLevel is the key's protection level (SOFTWARE, HSM, or
+	// HSM_SINGLE_TENANT). Empty means SOFTWARE.
+	ProtectionLevel string
+	// ImportOnly marks a key whose versions may only be created by import.
+	ImportOnly bool
 }
 
 // Version is a KMS crypto-key version with its own key material.
@@ -70,6 +76,19 @@ type Version struct {
 	// unless State is "DESTROYED" (mirrors the output-only destroy_event_time
 	// field).
 	DestroyEventTime time.Time
+
+	// ProtectionLevel is the version's protection level (SOFTWARE, HSM, or
+	// HSM_SINGLE_TENANT). Empty means SOFTWARE.
+	ProtectionLevel string
+	// ImportTime is when the version's key material was imported. Zero for a
+	// generated version.
+	ImportTime time.Time
+	// TrustedWrappingEnabled reports whether the version's key material may be
+	// exported wrapped by an HSM trusted (EKM) key.
+	TrustedWrappingEnabled bool
+	// HsmTrusted reports whether the version is usable as an HSM trusted
+	// wrapping key for ExportTrustedKeyWrappedCryptoKeyVersion.
+	HsmTrusted bool
 }
 
 // Store is the KMS store.
@@ -79,6 +98,10 @@ type Store interface {
 	ListKeyRings(ctx context.Context, projectID, location string) ([]KeyRing, error)
 
 	CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error
+	// CreateCryptoKeyWithVersion also stores ck but lets the caller decide whether
+	// the implicit initial CryptoKeyVersion is created (Cloud KMS creates it
+	// unless import-only or skipInitialVersionCreation is requested).
+	CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error
 	GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error)
 	ListCryptoKeys(ctx context.Context, projectID, location, keyringID string) ([]CryptoKey, error)
 	// UpdateCryptoKeyAtomic atomically reads the current crypto key, calls
@@ -93,6 +116,13 @@ type Store interface {
 	// CreateVersion allocates the next version number and stores the version
 	// with DEK-wrapped key material. Returns the assigned version string.
 	CreateVersion(ctx context.Context, projectID, location, keyringID, keyID string, v Version) (string, error)
+	// CreateImportedVersion allocates the next version number and stores a
+	// version built from caller-supplied key material (Cloud KMS key import),
+	// DEK-wrapping each non-nil component at rest. keyMat carries symmetric
+	// (AES/HMAC) material or a KEM private seed; privDER carries PKCS#8 private
+	// DER or a KEM seed; pubDER carries PKIX public DER or a raw KEM public
+	// key. Returns the assigned version string.
+	CreateImportedVersion(ctx context.Context, projectID, location, keyringID, keyID string, v Version, keyMat, privDER, pubDER []byte) (string, error)
 	GetVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) (Version, error)
 	ListVersions(ctx context.Context, projectID, location, keyringID, keyID string) ([]Version, error)
 	// UpdateVersionState applies an ENABLED/DISABLED lifecycle transition and

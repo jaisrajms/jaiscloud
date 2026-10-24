@@ -192,6 +192,22 @@ func validateSink(in loggingstore.LogSink) error {
 	if _, err := CompileFilter(in.Filter); err != nil {
 		return invalidArgument("invalid sink filter: " + err.Error())
 	}
+	switch in.OutputVersionFormat {
+	case "", "V1", "V2":
+	default:
+		return invalidArgument("invalid output_version_format: " + in.OutputVersionFormat)
+	}
+	// The Discovery document restricts intercept_children to a sink whose
+	// destination is a Cloud project and that also sets include_children; a
+	// violation is an invalid client request, as it is on real GCP.
+	if in.InterceptChildren {
+		if !in.IncludeChildren {
+			return invalidArgument("intercept_children requires include_children")
+		}
+		if !strings.HasPrefix(in.Destination, "logging.googleapis.com/projects/") {
+			return invalidArgument("intercept_children requires a Cloud project destination")
+		}
+	}
 	for _, ex := range in.Exclusions {
 		if err := validateExclusion(ex); err != nil {
 			return err
@@ -259,10 +275,7 @@ func (s *Service) ListSinks(ctx context.Context, parent string, pageSize int, pa
 	if err != nil {
 		return nil, "", err
 	}
-	page, next, err := paginateConfig(sinks, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(sinks, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -323,11 +336,24 @@ func (s *Service) DeleteSink(ctx context.Context, name string) error {
 	return mapConfigStoreError(s.store.DeleteSink(ctx, scope, id))
 }
 
+// sinkWritableMaskPaths is the writable field set of a LogSink (Discovery schema
+// google.logging.v2.LogSink). name/writerIdentity/createTime/updateTime are
+// read-only, so they are absent; the nested bigqueryOptions path names its only
+// writable leaf. The AIP-134 `*` wildcard expands to this set.
+var sinkWritableMaskPaths = []string{
+	"destination", "filter", "description", "disabled", "exclusions",
+	"include_children", "intercept_children", "output_version_format",
+	"bigquery_options.use_partitioned_tables",
+}
+
 // applySinkMask merges the incoming sink into the stored one for the named
 // field paths. Paths are normalized so both proto (snake_case) and REST
-// (camelCase) spellings are accepted.
+// (camelCase) spellings are accepted. A nested path addresses only the leaf it
+// names (bigqueryOptions.usePartitionedTables), and the AIP-134 `*` wildcard
+// replaces every writable field; a path that names no writable field is a 400
+// InvalidArgument.
 func applySinkMask(stored, incoming loggingstore.LogSink, updateMask []string) (loggingstore.LogSink, error) {
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, sinkWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "destination":
 			stored.Destination = incoming.Destination
@@ -341,11 +367,37 @@ func applySinkMask(stored, incoming loggingstore.LogSink, updateMask []string) (
 			stored.Exclusions = incoming.Exclusions
 		case "include_children":
 			stored.IncludeChildren = incoming.IncludeChildren
+		case "intercept_children":
+			stored.InterceptChildren = incoming.InterceptChildren
+		case "output_version_format":
+			stored.OutputVersionFormat = incoming.OutputVersionFormat
+		case "bigquery_options", "bigquery_options.use_partitioned_tables":
+			// `bigqueryOptions` (the message) and its nested writable leaf both
+			// apply only `use_partitioned_tables`.
+			stored.BigQueryOptions = mergeBigQueryOptions(stored.BigQueryOptions, incoming.BigQueryOptions)
 		default:
-			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return stored, invalidMaskPath(raw)
 		}
 	}
 	return stored, nil
+}
+
+// mergeBigQueryOptions applies the writable `use_partitioned_tables` subfield
+// (named by either the `bigqueryOptions` message path or its nested leaf) and
+// preserves the output-only `uses_timestamp_column_partitioning`, which a client
+// cannot set (the Discovery schema marks it readOnly).
+func mergeBigQueryOptions(stored, incoming *loggingstore.LogBigQueryOptions) *loggingstore.LogBigQueryOptions {
+	if stored == nil && incoming == nil {
+		return nil
+	}
+	out := &loggingstore.LogBigQueryOptions{}
+	if stored != nil {
+		out.UsesTimestampColumnPartitioning = stored.UsesTimestampColumnPartitioning
+	}
+	if incoming != nil {
+		out.UsePartitionedTables = incoming.UsePartitionedTables
+	}
+	return out
 }
 
 // ─── exclusions ───────────────────────────────────────────────────────────────
@@ -395,10 +447,7 @@ func (s *Service) ListExclusions(ctx context.Context, parent string, pageSize in
 	if err != nil {
 		return nil, "", err
 	}
-	page, next, err := paginateConfig(list, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(list, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -443,8 +492,13 @@ func (s *Service) DeleteExclusion(ctx context.Context, name string) error {
 	return mapConfigStoreError(s.store.DeleteExclusion(ctx, scope, id))
 }
 
+// exclusionWritableMaskPaths is the writable field set of a LogExclusion
+// (Discovery schema google.logging.v2.LogExclusion); createTime/updateTime are
+// read-only. The AIP-134 `*` wildcard expands to this set.
+var exclusionWritableMaskPaths = []string{"description", "filter", "disabled"}
+
 func applyExclusionMask(stored, incoming loggingstore.LogExclusion, updateMask []string) (loggingstore.LogExclusion, error) {
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, exclusionWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "description":
 			stored.Description = incoming.Description
@@ -453,22 +507,30 @@ func applyExclusionMask(stored, incoming loggingstore.LogExclusion, updateMask [
 		case "disabled":
 			stored.Disabled = incoming.Disabled
 		default:
-			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return stored, invalidMaskPath(raw)
 		}
 	}
 	return stored, nil
 }
 
 // normalizeConfigMaskPath converts a FieldMask path to its canonical snake_case
-// root field so proto (snake_case) and REST (camelCase) spellings agree.
+// form, normalizing every dot-separated segment so proto (snake_case) and REST
+// (camelCase) spellings agree. Nested segments are preserved: a subfield path
+// addresses only the leaf it names (AIP-134/AIP-161) rather than collapsing to
+// the message root.
 func normalizeConfigMaskPath(path string) string {
-	path = strings.TrimSpace(path)
-	if i := strings.IndexByte(path, '.'); i >= 0 {
-		path = path[:i]
+	segs := strings.Split(strings.TrimSpace(path), ".")
+	for i, seg := range segs {
+		segs[i] = snakeCase(seg)
 	}
+	return strings.Join(segs, ".")
+}
+
+// snakeCase lowercases a lowerCamelCase field name to its proto snake_case form.
+func snakeCase(name string) string {
 	var b strings.Builder
-	for i := 0; i < len(path); i++ {
-		c := path[i]
+	for i := 0; i < len(name); i++ {
+		c := name[i]
 		if c >= 'A' && c <= 'Z' {
 			if i > 0 {
 				b.WriteByte('_')
@@ -479,6 +541,21 @@ func normalizeConfigMaskPath(path string) string {
 		b.WriteByte(c)
 	}
 	return b.String()
+}
+
+// expandConfigMask expands a top-level AIP-134 `*` wildcard into the resource's
+// full writable field set so the following merge applies every writable field;
+// every other path is returned unchanged.
+func expandConfigMask(updateMask, writable []string) []string {
+	out := make([]string, 0, len(updateMask))
+	for _, raw := range updateMask {
+		if strings.TrimSpace(raw) == "*" {
+			out = append(out, writable...)
+			continue
+		}
+		out = append(out, raw)
+	}
+	return out
 }
 
 // ─── routing evaluation ───────────────────────────────────────────────────────
@@ -581,14 +658,20 @@ func (s *Service) recordRouting(ctx context.Context, e loggingstore.LogEntry) {
 	}
 }
 
-// paginateConfig applies the standard Cloud Logging pageSize/pageToken contract
-// (0 → 50, max 1000) to a name-sorted slice.
-func paginateConfig[T any](items []T, pageSize int, token string) ([]T, string, error) {
-	if pageSize < 0 || pageSize > 1000 {
-		return nil, "", invalidArgument("page_size must be between 0 and 1000")
-	}
-	if pageSize == 0 {
+// paginateConfig applies the non-positive-ignored pageSize/pageToken contract to
+// a name-sorted slice. Cloud Logging documents "Non-positive values are ignored"
+// on sinks/exclusions/buckets/views/logScopes/metrics.list (links.list is the
+// one config list without that exception and validates the sign itself), so a
+// non-positive size selects the default (50) rather than raising
+// InvalidArgument — the documented exception to AIP-158 that entries.list does
+// not take. An over-large size is clamped to 1000, the server-side cap AIP-158
+// permits (the Discovery/proto documents no maximum for these lists).
+func paginateConfig[T any](items []T, pageSize int, token string) ([]T, string) {
+	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
 	}
 	start := decodeOffset(token)
 	if start > len(items) {
@@ -602,5 +685,5 @@ func paginateConfig[T any](items []T, pageSize int, token string) ([]T, string, 
 	if end < len(items) {
 		next = encodeOffset(end)
 	}
-	return items[start:end], next, nil
+	return items[start:end], next
 }

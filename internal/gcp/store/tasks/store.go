@@ -174,6 +174,10 @@ type Store interface {
 	UpdateQueueAtomic(ctx context.Context, projectID, location, name string, mutate func(Queue) (Queue, error)) (Queue, error)
 	DeleteQueue(ctx context.Context, projectID, location, name string) error
 	ListQueues(ctx context.Context, projectID, location string) ([]Queue, error)
+	// ListQueuesByProject returns every queue in a project across all
+	// locations, sorted by location then name. It backs the location-optional
+	// console list.
+	ListQueuesByProject(ctx context.Context, projectID string) ([]Queue, error)
 	// ListAllQueues returns every queue across all projects and locations. The
 	// dispatch engine enumerates queues with it (it has no project/location
 	// input).

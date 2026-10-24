@@ -1,0 +1,69 @@
+{
+  "index": 21,
+  "service": "bigquery",
+  "op": "tour_bq_query",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "query": "SELECT id, name FROM `<project>.<dataset>.<table>` ORDER BY id",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "2",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "1"
+          },
+          {
+            "v": "alice"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "2"
+          },
+          {
+            "v": "bob"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "mode": "NULLABLE",
+          "name": "name",
+          "type": "STRING"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "2",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

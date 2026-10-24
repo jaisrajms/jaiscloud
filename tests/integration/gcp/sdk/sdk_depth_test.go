@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/api/option"
+	gcsapi "google.golang.org/api/storage/v1"
 )
 
 // TestSDKVersioningGenerations covers GCS object versioning through the SDK:
@@ -109,4 +113,35 @@ func TestSDKLifecycleConfigReadBack(t *testing.T) {
 	require.Len(t, attrs.Lifecycle.Rules, 1, "lifecycle rule should round-trip")
 	require.Equal(t, "Delete", attrs.Lifecycle.Rules[0].Action.Type)
 	require.Equal(t, int64(30), attrs.Lifecycle.Rules[0].Condition.AgeInDays)
+}
+
+// TestSDKListNegativeMaxResultsRejected sends maxResults=-1 through the
+// generated storage/v1 client (the high-level iterator guards pageSize > 0 and
+// can never emit it) and requires the AIP-158 INVALID_ARGUMENT answer on both
+// objects.list and buckets.list (DC39).
+func TestSDKListNegativeMaxResultsRejected(t *testing.T) {
+	ctx := context.Background()
+	client := newClient(t)
+	bucket := fmt.Sprintf("sdk-neg-max-%d", time.Now().UnixNano())
+	require.NoError(t, client.Bucket(bucket).Create(ctx, "proj", nil))
+
+	svc, err := gcsapi.NewService(ctx,
+		option.WithEndpoint(emulatorHost()+"/storage/v1/"),
+		option.WithoutAuthentication())
+	require.NoError(t, err)
+
+	_, err = svc.Objects.List(bucket).MaxResults(-1).Do()
+	requireAPIError(t, err, "objects.list maxResults=-1")
+
+	_, err = svc.Buckets.List("proj").MaxResults(-1).Do()
+	requireAPIError(t, err, "buckets.list maxResults=-1")
+}
+
+func requireAPIError(t *testing.T, err error, what string) {
+	t.Helper()
+	apiErr, ok := err.(*googleapi.Error)
+	require.Truef(t, ok, "%s: expected a *googleapi.Error, got %v", what, err)
+	require.Equalf(t, http.StatusBadRequest, apiErr.Code, "%s: %s", what, apiErr.Body)
+	require.NotEmptyf(t, apiErr.Errors, "%s: %s", what, apiErr.Body)
+	require.Equalf(t, "invalidParameter", apiErr.Errors[0].Reason, "%s: %s", what, apiErr.Body)
 }

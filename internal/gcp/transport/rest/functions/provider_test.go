@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/blobfs"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
@@ -1377,5 +1377,139 @@ func TestInvokeTriggerExecutorErrorIs500(t *testing.T) {
 	}
 	if body, _ := resp.Data["body"].([]byte); string(body) != "boom" {
 		t.Errorf("body = %q, want boom", body)
+	}
+}
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"functions": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListFunctions(ctx, n)
+		},
+		"locations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListLocations(ctx, n)
+		},
+		"operations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListOperations(ctx, n)
+		},
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(newNR(map[string]any{"location": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		if _, err := call(newNR(map[string]any{"location": "us-central1", "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", name, err)
+		}
+	}
+}
+
+// TestOperationsParentLocation pins the ListOperations scope resolution: the
+// Discovery document documents a single `name` query parameter (the operation's
+// parent resource), and v1 operation names are top-level (operations/{id}), so
+// the project-wide and locations/- parents read across every location.
+func TestOperationsParentLocation(t *testing.T) {
+	cases := []struct {
+		name, location, wantProject, wantLoc string
+		wantErr                              bool
+	}{
+		{name: "", wantLoc: "-"},
+		{name: "operations", wantLoc: "-"},
+		{name: "projects/proj", wantProject: "proj", wantLoc: "-"},
+		{name: "projects/proj/locations/us-central1", wantProject: "proj", wantLoc: "us-central1"},
+		{name: "projects/proj/locations/-", wantProject: "proj", wantLoc: "-"},
+		{name: "projects/proj/locations/europe-west1/", wantProject: "proj", wantLoc: "europe-west1"},
+		// The emulator's `location` extension addresses the request's project.
+		{name: "projects/proj/locations/us-central1", location: "asia-east1", wantLoc: "asia-east1"},
+		{name: "databases/x", wantErr: true},
+		{name: "projects//locations/us-central1", wantErr: true},
+		{name: "projects/proj/regions/us-central1", wantErr: true},
+	}
+	for _, tc := range cases {
+		project, loc, err := operationsParentLocation(tc.name, tc.location)
+		if tc.wantErr {
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("operationsParentLocation(%q, %q) err = %v, want InvalidArgument/400", tc.name, tc.location, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("operationsParentLocation(%q, %q): %v", tc.name, tc.location, err)
+			continue
+		}
+		if project != tc.wantProject || loc != tc.wantLoc {
+			t.Errorf("operationsParentLocation(%q, %q) = (%q, %q), want (%q, %q)",
+				tc.name, tc.location, project, loc, tc.wantProject, tc.wantLoc)
+		}
+	}
+}
+
+// TestListOperationsAcrossLocations covers the documented locations/- parent:
+// operations from every location in the project are listed, while a concrete
+// location parent narrows the page.
+func TestListOperationsAcrossLocations(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+	for _, loc := range []string{"us-central1", "europe-west1"} {
+		nr := newNR(map[string]any{
+			"location":   loc,
+			"functionId": "fn-" + loc,
+			"body": map[string]any{
+				"name":       "projects/proj/locations/" + loc + "/functions/fn-" + loc,
+				"runtime":    "nodejs20",
+				"entryPoint": "handler",
+			},
+		})
+		if _, err := p.CreateFunction(ctx, nr); err != nil {
+			t.Fatalf("create in %s: %v", loc, err)
+		}
+	}
+
+	names := func(resp *model.ProviderResponse) map[string]bool {
+		ops, _ := resp.Data["operations"].([]any)
+		out := map[string]bool{}
+		for _, o := range ops {
+			m, _ := o.(map[string]any)
+			if n, ok := m["name"].(string); ok {
+				out[n] = true
+			}
+		}
+		return out
+	}
+
+	all, err := p.ListOperations(ctx, newNR(map[string]any{"name": "projects/proj/locations/-"}))
+	if err != nil {
+		t.Fatalf("list all locations: %v", err)
+	}
+	if got := names(all); len(got) != 2 {
+		t.Fatalf("all-locations list = %v, want 2 operations", got)
+	}
+
+	scoped, err := p.ListOperations(ctx, newNR(map[string]any{"name": "projects/proj/locations/us-central1"}))
+	if err != nil {
+		t.Fatalf("list us-central1: %v", err)
+	}
+	if got := names(scoped); len(got) != 1 {
+		t.Fatalf("us-central1 list = %v, want 1 operation", got)
+	}
+
+	if _, err := p.ListOperations(ctx, newNR(map[string]any{"name": "databases/x"})); err == nil {
+		t.Fatal("expected InvalidArgument for a malformed parent name")
+	}
+
+	// The parent's project is authoritative: another project sees nothing.
+	other, err := p.ListOperations(ctx, newNR(map[string]any{"name": "projects/other/locations/-"}))
+	if err != nil {
+		t.Fatalf("list other project: %v", err)
+	}
+	if got := names(other); len(got) != 0 {
+		t.Fatalf("other project list = %v, want no operations", got)
 	}
 }

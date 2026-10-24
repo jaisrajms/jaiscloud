@@ -111,7 +111,10 @@ func (s *Service) DeleteLog(ctx context.Context, req *loggingpb.DeleteLogRequest
 }
 
 func (s *Service) ListMonitoredResourceDescriptors(_ context.Context, req *loggingpb.ListMonitoredResourceDescriptorsRequest) (*loggingpb.ListMonitoredResourceDescriptorsResponse, error) {
-	page, next := s.core.ListMonitoredResourceDescriptors(int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListMonitoredResourceDescriptors(int(req.GetPageSize()), req.GetPageToken())
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := make([]*monitoredres.MonitoredResourceDescriptor, 0, len(page))
 	for _, d := range page {
 		out = append(out, descriptorToProto(d))

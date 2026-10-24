@@ -42,6 +42,7 @@ func TestCodecDecode(t *testing.T) {
 		wantAction   string
 	}{
 		{http.MethodGet, "/v1/projects/proj/services", "ServicesList"},
+		{http.MethodGet, "/v1/projects/proj/services:batchGet", "ServicesBatchGet"},
 		{http.MethodPost, "/v1/projects/proj/services:batchEnable", "ServicesBatchEnable"},
 		{http.MethodGet, "/v1/projects/proj/services/run.googleapis.com", "ServicesGet"},
 		{http.MethodPost, "/v1/projects/proj/services/run.googleapis.com:enable", "ServicesEnable"},
@@ -184,6 +185,7 @@ func TestMissingParamsAreInvalidArgument(t *testing.T) {
 		"get":         p.GetService,
 		"enable":      p.EnableService,
 		"disable":     p.DisableService,
+		"batchGet":    p.BatchGetServices,
 		"batchEnable": p.BatchEnableServices,
 	}
 	// No project in the path, no account scope, and no configured default.
@@ -270,6 +272,58 @@ func TestBatchEnable(t *testing.T) {
 	}
 }
 
+func TestBatchGet(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	if _, err := p.EnableService(ctx, newNR(map[string]any{"project": "proj", "service": "a.googleapis.com"})); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	resp, err := p.BatchGetServices(ctx, newNR(map[string]any{
+		"project": "proj",
+		"names":   []string{"projects/proj/services/a.googleapis.com", "projects/proj/services/b.googleapis.com"},
+	}))
+	if err != nil {
+		t.Fatalf("batchGet: %v", err)
+	}
+	services, _ := resp.Data["services"].([]any)
+	if len(services) != 2 {
+		t.Fatalf("batchGet services = %d, want 2", len(services))
+	}
+	first, _ := services[0].(map[string]any)
+	if first["name"] != "projects/proj/services/a.googleapis.com" || first["state"] != string(core.StateEnabled) {
+		t.Errorf("services[0] = %v, want enabled a.googleapis.com", services[0])
+	}
+	second, _ := services[1].(map[string]any)
+	if second["state"] != string(core.StateDisabled) {
+		t.Errorf("services[1] = %v, want DISABLED", services[1])
+	}
+
+	// Empty and oversized batches are rejected with a 400.
+	for _, tc := range []struct {
+		name  string
+		names any
+	}{
+		{"empty", []string{}},
+		{"oversized", oversizedNames(31)},
+		{"malformed", []string{"a.googleapis.com"}},
+	} {
+		_, err := p.BatchGetServices(ctx, newNR(map[string]any{"project": "proj", "names": tc.names}))
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
+			t.Errorf("batchGet(%s) error = %v, want 400 InvalidArgument", tc.name, err)
+		}
+	}
+}
+
+func oversizedNames(n int) []string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = "projects/proj/services/s.googleapis.com"
+	}
+	return names
+}
+
 func TestListPaginationAndFilterValidation(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -303,5 +357,22 @@ func TestListPaginationAndFilterValidation(t *testing.T) {
 	var pe *model.ProviderError
 	if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
 		t.Fatalf("invalid filter error = %v, want 400", err)
+	}
+}
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListServices(ctx, newNR(map[string]any{"project": "proj", "pageSize": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListServices pageSize=%#v err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+	if _, err := p.ListServices(ctx, newNR(map[string]any{"project": "proj", "pageSize": "5"})); err != nil {
+		t.Errorf("ListServices pageSize=5: %v", err)
 	}
 }

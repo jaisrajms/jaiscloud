@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // ParseError describes a syntax error in an expression.
@@ -35,9 +37,9 @@ type Env struct {
 	Builtins map[string]string
 }
 
-// DefaultEnv returns a real-environment Env (process env + wall-clock UTC).
+// DefaultEnv returns a real-environment Env (process env + the global clock).
 func DefaultEnv() Env {
-	return Env{Getenv: os.LookupEnv, Now: func() time.Time { return time.Now().UTC() }}
+	return Env{Getenv: os.LookupEnv, Now: clock.Now}
 }
 
 // Interpolate evaluates a template string. A string that is exactly a single

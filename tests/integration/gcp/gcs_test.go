@@ -34,14 +34,22 @@ func resetState(t *testing.T) {
 	resp.Body.Close()
 }
 
-// do performs an HTTP request and returns the response plus its body bytes.
+// do performs an HTTP request against the shared emulator endpoint and returns
+// the response plus its body bytes.
 func do(t *testing.T, method, path string, body []byte, headers map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	return doAt(t, gcpBase(), method, path, body, headers)
+}
+
+// doAt is do against an arbitrary base URL. The process-restart suite starts its
+// own emulator on a private port, so it cannot use the package-wide gcpBase().
+func doAt(t *testing.T, base, method, path string, body []byte, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, gcpBase()+path, rd)
+	req, err := http.NewRequest(method, base+path, rd)
 	require.NoError(t, err)
 	for k, v := range headers {
 		req.Header.Set(k, v)

@@ -1,0 +1,193 @@
+{
+  "version": 1,
+  "project": "<project>",
+  "ops": 30,
+  "services": [
+    "bigquery",
+    "dataproc",
+    "storage"
+  ],
+  "files": [
+    {
+      "file": "000-storage-tour_bucket_create.json",
+      "op": "tour_bucket_create",
+      "sha256": "6663130786ab4b37e76c30047be42326ce1e8bcf320b16c5539a2984caa45bd9",
+      "status": 200
+    },
+    {
+      "file": "001-storage-tour_resumable_start.json",
+      "op": "tour_resumable_start",
+      "sha256": "4575d39fe9a426e6112f10a5fc206e9cc53e554dcc0fd6aafe6d84f24836c42e",
+      "status": 200
+    },
+    {
+      "file": "002-storage-tour_resumable_chunk.json",
+      "op": "tour_resumable_chunk",
+      "sha256": "aecf1145d5a70dd7f26397625f8429b6c1cd73c9f57ac780236206c3d3c725e9",
+      "status": 308
+    },
+    {
+      "file": "003-storage-tour_resumable_finalize.json",
+      "op": "tour_resumable_finalize",
+      "sha256": "d3b7d2ec65902d3478ce9bc7bf84b28cd21961f8a69d42b2b7aeb9368cb38a6c",
+      "status": 200
+    },
+    {
+      "file": "004-storage-tour_object_metadata.json",
+      "op": "tour_object_metadata",
+      "sha256": "3121cccadc81e48c1c5a09936a603e85ba983c7ba50efc347abaf2e8ec1cd739",
+      "status": 200
+    },
+    {
+      "file": "005-storage-tour_media_upload.json",
+      "op": "tour_media_upload",
+      "sha256": "f6eeba3ba5c14ecf5c2753af0b6ba23c1ad802c00653563d3d1be0c58d9d9319",
+      "status": 200
+    },
+    {
+      "file": "006-storage-tour_media_download.json",
+      "op": "tour_media_download",
+      "sha256": "d1fbcb4fb144460b80f746aa669f52042d6b7df2e34a58ce4e3f72e360551ff5",
+      "status": 200
+    },
+    {
+      "file": "007-storage-tour_page_upload_00.json",
+      "op": "tour_page_upload_00",
+      "sha256": "8765995b38a4b74b4854f24cc6e2c8172e43c3df9cce707a3672df840a64bd06",
+      "status": 200
+    },
+    {
+      "file": "008-storage-tour_page_upload_01.json",
+      "op": "tour_page_upload_01",
+      "sha256": "f9a30e0f32110e430e17797cbaa5f39b3ea62ba34a4acf9aec252f1fd0e36b40",
+      "status": 200
+    },
+    {
+      "file": "009-storage-tour_page_upload_02.json",
+      "op": "tour_page_upload_02",
+      "sha256": "e341df830d3a56c58e5c17cb87df62b049bced7a1dcac6c0c128a1d671ebf964",
+      "status": 200
+    },
+    {
+      "file": "010-storage-tour_page_upload_03.json",
+      "op": "tour_page_upload_03",
+      "sha256": "ede4ac470d4f2388180c881fd77a49e64952cb22c558b1a978868cd40e222829",
+      "status": 200
+    },
+    {
+      "file": "011-storage-tour_page_upload_04.json",
+      "op": "tour_page_upload_04",
+      "sha256": "3290f6be110eae283152d424659f9062892f3c8c642ab51e2fbcbda967a75912",
+      "status": 200
+    },
+    {
+      "file": "012-storage-tour_page_upload_05.json",
+      "op": "tour_page_upload_05",
+      "sha256": "9aec300dd89933100463000c773238d3efd9867d0420a36b5ecce251df11a531",
+      "status": 200
+    },
+    {
+      "file": "013-storage-tour_page_upload_06.json",
+      "op": "tour_page_upload_06",
+      "sha256": "328b708101b8d6a4edf45f74b1e602c2de2c88e7fba8b035cb2fc653b099ace6",
+      "status": 200
+    },
+    {
+      "file": "014-storage-tour_list_page_1.json",
+      "op": "tour_list_page_1",
+      "sha256": "d74680a582ee4df24217944225578a8bc4bbc77a79aa6c2296a27a1c026d5f57",
+      "status": 200
+    },
+    {
+      "file": "015-storage-tour_list_page_2.json",
+      "op": "tour_list_page_2",
+      "sha256": "0ce208d87134ffe85967f2b5e1da71d64215855f6d860ffb1046dd6d8c5be61c",
+      "status": 200
+    },
+    {
+      "file": "016-storage-tour_list_page_3.json",
+      "op": "tour_list_page_3",
+      "sha256": "f1730d089b6b06934266fc099a8a7eed05c48b041ab10b5f18b6329756049bcb",
+      "status": 200
+    },
+    {
+      "file": "017-storage-tour_list_page_4.json",
+      "op": "tour_list_page_4",
+      "sha256": "7443c225841421c4ccd109963c688908d5b2420cd7ff3a0b219eab08883286db",
+      "status": 200
+    },
+    {
+      "file": "018-bigquery-tour_bq_dataset_create.json",
+      "op": "tour_bq_dataset_create",
+      "sha256": "bf0c36418ab3812e779552518747f12e43f31fe93cb032425ed9084c6ca19128",
+      "status": 200
+    },
+    {
+      "file": "019-bigquery-tour_bq_table_create.json",
+      "op": "tour_bq_table_create",
+      "sha256": "0a4421037028247bc1d269b8edeac2de7fcfda5b3fa82a79dc65850ac2b99678",
+      "status": 200
+    },
+    {
+      "file": "020-bigquery-tour_bq_insertall.json",
+      "op": "tour_bq_insertall",
+      "sha256": "48faafa49d1d2118b1ccf2e143b95c3639142bbd83f7a19e175858c82b3d60f8",
+      "status": 200
+    },
+    {
+      "file": "021-bigquery-tour_bq_query.json",
+      "op": "tour_bq_query",
+      "sha256": "b0b02dd9b36177c870590ff50aff1bd8636efb265712436a97cfb58a256f641d",
+      "status": 200
+    },
+    {
+      "file": "022-storage-tour_bq_load_object_upload.json",
+      "op": "tour_bq_load_object_upload",
+      "sha256": "9770b59b9bd3ee2f3a1a661e4a2aed3e80ea795fb8a3748af322e2234c56010b",
+      "status": 200
+    },
+    {
+      "file": "023-bigquery-tour_bq_load_table_create.json",
+      "op": "tour_bq_load_table_create",
+      "sha256": "ee42dee07f8f3938fe0d72cd010bf5e4b272b2baf326f7306afcb401c333d1ad",
+      "status": 200
+    },
+    {
+      "file": "024-bigquery-tour_bq_load_insert.json",
+      "op": "tour_bq_load_insert",
+      "sha256": "54783384268a79e8df0862ff9f0aadbad0562cdfa779a659e2598c2be10fd645",
+      "status": 200
+    },
+    {
+      "file": "025-bigquery-tour_bq_load_poll.json",
+      "op": "tour_bq_load_poll",
+      "sha256": "bc52ad7ea605c08ebd4e17c418039b34f7dd38b5ec883190255a1fec92baaa6a",
+      "status": 200
+    },
+    {
+      "file": "026-bigquery-tour_bq_load_tabledata.json",
+      "op": "tour_bq_load_tabledata",
+      "sha256": "ecdbf0ce4d0eb641df517f65a21678378d02d80bb59044a527c1b379fb054661",
+      "status": 200
+    },
+    {
+      "file": "027-dataproc-tour_dataproc_cluster_create.json",
+      "op": "tour_dataproc_cluster_create",
+      "sha256": "fbbf5fb8759d2699c33f2b5ca1bc21126d3ab0f7498704a4c136cad7eef9de46",
+      "status": 200
+    },
+    {
+      "file": "028-dataproc-tour_dataproc_cluster_poll.json",
+      "op": "tour_dataproc_cluster_poll",
+      "sha256": "e98c4b93c5c7e64dff4efc8835949649f2d52fd8f481ffb9104d9b1b3333269a",
+      "status": 200
+    },
+    {
+      "file": "029-dataproc-tour_dataproc_cluster_get.json",
+      "op": "tour_dataproc_cluster_get",
+      "sha256": "a24233b8ee2bb2639e47068162453a5ebd4240dfecc27cfbef4b4ea345689958",
+      "status": 200
+    }
+  ]
+}
+

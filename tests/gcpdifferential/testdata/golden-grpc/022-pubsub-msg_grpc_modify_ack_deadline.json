@@ -1,0 +1,18 @@
+{
+  "index": 22,
+  "service": "pubsub",
+  "op": "msg_grpc_modify_ack_deadline",
+  "method": "google.pubsub.v1.Subscriber/ModifyAckDeadline",
+  "path": "projects/<project>/subscriptions/<subscription>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "ackDeadlineSeconds": 30,
+    "ackIds": [
+      "<ackId>"
+    ],
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {}
+}
+

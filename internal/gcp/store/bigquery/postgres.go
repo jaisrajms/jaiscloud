@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -94,6 +95,14 @@ func (s *PostgresStore) UpdateDataset(ctx context.Context, projectID string, d D
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateDatasetAtomic(ctx context.Context, projectID, datasetID string, mutate func(Dataset) (Dataset, error)) (Dataset, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Dataset, error) {
+		return s.updateDatasetAtomicOnce(ctx, projectID, datasetID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateDatasetAtomicOnce(ctx context.Context, projectID, datasetID string, mutate func(Dataset) (Dataset, error)) (Dataset, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Dataset{}, err
@@ -251,6 +260,12 @@ func (s *PostgresStore) UpdateTable(ctx context.Context, projectID, datasetID st
 // silently overwrite this call's write. See store/firestore/postgres.go's
 // Commit for the same convention.
 func (s *PostgresStore) UpdateTableAtomic(ctx context.Context, projectID, datasetID, tableID string, mutate func(Table) (Table, error)) (Table, error) {
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.updateTableAtomicOnce(ctx, projectID, datasetID, tableID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateTableAtomicOnce(ctx context.Context, projectID, datasetID, tableID string, mutate func(Table) (Table, error)) (Table, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Table{}, err

@@ -1,0 +1,14 @@
+{
+  "index": 110,
+  "service": "logging",
+  "op": "log_names_list",
+  "method": "GET",
+  "path": "/v2/projects/<project>/logs?resourceNames=projects%2F<project>",
+  "status": 200,
+  "response": {
+    "logNames": [
+      "projects/<project>/logs/<logName>"
+    ]
+  }
+}
+

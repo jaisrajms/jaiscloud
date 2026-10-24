@@ -67,10 +67,11 @@ type ConsumerGroupInput struct {
 }
 
 // ListConsumerGroups lists the cluster's consumer groups from the live broker's
-// group coordinator. view (BASIC/FULL) controls whether committed offsets are
-// read; filter keeps only groups that hold committed metadata for the given
-// topic (matched by full resource name or bare id). With no broker the list is
-// empty and a missing cluster is NOT_FOUND.
+// group coordinator (or, with no live broker, the mock topology's coordinator
+// stand-in seeded by the GROUP ACL flow). view (BASIC/FULL) controls whether
+// committed offsets are read; filter keeps only groups that hold committed
+// metadata for the given topic (matched by full resource name or bare id). A
+// missing cluster is NOT_FOUND.
 func (s *Service) ListConsumerGroups(ctx context.Context, project, location, clusterID, view, filter string, pageSize int, pageToken string) ([]ConsumerGroup, string, error) {
 	if location == "" || clusterID == "" {
 		return nil, "", invalidArgument("missing location or clusterId")
@@ -113,12 +114,16 @@ func (s *Service) ListConsumerGroups(ctx context.Context, project, location, clu
 		}
 		groups = append(groups, g)
 	}
-	page, next := paging.Page(groups, func(g ConsumerGroup) string { return g.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(groups, func(g ConsumerGroup) string { return g.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
-// GetConsumerGroup returns a group's committed offsets from the live broker.
-// A missing cluster, no live broker, or an unknown group is NOT_FOUND.
+// GetConsumerGroup returns a group's committed offsets from the live broker (or
+// the mock topology's registry). A missing cluster or an unknown group is
+// NOT_FOUND.
 func (s *Service) GetConsumerGroup(ctx context.Context, project, location, clusterID, group string) (ConsumerGroup, error) {
 	if location == "" || clusterID == "" || group == "" {
 		return ConsumerGroup{}, invalidArgument("missing location, clusterId, or consumerGroupId")
@@ -199,8 +204,8 @@ func (s *Service) UpdateConsumerGroup(ctx context.Context, project, location, cl
 }
 
 // DeleteConsumerGroup removes the group and its committed offsets from the
-// broker. A missing cluster, no live broker, or an already-absent group is
-// NOT_FOUND.
+// broker (or the mock registry). A missing cluster or an already-absent group
+// is NOT_FOUND.
 func (s *Service) DeleteConsumerGroup(ctx context.Context, project, location, clusterID, group string) error {
 	if location == "" || clusterID == "" || group == "" {
 		return invalidArgument("missing location, clusterId, or consumerGroupId")
@@ -221,46 +226,143 @@ func (s *Service) DeleteConsumerGroup(ctx context.Context, project, location, cl
 	return nil
 }
 
-// --- broker plumbing (nil broker == mock topology) ---
+// --- broker plumbing (no live broker == mock topology) ---
+
+// hasLiveBroker reports whether a real broker is serving the cluster. The
+// broker manager itself is non-nil in the default mock topology (it degrades a
+// failed/mock start to an empty endpoint), so the live check is the endpoint,
+// not the injection.
+func (s *Service) hasLiveBroker(project, location, cluster string) bool {
+	return s.broker != nil && s.broker.Endpoint(project, location, cluster) != ""
+}
+
+func mockGroupKey(project, location, cluster string) string {
+	return project + "/" + location + "/" + cluster
+}
+
+// seedMockGroup registers a group in the mock topology's coordinator stand-in.
+// It is called by the ACL flow for a LITERAL GROUP ACL, which is the only
+// control-plane reference that names a group (there is no create RPC).
+func (s *Service) seedMockGroup(project, location, cluster, group string) {
+	if group == "" {
+		return
+	}
+	s.mockGroupsMu.Lock()
+	defer s.mockGroupsMu.Unlock()
+	key := mockGroupKey(project, location, cluster)
+	if s.mockGroups[key] == nil {
+		s.mockGroups[key] = make(map[string]ConsumerGroup)
+	}
+	if _, ok := s.mockGroups[key][group]; ok {
+		return
+	}
+	s.mockGroups[key][group] = ConsumerGroup{Location: location, Cluster: cluster, Name: group}
+}
+
+// dropMockGroups forgets a deleted cluster's mock consumer groups.
+func (s *Service) dropMockGroups(project, location, cluster string) {
+	s.mockGroupsMu.Lock()
+	defer s.mockGroupsMu.Unlock()
+	delete(s.mockGroups, mockGroupKey(project, location, cluster))
+}
+
+func (s *Service) mockListGroups(project, location, cluster string) []string {
+	s.mockGroupsMu.RLock()
+	defer s.mockGroupsMu.RUnlock()
+	m := s.mockGroups[mockGroupKey(project, location, cluster)]
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (s *Service) mockGroup(project, location, cluster, group string) (ConsumerGroup, bool) {
+	s.mockGroupsMu.RLock()
+	defer s.mockGroupsMu.RUnlock()
+	g, ok := s.mockGroups[mockGroupKey(project, location, cluster)][group]
+	return g, ok
+}
 
 func (s *Service) brokerListGroups(ctx context.Context, project, location, cluster string) ([]string, error) {
-	if s.broker == nil {
-		return nil, nil
+	if !s.hasLiveBroker(project, location, cluster) {
+		return s.mockListGroups(project, location, cluster), nil
 	}
 	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.ListConsumerGroups(ctx, project, location, cluster)
 }
 
 func (s *Service) brokerConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string) ([]ConsumerGroupOffset, bool, error) {
-	if s.broker == nil {
-		return nil, false, nil
+	if !s.hasLiveBroker(project, location, cluster) {
+		g, ok := s.mockGroup(project, location, cluster, group)
+		if !ok {
+			return nil, false, nil
+		}
+		return mockGroupOffsets(g), true, nil
 	}
 	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.ConsumerGroupOffsets(ctx, project, location, cluster, group)
 }
 
 func (s *Service) brokerConsumerGroupMembers(ctx context.Context, project, location, cluster, group string) (int, bool, error) {
-	if s.broker == nil {
-		return 0, false, nil
+	if !s.hasLiveBroker(project, location, cluster) {
+		_, ok := s.mockGroup(project, location, cluster, group)
+		return 0, ok, nil
 	}
 	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.ConsumerGroupMembers(ctx, project, location, cluster, group)
 }
 
 func (s *Service) brokerDeleteConsumerGroup(ctx context.Context, project, location, cluster, group string) (bool, error) {
-	if s.broker == nil {
-		return false, nil
+	if !s.hasLiveBroker(project, location, cluster) {
+		s.mockGroupsMu.Lock()
+		defer s.mockGroupsMu.Unlock()
+		key := mockGroupKey(project, location, cluster)
+		if _, ok := s.mockGroups[key][group]; !ok {
+			return false, nil
+		}
+		delete(s.mockGroups[key], group)
+		return true, nil
 	}
 	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.DeleteConsumerGroup(ctx, project, location, cluster, group)
 }
 
 func (s *Service) brokerCommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []ConsumerGroupOffset) error {
-	if s.broker == nil {
-		return consumerGroupNotFound()
+	if !s.hasLiveBroker(project, location, cluster) {
+		s.mockGroupsMu.Lock()
+		defer s.mockGroupsMu.Unlock()
+		key := mockGroupKey(project, location, cluster)
+		if _, ok := s.mockGroups[key][group]; !ok {
+			return consumerGroupNotFound()
+		}
+		s.mockGroups[key][group] = ConsumerGroup{
+			Location: location,
+			Cluster:  cluster,
+			Name:     group,
+			Topics:   groupTopics(project, location, cluster, offsets),
+		}
+		return nil
 	}
 	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.CommitConsumerGroupOffsets(ctx, project, location, cluster, group, offsets)
+}
+
+// mockGroupOffsets flattens a mock group's topic map back into the offsets the
+// read path expects.
+func mockGroupOffsets(g ConsumerGroup) []ConsumerGroupOffset {
+	var out []ConsumerGroupOffset
+	for name, t := range g.Topics {
+		for partition, p := range t.Partitions {
+			out = append(out, ConsumerGroupOffset{
+				Topic:     bareTopicName(name),
+				Partition: partition,
+				Offset:    p.Offset,
+				Metadata:  p.Metadata,
+			})
+		}
+	}
+	return out
 }
 
 // --- helpers ---

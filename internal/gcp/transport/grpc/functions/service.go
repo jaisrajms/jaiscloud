@@ -193,7 +193,7 @@ func (s *Service) CallFunction(ctx context.Context, req *functionspb.CallFunctio
 		return nil, mapError(err)
 	}
 	project = resolveProject(ctx, project, s.defaultProj)
-	executionID, result, invokeErr, err := s.core.CallFunction(ctx, project, location, id, req.GetData())
+	executionID, result, invokeErr, err := s.core.CallFunction(ctx, project, location, id, core.CallInput{Data: req.GetData()})
 	if err != nil {
 		return nil, mapError(err)
 	}

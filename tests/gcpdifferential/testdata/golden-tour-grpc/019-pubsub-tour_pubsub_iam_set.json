@@ -1,0 +1,35 @@
+{
+  "index": 19,
+  "service": "pubsub",
+  "op": "tour_pubsub_iam_set",
+  "method": "google.iam.v1.IAMPolicy/SetIamPolicy",
+  "path": "projects/<project>/topics/<topic>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "policy": {
+      "bindings": [
+        {
+          "members": [
+            "allUsers"
+          ],
+          "role": "roles/pubsub.publisher"
+        }
+      ]
+    },
+    "resource": "projects/<project>/topics/<topic>"
+  },
+  "response": {
+    "bindings": [
+      {
+        "members": [
+          "allUsers"
+        ],
+        "role": "roles/pubsub.publisher"
+      }
+    ],
+    "etag": "<etag>",
+    "version": "<version>"
+  }
+}
+

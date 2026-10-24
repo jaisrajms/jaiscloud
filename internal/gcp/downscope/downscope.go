@@ -3,11 +3,12 @@
 //
 // A client (google-auth-library DownscopedCredentials) exchanges a source access
 // token for a downscoped one, passing the boundary as the `options` form field
-// of a token-exchange request. The emulator mints a downscoped token that is
-// prefixed with TokenPrefix and whose JWT payload carries the parsed rules under
-// the "access_boundary" claim. Because the token keeps the identity claims of
-// an ordinary access token, internal/gcp/identity still recovers the caller,
-// while internal/gcp/downscope recovers the boundary and enforces it.
+// of a token-exchange request. Real STS returns an opaque token; the emulator
+// mints an opaque JWT whose payload carries the parsed rules under the
+// "access_boundary" claim. Because the token keeps the identity claims of an
+// ordinary access token, internal/gcp/identity still recovers the caller, while
+// internal/gcp/downscope recovers the boundary by the presence of that claim and
+// enforces it. There is no emulator-specific token prefix.
 //
 // The accepted boundary is the documented Cloud Storage subset (a bucket plus an
 // optional object prefix) rather than arbitrary CEL; unsupported resources,
@@ -25,10 +26,6 @@ import (
 
 	"jaiscloud/internal/gcp/identity"
 )
-
-// TokenPrefix prefixes every downscoped access token. Real STS tokens are
-// opaque; the prefix is the emulator convention the compatibility suite asserts.
-const TokenPrefix = "floci-gcp-downscoped-"
 
 // Supported inRole permissions (the subset google-auth-library uses for Cloud
 // Storage downscoping). Real GCP supports the full IAM role surface.
@@ -329,36 +326,37 @@ func normalizePrefix(prefix string) (string, error) {
 }
 
 // RulesFromAuthorization returns the access-boundary rules carried by a
-// downscoped bearer credential. downscoped is true when the Authorization header
-// carries a TokenPrefix credential (even if its boundary cannot be decoded — a
-// malformed downscoped token then denies every operation rather than falling
-// back to unrestricted access).
+// downscoped bearer credential. Real STS tokens are opaque, so a token is
+// identified as downscoped by decoding its JWT payload and finding the
+// `access_boundary` claim; a credential without that claim is an ordinary
+// access token and is not restricted here. A downscoped token whose boundary
+// is present but empty is reported downscoped with no rules and therefore
+// denies every operation.
 func RulesFromAuthorization(authorization string) (rules []Rule, downscoped bool) {
-	token := bearerToken(authorization)
-	if !strings.HasPrefix(token, TokenPrefix) {
-		return nil, false
-	}
-	return rulesFromToken(token), true
+	return rulesFromToken(bearerToken(authorization))
 }
 
 // rulesFromToken decodes the boundary claim from a downscoped token's JWT
-// payload. Returns nil for a malformed token.
-func rulesFromToken(token string) []Rule {
+// payload. The claim's presence (not its contents) marks the token downscoped.
+func rulesFromToken(token string) ([]Rule, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {
-		return nil
+		return nil, false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var payload struct {
-		AccessBoundary []Rule `json:"access_boundary"`
+		AccessBoundary *[]Rule `json:"access_boundary"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil
+		return nil, false
 	}
-	return payload.AccessBoundary
+	if payload.AccessBoundary == nil {
+		return nil, false
+	}
+	return *payload.AccessBoundary, true
 }
 
 // Allowed reports whether the request's bearer credential permits op on the

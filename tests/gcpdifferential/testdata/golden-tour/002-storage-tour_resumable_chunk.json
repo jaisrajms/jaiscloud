@@ -1,0 +1,9 @@
+{
+  "index": 2,
+  "service": "storage",
+  "op": "tour_resumable_chunk",
+  "method": "PUT",
+  "path": "/upload/storage/v1/b/<bucket>/o?uploadType=resumable&name=resumable%2Fpayload.bin&upload_id=<token>",
+  "status": 308
+}
+

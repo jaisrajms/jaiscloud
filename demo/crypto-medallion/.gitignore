@@ -1,0 +1,12 @@
+# Demo runtime state and build scratch (never committed).
+.state.json
+spark/jars/
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+capture/
+out/
+narration/clips/
+narration/narration.mp3
+narration/timepoints.json

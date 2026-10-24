@@ -1,0 +1,14 @@
+{
+  "index": 203,
+  "service": "pubsub",
+  "op": "redel2_repull_empty",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-redel2-sub-<suffix>:pull",
+  "status": 200,
+  "request": {
+    "maxMessages": 10,
+    "returnImmediately": true
+  },
+  "response": {}
+}
+

@@ -1,5 +1,5 @@
 .git
 .github
 **/node_modules
-internal/aws/ui/dist
+internal/ui/dist
 *.log

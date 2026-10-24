@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"strconv"
-	"time"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -107,8 +106,11 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 				"entity":  entityToWire(r.Entity, project),
 				"version": strconv.FormatInt(r.Version, 10),
 			}
+			if !r.CreateTime.IsZero() {
+				er["createTime"] = core.CanonicalTimestamp(r.CreateTime)
+			}
 			if !r.Entity.UpdateTime.IsZero() {
-				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+				er["updateTime"] = core.CanonicalTimestamp(r.Entity.UpdateTime)
 			}
 			found = append(found, er)
 		}
@@ -123,6 +125,9 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			})
 		}
 		out["missing"] = missing
+	}
+	if !resp.ReadTime.IsZero() {
+		out["readTime"] = core.CanonicalTimestamp(resp.ReadTime)
 	}
 	return provider.OK(out), nil
 }
@@ -162,14 +167,29 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	}
 
 	batch := map[string]any{
-		"entityResultType": "FULL",
+		"entityResultType": restEntityResultType(resp.ResultType),
 		"moreResults":      "NO_MORE_RESULTS",
+	}
+	if !resp.ReadTime.IsZero() {
+		batch["readTime"] = core.CanonicalTimestamp(resp.ReadTime)
+	}
+	if resp.SnapshotVersion != 0 {
+		batch["snapshotVersion"] = strconv.FormatInt(resp.SnapshotVersion, 10)
+	}
+	if len(resp.SkippedCursor) > 0 {
+		batch["skippedCursor"] = base64.StdEncoding.EncodeToString(resp.SkippedCursor)
+	}
+	if len(resp.EndCursor) > 0 {
+		batch["endCursor"] = base64.StdEncoding.EncodeToString(resp.EndCursor)
 	}
 	if resp.Skipped > 0 {
 		batch["skippedResults"] = resp.Skipped
 	}
 	if resp.MoreResults == core.MoreResultsAfterLimit {
 		batch["moreResults"] = "MORE_RESULTS_AFTER_LIMIT"
+	}
+	if resp.MoreResults == core.MoreResultsAfterCursor {
+		batch["moreResults"] = "MORE_RESULTS_AFTER_CURSOR"
 	}
 	if len(resp.Entities) > 0 {
 		ers := make([]any, 0, len(resp.Entities))
@@ -178,8 +198,14 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 				"entity":  entityToWire(r.Entity, project),
 				"version": strconv.FormatInt(r.Version, 10),
 			}
+			if !r.CreateTime.IsZero() {
+				er["createTime"] = core.CanonicalTimestamp(r.CreateTime)
+			}
 			if !r.Entity.UpdateTime.IsZero() {
-				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+				er["updateTime"] = core.CanonicalTimestamp(r.Entity.UpdateTime)
+			}
+			if len(r.Cursor) > 0 {
+				er["cursor"] = base64.StdEncoding.EncodeToString(r.Cursor)
 			}
 			ers = append(ers, er)
 		}
@@ -229,7 +255,7 @@ func (p *Provider) RunAggregationQuery(ctx context.Context, nr *model.Normalized
 	batch := map[string]any{
 		"aggregationResults": []any{map[string]any{"aggregateProperties": props}},
 		"moreResults":        "NO_MORE_RESULTS",
-		"readTime":           resp.ReadTime.UTC().Format(time.RFC3339Nano),
+		"readTime":           core.CanonicalTimestamp(resp.ReadTime),
 	}
 	return provider.OK(map[string]any{"batch": batch}), nil
 }
@@ -276,8 +302,11 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		if r.Key != nil {
 			mr["key"] = keyToWire(*r.Key, project)
 		}
+		if !r.CreateTime.IsZero() {
+			mr["createTime"] = core.CanonicalTimestamp(r.CreateTime)
+		}
 		if !r.UpdateTime.IsZero() {
-			mr["updateTime"] = r.UpdateTime.UTC().Format(time.RFC3339Nano)
+			mr["updateTime"] = core.CanonicalTimestamp(r.UpdateTime)
 		}
 		if r.ConflictDetected {
 			mr["conflictDetected"] = true
@@ -285,8 +314,11 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		results = append(results, mr)
 	}
 	out := map[string]any{"mutationResults": results}
+	if resp.IndexUpdates != 0 {
+		out["indexUpdates"] = resp.IndexUpdates
+	}
 	if !resp.CommitTime.IsZero() {
-		out["commitTime"] = resp.CommitTime.UTC().Format(time.RFC3339Nano)
+		out["commitTime"] = core.CanonicalTimestamp(resp.CommitTime)
 	}
 	return provider.OK(out), nil
 }

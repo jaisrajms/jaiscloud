@@ -180,3 +180,81 @@ entries:
     match: "not-implemented-cloud-tasks-cloud-schedu"
     pr: 291
     note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries in #293 (CT3)"
+
+  # GA0 — clear the six `stale-doc` entries whose source rows live in gitignored
+  # scratch (or were closed after their plan was finalized) and still read open
+  # because `parseDocState` matched a stray "open"/"not implemented" substring.
+  # Each entry is matched on a phrase from the ORIGINAL row so it closes on a
+  # copy that was never hand-edited, and is evidence-gated on the merged PR.
+  - source: "final/EV4"
+    match: "the trigger's source does not define"
+    pr: 363
+    note: "resolved: Eventarc cross-source filter validation shipped in #363 (EV10)"
+  - source: "gcp-console-ui-wave-plan"
+    match: "gcp-firestore-show-missing"
+    pr: 369
+    note: "resolved: Firestore documents.list showMissing shipped in #369 (UI60)"
+  - source: "final/MKD1"
+    match: "JAISCLOUD_KAFKA_BROKER_MODE=docker"
+    pr: 398
+    note: "resolved: Managed Kafka docker broker backend shipped in #398 (MKD1)"
+  - source: "final/RMP3"
+    match: "console create-project form"
+    pr: 409
+    note: "resolved: console project-create labels shipped in #409 (RMP10)"
+  - source: "gcp-console-ui-wave-plan"
+    match: "not session-safe"
+    pr: 378
+    note: "resolved: console session reliability (stable token + 401 recovery) shipped in #378 (UI70)"
+  - source: "gcp-console-ui-wave-plan"
+    match: "stacked two navigation surfaces"
+    pr: 380
+    note: "resolved: unified console navigation shipped in #380 (UI73)"
+
+  # The GA0 session itself: its row reads "open ... stale-doc" and stays
+  # stale-doc after merge; the overlay closes it (evidence-gated on this PR).
+  - source: "gcp-ga-fidelity-wave-plan"
+    match: "stale-doc"
+    pr: 414
+    note: "resolved: cleared the six stale-doc entries via the resolution overlay (GA0)"
+
+  # GA1 — Service Usage BatchGetServices now ships over the shared core on both
+  # transports (#415). The wave-plan row lives in gitignored scratch, so this
+  # commits the closure; evidence-gated on #415.
+  - source: "gcp-ga-fidelity-wave-plan"
+    match: "stub on both transports"
+    pr: 415
+    note: "resolved: serviceusage BatchGetServices served over the shared core, REST + gRPC (#415, GA1)"
+
+  # GA1 also resolves the java-compat R35 deferral (the same batchGet gap). Its
+  # source doc is gitignored scratch, so this commits that closure too.
+  - source: "gcp-java-compat"
+    match: "404 UnsupportedOperation"
+    pr: 415
+    note: "resolved: serviceusage services:batchGet served, closing R35 (#415, GA1)"
+
+  # DGT1 — Cloud Tasks batchCreate/batchDelete now return a done
+  # google.longrunning.Operation (BatchCreateTasksResponse / google.protobuf.Empty)
+  # instead of the synchronous {"tasks":[…]} / {}. The row is a deferred item in
+  # the finalized GTC9 test-coverage wave plan (plan_docs is gitignored scratch),
+  # so this commits the closure; evidence-gated on #509.
+  - source: "GTC9-gcp-test-coverage"
+    match: "DGT1"
+    pr: 509
+    note: "resolved: tasks:batchCreate/batchDelete return a done google.longrunning.Operation (DGT1, #509)"
+
+  # DC1 (W1.1, depth-gate honesty) was delivered by DC10's ratchet PR #559:
+  # every `exempt` depth cell now needs an `owner` and a future `review_by`, and
+  # an overdue `review_by` fails the gate. Its own declared branch
+  # (chore/gcp-depth-gate-honesty) was abandoned before implementation — it
+  # carried only the Makefile `SERIES` priority tweak, since reverted — so the
+  # source doc (gitignored scratch) needs this committed, evidence-gated closure
+  # for both the backlog row and its wave row.
+  - source: "final/DC10"
+    match: "counts an exemption as accounted-for"
+    pr: 559
+    note: "resolved: DC1 delivered by DC10 — depth gate requires owner + future review_by (#559); abandoned branch retired"
+  - source: "final/DC10"
+    match: "tooling (depth-gate honesty)"
+    pr: 559
+    note: "resolved: W1.1 (DC1) delivered by DC10's depth-gate honesty work (#559)"

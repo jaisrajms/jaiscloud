@@ -1,0 +1,42 @@
+{
+  "index": 111,
+  "service": "datastore",
+  "op": "ds_lookup_missing",
+  "method": "POST",
+  "path": "/v1/projects/<project>:lookup",
+  "status": 200,
+  "request": {
+    "keys": [
+      {
+        "path": [
+          {
+            "kind": "conf_kind",
+            "name": "<missing>"
+          }
+        ]
+      }
+    ]
+  },
+  "response": {
+    "missing": [
+      {
+        "entity": {
+          "key": {
+            "partitionId": {
+              "projectId": "<project>"
+            },
+            "path": [
+              {
+                "kind": "conf_kind",
+                "name": "<missing>"
+              }
+            ]
+          }
+        },
+        "version": "<version>"
+      }
+    ],
+    "readTime": "<time>"
+  }
+}
+

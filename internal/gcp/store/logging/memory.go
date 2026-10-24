@@ -14,16 +14,67 @@ type MemoryStore struct {
 	sinks      map[string]map[string]LogSink      // scope → name → sink
 	exclusions map[string]map[string]LogExclusion // scope → name → exclusion
 	metrics    map[string]map[string]LogMetric    // scope → name → metric
+	// admin holds the Admin v2 registries (buckets/views/links/logScopes/
+	// settings/cmek): "<collection>\x00<scope>" → id → record.
+	admin        map[string]map[string]adminRecord
+	adminRecords // shared registry semantics over the memory backend
 }
 
 // NewMemoryStore returns an empty in-memory store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{
+	s := &MemoryStore{
 		entries:    make(map[string][]LogEntry),
 		sinks:      make(map[string]map[string]LogSink),
 		exclusions: make(map[string]map[string]LogExclusion),
 		metrics:    make(map[string]map[string]LogMetric),
+		admin:      make(map[string]map[string]adminRecord),
 	}
+	s.backend = s
+	return s
+}
+
+// ─── admin backend ────────────────────────────────────────────────────────────
+
+func adminKey(collection, scope string) string { return collection + "\x00" + scope }
+
+func (s *MemoryStore) putAdmin(_ context.Context, collection, scope, id string, rec adminRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := adminKey(collection, scope)
+	if s.admin[key] == nil {
+		s.admin[key] = make(map[string]adminRecord)
+	}
+	s.admin[key][id] = rec
+	return nil
+}
+
+func (s *MemoryStore) getAdmin(_ context.Context, collection, scope, id string) (adminRecord, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rec, ok := s.admin[adminKey(collection, scope)][id]
+	return rec, ok, nil
+}
+
+func (s *MemoryStore) listAdmin(_ context.Context, collection, scope string) (map[string]adminRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.admin[adminKey(collection, scope)]
+	out := make(map[string]adminRecord, len(src))
+	for id, rec := range src {
+		out[id] = rec
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) deleteAdmin(_ context.Context, collection, scope, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := adminKey(collection, scope)
+	if _, ok := s.admin[key][id]; !ok {
+		return false, nil
+	}
+	delete(s.admin[key], id)
+	return true, nil
 }
 
 func (s *MemoryStore) Write(_ context.Context, scope string, e LogEntry) error {
@@ -275,5 +326,6 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	s.sinks = make(map[string]map[string]LogSink)
 	s.exclusions = make(map[string]map[string]LogExclusion)
 	s.metrics = make(map[string]map[string]LogMetric)
+	s.admin = make(map[string]map[string]adminRecord)
 	s.nextID = 0
 }

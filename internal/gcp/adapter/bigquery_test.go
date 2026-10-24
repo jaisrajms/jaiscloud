@@ -1,10 +1,13 @@
 package gcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
 
@@ -108,5 +111,119 @@ func TestBigQueryCodecEncodeErrorReason(t *testing.T) {
 				t.Errorf("errors[0] = %+v, want domain=global reason=%q message=%q", e, tc.wantReason, tc.message)
 			}
 		})
+	}
+}
+
+// TestDetectBigQueryUploadPaths verifies the jobs.insert media-upload endpoints
+// are claimed by the bigquery service (both the simple and resumable forms)
+// rather than falling through to the GCS raw-media fallback.
+func TestDetectBigQueryUploadPaths(t *testing.T) {
+	paths := []string{
+		"/upload/bigquery/v2/projects/p/jobs?uploadType=multipart",
+		"/upload/bigquery/v2/projects/p/jobs?uploadType=resumable",
+		"/upload/bigquery/v2/projects/p/jobs?uploadType=resumable&upload_id=x",
+		"/resumable/upload/bigquery/v2/projects/p/jobs?uploadType=resumable",
+	}
+	for _, p := range paths {
+		r := httptest.NewRequest("POST", p, nil)
+		if got, _ := DetectService(r); got != "bigquery" {
+			t.Errorf("DetectService(%s) = %q, want bigquery", p, got)
+		}
+	}
+	// A resumable chunk arrives as a PUT; it must still be claimed.
+	r := httptest.NewRequest("PUT", "/upload/bigquery/v2/projects/p/jobs?uploadType=resumable&upload_id=x", nil)
+	if got, _ := DetectService(r); got != "bigquery" {
+		t.Errorf("DetectService(chunk PUT) = %q, want bigquery", got)
+	}
+}
+
+// TestBigQueryCodecDecodeUpload covers the media-upload decode paths.
+func TestBigQueryCodecDecodeUpload(t *testing.T) {
+	codec := &BigQueryCodec{Service: "bigquery"}
+
+	// Multipart: JSON job resource part followed by the file bytes.
+	const boundary = "b9142a1c"
+	jobJSON := `{"jobReference":{"projectId":"p","jobId":"j1"},"configuration":{"load":{"destinationTable":{"datasetId":"d","tableId":"t"},"sourceFormat":"CSV"}}}`
+	body := "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + jobJSON +
+		"\r\n--" + boundary + "\r\nContent-Type: */*\r\n\r\n1,alice\r\n--" + boundary + "--\r\n"
+	r := httptest.NewRequest("POST", "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=multipart", strings.NewReader(body))
+	r.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
+	nr, err := codec.Decode(r, []byte(body))
+	if err != nil {
+		t.Fatalf("multipart decode: %v", err)
+	}
+	if nr.Action != "InsertJob" {
+		t.Fatalf("multipart action = %q, want InsertJob", nr.Action)
+	}
+	if got := nr.Params[wire.BaseURLKey]; got != "http://bq.local" {
+		t.Errorf("multipart baseURL = %v, want http://bq.local", got)
+	}
+	parsed, _ := nr.Params["body"].(map[string]any)
+	if parsed == nil {
+		t.Fatal("multipart body (job resource) not decoded")
+	}
+	// The media part must be available to the provider (streamed or buffered).
+	if nr.Params[wire.StreamKey] == nil && nr.Params[wire.MediaKey] == nil {
+		t.Fatal("multipart media part not surfaced")
+	}
+
+	// Resumable start: a JSON job resource, no upload_id.
+	r = httptest.NewRequest("POST", "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=resumable", strings.NewReader(jobJSON))
+	r.Header.Set("X-Upload-Content-Type", "*/*")
+	nr, err = codec.Decode(r, []byte(jobJSON))
+	if err != nil {
+		t.Fatalf("resumable start decode: %v", err)
+	}
+	if nr.Action != "InsertJobResumableStart" {
+		t.Fatalf("resumable start action = %q, want InsertJobResumableStart", nr.Action)
+	}
+	if nr.Params["body"] == nil {
+		t.Fatal("resumable start did not decode the job resource")
+	}
+
+	// Resumable chunk: upload_id + media + Content-Range.
+	chunk := []byte("1,alice\n")
+	r = httptest.NewRequest("PUT", "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=resumable&upload_id=abc", bytes.NewReader(chunk))
+	r.Header.Set("Content-Range", "bytes 0-7/8")
+	nr, err = codec.Decode(r, chunk)
+	if err != nil {
+		t.Fatalf("resumable chunk decode: %v", err)
+	}
+	if nr.Action != "InsertJobResumable" {
+		t.Fatalf("resumable chunk action = %q, want InsertJobResumable", nr.Action)
+	}
+	if got, _ := nr.Params[wire.MediaKey].([]byte); string(got) != string(chunk) {
+		t.Errorf("resumable chunk media = %q, want %q", got, chunk)
+	}
+	if got, _ := nr.Params["contentRange"].(string); got != "bytes 0-7/8" {
+		t.Errorf("resumable chunk contentRange = %q", got)
+	}
+
+	// uploadType=media cannot carry a load configuration — fail loud.
+	r = httptest.NewRequest("POST", "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=media", strings.NewReader("x"))
+	if _, err := codec.Decode(r, []byte("x")); err == nil {
+		t.Fatal("uploadType=media should fail loud")
+	}
+}
+
+// TestBigQueryCodecEncodeResumable verifies the codec surfaces the resumable
+// Location/Range headers the client SDKs require.
+func TestBigQueryCodecEncodeResumable(t *testing.T) {
+	codec := &BigQueryCodec{Service: "bigquery"}
+
+	status, headers, body := codec.Encode(nil, &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{wire.LocationKey: "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=resumable&upload_id=abc"},
+	})
+	if status != 200 || headers.Get("Location") == "" || len(body) != 0 {
+		t.Fatalf("session start = %d loc=%q body=%q", status, headers.Get("Location"), body)
+	}
+
+	status, headers, _ = codec.Encode(nil, &model.ProviderResponse{
+		HTTPStatus: 308,
+		Data:       map[string]any{wire.RangeKey: "bytes=0-7"},
+	})
+	if status != 308 || headers.Get("Range") != "bytes=0-7" {
+		t.Fatalf("incomplete chunk = %d range=%q", status, headers.Get("Range"))
 	}
 }

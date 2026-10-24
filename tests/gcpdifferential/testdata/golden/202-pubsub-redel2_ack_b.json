@@ -1,0 +1,15 @@
+{
+  "index": 202,
+  "service": "pubsub",
+  "op": "redel2_ack_b",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-redel2-sub-<suffix>:acknowledge",
+  "status": 200,
+  "request": {
+    "ackIds": [
+      "<ackId>"
+    ]
+  },
+  "response": {}
+}
+

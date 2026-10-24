@@ -262,6 +262,11 @@ type Store interface {
 	// Time series data plane.
 	CreateTimeSeries(ctx context.Context, project string, ts TimeSeries) error
 	ListTimeSeries(ctx context.Context, project string) ([]TimeSeries, error)
+	// ListAllTimeSeries returns every stored series across all projects. It
+	// backs the folders arm of timeSeries.list, which aggregates the projects
+	// under a folder; the emulator has no folder→project membership, so the
+	// folder's contents are the whole store.
+	ListAllTimeSeries(ctx context.Context) ([]TimeSeries, error)
 
 	// Alert policy (alarm) registry.
 	CreateAlertPolicy(ctx context.Context, project string, p AlertPolicy) error

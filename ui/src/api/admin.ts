@@ -26,6 +26,22 @@ export interface ListSnapshotsResponse {
   snapshots: Snapshot[]
 }
 
+/**
+ * The backend's snapshot metadata shape (`admin.SnapshotMetadata`).
+ * `GET /api/ui/v1/admin/snapshots` returns a **bare array** of these with the
+ * snake_case JSON tags (`created_at`, `jaiscloud_version`), not the console's
+ * `{ snapshots: [...] }` / `createdAt` shape. `listSnapshots` adapts one to the
+ * other; without it both the GCP Admin page and the Cloudscape `AdminPanel`
+ * render an empty table even when snapshots exist.
+ */
+interface SnapshotMetadata {
+  name: string
+  description?: string
+  created_at?: string
+  cloud?: string
+  jaiscloud_version?: string
+}
+
 const BASE = '/api/ui/v1/admin'
 
 export function getAdminStatus(): Promise<AdminStatus> {
@@ -48,8 +64,17 @@ export function setClock(req: ClockState): Promise<ClockState> {
   return api.post<ClockState>(`${BASE}/clock`, req)
 }
 
-export function listSnapshots(): Promise<ListSnapshotsResponse> {
-  return api.get<ListSnapshotsResponse>(`${BASE}/snapshots`)
+export async function listSnapshots(): Promise<ListSnapshotsResponse> {
+  const raw = await api.get<SnapshotMetadata[]>(`${BASE}/snapshots`)
+  return {
+    snapshots: (raw ?? []).map((s) => ({
+      name: s.name,
+      description: s.description,
+      createdAt: s.created_at,
+      cloud: s.cloud,
+      version: s.jaiscloud_version,
+    })),
+  }
 }
 
 export function createSnapshot(req: { name: string; description?: string }): Promise<unknown> {

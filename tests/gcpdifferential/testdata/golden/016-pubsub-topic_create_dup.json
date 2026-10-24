@@ -1,0 +1,19 @@
+{
+  "index": 16,
+  "service": "pubsub",
+  "op": "topic_create_dup",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/topics/<topic>",
+  "status": 409,
+  "request": {
+    "name": "projects/<project>/topics/<topic>"
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "message": "Resource already exists in the project (resource=<topic>).",
+      "status": "ALREADY_EXISTS"
+    }
+  }
+}
+

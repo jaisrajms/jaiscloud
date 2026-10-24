@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	core "jaiscloud/internal/gcp/service/serviceusage"
@@ -63,20 +62,6 @@ func strParam(nr *model.NormalizedRequest, key string) string {
 	return s
 }
 
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
-}
-
 // bodyOf returns the decoded JSON request body, or an empty map when absent.
 func bodyOf(nr *model.NormalizedRequest) map[string]any {
 	if m, ok := nr.Params["body"].(map[string]any); ok && m != nil {
@@ -85,16 +70,23 @@ func bodyOf(nr *model.NormalizedRequest) map[string]any {
 	return map[string]any{}
 }
 
-// stringSlice extracts a []string from a decoded JSON array ([]any of string).
+// stringSlice extracts a []string from a decoded JSON array ([]any of string)
+// or a repeated query parameter ([]string).
 func stringSlice(v any) []string {
-	items, _ := v.([]any)
-	out := make([]string, 0, len(items))
-	for _, it := range items {
-		if s, ok := it.(string); ok {
-			out = append(out, s)
+	switch xs := v.(type) {
+	case []string:
+		return xs
+	case []any:
+		out := make([]string, 0, len(xs))
+		for _, it := range xs {
+			if s, ok := it.(string); ok {
+				out = append(out, s)
+			}
 		}
+		return out
+	default:
+		return nil
 	}
-	return out
 }
 
 // ─── wire encoding ────────────────────────────────────────────────────────────

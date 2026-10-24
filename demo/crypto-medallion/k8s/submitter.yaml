@@ -1,0 +1,70 @@
+# crypto-medallion submitter — Cloud Scheduler -> dataproc.jobs.submit (design §5.6).
+#
+# Cloud Scheduler has no Dataproc target, so its httpTarget points here; this
+# Deployment submits the Spark SQL rollup and answers with the Cloud Scheduler
+# delivery. Rendered by scripts/democtl.py (stage serve).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cm-submitter
+  namespace: __NAMESPACE__
+  labels:
+    app: cm-submitter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cm-submitter
+  template:
+    metadata:
+      labels:
+        app: cm-submitter
+    spec:
+      containers:
+        - name: submitter
+          image: __SUBMITTER_IMAGE__
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: EMULATOR
+              value: "__EMULATOR__"
+            - name: PROJECT
+              value: "__PROJECT__"
+            - name: REGION
+              value: "__REGION__"
+            - name: CLUSTER
+              value: "__CLUSTER__"
+            - name: JARS
+              value: "__JARS__"
+            - name: PROPERTIES_B64
+              value: "__PROPERTIES_B64__"
+            - name: ROLLUP_SQL_B64
+              value: "__ROLLUP_SQL_B64__"
+            - name: BQ_DATASET
+              value: "__BQ_DATASET__"
+            - name: BQ_TABLE
+              value: "__BQ_TABLE__"
+            - name: ROLLUP_PREFIX
+              value: "__ROLLUP_PREFIX__"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cm-submitter
+  namespace: __NAMESPACE__
+  labels:
+    app: cm-submitter
+spec:
+  selector:
+    app: cm-submitter
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

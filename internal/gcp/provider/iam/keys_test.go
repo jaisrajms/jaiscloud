@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -35,12 +36,14 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	if !strings.Contains(keyName, "/keys/") {
 		t.Fatalf("expected key name with /keys/, got %q", keyName)
 	}
-	keyIDField, _ := kr.Data["keyId"].(string)
-	if keyIDField == "" {
-		t.Error("expected a non-blank keyId on key create")
+	// The key id is the trailing segment of name — real GCP's ServiceAccountKey
+	// has no separate keyId field, so the response must not invent one.
+	if _, present := kr.Data["keyId"]; present {
+		t.Errorf("key create must not emit a non-schema keyId field: %v", kr.Data["keyId"])
 	}
-	if !strings.HasSuffix(keyName, "/keys/"+keyIDField) {
-		t.Errorf("keyId %q does not match trailing segment of name %q", keyIDField, keyName)
+	keyIDField := keyName[strings.LastIndex(keyName, "/")+1:]
+	if keyIDField == "" {
+		t.Fatalf("expected a key id in the name %q", keyName)
 	}
 	if kr.Data["keyOrigin"] != "USER_PROVIDED" {
 		t.Errorf("keyOrigin = %v, want USER_PROVIDED", kr.Data["keyOrigin"])
@@ -51,10 +54,32 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	if _, ok := kr.Data["privateKeyData"]; !ok {
 		t.Error("expected privateKeyData on key create")
 	}
+	if kr.Data["privateKeyType"] != "TYPE_GOOGLE_CREDENTIALS_FILE" {
+		t.Errorf("privateKeyType = %v, want TYPE_GOOGLE_CREDENTIALS_FILE", kr.Data["privateKeyType"])
+	}
+	// Discovery scopes publicKeyData to keys.get, so create must not return it.
+	if _, present := kr.Data["publicKeyData"]; present {
+		t.Error("keys.create must not emit publicKeyData (get-only per Discovery)")
+	}
+	if kr.Data["validBeforeTime"] != nonExpiringKeyTime {
+		t.Errorf("validBeforeTime = %v, want %s", kr.Data["validBeforeTime"], nonExpiringKeyTime)
+	}
+
+	// keys.get returns publicKeyData (and not the create-only fields).
+	gr, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyIDField}))
+	if err != nil {
+		t.Fatalf("key get: %v", err)
+	}
+	if _, present := gr.Data["privateKeyType"]; present {
+		t.Error("keys.get must not emit privateKeyType (create-only per Discovery)")
+	}
+	if _, present := gr.Data["privateKeyData"]; present {
+		t.Error("keys.get must not emit privateKeyData (create-only per Discovery)")
+	}
 	// publicKeyData is a base64 PKIX public-key PEM derived from the private key.
-	pubData, _ := kr.Data["publicKeyData"].(string)
+	pubData, _ := gr.Data["publicKeyData"].(string)
 	if pubData == "" {
-		t.Error("expected publicKeyData on key create")
+		t.Error("expected publicKeyData on key get")
 	} else {
 		pubPEM, err := base64.StdEncoding.DecodeString(pubData)
 		if err != nil {
@@ -99,18 +124,51 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 		t.Fatalf("expected 3-part JWT, got %d dots", got)
 	}
 
-	// List keys → 1.
+	// signBlob signs with the Google-managed key, never with the user-managed key
+	// created above (real GCP maintains a system-managed pair per account).
+	if keyID == keyIDField {
+		t.Errorf("signBlob signed with the user-managed key %q; want the system-managed key", keyID)
+	}
+
+	// List keys → the created user key plus the system-managed signing key.
 	lr, err := p.ServiceAccountKeyList(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys"}))
 	if err != nil {
 		t.Fatalf("key list: %v", err)
 	}
 	keys, _ := lr.Data["keys"].([]any)
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %v", lr.Data["keys"])
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 keys (user + system managed), got %v", lr.Data["keys"])
 	}
-	listed, _ := keys[0].(map[string]any)
-	if listed["keyId"] != keyIDField {
-		t.Errorf("listed key keyId = %v, want %q (stable across list)", listed["keyId"], keyIDField)
+	byName := map[string]map[string]any{}
+	for _, item := range keys {
+		listed, _ := item.(map[string]any)
+		if _, present := listed["keyId"]; present {
+			t.Errorf("keys.list must not emit a non-schema keyId field: %v", listed["keyId"])
+		}
+		// Discovery scopes these to create/get, so list carries neither.
+		if _, present := listed["publicKeyData"]; present {
+			t.Error("keys.list must not emit publicKeyData (get-only per Discovery)")
+		}
+		if _, present := listed["privateKeyType"]; present {
+			t.Error("keys.list must not emit privateKeyType (create-only per Discovery)")
+		}
+		name, _ := listed["name"].(string)
+		byName[name] = listed
+	}
+	listed, ok := byName[keyName]
+	if !ok {
+		t.Fatalf("keys.list dropped the created key %q: %v", keyName, lr.Data["keys"])
+	}
+	if listed["keyType"] != "USER_MANAGED" || listed["keyOrigin"] != "USER_PROVIDED" {
+		t.Errorf("created key listed as keyType=%v keyOrigin=%v, want USER_MANAGED/USER_PROVIDED",
+			listed["keyType"], listed["keyOrigin"])
+	}
+	systemName := keyName[:strings.LastIndex(keyName, "/")+1] + keyID
+	if sys, ok := byName[systemName]; !ok {
+		t.Errorf("keys.list is missing the system-managed signing key %q", systemName)
+	} else if sys["keyType"] != "SYSTEM_MANAGED" || sys["keyOrigin"] != "GOOGLE_PROVIDED" {
+		t.Errorf("signing key listed as keyType=%v keyOrigin=%v, want SYSTEM_MANAGED/GOOGLE_PROVIDED",
+			sys["keyType"], sys["keyOrigin"])
 	}
 
 	// Delete the key.
@@ -119,6 +177,51 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	}
 	if _, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyID})); err == nil {
 		t.Fatal("expected 404 on deleted key")
+	}
+}
+
+// TestServiceAccountSignBlobResponseFieldByHost covers J64: the IAM and IAM
+// Credentials APIs share one path on the emulator origin but return different
+// signature field names. The request Host selects exactly one — never both.
+func TestServiceAccountSignBlobResponseFieldByHost(t *testing.T) {
+	ctx := context.Background()
+	p := New(store.NewMemoryResourceStore())
+	if _, err := p.Create(ctx, newNR(map[string]any{"body": map[string]any{"accountId": "sa"}})); err != nil {
+		t.Fatalf("create SA: %v", err)
+	}
+	email := "sa@proj.iam.gserviceaccount.com"
+	payload := base64.StdEncoding.EncodeToString([]byte("hello"))
+
+	sign := func(host string) map[string]any {
+		t.Helper()
+		nr := newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": payload}})
+		nr.Raw = &http.Request{Host: host}
+		resp, err := p.ServiceAccountSignBlob(ctx, nr)
+		if err != nil {
+			t.Fatalf("signBlob(host=%q): %v", host, err)
+		}
+		return resp.Data
+	}
+
+	iam := sign("iam.googleapis.com")
+	if _, ok := iam["signature"]; !ok {
+		t.Errorf("IAM signBlob must return signature: %v", iam)
+	}
+	if _, ok := iam["signedBlob"]; ok {
+		t.Errorf("IAM signBlob must not return the IAM Credentials field signedBlob: %v", iam)
+	}
+
+	creds := sign("iamcredentials.googleapis.com")
+	if _, ok := creds["signedBlob"]; !ok {
+		t.Errorf("IAM Credentials signBlob must return signedBlob: %v", creds)
+	}
+	if _, ok := creds["signature"]; ok {
+		t.Errorf("IAM Credentials signBlob must not return the IAM field signature: %v", creds)
+	}
+
+	// An unqualified host (a bare emulator endpoint) defaults to the IAM spelling.
+	if local := sign("localhost:8080"); local["signature"] == nil || local["signedBlob"] != nil {
+		t.Errorf("default-host signBlob must return signature only: %v", local)
 	}
 }
 

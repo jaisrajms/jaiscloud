@@ -1,0 +1,26 @@
+{
+  "index": 20,
+  "service": "pubsub",
+  "op": "msg_grpc_pull",
+  "method": "google.pubsub.v1.Subscriber/Pull",
+  "path": "projects/<project>/subscriptions/<subscription>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "maxMessages": 1,
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {
+    "receivedMessages": [
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "data": "Z3JwYy1wdWxs",
+          "messageId": "<messageId>",
+          "publishTime": "<time>"
+        }
+      }
+    ]
+  }
+}
+

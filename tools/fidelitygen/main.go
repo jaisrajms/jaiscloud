@@ -27,16 +27,17 @@ func main() {
 	discoveryDir := flag.String("discovery", "tests/gcpconformance/discovery", "vendored Discovery snapshots dir")
 	reportPath := flag.String("report", "tests/gcpconformance/testdata/report/report.json", "conformance report to consume")
 	grpcReportPath := flag.String("grpc-report", "tests/gcpconformance/grpc/testdata/report/report.json", "gRPC conformance report to consume")
+	transcriptPath := flag.String("transcript", "tests/gcpconformance/testdata/transcripts.json", "committed wire-conformance transcript for response-evidence coverage")
 	strict := flag.Bool("strict", false, "also fail if a ga cell carries a non-allowlisted high/medium finding")
 	flag.Parse()
 
-	if err := run(*out, *overridesPath, *discoveryDir, *reportPath, *grpcReportPath, *strict); err != nil {
+	if err := run(*out, *overridesPath, *discoveryDir, *reportPath, *grpcReportPath, *transcriptPath, *strict); err != nil {
 		fmt.Fprintln(os.Stderr, "fidelitygen:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath string, strict bool) error {
+func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath, transcriptPath string, strict bool) error {
 	ops := conf.Enumerate()
 
 	docs, err := conf.LoadSnapshots(discoveryDir)
@@ -51,13 +52,18 @@ func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath string, st
 	if err != nil {
 		return fmt.Errorf("read gRPC conformance report (%s): %w", grpcReportPath, err)
 	}
+	tr, err := readTranscript(transcriptPath)
+	if err != nil {
+		return err
+	}
+	coverage := conf.TranscriptCoverage(ops, docs, tr)
 	ov, err := LoadOverrides(overridesPath, ops, conf.EnumerateGRPC())
 	if err != nil {
 		return err
 	}
 
 	grpcFacts := GRPCFacts(conf.EnumerateGRPC(), ov, grpcReport)
-	all := append(RestFacts(ops, docs, report, ov), grpcFacts...)
+	all := append(RestFacts(ops, docs, report, ov, coverage), grpcFacts...)
 
 	cells := make([]Cell, 0, len(all))
 	var suspicious []string
@@ -83,10 +89,29 @@ func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath string, st
 	fmt.Printf("wrote %s: %d cells (ga=%d limited=%d preview=%d unsupported=%d)\n",
 		out, s.Total, s.ByState[StateGA], s.ByState[StateLimited],
 		s.ByState[StatePreview], s.ByState[StateUnsupported])
+	ev := s.Evidence
+	fmt.Printf("evidence: rest %d/%d verified, grpc %d/%d verified\n",
+		ev.Verified["rest"], ev.Verified["rest"]+ev.Unverified["rest"],
+		ev.Verified["grpc"], ev.Verified["grpc"]+ev.Unverified["grpc"])
 
 	if strict && len(suspicious) > 0 {
 		return fmt.Errorf("-strict: %d ga cell(s) carry non-allowlisted high/medium findings:\n  %s",
 			len(suspicious), strings.Join(suspicious, "\n  "))
 	}
 	return nil
+}
+
+// readTranscript loads the committed wire-conformance transcript used to derive
+// REST response-evidence coverage. A missing file yields an empty transcript
+// (every mapped op unverified) so a fresh clone without a recording still
+// generates the matrix — mirroring ReadGRPCReport's tolerance.
+func readTranscript(path string) (conf.Transcript, error) {
+	tr, err := conf.ReadTranscript(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return conf.Transcript{}, nil
+		}
+		return conf.Transcript{}, fmt.Errorf("read transcript %s: %w", path, err)
+	}
+	return tr, nil
 }

@@ -12,9 +12,14 @@
 // shared locations/{location}/operations/{id} path is host-ambiguous with
 // Cloud Workflows' LRO surface and is deliberately not claimed here.
 //
-// Deferred surfaces (import/export/failover/reschedule-maintenance/auth-string,
-// backup collections, and the cluster surface) are not routed and fall through
-// to the adapter's generic 404 rather than silently succeeding.
+// Deferred surfaces (backup collections, the cluster surface, and the
+// instance-level maintenance/version surfaces the emulator does not model) are
+// not routed and fall through to the adapter's generic 404 rather than silently
+// succeeding. import/export/failover/reschedule-maintenance are accepted as
+// control-plane operations (validating their documented request shape) and
+// getAuthString reports the empty AUTH string real Memorystore returns when AUTH
+// is disabled — the emulator never stands up a Redis server, so none of them
+// touch a data plane.
 package memorystore
 
 import (
@@ -31,6 +36,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -60,12 +66,17 @@ func New(resources store.ResourceStore) *Provider {
 // Routes maps "Memorystore.<Action>" keys to their handlers.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Memorystore.CreateInstance":  p.CreateInstance,
-		"Memorystore.GetInstance":     p.GetInstance,
-		"Memorystore.ListInstances":   p.ListInstances,
-		"Memorystore.UpdateInstance":  p.UpdateInstance,
-		"Memorystore.DeleteInstance":  p.DeleteInstance,
-		"Memorystore.UpgradeInstance": p.UpgradeInstance,
+		"Memorystore.CreateInstance":        p.CreateInstance,
+		"Memorystore.GetInstance":           p.GetInstance,
+		"Memorystore.ListInstances":         p.ListInstances,
+		"Memorystore.UpdateInstance":        p.UpdateInstance,
+		"Memorystore.DeleteInstance":        p.DeleteInstance,
+		"Memorystore.UpgradeInstance":       p.UpgradeInstance,
+		"Memorystore.ImportInstance":        p.ImportInstance,
+		"Memorystore.ExportInstance":        p.ExportInstance,
+		"Memorystore.FailoverInstance":      p.FailoverInstance,
+		"Memorystore.RescheduleMaintenance": p.RescheduleMaintenance,
+		"Memorystore.GetAuthString":         p.GetAuthString,
 
 		"Memorystore.GetLocation":   p.GetLocation,
 		"Memorystore.ListLocations": p.ListLocations,
@@ -90,6 +101,7 @@ type Instance struct {
 	CreateTime        string            `json:"createTime,omitempty"`
 	RedisConfigs      map[string]string `json:"redisConfigs,omitempty"`
 	Labels            map[string]string `json:"labels,omitempty"`
+	ReplicaCount      int64             `json:"replicaCount,omitempty"`
 	ID                string            `json:"id,omitempty"`
 	CreationTimestamp string            `json:"creationTimestamp,omitempty"`
 }
@@ -184,7 +196,10 @@ func (p *Provider) ListInstances(ctx context.Context, nr *model.NormalizedReques
 			instances = append(instances, inst)
 		}
 	}
-	page, next := paging.Page(instances, func(i Instance) string { return i.ID }, nr.Params)
+	page, next, err := paging.Page(instances, func(i Instance) string { return i.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, inst := range page {
 		items = append(items, toMap(inst))
@@ -287,6 +302,118 @@ func (p *Provider) UpgradeInstance(ctx context.Context, nr *model.NormalizedRequ
 	return provider.OK(p.operation(nr, location, "upgrade", inst.Name, toMap(inst))), nil
 }
 
+// ImportInstance accepts an RDB import request. The emulator has no Redis data
+// plane, so it validates the required GCS source (real GCP rejects a request
+// without one) and reports the control-plane operation as done — the same
+// metadata-only contract Create/Update/Upgrade use.
+func (p *Provider) ImportInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	inst, location, err := p.mutationTarget(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	if nestedURI(body, "inputConfig", "gcsSource") == "" {
+		return nil, model.NewProviderError("InvalidArgument", "inputConfig.gcsSource.uri is required", 400)
+	}
+	return provider.OK(p.operation(nr, location, "import", inst.Name, map[string]any{})), nil
+}
+
+// ExportInstance accepts an RDB export request (see ImportInstance for the
+// metadata-only rationale).
+func (p *Provider) ExportInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	inst, location, err := p.mutationTarget(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	if nestedURI(body, "outputConfig", "gcsDestination") == "" {
+		return nil, model.NewProviderError("InvalidArgument", "outputConfig.gcsDestination.uri is required", 400)
+	}
+	return provider.OK(p.operation(nr, location, "export", inst.Name, map[string]any{})), nil
+}
+
+// FailoverInstance initiates a failover. Real Memorystore only supports a
+// failover on a STANDARD_HA tier instance, so a BASIC instance is rejected
+// rather than reported as a successful failover.
+func (p *Provider) FailoverInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	inst, location, err := p.mutationTarget(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	if inst.Tier != "STANDARD_HA" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"failover is only supported for STANDARD_HA tier instances", 400)
+	}
+	return provider.OK(p.operation(nr, location, "failover", inst.Name, map[string]any{})), nil
+}
+
+// RescheduleMaintenanceInstance records a maintenance reschedule. The emulator
+// models no maintenance policy, so it validates the documented request shape
+// (rescheduleType, plus scheduleTime for SPECIFIC_TIME) and reports the
+// control-plane operation as done.
+func (p *Provider) RescheduleMaintenance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	inst, location, err := p.mutationTarget(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	switch t := bodyString(body, "rescheduleType"); t {
+	case "IMMEDIATE", "NEXT_AVAILABLE_WINDOW":
+	case "SPECIFIC_TIME":
+		if bodyString(body, "scheduleTime") == "" {
+			return nil, model.NewProviderError("InvalidArgument",
+				"scheduleTime is required when rescheduleType is SPECIFIC_TIME", 400)
+		}
+	default:
+		return nil, model.NewProviderError("InvalidArgument",
+			"rescheduleType must be IMMEDIATE, NEXT_AVAILABLE_WINDOW or SPECIFIC_TIME", 400)
+	}
+	return provider.OK(p.operation(nr, location, "rescheduleMaintenance", inst.Name, map[string]any{})), nil
+}
+
+// GetAuthString returns an instance's AUTH string. The emulator stands up no
+// Redis server and so never enables AUTH; real Memorystore documents that "if
+// AUTH is not enabled for the instance the response will be empty", so an
+// existing instance answers an empty InstanceAuthString.
+func (p *Provider) GetAuthString(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	location, id := instanceParams(nr)
+	if location == "" || id == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing location or instance id", 400)
+	}
+	if _, err := p.loadInstance(ctx, nr.AccountID, location, id); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// mutationTarget resolves the instance an instance-level custom method targets,
+// returning the loaded instance and its location.
+func (p *Provider) mutationTarget(ctx context.Context, nr *model.NormalizedRequest) (Instance, string, error) {
+	location, id := instanceParams(nr)
+	if location == "" || id == "" {
+		return Instance{}, "", model.NewProviderError("InvalidArgument", "missing location or instance id", 400)
+	}
+	inst, err := p.loadInstance(ctx, nr.AccountID, location, id)
+	if err != nil {
+		return Instance{}, "", err
+	}
+	return inst, location, nil
+}
+
+// nestedURI reads body[outer][inner]["uri"].
+func nestedURI(body map[string]any, outer, inner string) string {
+	o, _ := body[outer].(map[string]any)
+	if o == nil {
+		return ""
+	}
+	i, _ := o[inner].(map[string]any)
+	if i == nil {
+		return ""
+	}
+	u, _ := i["uri"].(string)
+	return u
+}
+
 func (p *Provider) loadInstance(ctx context.Context, account, location, id string) (Instance, error) {
 	e, err := p.resources.Get(ctx, account, location, rtInstance, id)
 	if err != nil {
@@ -339,6 +466,9 @@ func applyInstanceUpdate(inst *Instance, body map[string]any, mask string) error
 			inst.RedisConfigs = incoming.RedisConfigs
 			break
 		}
+	}
+	if (apply("replicaCount") || apply("replica_count")) && bodyHas(body, "replicaCount") {
+		inst.ReplicaCount = incoming.ReplicaCount
 	}
 	return nil
 }
@@ -407,7 +537,10 @@ func (p *Provider) ListLocations(ctx context.Context, nr *model.NormalizedReques
 			DisplayName: r,
 		})
 	}
-	page, next := paging.Page(locations, func(l Location) string { return l.LocationID }, nr.Params)
+	page, next, err := paging.Page(locations, func(l Location) string { return l.LocationID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, l := range page {
 		items = append(items, toMap(l))
@@ -531,8 +664,10 @@ func toMap(v any) map[string]any {
 	return m
 }
 
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // numericID derives a stable decimal id from a string.

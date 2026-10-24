@@ -13,7 +13,10 @@ import (
 // topic/group/ACL/message bytes are runtime state and are deliberately excluded
 // (Cluster.BootstrapAddress is json:"-"): --dsn snapshots and import/export must
 // not claim broker data is portable. On restore the broker is re-ensured lazily
-// on the first read or data-plane call.
+// on the first read or data-plane call. The mock topology's consumer-group
+// registry is likewise runtime state: a restored LITERAL GROUP ACL does not
+// re-seed its group, so a caller that needs the group after a restore re-creates
+// the ACL (or uses a live broker, whose group coordinator owns the offsets).
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

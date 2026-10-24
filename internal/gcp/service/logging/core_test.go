@@ -228,7 +228,10 @@ func TestCorePageSizeValidation(t *testing.T) {
 func TestCoreListMonitoredResourceDescriptors(t *testing.T) {
 	s := newTestService()
 
-	all, next := s.ListMonitoredResourceDescriptors(0, "")
+	all, next, err := s.ListMonitoredResourceDescriptors(0, "")
+	if err != nil {
+		t.Fatalf("ListMonitoredResourceDescriptors: %v", err)
+	}
 	if next != "" {
 		t.Fatalf("unpaginated descriptors next = %q, want empty", next)
 	}
@@ -262,7 +265,10 @@ func TestCoreListMonitoredResourceDescriptors(t *testing.T) {
 	seen := map[string]bool{}
 	token := ""
 	for pages := 0; ; pages++ {
-		page, tok := s.ListMonitoredResourceDescriptors(3, token)
+		page, tok, err := s.ListMonitoredResourceDescriptors(3, token)
+		if err != nil {
+			t.Fatalf("ListMonitoredResourceDescriptors: %v", err)
+		}
 		if len(page) > 3 {
 			t.Fatalf("page size = %d, want <= 3", len(page))
 		}

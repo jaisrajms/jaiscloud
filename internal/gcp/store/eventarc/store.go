@@ -20,9 +20,10 @@ import (
 )
 
 var (
-	ErrNoSuchTrigger = errors.New("NoSuchTrigger")
-	ErrNoSuchChannel = errors.New("NoSuchChannel")
-	ErrAlreadyExists = errors.New("AlreadyExists")
+	ErrNoSuchTrigger   = errors.New("NoSuchTrigger")
+	ErrNoSuchChannel   = errors.New("NoSuchChannel")
+	ErrNoSuchOperation = errors.New("NoSuchOperation")
+	ErrAlreadyExists   = errors.New("AlreadyExists")
 )
 
 // Trigger is a stored Eventarc trigger. Config holds the wire request body
@@ -59,6 +60,24 @@ type Channel struct {
 	ActivationToken string            `json:"activationToken,omitempty"`
 	CreateTime      time.Time         `json:"createTime"`
 	UpdateTime      time.Time         `json:"updateTime"`
+}
+
+// Operation is a stored Eventarc long-running operation. Mutations complete
+// synchronously, but real GCP still records each one in the shared
+// google.longrunning.Operations surface (operations.list/get/delete address it
+// for a while), so the emulator persists the done operation and its rendered
+// response body. Response holds the Any-wrapped resource JSON the operation
+// carries (including its @type discriminator); it is kept after the target
+// resource is deleted, as real GCP keeps a completed delete operation's
+// response.
+type Operation struct {
+	ProjectID  string          `json:"projectId"`
+	Location   string          `json:"location"`
+	ID         string          `json:"id"`
+	Verb       string          `json:"verb"`
+	Target     string          `json:"target"`
+	Response   json.RawMessage `json:"response,omitempty"`
+	CreateTime time.Time       `json:"createTime"`
 }
 
 // Store is the Eventarc store.
@@ -98,6 +117,20 @@ type Store interface {
 	// deleting. See DeleteTriggerAtomic.
 	DeleteChannelAtomic(ctx context.Context, projectID, location, id string, guard func(Channel) error) error
 	ListChannels(ctx context.Context, projectID, location string) ([]Channel, error)
+	// ListChannelsAllLocations returns every channel for a project across all
+	// locations, for the location-optional console list (mirrors
+	// ListTriggersAllLocations).
+	ListChannelsAllLocations(ctx context.Context, projectID string) ([]Channel, error)
+
+	// Operations record the completed long-running operations of control-plane
+	// mutations (see Operation).
+	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
+	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
+	// ListOperations returns a location's persisted operations ordered by ID.
+	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
+	// DeleteOperation removes an operation, or ErrNoSuchOperation when the id
+	// is unknown.
+	DeleteOperation(ctx context.Context, projectID, location, id string) error
 
 	Reset(ctx context.Context)
 }

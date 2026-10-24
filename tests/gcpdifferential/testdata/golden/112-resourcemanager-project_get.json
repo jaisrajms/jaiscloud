@@ -1,0 +1,16 @@
+{
+  "index": 112,
+  "service": "resourcemanager",
+  "op": "project_get",
+  "method": "GET",
+  "path": "/v1/projects/<project>",
+  "status": 200,
+  "response": {
+    "createTime": "<time>",
+    "lifecycleState": "ACTIVE",
+    "name": "GCP parity diff",
+    "projectId": "<project>",
+    "projectNumber": "<project>"
+  }
+}
+

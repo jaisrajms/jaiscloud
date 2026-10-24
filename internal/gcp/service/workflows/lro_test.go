@@ -120,6 +120,99 @@ func TestWorkflowLROAsyncSettlesOnRead(t *testing.T) {
 	}
 }
 
+// TestListOperationsPagesAndSettles verifies the location-scoped operations
+// list: it pages over the location's persisted operations (the standard
+// pageSize/pageToken cursor) and settles each returned operation against the
+// timing mode, matching GetOperation.
+func TestListOperationsPagesAndSettles(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore(),
+		WithLROMode(lro.Mode{Enabled: true, Delay: 30 * time.Second}))
+
+	for _, id := range []string{"wf1", "wf2", "wf3"} {
+		if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{ID: id, SourceContents: simpleSource}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+
+	// A pageSize of 2 yields two unsettled operations and a cursor.
+	page, next, err := s.ListOperations(ctx, "proj", "us-central1", 2, "", "")
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(page) != 2 || next == "" {
+		t.Fatalf("page = %d ops, next = %q; want 2 and a cursor", len(page), next)
+	}
+	for _, op := range page {
+		if op.Done {
+			t.Fatalf("in-flight operation %s settled early", op.ID)
+		}
+	}
+
+	// The cursor resumes in operation-ID order (the deterministic key).
+	rest, next2, err := s.ListOperations(ctx, "proj", "us-central1", 2, next, "")
+	if err != nil {
+		t.Fatalf("list operations page 2: %v", err)
+	}
+	if len(rest) != 1 || next2 != "" {
+		t.Fatalf("page 2 = %d ops, next = %q; want 1 and no cursor", len(rest), next2)
+	}
+	if rest[0].ID <= page[1].ID {
+		t.Fatalf("page 2 first id %q must sort after page 1 last id %q", rest[0].ID, page[1].ID)
+	}
+
+	// Past the delay the listed operations settle, like GetOperation.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
+	settled, _, err := s.ListOperations(ctx, "proj", "us-central1", 2, "", "")
+	if err != nil {
+		t.Fatalf("list after delay: %v", err)
+	}
+	for _, op := range settled {
+		if !op.Done || !op.EndTime.Equal(t0.Add(30*time.Second)) {
+			t.Fatalf("settled page op = done=%v endTime=%v", op.Done, op.EndTime)
+		}
+	}
+
+	// An unknown location is an empty page, not an error.
+	if empty, _, err := s.ListOperations(ctx, "proj", "europe-west1", 0, "", ""); err != nil || len(empty) != 0 {
+		t.Fatalf("empty location = %d ops err=%v; want empty page", len(empty), err)
+	}
+
+	// A missing location and a non-empty filter fail loud.
+	if _, _, err := s.ListOperations(ctx, "proj", "", 0, "", ""); err == nil {
+		t.Fatalf("expected InvalidArgument for a missing location")
+	}
+	if _, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", "done=true"); err == nil {
+		t.Fatalf("expected InvalidArgument for a non-empty operations filter")
+	}
+}
+
+// TestDeleteOperation verifies delete removes a persisted operation and that an
+// unknown id is NotFound.
+func TestDeleteOperation(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	_, op, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{ID: "wf1", SourceContents: simpleSource})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", op.ID); err != nil {
+		t.Fatalf("delete operation: %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", op.ID); !IsNotFound(err) {
+		t.Fatalf("get after delete = %v, want NotFound", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", op.ID); !IsNotFound(err) {
+		t.Fatalf("delete absent = %v, want NotFound", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "", op.ID); err == nil {
+		t.Fatalf("expected InvalidArgument for a missing location")
+	}
+}
+
 // TestWorkflowLROAsyncZeroDelaySettlesImmediately verifies a zero delay settles
 // on the first read rather than leaving the operation in flight.
 func TestWorkflowLROAsyncZeroDelaySettlesImmediately(t *testing.T) {

@@ -9,16 +9,18 @@ import (
 
 // MemoryStore is an in-memory Store.
 type MemoryStore struct {
-	mu       sync.RWMutex
-	triggers map[string]map[string]Trigger // projectID+"/"+location → id → trigger
-	channels map[string]map[string]Channel // projectID+"/"+location → id → channel
+	mu         sync.RWMutex
+	triggers   map[string]map[string]Trigger   // projectID+"/"+location → id → trigger
+	channels   map[string]map[string]Channel   // projectID+"/"+location → id → channel
+	operations map[string]map[string]Operation // projectID+"/"+location → id → operation
 }
 
 // NewMemoryStore returns an empty in-memory store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		triggers: make(map[string]map[string]Trigger),
-		channels: make(map[string]map[string]Channel),
+		triggers:   make(map[string]map[string]Trigger),
+		channels:   make(map[string]map[string]Channel),
+		operations: make(map[string]map[string]Operation),
 	}
 }
 
@@ -214,9 +216,80 @@ func (s *MemoryStore) ListChannels(_ context.Context, projectID, location string
 	return result, nil
 }
 
+func (s *MemoryStore) ListChannelsAllLocations(_ context.Context, projectID string) ([]Channel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Channel
+	for key, m := range s.channels {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, c := range m {
+			result = append(result, c)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+// --- Operations ---
+
+func (s *MemoryStore) CreateOperation(_ context.Context, projectID, location string, op Operation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope(projectID, location)
+	if s.operations[key] == nil {
+		s.operations[key] = make(map[string]Operation)
+	}
+	op.ProjectID = projectID
+	op.Location = location
+	s.operations[key][op.ID] = op
+	return nil
+}
+
+func (s *MemoryStore) GetOperation(_ context.Context, projectID, location, id string) (Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	op, ok := s.operations[scope(projectID, location)][id]
+	if !ok {
+		return Operation{}, ErrNoSuchOperation
+	}
+	return op, nil
+}
+
+func (s *MemoryStore) ListOperations(_ context.Context, projectID, location string) ([]Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.operations[scope(projectID, location)]
+	result := make([]Operation, 0, len(m))
+	for _, op := range m {
+		result = append(result, op)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *MemoryStore) DeleteOperation(_ context.Context, projectID, location, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope(projectID, location)
+	if _, ok := s.operations[key][id]; !ok {
+		return ErrNoSuchOperation
+	}
+	delete(s.operations[key], id)
+	return nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.triggers = make(map[string]map[string]Trigger)
 	s.channels = make(map[string]map[string]Channel)
+	s.operations = make(map[string]map[string]Operation)
 }

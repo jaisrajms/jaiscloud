@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
@@ -55,6 +56,9 @@ const rtOperation = "gcp_serviceusage_operation"
 
 // maxBatchEnable mirrors real GCP's per-request batchEnable cap.
 const maxBatchEnable = 20
+
+// maxBatchGet mirrors real GCP's per-request BatchGetServices cap.
+const maxBatchGet = 30
 
 // ListServices page-size contract: the default is 50 and the maximum is 200
 // (serviceusage.googleapis.com Discovery, services.list pageSize).
@@ -127,9 +131,12 @@ type Operation struct {
 type Service struct {
 	resources store.ResourceStore
 	// lroMode controls operation timing. The zero value is synchronous: every
-	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// operation is stored done=true inline, matching the default synchronous contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 }
 
 // Option configures Service.
@@ -140,6 +147,16 @@ type Option func(*Service)
 // done=false and settles them on read once d has elapsed.
 func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // NewService returns a Service Usage core backed by the shared ResourceStore.
@@ -186,8 +203,10 @@ func (s *Service) ListAPIs(ctx context.Context, project string, filter StateFilt
 		}
 		apis = append(apis, buildAPI(project, e.ID, st))
 	}
-	// The API contract is: pageSize defaults to 50 and cannot exceed 200.
-	if pageSize <= 0 {
+	// The API contract is: pageSize defaults to 50 and cannot exceed 200. A
+	// negative value is not "unset" — AIP-158 requires INVALID_ARGUMENT, so it
+	// is left for paging.Page to reject rather than folded into the default.
+	if pageSize == 0 {
 		pageSize = defaultPageSize
 	}
 	if pageSize > maxPageSize {
@@ -197,7 +216,10 @@ func (s *Service) ListAPIs(ctx context.Context, project string, filter StateFilt
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(apis, func(a API) string { return a.Name }, params)
+	page, next, err := paging.Page(apis, func(a API) string { return a.Name }, params)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -213,6 +235,41 @@ func (s *Service) GetAPI(ctx context.Context, project, service string) (API, err
 		return API{}, err
 	}
 	return buildAPI(project, service, st), nil
+}
+
+// BatchGetAPIs returns one API per full resource name
+// (projects/{project}/services/{service}), preserving the requested order. Like
+// GetAPI, a name that has never been enabled resolves to DISABLED rather than
+// NotFound: real GCP lists every public API and the emulator has no catalog, so
+// an unknown id is simply not enabled. project, when non-empty, is the consumer
+// the names must belong to (the request's parent); a malformed name, a name
+// under a different project, an empty list, or more than maxBatchGet names is an
+// InvalidArgument.
+func (s *Service) BatchGetAPIs(ctx context.Context, project string, names []string) ([]API, error) {
+	if len(names) == 0 {
+		return nil, invalidArgument("names must not be empty")
+	}
+	if len(names) > maxBatchGet {
+		return nil, invalidArgument(fmt.Sprintf(
+			"A single request can get a maximum of %d services at a time.", maxBatchGet))
+	}
+	apis := make([]API, 0, len(names))
+	for _, name := range names {
+		nameProject, service, ok := splitServiceName(name)
+		if !ok {
+			return nil, invalidArgument(fmt.Sprintf("Invalid service name %q.", name))
+		}
+		if project != "" && nameProject != project {
+			return nil, invalidArgument(fmt.Sprintf(
+				"Service name %q must match parent projects/%s.", name, project))
+		}
+		st, err := s.readState(ctx, nameProject, service)
+		if err != nil {
+			return nil, err
+		}
+		apis = append(apis, buildAPI(nameProject, service, st))
+	}
+	return apis, nil
 }
 
 // EnableAPI flips a service to ENABLED and returns it with the operation.
@@ -463,7 +520,10 @@ func (s *Service) ListOperations(ctx context.Context, project string, pageSize i
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(ops, func(op Operation) string { return op.Name }, params)
+	page, next, err := paging.Page(ops, func(op Operation) string { return op.Name }, params)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -511,6 +571,7 @@ func (s *Service) settle(op Operation) Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	s.tracker.EmitOperation("serviceusage", op.Name, op.Name, op.Verb)
 	return op
 }
 

@@ -1,0 +1,31 @@
+{
+  "index": 179,
+  "service": "pubsub",
+  "op": "eod_ack_superseded",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-eod-sub-<suffix>:acknowledge",
+  "status": 400,
+  "request": {
+    "ackIds": [
+      "<ackId>"
+    ]
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "domain": "pubsub.googleapis.com",
+          "metadata": {
+            "<ackId>": "PERMANENT_FAILURE_INVALID_ACK_ID"
+          },
+          "reason": "EXACTLY_ONCE_ACKID_FAILURE"
+        }
+      ],
+      "message": "Some acknowledgement ids in the request were invalid. This could be because the acknowledgement ids have expired or the acknowledgement ids were malformed.",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

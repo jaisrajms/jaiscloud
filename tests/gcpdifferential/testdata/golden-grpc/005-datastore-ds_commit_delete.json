@@ -1,0 +1,37 @@
+{
+  "index": 5,
+  "service": "datastore",
+  "op": "ds_commit_delete",
+  "method": "google.datastore.v1.Datastore/Commit",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "mode": "NON_TRANSACTIONAL",
+    "mutations": [
+      {
+        "delete": {
+          "partitionId": {
+            "projectId": "<project>"
+          },
+          "path": [
+            {
+              "kind": "<dsKind>",
+              "name": "<dsEntity>"
+            }
+          ]
+        }
+      }
+    ],
+    "projectId": "<project>"
+  },
+  "response": {
+    "indexUpdates": "<indexUpdates>",
+    "mutationResults": [
+      {
+        "version": "<version>"
+      }
+    ]
+  }
+}
+

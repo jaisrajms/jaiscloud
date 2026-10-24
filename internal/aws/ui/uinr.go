@@ -25,7 +25,7 @@ func uiNR(_ context.Context, cfg *config.Config, service, action, region, accoun
 		Clock:      cfg.Clock,
 		Region:     region,
 		AccountID:  accountID,
-		Port:       cfg.Port,         // wire port (4566), NOT ui port
+		Port:       cfg.Port, // wire port (4566), NOT ui port
 		Cloud:      model.CloudAWS,
 		ResourceID: arn.ResourceID(region, accountID),
 	}

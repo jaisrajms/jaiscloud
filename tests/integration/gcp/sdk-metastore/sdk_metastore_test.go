@@ -110,7 +110,7 @@ func TestSDKMetastore(t *testing.T) {
 	// CreateMetadataImport returns a done LRO.
 	importID := unique("imp")
 	importOp, err := svc.Projects.Locations.Services.MetadataImports.Create(backupParent, &metastore.MetadataImport{
-		Description: "initial",
+		Description:  "initial",
 		DatabaseDump: &metastore.DatabaseDump{GcsUri: "gs://bucket/dump.sql"},
 	}).MetadataImportId(importID).Do()
 	require.NoError(t, err)
@@ -137,4 +137,103 @@ func TestSDKMetastore(t *testing.T) {
 	// The service is gone.
 	_, err = svc.Projects.Locations.Services.Get(wantName).Do()
 	require.Error(t, err)
+}
+
+// TestSDKMetastoreFederationAndIAM exercises the federation surface and the
+// IAM mixin through the official REST apiary client, proving the separate
+// DataprocMetastoreFederation gRPC/REST surface and the service/database IAM
+// verbs are wired end-to-end.
+func TestSDKMetastoreFederationAndIAM(t *testing.T) {
+	ctx := context.Background()
+	svc, err := metastore.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	project := projectID()
+	const location = "us-central1"
+	parent := fmt.Sprintf("projects/%s/locations/%s", project, location)
+
+	// CreateFederation returns a done LRO whose response is the ACTIVE
+	// federation with a synthesized endpointUri.
+	fedID := unique("fed")
+	fedOp, err := svc.Projects.Locations.Federations.Create(parent, &metastore.Federation{
+		Version: "3.1.2",
+	}).FederationId(fedID).Do()
+	require.NoError(t, err)
+	require.True(t, fedOp.Done)
+
+	var fed metastore.Federation
+	require.NoError(t, json.Unmarshal(fedOp.Response, &fed))
+	wantFed := fmt.Sprintf("%s/federations/%s", parent, fedID)
+	require.Equal(t, wantFed, fed.Name)
+	require.Equal(t, "ACTIVE", fed.State)
+	require.NotEmpty(t, fed.EndpointUri)
+
+	// GetFederation + ListFederations.
+	gotFed, err := svc.Projects.Locations.Federations.Get(wantFed).Do()
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", gotFed.State)
+	fedList, err := svc.Projects.Locations.Federations.List(parent).Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, fedList.Federations)
+
+	// PatchFederation (labels) applies through an LRO.
+	patchOp, err := svc.Projects.Locations.Federations.Patch(wantFed, &metastore.Federation{
+		Labels: map[string]string{"updated": "yes"},
+	}).UpdateMask("labels").Do()
+	require.NoError(t, err)
+	require.True(t, patchOp.Done)
+
+	// --- IAM mixin ---
+
+	// Build a service to hold service-level IAM.
+	serviceID := unique("ms-iam")
+	svcOp, err := svc.Projects.Locations.Services.Create(parent, &metastore.Service{}).ServiceId(serviceID).Do()
+	require.NoError(t, err)
+	require.True(t, svcOp.Done)
+	serviceName := fmt.Sprintf("%s/services/%s", parent, serviceID)
+
+	// getIamPolicy returns an empty default policy.
+	pol, err := svc.Projects.Locations.Services.GetIamPolicy(serviceName).Do()
+	require.NoError(t, err)
+	require.Empty(t, pol.Bindings)
+
+	// setIamPolicy then read it back.
+	set, err := svc.Projects.Locations.Services.SetIamPolicy(serviceName, &metastore.SetIamPolicyRequest{
+		Policy: &metastore.Policy{
+			Bindings: []*metastore.Binding{{Role: "roles/owner", Members: []string{"user:tf@example.com"}}},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, set.Etag)
+
+	gotPol, err := svc.Projects.Locations.Services.GetIamPolicy(serviceName).Do()
+	require.NoError(t, err)
+	require.Len(t, gotPol.Bindings, 1)
+	require.Equal(t, "roles/owner", gotPol.Bindings[0].Role)
+
+	// testIamPermissions echoes the requested permissions.
+	test, err := svc.Projects.Locations.Services.TestIamPermissions(serviceName, &metastore.TestIamPermissionsRequest{
+		Permissions: []string{"metastore.services.get"},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, []string{"metastore.services.get"}, test.Permissions)
+
+	// Database-level IAM is metadata-only (the database is not a control-plane
+	// record), so a policy can be set by name.
+	dbName := fmt.Sprintf("%s/databases/default", serviceName)
+	dbSet, err := svc.Projects.Locations.Services.Databases.SetIamPolicy(dbName, &metastore.SetIamPolicyRequest{
+		Policy: &metastore.Policy{
+			Bindings: []*metastore.Binding{{Role: "roles/metastore.admin", Members: []string{"user:tf@example.com"}}},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, dbSet.Etag)
+
+	// Clean up.
+	delFed, err := svc.Projects.Locations.Federations.Delete(wantFed).Do()
+	require.NoError(t, err)
+	require.True(t, delFed.Done)
+	delSvc, err := svc.Projects.Locations.Services.Delete(serviceName).Do()
+	require.NoError(t, err)
+	require.True(t, delSvc.Done)
 }

@@ -1,0 +1,33 @@
+{
+  "index": 80,
+  "service": "bigquery",
+  "op": "bqsql_err_type_mismatch",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 400,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT 1 + 'a'",
+    "useLegacySql": false
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "q",
+          "locationType": "parameter",
+          "message": "Could not cast literal \"a\" to type DATE at [1:12]",
+          "reason": "invalidQuery"
+        }
+      ],
+      "message": "Could not cast literal \"a\" to type DATE at [1:12]",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

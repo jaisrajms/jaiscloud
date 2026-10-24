@@ -1,0 +1,8 @@
+{
+  "exemptions": [
+    {
+      "service": "iamcredentials",
+      "reason": "IAM Credentials exposes only GenerateAccessToken/GenerateIdToken (no resource lifecycle) and the tokens are volatile; a create/get/list/delete parity flow does not apply. Tracked as AUD3-7."
+    }
+  ]
+}

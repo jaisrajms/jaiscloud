@@ -1,0 +1,16 @@
+{
+  "index": 107,
+  "service": "monitoring",
+  "op": "monitoring_metricdescriptor_get_missing",
+  "method": "GET",
+  "path": "/v3/projects/<project>/metricDescriptors/<metricType>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "Could not find descriptor for metric '<metricType>'.",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

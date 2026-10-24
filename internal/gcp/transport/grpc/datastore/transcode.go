@@ -149,7 +149,16 @@ func valueFromProto(p *datastorepb.Value) (dsstore.Value, error) {
 		f := v.DoubleValue
 		return dsstore.Value{DoubleValue: &f}, nil
 	case *datastorepb.Value_TimestampValue:
-		s := v.TimestampValue.AsTime().UTC().Format(time.RFC3339Nano)
+		// A raw proto Timestamp has no range bound in Go, so an out-of-range or
+		// malformed instant would be stored as a string the read path cannot
+		// parse back (and would read as the epoch). The proto's own checker is
+		// the authority for validity (range and nanos); real GCP rejects an
+		// invalid Timestamp with INVALID_ARGUMENT, so the gRPC decode boundary
+		// must too. (TD46)
+		if err := v.TimestampValue.CheckValid(); err != nil {
+			return dsstore.Value{}, invalidArgument("invalid timestampValue")
+		}
+		s := core.CanonicalTimestamp(v.TimestampValue.AsTime())
 		return dsstore.Value{TimestampValue: &s}, nil
 	case *datastorepb.Value_KeyValue:
 		key, err := keyFromProto(v.KeyValue)
@@ -203,7 +212,11 @@ func valueToProto(v dsstore.Value, project string) *datastorepb.Value {
 	case v.DoubleValue != nil:
 		return &datastorepb.Value{ValueType: &datastorepb.Value_DoubleValue{DoubleValue: *v.DoubleValue}}
 	case v.TimestampValue != nil:
-		t, err := time.Parse(time.RFC3339Nano, *v.TimestampValue)
+		// Both transports canonicalize a timestamp on write (REST rejects a
+		// malformed string, gRPC receives a typed Timestamp), so a stored value
+		// is always parseable; the epoch fallback only guards a hand-edited
+		// store or an import of corrupt state.
+		t, err := core.ParseTimestamp(*v.TimestampValue)
 		if err != nil {
 			t = time.Time{}
 		}
@@ -311,7 +324,10 @@ func mutationPrecondition(m *datastorepb.Mutation) *dsstore.Precondition {
 		bv := v.BaseVersion
 		return &dsstore.Precondition{BaseVersion: &bv}
 	case *datastorepb.Mutation_UpdateTime:
-		ut := v.UpdateTime.AsTime()
+		// The stored update_time is held at Datastore's microsecond precision,
+		// so truncate the client-supplied token the same way before it is
+		// compared (real GCP coerces it to microseconds). (TD42)
+		ut := v.UpdateTime.AsTime().Truncate(time.Microsecond)
 		return &dsstore.Precondition{UpdateTime: &ut}
 	default:
 		return nil
@@ -329,6 +345,21 @@ func queryFromProto(q *datastorepb.Query) (*core.Query, error) {
 	if q.GetLimit() != nil {
 		l := int(q.GetLimit().GetValue())
 		out.Limit = &l
+	}
+	if len(q.GetStartCursor()) > 0 {
+		out.StartCursor = q.GetStartCursor()
+	}
+	if len(q.GetEndCursor()) > 0 {
+		out.EndCursor = q.GetEndCursor()
+	}
+	if projs := q.GetProjection(); len(projs) > 0 {
+		props := make([]string, 0, len(projs))
+		for _, pr := range projs {
+			if name := pr.GetProperty().GetName(); name != "" {
+				props = append(props, name)
+			}
+		}
+		out.Projection = &core.Projection{Properties: props}
 	}
 	f, err := filterFromProto(q.GetFilter())
 	if err != nil {

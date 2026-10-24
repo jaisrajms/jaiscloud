@@ -15,21 +15,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 
 	"jaiscloud/internal/clock"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/store"
 )
 
 // ResourceType is the generic ResourceStore type for service-account keys.
 const ResourceType = "gcp_service_account_key"
 
-// KeyOrigin / KeyType classify a key created through the API: a user-provided,
-// user-managed key (as opposed to Google-managed/system-managed).
+// KeyOrigin / KeyType classify a key: a key created through
+// projects.serviceAccounts.keys.create is user-provided and user-managed, while
+// the key pair Google maintains for signing is system-managed and
+// Google-provided (see the IAM ServiceAccountKey keyOrigin/keyType enums).
 const (
 	KeyOrigin = "USER_PROVIDED"
 	KeyType   = "USER_MANAGED"
+
+	KeyOriginGoogleProvided = "GOOGLE_PROVIDED"
+	KeyTypeSystemManaged    = "SYSTEM_MANAGED"
 )
 
 // Key is the stored representation of a service-account key.
@@ -39,12 +44,35 @@ type Key struct {
 	Algorithm  string `json:"algorithm"`
 	PrivateDER string `json:"privateDer"` // base64 PKCS8 private key DER
 	ValidAfter string `json:"validAfterTime"`
+	// KeyOrigin/KeyType are the ServiceAccountKey enums. They are empty on
+	// records written before the type was modelled; Origin()/Type() then report
+	// the user-managed pair those records were created as.
+	KeyOrigin string `json:"keyOrigin,omitempty"`
+	KeyType   string `json:"keyType,omitempty"`
 	// Disabled marks a key turned off through
 	// projects.serviceAccounts.keys.disable; DisableTime is when it was
 	// disabled (empty while enabled). A disabled key still exists and is
 	// returned by list/get.
 	Disabled    bool   `json:"disabled,omitempty"`
 	DisableTime string `json:"disableTime,omitempty"`
+}
+
+// Origin returns the key's keyOrigin, defaulting a record that predates the
+// field to USER_PROVIDED.
+func (k *Key) Origin() string {
+	if k.KeyOrigin == "" {
+		return KeyOrigin
+	}
+	return k.KeyOrigin
+}
+
+// Type returns the key's keyType, defaulting a record that predates the field
+// to USER_MANAGED.
+func (k *Key) Type() string {
+	if k.KeyType == "" {
+		return KeyType
+	}
+	return k.KeyType
 }
 
 // PrivDER decodes the stored private key DER.
@@ -85,9 +113,15 @@ func GenerateKeyID() string {
 	return hex.EncodeToString(b)
 }
 
-// CreateKey generates an RSA-2048 key pair for email and persists it under
-// account.
+// CreateKey generates a user-managed RSA-2048 key pair for email and persists
+// it under account (the projects.serviceAccounts.keys.create shape).
 func CreateKey(ctx context.Context, resources store.ResourceStore, account, email string) (*Key, error) {
+	return createKey(ctx, resources, account, email, KeyType, KeyOrigin)
+}
+
+// createKey generates an RSA-2048 key pair classified by keyType/keyOrigin and
+// persists it under account.
+func createKey(ctx context.Context, resources store.ResourceStore, account, email, keyType, keyOrigin string) (*Key, error) {
 	priv, _, err := kmsstore.GenerateRSAKeyPair(2048)
 	if err != nil {
 		return nil, err
@@ -97,7 +131,9 @@ func CreateKey(ctx context.Context, resources store.ResourceStore, account, emai
 		KeyID:      GenerateKeyID(),
 		Algorithm:  "KEY_ALG_RSA_2048",
 		PrivateDER: base64.StdEncoding.EncodeToString(priv),
-		ValidAfter: clock.Now().UTC().Format(time.RFC3339Nano),
+		ValidAfter: timestamp.Canonical(clock.Now()),
+		KeyType:    keyType,
+		KeyOrigin:  keyOrigin,
 	}
 	data, _ := json.Marshal(k)
 	if err := resources.Create(ctx, account, store.GlobalRegion, store.ResourceEntry{Type: ResourceType, ID: k.KeyID, Data: data}); err != nil {
@@ -106,11 +142,14 @@ func CreateKey(ctx context.Context, resources store.ResourceStore, account, emai
 	return &k, nil
 }
 
-// EnsureKey returns an existing key for the service account, or creates a
-// system-managed one. It deliberately does not require the service account to
-// exist: impersonation calls address accounts by email and the emulator signs
-// for them lazily (a documented divergence from real GCP, which requires the
-// account to exist).
+// EnsureKey returns the service account's system-managed (Google-provided) key,
+// creating it on first use. Real GCP maintains that key pair per service
+// account and signs with it; the emulator materialises it lazily so creating a
+// service account does not pay for an RSA keygen, and a key created through
+// keys.create is never reused for signing. It deliberately does not require the
+// service account to exist: impersonation calls address accounts by email and
+// the emulator signs for them lazily (a documented divergence from real GCP,
+// which requires the account to exist).
 func EnsureKey(ctx context.Context, resources store.ResourceStore, account, email string) (*Key, error) {
 	entries, err := resources.List(ctx, account, store.GlobalRegion, ResourceType, "")
 	if err != nil {
@@ -118,11 +157,11 @@ func EnsureKey(ctx context.Context, resources store.ResourceStore, account, emai
 	}
 	for _, e := range entries {
 		var k Key
-		if json.Unmarshal(e.Data, &k) == nil && k.Email == email {
+		if json.Unmarshal(e.Data, &k) == nil && k.Email == email && k.Type() == KeyTypeSystemManaged {
 			return &k, nil
 		}
 	}
-	return CreateKey(ctx, resources, account, email)
+	return createKey(ctx, resources, account, email, KeyTypeSystemManaged, KeyOriginGoogleProvided)
 }
 
 // LoadKey loads a key by ID, verifying it belongs to the given service account.

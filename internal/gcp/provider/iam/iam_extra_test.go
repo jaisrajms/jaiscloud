@@ -15,6 +15,24 @@ func errStatus(err error) int {
 	return 0
 }
 
+// TestCreateRejectsInvalidAccountID pins the accountId character rule the
+// differential harness found missing: an id with uppercase letters or
+// underscores is INVALID_ARGUMENT (400) rather than being created.
+func TestCreateRejectsInvalidAccountID(t *testing.T) {
+	ctx := context.Background()
+	p := New(store.NewMemoryResourceStore())
+	for _, id := range []string{"Invalid_Account_ID", "UPPER", "has space", "-lead", "trail-"} {
+		nr := newNR(map[string]any{"body": map[string]any{"accountId": id}})
+		if _, err := p.Create(ctx, nr); err == nil || errStatus(err) != 400 {
+			t.Errorf("Create(%q) err = %v, want 400", id, err)
+		}
+	}
+	nr := newNR(map[string]any{"body": map[string]any{"accountId": "valid-sa"}})
+	if _, err := p.Create(ctx, nr); err != nil {
+		t.Errorf("Create(valid-sa) err = %v, want nil", err)
+	}
+}
+
 func TestIAMNegativesPaginationAndOCC(t *testing.T) {
 	ctx := context.Background()
 	p := New(store.NewMemoryResourceStore())
@@ -27,7 +45,7 @@ func TestIAMNegativesPaginationAndOCC(t *testing.T) {
 	}
 
 	// saToMap includes the full schema fields.
-	nr := newNR(map[string]any{"body": map[string]any{"accountId": "rich", "serviceAccount": map[string]any{"displayName": "Rich", "description": "d", "disabled": true, "oauth2ClientId": "cid"}}})
+	nr := newNR(map[string]any{"body": map[string]any{"accountId": "rich", "serviceAccount": map[string]any{"displayName": "Rich", "description": "d"}}})
 	resp, err := p.Create(ctx, nr)
 	if err != nil {
 		t.Fatalf("create rich: %v", err)

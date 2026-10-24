@@ -1,0 +1,32 @@
+{
+  "index": 91,
+  "service": "firestore",
+  "op": "fs_doc_upsert",
+  "method": "PATCH",
+  "path": "/v1/projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+  "status": 200,
+  "request": {
+    "fields": {
+      "count": {
+        "integerValue": "2"
+      },
+      "greeting": {
+        "stringValue": "hi"
+      }
+    }
+  },
+  "response": {
+    "createTime": "<time>",
+    "fields": {
+      "count": {
+        "integerValue": "2"
+      },
+      "greeting": {
+        "stringValue": "hi"
+      }
+    },
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+    "updateTime": "<time>"
+  }
+}
+

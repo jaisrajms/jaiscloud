@@ -1,0 +1,21 @@
+{
+  "index": 155,
+  "service": "pubsub",
+  "op": "msg_ack_publish",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/<topic>:publish",
+  "status": 200,
+  "request": {
+    "messages": [
+      {
+        "data": "bXNnLWFjaw=="
+      }
+    ]
+  },
+  "response": {
+    "messageIds": [
+      "<messageId>"
+    ]
+  }
+}
+

@@ -84,6 +84,24 @@ func TestSDKFirestoreCommitBatchWrite(t *testing.T) {
 	require.Len(t, commit.WriteResults, 2)
 	require.NotEmpty(t, commit.CommitTime)
 
+	// A present-but-empty update mask with no field transforms is AIP-134's
+	// no-op: the write result echoes the stored update_time and the stored
+	// document does not move (matching real GCP).
+	created := commit.WriteResults[1].UpdateTime
+	noop, err := svc.Projects.Databases.Documents.Commit(db, &firestore.CommitRequest{
+		Writes: []*firestore.Write{{
+			Update:     &firestore.Document{Name: fsParent + "/" + coll + "/b", Fields: map[string]firestore.Value{"n": *fsInt(99)}},
+			UpdateMask: &firestore.DocumentMask{FieldPaths: []string{}},
+		}},
+	}).Do()
+	require.NoError(t, err)
+	require.Len(t, noop.WriteResults, 1)
+	require.Equal(t, created, noop.WriteResults[0].UpdateTime)
+	stored, err := svc.Projects.Databases.Documents.Get(fsParent + "/" + coll + "/b").Do()
+	require.NoError(t, err)
+	require.Equal(t, created, stored.UpdateTime)
+	require.EqualValues(t, 2, stored.Fields["n"].IntegerValue)
+
 	// batchWrite: one valid update, one delete.
 	bw, err := svc.Projects.Databases.Documents.BatchWrite(db, &firestore.BatchWriteRequest{
 		Writes: []*firestore.Write{

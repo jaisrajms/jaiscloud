@@ -15,7 +15,9 @@ import (
 func TestGCSGRPC(t *testing.T) {
 	ctx := context.Background()
 	client := StorageGRPCClient(ctx)
-	defer client.Close()
+	// Close through a cleanup registered before the object/bucket reaper below,
+	// so the LIFO order deletes them while the client is still open.
+	t.Cleanup(func() { _ = client.Close() })
 
 	bucketName := uniqueName("go-gcs-grpc")
 	directName := "direct.txt"

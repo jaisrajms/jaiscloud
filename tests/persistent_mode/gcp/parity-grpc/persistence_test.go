@@ -39,6 +39,7 @@
 package paritygrpc_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -97,16 +98,31 @@ func (d *driver) target(env string) string {
 }
 
 func (d *driver) do(method, path, body string) (int, string, error) {
-	var rd io.Reader
+	var data []byte
 	if body != "" {
-		rd = strings.NewReader(body)
+		data = []byte(body)
+	}
+	ct := ""
+	if body != "" {
+		ct = "application/json"
+	}
+	return d.doBytes(method, path, data, ct)
+}
+
+// doBytes is do for binary/typed payloads (the /_jaiscloud/export tarball and
+// its /import round-trip), where the body is raw bytes and the caller chooses
+// the Content-Type.
+func (d *driver) doBytes(method, path string, data []byte, contentType string) (int, string, error) {
+	var rd io.Reader
+	if data != nil {
+		rd = bytes.NewReader(data)
 	}
 	req, err := http.NewRequest(method, d.httpBase+path, rd)
 	if err != nil {
 		return 0, "", err
 	}
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -341,6 +357,96 @@ func TestPersistenceParity(t *testing.T) {
 		t.Run(s.service+"/cleared-by-reset", func(t *testing.T) {
 			if err := s.cleared(); err != nil {
 				t.Errorf("resource not cleared by reset: %v", err)
+			}
+		})
+	}
+}
+
+// TestSnapshotRoundTrip proves the /_jaiscloud/export → reset → import path
+// round-trips every gRPC surface's state through the Postgres-backed stores:
+// seed, export, reset (asserting the state is gone), re-import the snapshot and
+// assert the reads succeed again. A store missing a Resetter fails the reset
+// phase; one missing a Snapshotter — or whose Snapshot/Restore drops fields —
+// fails the import phase.
+func TestSnapshotRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping gRPC snapshot round-trip test")
+	}
+
+	httpPort := persistPort()
+	gPort := grpcPort()
+	base := fmt.Sprintf("http://localhost:%d", httpPort)
+	blobDir := t.TempDir()
+	d := &driver{
+		httpBase: base,
+		grpcAddr: fmt.Sprintf("localhost:%d", gPort),
+		client:   &http.Client{Timeout: 60 * time.Second},
+	}
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	proc := startGCPProcess(t, httpPort, gPort, dsn, blobDir)
+	defer stopProcess(t, proc, httpPort)
+	waitForHealth(t, base)
+
+	type seeded struct {
+		service  string
+		survived func() error
+		cleared  func() error
+	}
+	var seeds []seeded
+	for _, p := range probes {
+		_, survived, cleared, err := p.seed(d, suffix)
+		if err != nil {
+			t.Errorf("seed %s: %v", p.service, err)
+			continue
+		}
+		seeds = append(seeds, seeded{p.service, survived, cleared})
+	}
+	if len(seeds) == 0 {
+		t.Fatal("no probe seeded — nothing to round-trip")
+	}
+
+	// ── Export the full state ────────────────────────────────────────────────
+	code, tarball, err := d.doBytes("GET", "/_jaiscloud/export", nil, "")
+	if err != nil {
+		t.Fatalf("GET /_jaiscloud/export: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Fatalf("GET /_jaiscloud/export: got HTTP %d: %s", code, truncate(tarball))
+	}
+	if len(tarball) < 2 || tarball[0] != 0x1f || tarball[1] != 0x8b {
+		t.Fatalf("export is not a gzip tarball (first bytes %x)", []byte(tarball[:min(len(tarball), 2)]))
+	}
+
+	// ── Reset: every seeded store must clear (Resetter registration) ─────────
+	if code, body, err := d.do("POST", "/_jaiscloud/reset", ""); err != nil {
+		t.Fatalf("POST /_jaiscloud/reset: %v", err)
+	} else if code != http.StatusOK {
+		t.Fatalf("POST /_jaiscloud/reset: got HTTP %d: %s", code, truncate(body))
+	}
+	for _, s := range seeds {
+		s := s
+		t.Run(s.service+"/cleared-by-reset", func(t *testing.T) {
+			if err := s.cleared(); err != nil {
+				t.Errorf("resource not cleared by reset: %v", err)
+			}
+		})
+	}
+
+	// ── Import: every seeded store must restore (Snapshotter registration) ──
+	code, body, err := d.doBytes("POST", "/_jaiscloud/import?reset_first=true", []byte(tarball), "application/gzip")
+	if err != nil {
+		t.Fatalf("POST /_jaiscloud/import: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Fatalf("POST /_jaiscloud/import: got HTTP %d: %s", code, truncate(body))
+	}
+	for _, s := range seeds {
+		s := s
+		t.Run(s.service+"/restored-by-import", func(t *testing.T) {
+			if err := s.survived(); err != nil {
+				t.Errorf("resource not restored by import: %v", err)
 			}
 		})
 	}

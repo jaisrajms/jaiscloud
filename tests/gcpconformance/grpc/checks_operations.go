@@ -31,6 +31,15 @@ func operationsChecks() []Check {
 		{Service: "operations", RPC: "DeleteOperation", Method: "DeleteOperation", KeyField: "success", Run: checkOperationsDelete},
 		{Service: "operations", RPC: "CancelOperation", Method: "CancelOperation", KeyField: "success", Run: checkOperationsCancel},
 		{Service: "operations", RPC: "WaitOperation", Method: "WaitOperation", KeyField: "name round-trips with done=true", Run: checkOperationsWait},
+		// Endpoint-scoped: a client configured for a service's endpoint
+		// (metastore.localhost / managedkafka.localhost) resolves and lists that
+		// service's operations, isolated from the sibling service that shares the
+		// location parent — real GCP serves Operations per service endpoint.
+		{Service: "operations", RPC: "ListOperations (metastore endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkMetastoreOperationsEndpoint},
+		{Service: "operations", RPC: "ListOperations (managedkafka endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkManagedKafkaOperationsEndpoint},
+		{Service: "operations", RPC: "ListOperations (run endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkRunOperationsEndpoint},
+		{Service: "operations", RPC: "ListOperations (cloudfunctions endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkFunctionsOperationsEndpoint},
+		{Service: "operations", RPC: "ListOperations (workflows endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List+Delete, sibling isolated", Run: checkWorkflowsOperationsEndpoint},
 	}
 }
 
@@ -43,6 +52,70 @@ func newOperationsClient(ctx context.Context, cfg Config) (*longrunning.Operatio
 		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
 		option.WithoutAuthentication(),
 	)
+}
+
+// newEndpointOperationsClient dials the shared longrunning Operations client with
+// an explicit endpoint host token (the first DNS label of the HTTP/2
+// :authority), so the emulator's endpoint-scoped Operations routing — the gRPC
+// analogue of the REST Host discriminator — is exercised. Real GCP serves
+// google.longrunning.Operations on each service's own host, so this is how a
+// service client addresses its operations.
+func newEndpointOperationsClient(ctx context.Context, cfg Config, host string) (*longrunning.OperationsClient, error) {
+	return longrunning.NewOperationsClient(ctx,
+		option.WithEndpoint(cfg.GRPCAddr()),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		option.WithGRPCDialOption(grpc.WithAuthority(host)),
+		option.WithoutAuthentication(),
+	)
+}
+
+// operationsListContains fails unless opName appears in the endpoint's
+// ListOperations page for parent.
+func operationsListContains(ctx context.Context, client *longrunning.OperationsClient, parent, opName string) error {
+	names, err := operationsListNames(ctx, client, parent)
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if n == opName {
+			return nil
+		}
+	}
+	return fmt.Errorf("ListOperations(%s) did not include %q (got %v)", parent, opName, names)
+}
+
+// operationsListExcludes fails if opName appears in the endpoint's
+// ListOperations page for parent — proving services sharing a location parent are
+// isolated.
+func operationsListExcludes(ctx context.Context, client *longrunning.OperationsClient, parent, opName string) error {
+	names, err := operationsListNames(ctx, client, parent)
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if n == opName {
+			return fmt.Errorf("ListOperations(%s) at the sibling endpoint leaked %q", parent, opName)
+		}
+	}
+	return nil
+}
+
+// operationsListNames returns every operation name in the endpoint's
+// ListOperations page for parent.
+func operationsListNames(ctx context.Context, client *longrunning.OperationsClient, parent string) ([]string, error) {
+	it := client.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: parent})
+	var names []string
+	for {
+		op, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("ListOperations: %w", err)
+		}
+		names = append(names, op.GetName())
+	}
+	return names, nil
 }
 
 // operationsParent is the project/location parent ListOperations is scoped to.

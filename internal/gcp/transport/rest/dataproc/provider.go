@@ -38,6 +38,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Dataproc.SubmitJobAsOperation": p.SubmitJobAsOperation,
 		"Dataproc.GetJob":               p.GetJob,
 		"Dataproc.ListJobs":             p.ListJobs,
+		"Dataproc.UpdateJob":            p.UpdateJob,
 		"Dataproc.DeleteJob":            p.DeleteJob,
 		"Dataproc.CancelJob":            p.CancelJob,
 		"Dataproc.GetOperation":         p.GetOperation,
@@ -86,7 +87,12 @@ func (p *Provider) GetCluster(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next, err := p.core.ListClusters(ctx, p.project(nr), strParam(nr, "region"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListClusters(ctx, p.project(nr), strParam(nr, "region"),
+		strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +190,17 @@ func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	matcher, err := core.ParseJobStateMatcher(strParam(nr, "jobStateMatcher"))
 	if err != nil {
 		return nil, err
 	}
 	page, next, err := p.core.ListJobs(ctx, p.project(nr), strParam(nr, "region"),
 		strParam(nr, "clusterName"), strParam(nr, "filter"), matcher,
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +213,19 @@ func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*
 		out["nextPageToken"] = next
 	}
 	return provider.OK(out), nil
+}
+
+// UpdateJob applies the masked fields of a dataproc.v1.Job. The request body is
+// the Job itself (not wrapped in a SubmitJobRequest) and updateMask is a query
+// parameter; labels is the only updatable field. It is the REST half of the
+// shared core's UpdateJob, mirroring the gRPC JobController.UpdateJob.
+func (p *Provider) UpdateJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	j, err := p.core.UpdateJob(ctx, p.project(nr), strParam(nr, "region"), strParam(nr, "jobId"),
+		core.JobInputFromMap(bodyOf(nr)), core.ParseMask(strParam(nr, "updateMask")))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.JobJSON(j)), nil
 }
 
 func (p *Provider) DeleteJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -257,8 +280,12 @@ func (p *Provider) GetWorkflowTemplate(ctx context.Context, nr *model.Normalized
 
 // ListWorkflowTemplates returns a page of the region's workflow templates.
 func (p *Provider) ListWorkflowTemplates(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListWorkflowTemplates(ctx, p.project(nr), strParam(nr, "region"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

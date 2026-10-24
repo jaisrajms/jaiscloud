@@ -1,0 +1,13 @@
+{
+  "index": 181,
+  "service": "pubsub",
+  "op": "redel_topic_create",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/topics/conf-pubsub-redel-<suffix>",
+  "status": 200,
+  "request": {},
+  "response": {
+    "name": "projects/<project>/topics/conf-pubsub-redel-<suffix>"
+  }
+}
+

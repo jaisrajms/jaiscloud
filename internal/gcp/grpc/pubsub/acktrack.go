@@ -44,11 +44,19 @@ const ackTombstoneTTL = time.Minute
 //     claimed copy can therefore still be sent until the store's own
 //     modify-deadline/ack-deadline state catches up. The task scope is ack
 //     state across StreamingPull streams, which this covers.
-//   - The ackId is base64url("subscription/messageID") and is stable across
-//     redeliveries (no wire change), so the emulator cannot tell a superseded
-//     ackId from the latest one. Real exactly-once rejects acks with a
-//     superseded/expired ackId; the emulator treats a repeat as an idempotent
-//     no-op. Acking is still guaranteed not to redeliver the message.
+//   - The ackId encodes the message's delivery version (base64url of
+//     "subscription/messageID/deliveryVersion", advanced per claim and per
+//     Seek). The unary Acknowledge and ModifyAckDeadline RPCs use it to reject a
+//     superseded, expired, or Seek-invalidated ackId on an exactly-once
+//     subscription (real GCP's contract: only the latest ackId is accepted, and
+//     an expired one is INVALID_ARGUMENT). This registry's own
+//     path — acks/modacks sent on a StreamingPull stream — validates the version
+//     the same way and drops a superseded/expired id without mutating the live
+//     delivery; it does not populate
+//     StreamingPullResponse.acknowledge_confirmation.invalid_ack_ids (the
+//     official clients resolve AckWithResult from the unary RPC's ErrorInfo
+//     sidecar, so that confirmation surface is not exercised). Acking is still
+//     guaranteed not to redeliver the message.
 type ackRegistry struct {
 	sub      string
 	messages pubsubstore.Messages
@@ -161,17 +169,22 @@ func (r *ackRegistry) reconcile(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	present := make(map[string]struct{}, len(live))
+	present := make(map[string]pubsubstore.Message, len(live))
 	for _, m := range live {
-		present[m.MessageID] = struct{}{}
+		present[m.MessageID] = m
 	}
 	now := clock.RealNow()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, at := range r.acked {
-		if _, ok := present[id]; ok {
-			// The message was restored (Seek to a snapshot/time) and is
-			// deliverable again: drop the stale tombstone.
+		if m, ok := present[id]; ok {
+			// A retained acked ordered message stays acked: keep its tombstone
+			// so no stream redelivers it. Any other present message was restored
+			// (Seek to a snapshot/time) and is deliverable again, so its stale
+			// tombstone is dropped.
+			if m.Acked {
+				continue
+			}
 			delete(r.acked, id)
 			continue
 		}

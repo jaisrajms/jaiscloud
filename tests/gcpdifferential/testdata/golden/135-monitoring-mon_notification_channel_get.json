@@ -1,0 +1,26 @@
+{
+  "index": 135,
+  "service": "monitoring",
+  "op": "mon_notification_channel_get",
+  "method": "GET",
+  "path": "/v3/projects/<project>/notificationChannels/<notificationChannelId>",
+  "status": 200,
+  "response": {
+    "creationRecord": {
+      "mutateTime": "<time>"
+    },
+    "displayName": "jaiscloud differential notify",
+    "enabled": true,
+    "labels": {
+      "topic": "projects/<project>/topics/<notifyTopic>"
+    },
+    "mutationRecords": [
+      {
+        "mutateTime": "<time>"
+      }
+    ],
+    "name": "projects/<project>/notificationChannels/<notificationChannelId>",
+    "type": "pubsub"
+  }
+}
+

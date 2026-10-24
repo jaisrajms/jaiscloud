@@ -3,6 +3,7 @@ package iam
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/serviceaccount"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -77,6 +80,11 @@ type serviceAccountMeta struct {
 	Disabled       bool   `json:"disabled"`
 	Oauth2ClientID string `json:"oauth2ClientId"`
 	Etag           string `json:"etag"`
+	// UniqueID is the account's numeric unique id, the second identifier real
+	// IAM accepts in a serviceAccounts resource name. Records written before
+	// the field was modelled leave it empty and keep reporting the email there
+	// (see saToMap); new accounts carry a generated 21-digit id.
+	UniqueID string `json:"uniqueId,omitempty"`
 }
 
 // resourceName returns the "name" path param, or a 400 when absent.
@@ -88,6 +96,31 @@ func resourceName(nr *model.NormalizedRequest) (string, error) {
 	return n, nil
 }
 
+// validAccountID enforces the service-account accountId pattern real GCP
+// applies, [a-z]([-a-z0-9]*[a-z0-9])?: the id begins with a lowercase letter,
+// contains only lowercase letters, digits and hyphens, and (when longer than
+// one character) ends in a letter or digit. The 6-30 length rule is not
+// enforced here because the emulator's own fixtures use shorter ids.
+func validAccountID(id string) bool {
+	if id == "" || id[0] < 'a' || id[0] > 'z' {
+		return false
+	}
+	if len(id) > 1 {
+		last := id[len(id)-1]
+		if !((last >= 'a' && last <= 'z') || (last >= '0' && last <= '9')) {
+			return false
+		}
+	}
+	for i := 1; i < len(id)-1; i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // emailFromName extracts the service-account email from a full or relative
 // resource name (last path segment).
 func emailFromName(name string) string {
@@ -95,6 +128,133 @@ func emailFromName(name string) string {
 		return name[i+1:]
 	}
 	return name
+}
+
+// saRef is a service account addressed by a method's resource name: the store
+// account (project) that owns it and the canonical email used as its store key.
+type saRef struct {
+	Account string
+	Email   string
+}
+
+// saLookupError is the failure every service-account method reports for a
+// resource it could not find. Real IAM documents that a miss through the
+// "projects/-" wildcard answers 403 PERMISSION_DENIED instead of 404
+// NOT_FOUND, and `gcloud iam service-accounts …` addresses every command with
+// that wildcard (command_lib/iam/iam_util.py EmailToAccountResourceName), so
+// the distinction is client-visible.
+//
+// The message names the wildcard resource but no permission: the emulator never
+// evaluates IAM permissions, so claiming a specific permission was denied (the
+// shape policy.PermissionDenied produces for the services that do check them)
+// would be a fiction.
+func saLookupError(nr *model.NormalizedRequest, name, notFoundMessage string) error {
+	if nr.AccountID == "-" {
+		return &model.ProviderError{
+			Code:       "PermissionDenied",
+			Message:    "Permission denied on resource 'projects/-/" + name + "' (or it may not exist).",
+			HTTPStatus: 403,
+			Status:     "PERMISSION_DENIED",
+		}
+	}
+	return model.NewProviderError("NotFound", notFoundMessage, 404)
+}
+
+// resolveSA maps the service-account identifier in a resource name (the segment
+// after "serviceAccounts/") to the store account that owns it and its canonical
+// email. Real IAM accepts two identifier forms — the email
+// ("{id}@{project}.iam.gserviceaccount.com") and the account's unique id — and
+// accepts "projects/-" in place of the project on every service-account
+// resource method.
+//
+// The project embedded in the email is authoritative for the wildcard
+// (serviceaccount.AccountForSA, the same resolver signBlob/signJwt and IAM
+// Credentials use); a unique id carries no project of its own, so it is
+// resolved by scanning the addressed account. types selects which records are
+// scanned (the live accounts by default, or the tombstones for undelete).
+func (p *Provider) resolveSA(ctx context.Context, nr *model.NormalizedRequest, identifier string, types ...string) (saRef, error) {
+	notFound := func() error {
+		return saLookupError(nr, "serviceAccounts/"+identifier, "service account not found")
+	}
+	if identifier == "" {
+		// An empty name segment must not match a record whose uniqueId is
+		// unset (every account written before the field existed).
+		return saRef{}, notFound()
+	}
+	if strings.Contains(identifier, "@") {
+		account := serviceaccount.AccountForSA(nr.AccountID, identifier)
+		if account == "" || account == "-" {
+			// The path project is the wildcard and the identifier embeds no
+			// project of its own, so the account cannot be scoped.
+			return saRef{}, notFound()
+		}
+		return saRef{Account: account, Email: identifier}, nil
+	}
+	if nr.AccountID == "" || nr.AccountID == "-" {
+		// A unique id under the wildcard would need a global account index; the
+		// emulator's ResourceStore is per-account, so it cannot be resolved.
+		return saRef{}, notFound()
+	}
+	if len(types) == 0 {
+		types = []string{rtServiceAccount}
+	}
+	for _, rt := range types {
+		entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rt, "")
+		if err != nil {
+			return saRef{}, err
+		}
+		for _, e := range entries {
+			var m serviceAccountMeta
+			if rt == rtServiceAccountDeleted {
+				// Tombstones wrap the account so undelete can restore it.
+				var tomb deletedServiceAccount
+				if json.Unmarshal(e.Data, &tomb) != nil {
+					continue
+				}
+				m = tomb.ServiceAcct
+			} else if json.Unmarshal(e.Data, &m) != nil {
+				continue
+			}
+			if m.UniqueID == identifier || m.Email == identifier {
+				return saRef{Account: nr.AccountID, Email: m.Email}, nil
+			}
+		}
+	}
+	return saRef{}, notFound()
+}
+
+// saNameFormat returns the resource-name formatter for a resolved account: the
+// request's injected formatter when it already addresses that account, and the
+// shared GCP formatter when a wildcard request resolved its project from the
+// service-account email. Response names must never carry "projects/-".
+func saNameFormat(nr *model.NormalizedRequest, account string) func(resourceType, name string) string {
+	if nr.ResourceID != nil && account == nr.AccountID {
+		return nr.ResourceID
+	}
+	return resource.ResourceID(account)
+}
+
+// newNumericID returns a 21-digit decimal identifier in the shape real IAM
+// assigns to a service account's uniqueId and oauth2ClientId. The two are
+// distinct values on real GCP (the Discovery sample pairs
+// 123456789012345678901 with 987654321098765432109), so Create draws each
+// separately; the leading digit is non-zero to keep the value 21 characters
+// long.
+//
+// The id is random rather than derived from the account because IAM documents
+// that a deleted service account keeps its id while an account re-created under
+// the same name gets a different one, so a stable hash of the email would
+// violate that contract.
+func newNumericID() string {
+	const digits = 21
+	buf := make([]byte, digits)
+	_, _ = rand.Read(buf)
+	out := make([]byte, digits)
+	out[0] = '1' + buf[0]%9
+	for i := 1; i < digits; i++ {
+		out[i] = '0' + buf[i]%10
+	}
+	return string(out)
 }
 
 func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -107,30 +267,35 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if accountID == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing accountId", 400)
 	}
+	if !validAccountID(accountID) {
+		return nil, model.NewProviderError("InvalidRequest",
+			accountID+" does not match [a-z]([-a-z0-9]*[a-z0-9])?", 400)
+	}
 	displayName := accountID
 	description := ""
-	disabled := false
-	oauthClientID := ""
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if sa, ok := body["serviceAccount"].(map[string]any); ok {
 			if dn, _ := sa["displayName"].(string); dn != "" {
 				displayName = dn
 			}
 			description, _ = sa["description"].(string)
-			disabled, _ = sa["disabled"].(bool)
-			oauthClientID, _ = sa["oauth2ClientId"].(string)
 		}
 	}
 	email := accountID + "@" + nr.AccountID + ".iam.gserviceaccount.com"
+	// uniqueId, oauth2ClientId and disabled are output-only in the Discovery
+	// schema: real IAM ignores them on input and answers the server-generated
+	// values (a disabled service account is created enabled, then disabled
+	// through projects.serviceAccounts.disable).
 	m := serviceAccountMeta{
 		Name:           nr.ResourceID("service-account", email),
 		Email:          email,
 		DisplayName:    displayName,
 		ProjectID:      nr.AccountID,
 		Description:    description,
-		Disabled:       disabled,
-		Oauth2ClientID: oauthClientID,
+		Disabled:       false,
+		Oauth2ClientID: newNumericID(),
 		Etag:           policy.Etag(displayName),
+		UniqueID:       newNumericID(),
 	}
 	data, _ := json.Marshal(m)
 	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtServiceAccount, ID: email, Data: data}); err != nil {
@@ -147,7 +312,10 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paging.Apply(entries, nr.Params)
+	page, nextToken, err := paging.Apply(entries, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, e := range page {
 		var m serviceAccountMeta
@@ -167,16 +335,14 @@ func (p *Provider) Get(ctx context.Context, nr *model.NormalizedRequest) (*model
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, email)
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "service account not found", 404)
-		}
 		return nil, err
 	}
-	var m serviceAccountMeta
-	json.Unmarshal(e.Data, &m)
+	m, err := p.loadServiceAccountMeta(ctx, nr, ref)
+	if err != nil {
+		return nil, err
+	}
 	return provider.OK(saToMap(m)), nil
 }
 
@@ -190,7 +356,10 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
+	if err != nil {
+		return nil, err
+	}
 	body, _ := nr.Params["body"].(map[string]any)
 	// PatchServiceAccountRequest wraps the account under "serviceAccount";
 	// tolerate a bare ServiceAccount body for the PUT/update verb.
@@ -203,7 +372,7 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		mask, _ = body["updateMask"].(string)
 	}
 
-	updated, err := p.resources.UpsertAtomic(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, email,
+	updated, err := p.resources.UpsertAtomic(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email,
 		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
 			if !exists {
 				return store.ResourceEntry{}, store.ErrNotFound
@@ -224,7 +393,7 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "service account not found", 404)
+			return nil, saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
 		}
 		return nil, err
 	}
@@ -298,11 +467,14 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, email)
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.resources.Get(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "service account not found", 404)
+			return nil, saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
 		}
 		return nil, err
 	}
@@ -311,18 +483,18 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	var m serviceAccountMeta
 	if json.Unmarshal(e.Data, &m) == nil {
 		tomb, _ := json.Marshal(deletedServiceAccount{
-			Account:     nr.AccountID,
-			Email:       email,
+			Account:     ref.Account,
+			Email:       ref.Email,
 			DeletedAt:   clock.Now().UTC().Format(time.RFC3339Nano),
 			ServiceAcct: m,
 		})
-		_ = p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{
-			Type: rtServiceAccountDeleted, ID: email, Data: tomb,
+		_ = p.resources.Upsert(ctx, ref.Account, store.GlobalRegion, store.ResourceEntry{
+			Type: rtServiceAccountDeleted, ID: ref.Email, Data: tomb,
 		})
 	}
-	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, email); err != nil {
+	if err := p.resources.Delete(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "service account not found", 404)
+			return nil, saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
 		}
 		return nil, err
 	}
@@ -330,11 +502,11 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 // loadServiceAccountMeta loads a service account's stored metadata.
-func (p *Provider) loadServiceAccountMeta(ctx context.Context, account, email string) (serviceAccountMeta, error) {
-	e, err := p.resources.Get(ctx, account, store.GlobalRegion, rtServiceAccount, email)
+func (p *Provider) loadServiceAccountMeta(ctx context.Context, nr *model.NormalizedRequest, ref saRef) (serviceAccountMeta, error) {
+	e, err := p.resources.Get(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return serviceAccountMeta{}, model.NewProviderError("NotFound", "service account not found", 404)
+			return serviceAccountMeta{}, saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
 		}
 		return serviceAccountMeta{}, err
 	}
@@ -354,22 +526,27 @@ func (p *Provider) saveServiceAccountMeta(ctx context.Context, account string, m
 }
 
 // setDisabled flips a service account's disabled flag (projects.serviceAccounts
-// .disable/.enable).
+// .disable/.enable). Both methods declare an Empty response, so the new state is
+// observable only through a follow-up get — real GCP never returns the account
+// here, and a client decoding strictly against Discovery must not receive one.
 func (p *Provider) setDisabled(ctx context.Context, nr *model.NormalizedRequest, disabled bool) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	m, err := p.loadServiceAccountMeta(ctx, nr.AccountID, email)
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
+	if err != nil {
+		return nil, err
+	}
+	m, err := p.loadServiceAccountMeta(ctx, nr, ref)
 	if err != nil {
 		return nil, err
 	}
 	m.Disabled = disabled
-	if err := p.saveServiceAccountMeta(ctx, nr.AccountID, m); err != nil {
+	if err := p.saveServiceAccountMeta(ctx, ref.Account, m); err != nil {
 		return nil, err
 	}
-	return provider.OK(saToMap(m)), nil
+	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) Disable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -387,14 +564,29 @@ func (p *Provider) Undelete(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	if m, err := p.loadServiceAccountMeta(ctx, nr.AccountID, email); err == nil {
-		return provider.OK(saToMap(m)), nil
+	identifier := emailFromName(name)
+	// Resolve against the live accounts first: undelete of a live account is a
+	// no-op that returns it unchanged. A unique-id identifier may exist only as
+	// a tombstone, so fall back to scanning those. Only a lookup miss falls
+	// through — a store failure must not be masked as "not found".
+	ref, rerr := p.resolveSA(ctx, nr, identifier)
+	if rerr != nil {
+		if _, ok := rerr.(*model.ProviderError); !ok {
+			return nil, rerr
+		}
+		ref, rerr = p.resolveSA(ctx, nr, identifier, rtServiceAccountDeleted)
+		if rerr != nil {
+			return nil, rerr
+		}
+	} else if m, lerr := p.loadServiceAccountMeta(ctx, nr, ref); lerr == nil {
+		return provider.OK(undeleteMap(m)), nil
+	} else if _, ok := lerr.(*model.ProviderError); !ok {
+		return nil, lerr
 	}
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountDeleted, email)
+	e, err := p.resources.Get(ctx, ref.Account, store.GlobalRegion, rtServiceAccountDeleted, ref.Email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "service account not found", 404)
+			return nil, saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
 		}
 		return nil, err
 	}
@@ -404,13 +596,20 @@ func (p *Provider) Undelete(ctx context.Context, nr *model.NormalizedRequest) (*
 	}
 	m := tomb.ServiceAcct
 	m.Disabled = false
-	if err := p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{
+	if err := p.resources.Upsert(ctx, ref.Account, store.GlobalRegion, store.ResourceEntry{
 		Type: rtServiceAccount, ID: m.Email, Data: mustJSON(m),
 	}); err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountDeleted, email)
-	return provider.OK(saToMap(m)), nil
+	_ = p.resources.Delete(ctx, ref.Account, store.GlobalRegion, rtServiceAccountDeleted, ref.Email)
+	return provider.OK(undeleteMap(m)), nil
+}
+
+// undeleteMap renders the projects.serviceAccounts.undelete response. The
+// Discovery schema (UndeleteServiceAccountResponse) and the generated clients
+// expect the restored account nested under restoredAccount, not returned bare.
+func undeleteMap(m serviceAccountMeta) map[string]any {
+	return map[string]any{"restoredAccount": saToMap(m)}
 }
 
 // mustJSON marshals a service account metadata value for the resource store.
@@ -424,11 +623,14 @@ func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	if err := p.requireServiceAccount(ctx, nr.AccountID, email); err != nil {
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
+	if err != nil {
 		return nil, err
 	}
-	pol := policy.Load(ctx, p.resources, nr.AccountID, rtServiceAccountPolicy, email)
+	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	pol := policy.Load(ctx, p.resources, ref.Account, rtServiceAccountPolicy, ref.Email)
 	// Honor options.requestedPolicyVersion: report at least the requested
 	// version (IAM supports versions 1 and 3; the emulator stores bindings
 	// without conditions, so 1 is authoritative but the version is surfaced).
@@ -445,12 +647,15 @@ func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	if err := p.requireServiceAccount(ctx, nr.AccountID, email); err != nil {
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
+	if err != nil {
+		return nil, err
+	}
+	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
 		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
-	pol, err := policy.Set(ctx, p.resources, nr.AccountID, rtServiceAccountPolicy, email, body)
+	pol, err := policy.Set(ctx, p.resources, ref.Account, rtServiceAccountPolicy, ref.Email, body)
 	if err != nil {
 		return nil, err
 	}
@@ -462,18 +667,21 @@ func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedR
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	if err := p.requireServiceAccount(ctx, nr.AccountID, email); err != nil {
+	ref, err := p.resolveSA(ctx, nr, emailFromName(name))
+	if err != nil {
+		return nil, err
+	}
+	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
 		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
 }
 
-func (p *Provider) requireServiceAccount(ctx context.Context, account, email string) error {
-	if _, err := p.resources.Get(ctx, account, store.GlobalRegion, rtServiceAccount, email); err != nil {
+func (p *Provider) requireServiceAccount(ctx context.Context, nr *model.NormalizedRequest, ref saRef) error {
+	if _, err := p.resources.Get(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return model.NewProviderError("NotFound", "service account not found", 404)
+			return saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
 		}
 		return err
 	}
@@ -481,12 +689,19 @@ func (p *Provider) requireServiceAccount(ctx context.Context, account, email str
 }
 
 func saToMap(m serviceAccountMeta) map[string]any {
+	// Records written before the unique id was stored report the email there,
+	// which is what the API returned for them; they also keep their empty
+	// oauth2ClientId. Everything created since carries numeric ids.
+	uniqueID := m.UniqueID
+	if uniqueID == "" {
+		uniqueID = m.Email
+	}
 	return map[string]any{
 		"name":           m.Name,
 		"email":          m.Email,
 		"displayName":    m.DisplayName,
 		"projectId":      m.ProjectID,
-		"uniqueId":       m.Email,
+		"uniqueId":       uniqueID,
 		"description":    m.Description,
 		"disabled":       m.Disabled,
 		"oauth2ClientId": m.Oauth2ClientID,

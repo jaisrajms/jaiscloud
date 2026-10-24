@@ -37,14 +37,12 @@ func newIamCredentialsClient(ctx context.Context, cfg Config) (*credentials.IamC
 // and signJwt, which share a REST path with iam — are exercised directly.
 func iamCredentialsChecks() []Check {
 	return []Check{
-		{Service: "iamcredentials", RPC: "GenerateAccessToken", KeyField: "accessToken carries the emulator prefix; expireTime is in the future", Run: checkIamCredentialsGenerateAccessToken},
+		{Service: "iamcredentials", RPC: "GenerateAccessToken", KeyField: "accessToken is a non-empty opaque token; expireTime is in the future", Run: checkIamCredentialsGenerateAccessToken},
 		{Service: "iamcredentials", RPC: "GenerateIdToken", KeyField: "token is a well-formed JWT", Run: checkIamCredentialsGenerateIdToken},
 		{Service: "iamcredentials", RPC: "SignBlob", KeyField: "keyId + non-empty signedBlob", Run: checkIamCredentialsSignBlob},
 		{Service: "iamcredentials", RPC: "SignJwt", KeyField: "keyId + well-formed signedJwt", Run: checkIamCredentialsSignJwt},
 	}
 }
-
-const iamCredentialsTokenPrefix = "floci-gcp-impersonated-"
 
 func checkIamCredentialsGenerateAccessToken(ctx context.Context, cfg Config) error {
 	client, err := newIamCredentialsClient(ctx, cfg)
@@ -61,8 +59,8 @@ func checkIamCredentialsGenerateAccessToken(ctx context.Context, cfg Config) err
 	if err != nil {
 		return fmt.Errorf("GenerateAccessToken: %w", err)
 	}
-	if !strings.HasPrefix(resp.GetAccessToken(), iamCredentialsTokenPrefix) {
-		return fmt.Errorf("GenerateAccessToken accessToken = %q, want prefix %q", resp.GetAccessToken(), iamCredentialsTokenPrefix)
+	if resp.GetAccessToken() == "" {
+		return fmt.Errorf("GenerateAccessToken accessToken is empty")
 	}
 	if resp.GetExpireTime() == nil || !resp.GetExpireTime().AsTime().After(time.Now()) {
 		return fmt.Errorf("GenerateAccessToken expireTime = %v, want a future timestamp", resp.GetExpireTime())

@@ -82,6 +82,26 @@ func (s *MemoryStore) DeleteSecret(_ context.Context, projectID, id string) erro
 	return nil
 }
 
+// DeleteSecretIf deletes under the store lock, running cond against the value
+// the delete replaces, so a concurrent UpdateSecret/NextVersion cannot land
+// between the precondition check and the delete.
+func (s *MemoryStore) DeleteSecretIf(_ context.Context, projectID, id string, cond func(Secret) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sec, ok := s.secrets[projectID][id]
+	if !ok {
+		return ErrNoSuchSecret
+	}
+	if cond != nil {
+		if err := cond(sec); err != nil {
+			return err
+		}
+	}
+	delete(s.secrets[projectID], id)
+	delete(s.versions, vkey(projectID, id))
+	return nil
+}
+
 func (s *MemoryStore) ListSecrets(_ context.Context, projectID string) ([]Secret, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -136,6 +156,27 @@ func (s *MemoryStore) UpdateVersion(_ context.Context, projectID string, v Versi
 	}
 	s.versions[key][v.VersionID] = v
 	return nil
+}
+
+// UpdateVersionIf applies a lifecycle transition under the store lock, running
+// mutate against the value the write replaces, so a concurrent transition
+// cannot land between the precondition check and the update.
+func (s *MemoryStore) UpdateVersionIf(_ context.Context, projectID, secretID, versionID string, mutate func(Version) (Version, error)) (Version, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := vkey(projectID, secretID)
+	cur, ok := s.versions[key][versionID]
+	if !ok {
+		return Version{}, ErrNoSuchVersion
+	}
+	next, err := mutate(cur)
+	if err != nil {
+		return Version{}, err
+	}
+	// Identity is the address, not a mutation: never let mutate move the record.
+	next.SecretID, next.VersionID = cur.SecretID, cur.VersionID
+	s.versions[key][versionID] = next
+	return next, nil
 }
 
 // NextVersion atomically allocates and advances a secret's version counter.

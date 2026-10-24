@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -255,6 +256,85 @@ func TestEngineRetryBackoff(t *testing.T) {
 	got, _ = core.GetJob(ctx, "proj", "us-central1", created.Name)
 	if !got.ScheduleTime.Equal(due.Add(time.Hour)) {
 		t.Fatalf("post-retry scheduleTime = %v, want %v", got.ScheduleTime, due.Add(time.Hour))
+	}
+}
+
+func TestHTTPTargetScheduleTimeHeader(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedClock(t, at)
+	ctx := context.Background()
+	mem := schedstore.NewMemoryStore()
+
+	var mu sync.Mutex
+	var seen []http.Header
+	var failFirst atomic.Bool
+	failFirst.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Clone())
+		mu.Unlock()
+		if failFirst.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	engine := NewEngine(mem, NewRunner(nil))
+	core := NewService(mem)
+	core.SetEngine(engine)
+
+	created, err := core.CreateJob(ctx, "proj", "us-central1", schedstore.Job{
+		Schedule: "* * * * *",
+		TimeZone: "UTC",
+		Target:   schedstore.TargetHTTP,
+		HTTP: &schedstore.HttpTarget{
+			URI:        server.URL,
+			HTTPMethod: "POST",
+			// Real Cloud Scheduler replaces a user-supplied value.
+			Headers: map[string]string{"X-CloudScheduler-ScheduleTime": "bogus"},
+		},
+		RetryConfig: &schedstore.RetryConfig{RetryCount: 1, MinBackoffDuration: 30 * time.Second},
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	slot := created.ScheduleTime
+
+	// First attempt fails and schedules a retry.
+	clock.SetGlobalClock(clock.FixedClock{T: slot})
+	engine.TickNow(ctx)
+	got, _ := core.GetJob(ctx, "proj", "us-central1", created.Name)
+	if got.Status == nil || got.Status.Code != http.StatusInternalServerError {
+		t.Fatalf("first attempt status = %+v, want 500", got.Status)
+	}
+	// Retry succeeds.
+	failFirst.Store(false)
+	clock.SetGlobalClock(clock.FixedClock{T: slot.Add(30 * time.Second)})
+	engine.TickNow(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("deliveries = %d, want 2", len(seen))
+	}
+	// The header is the run's cron slot, RFC3339, and the same on the retry.
+	wantSlot := slot.UTC().Format(time.RFC3339)
+	wantJob := JobName("proj", "us-central1", created.Name)
+	for i, h := range seen {
+		if h.Get("X-CloudScheduler-ScheduleTime") != wantSlot {
+			t.Errorf("attempt %d X-CloudScheduler-ScheduleTime = %q, want %q", i, h.Get("X-CloudScheduler-ScheduleTime"), wantSlot)
+		}
+		if h.Get("X-CloudScheduler") != "true" {
+			t.Errorf("attempt %d X-CloudScheduler = %q, want true", i, h.Get("X-CloudScheduler"))
+		}
+		if h.Get("X-CloudScheduler-JobName") != wantJob {
+			t.Errorf("attempt %d X-CloudScheduler-JobName = %q, want %q", i, h.Get("X-CloudScheduler-JobName"), wantJob)
+		}
+		if h.Get("User-Agent") != "Google-Cloud-Scheduler" {
+			t.Errorf("attempt %d User-Agent = %q, want Google-Cloud-Scheduler", i, h.Get("User-Agent"))
+		}
 	}
 }
 

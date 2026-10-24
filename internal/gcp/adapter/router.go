@@ -47,6 +47,21 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 	if strings.HasPrefix(r.URL.Path, "/v1/") && firstHostLabel(r.Host) == "container" {
 		return "container", SourceHost
 	}
+	// Managed Kafka and Dataproc Metastore share the bare
+	// /v1/projects/{project}/locations/{location}/operations[/{id}] LRO path with
+	// Cloud Workflows on the single emulator origin, and the operation resource
+	// name carries no service discriminator (it is
+	// projects/{p}/locations/{l}/operations/{id} for every owner). Their canonical
+	// hosts — managedkafka.googleapis.com / metastore.googleapis.com, or the
+	// managedkafka.localhost / metastore.localhost test forms — disambiguate it:
+	// an operations request to that host resolves to the owning service instead of
+	// Workflows. Every other path is left to path detection, which already owns
+	// the clusters/services resource segments; the default host keeps the bare
+	// operations path on Workflows (that path also backs the Cloud Workflows LRO
+	// surface).
+	if svc := operationsHostService(firstHostLabel(r.Host), r.URL.EscapedPath()); svc != "" {
+		return svc, SourceHost
+	}
 	p := r.URL.Path
 	// SDK test clients concatenate an endpoint that may already end in "/" with
 	// "/v1/..." paths, yielding a leading "//". Collapse redundant leading
@@ -114,7 +129,7 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	// /v1//v2/ namespaces are reserved by the other GCP services' routers.
 	for _, prefix := range []string{
 		"v1/", "v2/", "bigquery/", "storage/v1/", "upload/storage/", "download/storage/",
-		"resumable/upload/", "batch/storage/", "projects/",
+		"upload/bigquery/", "resumable/upload/", "batch/storage/", "projects/",
 	} {
 		if strings.HasPrefix(p, prefix) {
 			return false
@@ -134,6 +149,14 @@ func isRawStorageMediaPath(r *http.Request) bool {
 // GCS media fallback without colliding.
 func detectBigQueryService(path string) string {
 	if strings.HasPrefix(path, "/bigquery/v2/projects/") {
+		return "bigquery"
+	}
+	// The jobs.insert media-upload endpoint (load_table_from_file) lives under
+	// /upload/bigquery/v2/ and /resumable/upload/bigquery/v2/, not under the
+	// service's normal /bigquery/v2/ prefix. It is unambiguous — no other
+	// emulated service claims /upload/bigquery/ — so claim it here before the
+	// GCS raw-media fallback (a resumable chunk is a PUT).
+	if isBigQueryUploadPath(path) {
 		return "bigquery"
 	}
 	if !strings.HasPrefix(path, "/projects/") {
@@ -156,7 +179,23 @@ func detectBigQueryService(path string) string {
 // detectV1Service maps a /v1/projects/{project}/... path to a service name by
 // inspecting the resource-type segment(s) after the project.
 func detectV1Service(path string) string {
+	// SDK test clients concatenate an endpoint that may already end in "/" with
+	// "/v1/..." paths, yielding a leading "//". Collapse it (mirrors
+	// detectV2Service) so the top-level "/v1/operations" guard and the segment
+	// scan below stay stable.
+	path = "/" + strings.TrimLeft(path, "/")
 	seg := splitEscaped(path)
+	// IAM Service Account Credentials' getAllowedLocations is a plain trailing
+	// resource segment in the real Discovery documents
+	// (…/serviceAccounts/{sa}/allowedLocations and
+	// …/workloadIdentityPools/{pool}/allowedLocations), not the
+	// ":getAllowedLocations" custom verb the other iamcredentials methods use.
+	// It shares the serviceAccounts path with IAM, so the trailing segment is
+	// the discriminator (and it must run before the resource-type switch, which
+	// would otherwise claim the serviceAccounts path for iam).
+	if len(seg) > 0 && seg[len(seg)-1] == "allowedLocations" {
+		return "iamcredentials"
+	}
 	// v1 Cloud Functions operations are top-level (operations/{id}); the
 	// location-scoped .../locations/{l}/operations/{id} form belongs to the
 	// Workflows/Managed Kafka/etc. resource switch below.
@@ -179,12 +218,20 @@ func detectV1Service(path string) string {
 	if pi >= 0 && pi+1 == len(seg)-1 && isDatastoreVerb(seg[pi+1]) {
 		return "datastore"
 	}
+	// Cloud Resource Manager collection route: /v1/projects (the "projects"
+	// segment is the last segment) is projects.list (GET) / projects.create
+	// (POST). It has no project segment, so the project-last guard below does
+	// not match.
+	if pi >= 0 && pi == len(seg)-1 {
+		return "resourcemanager"
+	}
 	// Cloud Resource Manager project surface: when the project segment is the
 	// LAST segment there is no trailing resource type — either the bare project
 	// resource (GET /v1/projects/{project} → projects.get) or a project-segment
 	// custom method (POST /v1/projects/{project}:getIamPolicy|setIamPolicy|
-	// testIamPermissions). This must run before the pi+2 guard below, which
-	// assumes a trailing resource-type segment and would otherwise return "".
+	// testIamPermissions) / delete (DELETE) / undelete (POST). This must run
+	// before the pi+2 guard below, which assumes a trailing resource-type
+	// segment and would otherwise return "".
 	if pi >= 0 && pi+1 == len(seg)-1 {
 		return "resourcemanager"
 	}
@@ -210,6 +257,13 @@ func detectV1Service(path string) string {
 	// signBlob/signJwt are ambiguous with iam and remain owned by iam.
 	if custom == "generateAccessToken" || custom == "generateIdToken" || custom == "getAllowedLocations" {
 		return "iamcredentials"
+	}
+	// Cloud KMS locations.generateRandomBytes shares the bare
+	// locations[/{location}] path with Memorystore's location discovery, which
+	// is otherwise claimed below. The verb is declared only by Cloud KMS, so it
+	// discriminates before the Memorystore guard.
+	if custom == "generateRandomBytes" {
+		return "kms"
 	}
 	// Service Usage v1: /v1/projects/{project}/services[/{service}][:verb]. The
 	// bare "services" resource segment is claimed here before the generic
@@ -258,11 +312,11 @@ func detectV1Service(path string) string {
 		return "pubsub"
 	case "secrets":
 		return "secretmanager"
-	case "keyRings", "cryptoKeys", "cryptoKeyVersions":
+	case "keyRings", "cryptoKeys", "cryptoKeyVersions", "importJobs":
 		return "kms"
 	case "serviceAccounts", "keys":
 		return "iam"
-	case "documents", "indexes":
+	case "documents", "indexes", "databases", "databasesOperations", "backupSchedules", "userCreds", "fields", "backups":
 		return "firestore"
 	case "functions":
 		return "functions"
@@ -270,7 +324,8 @@ func detectV1Service(path string) string {
 		return "workflows"
 	case "executions":
 		return "workflowexecutions"
-	case "triggers", "channels", "providers":
+	case "triggers", "channels", "providers", "messageBuses", "enrollments",
+		"pipelines", "googleApiSources", "channelConnections", "googleChannelConfig":
 		return "eventarc"
 	}
 	return ""
@@ -309,11 +364,14 @@ func isDatastoreVerb(seg string) bool {
 // (POST /v2/entries:write|:list), the descriptor catalog
 // (/v2/monitoredResourceDescriptors), the {scope}/{scopeID}/logs family
 // (logs.list / logs.delete), the config plane
-// ({scope}/{scopeID}/{sinks,exclusions}), and logs-based metrics
-// ({scope}/{scopeID}/metrics); Cloud Functions owns
+// ({scope}/{scopeID}/{sinks,exclusions}), logs-based metrics
+// ({scope}/{scopeID}/metrics), and the Admin v2 plane
+// ({scope}/{scopeID}/locations/{location}/{buckets,logScopes} plus the
+// settings/cmekSettings records); Cloud Functions owns
 // /v2/projects/{project}/locations/... (functions/operations). The two do not
 // collide: Logging's log paths sit directly under a project, while Functions
-// always has a locations segment next.
+// always has a locations segment next, and the Admin v2 bucket/logScopes
+// families are routed explicitly before the Functions fallback.
 func detectV2Service(path string) string {
 	// SDK test clients may yield a leading "//"; collapse it as DetectService does.
 	path = "/" + strings.TrimLeft(path, "/")
@@ -340,6 +398,13 @@ func detectV2Service(path string) string {
 	// Cloud Logging logs-based metrics:
 	// /v2/{scope}/{scopeID}/metrics[/{metricId...}].
 	if isLoggingMetricsPath(seg) {
+		return "logging"
+	}
+	// Cloud Logging Admin v2: buckets/views/links under
+	// /v2/{scope}/{scopeID}/locations/{location}..., and the per-scope
+	// settings/cmekSettings records. These would otherwise be claimed by the
+	// /v2/projects/{p}/locations fallback (Cloud Functions).
+	if isLoggingAdminPath(seg) {
 		return "logging"
 	}
 
@@ -429,6 +494,28 @@ func isLoggingMetricsPath(seg []string) bool {
 	return seg[3] == "metrics"
 }
 
+// isLoggingAdminPath reports whether seg is a Cloud Logging Admin v2 path:
+// /v2/{scope}/{scopeID}/locations/{location}/buckets... (buckets, and the views
+// and links nested under them), /v2/{scope}/{scopeID}/locations/{location}/logScopes...,
+// or the per-scope settings/cmekSettings records at either the container or the
+// location level.
+func isLoggingAdminPath(seg []string) bool {
+	if len(seg) < 4 || !servicelogging.IsLogScope(seg[1]) || seg[2] == "" {
+		return false
+	}
+	if seg[3] == "settings" || seg[3] == "cmekSettings" {
+		return len(seg) == 4
+	}
+	if seg[3] != "locations" || len(seg) < 6 || seg[4] == "" {
+		return false
+	}
+	switch seg[5] {
+	case "buckets", "buckets:createAsync", "logScopes", "settings", "cmekSettings":
+		return true
+	}
+	return false
+}
+
 // detectDataprocResourceType returns "clusters", "jobs", "operations", or
 // "workflowTemplates" when the segments after projects/{project} form
 // regions/{region}/{type}, else "".
@@ -456,7 +543,10 @@ func detectDataprocResourceType(seg []string) string {
 // claimed here — it is path-ambiguous with Workflows' operations surface on a
 // single host, so it remains routed to workflows and Managed Kafka returns its
 // operations inline (done: true) from the cluster mutation that created them.
-// The provider still registers GetOperation/ListOperations for direct dispatch.
+// The provider still registers GetOperation/ListOperations for direct dispatch,
+// and the service's own host token (managedkafka.localhost /
+// managedkafka.googleapis.com) routes the operations family to Managed Kafka
+// instead; see operationsHostService.
 func detectManagedKafkaResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "locations" {
 		return ""
@@ -492,21 +582,68 @@ func detectMemorystoreResourceType(seg []string) string {
 }
 
 // detectMetastoreResourceType returns "services" when the segments after
-// projects/{project} form locations/{location}/services, else "". The
-// "services" segment is unique to Dataproc Metastore among the emulator's
+// projects/{project} form locations/{location}/services, or "federations" for
+// locations/{location}/federations, else "". The "services" and "federations"
+// segments are unique to Dataproc Metastore among the emulator's
 // /v1/projects/{project}/locations/{location}/... services (workflows uses
 // "workflows", functions uses "functions", KMS uses "keyRings", Managed Kafka
-// uses "clusters"). The shared locations/{location}/operations/{id} LRO path is
-// intentionally NOT claimed here — it is path-ambiguous with Workflows'
-// operations surface on a single host, so it remains routed to workflows.
+// uses "clusters", Cloud Scheduler uses "jobs"). The shared
+// locations/{location}/operations/{id} LRO path is intentionally NOT claimed
+// here — it is path-ambiguous with Workflows' operations surface on a single
+// host, so it remains routed to workflows (the service's own host token routes
+// it to Metastore instead; see operationsHostService).
 func detectMetastoreResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "locations" {
 		return ""
 	}
-	if seg[2] == "services" {
-		return "services"
+	switch seg[2] {
+	case "services", "federations":
+		return seg[2]
 	}
 	return ""
+}
+
+// operationsHostService maps a request host token plus path to the service that
+// owns the shared /v1/projects/{project}/locations/{location}/operations[/{id}]
+// LRO family. Managed Kafka, Dataproc Metastore and Eventarc each address their
+// operations under their own canonical host (managedkafka.googleapis.com /
+// metastore.googleapis.com / eventarc.googleapis.com, first DNS label
+// managedkafka/metastore/eventarc). Any other host, or a non-operations path,
+// returns "" so detection falls through to the path-based resolver, which keeps
+// the bare operations path on Cloud Workflows.
+func operationsHostService(hostLabel, path string) string {
+	switch hostLabel {
+	case "managedkafka", "metastore", "eventarc":
+	default:
+		return ""
+	}
+	if !isLocationOperationsPath(path) {
+		return ""
+	}
+	return hostLabel
+}
+
+// isLocationOperationsPath reports whether path is the shared
+// /v1/projects/{project}/locations/{location}/operations[/{id}] long-running
+// operations family. Only /v1/ is considered, mirroring the host-token guard on
+// the sibling GKE discriminator (a non-/v1/ path is never a control-plane LRO).
+func isLocationOperationsPath(path string) bool {
+	if !strings.HasPrefix(path, "/v1/") {
+		return false
+	}
+	seg := splitEscaped(path)
+	pi := -1
+	for i, s := range seg {
+		if s == "projects" {
+			pi = i
+			break
+		}
+	}
+	if pi < 0 || pi+2 > len(seg) {
+		return false
+	}
+	rest := seg[pi+2:]
+	return len(rest) >= 3 && rest[0] == "locations" && rest[2] == "operations"
 }
 
 // firstHostLabel returns the first DNS label of an HTTP Host header, stripping

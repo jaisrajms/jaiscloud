@@ -15,7 +15,7 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	lambdaexec "jaiscloud/internal/executor/awslambda"
 	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"

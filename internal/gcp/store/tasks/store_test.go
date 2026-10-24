@@ -72,6 +72,35 @@ func TestMemoryTaskRoundTripAndPurge(t *testing.T) {
 	}
 }
 
+func TestMemoryListQueuesByProject(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	for _, tc := range []struct{ project, location, name string }{
+		{"p", "us-central1", "b"},
+		{"p", "us-central1", "a"},
+		{"p", "europe-west1", "c"},
+		{"other", "us-central1", "d"},
+	} {
+		if err := s.CreateQueue(ctx, tc.project, tc.location, Queue{Name: tc.name}); err != nil {
+			t.Fatalf("CreateQueue %s: %v", tc.name, err)
+		}
+	}
+	got, err := s.ListQueuesByProject(ctx, "p")
+	if err != nil {
+		t.Fatalf("ListQueuesByProject: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	// Sorted by location then name; the other project's queue is excluded.
+	want := []string{"c", "a", "b"}
+	for i, name := range want {
+		if got[i].Name != name {
+			t.Fatalf("got[%d] = %q, want %q", i, got[i].Name, name)
+		}
+	}
+}
+
 func TestMemoryListAllQueues(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

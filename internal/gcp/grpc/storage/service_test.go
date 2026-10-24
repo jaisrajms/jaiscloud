@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -77,6 +78,21 @@ func createBucket(t *testing.T, client storagepb.StorageClient, name, location s
 		Bucket:   &storagepb.Bucket{Project: "projects/test-project", Location: location},
 	}); err != nil {
 		t.Fatalf("CreateBucket: %v", err)
+	}
+}
+
+// TestCreateBucketRejectsInvalidName pins the shared GCS naming rule on the gRPC
+// surface too: an invalid (uppercase) bucket id is INVALID_ARGUMENT.
+func TestCreateBucketRejectsInvalidName(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	_, err := client.CreateBucket(context.Background(), &storagepb.CreateBucketRequest{
+		Parent:   "projects/_",
+		BucketId: "INVALID_BUCKET_NAME",
+		Bucket:   &storagepb.Bucket{Project: "projects/test-project"},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateBucket(invalid) err = %v, want InvalidArgument", err)
 	}
 }
 
@@ -1351,8 +1367,85 @@ func TestRestoreObject(t *testing.T) {
 	client, cleanup := storageTestService(t)
 	defer cleanup()
 	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
 
-	// Versioned bucket so overwrites retain (tombstone) prior generations.
+	// Soft delete is the default bucket policy: a delete keeps the generation
+	// restorable instead of hard-deleting it.
+	v1 := writeSingleShot(t, client, "bucket-a", "restore-obj", "text/plain", []byte("payload"))
+	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
+		Bucket: testBucket, Object: "restore-obj",
+	}); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetObject after delete err = %v, want NotFound", err)
+	}
+
+	restored, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("RestoreObject: %v", err)
+	}
+	// Real GCS restores a new object copy: fresh generation, metageneration 1.
+	if restored.GetGeneration() == v1.GetGeneration() {
+		t.Fatalf("RestoreObject reused generation %d, want a new one", v1.GetGeneration())
+	}
+	if restored.GetMetageneration() != 1 {
+		t.Fatalf("RestoreObject metageneration = %d, want 1", restored.GetMetageneration())
+	}
+	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "payload" {
+		t.Fatalf("read after restore = %q, want payload", got)
+	}
+
+	// The soft-deleted source is retained for its window: a second restore of
+	// the same generation creates another live copy.
+	again, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("second RestoreObject of the retained copy: %v", err)
+	}
+	if again.GetGeneration() == restored.GetGeneration() {
+		t.Fatalf("second restore reused generation %d, want a new one", restored.GetGeneration())
+	}
+
+	// A live generation is not soft-deleted: 412 objectNotSoftDeleted.
+	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: again.GetGeneration(),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreObject live generation err = %v, want FailedPrecondition", err)
+	}
+
+	// An unknown generation is NotFound.
+	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: restored.GetGeneration() + 1000,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RestoreObject unknown generation err = %v, want NotFound", err)
+	}
+
+	// A soft-deleted generation is invisible without soft_deleted, visible with.
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetObject(soft-deleted) err = %v, want NotFound", err)
+	}
+	optIn := true
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(), SoftDeleted: &optIn,
+	}); err != nil {
+		t.Fatalf("GetObject(soft-deleted, soft_deleted=true): %v", err)
+	}
+}
+
+// TestRestoreObjectNoncurrentRejected pins the documented 412: a noncurrent
+// (archived) version is not soft-deleted.
+func TestRestoreObjectNoncurrentRejected(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
 	if _, err := client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
 		Parent:   "projects/_",
 		BucketId: "bucket-a",
@@ -1364,68 +1457,17 @@ func TestRestoreObject(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
-
-	v1 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("version-one"))
-	v2 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("version-two"))
-	if v1.GetGeneration() == v2.GetGeneration() {
-		t.Fatal("expected distinct generations")
+	v1 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("v1"))
+	writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("v2"))
+	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
+		Bucket: testBucket, Object: "restore-obj",
+	}); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
 	}
-
-	// v1 is now non-live (tombstoned) after the v2 write.
-	dead, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
-	})
-	if err != nil {
-		t.Fatalf("GetObject(v1): %v", err)
-	}
-	if dead.GetDeleteTime() == nil {
-		t.Fatal("expected v1 to carry a delete_time before restore")
-	}
-
-	restored, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
-	})
-	if err != nil {
-		t.Fatalf("RestoreObject: %v", err)
-	}
-	if restored.GetGeneration() != v1.GetGeneration() {
-		t.Fatalf("RestoreObject generation = %d, want %d", restored.GetGeneration(), v1.GetGeneration())
-	}
-	if restored.GetDeleteTime() != nil {
-		t.Fatalf("RestoreObject delete_time = %v, want nil", restored.GetDeleteTime())
-	}
-
-	// v1 is the live generation again (reads resolve to it).
-	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "version-one" {
-		t.Fatalf("read after restore = %q, want version-one", got)
-	}
-	// v2 was superseded and is now non-live.
-	superseded, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v2.GetGeneration(),
-	})
-	if err != nil {
-		t.Fatalf("GetObject(v2): %v", err)
-	}
-	if superseded.GetDeleteTime() == nil {
-		t.Fatal("expected v2 to be non-live after restoring v1")
-	}
-
-	// Precondition mismatch on the current live generation fails without mutating.
-	stale := int64(99999999)
 	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v2.GetGeneration(), IfGenerationMatch: &stale,
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
 	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("RestoreObject precondition err = %v, want FailedPrecondition", err)
-	}
-	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "version-one" {
-		t.Fatalf("failed restore mutated live object: %q", got)
-	}
-
-	// An unknown generation is NotFound.
-	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration() + v2.GetGeneration() + 1,
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("RestoreObject unknown generation err = %v, want NotFound", err)
+		t.Fatalf("RestoreObject noncurrent err = %v, want FailedPrecondition", err)
 	}
 }
 
@@ -1689,4 +1731,97 @@ func readObjectCSEK(t *testing.T, client storagepb.StorageClient, bucket, object
 		}
 	}
 	return out
+}
+
+// TestGRPCListPageSizeContract pins the documented page-size contract on the
+// gRPC lists (DC22): a negative page_size is INVALID_ARGUMENT, and an
+// unspecified one is the documented 1,000-item cap ("The service will use this
+// parameter or 1,000 items, whichever is smaller") rather than an unbounded page.
+func TestGRPCListPageSizeContract(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	if _, err := client.ListBuckets(ctx, &storagepb.ListBucketsRequest{Parent: "projects/test-project", PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListBuckets(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListObjects(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	for i := 0; i < listObjectsMaxPageSize+1; i++ {
+		name := fmt.Sprintf("obj-%04d", i)
+		if err := svc.objects.PutObjectMeta(ctx, "bucket-a", name, gcs.ObjectMeta{ContentType: "text/plain"}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	first, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket})
+	if err != nil {
+		t.Fatalf("ListObjects(default): %v", err)
+	}
+	if len(first.GetObjects()) != listObjectsMaxPageSize || first.GetNextPageToken() == "" {
+		t.Fatalf("default page = %d objects, next=%q; want %d and a token", len(first.GetObjects()), first.GetNextPageToken(), listObjectsMaxPageSize)
+	}
+	second, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, PageToken: first.GetNextPageToken()})
+	if err != nil {
+		t.Fatalf("ListObjects(page 2): %v", err)
+	}
+	if len(second.GetObjects()) != 1 || second.GetNextPageToken() != "" {
+		t.Fatalf("page 2 = %d objects, next=%q; want the remaining 1 and no token", len(second.GetObjects()), second.GetNextPageToken())
+	}
+	// An over-large page_size is coerced down to the same documented cap.
+	coerced, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, PageSize: 5000})
+	if err != nil {
+		t.Fatalf("ListObjects(page_size=5000): %v", err)
+	}
+	if len(coerced.GetObjects()) != listObjectsMaxPageSize || coerced.GetNextPageToken() == "" {
+		t.Fatalf("page_size=5000 = %d objects, next=%q; want %d and a token", len(coerced.GetObjects()), coerced.GetNextPageToken(), listObjectsMaxPageSize)
+	}
+}
+
+// TestGRPCListObjectsVersionsPageWalk pins the version-aware page cursor: a
+// versions=true listing orders a name's generations newest first, so a page
+// boundary inside a name's generations must not skip the rest of that name.
+// With the documented 1,000-item default this is reachable without any explicit
+// page size, so the walk is driven at page_size=1 to cross the same boundary.
+func TestGRPCListObjectsVersionsPageWalk(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	for _, m := range []struct{ name, gen string }{
+		{"dup", "1"}, {"dup", "2"}, {"dup", "3"},
+		{"other", "1"},
+		{"zzz", "1"},
+	} {
+		if err := svc.objects.PutObjectGeneration(ctx, "bucket-a", m.name, gcs.ObjectMeta{Generation: m.gen, ContentType: "text/plain"}); err != nil {
+			t.Fatalf("seed %s#%s: %v", m.name, m.gen, err)
+		}
+	}
+
+	var got []string
+	token := ""
+	for pages := 0; ; pages++ {
+		if pages > 10 {
+			t.Fatalf("page walk did not terminate; got %v", got)
+		}
+		resp, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, Versions: true, PageSize: 1, PageToken: token})
+		if err != nil {
+			t.Fatalf("ListObjects(versions, page %d): %v", pages, err)
+		}
+		for _, o := range resp.GetObjects() {
+			got = append(got, fmt.Sprintf("%s#%d", o.GetName(), o.GetGeneration()))
+		}
+		token = resp.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+
+	want := []string{"dup#3", "dup#2", "dup#1", "other#1", "zzz#1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("versions walk = %v, want %v", got, want)
+	}
 }

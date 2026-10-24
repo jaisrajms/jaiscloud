@@ -66,7 +66,7 @@ func TestFrozenClockConcurrentWritersConflict(t *testing.T) {
 	writerB := New(real, nil)
 	wrapped.inject = func() {
 		if _, err := writerB.PatchDocument(ctx, "proj", "(default)", "cities/SF",
-			map[string]*firestorestore.Value{"population": intField(2)}, []string{"population"}, nil); err != nil {
+			map[string]*firestorestore.Value{"population": intField(2)}, &UpdateMask{Paths: []string{"population"}}, nil); err != nil {
 			t.Fatalf("writer B: %v", err)
 		}
 	}
@@ -74,7 +74,7 @@ func TestFrozenClockConcurrentWritersConflict(t *testing.T) {
 	// Writer A patches a DIFFERENT field from the stale base it read. Without
 	// the guard this would clobber writer B's population=2 with population=1.
 	if _, err := writerA.PatchDocument(ctx, "proj", "(default)", "cities/SF",
-		map[string]*firestorestore.Value{"name": firestorestore.StringVal("San Francisco")}, []string{"name"}, nil); err == nil {
+		map[string]*firestorestore.Value{"name": firestorestore.StringVal("San Francisco")}, &UpdateMask{Paths: []string{"name"}}, nil); err == nil {
 		t.Fatal("expected the frozen-clock concurrent write to be detected (ABORTED), got nil error")
 	} else {
 		assertProviderError(t, err, 409, "ABORTED")

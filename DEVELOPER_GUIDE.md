@@ -166,8 +166,10 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 | 🔌 Stub | Endpoint exists, returns plausible responses. Limited operation coverage. |
 
 > The tier for each service is exposed to the UI as the `Tier` field on
-> `ServiceDescriptor` in `internal/aws/ui/services.go` (served by
-> `GET /api/ui/v1/services`). Keep that table in sync with this one; the
+> `ServiceDescriptor` (defined in `internal/ui/types.go`, served by
+> `GET /api/ui/v1/services`). Each cloud's catalog is contributed by its UI
+> registrar — AWS descriptors live in `internal/aws/ui/services.go`, GCP in
+> `internal/gcp/ui/`. Keep that table in sync with this one; the AWS
 > classification is pinned by `internal/aws/ui/services_test.go`.
 
 ### Service implementation matrix

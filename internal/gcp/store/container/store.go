@@ -19,9 +19,12 @@ import (
 var (
 	// ErrNoSuchCluster is returned when a cluster name is unknown.
 	ErrNoSuchCluster = errors.New("NoSuchCluster")
+	// ErrNoSuchNodePool is returned when a node pool name is unknown.
+	ErrNoSuchNodePool = errors.New("NoSuchNodePool")
 	// ErrNoSuchOperation is returned when an operation name is unknown.
 	ErrNoSuchOperation = errors.New("NoSuchOperation")
-	// ErrAlreadyExists is returned when creating a cluster that already exists.
+	// ErrAlreadyExists is returned when creating a cluster/node pool that
+	// already exists.
 	ErrAlreadyExists = errors.New("AlreadyExists")
 )
 
@@ -37,17 +40,141 @@ const (
 	OperationStatusDone = "DONE"
 )
 
-// Operation type values (google.container.v1.Operation.Type).
+// Operation type values (google.container.v1.Operation.Type). The proto enum
+// has a dedicated value for each; setters whose enum value is documented
+// "Unused" in the proto (setLabels/setMasterAuth/setNetworkPolicy/
+// setMaintenancePolicy and the metadata-only addons/legacyAbac/locations/
+// logging/monitoring setters) report UPDATE_CLUSTER, matching real GKE.
 const (
-	OperationCreateCluster = "CREATE_CLUSTER"
-	OperationDeleteCluster = "DELETE_CLUSTER"
+	OperationCreateCluster         = "CREATE_CLUSTER"
+	OperationDeleteCluster         = "DELETE_CLUSTER"
+	OperationCreateNodePool        = "CREATE_NODE_POOL"
+	OperationDeleteNodePool        = "DELETE_NODE_POOL"
+	OperationUpdateNodePool        = "UPGRADE_NODES"
+	OperationSetNodePoolSize       = "SET_NODE_POOL_SIZE"
+	OperationSetNodePoolManagement = "SET_NODE_POOL_MANAGEMENT"
+	OperationUpdateCluster         = "UPDATE_CLUSTER"
+	OperationUpgradeMaster         = "UPGRADE_MASTER"
 )
 
-// NodePool is the persisted subset of a GKE node pool.
+// NodePool is the persisted subset of a GKE node pool. Node pools are stored
+// embedded in their cluster record (no separate table), so a node-pool mutation
+// is a read-modify-write of the cluster document.
 type NodePool struct {
-	Name             string `json:"name"`
-	Status           string `json:"status,omitempty"`
-	InitialNodeCount int32  `json:"initialNodeCount,omitempty"`
+	Name             string                   `json:"name"`
+	Status           string                   `json:"status,omitempty"`
+	InitialNodeCount int32                    `json:"initialNodeCount,omitempty"`
+	NodeCount        int32                    `json:"nodeCount,omitempty"`
+	Version          string                   `json:"version,omitempty"`
+	Locations        []string                 `json:"locations,omitempty"`
+	SelfLink         string                   `json:"selfLink,omitempty"`
+	Config           *NodeConfig              `json:"config,omitempty"`
+	Autoscaling      *NodePoolAutoscaling     `json:"autoscaling,omitempty"`
+	Management       *NodeManagement          `json:"management,omitempty"`
+	UpgradeSettings  *NodePoolUpgradeSettings `json:"upgradeSettings,omitempty"`
+}
+
+// NodeConfig is the persisted subset of google.container.v1.NodeConfig.
+type NodeConfig struct {
+	MachineType    string            `json:"machineType,omitempty"`
+	DiskSizeGb     int32             `json:"diskSizeGb,omitempty"`
+	DiskType       string            `json:"diskType,omitempty"`
+	ImageType      string            `json:"imageType,omitempty"`
+	OauthScopes    []string          `json:"oauthScopes,omitempty"`
+	ServiceAccount string            `json:"serviceAccount,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	ResourceLabels map[string]string `json:"resourceLabels,omitempty"`
+	Tags           []string          `json:"tags,omitempty"`
+	MinCpuPlatform string            `json:"minCpuPlatform,omitempty"`
+	LocalSsdCount  int32             `json:"localSsdCount,omitempty"`
+	Preemptible    bool              `json:"preemptible,omitempty"`
+	Spot           bool              `json:"spot,omitempty"`
+}
+
+// NodePoolAutoscaling is the persisted subset of
+// google.container.v1.NodePoolAutoscaling.
+type NodePoolAutoscaling struct {
+	Enabled           bool   `json:"enabled,omitempty"`
+	MinNodeCount      int32  `json:"minNodeCount,omitempty"`
+	MaxNodeCount      int32  `json:"maxNodeCount,omitempty"`
+	Autoprovisioned   bool   `json:"autoprovisioned,omitempty"`
+	LocationPolicy    string `json:"locationPolicy,omitempty"`
+	TotalMinNodeCount int32  `json:"totalMinNodeCount,omitempty"`
+	TotalMaxNodeCount int32  `json:"totalMaxNodeCount,omitempty"`
+}
+
+// NodeManagement is the persisted subset of google.container.v1.NodeManagement.
+type NodeManagement struct {
+	AutoUpgrade bool `json:"autoUpgrade,omitempty"`
+	AutoRepair  bool `json:"autoRepair,omitempty"`
+}
+
+// NodePoolUpgradeSettings is the persisted subset of
+// google.container.v1.NodePool.UpgradeSettings.
+type NodePoolUpgradeSettings struct {
+	MaxSurge       int32  `json:"maxSurge,omitempty"`
+	MaxUnavailable int32  `json:"maxUnavailable,omitempty"`
+	Strategy       string `json:"strategy,omitempty"`
+}
+
+// AddonConfig is the persisted subset of the boolean addon toggles
+// (google.container.v1.HttpLoadBalancing and siblings).
+type AddonConfig struct {
+	Disabled bool `json:"disabled,omitempty"`
+}
+
+// AddonsConfig is the persisted subset of google.container.v1.AddonsConfig.
+type AddonsConfig struct {
+	HttpLoadBalancing        *AddonConfig `json:"httpLoadBalancing,omitempty"`
+	HorizontalPodAutoscaling *AddonConfig `json:"horizontalPodAutoscaling,omitempty"`
+	NetworkPolicyConfig      *AddonConfig `json:"networkPolicyConfig,omitempty"`
+}
+
+// LegacyAbac is the persisted subset of google.container.v1.LegacyAbac.
+type LegacyAbac struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// NetworkPolicy is the persisted subset of google.container.v1.NetworkPolicy.
+type NetworkPolicy struct {
+	Provider string `json:"provider,omitempty"`
+	Enabled  bool   `json:"enabled,omitempty"`
+}
+
+// MaintenancePolicy is the persisted subset of
+// google.container.v1.MaintenancePolicy.
+type MaintenancePolicy struct {
+	ResourceVersion string             `json:"resourceVersion,omitempty"`
+	Window          *MaintenanceWindow `json:"window,omitempty"`
+}
+
+// MaintenanceWindow is the persisted subset of
+// google.container.v1.MaintenanceWindow.
+type MaintenanceWindow struct {
+	DailyMaintenanceWindow *DailyMaintenanceWindow `json:"dailyMaintenanceWindow,omitempty"`
+	RecurringWindow        *RecurringWindow        `json:"recurringWindow,omitempty"`
+	MaintenanceExclusions  map[string]*TimeWindow  `json:"maintenanceExclusions,omitempty"`
+}
+
+// DailyMaintenanceWindow is the persisted subset of
+// google.container.v1.DailyMaintenanceWindow.
+type DailyMaintenanceWindow struct {
+	StartTime string `json:"startTime,omitempty"`
+	Duration  string `json:"duration,omitempty"`
+}
+
+// RecurringWindow is the persisted subset of
+// google.container.v1.RecurringTimeWindow.
+type RecurringWindow struct {
+	Window     *TimeWindow `json:"window,omitempty"`
+	Recurrence string      `json:"recurrence,omitempty"`
+}
+
+// TimeWindow is the persisted subset of google.container.v1.TimeWindow.
+type TimeWindow struct {
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
 }
 
 // Cluster is the persisted subset of google.container.v1.Cluster. Name is the
@@ -77,6 +204,21 @@ type Cluster struct {
 	NodePools      []NodePool        `json:"nodePools,omitempty"`
 	ResourceLabels map[string]string `json:"resourceLabels,omitempty"`
 
+	// Cluster-level recorded fields the Set*/update setters persist (no real
+	// control plane; the values are echoed on read).
+	AddonsConfig      *AddonsConfig      `json:"addonsConfig,omitempty"`
+	LegacyAbac        *LegacyAbac        `json:"legacyAbac,omitempty"`
+	LoggingService    string             `json:"loggingService,omitempty"`
+	MonitoringService string             `json:"monitoringService,omitempty"`
+	NetworkPolicy     *NetworkPolicy     `json:"networkPolicy,omitempty"`
+	MaintenancePolicy *MaintenancePolicy `json:"maintenancePolicy,omitempty"`
+	Locations         []string           `json:"locations,omitempty"`
+	// AdminUsername is masterAuth.username (SetMasterAuth SET_USERNAME). The
+	// admin password is never echoed, matching real GKE.
+	AdminUsername string `json:"adminUsername,omitempty"`
+	// IPRotationEnabled records StartIPRotation/CompleteIPRotation.
+	IPRotationEnabled bool `json:"ipRotationEnabled,omitempty"`
+
 	CreateTime time.Time `json:"createTime,omitempty"`
 	SelfLink   string    `json:"selfLink,omitempty"`
 }
@@ -97,12 +239,20 @@ type Operation struct {
 	EndTime       time.Time `json:"endTime,omitempty"`
 }
 
-// Store is the GKE cluster/operation store.
+// Store is the GKE cluster/node-pool/operation store.
 type Store interface {
 	CreateCluster(ctx context.Context, projectID, location string, c Cluster) error
 	GetCluster(ctx context.Context, projectID, location, name string) (Cluster, error)
 	DeleteCluster(ctx context.Context, projectID, location, name string) error
 	ListClusters(ctx context.Context, projectID, location string) ([]Cluster, error)
+
+	// MutateCluster applies fn to the stored cluster and writes it back as one
+	// atomic read-modify-write (memory: under its mutex; Postgres: a
+	// SELECT … FOR UPDATE transaction). It returns ErrNoSuchCluster when the
+	// cluster is unknown. Node-pool mutations run through it so both backends
+	// (and the snapshot) stay consistent and concurrent mutations cannot lose an
+	// update.
+	MutateCluster(ctx context.Context, projectID, location, cluster string, fn func(*Cluster) error) error
 
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
 	GetOperation(ctx context.Context, projectID, location, name string) (Operation, error)

@@ -1,0 +1,40 @@
+{
+  "allowances": [
+    {
+      "service": "managedkafka",
+      "op": "GetCluster",
+      "path": "response.bootstrapAddress",
+      "reason": "Tracked as J55 / AUD3-11: real GCP's REST Cluster schema exposes an output-only bootstrapAddress and the emulator serves it, but the pinned cloud.google.com/go/managedkafka proto has no Cluster.bootstrap_address (v1.2.0, the latest tagged release, is field-identical; also absent from googleapis / google-cloud-go main), so a typed gRPC client cannot receive the field (internal/gcp/transport/grpc/managedkafka/transcode.go). Closed as no fix: an upstream-proto gap, not a state divergence (both transports share one core); revisit when the published proto gains the field (canary: TestPinnedProtoLacksBootstrapAddress)."
+    },
+    {
+      "service": "managedkafka",
+      "op": "ListClusters",
+      "path": "response.clusters[0].bootstrapAddress",
+      "reason": "Same J55 / AUD3-11 upstream-proto gap as GetCluster: the pinned managedkafka proto has no Cluster.bootstrap_address, so the gRPC list omits the REST field. The list is scoped to the run suffix, so element [0] is this run's single cluster."
+    },
+    {
+      "service": "managedkafka",
+      "op": "CreateCluster (parity)",
+      "path": "response.bootstrapAddress",
+      "reason": "Same J55 / AUD3-11 upstream-proto gap as GetCluster/ListClusters, now observed on the mutation response: the pinned managedkafka proto has no Cluster.bootstrap_address, so the gRPC create response omits the output-only REST field. Both transports share one core."
+    },
+    {
+      "service": "tasks",
+      "op": "CreateTask (parity)",
+      "path": "response.name",
+      "reason": "Cloud Tasks assigns each created task a server-generated id (the trailing `task-<hash>` segment) that is volatile by definition, so two independent creates cannot share a name. Both transports return the identical projects/{p}/locations/{l}/queues/{q}/tasks/task-<hash> shape; only the generated segment differs."
+    },
+    {
+      "service": "workflowexecutions",
+      "op": "CreateExecution (parity)",
+      "path": "response.name",
+      "reason": "Cloud Workflow Executions assigns each created execution a server-generated uuid (the trailing execution id), volatile by definition, so two independent creates cannot share a name. Both transports return the identical projects/{p}/locations/{l}/workflows/{w}/executions/<uuid> shape; only the generated segment differs."
+    },
+    {
+      "service": "workflowexecutions",
+      "op": "CreateExecution (parity)",
+      "path": "response.duration",
+      "reason": "The emulator runs an execution synchronously to completion, so the terminal execution's `duration` is the wall-clock time of that specific run. Two independent creates (the gRPC and REST twins) execute the same workflow but cannot share a wall-clock measurement; the read steps compare `duration` on the SAME execution over both transports, so the field is still verified across the transports."
+    }
+  ]
+}

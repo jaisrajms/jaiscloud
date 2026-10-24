@@ -7,12 +7,21 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/paging"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
 // ─── request helpers ──────────────────────────────────────────────────────────
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Cloud
+// Monitoring Discovery document declares; a non-integer value is
+// INVALID_ARGUMENT rather than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
@@ -431,10 +440,10 @@ func timeSeriesToJSON(ts monitoringstore.TimeSeries) map[string]any {
 func pointToJSON(p monitoringstore.Point) map[string]any {
 	iv := map[string]any{}
 	if !p.StartTime.IsZero() {
-		iv["startTime"] = p.StartTime.UTC().Format(time.RFC3339Nano)
+		iv["startTime"] = timestamp.Canonical(p.StartTime)
 	}
 	if !p.EndTime.IsZero() {
-		iv["endTime"] = p.EndTime.UTC().Format(time.RFC3339Nano)
+		iv["endTime"] = timestamp.Canonical(p.EndTime)
 	}
 	return map[string]any{"interval": iv, "value": typedValueToJSON(p.Value)}
 }
@@ -587,7 +596,7 @@ func distributionToJSON(d monitoringstore.Distribution) map[string]any {
 		for _, e := range d.Exemplars {
 			ex := map[string]any{"value": e.Value}
 			if !e.Timestamp.IsZero() {
-				ex["timestamp"] = e.Timestamp.UTC().Format(time.RFC3339Nano)
+				ex["timestamp"] = timestamp.Canonical(e.Timestamp)
 			}
 			if len(e.Attachments) > 0 {
 				atts := make([]any, 0, len(e.Attachments))
@@ -805,10 +814,10 @@ func notificationChannelToJSON(c monitoringstore.NotificationChannel, project st
 		out["verificationStatus"] = name
 	}
 	if !c.CreateTime.IsZero() {
-		out["creationRecord"] = map[string]any{"mutateTime": c.CreateTime.UTC().Format(time.RFC3339Nano)}
+		out["creationRecord"] = map[string]any{"mutateTime": timestamp.Canonical(c.CreateTime)}
 	}
 	if !c.UpdateTime.IsZero() {
-		out["mutationRecords"] = []any{map[string]any{"mutateTime": c.UpdateTime.UTC().Format(time.RFC3339Nano)}}
+		out["mutationRecords"] = []any{map[string]any{"mutateTime": timestamp.Canonical(c.UpdateTime)}}
 	}
 	return out
 }

@@ -1,0 +1,26 @@
+# Behavioral-suite DoD exemptions (GTC9).
+#
+# The behavioral-coverage gate (`make gcp-status-behavioral-gate`,
+# `bin/gcpstatus -coverage-gate`) requires every `ga` service to be exercised by
+# an official-client suite under tests/integration/gcp, or to appear here with a
+# reason. The inventory itself is derived (registry + fidelity matrix + test
+# tree); this file is only the reasoned-exemption overlay.
+#
+# Fields:
+#   service: required — a service named by the derived inventory (registry or
+#            matrix name; aliases like redis->memorystore resolve).
+#   reason:  required — why no dedicated tests/integration/gcp suite is needed.
+#
+# A typo'd service fails the gate (an exemption must never silently swallow a
+# real gap). Add a suite or a reasoned entry here; do not leave a `ga` service
+# uncovered.
+
+exemptions:
+  - service: iamcredentials
+    reason: >-
+      The iamcredentials surface (generateAccessToken, generateIdToken, signBlob,
+      signJwt) is stateless token minting with no resource lifecycle to drive; it
+      is exercised by the IAM suite in tests/integration/gcp/sdk-rest and the
+      gRPC message-level conformance suite (4/4 checks). A dedicated behavioral
+      module would re-assert the same calls with no create/read/list/delete
+      lifecycle to cover.

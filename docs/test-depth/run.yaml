@@ -1,0 +1,25 @@
+# Behavioural depth record - run (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: run
+classes:
+  p2:
+    state: present
+    suites: [sdk-run]
+    note: "etag/optimistic-concurrency conflicts (409 ABORTED) across service patch, delete and IAM setIamPolicy, plus parallel writers under -race"
+  p3:
+    state: present
+    suites: [sdk-run]
+    note: "googleapi error envelopes: 404 NotFound, 409 AlreadyExists/Aborted, 400 InvalidArgument/FailedPrecondition"
+  p4:
+    state: present
+    suites: [sdk-run]
+    note: "pageSize/pageToken cursor paging over revisions, with cross-page stability"
+  p5:
+    state: present
+    suites: [sdk-run]
+    note: "long-running operation lifecycle (sync + async), incl. the typed in-flight metadata snapshot and its settle to the response, revision lineage/rotation, and the traffic-split boundary"

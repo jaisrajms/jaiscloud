@@ -1,0 +1,57 @@
+{
+  "index": 27,
+  "service": "dataproc",
+  "op": "tour_dataproc_cluster_create",
+  "method": "POST",
+  "path": "/v1/projects/<project>/regions/us-central1/clusters",
+  "status": 200,
+  "request": {
+    "clusterName": "<dataprocCluster>",
+    "config": {
+      "gceClusterConfig": {
+        "zoneUri": "https://www.googleapis.com/compute/v1/projects/<project>/zones/us-central1-a"
+      },
+      "masterConfig": {
+        "diskConfig": {
+          "bootDiskSizeGb": 100,
+          "bootDiskType": "pd-standard"
+        },
+        "machineTypeUri": "https://www.googleapis.com/compute/v1/projects/<project>/zones/us-central1-a/machineTypes/n1-standard-4"
+      },
+      "softwareConfig": {
+        "imageVersion": "2.2"
+      },
+      "workerConfig": {
+        "diskConfig": {
+          "bootDiskSizeGb": 100,
+          "bootDiskType": "pd-standard"
+        },
+        "machineTypeUri": "https://www.googleapis.com/compute/v1/projects/<project>/zones/us-central1-a/machineTypes/n1-standard-4",
+        "numInstances": 2
+      }
+    },
+    "projectId": "<project>"
+  },
+  "response": {
+    "metadata": {
+      "@type": "type.googleapis.com/google.cloud.dataproc.v1.ClusterOperationMetadata",
+      "clusterName": "<dataprocCluster>",
+      "clusterUuid": "<clusterUuid>",
+      "description": "Create cluster with 2 workers",
+      "operationType": "CREATE",
+      "status": {
+        "innerState": "PENDING",
+        "state": "PENDING",
+        "stateStartTime": "<time>"
+      },
+      "warnings": [
+        "Consider using Auto Zone rather than selecting a zone manually. See https://cloud.google.com/dataproc/docs/concepts/configuring-clusters/auto-zone",
+        "For PD-Standard without local SSDs, we strongly recommend provisioning 1TB or larger to ensure consistently high I/O performance. See https://cloud.google.com/compute/docs/disks/performance for information on disk I/O performance.",
+        "The firewall rules for specified network or subnetwork would allow ingress traffic from 0.0.0.0/0, which could be a security risk.",
+        "The specified custom staging bucket 'dataproc-staging-us-central1-<project>-vthp2ygr' is not using uniform bucket level access IAM configuration. It is recommended to update bucket to enable the same. See https://cloud.google.com/storage/docs/uniform-bucket-level-access."
+      ]
+    },
+    "name": "projects/<project>/regions/us-central1/operations/<operation>"
+  }
+}
+

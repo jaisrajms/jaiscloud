@@ -1,0 +1,10 @@
+{
+  "index": 104,
+  "service": "dataproc",
+  "op": "dataproc_clusters_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/regions/us-central1/clusters",
+  "status": 200,
+  "response": {}
+}
+

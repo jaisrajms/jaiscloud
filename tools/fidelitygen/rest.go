@@ -69,7 +69,13 @@ func isMutating(action string) bool {
 //
 // nil docs, report and ov are all tolerated (empty resolution / no findings /
 // no overrides respectively), which keeps the function testable without I/O.
-func RestFacts(ops []conf.Operation, docs map[string]*conf.DiscoveryDoc, report *conf.Report, ov *Overrides) []Facts {
+//
+// coverage is the transcript evidence join (conf.TranscriptCoverage): op key ->
+// number of committed-transcript 2xx responses whose matched Discovery method
+// equals the op's resolved method. A nil/incomplete map leaves ops unverified.
+// A REST cell is Verified when it maps to a Discovery method, has >=1 validated
+// transcript response, and carries no non-allowlisted medium/high finding.
+func RestFacts(ops []conf.Operation, docs map[string]*conf.DiscoveryDoc, report *conf.Report, ov *Overrides, coverage map[string]int) []Facts {
 	resolver := conf.NewActionResolver(docs)
 	byMethod := methodIndex(resolver, ops)
 
@@ -108,16 +114,24 @@ func RestFacts(ops []conf.Operation, docs map[string]*conf.DiscoveryDoc, report 
 			override = ov.For(op.Service, op.Key())
 		}
 
+		entries := coverage[op.Key()]
+		verified := method != "" && entries > 0
+		if _, bad := worstUnallowedFinding(fs); bad {
+			verified = false
+		}
+
 		facts = append(facts, Facts{
-			Service:           op.Service,
-			Operation:         op.Key(),
-			Transport:         "rest",
-			Implemented:       true,
-			DiscoveryMethod:   method,
-			Findings:          fs,
-			PersistentBackend: persistentBackends[op.Service],
-			Mutating:          isMutating(op.Action),
-			Override:          override,
+			Service:             op.Service,
+			Operation:           op.Key(),
+			Transport:           "rest",
+			Implemented:         true,
+			DiscoveryMethod:     method,
+			Findings:            fs,
+			PersistentBackend:   persistentBackends[op.Service],
+			Mutating:            isMutating(op.Action),
+			Override:            override,
+			RESTEvidenceEntries: entries,
+			Verified:            verified,
 		})
 	}
 	return facts

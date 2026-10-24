@@ -12,6 +12,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // operationMetadataType is the @type of the Cloud Workflows v1 OperationMetadata.
@@ -25,9 +26,9 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 		"name":               WorkflowName(project, w.Location, w.ID),
 		"state":              w.State,
 		"revisionId":         w.RevisionID,
-		"revisionCreateTime": w.UpdateTime.Format(time.RFC3339Nano),
-		"createTime":         w.CreateTime.Format(time.RFC3339Nano),
-		"updateTime":         w.UpdateTime.Format(time.RFC3339Nano),
+		"revisionCreateTime": timestamp.Canonical(liveRevisionCreateTime(w)),
+		"createTime":         timestamp.Canonical(w.CreateTime),
+		"updateTime":         timestamp.Canonical(w.UpdateTime),
 	}
 	if w.Description != "" {
 		out["description"] = w.Description
@@ -58,6 +59,49 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 	return out
 }
 
+// liveRevisionCreateTime returns the workflow's revision creation time, falling
+// back to UpdateTime for a legacy record that predates the stored field.
+func liveRevisionCreateTime(w workflowsstore.Workflow) time.Time {
+	if !w.RevisionCreateTime.IsZero() {
+		return w.RevisionCreateTime
+	}
+	return w.UpdateTime
+}
+
+// RevisionJSON renders a workflow revision as the workflows.v1.Workflow wire
+// map: the workflow-wide fields (name, description, labels, create/update time,
+// tags) come from the live workflow, while state, revisionId,
+// revisionCreateTime, sourceContents, serviceAccount, userEnvVars and
+// callLogLevel come from the revision. For the live revision the output is
+// byte-for-byte WorkflowJSON.
+func RevisionJSON(r Revision, project string) map[string]any {
+	out := WorkflowJSON(r.Workflow, project)
+	out["state"] = r.State
+	out["revisionId"] = r.RevisionID
+	out["revisionCreateTime"] = timestamp.Canonical(r.RevisionCreateTime)
+	if r.SourceContents != "" {
+		out["sourceContents"] = r.SourceContents
+	} else {
+		delete(out, "sourceContents")
+	}
+	if r.UserEnvVars != nil {
+		out["userEnvVars"] = stringMapToAny(r.UserEnvVars)
+	} else {
+		delete(out, "userEnvVars")
+	}
+	if r.ServiceAccount != "" {
+		out["serviceAccount"] = r.ServiceAccount
+	} else {
+		out["serviceAccount"] = DefaultServiceAccount(project)
+	}
+	if r.CallLogLevel != "" {
+		out["callLogLevel"] = r.CallLogLevel
+	} else {
+		delete(out, "callLogLevel")
+	}
+	return out
+}
+
 // OperationJSON renders a stored Operation as a google.longrunning.Operation
 // wire map. The response body and metadata.endTime are only present once the
 // operation is done: real GCP omits them while in flight. A done operation
@@ -66,7 +110,7 @@ func OperationJSON(op workflowsstore.Operation, project string) map[string]any {
 	name := OperationName(project, op.Location, op.ID)
 	metadata := map[string]any{
 		"@type":      operationMetadataType,
-		"createTime": op.CreateTime.Format(time.RFC3339Nano),
+		"createTime": timestamp.Canonical(op.CreateTime),
 		"target":     op.Target,
 		"verb":       op.Verb,
 		"apiVersion": "v1",
@@ -77,7 +121,7 @@ func OperationJSON(op workflowsstore.Operation, project string) map[string]any {
 		"done":     op.Done,
 	}
 	if op.Done {
-		metadata["endTime"] = op.EndTime.Format(time.RFC3339Nano)
+		metadata["endTime"] = timestamp.Canonical(op.EndTime)
 		var response any = map[string]any{}
 		if op.Response != "" {
 			_ = json.Unmarshal([]byte(op.Response), &response)
@@ -133,6 +177,7 @@ func (s *Service) settle(op workflowsstore.Operation) workflowsstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	s.tracker.EmitOperation("workflows", op.ID, op.ID, op.Verb)
 	return op
 }
 

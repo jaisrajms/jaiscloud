@@ -4,11 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 )
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Dataproc
+// Metastore Discovery document declares; a non-integer value is
+// INVALID_ARGUMENT rather than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 // ─── request helpers ──────────────────────────────────────────────────────────
 
@@ -73,18 +80,4 @@ func rawBodyOf(nr *model.NormalizedRequest) json.RawMessage {
 		return nil
 	}
 	return data
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }

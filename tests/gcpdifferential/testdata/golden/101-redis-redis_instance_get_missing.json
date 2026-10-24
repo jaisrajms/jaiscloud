@@ -1,0 +1,22 @@
+{
+  "index": 101,
+  "service": "redis",
+  "op": "redis_instance_get_missing",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/us-central1/instances/<redisInstance>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+          "resourceName": "projects/<project>/locations/us-central1/instances/<redisInstance>"
+        }
+      ],
+      "message": "Resource 'projects/<project>/locations/us-central1/instances/<redisInstance>' was not found",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

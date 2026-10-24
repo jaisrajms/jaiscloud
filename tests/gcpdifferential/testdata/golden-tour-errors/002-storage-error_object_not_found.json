@@ -1,0 +1,22 @@
+{
+  "index": 2,
+  "service": "storage",
+  "op": "error_object_not_found",
+  "method": "GET",
+  "path": "/storage/v1/b/<bucket>/o/no%2Fsuch%2Fobject",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "No such object: <bucket>/no/such/object",
+          "reason": "notFound"
+        }
+      ],
+      "message": "No such object: <bucket>/no/such/object"
+    }
+  }
+}
+

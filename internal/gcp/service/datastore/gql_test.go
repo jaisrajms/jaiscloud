@@ -373,3 +373,234 @@ func TestRunQueryGQLEndToEnd(t *testing.T) {
 		t.Fatal("malformed GQL should error")
 	}
 }
+
+// ─── error-arm tables (TD19) ──────────────────────────────────────────────────
+//
+// TD13's mutation spike showed the parser's fail-closed arms were asserted
+// against only a handful of blanket strings, so an emptied error branch survived
+// as a mutant (the parse would silently succeed). These tables name each arm.
+
+// TestParseGQLErrorArms covers every fail-closed arm of the parser: the lexer's
+// character classes, the SELECT/projection/FROM grammar, WHERE conditions, the
+// value and DATETIME/KEY/BLOB literal parsers, IN/HAS/ORDER, LIMIT/OFFSET, and
+// the binding resolver.
+func TestParseGQLErrorArms(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		// lexer character-class arms.
+		{"bang without equals", "SELECT * FROM Task WHERE n = 1!"},
+		{"lt at eof", "SELECT * FROM Task WHERE n <"},
+		{"gt at eof", "SELECT * FROM Task WHERE n >"},
+		{"unterminated single quote", "SELECT * FROM Task WHERE n = 'a"},
+		{"unterminated double quote", `SELECT * FROM Task WHERE n = "a`},
+		{"trailing escape", `SELECT * FROM Task WHERE n = 'a\`},
+		{"bare dot", "SELECT * FROM Task WHERE n = ."},
+		{"comment char", "SELECT * FROM Task # x"},
+
+		// SELECT / projection / FROM arms.
+		{"missing select", "FROM Task"},
+		{"projection not ident", "SELECT 1 FROM Task"},
+		{"from not ident", "SELECT * FROM 1"},
+		{"trailing token", "SELECT * FROM Task junk"},
+
+		// WHERE arms.
+		{"where nothing", "SELECT * FROM Task WHERE"},
+		{"condition not ident", "SELECT * FROM Task WHERE 1 = 1"},
+		{"operator missing", "SELECT * FROM Task WHERE n"},
+		{"unknown value keyword", "SELECT * FROM Task WHERE n = BOGUS"},
+		{"value is rparen", "SELECT * FROM Task WHERE n = )"},
+
+		// value / literal arms.
+		{"integer overflow", "SELECT * FROM Task WHERE n = 99999999999999999999"},
+		{"float overflow", "SELECT * FROM Task WHERE n = 1e999"},
+		{"unterminated literal", "SELECT * FROM Task WHERE n = DATETIME('x'"},
+
+		// DATETIME arms.
+		{"datetime not an ident", "SELECT * FROM Task WHERE t = DATETIME(1)"},
+		{"datetime unclosed", "SELECT * FROM Task WHERE t = DATETIME('2020-01-01T00:00:00Z'"},
+		{"datetime missing lparen", "SELECT * FROM Task WHERE t = DATETIME"},
+		{"datetime unparseable", "SELECT * FROM Task WHERE t = DATETIME('not-a-time')"},
+
+		// KEY arms.
+		{"key non string kind", "SELECT * FROM Task WHERE __key__ = KEY(1, 2)"},
+		{"key missing comma", "SELECT * FROM Task WHERE __key__ = KEY('Task')"},
+		{"key float id", "SELECT * FROM Task WHERE __key__ = KEY('Task', 1.5)"},
+		{"key id overflow", "SELECT * FROM Task WHERE __key__ = KEY('Task', 99999999999999999999)"},
+		{"key unclosed", "SELECT * FROM Task WHERE __key__ = KEY('Task', 7"},
+		{"key missing lparen", "SELECT * FROM Task WHERE __key__ = KEY"},
+
+		// BLOB arms.
+		{"blob non string", "SELECT * FROM Task WHERE b = BLOB(1)"},
+		{"blob unclosed", "SELECT * FROM Task WHERE b = BLOB('aGk='"},
+		{"blob bad base64", "SELECT * FROM Task WHERE b = BLOB('!!!')"},
+		{"blob missing lparen", "SELECT * FROM Task WHERE b = BLOB"},
+
+		// IN arms.
+		{"in not paren or binding", "SELECT * FROM Task WHERE n IN 5"},
+		{"in empty paren", "SELECT * FROM Task WHERE n IN ()"},
+		{"in unclosed", "SELECT * FROM Task WHERE n IN (1, 2"},
+
+		// HAS arms.
+		{"has nothing", "SELECT * FROM Task WHERE __key__ HAS"},
+		{"has descendant", "SELECT * FROM Task WHERE __key__ HAS DESCENDANT KEY('Task', 1)"},
+		{"has ancestor nothing", "SELECT * FROM Task WHERE __key__ HAS ANCESTOR"},
+
+		// ORDER BY arms.
+		{"order without by", "SELECT * FROM Task ORDER n"},
+		{"order by nothing", "SELECT * FROM Task ORDER BY"},
+
+		// LIMIT / OFFSET arms.
+		{"limit negative", "SELECT * FROM Task LIMIT -1"},
+		{"limit not int", "SELECT * FROM Task LIMIT x"},
+		{"limit missing", "SELECT * FROM Task LIMIT"},
+		{"limit overflow", "SELECT * FROM Task LIMIT 99999999999999999999"},
+		{"offset negative", "SELECT * FROM Task OFFSET -1"},
+		{"offset overflow", "SELECT * FROM Task OFFSET 99999999999999999999"},
+
+		// binding resolver arms.
+		{"positional zero", "SELECT * FROM Task WHERE n = @0"},
+		{"positional out of range", "SELECT * FROM Task WHERE n = @3"},
+		{"named missing", "SELECT * FROM Task WHERE n = @nope"},
+	}
+	bindings := []GQLBinding{gqlBindingVal(gqlIV(1)), gqlBindingVal(gqlIV(2))}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseGQL(GQLQuery{
+				QueryString:        tc.query,
+				AllowLiterals:      true,
+				PositionalBindings: bindings,
+			}); err == nil {
+				t.Fatalf("ParseGQL(%q) should fail", tc.query)
+			}
+		})
+	}
+}
+
+// TestParseGQLAcceptsEdgeArms is the positive complement: the boundary inputs
+// the error table above sits next to must still parse (so a mutant that widens a
+// guard into rejecting a valid query is caught too).
+func TestParseGQLAcceptsEdgeArms(t *testing.T) {
+	for _, qs := range []string{
+		"SELECT * FROM Task LIMIT 0",
+		"SELECT * FROM Task OFFSET 0",
+		"SELECT * FROM Task LIMIT 1 OFFSET 2",
+		"SELECT * FROM Task OFFSET 2 LIMIT 1",
+		"SELECT * FROM Task ORDER BY a ASC, b DESC",
+		"SELECT a, b FROM Task",
+		"SELECT * FROM Task WHERE __key__ = KEY('Task', -3)",
+		"SELECT * FROM Task WHERE t = DATETIME('2020-01-01T00:00:00Z')",
+		"SELECT * FROM Task WHERE x IS NOT NULL",
+		"SELECT * FROM Task WHERE n IN (1)",
+	} {
+		if _, err := ParseGQL(GQLQuery{QueryString: qs, AllowLiterals: true}); err != nil {
+			t.Errorf("ParseGQL(%q) = %v, want success", qs, err)
+		}
+	}
+}
+
+// TestParseGQLDatetimeNormalization pins every accepted DATETIME layout and the
+// RFC 3339 normalization, so removing a layout or dropping the UTC conversion is
+// detected.
+func TestParseGQLDatetimeNormalization(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"},
+		{"2020-01-01T05:00:00+05:00", "2020-01-01T00:00:00Z"},
+		{"2020-01-01T00:00:00.5Z", "2020-01-01T00:00:00.500Z"},
+		{"2020-01-01T00:00:00.123456789", "2020-01-01T00:00:00.123456Z"},
+		{"2020-01-01T00:00:00", "2020-01-01T00:00:00Z"},
+		{"2020-01-01", "2020-01-01T00:00:00Z"},
+	}
+	for _, tc := range cases {
+		got, err := parseGQLDatetime(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("parseGQLDatetime(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+	if _, err := parseGQLDatetime("not-a-time"); err == nil {
+		t.Fatal("parseGQLDatetime(garbage) should fail")
+	}
+}
+
+// TestParseGQLAggregationErrorArms covers the aggregation grammar's fail-closed
+// arms (missing OVER/parens, the COUNT-is-* rule, an unknown function, the
+// alias, and a negative COUNT_UP_TO).
+func TestParseGQLAggregationErrorArms(t *testing.T) {
+	cases := []string{
+		"AGGREGATE COUNT(*)",                                  // missing OVER
+		"AGGREGATE COUNT(*) OVER SELECT * FROM Task",          // missing '('
+		"AGGREGATE COUNT(*) OVER (SELECT * FROM Task",         // missing ')'
+		"AGGREGATE COUNT(1) OVER (SELECT * FROM Task)",        // COUNT requires *
+		"AGGREGATE COUNT(* OVER (SELECT * FROM Task)",         // missing ')' after *
+		"AGGREGATE MEDIAN(n) OVER (SELECT * FROM Task)",       // unsupported function
+		"AGGREGATE SUM(*) OVER (SELECT * FROM Task)",          // SUM requires a property
+		"AGGREGATE SUM(n, m) OVER (SELECT * FROM Task)",       // missing ')' after the aggregation
+		"AGGREGATE COUNT_UP_TO(-1) OVER (SELECT * FROM Task)", // negative up-to
+		"AGGREGATE COUNT(*) AS 1 OVER (SELECT * FROM Task)",   // alias is not an ident
+		"AGGREGATE 1(*) OVER (SELECT * FROM Task)",            // not a function name
+		"AGGREGATE COUNT(*) OVER (SELECT * FROM Task) junk",   // trailing tokens
+	}
+	for _, qs := range cases {
+		t.Run(qs, func(t *testing.T) {
+			if _, err := ParseGQLAggregation(GQLQuery{QueryString: qs, AllowLiterals: true}); err == nil {
+				t.Fatalf("ParseGQLAggregation(%q) should fail", qs)
+			}
+		})
+	}
+}
+
+// TestExpectNonNegInt covers the integer guard's three arms: a non-integer
+// token, a negative value, and a value strconv.Atoi cannot represent.
+func TestExpectNonNegInt(t *testing.T) {
+	ok, err := newGQLParser(GQLQuery{QueryString: "5"})
+	if err != nil {
+		t.Fatalf("newGQLParser: %v", err)
+	}
+	if n, err := ok.expectNonNegInt(); err != nil || n != 5 {
+		t.Fatalf("expectNonNegInt(5) = %d, %v; want 5,nil", n, err)
+	}
+	for _, s := range []string{"-1", "x", "99999999999999999999", ""} {
+		p, err := newGQLParser(GQLQuery{QueryString: s})
+		if err != nil {
+			t.Fatalf("newGQLParser(%q): %v", s, err)
+		}
+		if _, err := p.expectNonNegInt(); err == nil {
+			t.Errorf("expectNonNegInt(%q) should fail", s)
+		}
+	}
+}
+
+// TestIsAllDigits covers the positional-binding discriminator's empty, digit and
+// non-digit inputs.
+func TestIsAllDigits(t *testing.T) {
+	for _, s := range []string{"0", "12", "007"} {
+		if !isAllDigits(s) {
+			t.Errorf("isAllDigits(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "a", "1a", "a1", "1.2", "-1"} {
+		if isAllDigits(s) {
+			t.Errorf("isAllDigits(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestGQLParserPeekPastEnd exercises peek() beyond the token stream (a token
+// stream always ends in EOF; next() past it must not index out of range and
+// peek() must still report EOF).
+func TestGQLParserPeekPastEnd(t *testing.T) {
+	p, err := newGQLParser(GQLQuery{QueryString: "SELECT"})
+	if err != nil {
+		t.Fatalf("newGQLParser: %v", err)
+	}
+	if got := p.next(); got.kind != tokIdent {
+		t.Fatalf("next() = %+v, want the SELECT ident", got)
+	}
+	if got := p.next(); got.kind != tokEOF {
+		t.Fatalf("next() at end = %+v, want EOF", got)
+	}
+	if got := p.peek(); got.kind != tokEOF {
+		t.Fatalf("peek() past end = %+v, want EOF", got)
+	}
+}

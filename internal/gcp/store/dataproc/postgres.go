@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -46,10 +47,10 @@ func (s *PostgresStore) CreateCluster(ctx context.Context, projectID, region str
 	history, _ := json.Marshal(c.StatusHistory)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_dataproc_clusters
-			(project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`, projectID, region, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(c.VirtualClusterConfig, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.CreateTime, c.UpdateTime)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.Namespace, c.NamespaceOwned, c.CreateTime, c.UpdateTime)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -63,7 +64,7 @@ func (s *PostgresStore) CreateCluster(ctx context.Context, projectID, region str
 func scanCluster(row pgx.Row) (Cluster, error) {
 	var c Cluster
 	var config, vcc, labels, status, history []byte
-	err := row.Scan(&c.ProjectID, &c.Region, &c.Name, &config, &vcc, &labels, &status, &history, &c.ClusterUUID, &c.CreateTime, &c.UpdateTime)
+	err := row.Scan(&c.ProjectID, &c.Region, &c.Name, &config, &vcc, &labels, &status, &history, &c.ClusterUUID, &c.Namespace, &c.NamespaceOwned, &c.CreateTime, &c.UpdateTime)
 	if err != nil {
 		return Cluster{}, err
 	}
@@ -87,7 +88,7 @@ func normalizeOptionalJSON(b []byte) json.RawMessage {
 
 func (s *PostgresStore) GetCluster(ctx context.Context, projectID, region, name string) (Cluster, error) {
 	c, err := scanCluster(s.pool.QueryRow(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 AND cluster_name=$3
 	`, projectID, region, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -101,10 +102,10 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, region str
 	status, _ := json.Marshal(c.Status)
 	history, _ := json.Marshal(c.StatusHistory)
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, update_time=$10
+		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, namespace=$11, namespace_owned=$12, update_time=$10
 		WHERE project_id=$1 AND region=$2 AND cluster_name=$3
 	`, projectID, region, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(c.VirtualClusterConfig, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.UpdateTime)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.UpdateTime, c.Namespace, c.NamespaceOwned)
 	if err != nil {
 		return err
 	}
@@ -122,6 +123,15 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, region str
 // of racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	// A SERIALIZABLE read-modify-write can be aborted by a concurrent writer on
+	// the same row (40001/40P01) — a benign race. Retry the whole transaction
+	// instead of surfacing it as a 500 (see storeutil.RetrySerializable).
+	return storeutil.RetrySerializable(ctx, func() (Cluster, error) {
+		return s.updateClusterAtomicOnce(ctx, projectID, region, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateClusterAtomicOnce(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Cluster{}, err
@@ -129,7 +139,7 @@ func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, regi
 	defer tx.Rollback(ctx)
 
 	current, err := scanCluster(tx.QueryRow(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 AND cluster_name=$3 FOR UPDATE
 	`, projectID, region, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -148,10 +158,10 @@ func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, regi
 	status, _ := json.Marshal(next.Status)
 	history, _ := json.Marshal(next.StatusHistory)
 	tag, err := tx.Exec(ctx, `
-		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, update_time=$10
+		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, namespace=$11, namespace_owned=$12, update_time=$10
 		WHERE project_id=$1 AND region=$2 AND cluster_name=$3
 	`, projectID, region, name, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(next.VirtualClusterConfig, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.ClusterUUID, next.UpdateTime)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.ClusterUUID, next.UpdateTime, next.Namespace, next.NamespaceOwned)
 	if err != nil {
 		return Cluster{}, err
 	}
@@ -179,7 +189,7 @@ func (s *PostgresStore) DeleteCluster(ctx context.Context, projectID, region, na
 
 func (s *PostgresStore) ListClusters(ctx context.Context, projectID, region string) ([]Cluster, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 ORDER BY cluster_name
 	`, projectID, region)
 	if err != nil {
@@ -195,6 +205,28 @@ func (s *PostgresStore) ListClusters(ctx context.Context, projectID, region stri
 		result = append(result, c)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, rows.Err()
+}
+
+// ListClustersByProject returns every cluster in a project across all regions,
+// ordered by region then name.
+func (s *PostgresStore) ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
+		FROM jc_dataproc_clusters WHERE project_id=$1 ORDER BY region, cluster_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Cluster
+	for rows.Next() {
+		c, err := scanCluster(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
 	return result, rows.Err()
 }
 
@@ -303,6 +335,15 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, region string,
 // each other's terminal-state transition. See store/firestore/postgres.go's
 // Commit for the same convention.
 func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error) {
+	// advanceJob (called by every GetJob) races the job-state reconciler; a
+	// concurrent-write abort (40001/40P01) is a benign race, so retry the whole
+	// transaction rather than surfacing it as a 500 (see storeutil.RetrySerializable).
+	return storeutil.RetrySerializable(ctx, func() (Job, error) {
+		return s.updateJobAtomicOnce(ctx, projectID, region, jobID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateJobAtomicOnce(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Job{}, err
@@ -386,6 +427,30 @@ func (s *PostgresStore) ListJobs(ctx context.Context, projectID, region string) 
 	return result, rows.Err()
 }
 
+// ListJobsByProject returns every job in a project across all regions, ordered
+// by region then job id.
+func (s *PostgresStore) ListJobsByProject(ctx context.Context, projectID string) ([]Job, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid,
+		       scheduling, long_running
+		FROM jc_dataproc_jobs WHERE project_id=$1 ORDER BY region, job_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, j)
+	}
+	return result, rows.Err()
+}
+
 // --- Workflow templates ---
 
 func (s *PostgresStore) CreateWorkflowTemplate(ctx context.Context, projectID, region string, t WorkflowTemplate) error {
@@ -439,6 +504,12 @@ func (s *PostgresStore) GetWorkflowTemplate(ctx context.Context, projectID, regi
 // transaction with SELECT ... FOR UPDATE row-locks the template for the
 // duration of mutate, so concurrent version bumps serialize.
 func (s *PostgresStore) UpdateWorkflowTemplateAtomic(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error) {
+	return storeutil.RetrySerializable(ctx, func() (WorkflowTemplate, error) {
+		return s.updateWorkflowTemplateAtomicOnce(ctx, projectID, region, templateID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateWorkflowTemplateAtomicOnce(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return WorkflowTemplate{}, err
@@ -513,6 +584,28 @@ func (s *PostgresStore) ListWorkflowTemplates(ctx context.Context, projectID, re
 	return result, rows.Err()
 }
 
+// ListWorkflowTemplatesByProject returns every workflow template in a project
+// across all regions, ordered by region then template id.
+func (s *PostgresStore) ListWorkflowTemplatesByProject(ctx context.Context, projectID string) ([]WorkflowTemplate, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, template_id, version, definition, create_time, update_time
+		FROM jc_dataproc_workflow_templates WHERE project_id=$1 ORDER BY region, template_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []WorkflowTemplate
+	for rows.Next() {
+		t, err := scanWorkflowTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
+	return result, rows.Err()
+}
+
 // --- Operations ---
 
 func (s *PostgresStore) CreateOperation(ctx context.Context, projectID, region string, op Operation) error {
@@ -568,6 +661,12 @@ func (s *PostgresStore) UpdateOperation(ctx context.Context, projectID, region s
 // duration of mutate, so a metadata refresh cannot race a concurrent
 // completion into a last-write-wins regression.
 func (s *PostgresStore) UpdateOperationAtomic(ctx context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error) {
+	return storeutil.RetrySerializable(ctx, func() (Operation, error) {
+		return s.updateOperationAtomicOnce(ctx, projectID, region, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateOperationAtomicOnce(ctx context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Operation{}, err

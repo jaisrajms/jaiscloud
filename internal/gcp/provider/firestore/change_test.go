@@ -15,7 +15,7 @@ func TestReset_ClearsChangeFeed(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
 
-	if _, err := p.Service.CreateDocument(ctx, "proj", "(default)", "documents/cities", "SF", nil); err != nil {
+	if _, err := p.Service.CreateDocument(ctx, "proj", "(default)", "cities", "SF", nil); err != nil {
 		t.Fatalf("CreateDocument: %v", err)
 	}
 	if seq := p.CurrentSeq(); seq == 0 {
@@ -50,7 +50,7 @@ func TestChangeFeedCapsAndAdvancesFloor(t *testing.T) {
 	p.changeRetentionOverride = 3
 
 	for i := 0; i < 5; i++ {
-		if _, err := p.Service.CreateDocument(ctx, "proj", "(default)", "documents/cities",
+		if _, err := p.Service.CreateDocument(ctx, "proj", "(default)", "cities",
 			fmt.Sprintf("d%d", i), nil); err != nil {
 			t.Fatalf("create %d: %v", i, err)
 		}
@@ -90,7 +90,7 @@ func TestResetClearsChangeFloor(t *testing.T) {
 	p.changeRetentionOverride = 2
 
 	for i := 0; i < 5; i++ {
-		if _, err := p.Service.CreateDocument(ctx, "proj", "(default)", "documents/cities",
+		if _, err := p.Service.CreateDocument(ctx, "proj", "(default)", "cities",
 			fmt.Sprintf("d%d", i), nil); err != nil {
 			t.Fatalf("create %d: %v", i, err)
 		}

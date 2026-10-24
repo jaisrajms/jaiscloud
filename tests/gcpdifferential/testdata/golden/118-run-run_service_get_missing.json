@@ -1,0 +1,16 @@
+{
+  "index": 118,
+  "service": "run",
+  "op": "run_service_get_missing",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/services/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "Resource '<missing>' of kind 'SERVICE' in region 'us-central1' in project '<project>' does not exist.",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

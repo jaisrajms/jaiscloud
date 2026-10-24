@@ -24,7 +24,7 @@ package main
 //	iam                -> internal/gcp/store/kms + internal/store (accounts)
 //	pubsub             -> internal/gcp/store/pubsub (+ kms)
 //	firestore          -> internal/gcp/store/firestore
-//	firestoreadmin     -> internal/store (ResourceStore; composite-index state)
+//	firestoreadmin     -> internal/store (ResourceStore; control-plane state)
 //	datastore          -> internal/gcp/store/datastore
 //	functions          -> internal/gcp/store/functions
 //	workflows          -> internal/gcp/store/workflows

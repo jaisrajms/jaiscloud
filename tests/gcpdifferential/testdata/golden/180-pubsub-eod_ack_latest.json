@@ -1,0 +1,15 @@
+{
+  "index": 180,
+  "service": "pubsub",
+  "op": "eod_ack_latest",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-eod-sub-<suffix>:acknowledge",
+  "status": 200,
+  "request": {
+    "ackIds": [
+      "<ackId>"
+    ]
+  },
+  "response": {}
+}
+

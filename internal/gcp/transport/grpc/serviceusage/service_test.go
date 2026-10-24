@@ -160,11 +160,45 @@ func TestInvalidFilterAndMissingName(t *testing.T) {
 	}
 }
 
-func TestBatchGetServicesUnimplemented(t *testing.T) {
+func TestBatchGetServices(t *testing.T) {
+	ctx := context.Background()
 	s := newService()
-	_, err := s.BatchGetServices(context.Background(), &serviceusagepb.BatchGetServicesRequest{Parent: "projects/proj"})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("BatchGetServices code = %v, want Unimplemented", status.Code(err))
+
+	if _, err := s.EnableService(ctx, &serviceusagepb.EnableServiceRequest{Name: serviceName}); err != nil {
+		t.Fatalf("EnableService: %v", err)
+	}
+	got, err := s.BatchGetServices(ctx, &serviceusagepb.BatchGetServicesRequest{
+		Parent: "projects/proj",
+		Names: []string{
+			serviceName,
+			"projects/proj/services/absent.googleapis.com",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BatchGetServices: %v", err)
+	}
+	if len(got.GetServices()) != 2 {
+		t.Fatalf("BatchGetServices returned %d services, want 2", len(got.GetServices()))
+	}
+	if got.GetServices()[0].GetName() != serviceName || got.GetServices()[0].GetState() != serviceusagepb.State_ENABLED {
+		t.Errorf("services[0] = %+v, want enabled run.googleapis.com", got.GetServices()[0])
+	}
+	if got.GetServices()[1].GetState() != serviceusagepb.State_DISABLED {
+		t.Errorf("services[1] state = %v, want DISABLED", got.GetServices()[1].GetState())
+	}
+
+	// An empty batch is INVALID_ARGUMENT.
+	_, err = s.BatchGetServices(ctx, &serviceusagepb.BatchGetServicesRequest{Parent: "projects/proj"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty batch code = %v, want InvalidArgument", status.Code(err))
+	}
+	// A name outside the parent is INVALID_ARGUMENT.
+	_, err = s.BatchGetServices(ctx, &serviceusagepb.BatchGetServicesRequest{
+		Parent: "projects/proj",
+		Names:  []string{"projects/other/services/x.googleapis.com"},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("parent mismatch code = %v, want InvalidArgument", status.Code(err))
 	}
 }
 

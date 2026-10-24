@@ -9,7 +9,7 @@ You are creating a GCP plan document — **planning only, do not implement servi
 Service/effort requested: $ARGUMENTS
 
 Follow the `gcp-phase-workflow` skill §0 ("Plan documents — mandatory template") and
-`docs/gcp-wave-plan-template.md` exactly; the status ledger parses plans mechanically.
+`docs/gcp/wave-plan-template.md` exactly; the status ledger parses plans mechanically.
 
 1. Resolve the service from `$ARGUMENTS` (a service name, plus an optional `EFFORT`
    label, default `ga`). If empty, take the top `NEXT` item from
@@ -23,7 +23,7 @@ Follow the `gcp-phase-workflow` skill §0 ("Plan documents — mandatory templat
      `plan_docs/gcp-<service>-<effort>-wave-plan.md`, pre-filled with that service's
      non-`ga` fidelity cells.
    - A service with **no matrix cells** (greenfield, e.g. Cloud Scheduler) makes
-     `gcp-plan-new` fail; copy `docs/gcp-wave-plan-template.md` by hand instead.
+     `gcp-plan-new` fail; copy `docs/gcp/wave-plan-template.md` by hand instead.
 4. Turn the scaffold into a real plan:
    - group the raw cells into sensible sessions (not one session per cell);
    - index headers **exactly** `Wave | Session | IDs | Service(s) | Branch | Depends on`
@@ -34,10 +34,10 @@ Follow the `gcp-phase-workflow` skill §0 ("Plan documents — mandatory templat
      provided k3d cluster / remote Docker (see the `gcp-phase-workflow` skill's
      Environment section) — those are real, runnable gates;
    - fill §3 Serialization (shared hotspots: `cmd/jaiscloud-gcp/main.go`,
-     `tests/gcpconformance/grpc_enumerate.go`, `docs/fidelity/*`, `docs/GA.md`,
+     `tests/gcpconformance/grpc_enumerate.go`, `docs/fidelity/*`, `docs/gcp/wire-contract.md`,
      `go.mod`), §4 per-session blocks, §5 Out of scope / do not change, §6 Preview→GA
      exit checklist (every target cell derives `ga` in `make gen-gcp-fidelity-matrix`,
-     no remaining `docs/fidelity-overrides.yaml` downgrade, `docs/GA.md`/README updated,
+     no remaining `docs/fidelity-overrides.yaml` downgrade, `docs/gcp/wire-contract.md`/README updated,
      conformance + `make ga-check` green);
    - classify every `limited`/`unsupported` cell REAL vs TEST-NON-COMPLIANT (real GCP
      wins) and record the verdict.

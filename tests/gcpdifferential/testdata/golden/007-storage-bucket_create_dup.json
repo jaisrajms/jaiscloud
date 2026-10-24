@@ -1,0 +1,25 @@
+{
+  "index": 7,
+  "service": "storage",
+  "op": "bucket_create_dup",
+  "method": "POST",
+  "path": "/storage/v1/b?project=<project>",
+  "status": 409,
+  "request": {
+    "name": "<bucket>"
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "Your previous request to create the named bucket succeeded and you already own it.",
+          "reason": "conflict"
+        }
+      ],
+      "message": "Your previous request to create the named bucket succeeded and you already own it."
+    }
+  }
+}
+

@@ -45,6 +45,15 @@ func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
 	queryToParams(r, nr.Params)
+
+	rest := seg[pi+2:]
+	// The jobs.insert media-upload endpoint (load_table_from_file) carries a job
+	// resource plus raw file bytes rather than a plain JSON body. Route it before
+	// the JSON body parse, which would otherwise reject the upload framing.
+	if isBigQueryUploadPath(r.URL.Path) {
+		return c.decodeUpload(r, body, nr, rest)
+	}
+
 	m, err := parseJSON(body)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
@@ -53,7 +62,6 @@ func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		nr.Params["body"] = m
 	}
 
-	rest := seg[pi+2:]
 	action, datasetID, tableID, jobID := bigQueryAction(rest, r.Method)
 	if action == "" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported bigquery operation", 404)
@@ -68,6 +76,71 @@ func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		nr.Params["jobId"] = jobID
 	}
 	nr.Action = action
+	return nr, nil
+}
+
+// isBigQueryUploadPath reports whether path is a BigQuery jobs.insert media
+// upload endpoint. The clients use both the /upload/bigquery/v2/ form (the
+// Discovery `simple` media path, with uploadType=multipart|resumable) and the
+// /resumable/upload/bigquery/v2/ form (the Discovery `resumable` media path).
+func isBigQueryUploadPath(path string) bool {
+	return strings.HasPrefix(path, "/upload/bigquery/v2/projects/") ||
+		strings.HasPrefix(path, "/resumable/upload/bigquery/v2/projects/")
+}
+
+// decodeUpload handles the jobs.insert media-upload endpoint. A multipart
+// upload is a single multipart/related POST (JSON job resource part, then the
+// file bytes); a resumable upload is a POST that returns a session Location,
+// followed by PUT chunks carrying Content-Range, and is finalized by the chunk
+// that completes the source. Both feed the same configuration.load decoder as
+// the gs:// source path; the job resource is a full Job (jobReference +
+// configuration.load) exactly as a jobs.insert body.
+func (c *BigQueryCodec) decodeUpload(r *http.Request, body []byte, nr *model.NormalizedRequest, rest []string) (*model.NormalizedRequest, error) {
+	if len(rest) != 1 || rest[0] != "jobs" {
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported bigquery upload path", 404)
+	}
+	// The SDK expects an absolute Location header back, so pass the request base
+	// URL down for the provider to build the resumable session URI.
+	nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
+
+	uploadType, _ := nr.Params["uploadType"].(string)
+	if uploadType == "" && strings.HasPrefix(r.URL.Path, "/resumable/upload/") {
+		uploadType = "resumable"
+	}
+	switch uploadType {
+	case "multipart":
+		nr.Action = "InsertJob"
+		if err := parseMultipart(r, body, nr.Params); err != nil {
+			return nil, err
+		}
+	case "resumable":
+		if id, _ := nr.Params["upload_id"].(string); id != "" {
+			// A chunk upload. The gateway buffers the chunk body (resumable is
+			// not in the streaming-upload detection), so the bytes arrive whole.
+			nr.Action = "InsertJobResumable"
+			nr.Params[wire.MediaKey] = body
+			if cr := r.Header.Get("Content-Range"); cr != "" {
+				nr.Params["contentRange"] = cr
+			}
+			break
+		}
+		// Session start: the body is the Job resource, and X-Upload-Content-Type
+		// declares the media type (informational for a load job).
+		nr.Action = "InsertJobResumableStart"
+		m, err := parseJSON(body)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed JSON job resource", 400)
+		}
+		nr.Params["body"] = m
+		if ct := r.Header.Get("X-Upload-Content-Type"); ct != "" {
+			nr.Params[wire.ContentTypeKey] = ct
+		}
+	default:
+		// uploadType=media cannot carry a configuration.load job resource, so it
+		// is not a usable load path; fail loud rather than silently mis-loading.
+		return nil, model.NewProviderError("InvalidRequest",
+			"unsupported uploadType "+uploadType+" for a BigQuery load job (use multipart or resumable)", 400)
+	}
 	return nr, nil
 }
 
@@ -216,6 +289,31 @@ func (c *BigQueryCodec) Encode(nr *model.NormalizedRequest, resp *model.Provider
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
+
+	// A resumable-upload session start returns its session URI in Location (and
+	// no body); an incomplete chunk returns 308 with a Range header. These share
+	// the GCS resumable wire contract (see internal/gcp/wire).
+	if loc, ok := resp.Data[wire.LocationKey].(string); ok && loc != "" {
+		headers.Set("Location", loc)
+		return status, headers, nil
+	}
+	if rng, ok := resp.Data[wire.RangeKey].(string); ok && rng != "" {
+		headers.Set("Range", rng)
+		if so, ok := resp.Data[wire.StatusOverrideKey].(string); ok && so != "" {
+			headers.Set("X-Http-Status-Code-Override", so)
+		}
+		return status, headers, nil
+	}
+	if so, ok := resp.Data[wire.StatusOverrideKey].(string); ok && so != "" {
+		headers.Set("X-Http-Status-Code-Override", so)
+		return status, headers, nil
+	}
+	// A 308 Resume Incomplete with no Range (empty session) must return an empty
+	// body, not the "{}" the generic JSON marshal would emit.
+	if status == http.StatusPermanentRedirect {
+		return status, headers, nil
+	}
+
 	if raw, ok := resp.Data[wire.RawJSONKey].(json.RawMessage); ok {
 		return status, headers, raw
 	}

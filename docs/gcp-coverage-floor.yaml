@@ -1,0 +1,303 @@
+# GCP per-package statement-coverage floor (TD11) — a ratchet, not a target.
+#
+# Regenerate from a fresh profile with `make test-gcp-coverage-update`; the
+# update RAISES a recorded floor but refuses to LOWER one unless ALLOW_LOWER=1
+# is set, so a coverage drop cannot be laundered by re-running it. The gate
+# (`make test-gcp-coverage`) fails when a measured package drops more than
+# 0.5pp below its floor (a small noise tolerance for timing-dependent tests),
+# when a measured package has no entry here, or when an entry names a package
+# that no longer produces coverage data. Generated protobuf packages (a final
+# path element ending in `pb`) are excluded mechanically, as are packages with
+# no test files (they produce no coverage data).
+#
+# package: repo-relative package directory (`internal/gcp/...`).
+# min_percent: statement-coverage floor, two decimals.
+packages:
+  - package: internal/gcp/adapter
+    min_percent: 79.09
+  - package: internal/gcp/aip160
+    min_percent: 96.18
+  - package: internal/gcp/auth
+    min_percent: 97.09
+  - package: internal/gcp/broker/kafka
+    min_percent: 80.13
+  - package: internal/gcp/crypto
+    min_percent: 78.57
+  - package: internal/gcp/downscope
+    min_percent: 85.96
+  - package: internal/gcp/eventing
+    min_percent: 92
+  - package: internal/gcp/gcperr
+    min_percent: 84.21
+  - package: internal/gcp/grpc
+    min_percent: 49.46
+  - package: internal/gcp/grpc/firestore
+    min_percent: 56.87
+  - package: internal/gcp/grpc/firestoreadmin
+    min_percent: 74.52
+  - package: internal/gcp/grpc/operations
+    min_percent: 90.53
+  - package: internal/gcp/grpc/pubsub
+    min_percent: 74.37
+  - package: internal/gcp/grpc/secretmanager
+    min_percent: 74.06
+  - package: internal/gcp/grpc/storage
+    min_percent: 80.8
+  - package: internal/gcp/hms
+    min_percent: 75.74
+  - package: internal/gcp/httptarget
+    min_percent: 96.15
+  - package: internal/gcp/identity
+    min_percent: 83.64
+  - package: internal/gcp/lro
+    min_percent: 100
+  - package: internal/gcp/paging
+    min_percent: 88.37
+  - package: internal/gcp/policy
+    min_percent: 76.36
+  - package: internal/gcp/provider/bigquery
+    min_percent: 77.68
+  - package: internal/gcp/provider/clouddns
+    min_percent: 73.78
+  - package: internal/gcp/provider/cloudsql
+    min_percent: 79.89
+  - package: internal/gcp/provider/compute
+    min_percent: 82.86
+  - package: internal/gcp/provider/firestore
+    min_percent: 70.71
+  - package: internal/gcp/provider/iam
+    min_percent: 83.83
+  - package: internal/gcp/provider/iceberg
+    min_percent: 68.9
+  - package: internal/gcp/provider/memorystore
+    min_percent: 81.5
+  - package: internal/gcp/provider/pubsub
+    min_percent: 76.07
+  - package: internal/gcp/provider/secretmanager
+    min_percent: 78.14
+  - package: internal/gcp/provider/storage
+    min_percent: 84.31
+  - package: internal/gcp/pubsubfilter
+    min_percent: 85.71
+  - package: internal/gcp/queryengine
+    min_percent: 89.39
+  - package: internal/gcp/rescatalog
+    min_percent: 46.15
+  - package: internal/gcp/resource
+    min_percent: 30.99
+  - package: internal/gcp/runexec
+    min_percent: 83.94
+  - package: internal/gcp/service/container
+    min_percent: 69.35
+  - package: internal/gcp/service/dataproc
+    min_percent: 85.16
+  - package: internal/gcp/service/datastore
+    min_percent: 65.71
+  - package: internal/gcp/service/eventarc
+    min_percent: 70.72
+  - package: internal/gcp/service/functions
+    min_percent: 85.89
+  - package: internal/gcp/service/iamcredentials
+    min_percent: 78.13
+  - package: internal/gcp/service/kms
+    min_percent: 32.4
+  - package: internal/gcp/service/logging
+    min_percent: 79.42
+  - package: internal/gcp/service/managedkafka
+    min_percent: 77.21
+  - package: internal/gcp/service/metastore
+    min_percent: 86.08
+  - package: internal/gcp/service/monitoring
+    min_percent: 60.82
+  - package: internal/gcp/service/pubsub
+    min_percent: 88.35
+  - package: internal/gcp/service/resourcemanager
+    min_percent: 90.41
+  - package: internal/gcp/service/run
+    min_percent: 77.88
+  - package: internal/gcp/service/scheduler
+    min_percent: 74.14
+  - package: internal/gcp/service/secretmanager
+    min_percent: 91.67
+  - package: internal/gcp/service/serviceusage
+    min_percent: 85.65
+  - package: internal/gcp/service/tasks
+    min_percent: 74.89
+  - package: internal/gcp/service/workflowexecutions
+    min_percent: 81.12
+  - package: internal/gcp/service/workflows
+    min_percent: 77.32
+  - package: internal/gcp/serviceaccount
+    min_percent: 17.17
+  - package: internal/gcp/sparkgcp
+    min_percent: 86.67
+  - package: internal/gcp/store/bigquery
+    min_percent: 34.81
+  - package: internal/gcp/store/container
+    min_percent: 32.93
+  - package: internal/gcp/store/dataproc
+    min_percent: 26.27
+  - package: internal/gcp/store/datastore
+    min_percent: 44.02
+  - package: internal/gcp/store/eventarc
+    min_percent: 27.52
+  - package: internal/gcp/store/firestore
+    min_percent: 51.72
+  - package: internal/gcp/store/functions
+    min_percent: 31.7
+  - package: internal/gcp/store/gcs
+    min_percent: 30.84
+  - package: internal/gcp/store/hms
+    min_percent: 36.44
+  - package: internal/gcp/store/iceberg
+    min_percent: 35.16
+  - package: internal/gcp/store/kms
+    min_percent: 45.95
+  - package: internal/gcp/store/logging
+    min_percent: 34.13
+  - package: internal/gcp/store/managedkafka
+    min_percent: 30.48
+  - package: internal/gcp/store/metastore
+    min_percent: 30.39
+  - package: internal/gcp/store/monitoring
+    min_percent: 38.23
+  - package: internal/gcp/store/pubsub
+    min_percent: 49.19
+  - package: internal/gcp/store/run
+    min_percent: 27.68
+  - package: internal/gcp/store/scheduler
+    min_percent: 26.72
+  - package: internal/gcp/store/secretmanager
+    min_percent: 30.43
+  - package: internal/gcp/store/tasks
+    min_percent: 28.26
+  - package: internal/gcp/store/workflows
+    min_percent: 33.14
+  - package: internal/gcp/storeutil
+    min_percent: 100
+  - package: internal/gcp/throttle
+    min_percent: 90.72
+  - package: internal/gcp/timestamp
+    min_percent: 100
+  - package: internal/gcp/transport/grpc/container
+    min_percent: 24.83
+  - package: internal/gcp/transport/grpc/dataproc
+    min_percent: 76.39
+  - package: internal/gcp/transport/grpc/datastore
+    min_percent: 77.8
+  - package: internal/gcp/transport/grpc/eventarc
+    min_percent: 54.59
+  - package: internal/gcp/transport/grpc/functions
+    min_percent: 72.76
+  - package: internal/gcp/transport/grpc/iamcredentials
+    min_percent: 83.33
+  - package: internal/gcp/transport/grpc/kms
+    min_percent: 75.32
+  - package: internal/gcp/transport/grpc/logging
+    min_percent: 53.03
+  - package: internal/gcp/transport/grpc/managedkafka
+    min_percent: 81.96
+  - package: internal/gcp/transport/grpc/metastore
+    min_percent: 56.78
+  - package: internal/gcp/transport/grpc/monitoring
+    min_percent: 72.75
+  - package: internal/gcp/transport/grpc/resourcemanager
+    min_percent: 89.09
+  - package: internal/gcp/transport/grpc/run
+    min_percent: 72.02
+  - package: internal/gcp/transport/grpc/scheduler
+    min_percent: 73.68
+  - package: internal/gcp/transport/grpc/serviceusage
+    min_percent: 89.26
+  - package: internal/gcp/transport/grpc/tasks
+    min_percent: 73.1
+  - package: internal/gcp/transport/grpc/workflowexecutions
+    min_percent: 84.06
+  - package: internal/gcp/transport/grpc/workflows
+    min_percent: 85.92
+  - package: internal/gcp/transport/rest/container
+    min_percent: 53.81
+  - package: internal/gcp/transport/rest/dataproc
+    min_percent: 70.55
+  - package: internal/gcp/transport/rest/datastore
+    min_percent: 73.98
+  - package: internal/gcp/transport/rest/eventarc
+    min_percent: 90.91
+  - package: internal/gcp/transport/rest/functions
+    min_percent: 76.56
+  - package: internal/gcp/transport/rest/iamcredentials
+    min_percent: 70.49
+  - package: internal/gcp/transport/rest/kms
+    min_percent: 66.61
+  - package: internal/gcp/transport/rest/logging
+    min_percent: 79.6
+  - package: internal/gcp/transport/rest/managedkafka
+    min_percent: 63.08
+  - package: internal/gcp/transport/rest/metastore
+    min_percent: 75.98
+  - package: internal/gcp/transport/rest/monitoring
+    min_percent: 71.72
+  - package: internal/gcp/transport/rest/resourcemanager
+    min_percent: 83.19
+  - package: internal/gcp/transport/rest/run
+    min_percent: 58.02
+  - package: internal/gcp/transport/rest/scheduler
+    min_percent: 67.09
+  - package: internal/gcp/transport/rest/serviceusage
+    min_percent: 77.78
+  - package: internal/gcp/transport/rest/tasks
+    min_percent: 67.9
+  - package: internal/gcp/transport/rest/workflowexecutions
+    min_percent: 59.88
+  - package: internal/gcp/transport/rest/workflows
+    min_percent: 82.57
+  - package: internal/gcp/transportcfg
+    min_percent: 80.36
+  - package: internal/gcp/ui
+    min_percent: 83.33
+  - package: internal/gcp/ui/bigquery
+    min_percent: 79.56
+  - package: internal/gcp/ui/compute
+    min_percent: 78.5
+  - package: internal/gcp/ui/dataproc
+    min_percent: 72.62
+  - package: internal/gcp/ui/datastore
+    min_percent: 57.19
+  - package: internal/gcp/ui/eventarc
+    min_percent: 73.01
+  - package: internal/gcp/ui/firestore
+    min_percent: 82.79
+  - package: internal/gcp/ui/functions
+    min_percent: 72.31
+  - package: internal/gcp/ui/iam
+    min_percent: 57.97
+  - package: internal/gcp/ui/kms
+    min_percent: 52.85
+  - package: internal/gcp/ui/logging
+    min_percent: 45.85
+  - package: internal/gcp/ui/managedkafka
+    min_percent: 66.25
+  - package: internal/gcp/ui/monitoring
+    min_percent: 51.72
+  - package: internal/gcp/ui/pubsub
+    min_percent: 75.24
+  - package: internal/gcp/ui/resourcemanager
+    min_percent: 79.03
+  - package: internal/gcp/ui/run
+    min_percent: 74.03
+  - package: internal/gcp/ui/scheduler
+    min_percent: 77.78
+  - package: internal/gcp/ui/secretmanager
+    min_percent: 47.04
+  - package: internal/gcp/ui/storage
+    min_percent: 67.03
+  - package: internal/gcp/ui/tasks
+    min_percent: 78.48
+  - package: internal/gcp/ui/uihelper
+    min_percent: 5.38
+  - package: internal/gcp/ui/workflows
+    min_percent: 71.07
+  - package: internal/gcp/workflows/engine
+    min_percent: 73.93
+  - package: internal/gcp/workflows/expr
+    min_percent: 74.82

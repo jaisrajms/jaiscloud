@@ -1,0 +1,14 @@
+{
+  "index": 15,
+  "service": "dataproc",
+  "op": "operations_list",
+  "method": "google.longrunning.Operations/ListOperations",
+  "path": "projects/<project>/regions/us-central1/operations",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/regions/us-central1/operations"
+  },
+  "response": {}
+}
+

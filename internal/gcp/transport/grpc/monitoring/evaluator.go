@@ -22,7 +22,8 @@ import (
 // Publisher publishes a notification payload to a Pub/Sub topic identified by
 // its full resource name (projects/{p}/topics/{t}). It is the evaluator's only
 // side-effecting dependency and is injected so the engine is unit-testable;
-// main.go wires an adapter over the emulator's Pub/Sub message store.
+// main.go wires an adapter over the Pub/Sub provider's fan-out publish (the same
+// path as topics.publish), so every subscription of the topic receives a copy.
 type Publisher interface {
 	Publish(ctx context.Context, topic string, data []byte) error
 }
@@ -125,6 +126,11 @@ func (e *Evaluator) EvaluateAll(ctx context.Context) {
 		}
 	}
 }
+
+// TickNow evaluates every enabled alert policy once. It is the deterministic
+// trigger behind POST /_jaiscloud/monitoring-tick, so a caller does not wait for
+// the 30s wall-clock ticker (mirrors the scheduler/tasks tick hooks).
+func (e *Evaluator) TickNow(ctx context.Context) { e.EvaluateAll(ctx) }
 
 func (e *Evaluator) listProjects(ctx context.Context) ([]string, error) {
 	if e.projects != nil {
@@ -689,7 +695,7 @@ func (e *Evaluator) deliver(ctx context.Context, project string, p monitoringsto
 				n.Status, n.Detail = "skipped", "no pubsub publisher wired"
 				break
 			}
-			payload := notificationPayload(project, p, inc, state, reason, now)
+			payload := notificationPayload(project, p, inc, state, reason)
 			if err := e.publisher.Publish(ctx, topic, payload); err != nil {
 				e.log.Warn("monitoring evaluator: pubsub notification failed", "project", project, "topic", topic, "err", err)
 				n.Status, n.Detail = "failed", err.Error()
@@ -711,31 +717,28 @@ func (e *Evaluator) deliver(ctx context.Context, project string, p monitoringsto
 	return out
 }
 
-// notificationPayload renders a CloudEvents-style JSON envelope. It mirrors the
-// AWS CloudWatch->SNS alarm payload as the observable emulator effect.
-func notificationPayload(project string, p monitoringstore.AlertPolicy, inc monitoringstore.Incident, state, reason string, now time.Time) []byte {
-	envelope := map[string]any{
-		"specversion":     "1.0",
-		"id":              inc.ID,
-		"source":          fmt.Sprintf("//monitoring.googleapis.com/projects/%s/alertPolicies/%s", project, p.ID),
-		"type":            "google.cloud.monitoring.alert.v1.Incident",
-		"time":            now.Format(time.RFC3339),
-		"datacontenttype": "application/json",
-		"data": map[string]any{
-			"state":  state,
-			"reason": reason,
-			"incident": map[string]any{
-				"incidentId":        inc.ID,
-				"policyId":          p.ID,
-				"policyName":        core.AlertPolicyName(project, p.ID),
-				"policyDisplayName": p.DisplayName,
-				"conditionName":     inc.ConditionName,
-				"state":             string(inc.State),
-				"startedAt":         inc.StartedAt.Format(time.RFC3339),
-			},
-		},
+// notificationPayload renders the Cloud Monitoring Pub/Sub notification packet,
+// schema version 1.2: a top-level {"version","incident"} object whose incident
+// state is the lowercase `open`/`closed`. This is the format a consumer of a
+// real `pubsub` notification channel parses (see Cloud Monitoring "Create and
+// manage notification channels"). Incident fields that vary per resource
+// (resource/metric/metadata) are omitted; the identity, policy, condition,
+// state, and timestamps are populated.
+func notificationPayload(project string, p monitoringstore.AlertPolicy, inc monitoringstore.Incident, state, reason string) []byte {
+	incident := map[string]any{
+		"incident_id":        inc.ID,
+		"scoping_project_id": project,
+		"url":                fmt.Sprintf("https://console.cloud.google.com/monitoring/alerting/incidents/%s?project=%s", inc.ID, project),
+		"started_at":         inc.StartedAt.Unix(),
+		"state":              strings.ToLower(state),
+		"policy_name":        p.DisplayName,
+		"condition_name":     inc.ConditionName,
+		"summary":            reason,
 	}
-	b, err := json.Marshal(envelope)
+	if !inc.EndedAt.IsZero() {
+		incident["ended_at"] = inc.EndedAt.Unix()
+	}
+	b, err := json.Marshal(map[string]any{"version": "1.2", "incident": incident})
 	if err != nil {
 		return []byte("{}")
 	}

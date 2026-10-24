@@ -1,0 +1,25 @@
+{
+  "index": 82,
+  "service": "iam",
+  "op": "sa_create_dup",
+  "method": "POST",
+  "path": "/v1/projects/<project>/serviceAccounts?accountId=<serviceAccountId>",
+  "status": 409,
+  "request": {
+    "serviceAccount": "<serviceAccount>"
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+          "resourceName": "projects/<project>/serviceAccounts/<serviceAccount>"
+        }
+      ],
+      "message": "Service account <serviceAccountId> already exists within project projects/<project>.",
+      "status": "ALREADY_EXISTS"
+    }
+  }
+}
+

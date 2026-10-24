@@ -6,6 +6,26 @@ import (
 	"jaiscloud/internal/gcp/resource"
 )
 
+// ScopeFromResourceName returns the store scope key for a Monitoring parent:
+// "projects/{p}" maps to the project id, and "folders/{f}" to "folders/{f}".
+// The folders arm is read-only (the Discovery document declares create only on
+// the projects surface) and shares the series store with the projects arm: the
+// emulator does not model folder→project membership, so a folder lists every
+// project's series in that store (aggregation is over the whole store), with
+// the query shape (filter/interval/aggregation) served identically.
+func ScopeFromResourceName(name string) (string, bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) == 2 && parts[1] != "" {
+		switch parts[0] {
+		case "projects":
+			return parts[1], true
+		case "folders":
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // ProjectFromResourceName extracts the project id from "projects/{p}" or a
 // longer "projects/{p}/..." name, returning "" when the name is not
 // project-scoped.

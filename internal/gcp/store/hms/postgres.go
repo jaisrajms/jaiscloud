@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -232,6 +233,14 @@ func (s *PostgresStore) DropTable(ctx context.Context, dbName, tableName string)
 // concurrent commit to the same table blocks instead of silently losing the
 // other's update.
 func (s *PostgresStore) AlterTable(ctx context.Context, dbName, tableName string, mutate func(Table) (Table, error)) (Table, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.alterTableOnce(ctx, dbName, tableName, mutate)
+	})
+}
+
+func (s *PostgresStore) alterTableOnce(ctx context.Context, dbName, tableName string, mutate func(Table) (Table, error)) (Table, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Table{}, err
@@ -269,6 +278,14 @@ func (s *PostgresStore) AlterTable(ctx context.Context, dbName, tableName string
 // RenameTable is atomic: a Serializable transaction row-locks the source (and
 // probes the destination) so a concurrent commit/rename can't race it.
 func (s *PostgresStore) RenameTable(ctx context.Context, srcDB, srcName, dstDB, dstName string, t Table) (Table, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.renameTableOnce(ctx, srcDB, srcName, dstDB, dstName, t)
+	})
+}
+
+func (s *PostgresStore) renameTableOnce(ctx context.Context, srcDB, srcName, dstDB, dstName string, t Table) (Table, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Table{}, err
@@ -427,6 +444,14 @@ func (s *PostgresStore) ListPartitions(ctx context.Context, dbName, tableName st
 // partition for the duration of mutate so a concurrent commit blocks instead of
 // silently losing the other's update.
 func (s *PostgresStore) AlterPartition(ctx context.Context, dbName, tableName string, values []string, mutate func(Partition) (Partition, error)) (Partition, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Partition, error) {
+		return s.alterPartitionOnce(ctx, dbName, tableName, values, mutate)
+	})
+}
+
+func (s *PostgresStore) alterPartitionOnce(ctx context.Context, dbName, tableName string, values []string, mutate func(Partition) (Partition, error)) (Partition, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Partition{}, err
@@ -490,6 +515,14 @@ func (s *PostgresStore) DropPartition(ctx context.Context, dbName, tableName str
 // RenamePartition is atomic: a Serializable transaction row-locks the source
 // (and probes the destination) so a concurrent commit/rename can't race it.
 func (s *PostgresStore) RenamePartition(ctx context.Context, dbName, tableName string, oldValues, newValues []string, p Partition) (Partition, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Partition, error) {
+		return s.renamePartitionOnce(ctx, dbName, tableName, oldValues, newValues, p)
+	})
+}
+
+func (s *PostgresStore) renamePartitionOnce(ctx context.Context, dbName, tableName string, oldValues, newValues []string, p Partition) (Partition, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Partition{}, err

@@ -205,9 +205,15 @@ func valueFromWire(v any) (dsstore.Value, error) {
 		}
 		return dsstore.Value{DoubleValue: &f}, nil
 	case hasKey(m, "timestampValue"):
-		// Preserve the wire string verbatim (the store compares/orders by its
-		// RFC 3339 form).
-		s := strFrom(m["timestampValue"])
+		// Real GCP parses timestampValue as a proto Timestamp: a malformed
+		// string is INVALID_ARGUMENT, and every timestamp is normalized to UTC
+		// on write. Canonicalize here so REST and gRPC hold the same form and
+		// the gRPC read path never has to fall back to the epoch for a value
+		// this transport accepted.
+		s, err := core.NormalizeTimestamp(strFrom(m["timestampValue"]))
+		if err != nil {
+			return dsstore.Value{}, invalidArgument("invalid timestampValue")
+		}
 		return dsstore.Value{TimestampValue: &s}, nil
 	case hasKey(m, "keyValue"):
 		k, err := keyFromWire(m["keyValue"])
@@ -258,7 +264,13 @@ func valueFromWire(v any) (dsstore.Value, error) {
 func valueToWire(v dsstore.Value, project string) map[string]any {
 	switch {
 	case v.NullValue != nil:
-		return map[string]any{"nullValue": "NULL_VALUE"}
+		// google.protobuf.NullValue: real GCP's REST transcoder runs protojson,
+		// which renders the NullValue enum as JSON null (confirmed against real
+		// GCP: `{"nullValue":null}` at the top level, inside arrayValue, and
+		// inside a nested entityValue). The vendored Discovery schema documents
+		// the enum name "NULL_VALUE" — a lossy Discovery representation the
+		// conformance validator carves out (tests/gcpconformance/validate.go).
+		return map[string]any{"nullValue": nil}
 	case v.BooleanValue != nil:
 		return map[string]any{"booleanValue": *v.BooleanValue}
 	case v.IntegerValue != nil:
@@ -435,6 +447,11 @@ func preconditionFromWire(m map[string]any) *dsstore.Precondition {
 	}
 	if ut := strFrom(m["updateTime"]); ut != "" {
 		if t, err := time.Parse(time.RFC3339Nano, ut); err == nil {
+			// Preconditions are compared for equality against the stored
+			// update_time, which Datastore holds at microsecond precision, so a
+			// client-supplied value carrying sub-microsecond digits must be
+			// truncated the same way real GCP coerces it. (TD42)
+			t = t.Truncate(time.Microsecond)
 			return &dsstore.Precondition{UpdateTime: &t}
 		}
 	}
@@ -463,6 +480,37 @@ func queryFromWire(v any) (*core.Query, error) {
 	if lf, ok := numberFromWire(m["limit"]); ok {
 		l := int(lf)
 		out.Limit = &l
+	}
+	if raw := strFrom(m["startCursor"]); raw != "" {
+		cur, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, invalidArgument("malformed start cursor")
+		}
+		out.StartCursor = cur
+	}
+	if raw := strFrom(m["endCursor"]); raw != "" {
+		cur, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, invalidArgument("malformed end cursor")
+		}
+		out.EndCursor = cur
+	}
+	if projs, ok := m["projection"].([]any); ok && len(projs) > 0 {
+		props := make([]string, 0, len(projs))
+		for _, e := range projs {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			p, ok := em["property"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if name := strFrom(p["name"]); name != "" {
+				props = append(props, name)
+			}
+		}
+		out.Projection = &core.Projection{Properties: props}
 	}
 	f, err := filterFromWire(m["filter"])
 	if err != nil {
@@ -685,5 +733,18 @@ func compositeOpFromWire(s string) core.CompositeOp {
 		return core.CompositeOr
 	default:
 		return core.CompositeUnspecified
+	}
+}
+
+// restEntityResultType maps the core result classification to the REST
+// QueryResultBatch.entityResultType enum string.
+func restEntityResultType(rt core.ResultType) string {
+	switch rt {
+	case core.ResultProjection:
+		return "PROJECTION"
+	case core.ResultKeysOnly:
+		return "KEY_ONLY"
+	default:
+		return "FULL"
 	}
 }

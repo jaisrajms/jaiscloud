@@ -12,8 +12,10 @@ import (
 
 // objectIDGeneration matches a GCS object id of the form
 // <bucket>/<object>/<generation> after project/resource substitution, folding
-// the embedded generation so it is stable across runs.
-var objectIDGeneration = regexp.MustCompile(`^(<bucket>/.*)/[0-9]+$`)
+// the embedded generation so it is stable across runs. The bucket segment is
+// generic (not just the curated <bucket>) so a run-scoped load bucket's object
+// id folds too.
+var objectIDGeneration = regexp.MustCompile(`^([^/]+/.+)/[0-9]+$`)
 
 // opaqueHexID matches a scalar id that is entirely hexadecimal/decimal. Such
 // ids are server-generated and differ between real GCP and the emulator (e.g.
@@ -23,10 +25,50 @@ var objectIDGeneration = regexp.MustCompile(`^(<bucket>/.*)/[0-9]+$`)
 var opaqueHexID = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 
 // operationName matches a resolved google.longrunning Operation resource name
-// ("projects/<project>/locations/{location}/operations/{id}"). The id is
+// ("projects/<project>/{locations|regions}/{scope}/operations/{id}"). The id is
 // server-generated and random on both sides, so it is folded to <operation>.
-// It is applied to every string value; only this exact name shape matches.
-var operationName = regexp.MustCompile(`^projects/<project>/locations/([^/]+)/operations/[^/]+$`)
+// Dataproc publishes region-scoped names and every other service location-scoped,
+// so both segments are recognized (the scope segment is preserved). It is applied
+// to every string value; only this exact name shape matches.
+var operationName = regexp.MustCompile(`^projects/<project>/(locations|regions)/([^/]+)/operations/[^/]+$`)
+
+// genericOperationID folds a trailing long-running-operation id of any shape the
+// location/region-scoped operationName pattern does not cover — Service Usage's
+// top-level / projects-scoped "operations/{id}" names, for example — while
+// preserving any scope segment. It matches at the end of the string only.
+var genericOperationID = regexp.MustCompile(`(^|/)operations/[^/]+$`)
+
+// alertPolicyName and notificationChannelName fold the server-generated
+// Monitoring resource id that follows the project in a full resource name, so a
+// create response name and the subsequent get path are stable across runs.
+// alertPolicyRef / notificationChannelRef fold the server-generated Monitoring
+// resource id wherever it appears in a name (including a policy condition name,
+// ".../alertPolicies/{p}/conditions/{c}"). alertPolicyConditionRef folds the
+// trailing condition id.
+var alertPolicyRef = regexp.MustCompile(`(projects/<project>/alertPolicies)/[^/]+`)
+var alertPolicyConditionRef = regexp.MustCompile(`(/conditions)/[^/]+$`)
+var notificationChannelRef = regexp.MustCompile(`(projects/<project>/notificationChannels)/[^/]+`)
+
+// runRevisionName folds the server-generated Cloud Run revision suffix in a
+// ".../services/{svc}/revisions/{svc}-{gen}-{hash}" name; runServiceURL folds a
+// Cloud Run service URL (the emulator's hash authority and real GCP's differ).
+var runRevisionName = regexp.MustCompile(`^(projects/<project>/locations/[^/]+/services/[^/]+/revisions)/[^/]+$`)
+var runServiceURL = regexp.MustCompile(`^https?://[^/]*\.run\.app(/.*)?$`)
+
+// foldNames applies the shape-based string folds (operation ids, Monitoring
+// resource ids and Cloud Run revision/URL values) on top of the textual
+// substitution.
+func foldNames(s string) string {
+	s = genericOperationID.ReplaceAllString(s, "${1}operations/<operation>")
+	s = alertPolicyRef.ReplaceAllString(s, "${1}/<alertPolicyId>")
+	s = alertPolicyConditionRef.ReplaceAllString(s, "${1}/<condition>")
+	s = notificationChannelRef.ReplaceAllString(s, "${1}/<notificationChannelId>")
+	s = runRevisionName.ReplaceAllString(s, "${1}/<revision>")
+	if runServiceURL.MatchString(s) {
+		return "<runUrl>"
+	}
+	return s
+}
 
 // Normalizer rewrites captured JSON so goldens are stable across runs and
 // contain no project-specific secrets. It performs two passes:
@@ -51,8 +93,12 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		// project, so they collapse to a single placeholder — otherwise the
 		// alias difference manufactures a false divergence.
 		{projectNumber, "<project>"},
-		// Fixed KMS names are stable but still project resources.
+		// Fixed KMS names are stable but still project resources. The US
+		// keyring is longer than the global one and is replaced first (the sort
+		// below also enforces longest-match ordering).
+		{FixedKMSKeyRingUS, "<keyRing>"},
 		{FixedKMSKeyRing, "<keyRing>"},
+		{FixedKMSCryptoKeyAsym, "<cryptoKey>"},
 		{FixedKMSCryptoKey, "<cryptoKey>"},
 		// Concrete run resources (longest first below).
 		{names.Bucket, "<bucket>"},
@@ -78,6 +124,77 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.ComputeInstance, "<computeInstance>"},
 		{names.SQLInstance, "<sqlInstance>"},
 		{names.RedisInstance, "<redisInstance>"},
+		// AUD6 breadth: the GKE/Dataproc read-only probes, the custom log name
+		// and the nonexistent metric type all embed the run suffix.
+		{names.ContainerCluster, "<containerCluster>"},
+		{names.DataprocCluster, "<dataprocCluster>"},
+		{names.LogName, "<logName>"},
+		{names.MetricType, "<metricType>"},
+		// crypto-medallion demo parity (D1). Run-suffixed resources created by
+		// the demo mutations, each folded to a stable placeholder. The CMEK
+		// bucket folds to the shared <bucket> placeholder (it is a bucket); the
+		// BigQuery job id folds to <jobId> so a jobs.list response can be scoped
+		// to this run's job by the embedded id.
+		{names.CMEKBucket, "<bucket>"},
+		{names.LoadBucket, "<loadBucket>"},
+		{names.EventBucket, "<eventBucket>"},
+		{names.RunService, "<runService>"},
+		{names.Trigger, "<trigger>"},
+		{names.SchedJob, "<schedulerJob>"},
+		{names.BQJob, "<jobId>"},
+		{names.CryptoKey, "<cryptoKey>"},
+		{names.NotifyTopic, "<notifyTopic>"},
+		{names.AlertDisplay, "<alertDisplay>"},
+		{names.DemoMetric, "<demoMetric>"},
+		// SDK-tour differential resources. Each folds to the shared placeholder
+		// for its resource kind, so the tour goldens reuse the same list-scoping
+		// rules (e.g. a tour bucket list folds to the <bucket> element).
+		{names.TourBucket, "<bucket>"},
+		{names.TourBQDataset, "<dataset>"},
+		{names.TourBQTable, "<table>"},
+		{names.TourBQJob, "<jobId>"},
+		{names.TourTopic, "<topic>"},
+		{names.TourSub, "<subscription>"},
+		{names.TourLog, "<logName>"},
+		{names.TourSecret, "<secret>"},
+		{names.TourFSCounter, "<fsCollection>"},
+		{names.TourFSPage, "<fsCollection>"},
+		{names.TourDataproc, "<dataprocCluster>"},
+		// Error/retry tour differential resources.
+		{names.ErrorBucket, "<bucket>"},
+		{names.ErrorBQDataset, "<dataset>"},
+		{names.ErrorBQTable, "<table>"},
+		{names.ErrorTopic, "<topic>"},
+		// Pub/Sub messaging-semantics oracle (PSM1). Every dedicated topic folds
+		// to the shared <topic> and every subscription to <subscription>, so the
+		// scoped-list rules keep working; the snapshot folds to <snapshot>. The
+		// longest-first sort puts StreamSub before StreamTopic, so the topic
+		// prefix of the stream subscription name cannot win first.
+		{names.StreamSub, "<subscription>"},
+		{names.StreamTopic, "<topic>"},
+		{names.SeekSnap, "<snapshot>"},
+		{names.SeekSub, "<subscription>"},
+		{names.DLQMainSub, "<subscription>"},
+		{names.DLQMainTopic, "<topic>"},
+		{names.DLQSub, "<subscription>"},
+		{names.DLQTopic, "<topic>"},
+		{names.OrderSub, "<subscription>"},
+		{names.OrderTopic, "<topic>"},
+		{names.AckSub, "<subscription>"},
+		{names.ModSub, "<subscription>"},
+		{names.MsgSub, "<subscription>"},
+		{names.MsgTopic, "<topic>"},
+		// The scheduler job's OIDC service account is a project-shaped email
+		// (never a real account). Fold it so no golden carries an email address.
+		{"demo-runner@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
+		// AUD6-1 gRPC differential: the Datastore kind and the entity written
+		// into it are run-suffixed, so both fold to placeholders.
+		{names.DSEntity, "<dsEntity>"},
+		{names.DSKind, "<dsKind>"},
+		// AUD6-6 cursor paging: the separate paging kind and the common name
+		// prefix of its three equal-length entities.
+		{names.DSPageKind, "<dsPageKind>"},
+		{names.DSPagePrefix, "<dsPage>"},
 		// A missing service-account probe is an email-shaped 404 path; fold it
 		// too so a golden never carries an "@" or the gserviceaccount domain.
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -101,18 +218,25 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 	return &Normalizer{repls: repls}
 }
 
-// operationIDSuffix matches a trailing long-running-operation id in a request
-// path (e.g. ".../operations/operation-1789941434240-..."). Real GCP mints a
-// fresh id per operation, so an LRO poll path would otherwise churn the golden
-// on every recording.
-var operationIDSuffix = regexp.MustCompile(`/operations/[^/]+$`)
-
-// Path normalizes a request path: textual resource substitution plus folding a
-// trailing long-running-operation id. Exchange.Path is a report label (matching
-// is by Service/Op), so folding only removes per-run churn from committed
-// goldens.
+// Path normalizes a request path: textual resource substitution plus the
+// shape-based folds (a trailing long-running-operation id and Monitoring
+// resource ids). Exchange.Path is a report label (matching is by Service/Op),
+// so folding only removes per-run churn from committed goldens.
 func (n *Normalizer) Path(p string) string {
-	return operationIDSuffix.ReplaceAllString(n.substitute(p), "/operations/<operation>")
+	return foldSessionTokens(foldNames(n.substitute(p)))
+}
+
+// sessionTokenParam folds session/continuation tokens that appear as query
+// parameters in a report path — a resumable upload's upload_id, a list
+// pageToken, a resumable-session resumeToken — so a committed golden never
+// carries a server-issued token. The path is a report label (matching is by
+// Service/Op), so folding only removes per-run churn.
+var sessionTokenParam = regexp.MustCompile(`((?:pageToken|upload_id|resumeToken|sessionToken)=)[^&]*`)
+
+// foldSessionTokens folds the session/continuation query parameters in a
+// normalized path.
+func foldSessionTokens(s string) string {
+	return sessionTokenParam.ReplaceAllString(s, "${1}<token>")
 }
 
 // substitute applies textual replacements.
@@ -216,14 +340,49 @@ var volatileStringKeys = map[string]string{
 	"crc32c":        "<crc32c>",
 	"sha256Hash":    "<sha256Hash>",
 	"ciphertext":    "<ciphertext>",
-	"ackId":         "<ackId>",
-	"messageId":     "<messageId>",
+	// SDK-tour gRPC: KMS asymmetric material is key-specific (the emulator and
+	// real GCP hold different keys), so the PEM, the signature and their CRCs
+	// fold while the algorithm/protectionLevel (deterministic) survive.
+	"pem":             "<pem>",
+	"pemCrc32c":       "<crc32c>",
+	"signature":       "<signature>",
+	"signatureCrc32c": "<crc32c>",
+	// Firestore transaction ids are server-generated opaque bytes: they always
+	// originate in a BeginTransaction/BatchGetDocuments response and are echoed
+	// back in the read/commit requests that carry them, so (like a cursor) they
+	// fold on both sides. No harness-authored value uses the key.
+	"transaction": "<transaction>",
+	"ackId":       "<ackId>",
+	"messageId":   "<messageId>",
+	// Pub/Sub dead-lettering (PSM2): real GCP forwards a message to its
+	// dead-letter topic on a best-effort basis — the docs say it "might forward
+	// a message after fewer attempts than configured, or ... a few more times"
+	// — so the source delivery count is not a stable contract. Fold the value
+	// while still asserting the attribute is present; the element/attribute
+	// shape and the other three source attributes remain diffed.
+	"CloudPubSubDeadLetterSourceDeliveryCount": "<deadLetterDeliveryCount>",
 	"jobId":         "<jobId>",
 	"temporaryHold": "<temporaryHold>",
-	// IAM service accounts generate these server-side (the emulator leaves
-	// oauth2ClientId empty), so fold both sides to a placeholder.
+	// IAM service accounts generate these server-side (21-digit numeric ids on
+	// real GCP and in the emulator, but different values), so fold both sides to
+	// a placeholder.
 	"uniqueId":       "<uniqueId>",
 	"oauth2ClientId": "<oauth2ClientId>",
+	// Cloud Run / Eventarc resources carry a server-generated uid (a UUID on
+	// real GCP, a random hex on the emulator), and Cloud Run an
+	// observedGeneration and condition lastTransitionTime. Cloud Run's
+	// creator/lastModifier are the caller's email on real GCP, so fold them to
+	// keep emails out of committed goldens.
+	"uid":                "<uid>",
+	"observedGeneration": "<observedGeneration>",
+	// Dataproc server-generates a clusterUuid on both sides (a UUID on real
+	// GCP, a random hex in the emulator); it is an output-only identifier.
+	"clusterUuid":        "<clusterUuid>",
+	"lastTransitionTime": "<time>",
+	"creator":            "<userEmail>",
+	"lastModifier":       "<userEmail>",
+	// Monitoring mutation records name the mutating principal's email.
+	"mutatedBy": "<userEmail>",
 	// Cloud Workflows reports a defaulted serviceAccount (a project SA email);
 	// fold it so no golden carries an email address.
 	"serviceAccount": "<serviceAccount>",
@@ -232,6 +391,13 @@ var volatileStringKeys = map[string]string{
 	"endTime":     "<time>",
 	"queryId":     "<queryId>",
 	"totalSlotMs": "<totalSlotMs>",
+	// BigQuery jobs carry the creating principal's email / subject.
+	"user_email":        "<userEmail>",
+	"principal_subject": "<principalSubject>",
+	// Cloud Scheduler timestamps are wall-clock dependent.
+	"lastAttemptTime": "<time>",
+	"scheduleTime":    "<time>",
+	"userUpdateTime":  "<time>",
 	// CRC32C of random/opaque payloads is itself random.
 	"dataCrc32c":       "<crc32c>",
 	"ciphertextCrc32c": "<crc32c>",
@@ -245,6 +411,40 @@ var volatileStringKeys = map[string]string{
 	// List counts are polluted by unrelated real-project resources; the element
 	// arrays are scoped to this harness's resources, so the raw count is noise.
 	"totalSize": "<totalSize>",
+	// Cloud Datastore entity versions are opaque, monotonically increasing
+	// server-side values that differ between real GCP and the emulator.
+	"version": "<version>",
+	// Datastore/Firestore query cursors. A request cursor is always a token a
+	// previous response returned (real GCP's opaque protobuf cursor vs the
+	// emulator's key-based one), so it folds on both sides.
+	"startCursor": "<cursor>",
+	"endCursor":   "<cursor>",
+}
+
+// volatileResponseKeys are fields that are server-generated in a response and
+// must be folded there, but that a request body may legitimately carry as a
+// client-authored value which must survive verbatim.
+var volatileResponseKeys = map[string]string{
+	// BigQuery's tabledata.insertAll request carries a client-supplied "insertId"
+	// dedup key ("1") while Cloud Logging's ListLogEntries response carries a
+	// server-generated "insertId", so the key cannot be folded unconditionally.
+	"insertId": "<insertId>",
+	// AUD6-1 gRPC differential. protojson carries these server-generated or
+	// wall-clock response fields: Datastore/Firestore read/commit/snapshot times,
+	// query cursors and transaction ids, Datastore's index-update count, and
+	// Cloud Logging's timestamp/receive timestamp. They are folded in responses
+	// only, so a committed gRPC golden is stable without ever rewriting a
+	// harness-authored request body. (Request-side query cursors startCursor /
+	// endCursor fold unconditionally in volatileStringKeys, since a request
+	// cursor is always a previously returned token.)
+	"readTime":         "<time>",
+	"snapshotVersion":  "<snapshotVersion>",
+	"commitTime":       "<time>",
+	"skippedCursor":    "<cursor>",
+	"cursor":           "<cursor>",
+	"indexUpdates":     "<indexUpdates>",
+	"timestamp":        "<time>",
+	"receiveTimestamp": "<time>",
 }
 
 // volatileObjectKeys are fields whose entire value is opaque/volatile and is
@@ -258,6 +458,10 @@ var volatileObjectKeys = map[string]bool{
 // whole array (used for arrays of opaque, per-run identifiers).
 var volatileArrayKeys = map[string]any{
 	"messageIds": []any{"<messageId>"},
+	// Pub/Sub ack ids are server-generated, delivery-scoped opaque tokens that
+	// appear as an array in Acknowledge/ModifyAckDeadline requests (and never
+	// carry harness-authored meaning), so fold the whole array on both sides.
+	"ackIds": []any{"<ackId>"},
 	// Cloud DNS synthesizes a delegation set per managed zone whose names
 	// differ between real GCP and the emulator; the count is not part of
 	// this harness's contract, so the whole array folds to one placeholder.
@@ -287,6 +491,29 @@ var sortArrayKeys = map[string]bool{
 	"accounts": true,
 	// Firestore document list.
 	"documents": true,
+	// AUD6 breadth: GKE/Dataproc cluster lists, workflow-execution lists and
+	// the project log-name list have unspecified element order.
+	"clusters":   true,
+	"executions": true,
+	"logNames":   true,
+	// AUD6-2 breadth: Eventarc trigger, Cloud Tasks queue, Cloud Run service,
+	// Cloud Functions function and Metastore service lists.
+	"triggers":  true,
+	"queues":    true,
+	"services":  true,
+	"functions": true,
+	// AUD6-1 gRPC differential: Datastore lookup/query result arrays, Cloud
+	// Monitoring descriptor lists and Cloud Logging entry lists have no
+	// guaranteed element order across the two backends.
+	"found":             true,
+	"missing":           true,
+	"entityResults":     true,
+	"metricDescriptors": true,
+	"entries":           true,
+	// crypto-medallion demo parity (D1): a BigQuery jobs.list response is a
+	// project-wide history, so its element order is unspecified and the list is
+	// scoped below to this run's job.
+	"jobs": true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -318,6 +545,28 @@ var scopedListPlaceholders = map[string]string{
 	// Memorystore: scoped to this run's (always-absent) instance, so unrelated
 	// real-project instances cannot pollute the empty-list golden.
 	"instances": "<redisInstance>",
+	// AUD6 breadth. GKE/Dataproc clusters are a read-only smoke that creates no
+	// resource, so the list is forced empty: the placeholder matches no
+	// normalized element name (the probes fold to <containerCluster> /
+	// <dataprocCluster>), which keeps unrelated real-project clusters out of the
+	// routing/empty-shape golden — the same intent as compute's `items` →
+	// `<bucket>`. The logging log-name list is scoped to this run's custom log,
+	// which drops the real project's always-present cloudaudit logs.
+	"clusters": "<cluster>",
+	"logNames": "<logName>",
+	// AUD6-2 breadth. Each is a read-only smoke that creates no resource, so
+	// the list is forced empty: the placeholder matches no normalized element
+	// name, which keeps unrelated real-project resources out of the
+	// routing/empty-shape golden — the same intent as the GKE/Dataproc
+	// "clusters" rule above.
+	"triggers":  "<trigger>",
+	"queues":    "<queue>",
+	"services":  "<service>",
+	"functions": "<function>",
+	// crypto-medallion demo parity (D1): a BigQuery jobs.list is a project-wide
+	// job history; keep only this run's job, whose generated `id` embeds the
+	// run-suffixed job id that folds to <jobId>.
+	"jobs": "<jobId>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting
@@ -326,6 +575,14 @@ var scopedListPlaceholders = map[string]string{
 func (n *Normalizer) value(key string, v any, request bool) any {
 	if ph, ok := volatileStringKeys[key]; ok {
 		return ph
+	}
+	// Response-only volatile fields: server-generated in a response, but a
+	// client-authored request value (e.g. BigQuery's insertId dedup key) must
+	// survive verbatim.
+	if !request {
+		if ph, ok := volatileResponseKeys[key]; ok {
+			return ph
+		}
 	}
 	if volatileObjectKeys[key] {
 		return map[string]any{}
@@ -344,8 +601,12 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 				return "<id>"
 			}
 		}
-		// Cloud Workflows long-running-operation names carry a random id.
-		s = operationName.ReplaceAllString(s, "projects/<project>/locations/$1/operations/<operation>")
+		// Cloud Workflows / Dataproc long-running-operation names carry a random
+		// id; fold it while preserving the location/region scope segment.
+		s = operationName.ReplaceAllString(s, "projects/<project>/$1/$2/operations/<operation>")
+		// Any other operation-name shape (Service Usage) and the Monitoring
+		// server-generated resource ids.
+		s = foldNames(s)
 		if looksLikeTimestamp(s) {
 			return "<time>"
 		}
@@ -371,6 +632,16 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 		}
 		return out
 	case map[string]any:
+		if key == "metadata" && isExactlyOnceMetadata(t) {
+			// The google.rpc.ErrorInfo metadata of an exactly-once ack failure
+			// keys each entry by the opaque ackId. Fold the key like the ackId
+			// field so real GCP and the emulator compare equal.
+			out := make(map[string]any, 1)
+			for _, e := range t {
+				out["<ackId>"] = e
+			}
+			return out
+		}
 		out := make(map[string]any, len(t))
 		for k, e := range t {
 			out[k] = n.value(k, e, request)
@@ -379,6 +650,22 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 	default:
 		return v
 	}
+}
+
+// isExactlyOnceMetadata reports whether a JSON object is a google.rpc.ErrorInfo
+// metadata map from an exactly-once ack/modack failure (each value is a
+// permanent/transient per-ack status).
+func isExactlyOnceMetadata(m map[string]any) bool {
+	if len(m) == 0 {
+		return false
+	}
+	for _, v := range m {
+		s, ok := v.(string)
+		if !ok || !(s == "PERMANENT_FAILURE_INVALID_ACK_ID" || strings.HasPrefix(s, "TRANSIENT_")) {
+			return false
+		}
+	}
+	return true
 }
 
 func looksLikeTimestamp(s string) bool {

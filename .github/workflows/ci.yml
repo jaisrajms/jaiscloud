@@ -78,28 +78,123 @@ jobs:
           if [ -f server.pid ]; then kill $(cat server.pid) || true; fi
 
   # ─── Docker build smoke-test ───────────────────────────────────────────────
-  # Builds the image for linux/amd64 on every PR to catch Dockerfile errors early.
-  # Images are not pushed — push happens only on merge to main or on a version tag
-  # (see docker-publish.yml).
+  # Builds both cloud images for linux/amd64 on every PR to catch Dockerfile
+  # errors early, then runs each image: the version stamp (VERSION build arg),
+  # /_jaiscloud/health on the cloud's REST port, and the embedded console on
+  # 4567 (proves `-tags ui` + the UI build stage). Images are not pushed — push
+  # happens only on merge to main or on a version tag (see docker-publish.yml).
   docker-build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # aws first so the long-standing arm of the matrix keeps its slot.
+          - cloud: aws
+            port: 4566
+          - cloud: gcp
+            port: 8080
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build jaiscloud (linux/amd64, no push)
+      - name: Build jaiscloud-${{ matrix.cloud }} (linux/amd64, no push)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: false
+          load: true
           platforms: linux/amd64
-          build-args: VERSION=ci-${{ github.sha }}
-          tags: jaiscloud:ci
-          cache-from: type=gha,scope=jaiscloud
-          cache-to: type=gha,mode=max,scope=jaiscloud
+          build-args: |
+            CLOUD=${{ matrix.cloud }}
+            VERSION=ci-${{ github.sha }}
+            PORT=${{ matrix.port }}
+          tags: jaiscloud-${{ matrix.cloud }}:ci
+          cache-from: type=gha,scope=jaiscloud-${{ matrix.cloud }}
+          cache-to: type=gha,mode=max,scope=jaiscloud-${{ matrix.cloud }}
+
+      - name: Smoke-test jaiscloud-${{ matrix.cloud }} image
+        env:
+          IMAGE: jaiscloud-${{ matrix.cloud }}:ci
+          CLOUD: ${{ matrix.cloud }}
+          PORT: ${{ matrix.port }}
+          VERSION: ci-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version_out=$(docker run --rm "$IMAGE" version)
+          printf '%s\n' "$version_out"
+          grep -qF "$VERSION" <<<"$version_out"
+          docker rm -f "ci-$CLOUD" >/dev/null 2>&1 || true
+          # Anonymous host ports: the runner may already be using 4566/8080/4567.
+          docker run -d --name "ci-$CLOUD" \
+            -p "127.0.0.1::${PORT}" -p 127.0.0.1::4567 \
+            "$IMAGE" start --ui
+          # Logs on failure are the whole point of the smoke, so clean up on exit.
+          trap 'docker logs "ci-$CLOUD" || true; docker rm -f "ci-$CLOUD" >/dev/null 2>&1 || true' EXIT
+          rest=$(docker port "ci-$CLOUD" "${PORT}/tcp" | head -1)
+          ui=$(docker port "ci-$CLOUD" 4567/tcp | head -1)
+          for _ in $(seq 1 30); do
+            if curl -fsS --connect-timeout 2 --max-time 3 "http://${rest}/_jaiscloud/health" >/dev/null &&
+               [ "$(curl -s --connect-timeout 2 --max-time 3 -o /dev/null -w '%{http_code}' "http://${ui}/ui/")" = "200" ]; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS --connect-timeout 2 --max-time 3 "http://${rest}/_jaiscloud/health"
+          ui_code=$(curl -s --connect-timeout 2 --max-time 3 -o /dev/null -w '%{http_code}' "http://${ui}/ui/")
+          echo "GET /ui/ -> ${ui_code}"
+          test "${ui_code}" = "200"
+
+  # ─── Release config + artifact smoke ───────────────────────────────────────
+  # release.yml only runs on a tag, so without this job a broken
+  # .goreleaser.yaml, a missing `-tags ui` build or a dropped version ldflag is
+  # only discovered when the release is published. Builds a snapshot (no
+  # docker, no publish) and runs the release artifact tests against it.
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # snapshot version comes from git describe
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - name: Build UI assets
+        working-directory: ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          install-only: true
+
+      - name: Validate GoReleaser config
+        run: goreleaser check
+
+      - name: Build snapshot artifacts (no docker, no publish)
+        run: goreleaser release --snapshot --clean --skip=publish,docker
+
+      - name: Release artifact smoke tests
+        run: make test-release
 
   # ─── UI lint + build ───────────────────────────────────────────────────────
   ui:
@@ -138,8 +233,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Verify UI-enabled server builds
-        run: go build -tags ui -o /tmp/jaiscloud-ui ./cmd/jaiscloud-aws/
+      - name: Verify UI-enabled AWS server builds
+        run: go build -tags ui -o /tmp/jaiscloud-ui-aws ./cmd/jaiscloud-aws/
+
+      - name: Verify UI-enabled GCP server builds
+        run: go build -tags ui -o /tmp/jaiscloud-ui-gcp ./cmd/jaiscloud-gcp/
 
   # ─── GCP unit + integration + persistence tests ────────────────────────────
 
@@ -172,8 +270,20 @@ jobs:
       - name: Run GCP unit tests
         run: go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 
+      - name: GCP statement-coverage ratchet (per-package floor)
+        run: make test-gcp-coverage
+
       - name: Run GCP dev-tool tests
         run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+
+      - name: Behavioral-coverage gate (every `ga` service has a suite or reasoned exemption)
+        run: make gcp-status-behavioral-gate
+
+      - name: Behavioral-depth gate (every `ga` service records p2–p5 present or dated-exempt)
+        run: make gcp-status-depth-gate
+
+      - name: Run GCP convention lint
+        run: go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 
   # Builds and boots jaiscloud-gcp on both REST (8080) and gRPC (8081) ports,
   # then runs the raw-HTTP and per-SDK integration suites against the emulator.
@@ -238,6 +348,10 @@ jobs:
       - name: Run raw-HTTP integration tests
         run: go test -race -count=1 -timeout 120s ./tests/integration/gcp/
 
+      - name: Run depth-test kit unit tests
+        working-directory: tests/integration/gcp/testdepth
+        run: go test -race -count=1 -timeout 120s ./...
+
       - name: Run GCS REST SDK tests
         working-directory: tests/integration/gcp/sdk
         env:
@@ -248,19 +362,19 @@ jobs:
         working-directory: tests/integration/gcp/sdk-rest
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Workflows SDK tests
         working-directory: tests/integration/gcp/sdk-workflows
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Dataproc SDK tests
         working-directory: tests/integration/gcp/sdk-dataproc
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Firestore gRPC SDK tests
         working-directory: tests/integration/gcp/sdk-firestore
@@ -268,51 +382,59 @@ jobs:
           FIRESTORE_EMULATOR_HOST: localhost:8081
         run: go test -v -count=1 -timeout 120s ./...
 
+      - name: Run Firestore Admin gRPC SDK tests
+        working-directory: tests/integration/gcp/sdk-firestoreadmin
+        env:
+          GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
+        run: go test -v -race -count=1 -timeout 180s ./...
+
       - name: Run Monitoring gRPC SDK tests
         working-directory: tests/integration/gcp/sdk-monitoring
         env:
           MONITORING_EMULATOR_HOST: localhost:8081
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Datastore SDK tests
         working-directory: tests/integration/gcp/sdk-datastore
         env:
           DATASTORE_EMULATOR_HOST: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Logging SDK tests
         working-directory: tests/integration/gcp/sdk-logging
         env:
           LOGGING_EMULATOR_HOST: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run GCS gRPC SDK tests
         working-directory: tests/integration/gcp/sdk-gcs-grpc
         env:
           STORAGE_EMULATOR_HOST_GRPC: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Managed Kafka SDK tests
         working-directory: tests/integration/gcp/sdk-managed-kafka
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+          GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run BigQuery SDK tests
         working-directory: tests/integration/gcp/sdk-bigquery
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Metastore SDK tests
         working-directory: tests/integration/gcp/sdk-metastore
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+          JAISCLOUD_GCP_HMS_PORT: 9083
+        run: go test -v -race -count=1 -timeout 300s ./...
 
       - name: Run BigLake Iceberg SDK tests
         working-directory: tests/integration/gcp/sdk-iceberg
@@ -324,13 +446,25 @@ jobs:
         working-directory: tests/integration/gcp/sdk-eventarc
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 300s ./...
 
       - name: Run Cloud DNS SDK tests
         working-directory: tests/integration/gcp/sdk-clouddns
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
         run: go test -v -count=1 -timeout 120s ./...
+
+      - name: Run Cloud Scheduler SDK tests
+        working-directory: tests/integration/gcp/sdk-scheduler
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -v -race -count=1 -timeout 180s ./...
+
+      - name: Run Cloud Tasks SDK tests
+        working-directory: tests/integration/gcp/sdk-tasks
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Memorystore SDK tests
         working-directory: tests/integration/gcp/sdk-memorystore
@@ -348,7 +482,26 @@ jobs:
         working-directory: tests/integration/gcp/sdk-compute
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
+
+      - name: Run GKE Container SDK tests
+        working-directory: tests/integration/gcp/sdk-container
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -v -race -count=1 -timeout 180s ./...
+
+      - name: Run Cloud Run SDK tests
+        working-directory: tests/integration/gcp/sdk-run
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -v -race -count=1 -timeout 180s ./...
+
+      - name: Run Pub/Sub SDK tests
+        working-directory: tests/integration/gcp/sdk-pubsub
+        env:
+          PUBSUB_EMULATOR_HOST: localhost:8081
+          GCP_EMULATOR_PROJECT: test-project
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Upload GCP server log (on failure)
         if: failure()
@@ -426,12 +579,17 @@ jobs:
       # against the already-running emulator and writes a divergence report.
       # Offline and credential-free; strict mode fails the build on any open
       # (real-bug) divergence at any severity, so a regression against
-      # real GCP can't merge silently.
+      # real GCP can't merge silently. The regex is anchored so this REST step
+      # runs only the REST sets; the gRPC-only replays run after the gRPC
+      # listener is up (below). It also runs the golden-hygiene/contract guards
+      # (assertGoldensClean, manifest, scenario-validity) for the curated, tour,
+      # error-tour and BigQuery sets.
       - name: Run GCP differential replay (offline; strict)
         env:
           GCP_DIFFERENTIAL_STRICT: "1"
           GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
-        run: go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
+          GCP_DIFFERENTIAL_REQUIRE_GOLDENS: "1"
+        run: go test -tags gcp_differential -count=1 -v -run '^(TestReplay|TestGoldensAreClean|TestGoldenManifest|TestReplayTour|TestTourGoldensAreClean|TestTourGoldenManifest|TestTourScenariosValid|TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid|TestReplayBQSQL|TestBQSQLGoldensAreClean|TestBQSQLGoldenManifest|TestBQSQLScenariosValid)$' ./tests/gcpdifferential/
 
       - name: Wait for gRPC listener
         run: |
@@ -444,11 +602,35 @@ jobs:
           cat gcp-conformance.log
           exit 1
 
+      # AUD6-1: replays the committed real-GCP gRPC goldens (Cloud Datastore,
+      # Firestore, Logging, Monitoring) against the emulator's gRPC listener and
+      # diffs them with the shared normalize/triage engine. Offline and
+      # credential-free; strict mode fails on any open (real-bug) divergence.
+      # It also runs the gRPC SDK-tour replay (REST-tour replay is in the step
+      # above) plus its hygiene/contract guards.
+      - name: Run GCP gRPC differential replay (offline; strict)
+        env:
+          GCP_DIFFERENTIAL_STRICT: "1"
+          GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
+          GCP_DIFFERENTIAL_REQUIRE_GOLDENS: "1"
+          GCP_DIFFERENTIAL_GRPC_ENDPOINT: localhost:8081
+        run: go test -tags gcp_differential -count=1 -v -run '^(TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestTourGRPCScenariosValid)$' ./tests/gcpdifferential/
+
       - name: Run gRPC message-level conformance (official clients)
         working-directory: tests/gcpconformance/grpc
         env:
           GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
         run: go test -count=1 -v -timeout 180s ./...
+
+      # Cross-transport parity: drives each dual service's create/get/list/
+      # mutate/delete flow and reads every resource back over BOTH transports
+      # (REST :8080 + gRPC :8081), diffing the normalized bodies so a field one
+      # adapter drops cannot pass. Fails on any un-allowlisted divergence.
+      - name: Run REST↔gRPC cross-transport parity (official clients)
+        env:
+          GCP_EMULATOR_ENDPOINT_REST: http://localhost:8080
+          GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
+        run: go test -count=1 -tags gcp_conformance,gcp_differential,gcp_parity -v -timeout 300s ./tests/gcpparity/
 
       # Reporting suite: runs the real gcloud CLI (preinstalled on the runner)
       # against the already-running emulator. It skips cleanly if gcloud is not
@@ -494,6 +676,7 @@ jobs:
             tests/gcpconformance/grpc/testdata/report/
             tests/gcpconformance/gcloud/testdata/report/
             tests/gcpdifferential/testdata/report/
+            tests/gcpdifferential/testdata/report-grpc/
             tests/clients/python/report/
 
       - name: Upload GCP server log (on failure)
@@ -570,7 +753,8 @@ jobs:
         run: >
           go test -tags gcp_persistence -p 1 -count=1 -timeout 300s
           ./tests/persistent_mode/gcp/...
-          ./internal/gcp/provider/bigquery/... ./internal/gcp/store/bigquery/...
+          ./internal/gcp/store/... ./internal/gcp/service/resourcemanager/...
+          ./internal/gcp/provider/bigquery/...
 
       - name: Run GCP gRPC persistence parity tests
         working-directory: tests/persistent_mode/gcp/parity-grpc
@@ -589,3 +773,75 @@ jobs:
           JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
           JAISCLOUD_GCP_BIN: ${{ github.workspace }}/jaiscloud-gcp
         run: go test -tags gcp_persistence -p 1 -count=1 -timeout 300s ./...
+
+  # The opt-in async long-running-operation mode is a different code path from
+  # the synchronous default (operations are persisted in flight and settled on
+  # operations.get), and nothing else in CI turns it on. Run the live async-LRO
+  # gate (mirrors `make test-lro-async-gcp`) so a regression in the async surface
+  # is caught without a k3d cluster.
+  test-gcp-lro-async:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-gcp-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-gcp-
+            ${{ runner.os }}-go-
+
+      - name: Download modules
+        run: |
+          go mod download
+          for mod in tests/integration/gcp/*/go.mod; do
+            [ -f "$mod" ] || continue
+            (cd "${mod%/go.mod}" && go mod download)
+          done
+
+      - name: Build jaiscloud-gcp
+        run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+
+      - name: Start jaiscloud-gcp (async LRO, background)
+        run: |
+          JAISCLOUD_LRO_MODE=async JAISCLOUD_LRO_DELAY=2s JAISCLOUD_GCP_PROJECT_ID=proj \
+            ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > gcp-lro.log 2>&1 & echo $! > gcp-lro.pid
+
+      - name: Wait for GCP server health
+        run: |
+          for i in {1..60}; do
+            if curl -sfS http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; then
+              echo "gcp server healthy (async LRO, delay 2s)"; exit 0
+            fi
+            sleep 1
+          done
+          cat gcp-lro.log
+          exit 1
+
+      - name: Run async-LRO integration tests
+        env:
+          JAISCLOUD_LRO_ASYNC: '1'
+        run: go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestLROAsync
+
+      - name: Run Cloud Run async-LRO SDK tests
+        working-directory: tests/integration/gcp/sdk-run
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+          JAISCLOUD_LRO_ASYNC: '1'
+        run: go test -v -race -count=1 -timeout 240s ./...
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-lro-server-log
+          path: gcp-lro.log

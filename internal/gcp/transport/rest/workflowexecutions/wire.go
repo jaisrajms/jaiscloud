@@ -3,10 +3,10 @@ package workflowexecutions
 import (
 	"net/http"
 	"strconv"
-	"time"
 
 	core "jaiscloud/internal/gcp/service/workflowexecutions"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -28,20 +28,6 @@ func strParam(nr *model.NormalizedRequest, key string) string {
 func strFrom(v any) string {
 	s, _ := v.(string)
 	return s
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }
 
 func stringMapFrom(v any) map[string]string {
@@ -103,10 +89,10 @@ func executionToJSON(e workflowsstore.Execution, project string) map[string]any 
 		"workflowRevisionId": e.WorkflowRevisionID,
 	}
 	if !e.StartTime.IsZero() {
-		out["startTime"] = e.StartTime.Format(time.RFC3339Nano)
+		out["startTime"] = timestamp.Canonical(e.StartTime)
 	}
 	if !e.EndTime.IsZero() {
-		out["endTime"] = e.EndTime.Format(time.RFC3339Nano)
+		out["endTime"] = timestamp.Canonical(e.EndTime)
 	}
 	if e.Duration != "" {
 		out["duration"] = e.Duration

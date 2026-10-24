@@ -66,25 +66,22 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		Version   Version `json:"version"`
 	}
 	secrets := make([]secretRow, 0)
-	rows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations FROM jc_sm_secrets ORDER BY project_id, secret_id`)
+	rows, err := s.pool.Query(ctx, `SELECT project_id, `+secretColumns+` FROM jc_sm_secrets ORDER BY project_id, secret_id`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var r secretRow
-		var labels, annotations, rotation, aliases []byte
-		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations); err != nil {
+		var labels, annotations, topics, rotation, aliases, replication []byte
+		var expireTime *time.Time
+		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations, &replication, &topics, &r.Secret.VersionDestroyTTL, &expireTime); err != nil {
 			rows.Close()
 			return err
 		}
-		json.Unmarshal(labels, &r.Secret.Labels)
-		json.Unmarshal(annotations, &r.Secret.Annotations)
-		if len(rotation) > 0 {
-			json.Unmarshal(rotation, &r.Secret.Rotation)
+		if expireTime != nil {
+			r.Secret.ExpireTime = *expireTime
 		}
-		if len(aliases) > 0 {
-			json.Unmarshal(aliases, &r.Secret.VersionAliases)
-		}
+		decodeSecretJSON(&r.Secret, labels, annotations, topics, rotation, aliases, replication)
 		secrets = append(secrets, r)
 	}
 	rows.Close()
@@ -93,19 +90,27 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	versions := make([]versionRow, 0)
-	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, data FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
+	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
 	if err != nil {
 		return err
 	}
 	for vrows.Next() {
 		var r versionRow
-		var destroyTime *time.Time
-		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &r.Version.Data); err != nil {
+		var destroyTime, scheduledDestroyTime *time.Time
+		var replicaDEKs []byte
+		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &scheduledDestroyTime, &r.Version.Data, &r.Version.KmsKeyName, &r.Version.WrappedDEK, &replicaDEKs); err != nil {
 			vrows.Close()
 			return err
 		}
 		if destroyTime != nil {
 			r.Version.DestroyTime = *destroyTime
+		}
+		if scheduledDestroyTime != nil {
+			r.Version.ScheduledDestroyTime = *scheduledDestroyTime
+		}
+		if err := decodeReplicaDEKs(replicaDEKs, &r.Version); err != nil {
+			vrows.Close()
+			return err
 		}
 		r.Version.SecretID = r.SecretID
 		versions = append(versions, r)
@@ -146,7 +151,7 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	}
 	for _, r := range snap.Secrets {
 		labels, _ := json.Marshal(r.Secret.Labels)
-		var rotation, aliases, annotations []byte
+		var topics, rotation, aliases, annotations, replication []byte
 		if r.Secret.Rotation != nil {
 			rotation, _ = json.Marshal(r.Secret.Rotation)
 		}
@@ -156,14 +161,30 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if r.Secret.Annotations != nil {
 			annotations, _ = json.Marshal(r.Secret.Annotations)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations)); err != nil {
+		if r.Secret.Replication != nil {
+			replication, _ = json.Marshal(r.Secret.Replication)
+		}
+		if len(r.Secret.Topics) > 0 {
+			topics, _ = json.Marshal(r.Secret.Topics)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics, version_destroy_ttl, expire_time) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations), nullableJSONBytes(replication), nullableJSONBytes(topics), r.Secret.VersionDestroyTTL, nullableTime(r.Secret.ExpireTime)); err != nil {
 			return err
 		}
 	}
 	for _, r := range snap.Versions {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), r.Version.Data); err != nil {
+		// kms_key_name/wrapped_dek must ride along with data: a restored CMEK
+		// version without its wrapped DEK cannot be decrypted, and would report
+		// no customerManagedEncryption status (the per-version wrap is what
+		// DC44 renders). replica_deks carries the per-replica wraps a
+		// user-managed policy records (DC57), so a restored version keeps
+		// reporting every replica's CryptoKeyVersion.
+		replicaDEKs, err := marshalReplicaDEKs(r.Version.ReplicaDEKs)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), nullableTime(r.Version.ScheduledDestroyTime), r.Version.Data, r.Version.KmsKeyName, r.Version.WrappedDEK, replicaDEKs); err != nil {
 			return err
 		}
 	}

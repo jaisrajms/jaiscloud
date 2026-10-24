@@ -1,0 +1,35 @@
+{
+  "index": 15,
+  "service": "logging",
+  "op": "tour_log_list",
+  "method": "google.logging.v2.LoggingServiceV2/ListLogEntries",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "filter": "logName=\"projects/<project>/logs/<logName>\"",
+    "pageSize": 10,
+    "resourceNames": [
+      "projects/<project>"
+    ]
+  },
+  "response": {
+    "entries": [
+      {
+        "insertId": "<insertId>",
+        "logName": "projects/<project>/logs/<logName>",
+        "receiveTimestamp": "<time>",
+        "resource": {
+          "labels": {
+            "project_id": "<project>"
+          },
+          "type": "global"
+        },
+        "severity": "INFO",
+        "textPayload": "sdk-tour-entry",
+        "timestamp": "<time>"
+      }
+    ]
+  }
+}
+

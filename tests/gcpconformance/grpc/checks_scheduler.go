@@ -140,6 +140,11 @@ func checkSchedulerListJobs(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	// AIP-158: jobs.list documents no non-positive exception, so a negative
+	// page_size is INVALID_ARGUMENT rather than a silent first page.
+	if _, err := client.ListJobs(ctx, &schedulerpb.ListJobsRequest{Parent: schedulerParent(cfg), PageSize: -1}).Next(); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("ListJobs(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
 	it := client.ListJobs(ctx, &schedulerpb.ListJobsRequest{Parent: schedulerParent(cfg)})
 	for {
 		job, err := it.Next()

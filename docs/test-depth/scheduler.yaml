@@ -1,0 +1,25 @@
+# Behavioural depth record - scheduler (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: scheduler
+classes:
+  p2:
+    state: present
+    suites: [sdk-scheduler]
+    note: "concurrent job create/delete and dispatch under -race"
+  p3:
+    state: present
+    suites: [sdk-scheduler]
+    note: "googleapi error envelopes"
+  p4:
+    state: present
+    suites: [sdk-scheduler]
+    note: "NextPageToken paging over jobs"
+  p5:
+    state: present
+    suites: [sdk-scheduler]
+    note: "many-jobs page walk plus retry/attempt-deadline dispatch caps"

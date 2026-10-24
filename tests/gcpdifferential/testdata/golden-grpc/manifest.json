@@ -1,0 +1,184 @@
+{
+  "version": 1,
+  "project": "<project>",
+  "ops": 28,
+  "services": [
+    "dataproc",
+    "datastore",
+    "firestore",
+    "logging",
+    "monitoring",
+    "pubsub"
+  ],
+  "files": [
+    {
+      "file": "000-datastore-ds_commit_upsert.json",
+      "op": "ds_commit_upsert",
+      "sha256": "18df4b17bbe21b2967e2f2c5d8fb64d413d76f1060a1d7e8595d4bfded5a2b30",
+      "status": 0
+    },
+    {
+      "file": "001-datastore-ds_lookup_found.json",
+      "op": "ds_lookup_found",
+      "sha256": "ac59d7b7ff01aa4b2940a57d0e3e6c792c55992c64228d58df1333f12d3aa82f",
+      "status": 0
+    },
+    {
+      "file": "002-datastore-ds_lookup_missing.json",
+      "op": "ds_lookup_missing",
+      "sha256": "2ce1a3857ef7bd805b849f50381be47eca2ba8c29c3063a5b8dfaa1169837c36",
+      "status": 0
+    },
+    {
+      "file": "003-datastore-ds_run_query.json",
+      "op": "ds_run_query",
+      "sha256": "13e4e866e4b513c6d2cd7e44e250da6237d9a224c3247897cbc5b3fc1b8cc176",
+      "status": 0
+    },
+    {
+      "file": "004-datastore-ds_run_aggregation_query.json",
+      "op": "ds_run_aggregation_query",
+      "sha256": "a146a36d90f254cc4bb2cf8034369a82822ca52cd91577d24a37a9d9bdf5c065",
+      "status": 0
+    },
+    {
+      "file": "005-datastore-ds_commit_delete.json",
+      "op": "ds_commit_delete",
+      "sha256": "9606c21065ca7971ed8bbe380ddb889def543b2becff6daa775f27740e13f186",
+      "status": 0
+    },
+    {
+      "file": "006-firestore-fs_doc_create.json",
+      "op": "fs_doc_create",
+      "sha256": "1851f96e785561fc463735e256499c3d1061c9bd4f821e0a39f2521289c399f4",
+      "status": 0
+    },
+    {
+      "file": "007-firestore-fs_doc_get.json",
+      "op": "fs_doc_get",
+      "sha256": "85d8698efe654207ee8b0f7a68c2ed496eb1410e996e82255a3d056a4592646c",
+      "status": 0
+    },
+    {
+      "file": "008-firestore-fs_docs_list.json",
+      "op": "fs_docs_list",
+      "sha256": "a789a60ff80ed7e8da47934dace7538c66f6108c7bda2c0afcf1a10e32cdd685",
+      "status": 0
+    },
+    {
+      "file": "009-firestore-fs_doc_get_missing.json",
+      "op": "fs_doc_get_missing",
+      "sha256": "1300eb8ca88701046a0f3bdf9d68ff725edaee8e169b74003adb401cf524515e",
+      "status": 5
+    },
+    {
+      "file": "010-firestore-fs_doc_delete.json",
+      "op": "fs_doc_delete",
+      "sha256": "a4bdac15fad590cfa63a5593789ac4fbc6c295dbb9e89b51498bfde8b4997d91",
+      "status": 0
+    },
+    {
+      "file": "011-logging-log_write_entries.json",
+      "op": "log_write_entries",
+      "sha256": "a1fadc2daa1cced91eb9025880ace34a53e648ed9f26343fd96411591de928dd",
+      "status": 0
+    },
+    {
+      "file": "012-logging-log_list_entries.json",
+      "op": "log_list_entries",
+      "sha256": "15b7e2a5e8a6ff5c7b0e9bd7dce1f83eb6d614b519be6eeb2c569c9ff9cfde07",
+      "status": 0
+    },
+    {
+      "file": "013-monitoring-mon_list_metric_descriptors.json",
+      "op": "mon_list_metric_descriptors",
+      "sha256": "ee19faafd6ce71f8061ab4f52ca2efdf93125917878e905ec489acac9b21f60c",
+      "status": 0
+    },
+    {
+      "file": "014-monitoring-mon_get_metric_descriptor_missing.json",
+      "op": "mon_get_metric_descriptor_missing",
+      "sha256": "a22c1dd21934bd4adcb2caca6aecee062b5a77bde832a0f908b3f7e79e38e565",
+      "status": 5
+    },
+    {
+      "file": "015-dataproc-operations_list.json",
+      "op": "operations_list",
+      "sha256": "d45958f4aa0da16c52da38c9dc4b2e2208571075f666c6b5848705115d4321db",
+      "status": 0
+    },
+    {
+      "file": "016-dataproc-operation_get_missing.json",
+      "op": "operation_get_missing",
+      "sha256": "58053eb91d45ef2772c8fc9f0fde616061ba4b6eb9e8245a5fac9611d44f5304",
+      "status": 5
+    },
+    {
+      "file": "017-datastore-ds_run_query_start_cursor.json",
+      "op": "ds_run_query_start_cursor",
+      "sha256": "0db1036c40a2207f1bfbfd3148b6dd9b010aa098a13bbaabbba333d597f33569",
+      "status": 0
+    },
+    {
+      "file": "018-datastore-ds_run_query_end_cursor.json",
+      "op": "ds_run_query_end_cursor",
+      "sha256": "f48fb2dd7df74d8c2a6a002aedbccb957d8b80df13f0d1af9fe89b1698698101",
+      "status": 0
+    },
+    {
+      "file": "019-datastore-ds_run_query_end_cursor_last.json",
+      "op": "ds_run_query_end_cursor_last",
+      "sha256": "017c9085caf75d3d0e0cffb102c55d1f56e6670d5b3fa7ab2338ecaf8e6c9017",
+      "status": 0
+    },
+    {
+      "file": "020-pubsub-msg_grpc_pull.json",
+      "op": "msg_grpc_pull",
+      "sha256": "43ccd0233d2c8e9c851353063109846dd84b810399f55af2e2749153255c10ca",
+      "status": 0
+    },
+    {
+      "file": "021-pubsub-msg_grpc_acknowledge.json",
+      "op": "msg_grpc_acknowledge",
+      "sha256": "15bdeb84bc6cb87a235a0cce9ec3cea78045cec373a4689212d67e599dd2f534",
+      "status": 0
+    },
+    {
+      "file": "022-pubsub-msg_grpc_modify_ack_deadline.json",
+      "op": "msg_grpc_modify_ack_deadline",
+      "sha256": "a32278186508dfacbfd5b28428695f04aeb381d33ba7309d5e3a7a806da6d921",
+      "status": 0
+    },
+    {
+      "file": "023-pubsub-msg_grpc_create_snapshot.json",
+      "op": "msg_grpc_create_snapshot",
+      "sha256": "106baa2531d9c988499a0992335ce5f402f3ae51efdc3c99f0b9ef6a916614b5",
+      "status": 0
+    },
+    {
+      "file": "024-pubsub-msg_grpc_seek.json",
+      "op": "msg_grpc_seek",
+      "sha256": "ffb1246588b4f01cecbaedb079114d128cd89dabab1cd71eb022438871c04306",
+      "status": 0
+    },
+    {
+      "file": "025-pubsub-msg_grpc_seek_pull.json",
+      "op": "msg_grpc_seek_pull",
+      "sha256": "3897f71306a0672d254610abaf69b8e1fa0897f422e1f03b1bc1995f3305fe83",
+      "status": 0
+    },
+    {
+      "file": "026-pubsub-msg_grpc_streaming_pull.json",
+      "op": "msg_grpc_streaming_pull",
+      "sha256": "ecde6b393a6942bc6f2ff958ef1c7777aafd0e5aec7e2e96038d703a56afcd8d",
+      "status": 0
+    },
+    {
+      "file": "027-pubsub-msg_grpc_dead_letter.json",
+      "op": "msg_grpc_dead_letter",
+      "sha256": "026bf016323f130226ca2d93cf26575e306e27273ae98884280261226d4da78e",
+      "status": 0
+    }
+  ]
+}
+

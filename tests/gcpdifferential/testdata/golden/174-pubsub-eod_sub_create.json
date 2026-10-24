@@ -1,0 +1,26 @@
+{
+  "index": 174,
+  "service": "pubsub",
+  "op": "eod_sub_create",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-eod-sub-<suffix>",
+  "status": 200,
+  "request": {
+    "ackDeadlineSeconds": 10,
+    "enableExactlyOnceDelivery": true,
+    "topic": "projects/<project>/topics/conf-pubsub-eod-<suffix>"
+  },
+  "response": {
+    "ackDeadlineSeconds": 10,
+    "enableExactlyOnceDelivery": true,
+    "expirationPolicy": {
+      "ttl": "2678400s"
+    },
+    "messageRetentionDuration": "604800s",
+    "name": "projects/<project>/subscriptions/conf-pubsub-eod-sub-<suffix>",
+    "pushConfig": {},
+    "state": "ACTIVE",
+    "topic": "projects/<project>/topics/conf-pubsub-eod-<suffix>"
+  }
+}
+

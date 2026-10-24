@@ -49,7 +49,7 @@ func (c *CloudSQLCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 			nr.Action = "FlagsList"
 			return nr, nil
 		}
-		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 501)
 	}
 
 	pi := -1
@@ -83,7 +83,7 @@ func (c *CloudSQLCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 
 	nr.Action = cloudSQLAction(rest, r.Method, nr)
 	if nr.Action == "" {
-		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 501)
 	}
 	return nr, nil
 }

@@ -191,6 +191,15 @@ func (s *Service) CreateAcl(ctx context.Context, project, location, clusterID, a
 		s.rollbackCreatedAcl(ctx, project, location, clusterID, a)
 		return mkstore.Acl{}, err
 	}
+	// In the mock topology there is no group coordinator to observe a client
+	// committing offsets, so a LITERAL GROUP ACL — the only control-plane
+	// reference that names a concrete consumer group — seeds the group's
+	// record. That keeps consumerGroups get/update/delete addressable without
+	// inventing a create RPC; a live broker remains the source of truth when
+	// one is wired. A wildcard ACL names no group, so it seeds nothing.
+	if !s.hasLiveBroker(project, location, clusterID) && a.ResourceType == "GROUP" && a.PatternType == "LITERAL" && a.ResourceName != "*" {
+		s.seedMockGroup(project, location, clusterID, a.ResourceName)
+	}
 	return a, nil
 }
 
@@ -218,7 +227,10 @@ func (s *Service) ListAcls(ctx context.Context, project, location, clusterID str
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(acls, func(a mkstore.Acl) string { return a.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(acls, func(a mkstore.Acl) string { return a.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

@@ -1,0 +1,29 @@
+{
+  "index": 6,
+  "service": "pubsub",
+  "op": "error_iam_set_stale",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/<topic>:setIamPolicy",
+  "status": 409,
+  "request": {
+    "policy": {
+      "bindings": [
+        {
+          "members": [
+            "allAuthenticatedUsers"
+          ],
+          "role": "roles/pubsub.viewer"
+        }
+      ],
+      "etag": "<etag>"
+    }
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "message": "There were concurrent policy changes. Please retry the whole read-modify-write with exponential backoff. The request's ETag '\\000 \\001' did not match the current policy's ETag '\\007\\006]q+\\233\\217\\212'.",
+      "status": "ABORTED"
+    }
+  }
+}
+

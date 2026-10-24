@@ -1,7 +1,8 @@
 /**
- * Base fetch wrapper. Reads session token from cookie and sets
- * credentials: 'include' so the session cookie is sent cross-origin
- * in dev mode (Vite dev server → 4567).
+ * Base fetch wrapper. The `session` cookie is HttpOnly, so JS cannot read it —
+ * the browser attaches it automatically with `credentials: 'include'` (same
+ * origin in prod, Vite proxy in dev). On a 401 (e.g. the emulator restarted and
+ * rotated the token) we re-acquire the cookie and retry once.
  */
 
 const BASE = ''
@@ -13,13 +14,6 @@ export function setCurrentAccount(id: string) {
   _currentAccount = id
 }
 
-function getCookie(name: string): string | undefined {
-  const match = document.cookie
-    .split('; ')
-    .find((row) => row.startsWith(`${name}=`))
-  return match?.split('=')[1]
-}
-
 export class APIError extends Error {
   constructor(
     public readonly status: number,
@@ -29,6 +23,46 @@ export class APIError extends Error {
     super(message)
     this.name = 'APIError'
   }
+}
+
+/** In-flight session refresh, shared by concurrent callers. */
+let _refreshing: Promise<void> | null = null
+
+/**
+ * Re-acquire the session cookie. The server sets the HttpOnly `session` cookie
+ * on every /ui/* document response, so a credentialed GET is enough; the value
+ * is deliberately unreadable from JS. Concurrent callers share one request.
+ */
+export function refreshSession(): Promise<void> {
+  if (_refreshing) return _refreshing
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  _refreshing = fetch('/ui/', {
+    method: 'GET',
+    credentials: 'include',
+    cache: 'no-store',
+    signal: controller.signal,
+  })
+    .catch(() => undefined)
+    .then(() => undefined)
+    .finally(() => {
+      clearTimeout(timer)
+      _refreshing = null
+    })
+  return _refreshing
+}
+
+async function parseError(res: Response): Promise<APIError> {
+  let code = 'UnknownError'
+  let message = res.statusText
+  try {
+    const err = await res.json()
+    code = err.code ?? code
+    message = err.message ?? message
+  } catch {
+    // ignore JSON parse errors
+  }
+  return new APIError(res.status, code, message)
 }
 
 async function request<T>(
@@ -45,33 +79,27 @@ async function request<T>(
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)))
   }
 
-  const token = getCookie('session')
   const headers: Record<string, string> = {}
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
   }
 
-  const res = await fetch(url.toString(), {
-    method,
-    headers,
-    credentials: 'include',
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  const send = () =>
+    fetch(url.toString(), {
+      method,
+      headers,
+      credentials: 'include',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+
+  let res = await send()
+  if (res.status === 401) {
+    await refreshSession()
+    res = await send()
+  }
 
   if (!res.ok) {
-    let code = 'UnknownError'
-    let message = res.statusText
-    try {
-      const err = await res.json()
-      code = err.code ?? code
-      message = err.message ?? message
-    } catch {
-      // ignore JSON parse errors
-    }
-    throw new APIError(res.status, code, message)
+    throw await parseError(res)
   }
 
   if (res.status === 204) {
@@ -104,18 +132,19 @@ export async function putBlob(
   }
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)))
 
-  const token = getCookie('session')
-  const headers: Record<string, string> = { 'Content-Type': contentType }
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
+  const send = () =>
+    fetch(url.toString(), {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      credentials: 'include',
+      body: blob,
+    })
 
-  const res = await fetch(url.toString(), {
-    method: 'PUT',
-    headers,
-    credentials: 'include',
-    body: blob,
-  })
+  let res = await send()
+  if (res.status === 401) {
+    await refreshSession()
+    res = await send()
+  }
   if (!res.ok) {
     throw new APIError(res.status, 'UploadFailed', `Upload failed: ${res.status} ${res.statusText}`)
   }

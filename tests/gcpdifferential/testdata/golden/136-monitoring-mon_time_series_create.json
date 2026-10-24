@@ -1,0 +1,35 @@
+{
+  "index": 136,
+  "service": "monitoring",
+  "op": "mon_time_series_create",
+  "method": "POST",
+  "path": "/v3/projects/<project>/timeSeries",
+  "status": 200,
+  "request": {
+    "timeSeries": [
+      {
+        "metric": {
+          "type": "<demoMetric>"
+        },
+        "points": [
+          {
+            "interval": {
+              "endTime": "<time>"
+            },
+            "value": {
+              "doubleValue": 10
+            }
+          }
+        ],
+        "resource": {
+          "labels": {
+            "project_id": "<project>"
+          },
+          "type": "global"
+        }
+      }
+    ]
+  },
+  "response": {}
+}
+

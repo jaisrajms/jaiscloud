@@ -36,6 +36,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 )
 
 const (
@@ -81,12 +83,19 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// startPortForward forwards a Service to a free local port and returns the
-// base URL, the chosen local port, and a stop function.
+// startPortForward forwards a Service in the emulator's namespace to a free
+// local port and returns the base URL, the chosen local port, and a stop
+// function.
 func startPortForward(t *testing.T, svc string, remotePort int) (string, int, func()) {
 	t.Helper()
+	return startPortForwardInNamespace(t, namespace(), svc, remotePort)
+}
+
+// startPortForwardInNamespace forwards a Service in ns to a free local port.
+func startPortForwardInNamespace(t *testing.T, ns, svc string, remotePort int) (string, int, func()) {
+	t.Helper()
 	port := freePort(t)
-	cmd := exec.Command("kubectl", "-n", namespace(), "port-forward",
+	cmd := exec.Command("kubectl", "-n", ns, "port-forward",
 		"svc/"+svc, fmt.Sprintf("%d:%d", port, remotePort))
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -115,7 +124,7 @@ func startPortForward(t *testing.T, svc string, remotePort int) (string, int, fu
 		time.Sleep(300 * time.Millisecond)
 	}
 	stop()
-	t.Fatalf("port-forward to svc/%s never became ready: %s", svc, strings.TrimSpace(errb.String()))
+	t.Fatalf("port-forward to svc/%s in ns/%s never became ready: %s", svc, ns, strings.TrimSpace(errb.String()))
 	return "", 0, func() {}
 }
 
@@ -205,8 +214,10 @@ func TestManagedKafkaBrokerK3d(t *testing.T) {
 		t.Fatalf("bootstrapAddress %q is the synthesized mock address — the deployed emulator is not running JAISCLOUD_KAFKA_BROKER_MODE=k8s", addr)
 	}
 
-	// The address must be the in-cluster Service DNS the broker manager owns.
-	wantSuffix := fmt.Sprintf(".%s.svc.cluster.local:9092", namespace())
+	// The address must be the in-cluster Service DNS in the cluster's own
+	// namespace (KNS4: one namespace per Managed Kafka cluster).
+	clusterNS := kafkabroker.ClusterNamespace(testProject, testRegion, cluster)
+	wantSuffix := fmt.Sprintf(".%s.svc.cluster.local:9092", clusterNS)
 	if !strings.HasSuffix(addr, wantSuffix) {
 		t.Fatalf("bootstrapAddress %q does not end with %q", addr, wantSuffix)
 	}
@@ -217,13 +228,13 @@ func TestManagedKafkaBrokerK3d(t *testing.T) {
 
 	// The Service must exist and have ready endpoints (the Pod's readiness probe
 	// passed), which is what proves something listens at the advertised address.
-	if _, err := kubectl("-n", namespace(), "get", "svc", svcName); err != nil {
-		t.Fatalf("broker Service %s not found: %v", svcName, err)
+	if _, err := kubectl("-n", clusterNS, "get", "svc", svcName); err != nil {
+		t.Fatalf("broker Service %s not found in %s: %v", svcName, clusterNS, err)
 	}
-	waitForServiceEndpoints(t, svcName, 30*time.Second)
+	waitForServiceEndpoints(t, clusterNS, svcName, 30*time.Second)
 
 	// A TCP connection through the Service reaches the broker.
-	_, brokerPort, stopBroker := startPortForward(t, svcName, 9092)
+	_, brokerPort, stopBroker := startPortForwardInNamespace(t, clusterNS, svcName, 9092)
 	defer stopBroker()
 
 	t.Run("tcp reachable", func(t *testing.T) {
@@ -251,19 +262,21 @@ func TestManagedKafkaBrokerK3d(t *testing.T) {
 	if code < 200 || code >= 300 {
 		t.Fatalf("create acl: HTTP %d: %v", code, aclBody)
 	}
-	assertBrokerAcl(t, svcName, "User:acl-smoke", true)
+	assertBrokerAcl(t, clusterNS, svcName, "User:acl-smoke", true)
 
 	code, delBody := api(t, httpClient, http.MethodDelete,
 		base+clusterPath(cluster)+"/acls/topic/orders", nil)
 	if code >= 300 {
 		t.Fatalf("delete acl: HTTP %d: %v", code, delBody)
 	}
-	assertBrokerAcl(t, svcName, "User:acl-smoke", false)
+	assertBrokerAcl(t, clusterNS, svcName, "User:acl-smoke", false)
 
-	// Delete the cluster and assert the broker is reaped.
+	// Delete the cluster and assert the broker is reaped, including the
+	// namespace it owned.
 	deleteCluster(t, base, cluster)
-	waitForResourceGone(t, "svc", svcName, 60*time.Second)
-	waitForResourceGone(t, "pod", svcName, 90*time.Second)
+	waitForResourceGone(t, clusterNS, "svc", svcName, 60*time.Second)
+	waitForResourceGone(t, clusterNS, "pod", svcName, 90*time.Second)
+	waitForNamespaceGone(t, clusterNS, 60*time.Second)
 }
 
 // TestManagedKafkaBrokerResetAndSweepK3d proves the MK5 lifecycle hardening
@@ -301,6 +314,7 @@ func TestManagedKafkaBrokerResetAndSweepK3d(t *testing.T) {
 	if !strings.HasPrefix(svcName, "mkbroker-") {
 		t.Fatalf("unexpected broker service %q", svcName)
 	}
+	clusterNS := kafkabroker.ClusterNamespace(testProject, testRegion, cluster)
 
 	// Seed an orphan broker-labeled Pod/Service the emulator never tracked; the
 	// reset sweep must reap it (the once-per-process startup sweep is covered by
@@ -326,11 +340,13 @@ func TestManagedKafkaBrokerResetAndSweepK3d(t *testing.T) {
 		t.Fatalf("reset: HTTP %d: %v", code, resetBody)
 	}
 
-	// Reset reaps the tracked broker and the untracked orphan, and wipes state.
-	waitForResourceGone(t, "svc", svcName, 60*time.Second)
-	waitForResourceGone(t, "pod", svcName, 90*time.Second)
-	waitForResourceGone(t, "svc", orphan, 60*time.Second)
-	waitForResourceGone(t, "pod", orphan, 90*time.Second)
+	// Reset reaps the tracked broker (and the namespace it owned) and the
+	// untracked orphan, and wipes state.
+	waitForResourceGone(t, clusterNS, "svc", svcName, 60*time.Second)
+	waitForResourceGone(t, clusterNS, "pod", svcName, 90*time.Second)
+	waitForNamespaceGone(t, clusterNS, 60*time.Second)
+	waitForResourceGone(t, namespace(), "svc", orphan, 60*time.Second)
+	waitForResourceGone(t, namespace(), "pod", orphan, 90*time.Second)
 	if code, _ := api(t, httpClient, http.MethodGet, base+clusterPath(cluster), nil); code != http.StatusNotFound {
 		t.Fatalf("cluster still present after reset: HTTP %d", code)
 	}
@@ -353,13 +369,13 @@ func TestManagedKafkaBrokerResetAndSweepK3d(t *testing.T) {
 }
 
 // assertBrokerAcl reads the broker's Kafka ACL table from inside the broker Pod
-// and asserts whether the principal is present.
-func assertBrokerAcl(t *testing.T, pod, principal string, want bool) {
+// (in its per-cluster namespace) and asserts whether the principal is present.
+func assertBrokerAcl(t *testing.T, ns, pod, principal string, want bool) {
 	t.Helper()
-	out, err := kubectl("-n", namespace(), "exec", pod, "-c", "redpanda", "--",
+	out, err := kubectl("-n", ns, "exec", pod, "-c", "redpanda", "--",
 		"rpk", "acl", "list", "--brokers", "127.0.0.1:9092")
 	if err != nil {
-		t.Fatalf("rpk acl list in %s: %v", pod, err)
+		t.Fatalf("rpk acl list in %s/%s: %v", ns, pod, err)
 	}
 	got := strings.Contains(out, principal)
 	if got != want {
@@ -375,28 +391,42 @@ func deleteCluster(t *testing.T, base, cluster string) {
 	}
 }
 
-func waitForServiceEndpoints(t *testing.T, svc string, timeout time.Duration) {
+func waitForServiceEndpoints(t *testing.T, ns, svc string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := kubectl("-n", namespace(), "get", "endpoints", svc,
+		out, err := kubectl("-n", ns, "get", "endpoints", svc,
 			"-o", "jsonpath={range .subsets[*].addresses[*]}{.ip}{\"\\n\"}{end}")
 		if err == nil && strings.TrimSpace(out) != "" {
 			return
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatalf("Service %s never got ready endpoints within %s", svc, timeout)
+	t.Fatalf("Service %s/%s never got ready endpoints within %s", ns, svc, timeout)
 }
 
-func waitForResourceGone(t *testing.T, kind, name string, timeout time.Duration) {
+func waitForResourceGone(t *testing.T, ns, kind, name string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := kubectl("-n", namespace(), "get", kind, name); err != nil {
+		if _, err := kubectl("-n", ns, "get", kind, name); err != nil {
 			return
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("%s/%s was not reaped within %s", kind, name, timeout)
+	t.Fatalf("%s/%s in ns/%s was not reaped within %s", kind, name, ns, timeout)
+}
+
+// waitForNamespaceGone waits until the namespace itself is deleted (KNS4: the
+// broker's per-cluster namespace is torn down with its cluster/reset).
+func waitForNamespaceGone(t *testing.T, ns string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := kubectl("get", "namespace", ns); err != nil {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("namespace %s was not reaped within %s", ns, timeout)
 }

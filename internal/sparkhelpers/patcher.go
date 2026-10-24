@@ -19,12 +19,24 @@ import (
 //  2. Lists driver pods matching spark-app-id=<selector>.
 //  3. Returns an OwnerRefHint pointing at the driver pod's owning Job.
 func MakeExecutorOwnerResolver(k8s kubernetes.Interface, namespace string) func(*corev1.Pod) (*k8shelpers.OwnerRefHint, error) {
+	return resolveExecutorOwner(k8s, func(*corev1.Pod) string { return namespace })
+}
+
+// MakeExecutorOwnerResolverPerPod is MakeExecutorOwnerResolver for engines that
+// own one namespace per resource: it resolves the driver in the *executor pod's
+// own namespace* rather than a fixed one, so a single patcher can watch many
+// namespaces.
+func MakeExecutorOwnerResolverPerPod(k8s kubernetes.Interface) func(*corev1.Pod) (*k8shelpers.OwnerRefHint, error) {
+	return resolveExecutorOwner(k8s, func(pod *corev1.Pod) string { return pod.Namespace })
+}
+
+func resolveExecutorOwner(k8s kubernetes.Interface, namespaceOf func(*corev1.Pod) string) func(*corev1.Pod) (*k8shelpers.OwnerRefHint, error) {
 	return func(pod *corev1.Pod) (*k8shelpers.OwnerRefHint, error) {
 		appSelector := pod.Labels["spark-app-selector"]
 		if appSelector == "" {
 			return nil, nil
 		}
-		drivers, err := k8s.CoreV1().Pods(namespace).List(
+		drivers, err := k8s.CoreV1().Pods(namespaceOf(pod)).List(
 			context.Background(),
 			metav1.ListOptions{LabelSelector: "spark-app-id=" + appSelector},
 		)

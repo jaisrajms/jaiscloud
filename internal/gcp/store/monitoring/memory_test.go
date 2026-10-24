@@ -368,3 +368,38 @@ func TestMemoryStoreDistributionRoundTrip(t *testing.T) {
 	}
 	check(t, s2)
 }
+
+// TestMemoryStoreListAllTimeSeries covers the cross-project list that backs the
+// folders arm of timeSeries.list: every project's series, ordered by
+// (metric type, resource type, series key) so paging is stable.
+func TestMemoryStoreListAllTimeSeries(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	base := time.Now().UTC()
+
+	for _, proj := range []string{"p2", "p1"} {
+		if err := s.CreateTimeSeries(ctx, proj, TimeSeries{
+			MetricType:   "custom.googleapis.com/m",
+			ResourceType: "global",
+			Points:       []Point{testPoint(1, base)},
+		}); err != nil {
+			t.Fatalf("CreateTimeSeries(%s): %v", proj, err)
+		}
+	}
+	all, err := s.ListAllTimeSeries(ctx)
+	if err != nil {
+		t.Fatalf("ListAllTimeSeries: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListAllTimeSeries = %d series, want both projects", len(all))
+	}
+	// Two calls must return the same order (map iteration alone is unstable).
+	again, _ := s.ListAllTimeSeries(ctx)
+	if len(again) != 2 || again[0].MetricType != all[0].MetricType ||
+		again[0].ResourceType != all[0].ResourceType || len(again[0].Points) != len(all[0].Points) {
+		t.Fatalf("ListAllTimeSeries order not stable: %+v vs %+v", all, again)
+	}
+	if empty, err := NewMemoryStore().ListAllTimeSeries(ctx); err != nil || len(empty) != 0 {
+		t.Fatalf("empty store = %+v, %v", empty, err)
+	}
+}

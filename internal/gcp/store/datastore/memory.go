@@ -6,7 +6,6 @@ import (
 	"sort"
 	"sync"
 
-	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/storeutil"
 )
 
@@ -98,7 +97,7 @@ func (s *MemoryStore) ApplyMutation(_ context.Context, project string, kind Muta
 			case MutationUpsert:
 				e.Version = current.Version + 1
 			}
-			e.UpdateTime = nextUpdateTime(current.UpdateTime, clock.Now())
+			e = stampWrite(current, exists, e)
 			return e, nil
 		},
 		func(ent Entity) {

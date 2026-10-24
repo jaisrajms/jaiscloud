@@ -1,0 +1,15 @@
+{
+  "index": 24,
+  "service": "pubsub",
+  "op": "msg_grpc_seek",
+  "method": "google.pubsub.v1.Subscriber/Seek",
+  "path": "projects/<project>/subscriptions/<subscription>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "snapshot": "projects/<project>/snapshots/<snapshot>",
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {}
+}
+

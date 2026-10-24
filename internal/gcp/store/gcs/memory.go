@@ -104,10 +104,18 @@ func (s *MemoryObjectStore) DeleteBucket(_ context.Context, name string) error {
 	if _, ok := s.buckets[name]; !ok {
 		return ErrNoSuchBucket
 	}
-	if len(s.objects[name]) > 0 {
-		return ErrBucketNotEmpty
+	// GCS allows deleting a bucket that only holds soft-deleted objects (the
+	// delete succeeds and the soft-deleted objects are retained with the
+	// bucket); any live or noncurrent generation blocks it.
+	for _, gens := range s.objects[name] {
+		for _, m := range gens {
+			if !m.SoftDeleted {
+				return ErrBucketNotEmpty
+			}
+		}
 	}
 	delete(s.buckets, name)
+	delete(s.objects, name)
 	return nil
 }
 
@@ -145,8 +153,21 @@ func (s *MemoryObjectStore) PutObjectMeta(_ context.Context, bucket, name string
 	if s.objects[bucket] == nil {
 		s.objects[bucket] = make(map[string][]ObjectMeta)
 	}
-	s.objects[bucket][name] = []ObjectMeta{meta}
+	s.objects[bucket][name] = replaceLiveGeneration(s.objects[bucket][name], meta)
 	return nil
+}
+
+// replaceLiveGeneration drops the current live generation and appends meta,
+// leaving non-live generations (noncurrent or soft-deleted) in place — a
+// non-versioned overwrite must not destroy retained copies.
+func replaceLiveGeneration(gens []ObjectMeta, meta ObjectMeta) []ObjectMeta {
+	out := make([]ObjectMeta, 0, len(gens)+1)
+	for _, g := range gens {
+		if g.TimeDeleted != nil {
+			out = append(out, g)
+		}
+	}
+	return append(out, meta)
 }
 
 // liveGeneration returns the live (non-deleted) generation for a name, or
@@ -202,7 +223,7 @@ func (s *MemoryObjectStore) PutObjectMetaChecked(_ context.Context, bucket, name
 	if s.objects[bucket] == nil {
 		s.objects[bucket] = make(map[string][]ObjectMeta)
 	}
-	s.objects[bucket][name] = []ObjectMeta{meta}
+	s.objects[bucket][name] = replaceLiveGeneration(s.objects[bucket][name], meta)
 	return nil
 }
 
@@ -342,7 +363,7 @@ func (s *MemoryObjectStore) DeleteObjectMetaChecked(_ context.Context, bucket, n
 	return nil
 }
 
-func (s *MemoryObjectStore) TombstoneObjectMetaChecked(_ context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error) {
+func (s *MemoryObjectStore) TombstoneObjectMetaChecked(_ context.Context, bucket, name string, opts TombstoneOptions, precondition *Precondition) (ObjectMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	objs, ok := s.objects[bucket]
@@ -360,10 +381,10 @@ func (s *MemoryObjectStore) TombstoneObjectMetaChecked(_ context.Context, bucket
 	if !objectPreconditionMatches(current, exists, precondition) {
 		return ObjectMeta{}, ErrPreconditionFailed
 	}
+	now := clock.Now()
 	for i := len(gens) - 1; i >= 0; i-- {
 		if gens[i].TimeDeleted == nil {
-			now := clock.Now()
-			gens[i].TimeDeleted = &now
+			applyTombstone(&gens[i], now, opts)
 			objs[name] = gens
 			return gens[i], nil
 		}
@@ -386,56 +407,6 @@ func (s *MemoryObjectStore) GetObjectMeta(_ context.Context, bucket, name string
 		return meta, nil
 	}
 	return ObjectMeta{}, ErrNoSuchObject
-}
-
-// RestoreObjectGeneration makes generation live again: the target's timeDeleted
-// is cleared and metageneration bumped, and any other live generation is marked
-// non-live (mirroring real GCS, where restoring a soft-deleted generation
-// supersedes the current live one). The precondition is validated against the
-// current live state under the same write lock.
-func (s *MemoryObjectStore) RestoreObjectGeneration(_ context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	objs, ok := s.objects[bucket]
-	if !ok {
-		return ObjectMeta{}, ErrNoSuchObject
-	}
-	gens, ok := objs[name]
-	if !ok {
-		return ObjectMeta{}, ErrNoSuchObject
-	}
-	current, exists := liveGeneration(gens)
-	if !objectPreconditionMatches(current, exists, precondition) {
-		return ObjectMeta{}, ErrPreconditionFailed
-	}
-	idx := -1
-	for i := range gens {
-		if gens[i].Generation == generation {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return ObjectMeta{}, ErrNoSuchObject
-	}
-	if gens[idx].TimeDeleted == nil {
-		// The target is already live: restore is a no-op.
-		return gens[idx], nil
-	}
-	now := clock.Now()
-	for i := range gens {
-		if gens[i].TimeDeleted == nil && gens[i].Generation != generation {
-			t := now
-			gens[i].TimeDeleted = &t
-		}
-	}
-	g := gens[idx]
-	g.TimeDeleted = nil
-	g.Metageneration = nextMetageneration(g.Metageneration)
-	g.Updated = now
-	gens[idx] = g
-	objs[name] = gens
-	return g, nil
 }
 
 func (s *MemoryObjectStore) GetObjectGeneration(_ context.Context, bucket, name, generation string) (ObjectMeta, error) {
@@ -508,7 +479,7 @@ func (s *MemoryObjectStore) DeleteObjectGeneration(_ context.Context, bucket, na
 	return removed, nil
 }
 
-func (s *MemoryObjectStore) TombstoneObjectMeta(_ context.Context, bucket, name string) (ObjectMeta, error) {
+func (s *MemoryObjectStore) TombstoneObjectMeta(_ context.Context, bucket, name string, opts TombstoneOptions) (ObjectMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	objs, ok := s.objects[bucket]
@@ -520,15 +491,26 @@ func (s *MemoryObjectStore) TombstoneObjectMeta(_ context.Context, bucket, name 
 		return ObjectMeta{}, ErrNoSuchObject
 	}
 	// The live generation is the last appended one without a TimeDeleted mark.
+	now := clock.Now()
 	for i := len(gens) - 1; i >= 0; i-- {
 		if gens[i].TimeDeleted == nil {
-			now := clock.Now()
-			gens[i].TimeDeleted = &now
+			applyTombstone(&gens[i], now, opts)
 			objs[name] = gens
 			return gens[i], nil
 		}
 	}
 	return ObjectMeta{}, ErrNoSuchObject
+}
+
+// applyTombstone stamps a live generation non-live with the state selected by
+// opts (noncurrent archive or soft-deleted).
+func applyTombstone(m *ObjectMeta, now time.Time, opts TombstoneOptions) {
+	m.TimeDeleted = &now
+	m.SoftDeleted = opts.SoftDeleted
+	m.HardDeleteTime = time.Time{}
+	if opts.SoftDeleted {
+		m.HardDeleteTime = opts.HardDeleteTime
+	}
 }
 
 func (s *MemoryObjectStore) ListObjects(_ context.Context, bucket string) ([]ObjectMeta, error) {
@@ -557,6 +539,9 @@ func (s *MemoryObjectStore) ListObjectVersions(_ context.Context, bucket string)
 	objs := s.objects[bucket]
 	var result []ObjectMeta
 	for _, gens := range objs {
+		// Every generation, including soft-deleted copies: callers filter by
+		// state (the versions listing hides soft-deleted entries, the
+		// ?softDeleted=true listing shows only them).
 		result = append(result, gens...)
 	}
 	// Sort by name ascending, then generation descending (newest first).

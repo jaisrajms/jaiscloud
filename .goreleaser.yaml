@@ -7,8 +7,10 @@ before:
     - go mod tidy
 
 # ── ACTIVE BUILDS ──────────────────────────────────────────────────────────
-# Only jaiscloud-aws is released. Azure and GCP are future; add a build entry
-# for each once those clouds have implementations beyond the 501 stub.
+# jaiscloud-aws and jaiscloud-gcp are released. Both embed the console UI, so
+# both are built with -tags=ui (internal/ui/dist must exist first; release.yml
+# runs `pnpm --dir ui run build` before GoReleaser). Azure is still a 501 stub
+# and stays commented out below.
 
 builds:
   - id: jaiscloud-aws
@@ -31,26 +33,32 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
+  - id: jaiscloud-gcp
+    main: ./cmd/jaiscloud-gcp/
+    binary: jaiscloud-gcp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -tags=ui
+    ldflags:
+      - -s -w
+      # cmd/jaiscloud-gcp declares only `version` today (no commit/date vars).
+      - -X main.version={{.Version}}
+
 # ── FUTURE BUILDS (not active) ─────────────────────────────────────────────
 # Uncomment and add the matching archives/nfpms/brews/scoops entries when
-# jaiscloud-azure and jaiscloud-gcp move past the 501-stub phase.
+# jaiscloud-azure moves past the 501-stub phase.
 #
 #  - id: jaiscloud-azure
 #    main: ./cmd/jaiscloud-azure/
 #    binary: jaiscloud-azure
-#    env:
-#      - CGO_ENABLED=0
-#    goos: [linux, darwin, windows]
-#    goarch: [amd64, arm64]
-#    ldflags:
-#      - -s -w
-#      - -X main.version={{.Version}}
-#      - -X main.commit={{.Commit}}
-#      - -X main.date={{.Date}}
-#
-#  - id: jaiscloud-gcp
-#    main: ./cmd/jaiscloud-gcp/
-#    binary: jaiscloud-gcp
 #    env:
 #      - CGO_ENABLED=0
 #    goos: [linux, darwin, windows]
@@ -72,7 +80,17 @@ archives:
           - zip
     name_template: "jaiscloud-aws_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-  # Future: uncomment when Azure/GCP builds are active
+  - id: gcp
+    ids: [jaiscloud-gcp]
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "jaiscloud-gcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  # Future: uncomment when the Azure 501 stub becomes a real implementation
   # - id: azure
   #   ids: [jaiscloud-azure]
   #   formats: [tar.gz]
@@ -80,14 +98,6 @@ archives:
   #     - goos: windows
   #       formats: [zip]
   #   name_template: "jaiscloud-azure_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  #
-  # - id: gcp
-  #   ids: [jaiscloud-gcp]
-  #   formats: [tar.gz]
-  #   format_overrides:
-  #     - goos: windows
-  #       formats: [zip]
-  #   name_template: "jaiscloud-gcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 nfpms:
   - id: aws-packages
@@ -103,7 +113,18 @@ nfpms:
       - rpm
     bindir: /usr/local/bin
 
-  # Future: jaiscloud-azure and jaiscloud-gcp nfpm entries go here
+  - id: gcp-packages
+    ids: [jaiscloud-gcp]
+    package_name: jaiscloud-gcp
+    vendor: JaisCloud
+    homepage: https://github.com/jaisrajms/jaiscloud
+    maintainer: "Raj Jaiswal jaisraj@gmail.com"
+    description: "Local GCP emulator — GCP wire-protocol compatible"
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/local/bin
 
 homebrew_casks:
   - ids: [aws]
@@ -118,12 +139,29 @@ homebrew_casks:
     license: Apache-2.0
     hooks:
       post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/jaiscloud-aws"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/jaiscloud-aws"]
           end
 
-  # Future: add homebrew_casks entries for jaiscloud-azure and jaiscloud-gcp
+  - ids: [gcp]
+    name: jaiscloud-gcp
+    repository:
+      owner: jaisrajms
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/jaisrajms/jaiscloud
+    description: "Local GCP emulator — GCP wire-protocol compatible"
+    license: Apache-2.0
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/jaiscloud-gcp"]
+          end
+
+  # Future: add a homebrew_casks entry for jaiscloud-azure
 
 scoops:
   - ids: [aws]
@@ -136,23 +174,63 @@ scoops:
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
 
-  # Future: add scoops entries for jaiscloud-azure and jaiscloud-gcp
+  - ids: [gcp]
+    name: jaiscloud-gcp
+    repository:
+      owner: jaisrajms
+      name: scoop-jaiscloud
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: https://github.com/jaisrajms/jaiscloud
+    description: "Local GCP emulator — GCP wire-protocol compatible"
+    license: Apache-2.0
+
+  # Future: add a scoops entry for jaiscloud-azure
 
 # ── DOCKER IMAGES ──────────────────────────────────────────────────────────────
-# Single dockers_v2 entry replaces the old dockers + docker_manifests pair.
-# Buildx handles linux/amd64 and linux/arm64 in one shot via the multi-stage Dockerfile.
+# One dockers_v2 entry per cloud replaces the old dockers + docker_manifests pair.
+# Both reuse Dockerfile.goreleaser, which selects the binary and its default port
+# through BINARY/PORT build args (the image context is <os>/<arch>/<binary>).
+# Buildx handles linux/amd64 and linux/arm64 in one shot.
 # Requires DOCKERHUB_USERNAME env var (set in release.yml) and prior `docker login`.
 # TODO: once out of alpha, remove "latest" tag for prereleases by changing it to:
 #   "{{ if not .Prerelease }}latest{{ end }}"
 dockers_v2:
-  - images:
+  - ids: [jaiscloud-aws]
+    images:
       - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws"
     tags:
       - "{{ .Version }}"
       - "latest"
     dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    build_args:
+      BINARY: jaiscloud-aws
+      PORT: "4566"
     labels:
       "org.opencontainers.image.title": "jaiscloud-aws"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.revision": "{{ .Commit }}"
+      "org.opencontainers.image.source": "https://github.com/jaisrajms/jaiscloud"
+
+  - id: gcp
+    ids: [jaiscloud-gcp]
+    images:
+      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-gcp"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    build_args:
+      BINARY: jaiscloud-gcp
+      PORT: "8080"
+    labels:
+      "org.opencontainers.image.title": "jaiscloud-gcp"
       "org.opencontainers.image.version": "{{ .Version }}"
       "org.opencontainers.image.created": "{{ .Date }}"
       "org.opencontainers.image.revision": "{{ .Commit }}"

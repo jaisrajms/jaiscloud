@@ -1,0 +1,32 @@
+{
+  "index": 27,
+  "service": "pubsub",
+  "op": "msg_grpc_dead_letter",
+  "method": "google.pubsub.v1.Subscriber/Pull",
+  "path": "projects/<project>/subscriptions/<subscription>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "maxMessages": 1,
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {
+    "receivedMessages": [
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "attributes": {
+            "CloudPubSubDeadLetterSourceDeliveryCount": "<deadLetterDeliveryCount>",
+            "CloudPubSubDeadLetterSourceSubscription": "<subscription>",
+            "CloudPubSubDeadLetterSourceSubscriptionProject": "<project>",
+            "CloudPubSubDeadLetterSourceTopicPublishTime": "<time>"
+          },
+          "data": "Z3JwYy1kbHE=",
+          "messageId": "<messageId>",
+          "publishTime": "<time>"
+        }
+      }
+    ]
+  }
+}
+

@@ -353,6 +353,17 @@ func createVersionedBucket(t *testing.T, p *Provider, name string) {
 	}
 }
 
+// createSoftDeleteBucket creates an unversioned bucket, whose delete path is
+// soft delete (a delete keeps the generation restorable).
+func createSoftDeleteBucket(t *testing.T, p *Provider, name string) {
+	t.Helper()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": name}
+	if _, err := p.BucketsInsert(context.Background(), nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+}
+
 func addNotification(t *testing.T, p *Provider, bucket string, body map[string]any) {
 	t.Helper()
 	nr := notificationParams(bucket)

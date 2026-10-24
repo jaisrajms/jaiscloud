@@ -145,6 +145,9 @@ type Store interface {
 	UpdateJobAtomic(ctx context.Context, projectID, location, name string, mutate func(Job) (Job, error)) (Job, error)
 	DeleteJob(ctx context.Context, projectID, location, name string) error
 	ListJobs(ctx context.Context, projectID, location string) ([]Job, error)
+	// ListJobsByProject returns every job in a project across all locations,
+	// sorted by location then id. It backs the location-optional console list.
+	ListJobsByProject(ctx context.Context, projectID string) ([]Job, error)
 	// ListAllJobs returns every job across all projects and locations. The
 	// engine uses it to discover jobs to schedule.
 	ListAllJobs(ctx context.Context) ([]Job, error)

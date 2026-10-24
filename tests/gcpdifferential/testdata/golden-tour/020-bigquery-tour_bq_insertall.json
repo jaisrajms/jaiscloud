@@ -1,0 +1,30 @@
+{
+  "index": 20,
+  "service": "bigquery",
+  "op": "tour_bq_insertall",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables/<table>/insertAll",
+  "status": 200,
+  "request": {
+    "rows": [
+      {
+        "insertId": "1",
+        "json": {
+          "id": "1",
+          "name": "alice"
+        }
+      },
+      {
+        "insertId": "2",
+        "json": {
+          "id": "2",
+          "name": "bob"
+        }
+      }
+    ]
+  },
+  "response": {
+    "kind": "bigquery#tableDataInsertAllResponse"
+  }
+}
+

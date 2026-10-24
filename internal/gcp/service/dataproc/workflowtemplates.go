@@ -80,8 +80,18 @@ func (s *Service) ListWorkflowTemplates(ctx context.Context, project, region str
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(all, func(t dpstore.WorkflowTemplate) string { return t.TemplateID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(all, func(t dpstore.WorkflowTemplate) string { return t.TemplateID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// ListAllWorkflowTemplates lists every workflow template in a project across
+// all regions, sorted by region then template id. Templates have no lazy state,
+// so no settling is needed. It backs the region-optional console list.
+func (s *Service) ListAllWorkflowTemplates(ctx context.Context, project string) ([]dpstore.WorkflowTemplate, error) {
+	return s.store.ListWorkflowTemplatesByProject(ctx, project)
 }
 
 // UpdateWorkflowTemplate replaces a template's definition and bumps its

@@ -26,6 +26,12 @@ type PatcherConfig struct {
 
 	// Namespace to watch.
 	Namespace string
+
+	// Namespaces, when non-empty, are watched in addition to Namespace. It backs
+	// engines with one namespace per resource: resolve the owned namespaces with
+	// ListManagedNamespaces and pass them here. Duplicates and empty entries are
+	// ignored.
+	Namespaces []string
 }
 
 // StartOwnershipPatcher launches a controller goroutine that watches pods
@@ -40,44 +46,78 @@ type PatcherConfig struct {
 // Returned cancel() stops the controller. If the caller context is cancelled
 // the controller also stops.
 func StartOwnershipPatcher(ctx context.Context, k8s kubernetes.Interface, cfg PatcherConfig) (cancel func(), err error) {
-	// Startup reconcile sweep.
-	if err := reconcileSweep(ctx, k8s, cfg); err != nil {
-		slog.Warn("k8shelpers: ownership patcher startup sweep failed", "err", err)
-		// Non-fatal — proceed.
+	namespaces := uniqueNamespaces(cfg.Namespace, cfg.Namespaces)
+	if len(namespaces) == 0 {
+		return nil, fmt.Errorf("k8shelpers: ownership patcher requires at least one namespace")
+	}
+
+	// Startup reconcile sweep, one namespace at a time. A failure is non-fatal.
+	for _, ns := range namespaces {
+		if err := reconcileSweep(ctx, k8s, cfg, ns); err != nil {
+			slog.Warn("k8shelpers: ownership patcher startup sweep failed", "namespace", ns, "err", err)
+		}
 	}
 
 	patchCtx, patchCancel := context.WithCancel(ctx)
 
-	go func() {
-		backoff := time.Second
-		const maxBackoff = 30 * time.Second
-		for {
-			if err := watchAndPatch(patchCtx, k8s, cfg); err != nil {
-				if patchCtx.Err() != nil {
-					return // cancelled
-				}
-				slog.Warn("k8shelpers: ownership patcher watch error, restarting", "err", err, "backoff", backoff)
-				select {
-				case <-patchCtx.Done():
-					return
-				case <-time.After(backoff):
-				}
-				backoff *= 2
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-			} else {
-				backoff = time.Second // reset on clean exit
-			}
-		}
-	}()
+	for _, ns := range namespaces {
+		go func(namespace string) {
+			runPatchLoop(patchCtx, k8s, cfg, namespace)
+		}(ns)
+	}
 
 	return patchCancel, nil
 }
 
-// reconcileSweep lists all matching pods and patches those with empty OwnerReferences.
-func reconcileSweep(ctx context.Context, k8s kubernetes.Interface, cfg PatcherConfig) error {
-	pods, err := k8s.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
+// runPatchLoop watches one namespace, restarting the watch with backoff until
+// the context is cancelled.
+func runPatchLoop(ctx context.Context, k8s kubernetes.Interface, cfg PatcherConfig, namespace string) {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		if err := watchAndPatch(ctx, k8s, cfg, namespace); err != nil {
+			if ctx.Err() != nil {
+				return // cancelled
+			}
+			slog.Warn("k8shelpers: ownership patcher watch error, restarting", "namespace", namespace, "err", err, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		} else {
+			backoff = time.Second // reset on clean exit
+		}
+	}
+}
+
+// uniqueNamespaces returns the de-duplicated, non-empty union of the primary
+// namespace and the additional namespaces, preserving order.
+func uniqueNamespaces(primary string, additional []string) []string {
+	seen := make(map[string]bool, len(additional)+1)
+	out := make([]string, 0, len(additional)+1)
+	add := func(ns string) {
+		if ns == "" || seen[ns] {
+			return
+		}
+		seen[ns] = true
+		out = append(out, ns)
+	}
+	add(primary)
+	for _, ns := range additional {
+		add(ns)
+	}
+	return out
+}
+
+// reconcileSweep lists all matching pods in namespace and patches those with
+// empty OwnerReferences.
+func reconcileSweep(ctx context.Context, k8s kubernetes.Interface, cfg PatcherConfig, namespace string) error {
+	pods, err := k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: cfg.LabelSelector,
 	})
 	if err != nil {
@@ -95,9 +135,10 @@ func reconcileSweep(ctx context.Context, k8s kubernetes.Interface, cfg PatcherCo
 	return nil
 }
 
-// watchAndPatch watches pods and patches new pods with empty OwnerReferences.
-func watchAndPatch(ctx context.Context, k8s kubernetes.Interface, cfg PatcherConfig) error {
-	watcher, err := k8s.CoreV1().Pods(cfg.Namespace).Watch(ctx, metav1.ListOptions{
+// watchAndPatch watches pods in namespace and patches new pods with empty
+// OwnerReferences.
+func watchAndPatch(ctx context.Context, k8s kubernetes.Interface, cfg PatcherConfig, namespace string) error {
+	watcher, err := k8s.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
 		LabelSelector: cfg.LabelSelector,
 		Watch:         true,
 	})

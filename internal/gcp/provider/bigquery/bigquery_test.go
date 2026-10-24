@@ -762,6 +762,306 @@ func TestListPagination(t *testing.T) {
 	}
 }
 
+// TestMaxResultsEmptyBinding pins BigQuery's uint32 maxResults query binding on
+// every method that declares it: an explicitly empty value is not "absent"
+// (DC63), it is the frontend's binding rejection, so the error names
+// `max_results` (not the shared pager's internal pageSize alias) and the
+// message carries TYPE_UINT32. The check still happens up front, before any
+// dataset/table/job lookup, and an absent maxResults keeps meaning "no limit".
+func TestMaxResultsEmptyBinding(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"datasets.list", func() error {
+			_, err := p.ListDatasets(ctx, newNR(map[string]any{"maxResults": ""}))
+			return err
+		}},
+		{"tables.list", func() error {
+			_, err := p.ListTables(ctx, newNR(map[string]any{"datasetId": "d", "maxResults": ""}))
+			return err
+		}},
+		{"tabledata.list", func() error {
+			_, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "maxResults": ""}))
+			return err
+		}},
+		{"jobs.list", func() error {
+			_, err := p.ListJobs(ctx, newNR(map[string]any{"maxResults": ""}))
+			return err
+		}},
+		{"jobs.getQueryResults", func() error {
+			_, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": "j1", "maxResults": ""}))
+			return err
+		}},
+	}
+	for _, tc := range calls {
+		err := tc.call()
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("%s(maxResults=) = %v, want InvalidArgument/400", tc.name, err)
+			continue
+		}
+		if want := `Invalid value at 'max_results' (TYPE_UINT32), ""`; perr.Message != want {
+			t.Errorf("%s(maxResults=) message = %q, want %q", tc.name, perr.Message, want)
+		}
+	}
+	// An absent maxResults stays "no page limit" rather than an error.
+	if _, err := p.ListDatasets(ctx, newNR(nil)); err != nil {
+		t.Errorf("datasets.list without maxResults = %v, want a page", err)
+	}
+}
+
+// TestQueryResultPaging covers the result-set paging on jobs.query and
+// getQueryResults: maxResults truncates a page and returns a pageToken,
+// getQueryResults honors pageToken then startIndex, an unset maxResults still
+// returns the complete bounded set, and tabledata.list pages by maxResults and
+// startIndex.
+func TestQueryResultPaging(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(map[string]any{"name": "id", "type": "INTEGER"}))
+
+	rows := make([]any, 0, 5)
+	for i := 1; i <= 5; i++ {
+		rows = append(rows, map[string]any{"json": map[string]any{"id": i}})
+	}
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t", "body": map[string]any{"rows": rows},
+	})); err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+
+	// ids extracts the first cell (id) of each row in the response.
+	ids := func(resp *model.ProviderResponse) []string {
+		rws, _ := resp.Data["rows"].([]any)
+		out := make([]string, 0, len(rws))
+		for _, rw := range rws {
+			m, _ := rw.(map[string]any)
+			f, _ := m["f"].([]any)
+			c, _ := f[0].(map[string]any)
+			out = append(out, fmt.Sprint(c["v"]))
+		}
+		return out
+	}
+	tokenOf := func(resp *model.ProviderResponse) string {
+		s, _ := resp.Data["pageToken"].(string)
+		return s
+	}
+
+	// jobs.query with maxResults returns a truncated first page and a token;
+	// totalRows stays the full count and pageRowCount reports the page.
+	first, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "SELECT id FROM `proj.d.t` ORDER BY id", "maxResults": float64(2),
+	}}))
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got := ids(first); !reflect.DeepEqual(got, []string{"1", "2"}) {
+		t.Fatalf("page1 ids: %v", got)
+	}
+	if first.Data["totalRows"] != "5" {
+		t.Fatalf("totalRows must be the full count, got %v", first.Data["totalRows"])
+	}
+	if first.Data["pageRowCount"] != "2" {
+		t.Fatalf("pageRowCount: %v", first.Data["pageRowCount"])
+	}
+	token := tokenOf(first)
+	if token == "" {
+		t.Fatalf("expected a pageToken on a truncated first page")
+	}
+	ref, _ := first.Data["jobReference"].(map[string]any)
+	jobID, _ := ref["jobId"].(string)
+
+	// getQueryResults continues from the query's pageToken.
+	page2, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID, "pageToken": token, "maxResults": "2"}))
+	if err != nil {
+		t.Fatalf("getQueryResults page2: %v", err)
+	}
+	if got := ids(page2); !reflect.DeepEqual(got, []string{"3", "4"}) {
+		t.Fatalf("page2 ids: %v", got)
+	}
+	if tokenOf(page2) == "" {
+		t.Fatalf("expected a pageToken on the middle page")
+	}
+	page3, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID, "pageToken": tokenOf(page2), "maxResults": "2"}))
+	if err != nil {
+		t.Fatalf("getQueryResults page3: %v", err)
+	}
+	if got := ids(page3); !reflect.DeepEqual(got, []string{"5"}) {
+		t.Fatalf("page3 ids: %v", got)
+	}
+	if tokenOf(page3) != "" {
+		t.Fatalf("expected no pageToken on the final page, got %q", tokenOf(page3))
+	}
+
+	// startIndex selects a zero-based start row.
+	slice, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID, "startIndex": "3", "maxResults": "2"}))
+	if err != nil {
+		t.Fatalf("getQueryResults startIndex: %v", err)
+	}
+	if got := ids(slice); !reflect.DeepEqual(got, []string{"4", "5"}) {
+		t.Fatalf("startIndex=3 ids: %v", got)
+	}
+
+	// An out-of-range startIndex yields an empty page, not an error.
+	empty, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID, "startIndex": "99"}))
+	if err != nil {
+		t.Fatalf("getQueryResults out-of-range: %v", err)
+	}
+	if got := ids(empty); len(got) != 0 {
+		t.Fatalf("out-of-range startIndex must be empty, got %v", got)
+	}
+
+	// An unset maxResults returns the whole bounded set with no token.
+	all, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID}))
+	if err != nil {
+		t.Fatalf("getQueryResults default: %v", err)
+	}
+	if got := ids(all); !reflect.DeepEqual(got, []string{"1", "2", "3", "4", "5"}) {
+		t.Fatalf("default getQueryResults ids: %v", got)
+	}
+	if tokenOf(all) != "" {
+		t.Fatalf("expected no pageToken when maxResults is unset")
+	}
+
+	// tabledata.list pages by maxResults and offsets by startIndex.
+	td1, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "maxResults": "2"}))
+	if err != nil {
+		t.Fatalf("listRows page1: %v", err)
+	}
+	if rws, _ := td1.Data["rows"].([]any); len(rws) != 2 {
+		t.Fatalf("tableDataList page1 rows: %d", len(rws))
+	}
+	if td1.Data["totalRows"] != "5" {
+		t.Fatalf("tableDataList totalRows: %v", td1.Data["totalRows"])
+	}
+	td2, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "maxResults": "2", "pageToken": tokenOf(td1)}))
+	if err != nil {
+		t.Fatalf("listRows page2: %v", err)
+	}
+	if rws, _ := td2.Data["rows"].([]any); len(rws) != 2 {
+		t.Fatalf("tableDataList page2 rows: %d", len(rws))
+	}
+
+	// Invalid paging inputs are rejected, never silently ignored.
+	for _, tc := range []struct {
+		name string
+		nr   *model.NormalizedRequest
+	}{
+		{"negative maxResults", newNR(map[string]any{"jobId": jobID, "maxResults": "-1"})},
+		{"non-numeric maxResults", newNR(map[string]any{"jobId": jobID, "maxResults": "two"})},
+		{"negative startIndex", newNR(map[string]any{"jobId": jobID, "startIndex": "-1"})},
+	} {
+		_, err := p.GetQueryResults(ctx, tc.nr)
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Fatalf("%s: expected InvalidArgument/400, got %v", tc.name, err)
+		}
+	}
+	// A non-integer jobs.query maxResults is a 400 too.
+	if _, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "SELECT 1", "maxResults": float64(1.5),
+	}})); err == nil {
+		t.Fatalf("fractional maxResults: expected an error")
+	}
+}
+
+// TestQueryResultPagingNegatives pins the paging edge cases: an undecodable
+// pageToken is a 400 (never silently ignored), pageToken wins over startIndex,
+// paging input is validated on a DML job the same as a SELECT job, and a huge
+// maxResults cannot overflow the page bound.
+func TestQueryResultPagingNegatives(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(map[string]any{"name": "id", "type": "INTEGER"}))
+	rows := make([]any, 0, 3)
+	for i := 1; i <= 3; i++ {
+		rows = append(rows, map[string]any{"json": map[string]any{"id": i}})
+	}
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t", "body": map[string]any{"rows": rows},
+	})); err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+
+	first, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "SELECT id FROM `proj.d.t` ORDER BY id", "maxResults": float64(1),
+	}}))
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	ref, _ := first.Data["jobReference"].(map[string]any)
+	jobID, _ := ref["jobId"].(string)
+
+	// An undecodable pageToken is InvalidArgument, not "page 1 with 200".
+	_, err = p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID, "pageToken": "!!!not-base64!!!"}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid pageToken: expected InvalidArgument/400, got %v", err)
+	}
+
+	// pageToken takes precedence over startIndex.
+	token, _ := first.Data["pageToken"].(string)
+	if token == "" {
+		t.Fatalf("expected a pageToken")
+	}
+	page2, err := p.GetQueryResults(ctx, newNR(map[string]any{
+		"jobId": jobID, "pageToken": token, "startIndex": "0", "maxResults": "1",
+	}))
+	if err != nil {
+		t.Fatalf("pageToken precedence: %v", err)
+	}
+	got, _ := page2.Data["rows"].([]any)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row from the token's page, got %d", len(got))
+	}
+	cell, _ := got[0].(map[string]any)["f"].([]any)[0].(map[string]any)
+	if cell["v"] != "2" {
+		t.Fatalf("pageToken must select the second page, got row %v", cell["v"])
+	}
+
+	// The largest legal uint32 maxResults must not overflow the page bound (no
+	// panic, all remaining rows). Values above uint32 are outside the declared
+	// binding and are rejected up front, like real GCP's frontend.
+	huge, err := p.GetQueryResults(ctx, newNR(map[string]any{
+		"jobId": jobID, "startIndex": "1", "maxResults": "4294967295",
+	}))
+	if err != nil {
+		t.Fatalf("max uint32 maxResults: %v", err)
+	}
+	if rws, _ := huge.Data["rows"].([]any); len(rws) != 2 {
+		t.Fatalf("max uint32 maxResults from startIndex 1: expected 2 rows, got %d", len(rws))
+	}
+	if _, err := p.GetQueryResults(ctx, newNR(map[string]any{
+		"jobId": jobID, "maxResults": "9223372036854775807",
+	})); err == nil {
+		t.Fatalf("out-of-uint32 maxResults: expected the binding error")
+	}
+
+	// Paging input is validated on a DML job too (which returns no result set).
+	dml, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "INSERT INTO `proj.d.t` (id) VALUES (99)",
+	}}))
+	if err != nil {
+		t.Fatalf("dml query: %v", err)
+	}
+	dmlRef, _ := dml.Data["jobReference"].(map[string]any)
+	dmlJob, _ := dmlRef["jobId"].(string)
+	_, err = p.GetQueryResults(ctx, newNR(map[string]any{"jobId": dmlJob, "maxResults": "-1"}))
+	if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 400 {
+		t.Fatalf("DML job with maxResults=-1: expected 400, got %v", err)
+	}
+	// A DML job with a bad pageToken is likewise rejected.
+	_, err = p.GetQueryResults(ctx, newNR(map[string]any{"jobId": dmlJob, "pageToken": "nope"}))
+	if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 400 {
+		t.Fatalf("DML job with invalid pageToken: expected 400, got %v", err)
+	}
+}
+
 func TestGetServiceAccount(t *testing.T) {
 	ctx := context.Background()
 	p := New(bqstore.NewMemoryStore())
@@ -1352,5 +1652,35 @@ func TestListRowsCellEncoding(t *testing.T) {
 	sparseCells, _ := sparseRows[0].(map[string]any)["f"].([]any)
 	if !reflect.DeepEqual(sparseCells[1], map[string]any{"v": nil}) {
 		t.Fatalf("missing value must be {\"v\": null}, got %#v", sparseCells[1])
+	}
+}
+
+// TestMaxResultsUint32Range pins BigQuery's maxResults type: the Discovery
+// document declares it uint32, so a legal value above MaxInt32 (which the
+// shared int32 pageSize binding would reject) still pages successfully, while a
+// value above uint32 or a non-integer is 400 INVALID_ARGUMENT.
+func TestMaxResultsUint32Range(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	if _, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "d"},
+	}})); err != nil {
+		t.Fatalf("create dataset: %v", err)
+	}
+	for _, v := range []any{"4294967295", "2147483648", float64(4294967295)} {
+		resp, err := p.ListDatasets(ctx, newNR(map[string]any{"maxResults": v}))
+		if err != nil {
+			t.Fatalf("ListDatasets(maxResults=%v): %v", v, err)
+		}
+		if got, _ := resp.Data["datasets"].([]any); len(got) != 1 {
+			t.Fatalf("ListDatasets(maxResults=%v) = %v, want the dataset", v, resp.Data["datasets"])
+		}
+	}
+	for _, v := range []any{"4294967296", "-1", "abc", float64(1.5)} {
+		_, err := p.ListDatasets(ctx, newNR(map[string]any{"maxResults": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListDatasets(maxResults=%v) err = %v, want InvalidArgument/400", v, err)
+		}
 	}
 }

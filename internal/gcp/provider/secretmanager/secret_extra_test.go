@@ -2,10 +2,13 @@ package secretmanager
 
 import (
 	"context"
+	"encoding/base64"
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
@@ -285,11 +288,21 @@ func TestSecretIamPolicy(t *testing.T) {
 }
 
 // TestSecretRotationAndAliases verifies GCP-native rotation + version aliases
-// (no AWS version stages): they persist round-trip, and a due rotation creates
-// a new version and advances nextRotationTime.
+// (no AWS version stages): they persist round-trip, and a due rotation advances
+// nextRotationTime without creating a version. Real Secret Manager's rotation
+// schedule only publishes a SECRET_ROTATE notification; adding the version is
+// the subscriber's job (DC56), so an automatic reschedule must never fabricate
+// one — the emulator used to add an empty, unencrypted version here.
 func TestSecretRotationAndAliases(t *testing.T) {
 	ctx := context.Background()
 	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	// Freeze the clock: a rotation schedule must be at least five minutes in
+	// the future when it is set (DC65), so a due schedule is produced by moving
+	// time forward rather than by creating one in the past.
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
 
 	// Create with aliases (rotation unset).
 	create := newNR(map[string]any{
@@ -309,9 +322,11 @@ func TestSecretRotationAndAliases(t *testing.T) {
 		t.Fatalf("addVersion: %v", err)
 	}
 
-	// Enable rotation, already due, and update the alias to the new version.
+	// Enable rotation, due in an hour, and update the alias to the new version.
+	due := t0.Add(time.Hour)
 	upd := newNR(map[string]any{"name": "secrets/s", "body": map[string]any{
-		"rotation":       map[string]any{"nextRotationTime": "2000-01-01T00:00:00Z", "rotationPeriod": "3600s"},
+		"topics":         []any{map[string]any{"name": "projects/proj/topics/rot"}},
+		"rotation":       map[string]any{"nextRotationTime": due.Format(time.RFC3339), "rotationPeriod": "3600s"},
 		"versionAliases": map[string]any{"latest": float64(2)},
 	}})
 	resp, err = p.Update(ctx, upd)
@@ -322,19 +337,27 @@ func TestSecretRotationAndAliases(t *testing.T) {
 		t.Error("expected rotation in update response")
 	}
 
-	// Get triggers lazy rotation (nextRotationTime is in the past).
+	// Get once the schedule is due triggers lazy rotation.
+	clock.SetGlobalClock(clock.FixedClock{T: due.Add(time.Minute)})
 	resp, err = p.Get(ctx, newNR(map[string]any{"name": "secrets/s"}))
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	rot, _ := resp.Data["rotation"].(map[string]any)
-	if rot["nextRotationTime"] == "2000-01-01T00:00:00Z" {
+	if rot["nextRotationTime"] == due.Format(time.RFC3339) {
 		t.Error("expected nextRotationTime to advance after rotation")
 	}
 
-	// A rotated empty version 2 now exists.
-	if _, err := p.secrets.GetVersion(ctx, "proj", "s", "2"); err != nil {
-		t.Fatalf("expected rotated version 2, got %v", err)
+	// Rotation did not add a version: the secret still has only version 1.
+	versions, err := p.secrets.ListVersions(ctx, "proj", "s")
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].VersionID != "1" {
+		t.Fatalf("versions after rotation = %#v, want only version 1", versions)
+	}
+	if _, err := p.secrets.GetVersion(ctx, "proj", "s", "2"); err == nil {
+		t.Fatal("rotation created a version 2, want notification-only rotation")
 	}
 }
 
@@ -343,11 +366,16 @@ func TestSecretRotationNotDue(t *testing.T) {
 	ctx := context.Background()
 	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
 	create := newNR(map[string]any{
 		"secretId": "s",
 		"body": map[string]any{
+			"topics": []any{map[string]any{"name": "projects/proj/topics/rot"}},
 			"rotation": map[string]any{
-				"nextRotationTime": "2999-01-01T00:00:00Z",
+				"nextRotationTime": t0.Add(24 * time.Hour).Format(time.RFC3339),
 				"rotationPeriod":   "3600s",
 			},
 		},
@@ -407,9 +435,18 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	})
 	createNR.AccountID = projectID
 
-	_, err = p.Create(ctx, createNR)
+	created, err := p.Create(ctx, createNR)
 	if err != nil {
 		t.Fatalf("create secret: %v", err)
+	}
+	// The Secret response must echo the configured CMEK key (DC31): a client
+	// reads back what it set under
+	// replication.automatic.customerManagedEncryption.kmsKeyName.
+	if got := cmekFromSecretMap(t, created.Data); got != kmsKeyName {
+		t.Fatalf("create replication CMEK = %q, want %q (replication=%#v)", got, kmsKeyName, created.Data["replication"])
+	}
+	if got := cmekFromSecretMap(t, mustGetSecret(t, p, ctx, projectID, "cmek-secret").Data); got != kmsKeyName {
+		t.Fatalf("get replication CMEK = %q, want %q", got, kmsKeyName)
 	}
 
 	// Add Version
@@ -430,6 +467,23 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	}
 	versionName := addResp.Data["name"].(string)
 
+	// The version reports the exact CryptoKeyVersion that wrapped its payload
+	// under replicationStatus.automatic.customerManagedEncryption
+	// (DC44). The wrapping version is the key's primary at wrap time.
+	wantKeyVersion := kmsKeyName + "/versions/" + version
+	if got := cmekVersionFromVersionMap(t, addResp.Data); got != wantKeyVersion {
+		t.Fatalf("AddVersion kmsKeyVersionName = %q, want %q", got, wantKeyVersion)
+	}
+	gotVersionNR := newNR(map[string]any{"name": versionName})
+	gotVersionNR.AccountID = projectID
+	gotVersion, err := p.GetVersion(ctx, gotVersionNR)
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if got := cmekVersionFromVersionMap(t, gotVersion.Data); got != wantKeyVersion {
+		t.Fatalf("GetVersion kmsKeyVersionName = %q, want %q", got, wantKeyVersion)
+	}
+
 	// Access
 	accessNR := newNR(map[string]any{
 		"name": versionName,
@@ -445,6 +499,222 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	if payloadResp["data"] != payloadB64 {
 		t.Fatalf("expected payload %q, got %q", payloadB64, payloadResp["data"])
 	}
+
+	// Patching the replication policy is observable too (DC31): the Secret etag
+	// already covered kmsKeyName (DC13), so before this fix a CMEK change moved
+	// the etag while the rendered resource stayed byte-identical.
+	key2ID := "second-key"
+	if err := kmsStore.CreateCryptoKey(ctx, projectID, location, keyringID, key2ID, kms.CryptoKey{ID: key2ID, Purpose: "ENCRYPT_DECRYPT"}); err != nil {
+		t.Fatal(err)
+	}
+	v2, err := kmsStore.CreateVersion(ctx, projectID, location, keyringID, key2ID, kms.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kmsStore.UpdatePrimaryVersion(ctx, projectID, location, keyringID, key2ID, v2); err != nil {
+		t.Fatal(err)
+	}
+	key2Name := "projects/" + projectID + "/locations/" + location + "/keyRings/" + keyringID + "/cryptoKeys/" + key2ID
+
+	patchNR := newNR(map[string]any{
+		"name": "projects/" + projectID + "/secrets/cmek-secret",
+		"body": map[string]any{
+			"replication": map[string]any{
+				"automatic": map[string]any{
+					"customerManagedEncryption": map[string]any{"kmsKeyName": key2Name},
+				},
+			},
+		},
+	})
+	patchNR.AccountID = projectID
+	patched, err := p.Update(ctx, patchNR)
+	if err != nil {
+		t.Fatalf("patch replication: %v", err)
+	}
+	if got := cmekFromSecretMap(t, patched.Data); got != key2Name {
+		t.Fatalf("patch replication CMEK = %q, want %q", got, key2Name)
+	}
+	if got := cmekFromSecretMap(t, mustGetSecret(t, p, ctx, projectID, "cmek-secret").Data); got != key2Name {
+		t.Fatalf("get replication CMEK after patch = %q, want %q", got, key2Name)
+	}
+
+	// The patched secret is also readable through list.
+	listNR := newNR(map[string]any{})
+	listNR.AccountID = projectID
+	list, err := p.List(ctx, listNR)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := list.Data["secrets"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("list returned %d secrets, want 1", len(items))
+	}
+	if got := cmekFromSecretMap(t, items[0].(map[string]any)); got != key2Name {
+		t.Fatalf("list replication CMEK = %q, want %q", got, key2Name)
+	}
+
+	// A version's status is per-version, not the secret's current policy: after
+	// patching to key2, a new version reports key2's wrapping version, while the
+	// first version (wrapped with key1) keeps the key version that actually
+	// wrapped it. Rotating key2's primary afterwards must likewise only affect
+	// versions added later — the stored wrap-time tag is what makes this exact.
+	addVersion := func(payload string) map[string]any {
+		t.Helper()
+		nr := newNR(map[string]any{
+			"name": "projects/" + projectID + "/secrets/cmek-secret",
+			"body": map[string]any{"payload": map[string]any{"data": payload}},
+		})
+		nr.AccountID = projectID
+		resp, err := p.AddVersion(ctx, nr)
+		if err != nil {
+			t.Fatalf("add version: %v", err)
+		}
+		return resp.Data
+	}
+
+	// key2 was created with version v2 as its primary (above).
+	second := addVersion("c2Vjb25k")
+	if got, want := cmekVersionFromVersionMap(t, second), key2Name+"/versions/"+v2; got != want {
+		t.Fatalf("version after patching to key2 kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// Rotate key2's primary to a fresh version, then add another version.
+	rotated, err := kmsStore.CreateVersion(ctx, projectID, location, keyringID, key2ID, kms.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kmsStore.UpdatePrimaryVersion(ctx, projectID, location, keyringID, key2ID, rotated); err != nil {
+		t.Fatal(err)
+	}
+	third := addVersion("dGhpcmQ=")
+	if got, want := cmekVersionFromVersionMap(t, third), key2Name+"/versions/"+rotated; got != want {
+		t.Fatalf("version after primary rotation kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// The earlier version still reports the CryptoKeyVersion that wrapped it,
+	// and the pre-patch version still reports key1's version.
+	secondName, _ := second["name"].(string)
+	nr2 := newNR(map[string]any{"name": secondName})
+	nr2.AccountID = projectID
+	stillSecond, err := p.GetVersion(ctx, nr2)
+	if err != nil {
+		t.Fatalf("get second version: %v", err)
+	}
+	if got, want := cmekVersionFromVersionMap(t, stillSecond.Data), key2Name+"/versions/"+v2; got != want {
+		t.Fatalf("second version after rotation kmsKeyVersionName = %q, want %q", got, want)
+	}
+	nr1 := newNR(map[string]any{"name": versionName})
+	nr1.AccountID = projectID
+	stillFirst, err := p.GetVersion(ctx, nr1)
+	if err != nil {
+		t.Fatalf("get first version: %v", err)
+	}
+	if got := cmekVersionFromVersionMap(t, stillFirst.Data); got != wantKeyVersion {
+		t.Fatalf("first version after patch kmsKeyVersionName = %q, want %q", got, wantKeyVersion)
+	}
+}
+
+// TestSecretReplicationWithoutCMEK pins the no-CMEK shape: the automatic arm is
+// present and empty, with no customerManagedEncryption object at all (real GCP
+// omits the nested message rather than sending it empty).
+func TestSecretReplicationWithoutCMEK(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	resp, err := p.Create(ctx, newNR(map[string]any{"secretId": "plain-secret"}))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	repl, ok := resp.Data["replication"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication = %#v, want an object", resp.Data["replication"])
+	}
+	auto, ok := repl["automatic"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication.automatic = %#v, want an object", repl["automatic"])
+	}
+	if _, present := auto["customerManagedEncryption"]; present {
+		t.Fatalf("replication.automatic.customerManagedEncryption = %#v, want absent", auto["customerManagedEncryption"])
+	}
+	if got := cmekFromSecretMap(t, resp.Data); got != "" {
+		t.Fatalf("CMEK = %q, want empty", got)
+	}
+
+	// A version of a Google-managed secret reports the automatic arm with no
+	// customerManagedEncryption, rather than an empty nested status object.
+	addNR := newNR(map[string]any{
+		"name": "projects/proj/secrets/plain-secret",
+		"body": map[string]any{"payload": map[string]any{"data": "aGk="}},
+	})
+	addNR.AccountID = "proj"
+	addResp, err := p.AddVersion(ctx, addNR)
+	if err != nil {
+		t.Fatalf("add version: %v", err)
+	}
+	if got := cmekVersionFromVersionMap(t, addResp.Data); got != "" {
+		t.Fatalf("version kmsKeyVersionName = %q, want empty", got)
+	}
+}
+
+// cmekFromSecretMap returns the CMEK key name from a rendered Secret, or "" when
+// the automatic replication policy carries no customerManagedEncryption.
+func cmekFromSecretMap(t *testing.T, data map[string]any) string {
+	t.Helper()
+	repl, ok := data["replication"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication = %#v, want an object", data["replication"])
+	}
+	auto, ok := repl["automatic"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication.automatic = %#v, want an object", repl["automatic"])
+	}
+	raw, present := auto["customerManagedEncryption"]
+	if !present {
+		return ""
+	}
+	cme, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("customerManagedEncryption = %#v, want an object", raw)
+	}
+	name, _ := cme["kmsKeyName"].(string)
+	return name
+}
+
+// cmekVersionFromVersionMap returns the kmsKeyVersionName from a rendered
+// SecretVersion's replicationStatus, or "" when the version carries no CMEK
+// status (the automatic arm with no customerManagedEncryption).
+func cmekVersionFromVersionMap(t *testing.T, data map[string]any) string {
+	t.Helper()
+	rs, ok := data["replicationStatus"].(map[string]any)
+	if !ok {
+		t.Fatalf("replicationStatus = %#v, want an object", data["replicationStatus"])
+	}
+	auto, ok := rs["automatic"].(map[string]any)
+	if !ok {
+		t.Fatalf("replicationStatus.automatic = %#v, want an object", rs["automatic"])
+	}
+	raw, present := auto["customerManagedEncryption"]
+	if !present {
+		return ""
+	}
+	cme, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("customerManagedEncryption = %#v, want an object", raw)
+	}
+	name, _ := cme["kmsKeyVersionName"].(string)
+	return name
+}
+
+// mustGetSecret reads a secret back through the provider.
+func mustGetSecret(t *testing.T, p *Provider, ctx context.Context, project, id string) *model.ProviderResponse {
+	t.Helper()
+	nr := newNR(map[string]any{"name": "projects/" + project + "/secrets/" + id})
+	nr.AccountID = project
+	resp, err := p.Get(ctx, nr)
+	if err != nil {
+		t.Fatalf("get secret %s: %v", id, err)
+	}
+	return resp
 }
 
 // TestSecretVersionStateEnforcement verifies Secret Manager lifecycle rules:
@@ -535,7 +805,7 @@ func TestVersionMapEtagAndReplicationStatus(t *testing.T) {
 		Name:       "projects/p/secrets/s/versions/1",
 		State:      "ENABLED",
 		CreateTime: "2026-01-01T00:00:00Z",
-	})
+	}, nil)
 	if etag, _ := enabled["etag"].(string); etag == "" {
 		t.Fatalf("version map has no etag: %#v", enabled)
 	}
@@ -548,8 +818,191 @@ func TestVersionMapEtagAndReplicationStatus(t *testing.T) {
 		Name:       "projects/p/secrets/s/versions/1",
 		State:      "DISABLED",
 		CreateTime: "2026-01-01T00:00:00Z",
-	})
+	}, nil)
 	if enabled["etag"] == disabled["etag"] {
 		t.Errorf("etag should change with lifecycle state")
 	}
+}
+
+// TestManagedRotation covers the Cloud SQL managed-rotation surface:
+// EnableManagedRotation records the credentials + ACTIVE status and stores a
+// generated password as version 1; RotateSecret adds version 2; the preconditions
+// (rotate-before-enable, double-enable) fail FailedPrecondition; and the stored
+// password round-trips through Access.
+func TestManagedRotation(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	const name = "projects/proj/secrets/managed"
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "managed"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Rotate before managed rotation is enabled → FailedPrecondition.
+	if _, err := p.RotateSecret(ctx, newNR(map[string]any{"name": name})); err != nil {
+		requireProviderCode(t, err, "FailedPrecondition")
+	} else {
+		t.Fatal("RotateSecret before enable returned nil, want FailedPrecondition")
+	}
+
+	// Enable without credentials → InvalidRequest.
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{"name": name, "body": map[string]any{}})); err != nil {
+		requireProviderCode(t, err, "InvalidRequest")
+	} else {
+		t.Fatal("EnableManagedRotation without credentials returned nil, want InvalidRequest")
+	}
+
+	// Enable → version 1, status ACTIVE.
+	creds := map[string]any{"instanceId": "inst", "username": "app"}
+	resp, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": creds},
+	}))
+	if err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	if got, _ := resp.Data["name"].(string); got != name+"/versions/1" {
+		t.Fatalf("EnableManagedRotation version = %q, want %q", got, name+"/versions/1")
+	}
+
+	get, err := p.Get(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("get after enable: %v", err)
+	}
+	rot, _ := get.Data["rotation"].(map[string]any)
+	mrs, _ := rot["managedRotationStatus"].(map[string]any)
+	if mrs["state"] != "ACTIVE" {
+		t.Fatalf("managedRotationStatus = %#v, want state ACTIVE", mrs)
+	}
+
+	// Enabling twice → FailedPrecondition.
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": creds},
+	})); err != nil {
+		requireProviderCode(t, err, "FailedPrecondition")
+	} else {
+		t.Fatal("second EnableManagedRotation returned nil, want FailedPrecondition")
+	}
+
+	// Rotate → version 2.
+	resp, err = p.RotateSecret(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("RotateSecret: %v", err)
+	}
+	if got, _ := resp.Data["name"].(string); got != name+"/versions/2" {
+		t.Fatalf("RotateSecret version = %q, want %q", got, name+"/versions/2")
+	}
+
+	// The generated password round-trips through Access.
+	acc, err := p.Access(ctx, newNR(map[string]any{"name": name + "/versions/1"}))
+	if err != nil {
+		t.Fatalf("access managed version: %v", err)
+	}
+	payload, _ := acc.Data["payload"].(map[string]any)
+	if data, _ := payload["data"].(string); data == "" {
+		t.Fatalf("managed version payload = %#v, want a non-empty password", payload)
+	}
+
+	// A schedule update must not clobber the managed-rotation status.
+	if _, err := p.Update(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{
+			"topics": []any{map[string]any{"name": "projects/proj/topics/rot"}},
+			"rotation": map[string]any{
+				"nextRotationTime": clock.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+				"rotationPeriod":   "3600s",
+			},
+		},
+	})); err != nil {
+		t.Fatalf("update rotation period: %v", err)
+	}
+	get, err = p.Get(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	rot, _ = get.Data["rotation"].(map[string]any)
+	if mrs, _ = rot["managedRotationStatus"].(map[string]any); mrs["state"] != "ACTIVE" {
+		t.Fatalf("managedRotationStatus after schedule update = %#v, want ACTIVE", mrs)
+	}
+}
+
+// TestManagedRotationSuppliedPassword covers the optional Cloud SQL password: a
+// supplied password is stored as the version payload (not replaced by a
+// generated one).
+func TestManagedRotationSuppliedPassword(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	const name = "projects/proj/secrets/managed-pw"
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "managed-pw"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": map[string]any{
+			"instanceId": "inst", "username": "app", "password": "supplied-password",
+		}},
+	})); err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	acc, err := p.Access(ctx, newNR(map[string]any{"name": name + "/versions/1"}))
+	if err != nil {
+		t.Fatalf("access: %v", err)
+	}
+	payload, _ := acc.Data["payload"].(map[string]any)
+	if data, _ := payload["data"].(string); data != base64.StdEncoding.EncodeToString([]byte("supplied-password")) {
+		t.Fatalf("stored password = %q, want the supplied password", data)
+	}
+}
+
+// TestManagedRotationConcurrentReads hammers GetSecret while managed rotation is
+// being enabled. Run under -race, it guards against mutating the *Rotation the
+// store hands out (which aliases the stored map entry) in place.
+func TestManagedRotationConcurrentReads(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	const name = "projects/proj/secrets/managed-race"
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "managed-race"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Seed a rotation schedule so reads return a non-nil Rotation.
+	if _, err := p.Update(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{
+			"topics": []any{map[string]any{"name": "projects/proj/topics/rot"}},
+			"rotation": map[string]any{
+				"nextRotationTime": clock.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+				"rotationPeriod":   "3600s",
+			},
+		},
+	})); err != nil {
+		t.Fatalf("seed rotation: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = p.Get(ctx, newNR(map[string]any{"name": name}))
+				}
+			}
+		}()
+	}
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": map[string]any{"instanceId": "inst", "username": "app"}},
+	})); err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	close(stop)
+	wg.Wait()
 }

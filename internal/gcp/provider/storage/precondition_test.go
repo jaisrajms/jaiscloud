@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"jaiscloud/internal/gcp/wire"
@@ -412,5 +413,49 @@ func TestObjectsCopy_SourcePrecondition(t *testing.T) {
 	}
 	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "dst.txt")); err != nil {
 		t.Fatalf("destination must exist after a successful copy: %v", err)
+	}
+}
+
+// TestObjectsGet_GenerationMatchHeader verifies read preconditions in the
+// x-goog-if-generation-match *header* form the official clients send (the
+// query-param form is covered above). Before this fix only the query param was
+// read, so a client's conditional read was silently served unconditionally.
+func TestObjectsGet_GenerationMatchHeader(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+
+	ins := bucketParamsWithObj("bkt", "obj.txt")
+	ins.Params[wire.MediaKey] = []byte("v1")
+	created, err := p.ObjectsInsert(ctx, ins)
+	if err != nil {
+		t.Fatalf("insert object: %v", err)
+	}
+	gen, _ := created.Data["generation"].(string)
+	if gen == "" {
+		t.Fatal("expected a generation on the created object")
+	}
+
+	get := func(genHeader string) (*model.ProviderResponse, error) {
+		nr := bucketParamsWithObj("bkt", "obj.txt")
+		nr.Raw = &http.Request{Method: http.MethodGet, Header: http.Header{
+			"X-Goog-If-Generation-Match": []string{genHeader},
+		}}
+		return p.ObjectsGet(ctx, nr)
+	}
+
+	// The matching header generation reads.
+	if _, err := get(gen); err != nil {
+		t.Fatalf("matching x-goog-if-generation-match: %v", err)
+	}
+	// A stale header generation is 412.
+	if _, err := get("999999"); err == nil {
+		t.Fatal("expected a stale x-goog-if-generation-match to fail, got nil")
+	} else {
+		assertPrecondition412(t, err)
 	}
 }

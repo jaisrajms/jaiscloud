@@ -1,6 +1,21 @@
+# Runtime image used by GoReleaser `dockers_v2` (see .goreleaser.yaml).
+# GoReleaser stages each prebuilt binary as <os>/<arch>/<binary> inside the
+# build context, so one file serves every cloud: BINARY selects the executable
+# and PORT its default listen port. No per-cloud fork needed.
+#
+#   jaiscloud-aws -> BINARY=jaiscloud-aws, PORT=4566
+#   jaiscloud-gcp -> BINARY=jaiscloud-gcp, PORT=8080
+# PORT is the default REST listener and the port EXPOSEd here; the binary's own
+# --port flag still wins at runtime. gRPC (:8081) and the UI portal (:4567, only
+# with `start --ui`; /ui/ is also served on the REST port) are reached with an
+# explicit -p.
 FROM gcr.io/distroless/static:nonroot
+
 ARG TARGETPLATFORM
-COPY ${TARGETPLATFORM}/jaiscloud-aws /jaiscloud
-EXPOSE 4566
+ARG BINARY=jaiscloud-aws
+ARG PORT=4566
+
+COPY ${TARGETPLATFORM}/${BINARY} /jaiscloud
+EXPOSE ${PORT}
 ENTRYPOINT ["/jaiscloud"]
 CMD ["start"]

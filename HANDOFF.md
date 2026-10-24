@@ -23,11 +23,12 @@ Context for picking up further UI work. Current as of branch `feat/aws-console-u
 
 - Frontend typecheck: `cd ui && pnpm exec tsc -b`
 - Lint: `pnpm lint` (must stay error-free; a few known warnings are fine)
-- Build assets: `pnpm build` (outputs to `../internal/aws/ui/dist`)
+- Build assets: `pnpm build` (outputs to `../internal/ui/dist`)
 - Binary with UI embedded: `go build -tags ui -o /tmp/opencode/jc-console ./cmd/jaiscloud-aws/`
+- GCP binary with UI embedded: `go build -tags ui -o /tmp/opencode/jc-gcp ./cmd/jaiscloud-gcp/`
 - Run: `/tmp/opencode/jc-console start --ephemeral --ui --port 4599 --ui-port 4598 --log-level warn`
   - UI: http://localhost:4598/ui/ (LAN: http://10.0.100.115:4598/ui/), gateway: 4599
-- Go tests: `go test ./internal/...`; UI API tests in `internal/aws/ui/`.
+- Go tests: `go test ./internal/...`; shared UI core tests in `internal/ui/`, AWS UI API tests in `internal/aws/ui/`.
 - Always rebuild the binary after UI changes (assets are embedded via `-tags ui`).
 
 ## Architecture & conventions (match these)
@@ -38,8 +39,9 @@ Context for picking up further UI work. Current as of branch `feat/aws-console-u
   SideNavigation "All services" (category groups + "Find services"), BreadcrumbGroup, AppLayout,
   Tools HelpPanel, Flashbar notifications.
 - Service menu is **server-driven**: `GET /api/ui/v1/services` returns `ServiceDescriptor[]`
-  (`id,label,category,rootPath,children,tier,note`), built in `internal/aws/ui/services.go` and **cloud-scoped**
-  (AWS services only when `cfg.Cloud == "aws"`). Frontend: `hooks/useServices.ts`, grouped in `components/nav.ts`.
+  (`id,label,category,rootPath,children,tier,note`). Definitions live in `internal/ui/types.go`; each cloud
+  contributes its catalog via a `coreui.Registrar` — AWS in `internal/aws/ui/services.go`, GCP in `internal/gcp/ui/`.
+  Frontend: `hooks/useServices.ts`, grouped in `components/nav.ts`.
 - Lists: `components/ResourceTable.tsx` — PropertyFilter, pagination, CollectionPreferences, optional selection,
   sticky header, auto-sorting on filterable columns, `actions` slot. Page = `ContentLayout` + `Header` + `ResourceTable`.
 - Detail pages: `ContentLayout` + `Header` + `Tabs` + `Container` + `KeyValuePairs`/`Table`.

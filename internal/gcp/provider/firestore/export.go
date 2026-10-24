@@ -35,6 +35,16 @@ type (
 	// gRPC transport (internal/gcp/grpc/firestoreadmin).
 	IndexDef   = indexDef
 	IndexField = indexField
+
+	// Firestore Admin control-plane wire shapes (admin.go), shared with the
+	// FirestoreAdmin gRPC transport (internal/gcp/grpc/firestoreadmin).
+	DatabaseDef       = databaseDef
+	FieldDef          = fieldDef
+	FieldIndexConfig  = fieldIndexConfig
+	FieldTtlConfig    = fieldTtlConfig
+	UserCredsDef      = userCredsDef
+	BackupScheduleDef = backupScheduleDef
+	BackupDef         = backupDef
 )
 
 // NewPageParams returns pagination inputs for a Service list method. The

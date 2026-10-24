@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	core "jaiscloud/internal/gcp/service/scheduler"
@@ -76,5 +78,19 @@ func TestGRPCInvalidNames(t *testing.T) {
 	}
 	if _, err := svc.ListJobs(ctx, &schedulerpb.ListJobsRequest{Parent: "bogus"}); err == nil {
 		t.Fatalf("ListJobs with bad parent: expected error")
+	}
+}
+
+// TestGRPCListJobsNegativePageSize pins AIP-158 on the gRPC surface: a negative
+// page_size is INVALID_ARGUMENT, not a silent first page.
+func TestGRPCListJobsNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	_, err := svc.ListJobs(ctx, &schedulerpb.ListJobsRequest{Parent: "projects/p/locations/l", PageSize: -1})
+	if code := status.Code(err); code != codes.InvalidArgument {
+		t.Fatalf("ListJobs(page_size=-1) err = %v (%v), want InvalidArgument", err, code)
+	}
+	if _, err := svc.ListJobs(ctx, &schedulerpb.ListJobsRequest{Parent: "projects/p/locations/l", PageSize: 0}); err != nil {
+		t.Fatalf("ListJobs(page_size=0): %v", err)
 	}
 }

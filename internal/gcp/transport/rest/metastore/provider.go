@@ -3,6 +3,7 @@ package metastore
 import (
 	"context"
 
+	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -39,6 +40,23 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Metastore.GetMetadataImport":             p.GetMetadataImport,
 		"Metastore.ListMetadataImports":           p.ListMetadataImports,
 		"Metastore.UpdateMetadataImport":          p.UpdateMetadataImport,
+		"Metastore.CreateFederation":              p.CreateFederation,
+		"Metastore.GetFederation":                 p.GetFederation,
+		"Metastore.ListFederations":               p.ListFederations,
+		"Metastore.UpdateFederation":              p.UpdateFederation,
+		"Metastore.DeleteFederation":              p.DeleteFederation,
+		"Metastore.ServiceGetIamPolicy":           p.getIamPolicy,
+		"Metastore.ServiceSetIamPolicy":           p.setIamPolicy,
+		"Metastore.ServiceTestIamPermissions":     p.testIamPermissions,
+		"Metastore.BackupGetIamPolicy":            p.getIamPolicy,
+		"Metastore.BackupSetIamPolicy":            p.setIamPolicy,
+		"Metastore.DatabaseGetIamPolicy":          p.getIamPolicy,
+		"Metastore.DatabaseSetIamPolicy":          p.setIamPolicy,
+		"Metastore.TableGetIamPolicy":             p.getIamPolicy,
+		"Metastore.TableSetIamPolicy":             p.setIamPolicy,
+		"Metastore.FederationGetIamPolicy":        p.getIamPolicy,
+		"Metastore.FederationSetIamPolicy":        p.setIamPolicy,
+		"Metastore.FederationTestIamPermissions":  p.testIamPermissions,
 		"Metastore.GetOperation":                  p.GetOperation,
 		"Metastore.ListOperations":                p.ListOperations,
 		"Metastore.ExportMetadata":                p.unimplemented("ExportMetadata"),
@@ -83,7 +101,11 @@ func (p *Provider) GetService(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListServices(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListServices(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +160,11 @@ func (p *Provider) GetBackup(ctx context.Context, nr *model.NormalizedRequest) (
 
 func (p *Provider) ListBackups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListBackups(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListBackups(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +210,11 @@ func (p *Provider) GetMetadataImport(ctx context.Context, nr *model.NormalizedRe
 
 func (p *Provider) ListMetadataImports(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListMetadataImports(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListMetadataImports(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +236,96 @@ func (p *Provider) UpdateMetadataImport(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
+// --- Federations ---
+
+func (p *Provider) CreateFederation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	_, op, err := p.core.CreateFederation(ctx, project, strParam(nr, "location"), strParam(nr, "federationId"), rawBodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
+func (p *Provider) GetFederation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	f, err := p.core.GetFederation(ctx, project, strParam(nr, "location"), strParam(nr, "federationId"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.FederationJSON(f, project)), nil
+}
+
+func (p *Provider) ListFederations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListFederations(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(page))
+	for _, f := range page {
+		items = append(items, core.FederationJSON(f, project))
+	}
+	out := map[string]any{"federations": items}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) UpdateFederation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	_, op, err := p.core.UpdateFederation(ctx, project, strParam(nr, "location"), strParam(nr, "federationId"), rawBodyOf(nr), strParam(nr, "updateMask"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
+func (p *Provider) DeleteFederation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	op, err := p.core.DeleteFederation(ctx, project, strParam(nr, "location"), strParam(nr, "federationId"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
+// --- IAM ---
+
+// The IAM verbs are keyed by the full google.iam.v1.IAMPolicy resource name
+// (projects/{p}/locations/{l}/...), which the core resolves to a level and a
+// policy-store id. One handler therefore serves the
+// service/backup/database/table/federation levels; the route names differ only
+// for the coverage map.
+func (p *Provider) getIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pol, err := p.core.GetIamPolicy(ctx, strParam(nr, "iamName"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+func (p *Provider) setIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pol, err := p.core.SetIamPolicy(ctx, strParam(nr, "iamName"), bodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+func (p *Provider) testIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	perms, err := p.core.TestIamPermissions(ctx, strParam(nr, "iamName"), policy.Permissions(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"permissions": perms}), nil
 }
 
 // --- Operations ---
@@ -241,7 +361,11 @@ func (p *Provider) ResolveOperation(ctx context.Context, project, location, opID
 
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

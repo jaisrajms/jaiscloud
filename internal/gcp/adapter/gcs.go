@@ -663,15 +663,23 @@ func (c *GCSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	if r, _ := perr.Data["reason"].(string); r != "" {
 		reason = r
 	}
+	entry := map[string]any{
+		"domain":  "global",
+		"reason":  reason,
+		"message": perr.Message,
+	}
+	// GCS also names the offending request parameter on the errors[] entry
+	// (`location`/`locationType`; e.g. locationType "parameter" for a bad query
+	// binding, "header" for an auth failure) — some GCS clients surface it.
+	if loc, _ := perr.Data["location"].(string); loc != "" {
+		entry["location"] = loc
+	}
+	if locType, _ := perr.Data["locationType"].(string); locType != "" {
+		entry["locationType"] = locType
+	}
 	env := map[string]any{
 		"error": map[string]any{
-			"errors": []any{
-				map[string]any{
-					"domain":  "global",
-					"reason":  reason,
-					"message": perr.Message,
-				},
-			},
+			"errors":  []any{entry},
 			"code":    status,
 			"message": perr.Message,
 		},

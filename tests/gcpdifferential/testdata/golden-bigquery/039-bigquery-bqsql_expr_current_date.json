@@ -1,0 +1,55 @@
+{
+  "index": 39,
+  "service": "bigquery",
+  "op": "bqsql_expr_current_date",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT CURRENT_DATE()",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "1",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "2026-10-10"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "f0_",
+          "type": "DATE"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "1",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

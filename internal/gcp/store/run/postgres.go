@@ -175,6 +175,37 @@ func (s *PostgresStore) ListServices(ctx context.Context, project, location stri
 	return result, rows.Err()
 }
 
+// ListServicesByProject returns every service in a project across all
+// locations, sorted by location then id.
+func (s *PostgresStore) ListServicesByProject(ctx context.Context, project string) ([]Service, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT location, service_id, data FROM jc_run_services
+		WHERE project_id=$1
+		ORDER BY location, service_id
+	`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Service
+	for rows.Next() {
+		var location, id string
+		var data []byte
+		if err := rows.Scan(&location, &id, &data); err != nil {
+			return nil, err
+		}
+		svc, err := decodeService(data)
+		if err != nil {
+			return nil, err
+		}
+		svc.ProjectID = project
+		svc.Location = location
+		svc.ID = id
+		result = append(result, svc)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) CreateRevision(ctx context.Context, project, location, service string, r Revision) error {
 	data, err := encodeRevision(r)
 	if err != nil {
@@ -244,6 +275,20 @@ func (s *PostgresStore) ListRevisions(ctx context.Context, project, location, se
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+func (s *PostgresStore) DeleteRevision(ctx context.Context, project, location, service, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_run_revisions
+		WHERE project_id=$1 AND location=$2 AND service_id=$3 AND revision_id=$4
+	`, project, location, service, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchRevision
+	}
+	return nil
 }
 
 func (s *PostgresStore) DeleteRevisions(ctx context.Context, project, location, service string) error {

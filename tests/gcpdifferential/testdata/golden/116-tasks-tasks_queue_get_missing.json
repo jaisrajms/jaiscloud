@@ -1,0 +1,16 @@
+{
+  "index": 116,
+  "service": "tasks",
+  "op": "tasks_queue_get_missing",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/queues/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "message": "Queue does not exist. If you just created the queue, wait at least a minute for the queue to initialize.",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

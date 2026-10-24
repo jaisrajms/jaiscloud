@@ -113,6 +113,12 @@ WIRING = {
         "gRPC: FIRESTORE_EMULATOR_HOST=localhost:8081; "
         "firestore.Client(project=...) auto-selects an insecure channel"
     ),
+    "bigquery": (
+        "REST: no emulator env var. Point client_options.api_endpoint at the "
+        "emulator root (the client appends /bigquery/v2/...) and pass "
+        "AnonymousCredentials: bigquery.Client(project=..., "
+        "credentials=AnonymousCredentials(), client_options={'api_endpoint': ...})"
+    ),
 }
 
 
@@ -174,6 +180,23 @@ def firestore_client():
     from google.cloud import firestore
 
     return firestore.Client(project=CONFIG.project)
+
+
+def bigquery_client():
+    """BigQuery REST client wired through client_options.api_endpoint.
+
+    BigQuery has no emulator env hook. The library resolves REST paths against
+    the api_endpoint root (appending ``/bigquery/v2/...``), so point it at the
+    emulator and authenticate with AnonymousCredentials.
+    """
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud import bigquery
+
+    return bigquery.Client(
+        project=CONFIG.project,
+        credentials=AnonymousCredentials(),
+        client_options={"api_endpoint": CONFIG.rest},
+    )
 
 
 # ─── Result model + check runner ────────────────────────────────────────────

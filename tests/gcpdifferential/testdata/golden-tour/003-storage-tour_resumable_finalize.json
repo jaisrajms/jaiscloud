@@ -1,0 +1,29 @@
+{
+  "index": 3,
+  "service": "storage",
+  "op": "tour_resumable_finalize",
+  "method": "PUT",
+  "path": "/upload/storage/v1/b/<bucket>/o?uploadType=resumable&name=resumable%2Fpayload.bin&upload_id=<token>",
+  "status": 200,
+  "response": {
+    "bucket": "<bucket>",
+    "contentType": "application/octet-stream",
+    "crc32c": "<crc32c>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "id": "<bucket>/resumable/payload.bin/<generation>",
+    "kind": "storage#object",
+    "md5Hash": "<md5Hash>",
+    "mediaLink": "<mediaLink>",
+    "metageneration": "<metageneration>",
+    "name": "resumable/payload.bin",
+    "selfLink": "<selfLink>",
+    "size": "524288",
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "timeFinalized": "<time>",
+    "timeStorageClassUpdated": "<time>",
+    "updated": "<time>"
+  }
+}
+

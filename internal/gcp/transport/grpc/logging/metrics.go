@@ -6,15 +6,16 @@ import (
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 
 	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
 	labelpb "google.golang.org/genproto/googleapis/api/label"
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // MetricsService implements the Cloud Logging v2 logs-based metric plane
@@ -39,7 +40,7 @@ func (s *MetricsService) metricsParent(ctx context.Context, parent string) strin
 	if parent != "" {
 		return parent
 	}
-	return "projects/" + grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	return resource.ResourceID(grpcutil.ProjectFromMetadata(ctx, s.defaultProj))("project", "")
 }
 
 func (s *MetricsService) ListLogMetrics(ctx context.Context, req *loggingpb.ListLogMetricsRequest) (*loggingpb.ListLogMetricsResponse, error) {
@@ -162,10 +163,10 @@ func metricToProto(m loggingstore.LogMetric) *loggingpb.LogMetric {
 	}
 	out.MetricDescriptor = md
 	if !m.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(m.CreateTime)
+		out.CreateTime = timestamp.Proto(m.CreateTime)
 	}
 	if !m.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(m.UpdateTime)
+		out.UpdateTime = timestamp.Proto(m.UpdateTime)
 	}
 	return out
 }

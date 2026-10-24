@@ -54,4 +54,9 @@ provider "google" {
   # google_project_iam_member.
   service_usage_custom_endpoint    = "${var.endpoint}/v1/"
   resource_manager_custom_endpoint = "${var.endpoint}/v1/"
+
+  # Dataproc Metastore (service + federation + database/table IAM). The
+  # federation resource (google_dataproc_metastore_federation) and the
+  # database IAM member go through the same v1 custom endpoint.
+  dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
 }

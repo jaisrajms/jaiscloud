@@ -1,0 +1,43 @@
+{
+  "index": 186,
+  "service": "pubsub",
+  "op": "redel_pull",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-redel-sub-<suffix>:pull",
+  "status": 200,
+  "request": {
+    "maxMessages": 10
+  },
+  "response": {
+    "receivedMessages": [
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "data": "cmVkZWwtMA==",
+          "messageId": "<messageId>",
+          "orderingKey": "rk",
+          "publishTime": "<time>"
+        }
+      },
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "data": "cmVkZWwtMQ==",
+          "messageId": "<messageId>",
+          "orderingKey": "rk",
+          "publishTime": "<time>"
+        }
+      },
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "data": "cmVkZWwtMg==",
+          "messageId": "<messageId>",
+          "orderingKey": "rk",
+          "publishTime": "<time>"
+        }
+      }
+    ]
+  }
+}
+

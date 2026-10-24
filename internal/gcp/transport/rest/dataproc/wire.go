@@ -7,8 +7,16 @@ import (
 	"strconv"
 	"strings"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 )
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Dataproc
+// Discovery document declares; a non-integer value is INVALID_ARGUMENT rather
+// than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 // ─── request helpers ──────────────────────────────────────────────────────────
 

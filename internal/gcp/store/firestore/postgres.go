@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"time"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -119,6 +121,20 @@ func (s *PostgresStore) ListDocuments(ctx context.Context, project, database str
 // with row locking, mirroring the memory store's read-set + precondition
 // semantics.
 func (s *PostgresStore) Commit(ctx context.Context, reads []ReadRef, writes []Write) error {
+	// An explicit client transaction that loses a serialization race must
+	// report ABORTED (so the client retries with a fresh read-set), not a raw
+	// Postgres serialization_deadlock/serialization_failure (40001/40P01) that
+	// would otherwise surface as a 500.
+	if err := s.commitOnce(ctx, reads, writes); err != nil {
+		if storeutil.IsSerializationFailure(err) {
+			return ErrAborted
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *PostgresStore) commitOnce(ctx context.Context, reads []ReadRef, writes []Write) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err

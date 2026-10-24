@@ -1,0 +1,15 @@
+{
+  "index": 157,
+  "service": "pubsub",
+  "op": "msg_ack_acknowledge",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/<subscription>:acknowledge",
+  "status": 200,
+  "request": {
+    "ackIds": [
+      "<ackId>"
+    ]
+  },
+  "response": {}
+}
+

@@ -1,0 +1,55 @@
+{
+  "index": 16,
+  "service": "storage",
+  "op": "tour_list_page_3",
+  "method": "GET",
+  "path": "/storage/v1/b/<bucket>/o?prefix=page%2F&maxResults=2&pageToken=<token>",
+  "status": 200,
+  "response": {
+    "items": [
+      {
+        "bucket": "<bucket>",
+        "contentType": "text/plain",
+        "crc32c": "<crc32c>",
+        "etag": "<etag>",
+        "generation": "<generation>",
+        "id": "<bucket>/page/04.txt/<generation>",
+        "kind": "storage#object",
+        "md5Hash": "<md5Hash>",
+        "mediaLink": "<mediaLink>",
+        "metageneration": "<metageneration>",
+        "name": "page/04.txt",
+        "selfLink": "<selfLink>",
+        "size": "6",
+        "storageClass": "STANDARD",
+        "timeCreated": "<time>",
+        "timeFinalized": "<time>",
+        "timeStorageClassUpdated": "<time>",
+        "updated": "<time>"
+      },
+      {
+        "bucket": "<bucket>",
+        "contentType": "text/plain",
+        "crc32c": "<crc32c>",
+        "etag": "<etag>",
+        "generation": "<generation>",
+        "id": "<bucket>/page/05.txt/<generation>",
+        "kind": "storage#object",
+        "md5Hash": "<md5Hash>",
+        "mediaLink": "<mediaLink>",
+        "metageneration": "<metageneration>",
+        "name": "page/05.txt",
+        "selfLink": "<selfLink>",
+        "size": "6",
+        "storageClass": "STANDARD",
+        "timeCreated": "<time>",
+        "timeFinalized": "<time>",
+        "timeStorageClassUpdated": "<time>",
+        "updated": "<time>"
+      }
+    ],
+    "kind": "storage#objects",
+    "nextPageToken": "<nextPageToken>"
+  }
+}
+

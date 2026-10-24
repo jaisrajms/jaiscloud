@@ -1,0 +1,26 @@
+{
+  "index": 7,
+  "service": "firestore",
+  "op": "fs_doc_get",
+  "method": "google.firestore.v1.Firestore/GetDocument",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>"
+  },
+  "response": {
+    "createTime": "<time>",
+    "fields": {
+      "count": {
+        "integerValue": "1"
+      },
+      "greeting": {
+        "stringValue": "hello"
+      }
+    },
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+    "updateTime": "<time>"
+  }
+}
+

@@ -1,0 +1,42 @@
+{
+  "index": 0,
+  "service": "storage",
+  "op": "error_bucket_create",
+  "method": "POST",
+  "path": "/storage/v1/b?project=<project>",
+  "status": 200,
+  "request": {
+    "location": "US",
+    "name": "<bucket>"
+  },
+  "response": {
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "iamConfiguration": {
+      "bucketPolicyOnly": {
+        "enabled": false
+      },
+      "publicAccessPrevention": "inherited",
+      "uniformBucketLevelAccess": {
+        "enabled": false
+      }
+    },
+    "id": "<bucket>",
+    "kind": "storage#bucket",
+    "location": "US",
+    "locationType": "multi-region",
+    "metageneration": "<metageneration>",
+    "name": "<bucket>",
+    "projectNumber": "<project>",
+    "rpo": "DEFAULT",
+    "selfLink": "<selfLink>",
+    "softDeletePolicy": {
+      "effectiveTime": "<time>",
+      "retentionDurationSeconds": "604800"
+    },
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "updated": "<time>"
+  }
+}
+

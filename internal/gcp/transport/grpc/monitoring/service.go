@@ -15,11 +15,11 @@ import (
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -137,7 +137,13 @@ func (s *Service) DeleteMetricDescriptor(ctx context.Context, req *monitoringpb.
 // ─── MetricService: time series ───────────────────────────────────────────────
 
 func (s *Service) ListTimeSeries(ctx context.Context, req *monitoringpb.ListTimeSeriesRequest) (*monitoringpb.ListTimeSeriesResponse, error) {
+	// The proto's name accepts a project, folder or organization scope; the
+	// folders arm shares the core with the REST transport (see
+	// core.ListTimeSeries), so resolve the scope the same way there.
 	project := s.project(ctx, req.GetName())
+	if scope, ok := core.ScopeFromResourceName(req.GetName()); ok {
+		project = scope
+	}
 	headersOnly := req.GetView() == monitoringpb.ListTimeSeriesRequest_HEADERS
 	page, next, err := s.core.ListTimeSeries(ctx, project, req.GetFilter(), timeIntervalFromProto(req.GetInterval()), aggregationFromProto(req.GetAggregation()), aggregationFromProto(req.GetSecondaryAggregation()), req.GetOrderBy(), headersOnly, int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
@@ -165,6 +171,12 @@ func (s *Service) CreateServiceTimeSeries(ctx context.Context, req *monitoringpb
 }
 
 func (s *Service) writeTimeSeries(ctx context.Context, name string, series []*monitoringpb.TimeSeries, isService bool) error {
+	// Writes are project-scoped only (the Discovery document declares create on
+	// the projects surface), so a folder/organization scope is rejected rather
+	// than silently written into the default project.
+	if scope, ok := core.ScopeFromResourceName(name); ok && scope != core.ProjectFromResourceName(name) {
+		return grpcutil.GRPCStatus(invalidArgument("time series writes must target a project"))
+	}
 	project := s.project(ctx, name)
 	out := make([]monitoringstore.TimeSeries, 0, len(series))
 	for _, p := range series {
@@ -399,7 +411,7 @@ func (s *Service) GetNotificationChannelVerificationCode(ctx context.Context, re
 	}
 	return &monitoringpb.GetNotificationChannelVerificationCodeResponse{
 		Code:       code,
-		ExpireTime: timestamppb.New(expireTime),
+		ExpireTime: timestamp.Proto(expireTime),
 	}, nil
 }
 

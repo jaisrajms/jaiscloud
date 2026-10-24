@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -202,6 +203,14 @@ func (p *Provider) GetManagedZone(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *Provider) ListManagedZones(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bound, err := bindPageSize(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtManagedZone, "")
 	if err != nil {
 		return nil, err
@@ -213,7 +222,7 @@ func (p *Provider) ListManagedZones(ctx context.Context, nr *model.NormalizedReq
 			zones = append(zones, mz)
 		}
 	}
-	return provider.OK(p.pageManagedZones(nr, zones)), nil
+	return provider.OK(p.pageManagedZones(nr, zones, size)), nil
 }
 
 func (p *Provider) PatchManagedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -287,8 +296,8 @@ func (p *Provider) loadManagedZone(ctx context.Context, nr *model.NormalizedRequ
 	return mz, nil
 }
 
-func (p *Provider) pageManagedZones(nr *model.NormalizedRequest, zones []ManagedZone) map[string]any {
-	page, nextPageToken := paginate(zones, func(z ManagedZone) string { return z.Name }, nr.Params)
+func (p *Provider) pageManagedZones(nr *model.NormalizedRequest, zones []ManagedZone, size int) map[string]any {
+	page, nextPageToken := paginate(zones, func(z ManagedZone) string { return z.Name }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, z := range page {
 		items = append(items, toMap(withZoneDefaults(z)))
@@ -360,11 +369,19 @@ func (p *Provider) GetResourceRecordSet(ctx context.Context, nr *model.Normalize
 }
 
 func (p *Provider) ListResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bound, err := bindPageSize(nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	zone := strParam(nr, "managedZone")
 	if zone == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing managedZone", 400)
 	}
 	if _, err := p.loadManagedZone(ctx, nr, zone); err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
+	if err != nil {
 		return nil, err
 	}
 	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtRRSet, zone)
@@ -378,7 +395,7 @@ func (p *Provider) ListResourceRecordSets(ctx context.Context, nr *model.Normali
 			sets = append(sets, s.RR)
 		}
 	}
-	return provider.OK(p.pageRRSets(nr, sets)), nil
+	return provider.OK(p.pageRRSets(nr, sets, size)), nil
 }
 
 func (p *Provider) PatchResourceRecordSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -453,8 +470,8 @@ func (p *Provider) loadRRSet(ctx context.Context, account, zone, name, typ strin
 	return s.RR, nil
 }
 
-func (p *Provider) pageRRSets(nr *model.NormalizedRequest, sets []ResourceRecordSet) map[string]any {
-	page, nextPageToken := paginate(sets, func(r ResourceRecordSet) string { return r.Name + "/" + r.Type }, nr.Params)
+func (p *Provider) pageRRSets(nr *model.NormalizedRequest, sets []ResourceRecordSet, size int) map[string]any {
+	page, nextPageToken := paginate(sets, func(r ResourceRecordSet) string { return r.Name + "/" + r.Type }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, r := range page {
 		items = append(items, rrToMap(r))
@@ -538,9 +555,20 @@ func (p *Provider) GetChange(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) ListChanges(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bound, err := bindPageSize(nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	zone := strParam(nr, "managedZone")
 	if zone == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing managedZone", 400)
+	}
+	if _, err := p.loadManagedZone(ctx, nr, zone); err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
+	if err != nil {
+		return nil, err
 	}
 	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtChange, zone)
 	if err != nil {
@@ -553,11 +581,11 @@ func (p *Provider) ListChanges(ctx context.Context, nr *model.NormalizedRequest)
 			changes = append(changes, s.Change)
 		}
 	}
-	return provider.OK(p.pageChanges(nr, changes)), nil
+	return provider.OK(p.pageChanges(nr, changes, size)), nil
 }
 
-func (p *Provider) pageChanges(nr *model.NormalizedRequest, changes []Change) map[string]any {
-	page, nextPageToken := paginate(changes, func(c Change) string { return c.ID }, nr.Params)
+func (p *Provider) pageChanges(nr *model.NormalizedRequest, changes []Change, size int) map[string]any {
+	page, nextPageToken := paginate(changes, func(c Change) string { return c.ID }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, c := range page {
 		items = append(items, changeToMap(c))
@@ -770,12 +798,55 @@ func storeError(err error, what string) error {
 	return err
 }
 
+// defaultMaxResults is the page size Cloud DNS's emulator serves when the
+// request omits maxResults (the Discovery document leaves the size to the
+// server).
+const defaultMaxResults = 100
+
+// Cloud DNS's maxResults range. The Discovery document declares only an int32
+// with no minimum or maximum ("If unspecified, the server decides how many
+// results to return"), but real GCP's list backend accepts 1..1000 and rejects
+// everything else with 400 "Invalid value for 'parameters.maxResults': '<v>'"
+// — zero and negatives included, unlike Cloud SQL, which clamps an over-large
+// value instead (DC61). Probe-recorded for managedZones, rrsets and changes
+// (DC62).
+const (
+	minMaxResults = 1
+	maxMaxResults = 1000
+)
+
+// maxResultsKeys is the emulator's page-size surface for Cloud DNS: the
+// documented maxResults (int32) plus the emulator's pageSize alias. Both resolve
+// through the same range, since the emulator cannot ignore the alias the way
+// real GCP ignores an unknown query parameter.
+var maxResultsKeys = []string{"maxResults", "pageSize"}
+
+// bindPageSize applies Cloud DNS's maxResults query binding. Real GCP validates
+// the binding in the API frontend, before routing, so an unparseable value is
+// 400 even when the parent zone does not exist (probed: rrsets?maxResults=abc
+// on a missing zone is 400). The backend's 1..1000 range check is separate and
+// runs *after* the parent-zone lookup (rrsets?maxResults=0 on a missing zone is
+// the zone's 404), so handlers call bindPageSize first and Resolve once the
+// zone is known — or immediately on the parent-less managedZones.list.
+func bindPageSize(params map[string]any) (paging.MaxResultsBinding, error) {
+	return paging.BindMaxResults(params, maxResultsKeys)
+}
+
+// resolvePageSize applies the backend half of Cloud DNS's maxResults contract:
+// the emulator's default when the parameter was absent, and the probed 1..1000
+// range otherwise (an explicitly empty value is rejected by the binding before
+// this point, DC63).
+func resolvePageSize(b paging.MaxResultsBinding) (int, error) {
+	return b.Resolve(defaultMaxResults, minMaxResults, maxMaxResults)
+}
+
 // paginate sorts items by key and applies maxResults/pageToken cursor
 // pagination (Cloud DNS's list convention). The next page token is the
-// base64url-encoded key of the last returned item.
-func paginate[T any](items []T, key func(T) string, params map[string]any) (page []T, nextPageToken string) {
+// base64url-encoded key of the last returned item. size is resolved by the
+// caller before any parent lookup, so an invalid maxResults answers the binding
+// error rather than a 404 for a missing zone.
+func paginate[T any](items []T, key func(T) string, params map[string]any, size int) (page []T, nextPageToken string) {
 	sort.Slice(items, func(i, j int) bool { return key(items[i]) < key(items[j]) })
-	size := maxResults(params)
 	start := 0
 	if tok, _ := params["pageToken"].(string); tok != "" {
 		if raw, err := base64.RawURLEncoding.DecodeString(tok); err == nil {
@@ -794,26 +865,4 @@ func paginate[T any](items []T, key func(T) string, params map[string]any) (page
 		nextPageToken = base64.RawURLEncoding.EncodeToString([]byte(key(items[end-1])))
 	}
 	return page, nextPageToken
-}
-
-// maxResults reads the Cloud DNS maxResults query parameter, falling back to
-// pageSize and the default of 100.
-func maxResults(params map[string]any) int {
-	for _, k := range []string{"maxResults", "pageSize"} {
-		switch v := params[k].(type) {
-		case string:
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				return n
-			}
-		case int:
-			if v > 0 {
-				return v
-			}
-		case float64:
-			if v > 0 {
-				return int(v)
-			}
-		}
-	}
-	return 100
 }

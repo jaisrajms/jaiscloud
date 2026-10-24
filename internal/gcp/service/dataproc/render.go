@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // substateRunning is the dataproc.v1.JobStatus.Substate rendered while a job is
@@ -21,10 +22,10 @@ import (
 // RUNNING.
 const substateRunning = "QUEUED"
 
-// formatTimestamp renders a business timestamp as the RFC3339Nano string the
-// Discovery JSON shape uses.
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // --- Cluster rendering ---

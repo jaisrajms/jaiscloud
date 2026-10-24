@@ -45,7 +45,7 @@ func TestRunJob_SubmitClientModeWithFakeK8s(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, "proj", "us-central1", j, "")
+		p.runJob(ctx, "proj", "us-central1", j, "", "")
 	}()
 
 	// Wait until the spark-submit Job appears, then cancel the core context.

@@ -96,7 +96,7 @@ func (s *Service) GetCluster(ctx context.Context, req *dataprocpb.GetClusterRequ
 
 func (s *Service) ListClusters(ctx context.Context, req *dataprocpb.ListClustersRequest) (*dataprocpb.ListClustersResponse, error) {
 	project := s.resolveProject(ctx, req.GetProjectId())
-	page, next, err := s.core.ListClusters(ctx, project, req.GetRegion(), int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListClusters(ctx, project, req.GetRegion(), req.GetFilter(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
 	}

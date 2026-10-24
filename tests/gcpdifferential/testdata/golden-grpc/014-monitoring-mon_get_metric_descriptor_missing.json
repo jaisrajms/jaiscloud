@@ -1,0 +1,17 @@
+{
+  "index": 14,
+  "service": "monitoring",
+  "op": "mon_get_metric_descriptor_missing",
+  "method": "google.monitoring.v3.MetricService/GetMetricDescriptor",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 5,
+  "request": {
+    "name": "projects/<project>/metricDescriptors/<metricType>"
+  },
+  "response": {
+    "code": 5,
+    "message": "Could not find descriptor for metric '<metricType>'."
+  }
+}
+

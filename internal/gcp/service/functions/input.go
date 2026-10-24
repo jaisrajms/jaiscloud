@@ -17,12 +17,18 @@ type FunctionInput struct {
 	// Name is the optional resource name carried in a create/update body.
 	Name string
 
-	Runtime              string
-	EntryPoint           string
-	SourceUploadURL      string
-	SourceArchiveURL     string
-	SourceBucket         string
-	SourceObject         string
+	Runtime          string
+	EntryPoint       string
+	SourceUploadURL  string
+	SourceArchiveURL string
+	SourceBucket     string
+	SourceObject     string
+	// SourceArchive is an in-memory source archive supplied directly to the
+	// core rather than referenced over GCS. It is set only by the console UI's
+	// inline-source create path; FunctionInputFromMap and the gRPC transport
+	// never populate it, so wire behavior is unchanged. When non-empty it takes
+	// precedence over the GCS reference in resolveSource.
+	SourceArchive        []byte
 	EnvironmentVariables map[string]string
 	Labels               map[string]string
 	Description          string

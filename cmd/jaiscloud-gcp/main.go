@@ -3,12 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,16 +20,20 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/docker"
+	"jaiscloud/internal/events"
+	"jaiscloud/internal/executor/awslambda"
+	"jaiscloud/internal/executor/container"
+	"jaiscloud/internal/executor/gcf"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	gcauth "jaiscloud/internal/gcp/auth"
 	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 	"jaiscloud/internal/gcp/crypto"
+	"jaiscloud/internal/gcp/eventing"
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpcfirestoreadmin "jaiscloud/internal/gcp/grpc/firestoreadmin"
-	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
@@ -43,17 +48,18 @@ import (
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
-	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	"jaiscloud/internal/gcp/runexec"
 	containercore "jaiscloud/internal/gcp/service/container"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	eventarccore "jaiscloud/internal/gcp/service/eventarc"
 	functionscore "jaiscloud/internal/gcp/service/functions"
 	iamcredentialscore "jaiscloud/internal/gcp/service/iamcredentials"
+	kmscore "jaiscloud/internal/gcp/service/kms"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	metastorecore "jaiscloud/internal/gcp/service/metastore"
@@ -89,16 +95,19 @@ import (
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/gcp/throttle"
+	grpccontainer "jaiscloud/internal/gcp/transport/grpc/container"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
+	grpckms "jaiscloud/internal/gcp/transport/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
+	grpcrun "jaiscloud/internal/gcp/transport/grpc/run"
 	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
@@ -110,6 +119,7 @@ import (
 	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	restiamcredentials "jaiscloud/internal/gcp/transport/rest/iamcredentials"
+	restkms "jaiscloud/internal/gcp/transport/rest/kms"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
@@ -122,7 +132,14 @@ import (
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 	"jaiscloud/internal/gcp/transportcfg"
+	gcpui "jaiscloud/internal/gcp/ui"
+	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
+	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
+	functionsui "jaiscloud/internal/gcp/ui/functions"
+	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
+	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
+	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
@@ -130,8 +147,10 @@ import (
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
+	coreui "jaiscloud/internal/ui"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -149,6 +168,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	runpb "cloud.google.com/go/run/apiv2/runpb"
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
@@ -159,10 +179,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
-const version = "1.1.0"
+var version = "dev"
 
 const defaultHost = "http://localhost:8080"
 
@@ -226,11 +245,16 @@ func startCmd() *cobra.Command {
 
 			// Long-running-operation timing is an opt-in, cross-service mode.
 			// The default (env unset) keeps every operation synchronously done,
-			// matching the v1.1.0 contract and the conformance transcripts;
+			// matching the default synchronous LRO contract and the conformance transcripts;
 			// JAISCLOUD_LRO_MODE=async stores operations in flight and settles
 			// them lazily when a client polls Operations.GetOperation.
 			lroMode := lro.FromEnv()
 			slog.Info("gcp lro mode", "async", lroMode.Async(), "delay", lroMode.Delay)
+
+			// Shared in-process event bus for the console's live status stream:
+			// GCP cores publish cloud-neutral status events (EventStatus) and
+			// the UI SSE broker forwards them to connected browser clients.
+			eventBus := events.NewEventBus()
 
 			// Throttle/quota fault injection is an opt-in, cross-service,
 			// emulator-only testing affordance (default OFF). The same injector
@@ -278,7 +302,10 @@ func startCmd() *cobra.Command {
 
 			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs, crypto.NewEnvelopeEncryptor(stores.keys))
 			secretP := secretmanagerprovider.New(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys))
-			kmsP := kmsprovider.New(stores.keys, stores.resources)
+			// Cloud KMS: one transport-neutral core shared by the REST provider
+			// and the gRPC adapter, so the two transports cannot drift.
+			kmsCore := kmscore.NewService(stores.keys, stores.resources, cfg.ProjectID)
+			kmsP := restkms.New(kmsCore)
 			iamP := iamprovider.New(stores.resources)
 			// IAM Service Account Credentials (iamcredentials) shares its key
 			// material with iam (internal/gcp/serviceaccount). Its
@@ -291,6 +318,9 @@ func startCmd() *cobra.Command {
 			// provider only sees the interface, so it never imports the Pub/Sub
 			// provider (no provider→provider dependency).
 			storageP.SetEventPublisher(pubsubP)
+			// Secret Manager's control-plane event notifications (DC64) ride the
+			// same Pub/Sub publish path, for both transports.
+			secretP.SetEventPublisher(pubsubP)
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			// Cloud Datastore's transport-neutral core is shared by the REST
@@ -302,7 +332,7 @@ func startCmd() *cobra.Command {
 			// Cloud Logging's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports use one
 			// log store and cannot drift.
-			loggingCore := loggingcore.NewService(stores.logEntries, cfg.ProjectID)
+			loggingCore := loggingcore.NewService(stores.logEntries, cfg.ProjectID, loggingcore.WithResources(stores.resources))
 			loggingRestP := restlogging.NewProvider(loggingCore, cfg.ProjectID)
 
 			// Cloud Monitoring's transport-neutral core is shared by the REST
@@ -311,62 +341,97 @@ func startCmd() *cobra.Command {
 			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
-			// Cloud Functions reuses the Lambda executor: mock echo by default,
-			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The transport-neutral
-			// core is shared by the REST provider and the gRPC adapter below, so
-			// both transports own one function store and one executor. The
-			// executor (warm container pool / K8s client) is only built when
-			// functions is enabled.
+			// Cloud Functions runs on the shared, cloud-neutral container
+			// executor: mock echo by default, Docker/K8s under
+			// JAISCLOUD_FUNCTIONS_EXECUTOR_MODE / JAISCLOUD_EXECUTOR_MODE. The
+			// transport-neutral core is shared by the REST provider and the gRPC
+			// adapter below, so both transports own one function store and one
+			// executor. The runtime profile is the GCP Functions Framework by
+			// default; JAISCLOUD_FUNCTIONS_EXECUTOR=lambda selects the legacy
+			// Lambda-RIE contract for back-compat.
 			var functionsCore *functionscore.Service
+			// The requested Functions executor mode and the effective one: a
+			// docker mode with no reachable daemon, or a k8s mode whose client
+			// cannot be built, degrades to mock (below), so the console reports
+			// the truth instead of claiming a backend that would fail on the
+			// first invoke.
+			funcMode, funcModeSrc := config.ExecutorMode("functions", "mock")
+			functionsMode := funcMode
 			if serviceEnabled("functions") {
-				lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
-				lambdaCfg := lambdaexec.DefaultLambdaConfig()
-				lambdaCfg.Mode = lambdaMode
-				lambdaCfg.Region = cfg.Region
-				lambdaCfg.InstanceID = instanceID
-				lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
+				funcCfg := gcf.DefaultConfig()
+				// Resolve the effective mode and, for k8s, the probed client so
+				// the executor reuses it rather than building a second one.
+				var funcK8sClient kubernetes.Interface
+				funcCfg.Mode, funcK8sClient = effectiveFunctionsMode(funcMode, func(ctx context.Context) error {
+					addr, err := docker.ResolveAndProbe(ctx, "", funcCfg.Network)
+					if err != nil {
+						return err
+					}
+					funcCfg.Addressing = addr
+					return nil
+				})
+				functionsMode = funcCfg.Mode
+				funcCfg.Region = cfg.Region
+				funcCfg.InstanceID = instanceID
 				// K8s mode mounts source archives via a code-fetch init container,
 				// which downloads them from the admin API. Prefer an explicit
-				// JAISCLOUD_LAMBDA_CODE_URL (already read into lambdaCfg), else
+				// JAISCLOUD_FUNCTIONS_CODE_URL (already read into funcCfg), else
 				// derive it from a cluster-reachable emulator origin.
-				if lambdaCfg.CodeURL == "" {
-					lambdaCfg.CodeURL = lambdaCodeURL()
+				if funcCfg.CodeURL == "" {
+					funcCfg.CodeURL = lambdaCodeURL()
 				}
-				lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
-				defer lambdaExec.Close()
-				slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
-				// The core is its own lambdaexec.CodeLoader: it resolves a
-				// function's persisted source archive (FD1) from the blob store
-				// so Docker/K8s mode mounts and runs real code (mock stays the
-				// default). It reads GCS source references (v1 sourceArchiveUrl /
-				// v2 storageSource) through the storage provider, which owns
-				// object decryption.
-				functionsCore = functionscore.NewService(stores.functions, stores.resources,
-					functionscore.WithExecutor(lambdaExec),
+				profile := functionsRuntimeProfile()
+				// Build the executor directly (not via container.NewExecutor) so
+				// the platform overlay reaches function containers/pods: a
+				// docker/k8s Functions deployment must receive the same TLS PEM
+				// bundle, extra volumes and env as the Cloud Run/Dataproc docker
+				// executors (FDF2). A platform load failure is non-fatal, as in
+				// that wiring.
+				funcExec := newFunctionsExecutor(funcCfg, profile, funcK8sClient)
+				defer funcExec.Close()
+				slog.Info("functions executor", "mode", functionsMode, "requested", funcMode, "source", funcModeSrc, "profile", profile.Name())
+				serviceOpts := []functionscore.Option{
+					functionscore.WithExecutor(funcExec),
 					functionscore.WithBlobs(stores.blobs),
 					functionscore.WithSourceFetcher(storageP),
 					functionscore.WithSourceBuckets(storageP),
 					// Long-running-operation timing (LRO2): opt-in async mode,
 					// default sync, reusing the cross-service mode parsed above.
 					functionscore.WithLROMode(lroMode),
+					// The console's live stream: a lazily settled operation
+					// publishes a one-time status event so the Functions pages
+					// refetch when it completes.
+					functionscore.WithEventBus(eventBus),
 					// The executor is the shared concurrency resource, so its
 					// account-level cap is also the project-wide admission cap
-					// (FP1). JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT, default 1000.
-					functionscore.WithAccountConcurrencyLimit(lambdaCfg.ConcurrencyLimit),
-				)
-				if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
+					// (FP1). JAISCLOUD_FUNCTIONS_CONCURRENCY_LIMIT, default 1000.
+					functionscore.WithAccountConcurrencyLimit(funcCfg.ConcurrencyLimit),
+				}
+				if strings.EqualFold(os.Getenv("JAISCLOUD_FUNCTIONS_EXECUTOR"), "lambda") {
+					// The legacy Lambda-RIE contract maps GCP runtimes onto
+					// Lambda images; the native profile resolves its own images.
+					serviceOpts = append(serviceOpts, functionscore.WithRuntimeImageResolver(legacyLambdaRuntimeImage))
+				}
+				// The core is its own container.CodeLoader: it resolves a
+				// function's persisted source archive (FD1) from the blob store
+				// so Docker/K8s mode mounts and runs real code (mock stays the
+				// default). It reads GCS source references (v1 sourceArchiveUrl /
+				// v2 storageSource) through the storage provider, which owns
+				// object decryption.
+				functionsCore = functionscore.NewService(stores.functions, stores.resources, serviceOpts...)
+				if dockerExec, ok := funcExec.(*container.DockerExecutor); ok {
 					dockerExec.SetCodeLoader(functionsCore)
 				}
-				if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
+				if k8sExec, ok := funcExec.(*container.K8sExecutor); ok {
 					k8sExec.SetCodeLoader(functionsCore)
 				}
 			}
 			functionsP := restfunctions.NewProvider(functionsCore, cfg.ProjectID)
-			// Producers hand events to the functions core's delivery engine. The
-			// core is nil when functions is disabled, so only wire it then.
+			// Producers hand events to the delivery engines; the dispatcher is
+			// wired below, once the Eventarc core exists, so a single fan-out
+			// reaches both the functions engine and the Eventarc engine. The
+			// core is nil when functions is disabled.
 			if functionsCore != nil {
-				pubsubP.SetFunctionDispatcher(functionsCore)
-				storageP.SetFunctionDispatcher(functionsCore)
 				// Dead-letter resolution/forwarding (FD9) goes through the Pub/Sub
 				// provider; the Eventarc trigger provisioner is wired below once
 				// the Eventarc core exists.
@@ -380,7 +445,7 @@ func startCmd() *cobra.Command {
 			// core is only built when workflows is enabled on some transport.
 			var workflowsCore *workflowscore.Service
 			if serviceEnabled("workflows") {
-				workflowsCore = workflowscore.NewService(stores.workflows, workflowscore.WithLROMode(lroMode))
+				workflowsCore = workflowscore.NewService(stores.workflows, workflowscore.WithLROMode(lroMode), workflowscore.WithEventBus(eventBus))
 			}
 			workflowsP := restworkflows.NewProvider(workflowsCore, cfg.ProjectID)
 			// Cloud Workflow Executions' transport-neutral core is shared by the
@@ -393,22 +458,21 @@ func startCmd() *cobra.Command {
 			// provider and the gRPC adapter below, so both transports run against
 			// one store and cannot drift. It is built before Dataproc because the
 			// Dataproc core resolves a cluster's metastore attachment through it.
-			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode))
+			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus), metastorecore.WithResources(stores.resources))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
-			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
-			// for Spark is out of scope (Phase A) — mock only. The core (and its
-			// K8s client) is only built when dataproc is enabled, and it is
-			// shared by the REST provider and the gRPC adapter below so both
-			// transports own one cluster/job state and one executor.
+			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE, or Docker on the
+			// local daemon. The core (and its K8s client) is only built when
+			// dataproc is enabled, and it is shared by the REST provider and the
+			// gRPC adapter below so both transports own one cluster/job state and
+			// one executor.
 			var dataprocCore *dataproccore.Service
 			if serviceEnabled("dataproc") {
 				sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
-				if sparkMode == "docker" {
-					slog.Warn("dataproc: docker Spark executor not supported, falling back to mock")
-					sparkMode = "mock"
-				}
+				// effectiveSparkMode tracks a fallback to mock so the startup log
+				// reports the backend actually used, not just the requested one.
+				effectiveSparkMode := sparkMode
 				dataprocOpts := []dataproccore.Option{
 					dataproccore.WithInstanceID(instanceID),
 					dataproccore.WithProjectID(cfg.ProjectID),
@@ -419,6 +483,9 @@ func startCmd() *cobra.Command {
 					// jaiscloud-events-topic label.
 					dataproccore.WithEventPublisher(pubsubP),
 					dataproccore.WithEventsTopic(os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")),
+					// Surface job/cluster transitions in the console's live
+					// status stream (shared event bus).
+					dataproccore.WithEventBus(eventBus),
 					// Stage each job's driver output/control files into the
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
@@ -447,6 +514,10 @@ func startCmd() *cobra.Command {
 				} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
 					gcpEmulatorCfg.GCSEndpoint = v
 				}
+				// In docker mode a driver container cannot reach the emulator on
+				// the host's loopback address; the endpoint is rewritten for the
+				// deployment mode in the docker branch below, once the
+				// addressing is resolved.
 				dataprocOpts = append(dataprocOpts, dataproccore.WithGCPEmulator(gcpEmulatorCfg))
 				// Cluster mutations are asynchronous and settle lazily on a read.
 				// The default (zero) settles on the first read; a positive value
@@ -485,13 +556,49 @@ func startCmd() *cobra.Command {
 					}
 					if k8sClient, err := buildK8sClient(); err != nil {
 						slog.Warn("dataproc: failed to build k8s client; falling back to mock", "err", err)
+						effectiveSparkMode = "mock"
 					} else {
 						dataprocOpts = append(dataprocOpts, dataproccore.WithK8s(k8sClient, k8sNS, platformCfg))
+					}
+				} else if sparkMode == "docker" {
+					sparkImage := cfg.K8sSparkImage
+					if sparkImage == "" {
+						// A docker Spark driver needs an explicit image; without
+						// one, fall back to mock rather than fail startup (a
+						// global JAISCLOUD_EXECUTOR_MODE=docker must not break a
+						// dataproc deployment that never configured a Spark image).
+						slog.Warn("dataproc: JAISCLOUD_K8S_SPARK_IMAGE is required for docker mode; falling back to mock")
+						effectiveSparkMode = "mock"
+					} else {
+						dataprocOpts = append(dataprocOpts, dataproccore.WithSparkImage(sparkImage))
+						// The docker executor needs the local Docker daemon; if
+						// none is reachable, fall back to mock (a job submit would
+						// otherwise fail) rather than run blind. A platform load
+						// failure (bad TLS/volume config) is not fatal.
+						pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						addr, pingErr := docker.ResolveAndProbe(pingCtx, "", "")
+						cancel()
+						if pingErr != nil {
+							slog.Warn("dataproc: docker daemon unreachable or containerized addressing unset; falling back to mock", "err", pingErr)
+							effectiveSparkMode = "mock"
+						} else {
+							dockerCfg := dataproccore.DockerConfig{Logger: slog.Default(), InstanceID: instanceID, Addressing: addr}
+							// The driver reaches the emulator by name on the shared
+							// network in container mode, or via host.docker.internal
+							// on the host.
+							gcpEmulatorCfg.GCSEndpoint = dockerWorkloadEndpoint(addr, gcpEmulatorCfg.GCSEndpoint)
+							if platformCfg, err := platform.LoadFromEnv(); err != nil {
+								slog.Warn("dataproc: platform config failed; continuing without it", "err", err)
+							} else {
+								dockerCfg.Platform = platformCfg
+							}
+							dataprocOpts = append(dataprocOpts, dataproccore.WithDocker(dockerCfg))
+						}
 					}
 				} else if sparkImage := cfg.K8sSparkImage; sparkImage != "" {
 					dataprocOpts = append(dataprocOpts, dataproccore.WithSparkImage(sparkImage))
 				}
-				slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
+				slog.Info("dataproc executor", "mode", effectiveSparkMode, "requested", sparkMode, "source", sparkModeSrc)
 				dataprocCore = dataproccore.NewService(stores.dataproc, stores.resources, dataprocOpts...)
 				// Deliver lifecycle events directly to functions whose
 				// eventTrigger names a Dataproc state-change type (independent
@@ -508,18 +615,21 @@ func startCmd() *cobra.Command {
 			// cloud.goog name; k8s/native start a Redpanda broker per cluster
 			// and the core renders its live endpoint. Brokers are runtime state,
 			// reaped on shutdown (reset/orphan sweep is the planned MK5).
-			mkBroker := buildManagedKafkaBroker(cfg)
+			mkBroker := buildManagedKafkaBroker(cfg, instanceID)
 			defer mkBroker.Shutdown(context.Background())
 
 			// Managed Kafka's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode), managedkafkacore.WithBroker(mkBroker))
+			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode), managedkafkacore.WithBroker(mkBroker), managedkafkacore.WithEventBus(eventBus))
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
 
 			icebergP := icebergprovider.New(stores.iceberg)
 
-			bigqueryP := bigqueryprovider.New(stores.bigquery)
+			// Load jobs read their gs:// source from the emulated GCS through the
+			// SourceReader interface, so the BigQuery provider never imports the
+			// storage provider.
+			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageP))
 
 			// Eventarc's transport-neutral core is shared by the REST provider
 			// and the gRPC adapter below, so both transports run against one
@@ -545,6 +655,24 @@ func startCmd() *cobra.Command {
 				// imports the Eventarc core.
 				functionsCore.SetTriggerProvisioner(eventarcCore)
 			}
+			// One fan-out dispatcher feeds both delivery engines: the Cloud
+			// Functions engine owns destination.cloudFunction, the Eventarc engine
+			// owns httpEndpoint (and, later, cloudRun). The destinations are
+			// disjoint, so no event is delivered twice. Dataproc keeps its
+			// functions-only dispatcher.
+			var producerDispatcher eventing.Dispatcher
+			switch {
+			case functionsCore != nil && eventarcCore != nil:
+				producerDispatcher = eventing.Fanout{functionsCore, eventarcCore}
+			case functionsCore != nil:
+				producerDispatcher = functionsCore
+			case eventarcCore != nil:
+				producerDispatcher = eventarcCore
+			}
+			if producerDispatcher != nil {
+				pubsubP.SetFunctionDispatcher(producerDispatcher)
+				storageP.SetFunctionDispatcher(producerDispatcher)
+			}
 			eventarcP := resteventarc.NewProvider(eventarcCore, cfg.ProjectID)
 
 			// Cloud DNS is metadata-only over the shared ResourceStore.
@@ -561,31 +689,97 @@ func startCmd() *cobra.Command {
 
 			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
 			// REST only — GKE's native transport is gRPC, but the emulator
-			// deliberately exposes the REST metadata surface (docs/GA.md §7).
+			// deliberately exposes the REST metadata surface (docs/gcp/wire-contract.md §5).
 			// The core sits behind a ClusterManager seam whose only
 			// implementation is the mock: a cluster is a stored record, not a
 			// real Kubernetes control plane.
 			containerCore := containercore.NewService(stores.container)
 			containerP := restcontainer.NewProvider(containerCore)
 
-			// Cloud Run Admin v2's behavioural control plane. REST-first (gRPC
-			// deferred, CR4): W1.1 ships a mock runtime (a service is a stored
-			// record), W1.2 adds the k8s executor that launches the template
-			// image. The seam is resolved once at startup.
+			// Cloud Run Admin v2's behavioural control plane, served over REST and
+			// gRPC: the default mock runtime makes a service a stored record;
+			// k8s executor mode additionally launches the template image as a
+			// Pod + ClusterIP Service and reverse-proxies to it. The seam is
+			// resolved once at startup.
 			runExecutorMode, runExecutorSource := config.ExecutorMode("cloudrun", "mock")
-			if runExecutorMode != "mock" {
-				slog.Warn("cloudrun: executor mode not supported in this build; using mock",
+			// The invocation host is process-wide: the router's host detection
+			// (DetectService -> IsInvocationHost) and the core's uri synthesis
+			// must agree, so configure it before serving. k8s mode uses http and
+			// the externally reachable emulator port so a client can send the
+			// generated authority back as a Host header.
+			runScheme := "https"
+			if runExecutorMode == "k8s" || runExecutorMode == "docker" {
+				runScheme = "http"
+			}
+			runHost := runcore.HostConfig{
+				Scheme: runScheme,
+				Suffix: os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX"),
+				Port:   os.Getenv("JAISCLOUD_CLOUDRUN_URL_PORT"),
+			}
+			runcore.ConfigureInvocationHost(runHost)
+
+			runOpts := []runcore.Option{
+				runcore.WithLROMode(lroMode),
+				runcore.WithInvocationHost(runHost),
+				runcore.WithEventBus(eventBus),
+			}
+			switch runExecutorMode {
+			case "k8s":
+				k8sNS := cfg.K8sNamespace
+				if k8sNS == "" {
+					k8sNS = "jaiscloud"
+				}
+				if client, err := buildK8sClient(); err != nil {
+					slog.Warn("cloudrun: failed to build k8s client; falling back to mock", "err", err)
+				} else {
+					runOpts = append(runOpts, runcore.WithRuntimeManager(runexec.New(runexec.Config{
+						Client:    client,
+						Namespace: k8sNS,
+						Logger:    slog.Default(),
+					})))
+					slog.Info("cloudrun executor", "mode", runExecutorMode, "source", runExecutorSource, "namespace", k8sNS)
+				}
+			case "docker":
+				// The docker runtime manager needs the local Docker socket; if no
+				// daemon is reachable, fall back to the mock runtime (a service
+				// create would otherwise fail) rather than run blind. A platform
+				// load failure (bad TLS/volume config) is not fatal: the manager
+				// runs without the platform layer.
+				pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				addr, pingErr := docker.ResolveAndProbe(pingCtx, "", "")
+				cancel()
+				if pingErr != nil {
+					slog.Warn("cloudrun: docker daemon unreachable or containerized addressing unset; falling back to mock", "err", pingErr)
+					break
+				}
+				dockerCfg := runexec.DockerConfig{Logger: slog.Default(), InstanceID: instanceID, Addressing: addr}
+				if platformCfg, err := platform.LoadFromEnv(); err != nil {
+					slog.Warn("cloudrun: platform config failed; continuing without it", "err", err)
+				} else {
+					dockerCfg.Platform = platformCfg
+				}
+				runOpts = append(runOpts, runcore.WithRuntimeManager(runexec.NewDocker(dockerCfg)))
+				slog.Info("cloudrun executor", "mode", runExecutorMode, "source", runExecutorSource)
+			case "mock":
+			default:
+				slog.Warn("cloudrun: unknown executor mode; using mock",
 					"mode", runExecutorMode, "source", runExecutorSource)
 			}
-			runCore := runcore.NewService(stores.run, stores.resources,
-				runcore.WithLROMode(lroMode),
-				runcore.WithURLSuffix(os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX")))
+			runCore := runcore.NewService(stores.run, stores.resources, runOpts...)
 			runP := restrun.NewProvider(runCore)
+
+			// Eventarc delivers a destination.cloudRun trigger through the run
+			// core's runtime seam (not an HTTP call to the generated host), so
+			// delivery works in k8s executor mode without DNS. The core is
+			// always built, so the invoker is wired whenever Eventarc exists.
+			if eventarcCore != nil {
+				eventarcCore.SetCloudRunInvoker(cloudRunEventarcInvoker{run: runCore})
+			}
 
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode))
+			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode), serviceusagecore.WithEventBus(eventBus))
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
 			// Cloud Scheduler v1's transport-neutral core is shared by the REST
@@ -616,7 +810,10 @@ func startCmd() *cobra.Command {
 			// The core is only built when resourcemanager is enabled.
 			var resourceManagerCore *resourcemanagercore.Service
 			if serviceEnabled("resourcemanager") {
-				resourceManagerCore = resourcemanagercore.NewService(stores.resources)
+				resourceManagerCore = resourcemanagercore.NewService(stores.resources,
+					resourcemanagercore.WithKnownProjects(cfg.ProjectID, cfg.ExtraAccounts),
+					resourcemanagercore.WithLROMode(lroMode),
+					resourcemanagercore.WithEventBus(eventBus))
 			}
 			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
 
@@ -629,12 +826,17 @@ func startCmd() *cobra.Command {
 			if lroMode.Async() {
 				workflowsP.SetOperationResolvers(metastoreP, managedkafkaP)
 				// The top-level /v1/operations/{id} route is decoded as a
-				// Functions v1 operation, so wire Service Usage (which shares
-				// the operations/{id} namespace) as a fallback resolver: a
-				// Service Usage poll 404s in Functions first, then resolves
-				// here. Sync mode returns every operation done inline, so
+				// Functions v1 operation, so wire Service Usage and Resource
+				// Manager (which share the operations/{id} namespace) as
+				// fallback resolvers: a poll 404s in Functions first, then
+				// resolves here, and each resolver declines ids it does not
+				// own. Sync mode returns every operation done inline, so
 				// nothing is wired and the REST contract is unchanged.
-				functionsP.SetOperationResolvers(serviceusageP)
+				if resourceManagerCore != nil {
+					functionsP.SetOperationResolvers(serviceusageP, resourcemanagerP)
+				} else {
+					functionsP.SetOperationResolvers(serviceusageP)
+				}
 			}
 
 			// Register only services enabled on at least one transport, so a
@@ -688,7 +890,8 @@ func startCmd() *cobra.Command {
 			firestoreAdminGRPC := grpcfirestoreadmin.NewService(firestoreP.Service, cfg.ProjectID)
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
-			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
+			secretGRPC.SetEventPublisher(pubsubP)
+			kmsGRPC := grpckms.NewService(kmsCore, cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			loggingConfigGRPC := grpclogging.NewConfigService(loggingCore, cfg.ProjectID)
 			loggingMetricsGRPC := grpclogging.NewMetricsService(loggingCore, cfg.ProjectID)
@@ -697,8 +900,7 @@ func startCmd() *cobra.Command {
 			// conditions, opens/closes incidents, and publishes notifications to
 			// pubsub notification channels via the emulator's Pub/Sub store.
 			monitoringEval := grpcmonitoring.NewEvaluator(stores.monitoring, pubsubNotificationPublisher{
-				messages:  stores.messages,
-				encryptor: crypto.NewEnvelopeEncryptor(stores.keys),
+				provider: pubsubP,
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
@@ -715,6 +917,8 @@ func startCmd() *cobra.Command {
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
 			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID, functionsUploadBase)
+			containerGRPC := grpccontainer.NewService(containerCore, cfg.ProjectID)
+			runGRPC := grpcrun.NewService(runCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -741,6 +945,7 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("metastore") {
 					metastorepb.RegisterDataprocMetastoreServer(gserv.GRPC(), metastoreGRPC)
+					metastorepb.RegisterDataprocMetastoreFederationServer(gserv.GRPC(), metastoreGRPC)
 				}
 				if transports.GRPCFor("eventarc") {
 					eventarcpb.RegisterEventarcServer(gserv.GRPC(), eventarcGRPC)
@@ -764,6 +969,13 @@ func startCmd() *cobra.Command {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterWorkflowTemplateServiceServer(gserv.GRPC(), dataprocGRPC)
+				}
+				if transports.GRPCFor("container") {
+					containerpb.RegisterClusterManagerServer(gserv.GRPC(), containerGRPC)
+				}
+				if transports.GRPCFor("run") {
+					runpb.RegisterServicesServer(gserv.GRPC(), runGRPC)
+					runpb.RegisterRevisionsServer(gserv.GRPC(), runGRPC)
 				}
 				if transports.GRPCFor("functions") {
 					functionspb.RegisterCloudFunctionsServiceServer(gserv.GRPC(), functionsGRPC)
@@ -797,14 +1009,18 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub, KMS and Eventarc share the single IAMPolicy service, so
-				// their IAM surfaces are dispatched through one router. Eventarc
-				// only joins the router when its gRPC transport is selected, so a
-				// trigger/channel IAM name cannot reach a nil core.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") {
+				// Pub/Sub, KMS, Eventarc and Dataproc Metastore share the single
+				// IAMPolicy service, so their IAM surfaces are dispatched through
+				// one router. Eventarc and Metastore only join the router when
+				// their gRPC transport is selected, so a trigger/channel or
+				// metastore IAM name cannot reach a nil core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") {
 					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
 					if transports.GRPCFor("eventarc") {
 						iamHandlers = append(iamHandlers, eventarcGRPC)
+					}
+					if transports.GRPCFor("metastore") {
+						iamHandlers = append(iamHandlers, metastoreGRPC)
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
@@ -823,9 +1039,19 @@ func startCmd() *cobra.Command {
 				// registered only in the opt-in async mode: in sync mode every
 				// operation is returned done inline so nothing polls, and
 				// omitting it leaves Functions' existing top-level NotFound (the
-				// v1.1.0 contract) unchanged. Mirrors the REST fallback wiring.
+				// default synchronous LRO contract) unchanged. Mirrors the REST fallback wiring.
 				if lroMode.Async() && transports.GRPCFor("serviceusage") && serviceUsageCore != nil {
 					opsResolvers = append(opsResolvers, serviceUsageGRPC)
+				}
+				// Cloud Resource Manager publishes top-level operations
+				// (operations/{id}) too. Like Service Usage it is consulted
+				// BEFORE Cloud Functions v1 (which claims the same namespace
+				// and answers an unknown id with NotFound) and returns
+				// handled=false for ids it does not own. It is registered only
+				// in the opt-in async mode: in sync mode every project
+				// mutation is returned done inline, so nothing polls.
+				if lroMode.Async() && transports.GRPCFor("resourcemanager") && resourceManagerCore != nil {
+					opsResolvers = append(opsResolvers, resourceManagerGRPC)
 				}
 				// Cloud Functions publishes typed operations (J58); v1 names are
 				// top-level (operations/{id}) and v2 names are location-scoped.
@@ -850,7 +1076,54 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
 					opsResolvers = append(opsResolvers, managedKafkaGRPC)
 				}
+				// Cloud Run publishes location-scoped operations whose ids carry
+				// the run-owned "operation-run-" prefix, so it claims only its
+				// own names and leaves Cloud Functions v2's location-scoped
+				// operations (and every other service's) untouched.
+				if transports.GRPCFor("run") && runCore != nil {
+					opsResolvers = append(opsResolvers, runGRPC)
+				}
 				opsService := grpcoperations.New(opsResolvers...)
+				// Real GCP serves google.longrunning.Operations per service
+				// endpoint, so ListOperations returns only that service's
+				// operations. The emulator serves one Operations on a single
+				// listener, so register each service's resolvers under its
+				// endpoint host token (the request's HTTP/2 :authority first
+				// label). Managed Kafka and Dataproc Metastore operations share
+				// the location-scoped namespace with Workflows/Run and therefore
+				// need the discriminator to list their own; the registration is
+				// additive and leaves the untokened fallback chain unchanged.
+				if transports.GRPCFor("metastore") && metastoreCore != nil {
+					opsService.SetEndpointResolvers("metastore", metastoreGRPC)
+				}
+				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
+					opsService.SetEndpointResolvers("managedkafka", managedKafkaGRPC)
+				}
+				// The other LRO-owning services are endpoint-scoped too, so a
+				// client addressed at their canonical host resolves and lists only
+				// their operations (real GCP serves Operations per endpoint).
+				// Functions v1 and v2 share cloudfunctions.googleapis.com, so the
+				// token carries both. Service Usage and Resource Manager are
+				// registered only in the opt-in async mode, matching their
+				// fallback-chain registration.
+				if transports.GRPCFor("dataproc") && dataprocCore != nil {
+					opsService.SetEndpointResolvers("dataproc", dataprocGRPC)
+				}
+				if transports.GRPCFor("functions") && functionsCore != nil {
+					opsService.SetEndpointResolvers("cloudfunctions", functionsGRPC, functionsV2GRPC)
+				}
+				if transports.GRPCFor("workflows") && workflowsCore != nil {
+					opsService.SetEndpointResolvers("workflows", workflowsGRPC)
+				}
+				if transports.GRPCFor("run") && runCore != nil {
+					opsService.SetEndpointResolvers("run", runGRPC)
+				}
+				if lroMode.Async() && transports.GRPCFor("serviceusage") && serviceUsageCore != nil {
+					opsService.SetEndpointResolvers("serviceusage", serviceUsageGRPC)
+				}
+				if lroMode.Async() && transports.GRPCFor("resourcemanager") && resourceManagerCore != nil {
+					opsService.SetEndpointResolvers("cloudresourcemanager", resourceManagerGRPC)
+				}
 				// The opt-in async mode reports a name no resolver or registry
 				// owns as NotFound (real google.longrunning semantics); the
 				// default keeps the lenient terminal stub the synchronous SDK
@@ -880,7 +1153,13 @@ func startCmd() *cobra.Command {
 				adminHandler.RegisterResetter(functionsCore)
 			}
 			adminHandler.RegisterResetter(stores.workflows)
-			adminHandler.RegisterResetter(stores.dataproc)
+			// The dataproc core owns per-cluster Kubernetes namespaces; register
+			// it (rather than the bare store) so /_jaiscloud/reset reaps
+			// emulator-owned namespaces in addition to wiping the store (its
+			// Reset calls store.Reset). Mirrors the managedkafka core below.
+			if dataprocCore != nil {
+				adminHandler.RegisterResetter(dataprocCore)
+			}
 			// The managedkafka core owns the optional real broker; register it
 			// (rather than the bare store) so /_jaiscloud/reset reaps broker
 			// Pods/Services/subprocesses in addition to wiping the store.
@@ -889,6 +1168,10 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.iceberg)
 			adminHandler.RegisterResetter(stores.hms)
 			adminHandler.RegisterResetter(stores.bigquery)
+			// The BigQuery provider holds in-progress resumable load-job upload
+			// sessions in memory; register it so /_jaiscloud/reset clears them
+			// alongside the store.
+			adminHandler.RegisterResetter(bigqueryP)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.eventarc)
@@ -896,6 +1179,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterSchedulerTicker(schedulerEngine)
 			adminHandler.RegisterResetter(tasksCore)
 			adminHandler.RegisterTasksTicker(tasksEngine)
+			adminHandler.RegisterMonitoringTicker(monitoringEval)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(containerCore)
 			adminHandler.RegisterResetter(runCore)
@@ -1180,6 +1464,88 @@ func startCmd() *cobra.Command {
 				defer hmsServer.Stop()
 			}
 
+			// Optional UI portal on --ui-port (default 4567), served alongside
+			// the emulator gateway. Only compiled in with -tags ui; without the
+			// tag coreui.New returns (nil, nil) and the listener is skipped.
+			var uiServer *coreui.UIServer
+			if cfg.UIEnabled {
+				var uiErr error
+				// The Workflows console spans the Workflows management and
+				// Workflow Executions cores; it is advertised only when the
+				// workflows service is enabled (otherwise workflowsCore is nil).
+				var workflowsUI workflowsui.ProviderInterface
+				if workflowsCore != nil {
+					workflowsUI = workflowsui.NewProvider(workflowsCore, workflowExecutionsCore)
+				}
+				// Eventarc is advertised only when the service is enabled
+				// (otherwise eventarcCore is nil, and a typed nil must not be
+				// boxed into the interface or the catalog would list it).
+				var eventarcUI eventarcui.ProviderInterface
+				if eventarcCore != nil {
+					eventarcUI = eventarcui.NewProvider(eventarcCore)
+				}
+				// Cloud Functions is advertised only when the service is
+				// enabled (otherwise functionsCore is nil, and a typed nil must
+				// not be boxed into the interface or the catalog would list it).
+				var functionsUI functionsui.ProviderInterface
+				if functionsCore != nil {
+					functionsUI = functionsui.NewProvider(functionsCore, storageP)
+				}
+				// Dataproc is advertised only when the service is enabled
+				// (otherwise dataprocCore is nil, and a typed nil must not be
+				// boxed into the interface or the catalog would list it).
+				var dataprocUI dataprocui.ProviderInterface
+				if dataprocCore != nil {
+					dataprocUI = dataprocui.NewProvider(dataprocCore)
+				}
+				// Managed Kafka is advertised whenever the core is wired; the
+				// core is always constructed (its default mock topology starts
+				// no broker), so the console page is present in every mode.
+				managedkafkaUI := managedkafkaui.NewProvider(managedKafkaCore)
+				// Report the configured engine/executor modes to the catalog so
+				// an engine-capable service is shown as engine-backed rather
+				// than shape-only (see gcpui.ServiceModes).
+				sparkExec, sparkSrc := config.ExecutorMode("spark", "mock")
+				lambdaExec, lambdaSrc := functionsMode, funcModeSrc
+				cloudRunExec, cloudRunSrc := config.ExecutorMode("cloudrun", "mock")
+				kafkaBrokerMode, kafkaBrokerSrc := resolveKafkaBrokerMode()
+				// Report the effective backend: a requested docker mode with no
+				// reachable daemon already degraded to mock when the broker was
+				// built above (mkBroker is in scope here).
+				kafkaBrokerMode = string(mkBroker.Mode())
+				serviceModes := gcpui.ServiceModes{
+					KafkaBroker:       kafkaBrokerMode,
+					KafkaBrokerSource: kafkaBrokerSrc,
+					Spark:             sparkExec,
+					SparkSource:       sparkSrc,
+					Lambda:            lambdaExec,
+					LambdaSource:      lambdaSrc,
+					CloudRun:          cloudRunExec,
+					CloudRunSource:    cloudRunSrc,
+				}
+				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithServiceModes(serviceModes)
+				uiServer, uiErr = coreui.New(gcpRegistrar, adminHandler, cfg, eventBus, version)
+				if uiErr != nil {
+					slog.Warn("ui server init failed", "err", uiErr)
+				} else if uiServer != nil {
+					go func() {
+						addr := fmt.Sprintf(":%d", cfg.UIPort)
+						slog.Info("ui server starting", "url", fmt.Sprintf("http://localhost:%d/ui/", cfg.UIPort))
+						if err := uiServer.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
+							slog.Warn("ui server stopped", "err", err)
+						}
+					}()
+					if cfg.UIOpen {
+						coreui.OpenBrowser(fmt.Sprintf("http://localhost:%d/ui/", cfg.UIPort))
+					}
+					defer func() {
+						shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						_ = uiServer.Shutdown(shutCtx)
+					}()
+				}
+			}
+
 			return srv.ListenAndServe()
 		},
 	}
@@ -1201,6 +1567,11 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
 	cmd.Flags().String("transports", "rest,grpc", "GCP wire transports to expose: rest,grpc,both,none")
 	cmd.Flags().String("transport-overrides", "", "Per-service transport overrides, e.g. storage=grpc,pubsub=rest,memorystore=none")
+	cmd.Flags().Bool("ui", false, "Enable the UI Portal listener on --ui-port (default 4567)")
+	cmd.Flags().Int("ui-port", 4567, "Port for the UI Portal HTTP listener")
+	cmd.Flags().Bool("ui-open", false, "Auto-open browser when UI starts (no-op when not a TTY)")
+	cmd.Flags().Bool("ui-dev", false, "UI dev mode: relaxed CORS for the Vite dev server")
+	cmd.Flags().String("dev-ui-origin", "http://localhost:5173", "Allowed dev UI origin when --ui-dev is set")
 	return cmd
 }
 
@@ -1221,16 +1592,28 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
 	viper.BindPFlag("transports", cmd.Flags().Lookup("transports"))
 	viper.BindPFlag("transport_overrides", cmd.Flags().Lookup("transport-overrides"))
+	viper.BindPFlag("ui", cmd.Flags().Lookup("ui"))
+	viper.BindPFlag("ui_port", cmd.Flags().Lookup("ui-port"))
+	viper.BindPFlag("ui_open", cmd.Flags().Lookup("ui-open"))
+	viper.BindPFlag("ui_dev", cmd.Flags().Lookup("ui-dev"))
+	viper.BindPFlag("dev_ui_origin", cmd.Flags().Lookup("dev-ui-origin"))
 }
 
-// pubsubNotificationPublisher adapts the emulator's Pub/Sub message store to
-// the monitoring evaluator's Publisher interface. Alert-policy notifications
-// are written as ordinary Pub/Sub messages (envelope-encrypted with the server
-// DEK, matching the Publish service) on the channel's labels.topic, which is
-// the observable effect (mirrors AWS CloudWatch alarm -> SNS delivery).
+// pubsubNotificationPublisher adapts the emulator's Pub/Sub publish path to the
+// monitoring evaluator's Publisher interface. Alert-policy notifications are
+// delivered to the channel's labels.topic through the same fan-out publish used
+// by topics.publish, so every pull subscription, push endpoint, and function
+// trigger on the topic receives a copy (mirrors AWS CloudWatch alarm -> SNS).
 type pubsubNotificationPublisher struct {
-	messages  pubsubstore.Messages
-	encryptor crypto.EnvelopeEncryptor
+	provider *pubsubprovider.Provider
+}
+
+// Publish writes the notification payload to the topic named by topic (a full
+// "projects/{p}/topics/{t}" resource name). A missing topic is NotFound, as in
+// real Pub/Sub, and is recorded on the incident as a failed delivery.
+func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, data []byte) error {
+	_, err := p.provider.PublishEvent(ctx, "", topic, data, nil)
+	return err
 }
 
 // schedulerPubSubPublisher adapts the Pub/Sub provider's fan-out publish path to
@@ -1247,32 +1630,47 @@ func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, dat
 	return err
 }
 
-// Publish writes a message to the topic named by topic (a full
-// "projects/{p}/topics/{t}" resource name).
-func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, data []byte) error {
-	short := topic
-	if i := strings.LastIndex(topic, "/topics/"); i >= 0 {
-		short = topic[i+len("/topics/"):]
-	}
-	rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, "", "")
+// cloudRunEventarcInvoker adapts the Cloud Run core to Eventarc's
+// CloudRunInvoker seam: it resolves the stored service and forwards the
+// CloudEvents POST through the runtime manager, so a destination.cloudRun
+// trigger is delivered without DNS or the generated host.
+type cloudRunEventarcInvoker struct {
+	run *runcore.Service
+}
+
+// Invoke forwards one CloudEvents request to a Cloud Run service's latest ready
+// revision. A missing service maps to 404 and an unavailable runtime to the
+// runtime's own 502/503/504, mirroring the Cloud Run data-plane contract
+// (ErrNoReadyRuntime, e.g. the default mock runtime, -> 503).
+func (i cloudRunEventarcInvoker) Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error) {
+	svc, err := i.run.GetService(ctx, project, region, service)
 	if err != nil {
-		return err
+		return providerHTTPStatus(err), err
 	}
-	ciphertext, err := kmsstore.EncryptData(rawDEK, data, nil)
-	if err != nil {
-		return err
-	}
-	id, err := p.messages.NextID(ctx)
-	if err != nil {
-		return err
-	}
-	return p.messages.Put(ctx, pubsubstore.Message{
-		Topic:       short,
-		MessageID:   id,
-		Data:        base64.StdEncoding.EncodeToString(ciphertext),
-		PublishTime: clock.Now(),
-		WrappedDEK:  wrappedDEK,
+	inv, err := i.run.Invoke(ctx, runcore.InvocationRequest{
+		Service: svc,
+		Method:  http.MethodPost,
+		Path:    path,
+		Headers: headers,
+		Body:    body,
 	})
+	if err != nil {
+		if errors.Is(err, runcore.ErrNoReadyRuntime) {
+			return http.StatusServiceUnavailable, err
+		}
+		return providerHTTPStatus(err), err
+	}
+	return inv.Status, nil
+}
+
+// providerHTTPStatus extracts the HTTP status from a *model.ProviderError,
+// defaulting to 502 (Bad Gateway) for an unmapped delivery failure.
+func providerHTTPStatus(err error) int {
+	var pe *model.ProviderError
+	if errors.As(err, &pe) && pe.HTTPStatus > 0 {
+		return pe.HTTPStatus
+	}
+	return http.StatusBadGateway
 }
 
 // stores bundles the per-mode store backends constructed by initStores.
@@ -1415,56 +1813,112 @@ func versionCmd() *cobra.Command {
 	}
 }
 
+// resolveKafkaBrokerMode resolves the Managed Kafka broker backend:
+// JAISCLOUD_KAFKA_BROKER_MODE → JAISCLOUD_EXECUTOR_MODE → mock. It keeps
+// Kafka's own variable (JAISCLOUD_KAFKA_BROKER_MODE) at first-class precedence
+// for back-compat while letting a global JAISCLOUD_EXECUTOR_MODE=docker cover
+// Kafka like Cloud Run/Dataproc/Functions.
+func resolveKafkaBrokerMode() (mode, source string) {
+	if v := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE"); v != "" {
+		return v, "JAISCLOUD_KAFKA_BROKER_MODE"
+	}
+	if v := os.Getenv("JAISCLOUD_EXECUTOR_MODE"); v != "" {
+		return v, "JAISCLOUD_EXECUTOR_MODE"
+	}
+	return "mock", "default"
+}
+
 // buildManagedKafkaBroker builds the optional real Kafka broker behind Managed
 // Kafka clusters from the environment:
 //
-//	JAISCLOUD_KAFKA_BROKER_MODE   mock (default) | k8s | native
-//	JAISCLOUD_KAFKA_BROKER_IMAGE  Redpanda image for k8s mode
+//	JAISCLOUD_KAFKA_BROKER_MODE   mock (default) | k8s | native | docker
+//	JAISCLOUD_EXECUTOR_MODE       global fallback when the above is unset
+//	JAISCLOUD_KAFKA_BROKER_IMAGE  Redpanda image for k8s/docker mode
 //	JAISCLOUD_KAFKA_BROKER_BIN    Redpanda CLI (rpk) path for native mode
 //
-// k8s mode needs a Kubernetes client; native mode needs a resolvable binary.
-// Both degrade to the mock topology (no broker) when unavailable, mirroring the
-// Dataproc executor wiring. Broker endpoint durability and reaping are the
-// planned MK5 session.
-func buildManagedKafkaBroker(cfg *config.Config) kafkabroker.Broker {
-	mode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
+// k8s mode needs a Kubernetes client, native mode a resolvable binary, and
+// docker mode a reachable daemon; each degrades to the mock topology (no
+// broker) when unavailable, mirroring the Cloud Run/Dataproc executor wiring.
+func buildManagedKafkaBroker(cfg *config.Config, instanceID string) kafkabroker.Broker {
+	mode, source := resolveKafkaBrokerMode()
 	bcfg := kafkabroker.Config{
 		Mode:       mode,
 		Namespace:  cfg.K8sNamespace,
 		Image:      os.Getenv("JAISCLOUD_KAFKA_BROKER_IMAGE"),
 		BinaryPath: os.Getenv("JAISCLOUD_KAFKA_BROKER_BIN"),
 		DataDir:    cfg.DataDir,
+		InstanceID: instanceID,
 	}
-	if kafkabroker.Mode(mode) == kafkabroker.ModeK8s {
+	switch kafkabroker.Mode(mode) {
+	case kafkabroker.ModeK8s:
 		if client, err := buildK8sClient(); err != nil {
 			slog.Warn("managedkafka: failed to build k8s client; broker falls back to mock", "err", err)
 		} else {
-			bcfg.Client = client
+			bcfg.K8sClient = client
+		}
+	case kafkabroker.ModeDocker:
+		// The docker broker needs the local Docker daemon; if none is
+		// reachable, fall back to mock (a cluster create would otherwise fail)
+		// rather than run blind. A platform load failure (bad TLS/volume
+		// config) is not fatal.
+		pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		addr, pingErr := docker.ResolveAndProbe(pingCtx, "", "")
+		cancel()
+		if pingErr != nil {
+			slog.Warn("managedkafka: docker daemon unreachable or containerized addressing unset; broker falls back to mock", "err", pingErr)
+			bcfg.Mode = string(kafkabroker.ModeMock)
+			break
+		}
+		bcfg.Addressing = addr
+		if platformCfg, err := platform.LoadFromEnv(); err != nil {
+			slog.Warn("managedkafka: platform config failed; continuing without it", "err", err)
+		} else {
+			bcfg.Platform = platformCfg
 		}
 	}
-	return kafkabroker.New(bcfg)
+	broker := kafkabroker.New(bcfg)
+	slog.Info("managedkafka broker", "mode", broker.Mode(), "requested", mode, "source", source)
+	return broker
 }
 
-// buildK8sClient constructs a kubernetes.Interface using in-cluster config if
-// available, falling back to JAISCLOUD_K8S_APISERVER + JAISCLOUD_K8S_TOKEN env
-// vars (mirrors cmd/jaiscloud-aws/main.go).
+// buildK8sClient builds the shared Kubernetes client (in-cluster config first,
+// then the JAISCLOUD_K8S_* environment). It delegates so AWS and GCP use one
+// bootstrap.
 func buildK8sClient() (kubernetes.Interface, error) {
-	if cfg, err := rest.InClusterConfig(); err == nil {
-		return kubernetes.NewForConfig(cfg)
+	return k8shelpers.NewClient()
+}
+
+// dockerWorkloadEndpoint rewrites the emulator endpoint a docker workload is
+// given. Host mode maps the emulator's loopback to host.docker.internal (the
+// daemon host, which is the emulator's own host). Container mode uses the
+// emulator's address on the shared network (JAISCLOUD_ENDPOINT, which a
+// containerized deployment sets): from a sibling container host.docker.internal
+// is the daemon host, not the emulator's container (CDE1).
+func dockerWorkloadEndpoint(addr docker.Addressing, endpoint string) string {
+	if !addr.Containerized() {
+		return dockerReachableEndpoint(endpoint)
 	}
-	apiServer := os.Getenv("JAISCLOUD_K8S_APISERVER")
-	if apiServer == "" {
-		apiServer = "https://kubernetes.default.svc"
+	if v := os.Getenv("JAISCLOUD_ENDPOINT"); v != "" {
+		if u, err := url.Parse(v); err == nil && u.Host != "" {
+			return u.Host
+		}
 	}
-	token := os.Getenv("JAISCLOUD_K8S_TOKEN")
-	cfg := &rest.Config{
-		Host:        apiServer,
-		BearerToken: token,
-		TLSClientConfig: rest.TLSClientConfig{
-			Insecure: true,
-		},
+	return endpoint
+}
+
+// dockerReachableEndpoint rewrites a loopback endpoint (e.g. a
+// STORAGE_EMULATOR_HOST of localhost:8080) to the host.docker.internal alias a
+// Driver/runner container resolves to the host, whose ExtraHosts maps
+// host.docker.internal to the host gateway. A non-loopback or empty endpoint is
+// unchanged.
+func dockerReachableEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return endpoint
 	}
-	return kubernetes.NewForConfig(cfg)
+	return strings.NewReplacer(
+		"localhost", "host.docker.internal",
+		"127.0.0.1", "host.docker.internal",
+	).Replace(endpoint)
 }
 
 func envCmd() *cobra.Command {
@@ -1836,14 +2290,113 @@ func functionsUploadOrigin(port int) string {
 	return fmt.Sprintf("http://localhost:%d", port)
 }
 
+// functionsDockerPingTimeout bounds the daemon probe before selecting the docker
+// Functions executor.
+const functionsDockerPingTimeout = 5 * time.Second
+
+// functionsPlatformConfig loads the platform overlay (TLS PEM bundle, extra
+// volumes/env) for the Functions executor. It returns nil for the mock mode and
+// on a load error: the failure is non-fatal for both docker and k8s, matching
+// the Cloud Run/Dataproc docker wiring, so a bad overlay never blocks startup —
+// the executor simply runs without it.
+func functionsPlatformConfig(mode string) *platform.PlatformConfig {
+	if mode != "docker" && mode != "k8s" {
+		return nil
+	}
+	platformCfg, err := platform.LoadFromEnv()
+	if err != nil {
+		slog.Warn("functions: platform config failed; continuing without it", "err", err)
+		return nil
+	}
+	return platformCfg
+}
+
+// buildFunctionsK8sClient builds the Kubernetes client the k8s Functions
+// executor uses. It is a package variable so a test can inject a client (or a
+// build failure) without a cluster; production delegates to the shared
+// buildK8sClient bootstrap, as the Cloud Run/Dataproc wiring does.
+var buildFunctionsK8sClient = buildK8sClient
+
+// functions executor constructors, as package variables so a test can capture
+// the platform config (and the injected k8s client) without standing up a
+// daemon or a cluster. Production always uses the real container constructors.
+var (
+	newFunctionsDockerExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig) container.Executor {
+		return container.NewDockerExecutor(cfg, profile, plat)
+	}
+	newFunctionsK8sExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig, opts ...container.K8sExecutorOption) container.Executor {
+		return container.NewK8sExecutor(cfg, profile, plat, opts...)
+	}
+)
+
+// newFunctionsExecutor builds the Functions executor for the effective mode,
+// threading the platform overlay (TLS PEM bundle, extra volumes/env) into the
+// docker/k8s executors so function containers/pods receive it. A k8s executor
+// reuses the client resolved during the startup probe (k8sClient) instead of
+// building a second one. Mock stays the default for every other mode.
+func newFunctionsExecutor(cfg container.Config, profile container.Profile, k8sClient kubernetes.Interface) container.Executor {
+	switch cfg.Mode {
+	case "docker":
+		return newFunctionsDockerExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode))
+	case "k8s":
+		var opts []container.K8sExecutorOption
+		if k8sClient != nil {
+			opts = append(opts, container.WithK8sClient(k8sClient))
+		}
+		return newFunctionsK8sExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode), opts...)
+	default:
+		return &container.MockExecutor{}
+	}
+}
+
+// effectiveFunctionsMode resolves the Functions executor actually used and, for
+// k8s, the client the executor should reuse. A docker mode with no reachable
+// Docker daemon, or a k8s mode whose client cannot be built, degrades to mock,
+// matching the Cloud Run/Dataproc startup probes (and AWS Lambda's
+// effectiveLambdaMode): the emulator runs and reports the truth instead of
+// accepting the config and then failing every invoke inside the container/pod
+// start path. dockerPing is injectable for tests; the k8s client comes from the
+// buildFunctionsK8sClient package variable.
+func effectiveFunctionsMode(mode string, dockerPing func(context.Context) error) (string, kubernetes.Interface) {
+	switch mode {
+	case "docker":
+		ctx, cancel := context.WithTimeout(context.Background(), functionsDockerPingTimeout)
+		defer cancel()
+		if err := dockerPing(ctx); err != nil {
+			slog.Warn("functions: docker daemon unreachable; falling back to mock", "err", err)
+			return "mock", nil
+		}
+		return "docker", nil
+	case "k8s":
+		client, err := buildFunctionsK8sClient()
+		if err != nil {
+			slog.Warn("functions: failed to build k8s client; falling back to mock", "err", err)
+			return "mock", nil
+		}
+		return "k8s", client
+	default:
+		return mode, nil
+	}
+}
+
+// functionsRuntimeProfile selects the Cloud Functions runtime profile: the GCP
+// Functions Framework by default, the legacy AWS Lambda-RIE contract when
+// JAISCLOUD_FUNCTIONS_EXECUTOR=lambda (back-compat for existing setups).
+func functionsRuntimeProfile() container.Profile {
+	if strings.EqualFold(os.Getenv("JAISCLOUD_FUNCTIONS_EXECUTOR"), "lambda") {
+		return awslambda.NewLambdaProfile()
+	}
+	return gcf.NewFunctionsFrameworkProfile()
+}
+
 // lambdaCodeURL returns the admin base a K8s code-fetch init container uses to
 // download a Cloud Function's source archive, including the /_jaiscloud prefix
 // (the executor appends /lambda/code/{account}/{key}/$LATEST). It derives the
 // base from the cluster-reachable JAISCLOUD_GCS_EMULATOR_ENDPOINT (the in-cluster
 // Service DNS name) and returns "" when it is unset, so the code mount stays
 // disabled rather than guessing an unreachable localhost address.
-// JAISCLOUD_LAMBDA_CODE_URL takes precedence and is applied earlier (the executor
-// reads it in DefaultLambdaConfig).
+// JAISCLOUD_FUNCTIONS_CODE_URL takes precedence and is applied earlier (the gcf
+// profile reads it in DefaultConfig).
 func lambdaCodeURL() string {
 	v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT")
 	if v == "" {

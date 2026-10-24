@@ -22,10 +22,13 @@ package workflows
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
@@ -37,9 +40,12 @@ import (
 type Service struct {
 	workflows workflowsstore.Store
 	// lroMode controls operation timing. The zero value is synchronous: every
-	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// operation is stored done=true inline, matching the default synchronous contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 }
 
 // Option configures Service.
@@ -50,6 +56,16 @@ type Option func(*Service)
 // operations done=false and settles them on read once d has elapsed.
 func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // NewService returns a Cloud Workflows core backed by the given store.
@@ -89,22 +105,54 @@ type UpdateInput struct {
 	CallLogLevel   string
 }
 
-// ListWorkflows returns a cursor page of the workflows in a location. filter
-// and orderBy are accepted by the wire but ignored (documented limitation).
-func (s *Service) ListWorkflows(ctx context.Context, project, location string, pageSize int, pageToken string) ([]workflowsstore.Workflow, string, error) {
+// ListWorkflows returns a cursor page of the workflows in a location, applying
+// the documented AIP-160 filter and orderBy. An empty filter matches every
+// workflow; a filter or orderBy outside the supported grammar is
+// InvalidArgument (never silently ignored). A negative pageSize is rejected.
+func (s *Service) ListWorkflows(ctx context.Context, project, location, filter, orderBy string, pageSize int, pageToken string) ([]workflowsstore.Workflow, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	nameOf := func(w workflowsstore.Workflow) string { return WorkflowName(project, location, w.ID) }
+	flt, err := compileWorkflowFilter(filter, nameOf)
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := workflowOrderSpec.Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument("workflows ListWorkflows orderBy: " + err.Error())
 	}
 	wfs, err := s.workflows.ListWorkflows(ctx, project, location)
 	if err != nil {
 		return nil, "", mapStoreError(err)
 	}
+	out := make([]workflowsstore.Workflow, 0, len(wfs))
+	for _, w := range wfs {
+		if flt.match(w) {
+			out = append(out, w)
+		}
+	}
+	order.Sort(out)
 	params := map[string]any{"pageSize": clampPageSize(pageSize)}
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(wfs, func(w workflowsstore.Workflow) string { return w.ID }, params)
+	page, next, err := paging.PageOrdered(out, params, order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// ListWorkflowsByProject lists every workflow in a project across all
+// locations, sorted by location then ID. It backs the location-optional console
+// list, which aggregates locations rather than requiring a location picker.
+func (s *Service) ListWorkflowsByProject(ctx context.Context, project string) ([]workflowsstore.Workflow, error) {
+	wfs, err := s.workflows.ListWorkflowsByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	return wfs, nil
 }
 
 // GetWorkflow returns one workflow, or NotFound.
@@ -119,30 +167,171 @@ func (s *Service) GetWorkflow(ctx context.Context, project, location, id string)
 	return w, nil
 }
 
+// Revision is a workflow revision rendered together with the workflow-wide
+// fields it belongs to. Transports render it with the same shape as a Workflow
+// (WorkflowJSON / workflowToProto); only the revision-scoped fields differ.
+type Revision struct {
+	Workflow           workflowsstore.Workflow // live workflow-wide fields (name, description, labels, create/update time)
+	RevisionID         string                  // output-only revision
+	RevisionCreateTime time.Time               // when this revision was created
+	State              string                  // deployment state at this revision
+	SourceContents     string                  // workflow YAML
+	ServiceAccount     string                  // runtime identity
+	CallLogLevel       string                  // call log level
+	UserEnvVars        map[string]string       // user-defined environment variables
+}
+
+// liveRevisionView renders the current workflow as the "latest revision" view.
+func liveRevisionView(w workflowsstore.Workflow) Revision {
+	return Revision{
+		Workflow:           w,
+		RevisionID:         w.RevisionID,
+		RevisionCreateTime: liveRevisionCreateTime(w),
+		State:              w.State,
+		SourceContents:     w.SourceContents,
+		ServiceAccount:     w.ServiceAccount,
+		CallLogLevel:       w.CallLogLevel,
+		UserEnvVars:        w.UserEnvVars,
+	}
+}
+
+// revisionView combines a stored revision snapshot with the workflow-wide
+// fields of the live workflow it belongs to.
+func revisionView(w workflowsstore.Workflow, r workflowsstore.Revision) Revision {
+	return Revision{
+		Workflow:           w,
+		RevisionID:         r.RevisionID,
+		RevisionCreateTime: r.RevisionCreateTime,
+		State:              r.State,
+		SourceContents:     r.SourceContents,
+		ServiceAccount:     r.ServiceAccount,
+		CallLogLevel:       r.CallLogLevel,
+		UserEnvVars:        r.UserEnvVars,
+	}
+}
+
+// GetWorkflowRevision returns a workflow as of a specific revision. An empty
+// revisionID returns the current workflow; an unknown workflow or revision is
+// NotFound.
+func (s *Service) GetWorkflowRevision(ctx context.Context, project, location, id, revisionID string) (Revision, error) {
+	if location == "" || id == "" {
+		return Revision{}, invalidArgument("missing workflow name")
+	}
+	w, err := s.workflows.GetWorkflow(ctx, project, location, id)
+	if err != nil {
+		return Revision{}, mapStoreError(err)
+	}
+	if revisionID == "" || revisionID == w.RevisionID {
+		// The current revision is the live workflow: rendering it from the
+		// stored snapshot would report a stale userEnvVars/callLogLevel after a
+		// workflow-wide (non-revision) update. See ListWorkflowRevisions.
+		return liveRevisionView(w), nil
+	}
+	r, err := s.workflows.GetRevision(ctx, project, location, id, revisionID)
+	if err != nil {
+		return Revision{}, mapStoreError(err)
+	}
+	return revisionView(w, r), nil
+}
+
+// ListWorkflowRevisions returns a cursor page of a workflow's revision history,
+// newest first. pageSize defaults to 20 and is capped at 100 (the Discovery
+// contract for :listRevisions). An unknown workflow is NotFound.
+func (s *Service) ListWorkflowRevisions(ctx context.Context, project, location, id string, pageSize int, pageToken string) ([]Revision, string, error) {
+	if location == "" || id == "" {
+		return nil, "", invalidArgument("missing workflow name")
+	}
+	// This surface has its own newest-first cursor (pageRevisions), not the
+	// shared pager, so it validates the AIP-158 negative-pageSize rule itself.
+	if pageSize < 0 {
+		return nil, "", invalidArgument("pageSize must not be negative")
+	}
+	w, err := s.workflows.GetWorkflow(ctx, project, location, id)
+	if err != nil {
+		return nil, "", mapStoreError(err)
+	}
+	revs, err := s.workflows.ListRevisions(ctx, project, location, id)
+	if err != nil {
+		return nil, "", mapStoreError(err)
+	}
+	views := make([]Revision, 0, len(revs))
+	for _, r := range revs {
+		// The newest revision is the live workflow. Render it from the live
+		// record so its revision-scoped fields (userEnvVars, callLogLevel,
+		// state) and revisionCreateTime match GetWorkflow after a workflow-wide
+		// update that did not mint a new revision; older revisions keep their
+		// immutable snapshots.
+		if r.RevisionID == w.RevisionID {
+			views = append(views, liveRevisionView(w))
+			continue
+		}
+		views = append(views, revisionView(w, r))
+	}
+	if len(views) == 0 {
+		// Legacy data (a store written before revisions were modelled, or a
+		// snapshot without them): report the current revision rather than an
+		// empty history.
+		views = append(views, liveRevisionView(w))
+	}
+	page, next := pageRevisions(views, pageSize, pageToken)
+	return page, next, nil
+}
+
+// pageRevisions applies the :listRevisions paging contract to an already
+// newest-first list. The opaque pageToken is the base64 revision ID of the last
+// item of the previous page (the same convention as paging.Page).
+func pageRevisions(revs []Revision, pageSize int, pageToken string) ([]Revision, string) {
+	size := clampRevisionPageSize(pageSize)
+	start := 0
+	if pageToken != "" {
+		if b, err := base64.RawURLEncoding.DecodeString(pageToken); err == nil {
+			cursor := string(b)
+			for start < len(revs) && revs[start].RevisionID != cursor {
+				start++
+			}
+			if start < len(revs) {
+				start++ // resume after the cursor revision
+			}
+		}
+	}
+	if start >= len(revs) {
+		return []Revision{}, ""
+	}
+	end := start + size
+	if end >= len(revs) {
+		return revs[start:], ""
+	}
+	return revs[start:end], base64.RawURLEncoding.EncodeToString([]byte(revs[end-1].RevisionID))
+}
+
 // CreateWorkflow creates a workflow and returns it with the done operation that
 // carries it as the response, or AlreadyExists.
 func (s *Service) CreateWorkflow(ctx context.Context, project, location string, in CreateInput) (workflowsstore.Workflow, workflowsstore.Operation, error) {
 	if location == "" {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, invalidArgument("missing location")
 	}
-	if in.ID == "" {
-		return workflowsstore.Workflow{}, workflowsstore.Operation{}, invalidArgument("missing workflowId")
+	if err := validateWorkflowID(in.ID); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+	}
+	if err := validateSource(in.SourceContents); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
 	}
 	now := clock.Now().UTC()
 	w := workflowsstore.Workflow{
-		ID:             in.ID,
-		Location:       location,
-		Description:    in.Description,
-		Labels:         in.Labels,
-		ServiceAccount: in.ServiceAccount,
-		SourceContents: in.SourceContents,
-		State:          "ACTIVE",
-		RevisionID:     nextRevision(""),
-		CreateTime:     now,
-		UpdateTime:     now,
-		CallLogLevel:   in.CallLogLevel,
-		UserEnvVars:    in.UserEnvVars,
-		Tags:           in.Tags,
+		ID:                 in.ID,
+		Location:           location,
+		Description:        in.Description,
+		Labels:             in.Labels,
+		ServiceAccount:     in.ServiceAccount,
+		SourceContents:     in.SourceContents,
+		State:              "ACTIVE",
+		RevisionID:         nextRevision(""),
+		CreateTime:         now,
+		UpdateTime:         now,
+		RevisionCreateTime: now,
+		CallLogLevel:       in.CallLogLevel,
+		UserEnvVars:        in.UserEnvVars,
+		Tags:               in.Tags,
 	}
 	if err := s.workflows.CreateWorkflow(ctx, project, location, in.ID, w); err != nil {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, mapStoreError(err)
@@ -162,6 +351,9 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 	if location == "" || in.ID == "" {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, invalidArgument("missing workflow name")
 	}
+	if err := validateWorkflowID(in.ID); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+	}
 	masked, err := maskedFields(in.UpdateMask)
 	if err != nil {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
@@ -172,7 +364,13 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 		}
 		return masked[field]
 	}
+	if apply("sourceContents") {
+		if err := validateSource(in.SourceContents); err != nil {
+			return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+		}
+	}
 	w, err := s.workflows.UpdateWorkflowAtomic(ctx, project, location, in.ID, func(w workflowsstore.Workflow) (workflowsstore.Workflow, error) {
+		now := clock.Now().UTC()
 		sourceChanged := false
 		if apply("description") {
 			w.Description = in.Description
@@ -204,8 +402,9 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 		}
 		if sourceChanged {
 			w.RevisionID = nextRevision(w.RevisionID)
+			w.RevisionCreateTime = now
 		}
-		w.UpdateTime = clock.Now().UTC()
+		w.UpdateTime = now
 		return w, nil
 	})
 	if err != nil {
@@ -246,6 +445,55 @@ func (s *Service) GetOperation(ctx context.Context, project, location, opID stri
 		return workflowsstore.Operation{}, mapStoreError(err)
 	}
 	return s.settle(op), nil
+}
+
+// ListOperations returns a cursor page of the long-running operations persisted
+// for a location, in the deterministic order of the shared pagination cursor
+// (operation ID). Each returned operation is settled against the configured
+// timing mode, so a client polling the page sees the same state GetOperation
+// reports. It backs both the REST projects.locations.operations.list surface
+// (gcloud workflows operations list / the Go SDK) and the shared gRPC
+// google.longrunning.Operations.List.
+//
+// The documented `filter` parameter is not evaluated: a non-empty filter is
+// InvalidArgument rather than a silently unfiltered page (the shared
+// Operations.List contract, matching the gRPC ListRegistry surface).
+func (s *Service) ListOperations(ctx context.Context, project, location string, pageSize int, pageToken, filter string) ([]workflowsstore.Operation, string, error) {
+	if location == "" {
+		return nil, "", invalidArgument("missing location")
+	}
+	if filter != "" {
+		return nil, "", invalidArgument("operations filter is not supported")
+	}
+	ops, err := s.workflows.ListOperations(ctx, project, location)
+	if err != nil {
+		return nil, "", mapStoreError(err)
+	}
+	params := map[string]any{"pageSize": pageSize}
+	if pageToken != "" {
+		params["pageToken"] = pageToken
+	}
+	page, next, err := paging.Page(ops, func(op workflowsstore.Operation) string { return op.ID }, params)
+	if err != nil {
+		return nil, "", err
+	}
+	for i := range page {
+		page[i] = s.settle(page[i])
+	}
+	return page, next, nil
+}
+
+// DeleteOperation removes a persisted long-running operation, or NotFound when
+// the id is unknown. Per the Discovery, deleting an operation only records that
+// the client is no longer interested in the result; it does not cancel it.
+func (s *Service) DeleteOperation(ctx context.Context, project, location, id string) error {
+	if location == "" || id == "" {
+		return invalidArgument("missing operation name")
+	}
+	if err := s.workflows.DeleteOperation(ctx, project, location, id); err != nil {
+		return mapStoreError(err)
+	}
+	return nil
 }
 
 // IsNotFound reports whether err is the canonical NotFound provider error (as
@@ -312,13 +560,29 @@ func maskedFields(mask string) (map[string]bool, error) {
 }
 
 // clampPageSize applies ListWorkflows' paging contract: a default of 500 when
-// unspecified, and a maximum of 1000.
+// unspecified, and a maximum of 1000. A negative size is passed through so the
+// shared cursor pager rejects it with INVALID_ARGUMENT.
 func clampPageSize(n int) int {
 	switch {
-	case n <= 0:
+	case n == 0:
 		return 500
 	case n > 1000:
 		return 1000
+	default:
+		return n
+	}
+}
+
+// clampRevisionPageSize applies ListWorkflowRevisions' paging contract: a
+// default of 20 when unspecified, and a maximum of 100 (per the Discovery doc).
+// ListWorkflowRevisions rejects a negative pageSize before reaching here, so the
+// clamp only ever sees 0 (unset) or a positive size.
+func clampRevisionPageSize(n int) int {
+	switch {
+	case n <= 0:
+		return 20
+	case n > 100:
+		return 100
 	default:
 		return n
 	}
@@ -329,6 +593,8 @@ func mapStoreError(err error) error {
 	switch {
 	case errors.Is(err, workflowsstore.ErrNoSuchWorkflow):
 		return model.NewProviderError("NotFound", "workflow not found", 404)
+	case errors.Is(err, workflowsstore.ErrNoSuchRevision):
+		return model.NewProviderError("NotFound", "workflow revision not found", 404)
 	case errors.Is(err, workflowsstore.ErrNoSuchOperation):
 		return model.NewProviderError("NotFound", "operation not found", 404)
 	case errors.Is(err, workflowsstore.ErrAlreadyExists):

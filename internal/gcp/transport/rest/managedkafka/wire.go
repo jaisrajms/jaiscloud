@@ -7,8 +7,16 @@ import (
 	"strconv"
 	"strings"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 )
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Managed Kafka
+// Discovery document declares; a non-integer value is INVALID_ARGUMENT rather
+// than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 // ─── request helpers ──────────────────────────────────────────────────────────
 
@@ -98,18 +106,4 @@ func bodyInt(body map[string]any, key string) int {
 		}
 	}
 	return 0
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }

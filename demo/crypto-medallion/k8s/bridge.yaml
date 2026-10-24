@@ -1,0 +1,57 @@
+# crypto-medallion bridge — WS -> Managed Kafka (design §5.2).
+#
+# Rendered by scripts/democtl.py (stage bridge) and applied to the jaiscloud
+# namespace. The bridge is the first of the demo's two "your app" pieces.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cm-bridge
+  namespace: __NAMESPACE__
+  labels:
+    app: cm-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cm-bridge
+  template:
+    metadata:
+      labels:
+        app: cm-bridge
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: bridge
+          image: __BRIDGE_IMAGE__
+          imagePullPolicy: Always
+          env:
+            - name: EMULATOR
+              value: "__EMULATOR__"
+            - name: PROJECT
+              value: "__PROJECT__"
+            - name: KAFKA_BOOTSTRAP
+              value: "__KAFKA_BOOTSTRAP__"
+            - name: KAFKA_TOPIC
+              value: "__KAFKA_TOPIC__"
+            - name: CAPTURE_BUCKET
+              value: "__CAPTURE_BUCKET__"
+            - name: FEED_SECRET
+              value: "__FEED_SECRET__"
+            - name: FEED_EXCHANGE
+              value: "coinbase"
+            - name: SOURCE
+              value: "auto"
+            - name: SYMBOLS
+              value: "BTC-USD,ETH-USD,SOL-USD,XRP-USD,ADA-USD"
+            - name: RUN_ID
+              value: "take"
+            - name: LIVENESS_SECONDS
+              value: "20"
+            - name: REPLAY_TRADES_PER_SECOND
+              value: "120"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi

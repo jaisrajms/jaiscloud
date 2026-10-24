@@ -13,6 +13,29 @@ import (
 	"strings"
 )
 
+// ValidBucketName reports whether name satisfies the GCS bucket-naming
+// character rules: lowercase letters, digits, and '-', '_' or '.', with the
+// name beginning and ending in a letter or digit. It is shared by the REST and
+// gRPC adapters so both reject the same names. Length bounds (3-63, or 3-222
+// with dots) and the reserved-prefix rules (goog, google, an IP literal) are
+// not enforced: the emulator's fixtures and clients use short names, and those
+// rules are not part of the recorded differential contract.
+func ValidBucketName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '-' || c == '_' || c == '.') && i != 0 && i != len(name)-1:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // formatters maps abstract resource types to their GCP resource-name format
 // function. To add a new resource type, add one entry here — no switch to update.
 var formatters = map[string]func(project, name string) string{
@@ -21,6 +44,9 @@ var formatters = map[string]func(project, name string) string{
 	"gcs-object": func(_, n string) string { return n },
 	// GCS bucket IAM policy resourceId uses a fixed "_" project placeholder.
 	"gcs-bucket-policy": func(_, n string) string { return "projects/_/buckets/" + n },
+	// Canonical GCS bucket resource name (Storage gRPC Bucket.name), same
+	// "projects/_/buckets/{bucket}" form as the IAM policy resourceId.
+	"gcs-bucket-resource": func(_, n string) string { return "projects/_/buckets/" + n },
 	// GCS notification-config resource name used by the `notificationConfig`
 	// event attribute: projects/_/buckets/{bucket}/notificationConfigs/{id}
 	// (callers pass "bucket/notificationConfigs/id").
@@ -43,6 +69,22 @@ var formatters = map[string]func(project, name string) string{
 		// callers pass "location/keyRing/cryptoKey/version"
 		loc, kr, k, v := parts4(n)
 		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%s", p, loc, kr, k, v)
+	},
+	"kms-importjob": func(p, n string) string {
+		// callers pass "location/keyRing/importJob"
+		parts := strings.SplitN(n, "/", 3)
+		if len(parts) < 3 {
+			return n
+		}
+		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/importJobs/%s", p, parts[0], parts[1], parts[2])
+	},
+	"kms-retiredresource": func(p, n string) string {
+		// callers pass "location/retiredResource"
+		parts := strings.SplitN(n, "/", 2)
+		if len(parts) < 2 {
+			return n
+		}
+		return fmt.Sprintf("projects/%s/locations/%s/retiredResources/%s", p, parts[0], parts[1])
 	},
 	// IAM — service accounts are identified by their email in the full name.
 	"service-account": func(p, n string) string { return fmt.Sprintf("projects/%s/serviceAccounts/%s", p, n) },
@@ -170,6 +212,12 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// A federation is location-scoped (not nested under a service); callers pass
+	// "location/federation".
+	"metastore-federation": func(p, n string) string {
+		loc, f := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/federations/%s", p, loc, f)
+	},
 	// Eventarc — names embed the location; callers pass "location/trigger",
 	// "location/channel", "location/provider", and "location/operation".
 	"eventarc-trigger": func(p, n string) string {
@@ -187,6 +235,32 @@ var formatters = map[string]func(project, name string) string{
 	"eventarc-operation": func(p, n string) string {
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
+	// Eventarc advanced surface — names embed the location; callers pass
+	// "location/id" for a collection member, or just "location" for the
+	// googleChannelConfig singleton.
+	"eventarc-message-bus": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/messageBuses/%s", p, loc, id)
+	},
+	"eventarc-enrollment": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/enrollments/%s", p, loc, id)
+	},
+	"eventarc-pipeline": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/pipelines/%s", p, loc, id)
+	},
+	"eventarc-google-api-source": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/googleApiSources/%s", p, loc, id)
+	},
+	"eventarc-channel-connection": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/channelConnections/%s", p, loc, id)
+	},
+	"eventarc-google-channel-config": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/locations/%s/googleChannelConfig", p, n)
 	},
 	// Memorystore for Redis — names embed the location; callers pass
 	// "location/instance" and "location/operation".
@@ -347,6 +421,17 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// A GKE node pool nests under its cluster:
+	// "projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{pool}"
+	// (callers pass "location/cluster/pool").
+	"container-node-pool": func(p, n string) string {
+		loc, rest := wfLoc(n)
+		cluster, pool := rest, ""
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			cluster, pool = rest[:i], rest[i+1:]
+		}
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/nodePools/%s", p, loc, cluster, pool)
+	},
 	// Cloud Tasks v2 — a queue is
 	// "projects/{project}/locations/{location}/queues/{queue}" (callers pass
 	// "location/queue") and a task nests under it (callers pass
@@ -359,12 +444,24 @@ var formatters = map[string]func(project, name string) string{
 		loc, q, t := wfExec(n)
 		return fmt.Sprintf("projects/%s/locations/%s/queues/%s/tasks/%s", p, loc, q, t)
 	},
+	// A Cloud Tasks long-running operation is location-scoped: callers pass
+	// "location/operation" (the batchCreate/batchDelete LROs).
+	"tasks-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// Cloud Resource Manager — a project's canonical v3 resource name is
 	// "projects/{project}". The v1 REST API has no resource name (it identifies
 	// a project by projectId), so callers pass the project id as the closure
 	// project and the name is unused.
 	"project": func(p, _ string) string {
 		return "projects/" + p
+	},
+	// Cloud Resource Manager v3 project lifecycle mutations return a
+	// google.longrunning Operation with the top-level name "operations/{id}"
+	// (callers pass the bare operation id).
+	"resourcemanager-operation": func(_, n string) string {
+		return "operations/" + n
 	},
 	// Cloud Logging v2 (gRPC and REST).
 	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
@@ -390,6 +487,43 @@ var formatters = map[string]func(project, name string) string{
 	"monitoring-slo": func(p, n string) string {
 		svc, id := svcSLO(n)
 		return fmt.Sprintf("projects/%s/services/%s/serviceLevelObjectives/%s", p, svc, id)
+	},
+	// Firestore Admin control plane (google.firestore.admin.v1).
+	// A database name is "projects/{p}/databases/{db}" (callers pass the
+	// database id).
+	"firestore-database": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/databases/%s", p, n)
+	},
+	// A collection-group field nests under the database: callers pass
+	// "database/collectionGroup/fieldPath" (the field path may contain dots but
+	// never slashes).
+	"firestore-field": func(p, n string) string {
+		parts := strings.SplitN(n, "/", 3)
+		if len(parts) < 3 {
+			return n
+		}
+		return fmt.Sprintf("projects/%s/databases/%s/collectionGroups/%s/fields/%s", p, parts[0], parts[1], parts[2])
+	},
+	// A user creds resource: callers pass "database/userCredsId".
+	"firestore-user-creds": func(p, n string) string {
+		db, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/userCreds/%s", p, db, id)
+	},
+	// A backup schedule: callers pass "database/scheduleId".
+	"firestore-backup-schedule": func(p, n string) string {
+		db, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/backupSchedules/%s", p, db, id)
+	},
+	// A backup is location-scoped: callers pass "location/backupId".
+	"firestore-backup": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/backups/%s", p, loc, id)
+	},
+	// A Firestore Admin long-running operation is database-scoped: callers pass
+	// "database/operationId".
+	"firestore-operation": func(p, n string) string {
+		db, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/operations/%s", p, db, op)
 	},
 }
 

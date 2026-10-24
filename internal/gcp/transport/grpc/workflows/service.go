@@ -11,8 +11,14 @@
 // generated client's Wait observes it without polling; in the opt-in async mode
 // it is returned in flight and the client's poll resolves it through
 // ResolveOperation (registered with the shared google.longrunning.Operations
-// service in main.go). ListWorkflowRevisions is not implemented (Unimplemented),
-// matching the emulator's control-plane scope.
+// service in main.go). ListWorkflowRevisions serves the workflow revision
+// history, and GetWorkflow's optional revision_id selects one revision.
+//
+// The shared google.longrunning.Operations surface is served through the
+// Resolver (GetOperation), ListRegistry (ListOperations) and Registry
+// (DeleteOperation) seams: ListOperations lists a location's persisted
+// operations, DeleteOperation removes one, and CancelOperation declines (the
+// Discovery declares no cancel for Cloud Workflows operations).
 package workflows
 
 import (
@@ -56,6 +62,7 @@ func (s *Service) projectFor(ctx context.Context, name string) string {
 func (s *Service) ListWorkflows(ctx context.Context, req *workflowspb.ListWorkflowsRequest) (*workflowspb.ListWorkflowsResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	page, next, err := s.core.ListWorkflows(ctx, project, core.LocationFromName(req.GetParent()),
+		req.GetFilter(), req.GetOrderBy(),
 		int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
@@ -69,11 +76,26 @@ func (s *Service) ListWorkflows(ctx context.Context, req *workflowspb.ListWorkfl
 
 func (s *Service) GetWorkflow(ctx context.Context, req *workflowspb.GetWorkflowRequest) (*workflowspb.Workflow, error) {
 	project := s.projectFor(ctx, req.GetName())
-	w, err := s.core.GetWorkflow(ctx, project, core.LocationFromName(req.GetName()), core.WorkflowIDFromName(req.GetName()))
+	r, err := s.core.GetWorkflowRevision(ctx, project, core.LocationFromName(req.GetName()),
+		core.WorkflowIDFromName(req.GetName()), req.GetRevisionId())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return workflowToProto(w, project), nil
+	return revisionToProto(r, project), nil
+}
+
+func (s *Service) ListWorkflowRevisions(ctx context.Context, req *workflowspb.ListWorkflowRevisionsRequest) (*workflowspb.ListWorkflowRevisionsResponse, error) {
+	project := s.projectFor(ctx, req.GetName())
+	page, next, err := s.core.ListWorkflowRevisions(ctx, project, core.LocationFromName(req.GetName()),
+		core.WorkflowIDFromName(req.GetName()), int(req.GetPageSize()), req.GetPageToken())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := &workflowspb.ListWorkflowRevisionsResponse{NextPageToken: next}
+	for _, r := range page {
+		out.Workflows = append(out.Workflows, revisionToProto(r, project))
+	}
+	return out, nil
 }
 
 func (s *Service) CreateWorkflow(ctx context.Context, req *workflowspb.CreateWorkflowRequest) (*longrunningpb.Operation, error) {
@@ -134,6 +156,79 @@ func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunni
 	return out, true, nil
 }
 
+// ListOperations implements the shared google.longrunning.Operations
+// ListRegistry surface for Cloud Workflows. The parent must be a location
+// parent (projects/{project}/locations/{location}); a location that holds no
+// Cloud Workflows operations is declined so the shared stub (or another
+// service) answers when the request is not endpoint-scoped. When the request is
+// addressed to the Cloud Workflows endpoint the page is authoritative, so an
+// empty page is returned rather than falling through. The standard `filter`
+// parameter is not modelled; the core fails loud on a non-empty filter rather
+// than silently returning unfiltered results.
+func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
+	project, location, ok := parseOperationParent(parent)
+	if !ok {
+		return nil, false, nil
+	}
+	page, next, err := s.core.ListOperations(ctx, project, location,
+		int(pageSize), pageToken, filter)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	if len(page) == 0 {
+		return nil, false, nil
+	}
+	out := &longrunningpb.ListOperationsResponse{NextPageToken: next}
+	for _, op := range page {
+		pb, err := operationToProto(op, project, operationResponse(op))
+		if err != nil {
+			return nil, true, err
+		}
+		out.Operations = append(out.Operations, pb)
+	}
+	return out, true, nil
+}
+
+// DeleteOperation implements the shared google.longrunning.Operations Registry
+// surface for Cloud Workflows: a location-scoped operation the workflows store
+// owns is removed; a name in the shared namespace that workflows does not own
+// (a Dataproc Metastore or Managed Kafka operation) is declined (handled=false)
+// so their registry — or the shared terminal stub — answers.
+func (s *Service) DeleteOperation(ctx context.Context, name string) (bool, error) {
+	project, location, id, ok := parseOperationName(name)
+	if !ok {
+		return false, nil
+	}
+	if err := s.core.DeleteOperation(ctx, project, location, id); err != nil {
+		if core.IsNotFound(err) {
+			return false, nil
+		}
+		return true, mapError(err)
+	}
+	return true, nil
+}
+
+// CancelOperation declines ownership: the Cloud Workflows Discovery declares
+// operations.get/list/delete but no cancel, so a cancel is not workflows'. The
+// shared Operations service's documented no-op (or strict-mode Get check)
+// handles it exactly as before the Registry seam.
+func (s *Service) CancelOperation(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+// parseOperationParent parses a location parent name
+// projects/{project}/locations/{location} for the operations List surface.
+func parseOperationParent(parent string) (project, location string, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(parent, "/"), "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "locations" {
+		return "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
 // parseOperationName parses a Cloud Workflows location operation name
 // projects/{project}/locations/{location}/operations/{id}.
 func parseOperationName(name string) (project, location, id string, ok bool) {
@@ -152,4 +247,6 @@ func parseOperationName(name string) (project, location, id string, ok bool) {
 var (
 	_ workflowspb.WorkflowsServer = (*Service)(nil)
 	_ grpcoperations.Resolver     = (*Service)(nil)
+	_ grpcoperations.ListRegistry = (*Service)(nil)
+	_ grpcoperations.Registry     = (*Service)(nil)
 )

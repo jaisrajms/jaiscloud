@@ -8,8 +8,7 @@
 // EnableService, DisableService, and BatchEnableServices return a done
 // google.longrunning.Operation with the response (a Service, or a list of
 // Services) packed as a typed Any, so the generated client's Wait observes it
-// without polling. BatchGetServices is not implemented (Unimplemented), matching
-// the emulator's control-plane scope.
+// without polling.
 package serviceusage
 
 import (
@@ -64,6 +63,19 @@ func (s *Service) ListServices(ctx context.Context, req *serviceusagepb.ListServ
 	}
 	out := &serviceusagepb.ListServicesResponse{NextPageToken: next}
 	for _, a := range page {
+		out.Services = append(out.Services, apiToProto(a))
+	}
+	return out, nil
+}
+
+func (s *Service) BatchGetServices(ctx context.Context, req *serviceusagepb.BatchGetServicesRequest) (*serviceusagepb.BatchGetServicesResponse, error) {
+	project, _ := parseName(req.GetParent())
+	apis, err := s.core.BatchGetAPIs(ctx, s.projectFor(ctx, project), req.GetNames())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := &serviceusagepb.BatchGetServicesResponse{}
+	for _, a := range apis {
 		out.Services = append(out.Services, apiToProto(a))
 	}
 	return out, nil

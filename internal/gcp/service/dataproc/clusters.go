@@ -101,6 +101,11 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	now := clock.Now().UTC()
+	// Provision the cluster's workload namespace before persisting the record, so
+	// a job submitted immediately after create has a placement. Mock execution
+	// yields ("", false); an RBAC/tech failure falls back to the process-wide
+	// namespace (see resolveClusterNamespace).
+	ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, in)
 	c := dpstore.Cluster{
 		ProjectID:            project,
 		Region:               region,
@@ -112,11 +117,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		Labels:               in.Labels,
 		Config:               in.Config,
 		VirtualClusterConfig: in.VirtualClusterConfig,
+		Namespace:            ns,
+		NamespaceOwned:       nsOwned,
 	}
 	if err := s.store.CreateCluster(ctx, project, region, c); err != nil {
+		s.rollbackNamespace(ctx, ns, nsOwned)
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
-	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name, "placement", clusterPlacement(c))
+	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
+		"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
 	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
@@ -140,15 +149,26 @@ func (s *Service) GetCluster(ctx context.Context, project, region, name string) 
 
 // ListClusters returns a cursor page of the clusters in a region, settling each
 // transitional cluster first and dropping any whose delayed delete completed.
-func (s *Service) ListClusters(ctx context.Context, project, region string, pageSize int, pageToken string) ([]dpstore.Cluster, string, error) {
+// filter is the bounded dataproc.v1.ListClustersRequest.filter grammar
+// (status.state, clusterName, labels.<key>); it is applied before pagination so
+// pageToken cursors stay stable. A malformed or unsupported filter is
+// InvalidArgument — never a silently unfiltered list.
+func (s *Service) ListClusters(ctx context.Context, project, region, filter string, pageSize int, pageToken string) ([]dpstore.Cluster, string, error) {
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
+	}
+	filter = strings.TrimSpace(filter)
+	var compiled clusterFilter
+	if filter != "" {
+		var err error
+		if compiled, err = compileClusterFilter(filter); err != nil {
+			return nil, "", err
+		}
 	}
 	clusters, err := s.store.ListClusters(ctx, project, region)
 	if err != nil {
 		return nil, "", err
 	}
-	// filter is accepted but ignored (documented limitation, matches workflows).
 	settled := make([]dpstore.Cluster, 0, len(clusters))
 	for _, c := range clusters {
 		advanced, err := s.advanceCluster(ctx, project, region, c.Name)
@@ -158,10 +178,39 @@ func (s *Service) ListClusters(ctx context.Context, project, region string, page
 		if err != nil {
 			return nil, "", err
 		}
+		if filter != "" && !compiled.match(advanced) {
+			continue
+		}
 		settled = append(settled, advanced)
 	}
-	page, next := pageClusters(settled, pageParams(pageSize, pageToken))
+	page, next, err := pageClusters(settled, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// ListAllClusters lists every cluster in a project across all regions, sorted
+// by region then name, settling each transitional cluster first (and dropping
+// any whose delayed delete completed). It backs the region-optional console
+// list.
+func (s *Service) ListAllClusters(ctx context.Context, project string) ([]dpstore.Cluster, error) {
+	clusters, err := s.store.ListClustersByProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	settled := make([]dpstore.Cluster, 0, len(clusters))
+	for _, c := range clusters {
+		advanced, err := s.advanceCluster(ctx, c.ProjectID, c.Region, c.Name)
+		if errors.Is(err, dpstore.ErrNoSuchCluster) {
+			continue // a delayed delete completed during this read
+		}
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		settled = append(settled, advanced)
+	}
+	return settled, nil
 }
 
 // UpdateCluster merges the caller's config/labels into the stored cluster and
@@ -417,6 +466,10 @@ func (s *Service) advanceCluster(ctx context.Context, project, region, name stri
 			gone := deleted
 			gone.Status = dpstore.ClusterStatus{State: clusterDeletedState, StateStartTime: clock.Now().UTC()}
 			s.emitClusterStateChange(ctx, project, region, gone, deleted.Status)
+			// The record is gone; reap the cluster's workloads and, when the
+			// emulator owns it, its namespace. Dispatched in the background so a
+			// read never blocks on namespace deletion.
+			s.dispatchClusterTeardown(deleted)
 		}
 		return dpstore.Cluster{}, dpstore.ErrNoSuchCluster
 	}
@@ -442,7 +495,7 @@ func clusterNameFromTarget(target string) string {
 }
 
 // pageClusters paginates cluster records using the shared GCP paging helper.
-func pageClusters(clusters []dpstore.Cluster, params map[string]any) ([]dpstore.Cluster, string) {
+func pageClusters(clusters []dpstore.Cluster, params map[string]any) ([]dpstore.Cluster, string, error) {
 	return paging.Page(clusters, func(c dpstore.Cluster) string { return c.Name }, params)
 }
 

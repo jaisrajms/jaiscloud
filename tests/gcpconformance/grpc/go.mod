@@ -3,6 +3,8 @@ module jaiscloud-gcp-conformance-grpc
 go 1.26.0
 
 require (
+	cloud.google.com/go/cloudtasks v1.19.0
+	cloud.google.com/go/container v1.55.0
 	cloud.google.com/go/dataproc/v2 v2.25.0
 	cloud.google.com/go/datastore v1.22.0
 	cloud.google.com/go/eventarc v1.25.0
@@ -17,6 +19,8 @@ require (
 	cloud.google.com/go/monitoring v1.24.3
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/resourcemanager v1.16.0
+	cloud.google.com/go/run v1.23.0
+	cloud.google.com/go/scheduler v1.17.0
 	cloud.google.com/go/secretmanager v1.21.0
 	cloud.google.com/go/serviceusage v1.15.0
 	cloud.google.com/go/storage v1.62.0
@@ -33,9 +37,7 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	cloud.google.com/go/cloudtasks v1.19.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	cloud.google.com/go/scheduler v1.17.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.55.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.55.0 // indirect

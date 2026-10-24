@@ -1,0 +1,27 @@
+# Behavioural depth record - container (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: container
+classes:
+  p2:
+    state: present
+    suites: [sdk-container]
+    note: "concurrent cluster and node-pool mutations under -race: a same-name cluster or node-pool create has one winner (losers ALREADY_EXISTS/409), a concurrent cluster delete has one winner (losers NOT_FOUND/404), and concurrent version updates on distinct node pools all land with each pool keeping its own version. Same-pool concurrent operations are not asserted: real GKE permits only one operation per node pool and rejects a conflict (FAILED_PRECONDITION), a lifecycle the metadata-only emulator does not model (DC15)"
+  p3:
+    state: present
+    suites: [sdk-container]
+    note: "googleapi error codes on cluster/node-pool RPCs"
+  p4:
+    state: exempt
+    reason: "no client-observable listing cursor: the GKE Discovery document declares no pageSize/pageToken on projects.locations.clusters.list or ...nodePools.list, neither ListClustersResponse nor ListNodePoolsResponse carries a nextPageToken, and the generated client has no PageSize method — so no client pages these collections (the emulator's offset paging is an undocumented extension); the complete-collection listing that is observable is asserted as p5"
+    date: "2026-10-16"
+    owner: DC6
+    review_by: "2027-04-16"
+  p5:
+    state: present
+    suites: [sdk-container]
+    note: "a twenty-five-node-pool collection on one cluster and a twenty-five-cluster collection are each returned in full by a single list (the metadata lists are unpaginated, so nothing may be dropped at scale)"

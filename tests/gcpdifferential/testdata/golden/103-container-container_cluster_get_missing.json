@@ -1,0 +1,22 @@
+{
+  "index": 103,
+  "service": "container",
+  "op": "container_cluster_get_missing",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/us-central1/clusters/<containerCluster>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.RequestInfo",
+          "requestId": "<requestId>"
+        }
+      ],
+      "message": "Not found: projects/<project>/locations/us-central1/clusters/<containerCluster>.",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

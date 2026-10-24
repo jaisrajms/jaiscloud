@@ -47,6 +47,20 @@ func strParam(nr *model.NormalizedRequest, key string) string {
 	return s
 }
 
+// boolParam reads a boolean query parameter ("true"/"1"); anything else is
+// false.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		b, _ := strconv.ParseBool(v)
+		return b
+	default:
+		return false
+	}
+}
+
 func bodyOf(nr *model.NormalizedRequest) map[string]any {
 	if m, ok := nr.Params["body"].(map[string]any); ok && m != nil {
 		return m
@@ -60,18 +74,4 @@ func splitVerb(seg string) (name, verb string) {
 		return seg[:i], seg[i+1:]
 	}
 	return seg, ""
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }

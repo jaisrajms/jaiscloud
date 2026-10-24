@@ -13,8 +13,9 @@
 // deferred control-plane RPCs (ExportMetadata,
 // RestoreService, QueryMetadata, MoveTableToDatabase,
 // AlterMetadataResourceLocation) fail loud with codes.Unimplemented. The
-// separate google.cloud.metastore.v1.DataprocMetastoreFederation service is not
-// registered.
+// separate google.cloud.metastore.v1.DataprocMetastoreFederation service is
+// implemented here too (see federation.go), and the google.iam.v1.IAMPolicy
+// mixin is served through the shared IAMPolicy router (see iam.go).
 package metastore
 
 import (
@@ -24,6 +25,8 @@ import (
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -283,9 +286,46 @@ func parseOperationName(name string) (project, location, id string, ok bool) {
 	return parts[1], parts[3], parts[5], true
 }
 
+// ListOperations implements the shared google.longrunning.Operations
+// ListRegistry surface for Dataproc Metastore. The parent must be a location
+// parent; a location that holds no Metastore operations is declined so the
+// shared stub (or another service) answers when the request is not
+// endpoint-scoped. When the request is addressed to the Metastore endpoint (the
+// shared service's SetEndpointResolvers) this page is authoritative, so an empty
+// page is returned rather than falling through. The standard filter parameter is
+// not modelled; a non-empty filter fails loud rather than silently returning
+// unfiltered results.
+func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
+	_, location, ok := core.ParseParent(parent)
+	if !ok {
+		return nil, false, nil
+	}
+	project := s.projectFor(ctx, parent)
+	page, next, err := s.core.ListOperations(ctx, project, location, int(pageSize), pageToken)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	if len(page) == 0 {
+		return nil, false, nil
+	}
+	if filter != "" {
+		return nil, true, status.Error(codes.InvalidArgument, "operations filter is not supported")
+	}
+	out := &longrunningpb.ListOperationsResponse{NextPageToken: next}
+	for _, op := range page {
+		pb, err := operationToProto(op, project, operationResponse(op))
+		if err != nil {
+			return nil, true, err
+		}
+		out.Operations = append(out.Operations, pb)
+	}
+	return out, true, nil
+}
+
 // compile-time assertions that Service implements the generated server and the
-// operations resolver.
+// operations resolver/List surface.
 var (
 	_ metastorepb.DataprocMetastoreServer = (*Service)(nil)
 	_ grpcoperations.Resolver             = (*Service)(nil)
+	_ grpcoperations.ListRegistry         = (*Service)(nil)
 )

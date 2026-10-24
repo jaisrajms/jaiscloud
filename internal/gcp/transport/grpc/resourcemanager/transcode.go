@@ -2,14 +2,20 @@ package resourcemanager
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/resourcemanager"
+	"jaiscloud/internal/gcp/timestamp"
+	"jaiscloud/internal/model"
 )
 
 // projectFor resolves the owning project from a resource name/parent, falling
@@ -35,13 +41,13 @@ func projectToProto(p core.Project) *resourcemanagerpb.Project {
 		Labels:      p.Labels,
 	}
 	if !p.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(p.CreateTime)
+		out.CreateTime = timestamp.Proto(p.CreateTime)
 	}
 	if !p.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(p.UpdateTime)
+		out.UpdateTime = timestamp.Proto(p.UpdateTime)
 	}
 	if !p.DeleteTime.IsZero() {
-		out.DeleteTime = timestamppb.New(p.DeleteTime)
+		out.DeleteTime = timestamp.Proto(p.DeleteTime)
 	}
 	return out
 }
@@ -50,7 +56,7 @@ func stateToProto(state string) resourcemanagerpb.Project_State {
 	switch state {
 	case core.StateActive:
 		return resourcemanagerpb.Project_ACTIVE
-	case "DELETE_REQUESTED":
+	case core.StateDeleteRequested:
 		return resourcemanagerpb.Project_DELETE_REQUESTED
 	}
 	return resourcemanagerpb.Project_STATE_UNSPECIFIED
@@ -102,4 +108,72 @@ func toStrings(v any) []string {
 		}
 	}
 	return out
+}
+
+// ─── long-running operations ─────────────────────────────────────────────────
+
+// operationToProto renders a core operation as the v3 google.longrunning
+// Operation: the verb-specific typed metadata plus, once done, the resulting
+// Project as the Any response. An in-flight operation carries no result.
+func operationToProto(op core.Operation) (*longrunningpb.Operation, error) {
+	out := &longrunningpb.Operation{Name: op.Name, Done: op.Done}
+	metadata, err := operationMetadataProto(op)
+	if err != nil {
+		return nil, err
+	}
+	out.Metadata = metadata
+	if op.Done {
+		resp, err := anypb.New(projectToProto(op.Project))
+		if err != nil {
+			return nil, err
+		}
+		out.Result = &longrunningpb.Operation_Response{Response: resp}
+	}
+	return out, nil
+}
+
+// operationMetadataProto packs the v3 typed metadata message for a project
+// mutation verb. Update/Move/Delete/Undelete metadata are empty marker
+// messages; Create carries the workflow timing/gettable/ready fields.
+func operationMetadataProto(op core.Operation) (*anypb.Any, error) {
+	switch op.Verb {
+	case "create":
+		md := &resourcemanagerpb.CreateProjectMetadata{Gettable: op.Done, Ready: op.Done}
+		if !op.CreateTime.IsZero() {
+			md.CreateTime = timestamp.Proto(op.CreateTime)
+		}
+		return anypb.New(md)
+	case "update":
+		return anypb.New(&resourcemanagerpb.UpdateProjectMetadata{})
+	case "move":
+		return anypb.New(&resourcemanagerpb.MoveProjectMetadata{})
+	case "delete":
+		return anypb.New(&resourcemanagerpb.DeleteProjectMetadata{})
+	case "undelete":
+		return anypb.New(&resourcemanagerpb.UndeleteProjectMetadata{})
+	}
+	return nil, nil
+}
+
+// updateMaskPaths returns the field-mask paths of an UpdateProjectRequest, or
+// nil when no mask was supplied.
+func updateMaskPaths(m *fieldmaskpb.FieldMask) []string {
+	if m == nil {
+		return nil
+	}
+	return append([]string(nil), m.GetPaths()...)
+}
+
+// isTopLevelOperationName reports whether name is a top-level operations/{id}
+// resource name (the shape project mutations publish).
+func isTopLevelOperationName(name string) bool {
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	return len(parts) == 2 && parts[0] == "operations" && parts[1] != ""
+}
+
+// isNotFound reports whether err is the canonical NotFound provider error (as
+// returned by GetOperation for an absent operation).
+func isNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
 }

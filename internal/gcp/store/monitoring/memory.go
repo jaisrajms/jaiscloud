@@ -108,6 +108,39 @@ func (s *MemoryStore) ListTimeSeries(_ context.Context, project string) ([]TimeS
 	return result, nil
 }
 
+// ListAllTimeSeries returns every stored series across all projects (the
+// folders arm of timeSeries.list).
+func (s *MemoryStore) ListAllTimeSeries(_ context.Context) ([]TimeSeries, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type keyed struct {
+		key string
+		ts  TimeSeries
+	}
+	all := make([]keyed, 0)
+	for _, m := range s.series {
+		for k, ts := range m {
+			all = append(all, keyed{key: k, ts: *ts})
+		}
+	}
+	// Match the Postgres order (metric_type, resource_type, series_key) so
+	// pagination over the cross-project folders arm is stable in both backends.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].ts.MetricType != all[j].ts.MetricType {
+			return all[i].ts.MetricType < all[j].ts.MetricType
+		}
+		if all[i].ts.ResourceType != all[j].ts.ResourceType {
+			return all[i].ts.ResourceType < all[j].ts.ResourceType
+		}
+		return all[i].key < all[j].key
+	})
+	result := make([]TimeSeries, 0, len(all))
+	for _, a := range all {
+		result = append(result, a.ts)
+	}
+	return result, nil
+}
+
 func (s *MemoryStore) CreateAlertPolicy(_ context.Context, project string, p AlertPolicy) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

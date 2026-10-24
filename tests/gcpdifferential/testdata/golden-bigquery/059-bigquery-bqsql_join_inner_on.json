@@ -1,0 +1,83 @@
+{
+  "index": 59,
+  "service": "bigquery",
+  "op": "bqsql_join_inner_on",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT e.name, d.dept FROM employees e JOIN depts d ON e.dept_id = d.id ORDER BY e.id",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "3",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "ann"
+          },
+          {
+            "v": "eng"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "bob"
+          },
+          {
+            "v": "eng"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "cid"
+          },
+          {
+            "v": "ops"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "name",
+          "type": "STRING"
+        },
+        {
+          "mode": "NULLABLE",
+          "name": "dept",
+          "type": "STRING"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "3",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

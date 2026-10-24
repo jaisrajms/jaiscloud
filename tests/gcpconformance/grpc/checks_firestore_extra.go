@@ -37,7 +37,7 @@ func firestoreExtraChecks() []Check {
 		// ── documents ───────────────────────────────────────────────────────
 		{Service: "firestore", RPC: "CreateDocument", Method: "CreateDocument", KeyField: "document.name/fields", Run: checkFirestoreCreateDocument},
 		{Service: "firestore", RPC: "GetDocument", Method: "GetDocument", KeyField: "document.name/fields", Run: checkFirestoreGetDocument},
-		{Service: "firestore", RPC: "UpdateDocument (update_mask)", Method: "UpdateDocument", KeyField: "masked field updated, unmasked preserved", Run: checkFirestoreUpdateDocument},
+		{Service: "firestore", RPC: "UpdateDocument (update_mask)", Method: "UpdateDocument", KeyField: "masked field updated, unmasked preserved, empty mask no-op, mask=response projection", Run: checkFirestoreUpdateDocument},
 		{Service: "firestore", RPC: "ListDocuments", Method: "ListDocuments", KeyField: "documents[] contains fixture", Run: checkFirestoreListDocuments},
 		{Service: "firestore", RPC: "ListCollectionIds", Method: "ListCollectionIds", KeyField: "collectionIds[] contains fixture", Run: checkFirestoreListCollectionIds},
 
@@ -48,7 +48,7 @@ func firestoreExtraChecks() []Check {
 		{Service: "firestore", RPC: "ExecutePipeline", Method: "ExecutePipeline", KeyField: "results[] + execution_time", Run: checkFirestoreExecutePipeline},
 
 		// ── writes / transactions ───────────────────────────────────────────
-		{Service: "firestore", RPC: "BatchWrite", Method: "BatchWrite", KeyField: "write_results[] + OK statuses", Run: checkFirestoreBatchWrite},
+		{Service: "firestore", RPC: "BatchWrite", Method: "BatchWrite", KeyField: "write_results[] + OK statuses + empty-mask no-op", Run: checkFirestoreBatchWrite},
 		{Service: "firestore", RPC: "BeginTransaction + Commit", Method: "BeginTransaction", KeyField: "transaction id; committed write persists", Run: checkFirestoreBeginTransaction},
 		{Service: "firestore", RPC: "Rollback", Method: "Rollback", KeyField: "rolled-back write absent, committed present", Run: checkFirestoreRollback},
 		{Service: "firestore", RPC: "Write", Method: "Write", KeyField: "stream_id/stream_token + write_results", Run: checkFirestoreWrite},
@@ -212,6 +212,51 @@ func checkFirestoreUpdateDocument(ctx context.Context, cfg Config) error {
 	if got := doc.GetFields()["keep"].GetStringValue(); got != "keep" {
 		return fmt.Errorf("UpdateDocument clobbered unmasked field keep = %q, want keep", got)
 	}
+
+	// A present-but-empty update_mask is AIP-134's no-op: the body is ignored,
+	// the document keeps every field, and update_time does not move. (An
+	// omitted mask — the request above minus UpdateMask — is the replace form.)
+	stamped := doc.GetUpdateTime().AsTime()
+	noop, err := client.UpdateDocument(ctx, &firestorepb.UpdateDocumentRequest{
+		Document: &firestorepb.Document{
+			Name:   name,
+			Fields: map[string]*firestorepb.Value{"name": fsString("ignored-by-empty-mask")},
+		},
+		UpdateMask: &firestorepb.DocumentMask{},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDocument (empty mask): %w", err)
+	}
+	if got := noop.GetFields()["name"].GetStringValue(); got != updated {
+		return fmt.Errorf("empty mask wrote name = %q, want %q (no-op)", got, updated)
+	}
+	if got := noop.GetFields()["keep"].GetStringValue(); got != "keep" {
+		return fmt.Errorf("empty mask dropped keep = %q, want keep", got)
+	}
+	if got := noop.GetUpdateTime().AsTime(); !got.Equal(stamped) {
+		return fmt.Errorf("empty mask rotated updateTime %v -> %v, want unchanged", stamped, got)
+	}
+
+	// `mask` is the response projection ("fields to return"), not a write
+	// mask: asking for ["keep"] on the same no-op hides name from the reply
+	// while leaving the stored document alone.
+	projected, err := client.UpdateDocument(ctx, &firestorepb.UpdateDocumentRequest{
+		Document: &firestorepb.Document{
+			Name:   name,
+			Fields: map[string]*firestorepb.Value{"name": fsString("ignored-by-empty-mask")},
+		},
+		UpdateMask: &firestorepb.DocumentMask{},
+		Mask:       &firestorepb.DocumentMask{FieldPaths: []string{"keep"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDocument (response mask): %w", err)
+	}
+	if _, ok := projected.GetFields()["name"]; ok {
+		return fmt.Errorf("response mask returned name; want only keep")
+	}
+	if got := projected.GetFields()["keep"].GetStringValue(); got != "keep" {
+		return fmt.Errorf("response mask keep = %q, want keep", got)
+	}
 	return nil
 }
 
@@ -248,6 +293,15 @@ func checkFirestoreListCollectionIds(ctx context.Context, cfg Config) error {
 	}
 	defer conn.Close()
 
+	contains := func(ids []string, want string) bool {
+		for _, id := range ids {
+			if id == want {
+				return true
+			}
+		}
+		return false
+	}
+
 	coll := fsCollection(cfg)
 	if _, err := fsCreate(ctx, client, cfg, coll, "create-doc"); err != nil {
 		return fmt.Errorf("fixture CreateDocument: %w", err)
@@ -256,12 +310,46 @@ func checkFirestoreListCollectionIds(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("ListCollectionIds: %w", err)
 	}
-	for _, id := range resp.GetCollectionIds() {
-		if id == coll {
-			return nil
-		}
+	if !contains(resp.GetCollectionIds(), coll) {
+		return fmt.Errorf("ListCollectionIds did not include %q (got %v)", coll, resp.GetCollectionIds())
 	}
-	return fmt.Errorf("ListCollectionIds did not include %q (got %v)", coll, resp.GetCollectionIds())
+
+	// Only the leaf document exists: every document above it is a "missing"
+	// parent that lives purely as a path prefix. Firestore still lists the
+	// ancestor collections (a collection is listed whenever its path is a
+	// prefix of any document at any depth), including a top-level collection
+	// with no direct document of its own. Validated against the official
+	// Cloud Firestore emulator v1.22.0.
+	deepColl := cfg.ResourceName("gcpc_grpc_fs_deep")
+	deepLeaf := fsDocuments(cfg) + "/" + deepColl + "/p1/c1/p2/c2/leaf"
+	if _, err := client.CreateDocument(ctx, &firestorepb.CreateDocumentRequest{
+		Parent:       fsDocuments(cfg) + "/" + deepColl + "/p1/c1/p2",
+		CollectionId: "c2",
+		DocumentId:   "leaf",
+		Document:     &firestorepb.Document{Fields: map[string]*firestorepb.Value{"name": fsString(firestoreExtraVal)}},
+	}); err != nil {
+		return fmt.Errorf("deep fixture CreateDocument: %w", err)
+	}
+	defer fsDelete(ctx, client, deepLeaf)
+
+	resp, err = client.ListCollectionIds(ctx, &firestorepb.ListCollectionIdsRequest{Parent: fsDocuments(cfg)})
+	if err != nil {
+		return fmt.Errorf("ListCollectionIds (root): %w", err)
+	}
+	if !contains(resp.GetCollectionIds(), deepColl) {
+		return fmt.Errorf("ListCollectionIds root omitted ancestor-only %q (got %v)", deepColl, resp.GetCollectionIds())
+	}
+
+	resp, err = client.ListCollectionIds(ctx, &firestorepb.ListCollectionIdsRequest{
+		Parent: fsDocuments(cfg) + "/" + deepColl + "/p1",
+	})
+	if err != nil {
+		return fmt.Errorf("ListCollectionIds (missing parent): %w", err)
+	}
+	if !contains(resp.GetCollectionIds(), "c1") {
+		return fmt.Errorf("ListCollectionIds under missing parent omitted %q (got %v)", "c1", resp.GetCollectionIds())
+	}
+	return nil
 }
 
 // ─── queries ─────────────────────────────────────────────────────────────────
@@ -486,6 +574,38 @@ func checkFirestoreBatchWrite(ctx context.Context, cfg Config) error {
 		if doc.GetFields()["name"].GetStringValue() == "" {
 			return fmt.Errorf("BatchWrite document %q has no name field", name)
 		}
+	}
+	// A present-but-empty update mask with no field transforms is AIP-134's
+	// no-op: the write result echoes the stored update_time, the stored fields
+	// do not move (verified against real GCP).
+	storedTime := resp.GetWriteResults()[0].GetUpdateTime().AsTime()
+	noop, err := client.BatchWrite(ctx, &firestorepb.BatchWriteRequest{
+		Database: fsDatabase(cfg),
+		Writes: []*firestorepb.Write{{
+			Operation: &firestorepb.Write_Update{Update: &firestorepb.Document{
+				Name: a,
+				Fields: map[string]*firestorepb.Value{
+					"name": {ValueType: &firestorepb.Value_StringValue{StringValue: "ignored"}},
+				},
+			}},
+			UpdateMask: &firestorepb.DocumentMask{FieldPaths: []string{}},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("BatchWrite (empty mask): %w", err)
+	}
+	if len(noop.GetWriteResults()) != 1 || noop.GetStatus()[0].GetCode() != 0 {
+		return fmt.Errorf("BatchWrite (empty mask): %d write_results, status %v", len(noop.GetWriteResults()), noop.GetStatus())
+	}
+	if got := noop.GetWriteResults()[0].GetUpdateTime().AsTime(); !got.Equal(storedTime) {
+		return fmt.Errorf("BatchWrite empty-mask no-op update_time = %v, want the stored %v", got, storedTime)
+	}
+	noopDoc, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{Name: a})
+	if err != nil {
+		return fmt.Errorf("BatchWrite empty-mask no-op get: %w", err)
+	}
+	if got := noopDoc.GetFields()["name"].GetStringValue(); got != "batch-a-value" {
+		return fmt.Errorf("BatchWrite empty-mask no-op wrote %q, want the stored batch-a-value", got)
 	}
 	fsDelete(ctx, client, a)
 	fsDelete(ctx, client, b)

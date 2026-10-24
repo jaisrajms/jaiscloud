@@ -21,12 +21,23 @@ var actionOverrides = map[string]string{
 	"Storage.ObjectsGetMedia":             "storage.objects.get",
 	"Storage.ObjectsInsertStartResumable": "storage.objects.insert",
 	"Storage.ObjectsInsertResumable":      "storage.objects.insert",
+	// BigQuery load-from-file is jobs.insert on the wire; the multipart upload
+	// reuses InsertJob and the resumable session has its own start/chunk actions.
+	"BigQuery.InsertJobResumableStart": "bigquery.jobs.insert",
+	"BigQuery.InsertJobResumable":      "bigquery.jobs.insert",
 
 	// Secret Manager version verbs are 1:1 with Discovery's versions.* methods.
 	"Secret.GetVersion":     "secretmanager.projects.secrets.versions.get",
 	"Secret.DestroyVersion": "secretmanager.projects.secrets.versions.destroy",
 	"Secret.DisableVersion": "secretmanager.projects.secrets.versions.disable",
 	"Secret.EnableVersion":  "secretmanager.projects.secrets.versions.enable",
+	// The version access/list and the secret rotation verbs exist on both the
+	// project-level and the location-level surface; the emulator serves the
+	// classic project-level methods, so pin those.
+	"Secret.Access":                "secretmanager.projects.secrets.versions.access",
+	"Secret.ListVersions":          "secretmanager.projects.secrets.versions.list",
+	"Secret.EnableManagedRotation": "secretmanager.projects.secrets.enableManagedRotation",
+	"Secret.RotateSecret":          "secretmanager.projects.secrets.rotateSecret",
 
 	// IAM service-account keys nest under serviceAccounts in Discovery.
 	"IAM.ServiceAccountKeyCreate": "iam.projects.serviceAccounts.keys.create",
@@ -47,6 +58,30 @@ var actionOverrides = map[string]string{
 
 	// KMS crypto-key-version public key is Discovery's cryptoKeyVersions.getPublicKey.
 	"KMS.CryptoKeyVersionGetPublicKey": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",
+	// KMS key import / trusted wrapping / KEM custom methods and import jobs
+	// nest under cryptoKeyVersions / importJobs in Discovery.
+	"KMS.CryptoKeyVersionImport":        "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.import",
+	"KMS.CryptoKeyVersionImportTrusted": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.importTrustedKeyWrappedCryptoKeyVersion",
+	"KMS.CryptoKeyVersionExportTrusted": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.exportTrustedKeyWrappedCryptoKeyVersion",
+	"KMS.CryptoKeyVersionDecapsulate":   "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.decapsulate",
+	"KMS.ImportJobCreate":               "cloudkms.projects.locations.keyRings.importJobs.create",
+	"KMS.ImportJobGet":                  "cloudkms.projects.locations.keyRings.importJobs.get",
+	"KMS.ImportJobList":                 "cloudkms.projects.locations.keyRings.importJobs.list",
+	"KMS.CryptoKeyVersionRestore":       "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.restore",
+	"KMS.CryptoKeyVersionDelete":        "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
+	"KMS.CryptoKeyDelete":               "cloudkms.projects.locations.keyRings.cryptoKeys.delete",
+
+	// Secret Manager's bare Get/List are the secret get/list methods, not the
+	// (unimplemented) project-level locations.get/locations.list that the
+	// CamelCase heuristic otherwise picks first (".list" suffix tie broken
+	// alphabetically by locations.* before secrets.*).
+	"Secret.Get":  "secretmanager.projects.secrets.get",
+	"Secret.List": "secretmanager.projects.secrets.list",
+
+	// Dataproc serves its operations under regions/{region} (the emulator's
+	// REST surface); the Discovery document also declares a locations/{location}
+	// variant, which the heuristic otherwise picks first (locations < regions).
+	"Dataproc.GetOperation": "dataproc.projects.regions.operations.get",
 
 	// Remaining resource/verb naming differences across services.
 	"CloudSQL.ConnectGet":                        "sql.connect.get",
@@ -61,6 +96,11 @@ var actionOverrides = map[string]string{
 	"Dataproc.InstantiateWorkflowTemplate":       "dataproc.projects.regions.workflowTemplates.instantiate",
 	"Dataproc.InstantiateInlineWorkflowTemplate": "dataproc.projects.regions.workflowTemplates.instantiateInline",
 	"Metastore.AlterMetadataResourceLocation":    "metastore.projects.locations.services.alterLocation",
+	"Workflow.ListWorkflowRevisions":             "workflows.projects.locations.workflows.listRevisions",
+
+	// Firestore Admin user-creds resetPassword is a Discovery custom method
+	// ("userCreds.resetPassword") the flat registry action name cannot derive.
+	"Firestore.ResetUserPassword": "firestore.projects.databases.userCreds.resetPassword",
 
 	// BigQuery's tabledata/jobs/projects surfaces use different method names
 	// than the emulator's registry actions.
@@ -73,6 +113,7 @@ var actionOverrides = map[string]string{
 	// Service Usage v1 services.* verbs.
 	"ServiceUsage.ServicesList":        "serviceusage.services.list",
 	"ServiceUsage.ServicesGet":         "serviceusage.services.get",
+	"ServiceUsage.ServicesBatchGet":    "serviceusage.services.batchGet",
 	"ServiceUsage.ServicesBatchEnable": "serviceusage.services.batchEnable",
 	"ServiceUsage.ServicesEnable":      "serviceusage.services.enable",
 	"ServiceUsage.ServicesDisable":     "serviceusage.services.disable",
@@ -100,6 +141,7 @@ var actionOverrides = map[string]string{
 	"Run.TestIamPermissions": "run.projects.locations.services.testIamPermissions",
 	"Run.ListRevisions":      "run.projects.locations.services.revisions.list",
 	"Run.GetRevision":        "run.projects.locations.services.revisions.get",
+	"Run.DeleteRevision":     "run.projects.locations.services.revisions.delete",
 	// The REST :wait custom method maps to operations.get. CancelOperation is
 	// served for direct dispatch but real run v2 has no operations.cancel
 	// discovery method, so it stays uncovered.
@@ -112,9 +154,65 @@ var actionOverrides = map[string]string{
 	// service is "cloudresourcemanager"; the vendored snapshot is keyed by the
 	// emulator's wire service name "resourcemanager").
 	"ResourceManager.ProjectGet":                "cloudresourcemanager.projects.get",
+	"ResourceManager.ProjectUpdate":             "cloudresourcemanager.projects.update",
 	"ResourceManager.ProjectGetIamPolicy":       "cloudresourcemanager.projects.getIamPolicy",
 	"ResourceManager.ProjectSetIamPolicy":       "cloudresourcemanager.projects.setIamPolicy",
 	"ResourceManager.ProjectTestIamPermissions": "cloudresourcemanager.projects.testIamPermissions",
+
+	// Cloud Logging Settings/CMEK are Discovery custom methods whose ids do not
+	// derive from the flat registry action names ("logging.projects.getSettings",
+	// not "projects.settings.get"). The updates live on the bare "logging.*"
+	// resource, not "logging.projects.*".
+	"Logging.SettingsGet":    "logging.projects.getSettings",
+	"Logging.SettingsUpdate": "logging.updateSettings",
+	"Logging.CmekGet":        "logging.projects.getCmekSettings",
+	"Logging.CmekUpdate":     "logging.updateCmekSettings",
+
+	// GKE (container) setter custom methods nest under clusters / nodePools and
+	// several use a different Discovery verb than the registry action name.
+	"Container.SetAddonsConfig":         "container.projects.locations.clusters.setAddons",
+	"Container.SetLabels":               "container.projects.locations.clusters.setResourceLabels",
+	"Container.SetLoggingService":       "container.projects.locations.clusters.setLogging",
+	"Container.SetMonitoringService":    "container.projects.locations.clusters.setMonitoring",
+	"Container.SetNodePoolAutoscaling":  "container.projects.locations.clusters.nodePools.setAutoscaling",
+	"Container.SetNodePoolSize":         "container.projects.locations.clusters.nodePools.setSize",
+	"Container.SetNodePoolManagement":   "container.projects.locations.clusters.nodePools.setManagement",
+	"Container.RollbackNodePoolUpgrade": "container.projects.locations.clusters.nodePools.rollback",
+
+	// Eventarc's advanced message-bus actions do not derive from the CamelCase
+	// heuristic: the Discovery collection is "messageBuses" (which singularises
+	// to "messageBus"), so the verb-first candidate comes out "messageBus.create"
+	// rather than "messageBuses.create".
+	"Eventarc.CreateMessageBus":             "eventarc.projects.locations.messageBuses.create",
+	"Eventarc.GetMessageBus":                "eventarc.projects.locations.messageBuses.get",
+	"Eventarc.ListMessageBuses":             "eventarc.projects.locations.messageBuses.list",
+	"Eventarc.UpdateMessageBus":             "eventarc.projects.locations.messageBuses.patch",
+	"Eventarc.DeleteMessageBus":             "eventarc.projects.locations.messageBuses.delete",
+	"Eventarc.ListMessageBusEnrollments":    "eventarc.projects.locations.messageBuses.listEnrollments",
+	"Eventarc.MessageBusGetIamPolicy":       "eventarc.projects.locations.messageBuses.getIamPolicy",
+	"Eventarc.MessageBusSetIamPolicy":       "eventarc.projects.locations.messageBuses.setIamPolicy",
+	"Eventarc.MessageBusTestIamPermissions": "eventarc.projects.locations.messageBuses.testIamPermissions",
+
+	// Dataproc Metastore federations + IAM mixin: nested methods the flat
+	// registry action names cannot derive ("federations" pluralises to
+	// "federations", and the IAM verbs nest under services/databases/tables).
+	"Metastore.CreateFederation":             "metastore.projects.locations.federations.create",
+	"Metastore.GetFederation":                "metastore.projects.locations.federations.get",
+	"Metastore.ListFederations":              "metastore.projects.locations.federations.list",
+	"Metastore.UpdateFederation":             "metastore.projects.locations.federations.patch",
+	"Metastore.DeleteFederation":             "metastore.projects.locations.federations.delete",
+	"Metastore.ServiceGetIamPolicy":          "metastore.projects.locations.services.getIamPolicy",
+	"Metastore.ServiceSetIamPolicy":          "metastore.projects.locations.services.setIamPolicy",
+	"Metastore.ServiceTestIamPermissions":    "metastore.projects.locations.services.testIamPermissions",
+	"Metastore.BackupGetIamPolicy":           "metastore.projects.locations.services.backups.getIamPolicy",
+	"Metastore.BackupSetIamPolicy":           "metastore.projects.locations.services.backups.setIamPolicy",
+	"Metastore.DatabaseGetIamPolicy":         "metastore.projects.locations.services.databases.getIamPolicy",
+	"Metastore.DatabaseSetIamPolicy":         "metastore.projects.locations.services.databases.setIamPolicy",
+	"Metastore.TableGetIamPolicy":            "metastore.projects.locations.services.databases.tables.getIamPolicy",
+	"Metastore.TableSetIamPolicy":            "metastore.projects.locations.services.databases.tables.setIamPolicy",
+	"Metastore.FederationGetIamPolicy":       "metastore.projects.locations.federations.getIamPolicy",
+	"Metastore.FederationSetIamPolicy":       "metastore.projects.locations.federations.setIamPolicy",
+	"Metastore.FederationTestIamPermissions": "metastore.projects.locations.federations.testIamPermissions",
 }
 
 // ActionResolver maps emulator registry actions to Discovery method ids within

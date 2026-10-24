@@ -24,6 +24,26 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: params, ResourceID: resource.ResourceID("proj")}
 }
 
+// TestTopicPublishRejectsEmpty pins the real-Pub/Sub rule the differential
+// harness found missing: a publish request must carry at least one message, so
+// an empty (or absent) messages array is INVALID_ARGUMENT (400).
+func TestTopicPublishRejectsEmpty(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := newNR(map[string]any{"name": "topics/t"})
+	if _, err := p.TopicCreate(ctx, nr); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	for _, body := range []map[string]any{{"messages": []any{}}, {}} {
+		nr = newNR(map[string]any{"name": "topics/t", "body": body})
+		_, err := p.TopicPublish(ctx, nr)
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 {
+			t.Errorf("TopicPublish(%v) err = %v, want 400 ProviderError", body, err)
+		}
+	}
+}
+
 func TestPubSubRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
@@ -114,8 +134,8 @@ func TestPubSubOpaqueAckID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ackId is not base64url: %v", err)
 	}
-	if string(decoded) != "s/"+msgID {
-		t.Errorf("decoded ackId = %q, want s/%s", decoded, msgID)
+	if string(decoded) != "s/"+msgID+"/1" {
+		t.Errorf("decoded ackId = %q, want s/%s/1", decoded, msgID)
 	}
 
 	// modifyAckDeadline round-trips through the opaque ackId.

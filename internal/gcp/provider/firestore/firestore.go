@@ -18,13 +18,18 @@ import (
 	"strings"
 	"time"
 
+	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -32,10 +37,24 @@ const (
 	maxDocumentSize = 1 << 20 // 1,048,576 bytes
 	// maxFieldNameBytes is the per-field-name byte limit (document.proto).
 	maxFieldNameBytes = 1500
+	// maxPathElementBytes is the per-key-path-element byte limit: every
+	// collection id (kind) and document id (name) must be no longer than
+	// 1,500 bytes (Firestore quotas: "Constraints on collection IDs" /
+	// "Constraints on document IDs"). The official emulator rejects an
+	// over-long element with 400 INVALID_ARGUMENT. This is a distinct quota
+	// from maxFieldNameBytes (a different constraint that shares the value).
+	maxPathElementBytes = 1500
 	// maxStringBytes is the per-stringValue/bytesValue byte limit (1 MiB − 89).
 	maxStringBytes = (1 << 20) - 89 // 1,048,487 bytes
 	// autoIDLength is the length of a server-generated document ID.
 	autoIDLength = 20
+	// maxDocumentNameBytes is the Firestore document-name byte limit (6 KiB).
+	maxDocumentNameBytes = 6 << 10 // 6,144 bytes
+	// maxSubcollectionDepth is the maximum number of collection levels a
+	// document path may have (Firestore "Maximum depth of subcollections").
+	// The official Firestore emulator rejects a 101-collection path with
+	// 400 INVALID_ARGUMENT ("Key path is too long. Cannot exceed 100 elements.").
+	maxSubcollectionDepth = 100
 )
 
 // autoIDAlphabet is the alphabet Firestore uses for auto-generated document IDs.
@@ -66,6 +85,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Firestore.ListDocuments":     p.ListDocuments,
 		"Firestore.ListCollectionIds": p.ListCollectionIds,
 		"Firestore.RunQuery":          p.RunQuery,
+		"Firestore.PartitionQuery":    p.PartitionQuery,
+		"Firestore.ExecutePipeline":   p.ExecutePipeline,
 		"Firestore.Commit":            p.Commit,
 		"Firestore.BatchWrite":        p.BatchWrite,
 		"Firestore.BatchGet":          p.BatchGet,
@@ -75,6 +96,36 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Firestore.ListIndexes":       p.ListIndexes,
 		"Firestore.GetIndex":          p.GetIndex,
 		"Firestore.DeleteIndex":       p.DeleteIndex,
+		// Firestore Admin control plane (REST under the `firestore` service; the
+		// gRPC twin is google.firestore.admin.v1.FirestoreAdmin).
+		"Firestore.CreateDatabase":       p.CreateDatabase,
+		"Firestore.ListDatabases":        p.ListDatabases,
+		"Firestore.GetDatabase":          p.GetDatabase,
+		"Firestore.UpdateDatabase":       p.UpdateDatabase,
+		"Firestore.DeleteDatabase":       p.DeleteDatabase,
+		"Firestore.CreateBackupSchedule": p.CreateBackupSchedule,
+		"Firestore.ListBackupSchedules":  p.ListBackupSchedules,
+		"Firestore.GetBackupSchedule":    p.GetBackupSchedule,
+		"Firestore.UpdateBackupSchedule": p.UpdateBackupSchedule,
+		"Firestore.DeleteBackupSchedule": p.DeleteBackupSchedule,
+		"Firestore.CreateUserCreds":      p.CreateUserCreds,
+		"Firestore.ListUserCreds":        p.ListUserCreds,
+		"Firestore.GetUserCreds":         p.GetUserCreds,
+		"Firestore.EnableUserCreds":      p.EnableUserCreds,
+		"Firestore.DisableUserCreds":     p.DisableUserCreds,
+		"Firestore.ResetUserPassword":    p.ResetUserPassword,
+		"Firestore.DeleteUserCreds":      p.DeleteUserCreds,
+		"Firestore.ListFields":           p.ListFields,
+		"Firestore.GetField":             p.GetField,
+		"Firestore.UpdateField":          p.UpdateField,
+		"Firestore.ListBackups":          p.ListBackups,
+		"Firestore.GetBackup":            p.GetBackup,
+		"Firestore.DeleteBackup":         p.DeleteBackup,
+		// Firestore Admin long-running operations (projects.databases.operations).
+		"Firestore.GetOperation":    p.GetOperation,
+		"Firestore.ListOperations":  p.ListOperations,
+		"Firestore.DeleteOperation": p.DeleteOperation,
+		"Firestore.CancelOperation": p.CancelOperation,
 	}
 }
 
@@ -107,6 +158,26 @@ func decodeBody(nr *model.NormalizedRequest, v any) error {
 	return nil
 }
 
+// decodeProtoBody decodes nr.Params["body"] into a protobuf message using
+// protojson — the Firestore REST body encoding. It is used by request bodies
+// whose shape is richer than the flat wire structs (the pipeline expression
+// tree), so the REST handler can reuse the same proto types the gRPC transport
+// decodes. An absent body leaves the message at its zero value.
+func decodeProtoBody(nr *model.NormalizedRequest, m proto.Message) error {
+	body, ok := nr.Params["body"]
+	if !ok || body == nil {
+		return nil
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
+	}
+	if err := protojson.Unmarshal(b, m); err != nil {
+		return model.NewProviderError("InvalidArgument", "malformed request body: "+err.Error(), 400)
+	}
+	return nil
+}
+
 // encodeTxn standard-base64-encodes transaction bytes for the wire.
 func encodeTxn(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
@@ -132,9 +203,27 @@ func decodeTxnParam(nr *model.NormalizedRequest) ([]byte, error) {
 }
 
 // pageFromNR extracts cursor-pagination inputs from the request query params.
-func pageFromNR(nr *model.NormalizedRequest) pageParams {
+// A negative pageSize is InvalidArgument (AIP-158), so the error is returned
+// rather than folded into the default.
+func pageFromNR(nr *model.NormalizedRequest) (pageParams, error) {
 	token, _ := nr.Params["pageToken"].(string)
-	return pageParams{size: paging.PageSize(nr.Params), token: token}
+	size, err := paging.PageSize(nr.Params)
+	if err != nil {
+		return pageParams{}, err
+	}
+	return pageParams{size: size, token: token}, nil
+}
+
+// boolParam reads a boolean request parameter, accepting the string forms the
+// REST query decoder produces ("true"/"1") and a native bool.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	}
+	return false
 }
 
 // extractFields extracts the document fields from a decoded request body.
@@ -158,10 +247,25 @@ func extractFields(body map[string]any) (map[string]*firestorestore.Value, error
 }
 
 // documentMap serialises a store Document to its REST wire form.
+// documentMap encodes a document for the wire. createTime/updateTime are omitted
+// when unset so a showMissing placeholder (name only, no underlying document)
+// matches real Firestore: it has a name but no fields or timestamps.
 func documentMap(d firestorestore.Document) map[string]any {
-	b, _ := json.Marshal(d)
-	var m map[string]any
-	json.Unmarshal(b, &m)
+	m := map[string]any{"name": d.Name}
+	if len(d.Fields) > 0 {
+		// Round-trip through JSON so fields are generic map[string]any (the wire
+		// shape every caller expects), not the typed *Value form.
+		b, _ := json.Marshal(d.Fields)
+		var fields map[string]any
+		json.Unmarshal(b, &fields)
+		m["fields"] = fields
+	}
+	if !d.CreateTime.IsZero() {
+		m["createTime"] = timestamp.Canonical(d.CreateTime)
+	}
+	if !d.UpdateTime.IsZero() {
+		m["updateTime"] = timestamp.Canonical(d.UpdateTime)
+	}
 	return m
 }
 
@@ -264,6 +368,57 @@ func validateDocumentID(id string) error {
 	}
 	if reservedNameRe.MatchString(id) {
 		return model.NewProviderError("InvalidArgument", "document id "+id+" is reserved", 400)
+	}
+	return nil
+}
+
+// validateDocumentName enforces the Firestore limits that apply to every write
+// target, for both the REST and gRPC transports (the shared Service calls it):
+// the name must be a well-formed database document name, no longer than 6 KiB,
+// with every collection/document path element no longer than 1,500 bytes, and
+// no deeper than 100 collection levels. Real Firestore (and the official
+// emulator, for the depth and element limits) rejects a violating name with 400
+// INVALID_ARGUMENT. The whole-name 6 KiB pre-check intentionally runs first
+// (before splitting), so a single element over 6 KiB reports the name-size
+// error; every violation is still 400 INVALID_ARGUMENT.
+func validateDocumentName(name string) error {
+	// Reject an over-long name before splitting so a multi-megabyte request body
+	// cannot force a large allocation first.
+	if len(name) > maxDocumentNameBytes {
+		return model.NewProviderError("InvalidArgument", "document name exceeds maximum size of 6 KiB", 400)
+	}
+	_, _, path, ok := firestorestore.ParseDocumentName(name)
+	if !ok {
+		return model.NewProviderError("InvalidArgument", "invalid document name", 400)
+	}
+	// A document path alternates collection/document segments, so the number of
+	// collection levels is half the segment count; the root collection is the
+	// first level. An empty path, an odd segment count, or an empty segment is
+	// not a document.
+	segs := splitRelativePath(path)
+	if len(segs) == 0 || len(segs)%2 != 0 {
+		return model.NewProviderError("InvalidArgument", "invalid document name", 400)
+	}
+	for i, seg := range segs {
+		if seg == "" {
+			return model.NewProviderError("InvalidArgument", "document name contains an empty path element", 400)
+		}
+		// Elements alternate collection id (kind) and document id (name),
+		// starting with the root collection. Each is capped at 1,500 bytes;
+		// the official emulator names the offending element type in the
+		// message ("element name"/"element kind").
+		if len(seg) > maxPathElementBytes {
+			element := "kind"
+			if i%2 == 1 {
+				element = "name"
+			}
+			return model.NewProviderError("InvalidArgument",
+				"The key path element "+element+" is longer than "+strconv.Itoa(maxPathElementBytes)+" bytes.", 400)
+		}
+	}
+	if levels := len(segs) / 2; levels > maxSubcollectionDepth {
+		return model.NewProviderError("InvalidArgument",
+			"document path exceeds maximum depth of "+strconv.Itoa(maxSubcollectionDepth)+" collections", 400)
 	}
 	return nil
 }
@@ -449,20 +604,15 @@ func maskFields(doc firestorestore.Document, paths []string) map[string]*firesto
 }
 
 // applyMask merges body fields into a document's fields per Firestore patch
-// semantics:
-//   - no mask: the body fields fully replace the document's fields.
-//   - mask present: only the field paths in the mask are updated; a mask path
-//     not present in the body is deleted; fields outside the mask are unchanged.
+// semantics: only the field paths in the mask are updated; a mask path not
+// present in the body is deleted; fields outside the mask are unchanged.
 //
 // base is the existing fields (nil when the document is being created).
+//
+// The mask must be populated: the omitted mask (replace every field) and the
+// present-but-empty mask (AIP-134's no-op) are resolved by the caller, and an
+// empty mask here leaves the base untouched rather than silently replacing it.
 func applyMask(fields map[string]*firestorestore.Value, mask []string, base map[string]*firestorestore.Value) map[string]*firestorestore.Value {
-	if len(mask) == 0 {
-		out := make(map[string]*firestorestore.Value, len(fields))
-		for k, v := range fields {
-			out[k] = v
-		}
-		return out
-	}
 	out := make(map[string]*firestorestore.Value, len(base)+len(mask))
 	for k, v := range base {
 		out[k] = v
@@ -570,8 +720,10 @@ func (p *Provider) CreateDocument(ctx context.Context, nr *model.NormalizedReque
 }
 
 // DocumentsPatch implements documents.patch. Patch upserts: a missing document
-// is created. The updateMask (updateMask.fieldPaths) restricts which fields are
-// updated; without it the body fields fully replace the document's fields.
+// is created. The write mask is `updateMask.fieldPaths`: a populated mask
+// updates only the listed paths, an omitted one replaces every field, and a
+// present-but-empty one is AIP-134's no-op. `mask.fieldPaths` is the unrelated
+// response projection (fields to return), applied to the reply only.
 func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	database, path, err := relativeName(nr)
 	if err != nil {
@@ -582,10 +734,7 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	mask := maskFieldPaths(nr)
-	if len(mask) == 0 {
-		mask = updateMaskPaths(nr)
-	}
+	mask := updateMaskFromQuery(nr)
 	pre, err := preconditionFromQuery(nr)
 	if err != nil {
 		return nil, err
@@ -594,7 +743,20 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(documentMap(doc)), nil
+	return provider.OK(documentMap(ProjectDocument(doc, maskFieldPaths(nr)))), nil
+}
+
+// updateMaskFromQuery reads the documents.patch *write* mask from the
+// `updateMask.fieldPaths` query parameter, preserving presence: a parameter
+// supplied with no values (`?updateMask.fieldPaths=`) is a present-but-empty
+// mask, which is AIP-134's no-op — not an omitted mask, which replaces every
+// field. `mask.fieldPaths` is deliberately not consulted here; it selects the
+// fields the response is projected to (see DocumentsPatch).
+func updateMaskFromQuery(nr *model.NormalizedRequest) *UpdateMask {
+	if !maskParamPresent(nr, "updateMask.fieldPaths") {
+		return nil
+	}
+	return &UpdateMask{Paths: updateMaskPaths(nr)}
 }
 
 // DocumentsDelete implements documents.delete. Idempotent, unless a
@@ -625,7 +787,11 @@ func (p *Provider) ListDocuments(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), boolParam(nr, "showMissing"), page)
 	if err != nil {
 		return nil, err
 	}
@@ -647,11 +813,18 @@ func (p *Provider) ListCollectionIds(ctx context.Context, nr *model.NormalizedRe
 	if err != nil {
 		return nil, err
 	}
-	ids, nextToken, err := p.Service.ListCollectionIds(ctx, nr.AccountID, database, path, pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	ids, nextToken, err := p.Service.ListCollectionIds(ctx, nr.AccountID, database, path, page)
 	if err != nil {
 		return nil, err
 	}
 	resp := map[string]any{"collectionIds": ids}
+	if ids == nil {
+		resp["collectionIds"] = []string{}
+	}
 	if nextToken != "" {
 		resp["nextPageToken"] = nextToken
 	}
@@ -688,7 +861,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	for _, d := range results {
 		item := map[string]any{
 			"document": documentMap(d),
-			"readTime": readTime.Format(time.RFC3339Nano),
+			"readTime": timestamp.Canonical(readTime),
 		}
 		b, err := json.Marshal(item)
 		if err != nil {
@@ -696,7 +869,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		}
 		lines = append(lines, string(b))
 	}
-	final := map[string]any{"done": true}
+	final := map[string]any{"done": true, "readTime": timestamp.Canonical(readTime)}
 	if req.StructuredQuery.Offset > 0 {
 		final["skippedResults"] = req.StructuredQuery.Offset
 	}
@@ -706,6 +879,84 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	}
 	lines = append(lines, string(b))
 	return provider.OK(map[string]any{wire.RawJSONKey: json.RawMessage(strings.Join(lines, "\n"))}), nil
+}
+
+// PartitionQuery implements documents.partitionQuery: cursor partition points
+// over a structured query's ordered result set. As in the gRPC transport, an
+// empty partition list is returned when the query yields too few documents to
+// partition or a single partition is requested (the SDK treats that as one
+// full-range partition).
+func (p *Provider) PartitionQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req partitionQueryRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	database, path, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+	if req.StructuredQuery == nil {
+		return nil, model.NewProviderError("InvalidArgument", "partitionQuery requires a structuredQuery", 400)
+	}
+	count := int(req.PartitionCount)
+	if count <= 1 {
+		return provider.OK(map[string]any{"partitions": []any{}}), nil
+	}
+	docs, err := p.Service.RunQuery(ctx, nr.AccountID, database, path, req.StructuredQuery, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) < count {
+		return provider.OK(map[string]any{"partitions": []any{}}), nil
+	}
+	partitions := make([]any, 0, count-1)
+	for i := 1; i < count; i++ {
+		idx := len(docs) * i / count
+		if idx >= len(docs) {
+			break
+		}
+		partitions = append(partitions, map[string]any{
+			"values": []any{map[string]any{"referenceValue": docs[idx].Name}},
+		})
+	}
+	return provider.OK(map[string]any{"partitions": partitions}), nil
+}
+
+// ExecutePipeline implements documents.executePipeline. The request body is the
+// protojson form of google.firestore.v1.ExecutePipelineRequest; the pipeline
+// stages are evaluated by the shared engine (pipeline.go), the same one the gRPC
+// ExecutePipeline RPC uses. The response carries executionTime, the result
+// documents, and — when newTransaction was requested — the base64 transaction
+// id. The whole stream is collapsed into one JSON response (a valid batching).
+func (p *Provider) ExecutePipeline(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req firestorepb.ExecutePipelineRequest
+	if err := decodeProtoBody(nr, &req); err != nil {
+		return nil, err
+	}
+	database, _, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+	// RunPipeline validates the stage list, so a missing/empty pipeline is the
+	// shared 400 INVALID_ARGUMENT (the same error the gRPC adapter surfaces).
+	res, err := p.Service.RunPipeline(ctx, nr.AccountID, database,
+		req.GetStructuredPipeline().GetPipeline().GetStages(),
+		req.GetTransaction(), req.GetNewTransaction() != nil)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]any, 0, len(res.Documents))
+	for _, d := range res.Documents {
+		results = append(results, documentMap(d))
+	}
+	out := map[string]any{
+		"executionTime": timestamp.Canonical(res.ExecutionTime),
+		"results":       results,
+	}
+	if len(res.Transaction) > 0 {
+		out["transaction"] = encodeTxn(res.Transaction)
+	}
+	return provider.OK(out), nil
 }
 
 // Commit implements documents.commit: an atomic batch of writes with optimistic
@@ -728,7 +979,7 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		wr = append(wr, r)
 	}
 	return provider.OK(map[string]any{
-		"commitTime":   commitTime.Format(time.RFC3339Nano),
+		"commitTime":   timestamp.Canonical(commitTime),
 		"writeResults": wr,
 	}), nil
 }
@@ -760,12 +1011,24 @@ func (p *Provider) BatchGet(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	// Real Firestore starts a new transaction when newTransaction is set and
+	// returns its id on the first streamed response. The Node SDK's
+	// runTransaction begins transactions lazily through documents.batchGet.
+	if len(req.NewTransaction) > 0 && string(req.NewTransaction) != "null" {
+		txn, err = p.Service.BeginTransaction(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	items, err := p.Service.BatchGet(ctx, req.Documents, txn)
 	if err != nil {
 		return nil, err
 	}
 	lines := make([]string, 0, len(items))
-	for _, item := range items {
+	for i, item := range items {
+		if i == 0 && len(txn) > 0 {
+			item["transaction"] = encodeTxn(txn)
+		}
 		b, err := json.Marshal(item)
 		if err != nil {
 			return nil, err
@@ -831,7 +1094,11 @@ func (p *Provider) ListIndexes(ctx context.Context, nr *model.NormalizedRequest)
 	}
 	filter, _ := nr.Params["filter"].(string)
 
-	idxs, nextToken, err := p.Service.ListIndexes(ctx, nr.AccountID, database, cg, filter, pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	idxs, nextToken, err := p.Service.ListIndexes(ctx, nr.AccountID, database, cg, filter, page)
 	if err != nil {
 		return nil, err
 	}

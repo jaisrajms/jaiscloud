@@ -501,7 +501,7 @@ func TestTransactionExpiredTTL(t *testing.T) {
 // TestTransactionActiveUnderFrozenClock is the guard for the frozen-clock TTL
 // edge: transaction expiry is derived from the emulator's business clock, so
 // while the clock is frozen a transaction never crosses its TTL. This is the
-// documented do-not-rely behaviour (GCP-TESTABILITY.md §7) — the test pins it so
+// documented do-not-rely behaviour (docs/gcp/testability.md §7) — the test pins it so
 // an accidental switch to wall-clock expiry cannot slip in silently.
 func TestTransactionActiveUnderFrozenClock(t *testing.T) {
 	client, cleanup := testServer(t)

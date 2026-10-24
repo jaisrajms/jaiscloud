@@ -1,0 +1,34 @@
+{
+  "index": 134,
+  "service": "monitoring",
+  "op": "mon_notification_channel_create",
+  "method": "POST",
+  "path": "/v3/projects/<project>/notificationChannels",
+  "status": 200,
+  "request": {
+    "displayName": "jaiscloud differential notify",
+    "enabled": true,
+    "labels": {
+      "topic": "projects/<project>/topics/<notifyTopic>"
+    },
+    "type": "pubsub"
+  },
+  "response": {
+    "creationRecord": {
+      "mutateTime": "<time>"
+    },
+    "displayName": "jaiscloud differential notify",
+    "enabled": true,
+    "labels": {
+      "topic": "projects/<project>/topics/<notifyTopic>"
+    },
+    "mutationRecords": [
+      {
+        "mutateTime": "<time>"
+      }
+    ],
+    "name": "projects/<project>/notificationChannels/<notificationChannelId>",
+    "type": "pubsub"
+  }
+}
+

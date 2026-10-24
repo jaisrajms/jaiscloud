@@ -1,0 +1,26 @@
+{
+  "index": 182,
+  "service": "pubsub",
+  "op": "redel_sub_create",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-redel-sub-<suffix>",
+  "status": 200,
+  "request": {
+    "ackDeadlineSeconds": 60,
+    "enableMessageOrdering": true,
+    "topic": "projects/<project>/topics/conf-pubsub-redel-<suffix>"
+  },
+  "response": {
+    "ackDeadlineSeconds": 60,
+    "enableMessageOrdering": true,
+    "expirationPolicy": {
+      "ttl": "2678400s"
+    },
+    "messageRetentionDuration": "604800s",
+    "name": "projects/<project>/subscriptions/conf-pubsub-redel-sub-<suffix>",
+    "pushConfig": {},
+    "state": "ACTIVE",
+    "topic": "projects/<project>/topics/conf-pubsub-redel-<suffix>"
+  }
+}
+

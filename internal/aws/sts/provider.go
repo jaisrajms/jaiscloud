@@ -78,8 +78,7 @@ func (p *STSProvider) GetCallerIdentity(_ context.Context, nr *model.NormalizedR
 	// Check if we have a stored session for this access key (LSIA/ASIA assumed-role creds).
 	if nr.AccessKey != "" {
 		if sess, ok := p.store.GetSession(nr.AccessKey); ok && sess.RoleName != "" {
-			arnStr := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s",
-				nr.AccountID, sess.RoleName, sess.RoleSessionName)
+			arnStr := awsarn.ResourceID("", nr.AccountID)("sts-assumed-role", sess.RoleName+"/"+sess.RoleSessionName)
 			return provider.OK(map[string]any{
 				"Account": nr.AccountID,
 				"Arn":     arnStr,
@@ -204,7 +203,7 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 	})
 
 	// AssumedRoleUser.Arn uses the TARGET account (fix for §11.1.2).
-	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", targetAccount, roleName, sessionName)
+	assumedArn := awsarn.ResourceID("", targetAccount)("sts-assumed-role", roleName+"/"+sessionName)
 
 	return provider.OK(map[string]any{
 		"Credentials": map[string]any{
@@ -247,7 +246,7 @@ func (p *STSProvider) AssumeRoleWithWebIdentity(_ context.Context, nr *model.Nor
 		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
 	}
 	expiry := clock.Now().Add(time.Duration(durationSecs) * time.Second)
-	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", targetAccount, roleName, sessionName)
+	assumedArn := awsarn.ResourceID("", targetAccount)("sts-assumed-role", roleName+"/"+sessionName)
 	_ = p.store.StoreSession(accessKey, SessionConfig{
 		Account:         targetAccount,
 		RoleName:        roleName,
@@ -284,7 +283,7 @@ func (p *STSProvider) AssumeRoleWithSAML(_ context.Context, nr *model.Normalized
 		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
 	}
 	expiry := clock.Now().Add(time.Duration(durationSecs) * time.Second)
-	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/saml-session", targetAccount, roleName)
+	assumedArn := awsarn.ResourceID("", targetAccount)("sts-assumed-role", roleName+"/saml-session")
 	_ = p.store.StoreSession(accessKey, SessionConfig{
 		Account:         targetAccount,
 		RoleName:        roleName,

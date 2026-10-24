@@ -51,13 +51,13 @@ func TestGenerateAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAccessToken: %v", err)
 	}
-	if !strings.HasPrefix(token, AccessTokenPrefix) {
-		t.Fatalf("token %q does not carry the emulator prefix", token)
+	if strings.Count(token, ".") != 2 {
+		t.Fatalf("access token %q is not an opaque 3-part JWT", token)
 	}
 	if expires.Before(before.Add(59*time.Minute)) || expires.After(before.Add(61*time.Minute)) {
 		t.Fatalf("expireTime %v not ~1h from now", expires)
 	}
-	claims := jwtClaims(t, strings.TrimPrefix(token, AccessTokenPrefix))
+	claims := jwtClaims(t, token)
 	if claims["email"] != testEmail || claims["sub"] != testEmail {
 		t.Errorf("identity claims = %v", claims)
 	}
@@ -81,7 +81,7 @@ func TestGenerateAccessTokenDefaultLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAccessToken: %v", err)
 	}
-	claims := jwtClaims(t, strings.TrimPrefix(token, AccessTokenPrefix))
+	claims := jwtClaims(t, token)
 	exp, _ := claims["exp"].(float64)
 	iat, _ := claims["iat"].(float64)
 	if exp-iat != 3600 {

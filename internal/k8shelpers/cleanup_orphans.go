@@ -14,6 +14,12 @@ import (
 type CleanupConfig struct {
 	Namespace string
 
+	// Namespaces, when non-empty, are swept in addition to Namespace. It backs
+	// engines with one namespace per resource: resolve the owned namespaces with
+	// ListManagedNamespaces and pass them here. Duplicates and empty entries are
+	// ignored.
+	Namespaces []string
+
 	// InstanceID filters Jobs to only those owned by this JaisCloud instance.
 	// Jobs labeled with a different InstanceID are skipped.
 	InstanceID string
@@ -33,25 +39,27 @@ type CleanupConfig struct {
 	OnUnownedPod func(pod *corev1.Pod) (delete bool)
 }
 
-// CleanupOrphans runs a startup sweep across:
+// CleanupOrphans runs a startup sweep across every configured namespace over:
 //  1. batchv1.Jobs matching app.kubernetes.io/managed-by=jaiscloud.
 //     Terminal Jobs invoke OnTerminalJob and are deleted.
 //     Suspended Jobs are unsuspended (re-adopted).
 //  2. Each cfg.OrphanSelectors — for pods matching each selector with
 //     empty OwnerReferences, OnUnownedPod is called.
 func CleanupOrphans(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig) error {
-	if err := sweepJobs(ctx, k8s, cfg); err != nil {
-		slog.Warn("k8shelpers: CleanupOrphans job sweep error", "err", err)
-	}
-	for _, sel := range cfg.OrphanSelectors {
-		if err := sweepOrphanPods(ctx, k8s, cfg, sel); err != nil {
-			slog.Warn("k8shelpers: CleanupOrphans pod sweep error", "selector", sel, "err", err)
+	for _, ns := range uniqueNamespaces(cfg.Namespace, cfg.Namespaces) {
+		if err := sweepJobs(ctx, k8s, cfg, ns); err != nil {
+			slog.Warn("k8shelpers: CleanupOrphans job sweep error", "namespace", ns, "err", err)
+		}
+		for _, sel := range cfg.OrphanSelectors {
+			if err := sweepOrphanPods(ctx, k8s, cfg, ns, sel); err != nil {
+				slog.Warn("k8shelpers: CleanupOrphans pod sweep error", "namespace", ns, "selector", sel, "err", err)
+			}
 		}
 	}
 	return nil
 }
 
-func sweepJobs(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig) error {
+func sweepJobs(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig, namespace string) error {
 	sel := "app.kubernetes.io/managed-by=jaiscloud"
 	if cfg.InstanceID != "" {
 		sel += ",jaiscloud.io/instance-id=" + cfg.InstanceID
@@ -59,7 +67,7 @@ func sweepJobs(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig)
 
 	var continueToken string
 	for {
-		list, err := k8s.BatchV1().Jobs(cfg.Namespace).List(ctx, metav1.ListOptions{
+		list, err := k8s.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: sel,
 			Limit:         500,
 			Continue:      continueToken,
@@ -82,7 +90,7 @@ func sweepJobs(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig)
 					cfg.OnTerminalJob(job.Name, state, reason)
 				}
 				propagation := metav1.DeletePropagationForeground
-				_ = k8s.BatchV1().Jobs(cfg.Namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
+				_ = k8s.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
 					PropagationPolicy: &propagation,
 				})
 				continue
@@ -93,7 +101,7 @@ func sweepJobs(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig)
 				suspended := false
 				patch := job.DeepCopy()
 				patch.Spec.Suspend = &suspended
-				_, err := k8s.BatchV1().Jobs(cfg.Namespace).Update(ctx, patch, metav1.UpdateOptions{})
+				_, err := k8s.BatchV1().Jobs(namespace).Update(ctx, patch, metav1.UpdateOptions{})
 				if err != nil {
 					slog.Warn("k8shelpers: failed to unsuspend job", "job", job.Name, "err", err)
 				} else {
@@ -110,8 +118,8 @@ func sweepJobs(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig)
 	return nil
 }
 
-func sweepOrphanPods(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig, selector string) error {
-	pods, err := k8s.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
+func sweepOrphanPods(ctx context.Context, k8s kubernetes.Interface, cfg CleanupConfig, namespace, selector string) error {
+	pods, err := k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
 	if err != nil {
@@ -127,8 +135,8 @@ func sweepOrphanPods(ctx context.Context, k8s kubernetes.Interface, cfg CleanupC
 			shouldDelete = cfg.OnUnownedPod(pod)
 		}
 		if shouldDelete {
-			_ = k8s.CoreV1().Pods(cfg.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-			slog.Info("k8shelpers: deleted orphan pod", "pod", pod.Name, "selector", selector)
+			_ = k8s.CoreV1().Pods(namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+			slog.Info("k8shelpers: deleted orphan pod", "pod", pod.Name, "namespace", namespace, "selector", selector)
 		}
 	}
 	return nil

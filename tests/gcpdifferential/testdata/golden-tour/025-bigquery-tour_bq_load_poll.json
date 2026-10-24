@@ -1,0 +1,85 @@
+{
+  "index": 25,
+  "service": "bigquery",
+  "op": "tour_bq_load_poll",
+  "method": "GET",
+  "path": "/bigquery/v2/projects/<project>/jobs/<jobId>?location=US",
+  "status": 200,
+  "response": {
+    "configuration": {
+      "jobType": "LOAD",
+      "load": {
+        "destinationTable": {
+          "datasetId": "<dataset>",
+          "projectId": "<project>",
+          "tableId": "<table>_load"
+        },
+        "schema": {
+          "fields": [
+            {
+              "name": "id",
+              "type": "INTEGER"
+            },
+            {
+              "name": "name",
+              "type": "STRING"
+            }
+          ]
+        },
+        "sourceFormat": "NEWLINE_DELIMITED_JSON",
+        "sourceUris": [
+          "gs://<bucket>/load/rows.ndjson"
+        ],
+        "writeDisposition": "WRITE_APPEND"
+      }
+    },
+    "etag": "<etag>",
+    "id": "<project>:US.<jobId>",
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#job",
+    "principal_subject": "<principalSubject>",
+    "selfLink": "<selfLink>",
+    "statistics": {
+      "completionRatio": 1,
+      "creationTime": "<time>",
+      "endTime": "<time>",
+      "finalExecutionDurationMs": "405",
+      "load": {
+        "badRecords": "0",
+        "inputFileBytes": "40",
+        "inputFiles": "1",
+        "outputBytes": "22",
+        "outputRows": "2",
+        "timeline": [
+          {
+            "activeUnits": "1",
+            "completedUnits": "0",
+            "elapsedMs": "533",
+            "estimatedRunnableUnits": "0",
+            "pendingUnits": "1",
+            "totalSlotMs": "<totalSlotMs>"
+          },
+          {
+            "completedUnits": "1",
+            "elapsedMs": "597",
+            "estimatedRunnableUnits": "0",
+            "pendingUnits": "0",
+            "shuffleRamUsageRatio": 0.0000012286702838719824,
+            "totalSlotMs": "<totalSlotMs>"
+          }
+        ]
+      },
+      "reservation_id": "default-pipeline",
+      "startTime": "<time>",
+      "totalSlotMs": "<totalSlotMs>"
+    },
+    "status": {
+      "state": "DONE"
+    },
+    "user_email": "<userEmail>"
+  }
+}
+

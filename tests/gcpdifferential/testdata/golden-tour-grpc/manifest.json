@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "project": "<project>",
+  "ops": 20,
+  "services": [
+    "firestore",
+    "kms",
+    "logging",
+    "pubsub",
+    "secretmanager"
+  ],
+  "files": [
+    {
+      "file": "000-kms-tour_kms_encrypt.json",
+      "op": "tour_kms_encrypt",
+      "sha256": "25fa6583d183ab791c25f84b73a418ed5f10f6b6339311d17f8947de32a0696b",
+      "status": 0
+    },
+    {
+      "file": "001-kms-tour_kms_decrypt.json",
+      "op": "tour_kms_decrypt",
+      "sha256": "03fe765c3492c61ea92d53d9bef08fdb5faa0daedad157a2e3107a1ad10f45cf",
+      "status": 0
+    },
+    {
+      "file": "002-kms-tour_kms_asym_get_public_key.json",
+      "op": "tour_kms_asym_get_public_key",
+      "sha256": "42b22e1dd7d2c1edf5d2b2bc50e0981bf6d5bcbd955a88508067eae1c1bd6cc3",
+      "status": 0
+    },
+    {
+      "file": "003-kms-tour_kms_asym_sign.json",
+      "op": "tour_kms_asym_sign",
+      "sha256": "9e5cfce9a608ee93508b3d4ec5022767abd47da484733616aa7f019d8ceb3fe7",
+      "status": 0
+    },
+    {
+      "file": "004-secretmanager-tour_secret_create.json",
+      "op": "tour_secret_create",
+      "sha256": "fe68c00fd9f80f300dcbc62ec6f09c49175fab1f7cff7ea4cce75b3e4a155d2e",
+      "status": 0
+    },
+    {
+      "file": "005-secretmanager-tour_secret_add_version.json",
+      "op": "tour_secret_add_version",
+      "sha256": "32b46a9fe97e87eab0cd16c31c2bb622f112fa6c6512973f526720ac40ce01e9",
+      "status": 0
+    },
+    {
+      "file": "006-secretmanager-tour_secret_access.json",
+      "op": "tour_secret_access",
+      "sha256": "d33bfb6ca5c7dc2f445a481914f1dbdf38eb2f58650e13fdbb71f23a18d53617",
+      "status": 0
+    },
+    {
+      "file": "007-secretmanager-tour_secret_list_versions.json",
+      "op": "tour_secret_list_versions",
+      "sha256": "4d2d19e52075938336c0ff36fd4aaa6ebec4b6bd0dc3afc48f29ea2a63ac90b3",
+      "status": 0
+    },
+    {
+      "file": "008-firestore-tour_fs_tx_seed.json",
+      "op": "tour_fs_tx_seed",
+      "sha256": "d09cfba6c9f8ab10b78f75ccc55c03c63c5e3c27d377070766b696a944df2aa2",
+      "status": 0
+    },
+    {
+      "file": "009-firestore-tour_fs_tx_commit.json",
+      "op": "tour_fs_tx_commit",
+      "sha256": "7495d8313952b8474459c9c1102bc22a2c948c97b73089950ca3e8cebc234beb",
+      "status": 0
+    },
+    {
+      "file": "010-firestore-tour_fs_page_seed.json",
+      "op": "tour_fs_page_seed",
+      "sha256": "d4e40f66c20653f7553f42d89fe7989ab3ba90b3a74b3f2a0c182d82c160144c",
+      "status": 0
+    },
+    {
+      "file": "011-firestore-tour_fs_query_page_1.json",
+      "op": "tour_fs_query_page_1",
+      "sha256": "f5348bcbd96cb773d942d76096ccbae4f5720322dd0f909b99cf06c65fcee8fb",
+      "status": 0
+    },
+    {
+      "file": "012-firestore-tour_fs_query_page_2.json",
+      "op": "tour_fs_query_page_2",
+      "sha256": "6797c9f6ab4549b658a3f100a884f28537ceb2f4ea76a69a5de4ef1edc71690b",
+      "status": 0
+    },
+    {
+      "file": "013-firestore-tour_fs_query_page_3.json",
+      "op": "tour_fs_query_page_3",
+      "sha256": "c2d5617f011c03182d0e761785a6b0b2c86144a7d5f87d4fdfe3e70c7548faff",
+      "status": 0
+    },
+    {
+      "file": "014-logging-tour_log_write.json",
+      "op": "tour_log_write",
+      "sha256": "21779ebee0c1ca0a7bad0a641ad124942db632e76ce5bfe61a73f727a5f656fe",
+      "status": 0
+    },
+    {
+      "file": "015-logging-tour_log_list.json",
+      "op": "tour_log_list",
+      "sha256": "9f74d1f8453d0a07a545705b1b29a3bb6da60425cbb1574d12313381f1753577",
+      "status": 0
+    },
+    {
+      "file": "016-pubsub-tour_pubsub_topic_create.json",
+      "op": "tour_pubsub_topic_create",
+      "sha256": "99d98d6f99416caec2a219d02c798d2b5def7ffddf5bf9b02462ad7b008f81d3",
+      "status": 0
+    },
+    {
+      "file": "017-pubsub-tour_pubsub_publish.json",
+      "op": "tour_pubsub_publish",
+      "sha256": "0436befc6029a7fc09380b1e06146650d5317bfbb81b874d3645106e36934dd7",
+      "status": 0
+    },
+    {
+      "file": "018-pubsub-tour_pubsub_iam_get.json",
+      "op": "tour_pubsub_iam_get",
+      "sha256": "33c7642a6255d9ffda53c98942a5b7809dba9514b35285983c9113207eed9adb",
+      "status": 0
+    },
+    {
+      "file": "019-pubsub-tour_pubsub_iam_set.json",
+      "op": "tour_pubsub_iam_set",
+      "sha256": "4cbc9e4ec4a83ab971933ad443911e645c494d9e20d715adb3824002dd63b729",
+      "status": 0
+    }
+  ]
+}
+

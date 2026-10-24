@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sort"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -105,7 +107,15 @@ func (s *PostgresStore) NamespaceExists(ctx context.Context, namespace string) (
 }
 
 func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	// Retry a transient conflict (40P01) rather than surfacing a benign race
+	// as a 500. The transaction is Read Committed — see CommitTable.
+	return storeutil.RetrySerializable(ctx, func() (NamespacePropertiesUpdate, error) {
+		return s.updateNamespacePropertiesOnce(ctx, namespace, removals, updates)
+	})
+}
+
+func (s *PostgresStore) updateNamespacePropertiesOnce(ctx context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return NamespacePropertiesUpdate{}, err
 	}
@@ -234,12 +244,28 @@ func (s *PostgresStore) DropTable(ctx context.Context, namespace, name string) e
 	return nil
 }
 
-// CommitTable mirrors MemoryStore's version: a Serializable transaction with
+// CommitTable mirrors MemoryStore's version: a Read Committed transaction with
 // SELECT ... FOR UPDATE row-locks the table for the duration of mutate, so a
 // concurrent commit to the same table blocks instead of silently losing the
 // other's update.
+//
+// The transaction is deliberately Read Committed, not Serializable: under
+// Serializable every waiter that acquires the row lock after the holder
+// commits is aborted with 40001 ("could not serialize access due to concurrent
+// update"), so N concurrent commits need up to N retries and the fixed retry
+// budget fails the unlucky ones. The FOR UPDATE row lock alone serializes the
+// read-modify-write, and under Read Committed the waiter re-reads the row the
+// holder just committed, which is exactly the semantics mutate expects.
 func (s *PostgresStore) CommitTable(ctx context.Context, namespace, name string, mutate func(Table) (Table, error)) (Table, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	// Retry a transient conflict (40P01) rather than surfacing a benign race
+	// as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.commitTableOnce(ctx, namespace, name, mutate)
+	})
+}
+
+func (s *PostgresStore) commitTableOnce(ctx context.Context, namespace, name string, mutate func(Table) (Table, error)) (Table, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Table{}, err
 	}
@@ -274,10 +300,19 @@ func (s *PostgresStore) CommitTable(ctx context.Context, namespace, name string,
 	return next, nil
 }
 
-// RenameTable is atomic: a Serializable transaction row-locks the source (and
-// probes the destination) so a concurrent commit/rename can't race it.
+// RenameTable is atomic: a Read Committed transaction row-locks the source
+// (and probes the destination) so a concurrent commit/rename can't race it
+// (see CommitTable for why the isolation level is Read Committed).
 func (s *PostgresStore) RenameTable(ctx context.Context, srcNamespace, srcName, dstNamespace, dstName string) (Table, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	// Retry a transient conflict (40P01) rather than surfacing a benign race
+	// as a 500. The transaction is Read Committed — see CommitTable.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.renameTableOnce(ctx, srcNamespace, srcName, dstNamespace, dstName)
+	})
+}
+
+func (s *PostgresStore) renameTableOnce(ctx context.Context, srcNamespace, srcName, dstNamespace, dstName string) (Table, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Table{}, err
 	}

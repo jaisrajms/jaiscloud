@@ -1,0 +1,25 @@
+# Behavioural depth record - tasks (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: tasks
+classes:
+  p2:
+    state: present
+    suites: [sdk-tasks]
+    note: "queue rate-limit contention under dispatch"
+  p3:
+    state: present
+    suites: [sdk-tasks]
+    note: "googleapi error envelopes plus run/retry semantics"
+  p4:
+    state: present
+    suites: [sdk-tasks]
+    note: "pageSize/pageToken walk over projects.locations.queues.list, asserting the documented lexicographical queue order across page boundaries (the kit's cross-page order check, DC17), and over ...queues.tasks.list (tasks in any order, compared as a set); the queues-list filter is asserted separately for the documented equality (`=`) and contains (`:`) operators, the state field and a filtered paged walk (DC16)"
+  p5:
+    state: present
+    suites: [sdk-tasks]
+    note: "a twenty-five-queue and twenty-five-task collection walked at page size 4, so the whole cursor chain over a large collection is exercised rather than one response"

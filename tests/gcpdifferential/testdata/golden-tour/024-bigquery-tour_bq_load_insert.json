@@ -1,0 +1,73 @@
+{
+  "index": 24,
+  "service": "bigquery",
+  "op": "tour_bq_load_insert",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/jobs",
+  "status": 200,
+  "request": {
+    "configuration": {
+      "load": {
+        "destinationTable": {
+          "datasetId": "<dataset>",
+          "projectId": "<project>",
+          "tableId": "<table>_load"
+        },
+        "sourceFormat": "NEWLINE_DELIMITED_JSON",
+        "sourceUris": [
+          "gs://<bucket>/load/rows.ndjson"
+        ],
+        "writeDisposition": "WRITE_APPEND"
+      }
+    },
+    "jobReference": {}
+  },
+  "response": {
+    "configuration": {
+      "jobType": "LOAD",
+      "load": {
+        "destinationTable": {
+          "datasetId": "<dataset>",
+          "projectId": "<project>",
+          "tableId": "<table>_load"
+        },
+        "schema": {
+          "fields": [
+            {
+              "name": "id",
+              "type": "INTEGER"
+            },
+            {
+              "name": "name",
+              "type": "STRING"
+            }
+          ]
+        },
+        "sourceFormat": "NEWLINE_DELIMITED_JSON",
+        "sourceUris": [
+          "gs://<bucket>/load/rows.ndjson"
+        ],
+        "writeDisposition": "WRITE_APPEND"
+      }
+    },
+    "etag": "<etag>",
+    "id": "<project>:US.<jobId>",
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#job",
+    "principal_subject": "<principalSubject>",
+    "selfLink": "<selfLink>",
+    "statistics": {
+      "creationTime": "<time>",
+      "reservation_id": "default-pipeline",
+      "startTime": "<time>"
+    },
+    "status": {
+      "state": "RUNNING"
+    },
+    "user_email": "<userEmail>"
+  }
+}
+

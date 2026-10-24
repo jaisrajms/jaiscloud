@@ -10,11 +10,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	core "jaiscloud/internal/gcp/service/metastore"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (which
@@ -56,6 +56,14 @@ func metadataImportToProto(mi metastorestore.MetadataImport, project string) *me
 	return out
 }
 
+// federationToProto renders a stored federation as the proto Federation, driven
+// by the core's FederationJSON map so the REST and gRPC renders cannot drift.
+func federationToProto(f metastorestore.Federation, project string) *metastorepb.Federation {
+	out := &metastorepb.Federation{}
+	unmarshalProtoJSON(core.FederationJSON(f, project), out)
+	return out
+}
+
 // operationToProto renders a stored operation as the proto
 // google.longrunning.Operation, packing the typed metadata and the
 // caller-supplied response message (a Service/Backup/MetadataImport, or Empty
@@ -64,13 +72,13 @@ func metadataImportToProto(mi metastorestore.MetadataImport, project string) *me
 // keeps the original output exactly.
 func operationToProto(op metastorestore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
 	meta := &metastorepb.OperationMetadata{
-		CreateTime: timestamppb.New(op.CreateTime),
+		CreateTime: timestamp.Proto(op.CreateTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
 	}
 	if op.Done {
-		meta.EndTime = timestamppb.New(op.EndTime)
+		meta.EndTime = timestamp.Proto(op.EndTime)
 	}
 	metadata, err := anypb.New(meta)
 	if err != nil {
@@ -112,6 +120,8 @@ func operationResponse(op metastorestore.Operation) proto.Message {
 		out = &metastorepb.Backup{}
 	case core.MetadataImportTypeURL:
 		out = &metastorepb.MetadataImport{}
+	case core.FederationTypeURL:
+		out = &metastorepb.Federation{}
 	default:
 		return emptyResponse()
 	}

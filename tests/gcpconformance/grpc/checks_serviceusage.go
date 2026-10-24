@@ -14,10 +14,10 @@ import (
 
 // serviceUsageChecks covers the Service Usage v1 surface
 // (google.api.serviceusage.v1.ServiceUsage) via the official generated
-// cloud.google.com/go/serviceusage/apiv1 client: GetService, ListServices, and
-// the EnableService / DisableService / BatchEnableServices long-running
-// operations (the emulator completes them inline, so the client's Wait observes
-// the response without polling).
+// cloud.google.com/go/serviceusage/apiv1 client: GetService, ListServices,
+// BatchGetServices, and the EnableService / DisableService /
+// BatchEnableServices long-running operations (the emulator completes them
+// inline, so the client's Wait observes the response without polling).
 //
 // Every probe is self-contained and run-unique (cfg.ResourceName), so a
 // long-lived emulator never sees cross-run collisions.
@@ -26,6 +26,7 @@ func serviceUsageChecks() []Check {
 		{Service: "serviceusage", RPC: "EnableService", Method: "EnableService", KeyField: "LRO done + state ENABLED", Run: checkSUEnableService},
 		{Service: "serviceusage", RPC: "GetService", Method: "GetService", KeyField: "name/state/config.name round-trip", Run: checkSUGetService},
 		{Service: "serviceusage", RPC: "ListServices", Method: "ListServices", KeyField: "enabled service present", Run: checkSUListServices},
+		{Service: "serviceusage", RPC: "BatchGetServices", Method: "BatchGetServices", KeyField: "enabled + absent states, order preserved", Run: checkSUBatchGetServices},
 		{Service: "serviceusage", RPC: "BatchEnableServices", Method: "BatchEnableServices", KeyField: "LRO done + both services ENABLED", Run: checkSUBatchEnableServices},
 		{Service: "serviceusage", RPC: "DisableService", Method: "DisableService", KeyField: "LRO done + state DISABLED", Run: checkSUDisableService},
 	}
@@ -138,7 +139,41 @@ func checkSUListServices(ctx context.Context, cfg Config) error {
 	}
 }
 
-// Check 4: BatchEnableServices returns a done LRO with both services enabled.
+// Check 4: BatchGetServices returns one entry per requested name, preserving the
+// requested order, with the enabled service ENABLED and a never-enabled one
+// DISABLED (matching GetService, which defaults an unknown id to DISABLED).
+func checkSUBatchGetServices(ctx context.Context, cfg Config) error {
+	client, err := newServiceUsageClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	enabled := serviceUsageName(cfg, "gcpc-grpc-su-bget-a")
+	absent := serviceUsageName(cfg, "gcpc-grpc-su-bget-b")
+	if _, err := client.EnableService(ctx, &serviceusagepb.EnableServiceRequest{Name: enabled}); err != nil {
+		return fmt.Errorf("EnableService: %w", err)
+	}
+	resp, err := client.BatchGetServices(ctx, &serviceusagepb.BatchGetServicesRequest{
+		Parent: fmt.Sprintf("projects/%s", cfg.Project),
+		Names:  []string{enabled, absent},
+	})
+	if err != nil {
+		return fmt.Errorf("BatchGetServices: %w", err)
+	}
+	if len(resp.GetServices()) != 2 {
+		return fmt.Errorf("BatchGetServices returned %d services, want 2", len(resp.GetServices()))
+	}
+	if got := resp.GetServices()[0]; got.GetName() != enabled || got.GetState() != serviceusagepb.State_ENABLED {
+		return fmt.Errorf("BatchGetServices[0] = %+v, want enabled %q", got, enabled)
+	}
+	if got := resp.GetServices()[1]; got.GetName() != absent || got.GetState() != serviceusagepb.State_DISABLED {
+		return fmt.Errorf("BatchGetServices[1] = %+v, want disabled %q", got, absent)
+	}
+	return nil
+}
+
+// Check 5: BatchEnableServices returns a done LRO with both services enabled.
 func checkSUBatchEnableServices(ctx context.Context, cfg Config) error {
 	client, err := newServiceUsageClient(ctx, cfg)
 	if err != nil {
@@ -183,7 +218,7 @@ func checkSUBatchEnableServices(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 5: DisableService returns a done LRO with the service DISABLED.
+// Check 6: DisableService returns a done LRO with the service DISABLED.
 func checkSUDisableService(ctx context.Context, cfg Config) error {
 	client, err := newServiceUsageClient(ctx, cfg)
 	if err != nil {

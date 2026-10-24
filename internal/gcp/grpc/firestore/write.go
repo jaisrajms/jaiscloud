@@ -8,11 +8,11 @@ import (
 
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // writeStream carries the per-stream Write state. The Write RPC is a
@@ -131,7 +131,7 @@ func (ws *writeStream) handleWrites(req *firestorepb.WriteRequest) error {
 	return ws.stream.Send(&firestorepb.WriteResponse{
 		StreamToken:  EncodeResumeToken(token),
 		WriteResults: wr,
-		CommitTime:   timestamppb.New(commitTime),
+		CommitTime:   timestamp.Proto(commitTime),
 	})
 }
 

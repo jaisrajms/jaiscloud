@@ -1,0 +1,29 @@
+{
+  "index": 48,
+  "service": "bigquery",
+  "op": "dataset_create_dup",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/datasets",
+  "status": 409,
+  "request": {
+    "datasetReference": {
+      "datasetId": "<dataset>",
+      "projectId": "<project>"
+    }
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "Already Exists: Dataset <project>:<dataset>",
+          "reason": "duplicate"
+        }
+      ],
+      "message": "Already Exists: Dataset <project>:<dataset>",
+      "status": "ALREADY_EXISTS"
+    }
+  }
+}
+

@@ -12,11 +12,11 @@ import (
 	"jaiscloud/internal/clock"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // EncodeResumeToken encodes a monotonic sequence number into an 8-byte resume
@@ -214,8 +214,11 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 	// buffered on the stream subscription and delivered by handleChange, so
 	// advancing the cursor to it can never advertise a delta that was not (or
 	// will not be) delivered — unlike reading the head after the snapshot, which
-	// could run past a buffered event. Reads that land between this position and
-	// the snapshot store-read are seen twice (snapshot + delta), never lost.
+	// could run past a buffered event. A write that lands between this position
+	// and the snapshot store-read is reflected in the snapshot (or replayed) and
+	// is also buffered as a live delta; handleChange drops any live event at or
+	// below the target's cursor, so such a write is delivered exactly once and
+	// none is lost.
 	base := ls.srv.svc.CurrentSeq()
 
 	// A valid, unexpired resume token replays only this target's deltas after
@@ -265,7 +268,7 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 			TargetChangeType: firestorepb.TargetChange_CURRENT,
 			TargetIds:        []int32{id},
 			ResumeToken:      EncodeResumeToken(lt.seq),
-			ReadTime:         timestamppb.New(ls.nextReadTime()),
+			ReadTime:         timestamp.Proto(ls.nextReadTime()),
 		},
 	}}); err != nil {
 		return err
@@ -286,7 +289,7 @@ func (ls *listenSession) sendNoChange() error {
 	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
 		TargetChange: &firestorepb.TargetChange{
 			TargetChangeType: firestorepb.TargetChange_NO_CHANGE,
-			ReadTime:         timestamppb.New(ls.nextReadTime()),
+			ReadTime:         timestamp.Proto(ls.nextReadTime()),
 			ResumeToken:      EncodeResumeToken(ls.allTargetsSeq()),
 		},
 	}})
@@ -348,13 +351,22 @@ func (ls *listenSession) handleChange(ev firestoreprovider.ChangeEvent) {
 	aggs := make(map[string]*agg)
 	anyChanged := false
 	for id, t := range ls.targets {
+		// A live event at or below the target's delivered cursor was already
+		// represented in the target's snapshot or resume replay; re-emitting it
+		// would deliver the same change twice. This window is real: the change
+		// subscription is registered before the snapshot/replay position is
+		// captured, so a write in between is both snapshotted and buffered as a
+		// live delta. Real Firestore delivers each change exactly once per
+		// target, so skip it. Every event with Seq <= t.seq is already in the
+		// target's view, so nothing is lost.
+		if ev.Seq <= t.seq {
+			continue
+		}
 		deltas, changed := ls.computeChange(t, ev)
 		if !changed {
 			continue
 		}
-		if ev.Seq > t.seq {
-			t.seq = ev.Seq
-		}
+		t.seq = ev.Seq
 		anyChanged = true
 		for _, d := range deltas {
 			a := aggs[d.name]

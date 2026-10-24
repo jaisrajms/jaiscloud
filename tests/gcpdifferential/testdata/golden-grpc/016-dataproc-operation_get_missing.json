@@ -1,0 +1,17 @@
+{
+  "index": 16,
+  "service": "dataproc",
+  "op": "operation_get_missing",
+  "method": "google.longrunning.Operations/GetOperation",
+  "path": "projects/<project>/regions/us-central1/operations/<operation>",
+  "transport": "grpc",
+  "status": 5,
+  "request": {
+    "name": "projects/<project>/regions/us-central1/operations/<operation>"
+  },
+  "response": {
+    "code": 5,
+    "message": "Operation not found <project>/<missing>"
+  }
+}
+

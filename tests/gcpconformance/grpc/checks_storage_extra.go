@@ -76,8 +76,10 @@ func storageExtraChecks() []Check {
 // by deleting its bucket) never affects these probes.
 func storageObjBucket(cfg Config) string { return cfg.ResourceName("gcpc-grpc-storage") }
 
-// storageVersionedBucket backs the RestoreObject soft-delete probe.
-func storageVersionedBucket(cfg Config) string { return cfg.ResourceName("gcpc-grpc-storage-ver") }
+// storageSoftDeleteBucket backs the RestoreObject probe. It must NOT have
+// Object Versioning enabled: only a soft-deleted generation is restorable, and
+// a versioned delete archives the generation instead.
+func storageSoftDeleteBucket(cfg Config) string { return cfg.ResourceName("gcpc-grpc-storage-ver") }
 
 // ensureStorageBucket makes a bucket exist idempotently, creating it with the
 // supplied attrs when absent.
@@ -468,31 +470,36 @@ func checkStorageRestoreObject(ctx context.Context, cfg Config) error {
 	}
 	defer client.Close()
 
-	bucket := storageVersionedBucket(cfg)
-	if err := ensureStorageBucket(ctx, client, cfg, bucket, &storage.BucketAttrs{VersioningEnabled: true}); err != nil {
+	bucket := storageSoftDeleteBucket(cfg)
+	if err := ensureStorageBucket(ctx, client, cfg, bucket, nil); err != nil {
 		return err
 	}
 	object := cfg.ResourceName("gcpc-grpc-restore-obj")
-	first, err := putStorageObject(ctx, client, bucket, object, "text/plain", []byte("version-one"))
+	first, err := putStorageObject(ctx, client, bucket, object, "text/plain", []byte("restorable-payload"))
 	if err != nil {
 		return err
 	}
-	if _, err := putStorageObject(ctx, client, bucket, object, "text/plain", []byte("version-two")); err != nil {
-		return err
+	// The bucket's default soft delete policy retains a deleted generation.
+	if err := client.Bucket(bucket).Object(object).Delete(ctx); err != nil {
+		return fmt.Errorf("delete object: %w", err)
+	}
+	if _, err := client.Bucket(bucket).Object(object).Attrs(ctx); err == nil {
+		return fmt.Errorf("object still live after delete")
 	}
 	restored, err := client.Bucket(bucket).Object(object).Generation(first.Generation).Restore(ctx, &storage.RestoreOptions{})
 	if err != nil {
 		return fmt.Errorf("RestoreObject: %w", err)
 	}
-	if restored.Generation != first.Generation {
-		return fmt.Errorf("RestoreObject generation = %d, want %d", restored.Generation, first.Generation)
+	// A restore creates a new object copy, not the old generation.
+	if restored.Generation == first.Generation {
+		return fmt.Errorf("RestoreObject reused generation %d, want a new one", first.Generation)
 	}
 	got, err := readStorageObject(ctx, client, bucket, object)
 	if err != nil {
 		return err
 	}
-	if string(got) != "version-one" {
-		return fmt.Errorf("content after restore = %q, want version-one", got)
+	if string(got) != "restorable-payload" {
+		return fmt.Errorf("content after restore = %q, want restorable-payload", got)
 	}
 	return nil
 }

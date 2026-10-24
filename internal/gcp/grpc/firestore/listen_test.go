@@ -1218,3 +1218,77 @@ func TestListenUnresumableTokenEmitsReset(t *testing.T) {
 		t.Fatalf("expected NO_CHANGE, got %v", rs[4])
 	}
 }
+
+// fakeListenServer captures the frames handleChange emits without a real gRPC
+// stream, so the exactly-once dedupe can be exercised deterministically (the
+// race it closes depends on goroutine scheduling and cannot be reproduced
+// reliably through a live stream).
+type fakeListenServer struct {
+	grpc.ServerStream
+	mu   sync.Mutex
+	sent []*firestorepb.ListenResponse
+}
+
+func (f *fakeListenServer) Send(r *firestorepb.ListenResponse) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, r)
+	return nil
+}
+
+func (f *fakeListenServer) Recv() (*firestorepb.ListenRequest, error) { return nil, io.EOF }
+
+func (f *fakeListenServer) Context() context.Context { return context.Background() }
+
+func (f *fakeListenServer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sent)
+}
+
+// TestListenHandleChangeDropsAlreadyDeliveredSeq pins the exactly-once dedupe: a
+// live event at or below a target's delivered cursor was already represented in
+// its snapshot or resume replay and must not be emitted again; an event above
+// the cursor must be delivered and advance the cursor.
+func TestListenHandleChangeDropsAlreadyDeliveredSeq(t *testing.T) {
+	store := firestorestore.NewMemoryStore()
+	providerSvc := firestoreprovider.New(store, nil).Service
+	grpcSvc := NewService(providerSvc, "test")
+
+	fake := &fakeListenServer{}
+	const tid int32 = 1
+	docName := listenParent + "/items/x"
+	lt := &listenTarget{
+		documents: []string{docName},
+		seq:       5,
+		view:      map[string]struct{}{docName: {}},
+	}
+	ls := &listenSession{
+		srv:          grpcSvc,
+		stream:       fake,
+		targets:      map[int32]*listenTarget{tid: lt},
+		lastReadTime: time.Now(),
+	}
+
+	newDoc := func(v string) *firestorestore.Document {
+		return &firestorestore.Document{
+			Name:   docName,
+			Fields: map[string]*firestorestore.Value{"v": firestorestore.StringVal(v)},
+		}
+	}
+
+	// A write that raced the snapshot/replay is at or below the cursor: dropped.
+	ls.handleChange(firestoreprovider.ChangeEvent{Seq: 5, Name: docName, Doc: newDoc("dup")})
+	if got := fake.count(); got != 0 {
+		t.Fatalf("event at the cursor delivered %d frames, want 0", got)
+	}
+
+	// A genuinely new event is delivered (DocumentChange + NO_CHANGE).
+	ls.handleChange(firestoreprovider.ChangeEvent{Seq: 6, Name: docName, Doc: newDoc("new")})
+	if got := fake.count(); got == 0 {
+		t.Fatal("event above the cursor was not delivered")
+	}
+	if lt.seq != 6 {
+		t.Fatalf("target seq = %d, want 6", lt.seq)
+	}
+}

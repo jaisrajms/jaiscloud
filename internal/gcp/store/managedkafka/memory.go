@@ -3,6 +3,7 @@ package managedkafka
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -113,6 +114,30 @@ func (s *MemoryStore) ListClusters(_ context.Context, projectID, location string
 	return result, nil
 }
 
+// ListClustersByProject returns every cluster in a project across all
+// locations, sorted by location then name.
+func (s *MemoryStore) ListClustersByProject(_ context.Context, projectID string) ([]Cluster, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Cluster
+	for key, m := range s.clusters {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, c := range m {
+			result = append(result, c)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
 func (s *MemoryStore) CreateTopic(_ context.Context, projectID, location, clusterName string, t Topic) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -193,6 +218,33 @@ func (s *MemoryStore) ListTopics(_ context.Context, projectID, location, cluster
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+// ListTopicsByProject returns every topic in a project across all locations
+// and clusters, sorted by location, cluster, then name.
+func (s *MemoryStore) ListTopicsByProject(_ context.Context, projectID string) ([]Topic, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Topic
+	for key, m := range s.topics {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, t := range m {
+			result = append(result, t)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		if result[i].ClusterName != result[j].ClusterName {
+			return result[i].ClusterName < result[j].ClusterName
+		}
+		return result[i].Name < result[j].Name
+	})
 	return result, nil
 }
 

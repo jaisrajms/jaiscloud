@@ -16,15 +16,21 @@ import (
 // Exchange is one recorded request/response pair. The same type holds the
 // golden (real GCP) and the replayed (emulator) exchange; the normalizer has
 // already folded project/run-specific values before it is stored or compared.
+//
+// Transport is "rest" (implicit, empty in the original REST goldens) or "grpc"
+// (AUD6-1). Status carries the HTTP status code for REST and the numeric
+// google.rpc.Code for gRPC; because a golden is only ever diffed against a
+// replay of the same transport, the two meanings cannot be confused.
 type Exchange struct {
-	Index    int             `json:"index"`
-	Service  string          `json:"service"`
-	Op       string          `json:"op"`
-	Method   string          `json:"method"`
-	Path     string          `json:"path"`
-	Status   int             `json:"status"`
-	Request  json.RawMessage `json:"request,omitempty"`
-	Response json.RawMessage `json:"response,omitempty"`
+	Index     int             `json:"index"`
+	Service   string          `json:"service"`
+	Op        string          `json:"op"`
+	Method    string          `json:"method"`
+	Path      string          `json:"path"`
+	Transport string          `json:"transport,omitempty"`
+	Status    int             `json:"status"`
+	Request   json.RawMessage `json:"request,omitempty"`
+	Response  json.RawMessage `json:"response,omitempty"`
 }
 
 // Manifest lists the golden files with a content hash so a replay can detect a
@@ -158,4 +164,14 @@ func GoldenFiles(dir string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// envOr returns the value of the environment variable key, or def when it is
+// unset or empty. It lives in a non-test file because both the test entry points
+// and the gRPC engine's directory helpers consult the environment.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

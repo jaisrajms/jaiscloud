@@ -11,29 +11,44 @@ import (
 )
 
 // Owns reports whether the Eventarc service handles IAM for this resource name
-// (a trigger or a channel). It lets the shared google.iam.v1.IAMPolicy router
-// dispatch Eventarc IAM alongside Pub/Sub and KMS.
+// (a trigger, a channel, or one of the advanced-surface families). It lets the
+// shared google.iam.v1.IAMPolicy router dispatch Eventarc IAM alongside Pub/Sub
+// and KMS.
 func (s *Service) Owns(resource string) bool {
 	rn := core.ParseName(resource)
-	return rn.Trigger != "" || rn.Channel != ""
+	if rn.Trigger != "" || rn.Channel != "" {
+		return true
+	}
+	_, _, ok := core.AdvancedKindForName(resource)
+	return ok
+}
+
+// iamTarget identifies the resource an IAM request names.
+type iamTarget struct {
+	project, location, id string
+	channel               bool      // a Channel (else a Trigger)
+	advanced              bool      // an advanced-surface family
+	kind                  core.Kind // valid when advanced
 }
 
 // iamTarget resolves an IAM resource name to its owning project, location and
-// resource id, reporting whether it is a trigger (channel=false) or a channel.
-func (s *Service) iamTarget(resource string) (project, location, id string, channel bool, ok bool) {
+// resource id.
+func (s *Service) iamTarget(resource string) (iamTarget, bool) {
 	rn := core.ParseName(resource)
-	project = rn.Project
-	if rn.Trigger != "" {
-		return project, rn.Location, rn.Trigger, false, true
+	switch {
+	case rn.Trigger != "":
+		return iamTarget{project: rn.Project, location: rn.Location, id: rn.Trigger}, true
+	case rn.Channel != "":
+		return iamTarget{project: rn.Project, location: rn.Location, id: rn.Channel, channel: true}, true
 	}
-	if rn.Channel != "" {
-		return project, rn.Location, rn.Channel, true, true
+	if k, id, ok := core.AdvancedKindForName(resource); ok {
+		return iamTarget{project: rn.Project, location: rn.Location, id: id, advanced: true, kind: k}, true
 	}
-	return "", "", "", false, false
+	return iamTarget{}, false
 }
 
 func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyRequest) (*iampb.Policy, error) {
-	project, location, id, channel, ok := s.iamTarget(req.GetResource())
+	t, ok := s.iamTarget(req.GetResource())
 	if !ok {
 		return nil, grpcutil.GRPCStatus(core.InvalidIAMResource())
 	}
@@ -41,10 +56,13 @@ func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyReque
 		pol policy.Policy
 		err error
 	)
-	if channel {
-		pol, err = s.core.ChannelGetIamPolicy(ctx, project, location, id)
-	} else {
-		pol, err = s.core.TriggerGetIamPolicy(ctx, project, location, id)
+	switch {
+	case t.advanced:
+		pol, err = s.core.AdvancedGetIamPolicy(ctx, t.project, t.kind, t.location, t.id)
+	case t.channel:
+		pol, err = s.core.ChannelGetIamPolicy(ctx, t.project, t.location, t.id)
+	default:
+		pol, err = s.core.TriggerGetIamPolicy(ctx, t.project, t.location, t.id)
 	}
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
@@ -53,7 +71,7 @@ func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyReque
 }
 
 func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyRequest) (*iampb.Policy, error) {
-	project, location, id, channel, ok := s.iamTarget(req.GetResource())
+	t, ok := s.iamTarget(req.GetResource())
 	if !ok {
 		return nil, grpcutil.GRPCStatus(core.InvalidIAMResource())
 	}
@@ -62,10 +80,13 @@ func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyReque
 		pol policy.Policy
 		err error
 	)
-	if channel {
-		pol, err = s.core.ChannelSetIamPolicy(ctx, project, location, id, body)
-	} else {
-		pol, err = s.core.TriggerSetIamPolicy(ctx, project, location, id, body)
+	switch {
+	case t.advanced:
+		pol, err = s.core.AdvancedSetIamPolicy(ctx, t.project, t.kind, t.location, t.id, body)
+	case t.channel:
+		pol, err = s.core.ChannelSetIamPolicy(ctx, t.project, t.location, t.id, body)
+	default:
+		pol, err = s.core.TriggerSetIamPolicy(ctx, t.project, t.location, t.id, body)
 	}
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
@@ -74,7 +95,7 @@ func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyReque
 }
 
 func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPermissionsRequest) (*iampb.TestIamPermissionsResponse, error) {
-	project, location, id, channel, ok := s.iamTarget(req.GetResource())
+	t, ok := s.iamTarget(req.GetResource())
 	if !ok {
 		return nil, grpcutil.GRPCStatus(core.InvalidIAMResource())
 	}
@@ -82,10 +103,13 @@ func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPerm
 		perms []string
 		err   error
 	)
-	if channel {
-		perms, err = s.core.ChannelTestIamPermissions(ctx, project, location, id, req.GetPermissions())
-	} else {
-		perms, err = s.core.TriggerTestIamPermissions(ctx, project, location, id, req.GetPermissions())
+	switch {
+	case t.advanced:
+		perms, err = s.core.AdvancedTestIamPermissions(ctx, t.project, t.kind, t.location, t.id, req.GetPermissions())
+	case t.channel:
+		perms, err = s.core.ChannelTestIamPermissions(ctx, t.project, t.location, t.id, req.GetPermissions())
+	default:
+		perms, err = s.core.TriggerTestIamPermissions(ctx, t.project, t.location, t.id, req.GetPermissions())
 	}
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)

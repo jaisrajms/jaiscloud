@@ -20,6 +20,7 @@ func TestStatusForHTTP(t *testing.T) {
 		499: Cancelled,
 		500: Internal,
 		501: Unimplemented,
+		502: Unavailable,
 		503: Unavailable,
 		504: DeadlineExceeded,
 		418: Unknown,
@@ -70,6 +71,10 @@ func TestResolvePrecedence(t *testing.T) {
 		{"unavailable code alias", &model.ProviderError{Code: "ServiceUnavailable", HTTPStatus: 503}, Unavailable, 503},
 		{"http fallback 503", &model.ProviderError{Code: "OddUnknownCode", HTTPStatus: 503}, Unavailable, 503},
 		{"http fallback 404", &model.ProviderError{HTTPStatus: 404}, NotFound, 404},
+		{"unsupported operation on 501 resolves to UNIMPLEMENTED", &model.ProviderError{Code: "UnsupportedOperation", HTTPStatus: 501}, Unimplemented, 501},
+		{"unsupported operation on 404 resolves to NOT_FOUND", &model.ProviderError{Code: "UnsupportedOperation", HTTPStatus: 404}, NotFound, 404},
+		{"unknown service on 404 resolves to NOT_FOUND", &model.ProviderError{Code: "UnknownService", HTTPStatus: 404}, NotFound, 404},
+		{"bad gateway 502 resolves to UNAVAILABLE", &model.ProviderError{Code: "BadGateway", HTTPStatus: 502}, Unavailable, 502},
 		{"derive http from status", &model.ProviderError{Status: Unavailable}, Unavailable, 503},
 		{"nil error", nil, Unknown, 500},
 	}

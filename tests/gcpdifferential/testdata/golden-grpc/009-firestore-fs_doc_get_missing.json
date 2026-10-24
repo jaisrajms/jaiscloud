@@ -1,0 +1,17 @@
+{
+  "index": 9,
+  "service": "firestore",
+  "op": "fs_doc_get_missing",
+  "method": "google.firestore.v1.Firestore/GetDocument",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>/<missing>",
+  "transport": "grpc",
+  "status": 5,
+  "request": {
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<missing>"
+  },
+  "response": {
+    "code": 5,
+    "message": "Document \"projects/<project>/databases/(default)/documents/<fsCollection>/<missing>\" not found."
+  }
+}
+

@@ -2,11 +2,19 @@ package eventarc
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 )
+
+// pageSizeParam parses the pageSize query parameter as the int32 every
+// Eventarc list method declares. A value the int32 binding cannot parse is
+// INVALID_ARGUMENT (real GCP rejects it) instead of being folded into zero and
+// treated as an absent parameter.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 func strParam(nr *model.NormalizedRequest, key string) string {
 	s, _ := nr.Params[key].(string)
@@ -46,18 +54,4 @@ func bodyOf(nr *model.NormalizedRequest) map[string]any {
 		return m
 	}
 	return map[string]any{}
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }

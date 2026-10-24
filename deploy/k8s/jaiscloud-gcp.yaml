@@ -64,6 +64,11 @@ spec:
               containerPort: 8080
             - name: grpc
               containerPort: 8081
+            # Hive Metastore (Thrift) serving plane. Spark drivers running as
+            # client-mode pods reach it via the Service's `hms` port below; the
+            # synthesized per-service endpoint is not resolvable from pods.
+            - name: hms
+              containerPort: 9083
           volumeMounts:
             - name: blobs
               mountPath: /data/blobs
@@ -78,6 +83,13 @@ spec:
             # Spark reads/writes GCS through the emulator's own in-cluster Service.
             - name: JAISCLOUD_GCS_EMULATOR_ENDPOINT
               value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+            # The per-service Metastore endpoint is synthesized (not resolvable
+            # from pods), so a Dataproc job attached to a Metastore service is
+            # injected this pod-reachable thrift address as
+            # spark.hadoop.hive.metastore.uris. Iceberg's HiveCatalog is also
+            # pointed here by the job's properties.
+            - name: JAISCLOUD_DATAPROC_HMS_ENDPOINT
+              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:9083
             - name: JAISCLOUD_PLATFORM_TLS_ENABLED
               value: "false"
             # Managed Kafka broker topology: k8s starts a single-node Redpanda
@@ -88,6 +100,15 @@ spec:
             # client. Set to mock to disable (no broker; synthesized cloud.goog
             # address).
             - name: JAISCLOUD_KAFKA_BROKER_MODE
+              value: k8s
+            # Cloud Run k8s execution: each revision's template image runs as a
+            # Pod + ClusterIP Service (namespace jaiscloud) and data-plane
+            # requests addressed to the synthesized *.run.app authority are
+            # reverse-proxied to it. The jaiscloud ServiceAccount already has
+            # pod/service create+delete from rbac.yaml. The URI suffix/port are
+            # left at the real-GCP default; the optional floci interop smoke
+            # run overrides them per-target (see the Makefile).
+            - name: JAISCLOUD_CLOUDRUN_EXECUTOR_MODE
               value: k8s
           readinessProbe:
             httpGet:
@@ -131,3 +152,6 @@ spec:
     - name: grpc
       port: 8081
       targetPort: 8081
+    - name: hms
+      port: 9083
+      targetPort: 9083

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,13 +29,13 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 // name_or_id column holds the full canonical key (KeyOfPath) and the kind
 // column is its final element kind (denormalized for kind-scoped listing); the
 // project column is scanned but discarded.
-const entityCols = "project, kind, name_or_id, properties, version, update_time"
+const entityCols = "project, kind, name_or_id, properties, version, create_time, update_time"
 
 func scanEntity(scan func(...any) error) (Entity, error) {
 	var e Entity
 	var project, nameOrID string
 	var props []byte
-	if err := scan(&project, &e.Kind, &nameOrID, &props, &e.Version, &e.UpdateTime); err != nil {
+	if err := scan(&project, &e.Kind, &nameOrID, &props, &e.Version, &e.CreateTime, &e.UpdateTime); err != nil {
 		return Entity{}, err
 	}
 	if len(props) > 0 {
@@ -168,6 +168,14 @@ func (s *PostgresStore) Delete(ctx context.Context, project, key string) error {
 // on the same entity can't land in between. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind MutationKind, e Entity, precondition *Precondition) (Entity, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Entity, error) {
+		return s.applyMutationOnce(ctx, project, kind, e, precondition)
+	})
+}
+
+func (s *PostgresStore) applyMutationOnce(ctx context.Context, project string, kind MutationKind, e Entity, precondition *Precondition) (Entity, error) {
 	entKind, nameOrID, err := splitKeyCols(e)
 	if err != nil {
 		return Entity{}, err
@@ -210,14 +218,14 @@ func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind 
 	case MutationUpsert:
 		e.Version = current.Version + 1
 	}
-	e.UpdateTime = nextUpdateTime(current.UpdateTime, clock.Now())
+	e = stampWrite(current, exists, e)
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (project, kind, name_or_id) DO UPDATE
-			SET properties=EXCLUDED.properties, version=EXCLUDED.version, update_time=EXCLUDED.update_time
-	`, project, entKind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+			SET properties=EXCLUDED.properties, version=EXCLUDED.version, create_time=EXCLUDED.create_time, update_time=EXCLUDED.update_time
+	`, project, entKind, nameOrID, propertiesJSON(e.Properties), e.Version, e.CreateTime, e.UpdateTime); err != nil {
 		return Entity{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -228,6 +236,14 @@ func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind 
 
 // DeleteConflictChecked mirrors ApplyMutation's locking convention.
 func (s *PostgresStore) DeleteConflictChecked(ctx context.Context, project, key string, precondition *Precondition) error {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteConflictCheckedOnce(ctx, project, key, precondition)
+	})
+}
+
+func (s *PostgresStore) deleteConflictCheckedOnce(ctx context.Context, project, key string, precondition *Precondition) error {
 	kind, nameOrID, ok := keyCols(key)
 	if !ok {
 		return ErrInvalidKey
@@ -266,6 +282,17 @@ func (s *PostgresStore) DeleteConflictChecked(ctx context.Context, project, key 
 // can slip in between them. See Store.Commit's doc comment for the error
 // contract.
 func (s *PostgresStore) Commit(ctx context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error) {
+	// An explicit client transaction that loses a serialization race must
+	// report ABORTED (the client retries with a fresh read-set), not a raw
+	// Postgres 40001/40P01 that would otherwise surface as a 500.
+	applied, err := s.commitOnce(ctx, project, reads, writes)
+	if storeutil.IsSerializationFailure(err) {
+		return nil, ErrAborted
+	}
+	return applied, err
+}
+
+func (s *PostgresStore) commitOnce(ctx context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return nil, err
@@ -343,9 +370,9 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 			// semantics: a concurrent insert of the same key surfaces as a
 			// unique violation instead of silently overwriting.
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-				VALUES ($1,$2,$3,$4,$5,$6)
-			`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+				INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+				VALUES ($1,$2,$3,$4,$5,$6,$7)
+			`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.CreateTime, e.UpdateTime); err != nil {
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 					return nil, ErrEntityExists
@@ -355,11 +382,11 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6)
+			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
 			ON CONFLICT (project, kind, name_or_id) DO UPDATE
-				SET properties=EXCLUDED.properties, version=EXCLUDED.version, update_time=EXCLUDED.update_time
-		`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+				SET properties=EXCLUDED.properties, version=EXCLUDED.version, create_time=EXCLUDED.create_time, update_time=EXCLUDED.update_time
+		`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.CreateTime, e.UpdateTime); err != nil {
 			return nil, err
 		}
 	}

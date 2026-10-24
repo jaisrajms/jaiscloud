@@ -135,8 +135,19 @@ type ObjectRetention struct {
 	Mode            string    `json:"mode,omitempty"`
 }
 
+// TombstoneOptions selects the non-live state a tombstoned generation gets.
+type TombstoneOptions struct {
+	// SoftDeleted marks the generation soft-deleted (objects.delete with the
+	// bucket's soft delete policy in force) instead of a noncurrent archive.
+	SoftDeleted bool
+	// HardDeleteTime is the soft-delete purge deadline (zero for a noncurrent
+	// archive).
+	HardDeleteTime time.Time
+}
+
 // ObjectMeta holds GCS object metadata. Generation/metageneration are the GCS
-// analogues of S3's version_id; CRC32C is the GCS checksum (vs S3's IEEE CRC32).
+// analogues of S3's version_id; CRC32C is the GCS checksum (vs S3's IEEE
+// CRC32). A generation is live, noncurrent (versioning) or soft-deleted.
 type ObjectMeta struct {
 	Bucket         string `json:"bucket"`
 	Name           string `json:"name"`
@@ -163,8 +174,18 @@ type ObjectMeta struct {
 	// Object.eventBasedHold: while true, the object cannot be deleted.
 	TemporaryHold  bool `json:"temporaryHold,omitempty"`
 	EventBasedHold bool `json:"eventBasedHold,omitempty"`
-	// TimeDeleted is set when this generation is no longer live (versioning).
+	// TimeDeleted is set when this generation is no longer live (versioning or
+	// soft delete).
 	TimeDeleted *time.Time `json:"timeDeleted,omitempty"`
+	// SoftDeleted marks a generation removed by objects.delete while the bucket
+	// had soft delete enabled. A soft-deleted generation is not live, keeps its
+	// bytes until HardDeleteTime, and is the only kind objects.restore accepts.
+	// It is distinct from a noncurrent (archived) version, which restore rejects
+	// with 412 objectNotSoftDeleted.
+	SoftDeleted bool `json:"softDeleted,omitempty"`
+	// HardDeleteTime is when the soft-delete window closes (the purge
+	// deadline), surfaced as Object.hardDeleteTime.
+	HardDeleteTime time.Time `json:"hardDeleteTime,omitempty"`
 	// KmsKeyName is the CMEK key name (empty when server-DEK encrypted).
 	KmsKeyName string `json:"kmsKeyName,omitempty"`
 	// WrappedDEK is the DEK wrapped under KmsKeyName (nil for CSEK/server-DEK).
@@ -225,19 +246,11 @@ type ObjectStore interface {
 	// DeleteObjectMeta removes every generation of the object.
 	DeleteObjectMeta(ctx context.Context, bucket, name string) error
 	// TombstoneObjectMeta marks the live generation non-live (timeDeleted set)
-	// and returns it, leaving any prior non-live generations untouched. Used
-	// for versioned-object deletion so a non-live tombstone is retained.
-	TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error)
-	// RestoreObjectGeneration makes the given (tombstoned) generation the live
-	// generation: the current live generation, if any, is marked non-live
-	// (timeDeleted set) and the target generation's timeDeleted is cleared. The
-	// precondition (if non-nil) is validated against the current live-generation
-	// state atomically with the mutation. Returns ErrNoSuchObject when the
-	// target generation does not exist and ErrPreconditionFailed — without
-	// applying the mutation — on a mismatch. If the target is already live the
-	// call is a no-op and returns it unchanged.
-	RestoreObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error)
-
+	// and returns it, leaving any prior non-live generations untouched. opts
+	// selects between a noncurrent archive (softDeleted=false, used for a
+	// versioned delete) and a soft-deleted generation (used when the bucket's
+	// soft delete policy applies).
+	TombstoneObjectMeta(ctx context.Context, bucket, name string, opts TombstoneOptions) (ObjectMeta, error)
 	// PutObjectMetaChecked/PutObjectGenerationChecked/DeleteObjectMetaChecked/
 	// TombstoneObjectMetaChecked mirror their unchecked counterparts above,
 	// but atomically validate precondition (if non-nil) against the object's
@@ -268,7 +281,7 @@ type ObjectStore interface {
 	// ErrPreconditionFailed — without applying the write — on a mismatch.
 	UpdateObjectGenerationMetaChecked(ctx context.Context, bucket, name, generation string, meta ObjectMeta, precondition *Precondition) error
 	DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error
-	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error)
+	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, opts TombstoneOptions, precondition *Precondition) (ObjectMeta, error)
 	// DeleteObjectGeneration removes exactly one generation (live or non-live)
 	// of an object, returning its metadata for blob cleanup/events. Deleting
 	// the live generation does not promote a noncurrent survivor: remaining

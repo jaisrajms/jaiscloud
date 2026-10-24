@@ -1,0 +1,35 @@
+{
+  "index": 152,
+  "service": "serviceusage",
+  "op": "su_service_get_unknown",
+  "method": "GET",
+  "path": "/v1/projects/<project>/services/unknown.googleapis.com",
+  "status": 403,
+  "response": {
+    "error": {
+      "code": 403,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.PreconditionFailure",
+          "violations": [
+            {
+              "subject": "?error_code=220002&services=unknown.googleapis.com",
+              "type": "googleapis.com"
+            }
+          ]
+        },
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "domain": "serviceusage.googleapis.com",
+          "metadata": {
+            "services": "unknown.googleapis.com"
+          },
+          "reason": "SERVICE_CONFIG_NOT_FOUND_OR_PERMISSION_DENIED"
+        }
+      ],
+      "message": "Not found or permission denied for service(s): unknown.googleapis.com.\nHelp Token: Ad9DraDlLyfCRVRrrXPmhC5VTdQSSg313J3zvtICyLZkrkr94L7G0MBuj3BHKbENnltC4XVhFFpdkukFEjNHeDLDT7xC8tsaX0dfCmUARnND2FY4",
+      "status": "PERMISSION_DENIED"
+    }
+  }
+}
+

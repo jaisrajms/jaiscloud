@@ -227,6 +227,32 @@ func BuildMethodIndex(docs map[string]*DiscoveryDoc) *MethodIndex {
 	sort.Strings(services)
 	for _, svc := range services {
 		doc := docs[svc]
+		// The common-API GetLocation (google.cloud.location.Locations) is not
+		// declared in each service's own Discovery document, so a
+		// GET /{version}/projects/{project}/locations/{location} otherwise
+		// fuzzy-matches an unrelated method with a /{version}/{+name} template
+		// (e.g. operations.get) and its Location response is validated against
+		// the wrong schema. When the document defines a Location schema,
+		// register the real method so the response validates correctly.
+		if _, ok := doc.Schemas["Location"]; ok && doc.Version != "" {
+			tpl := doc.Version + "/projects/{project}/locations/{location}"
+			loc := &Method{
+				ID:         svc + ".projects.locations.get",
+				HTTPMethod: "GET",
+				Path:       "/" + tpl,
+				Response:   &Ref{Ref: "Location"},
+				doc:        doc,
+			}
+			ix.entries = append(ix.entries, methodEntry{
+				doc:         doc,
+				service:     svc,
+				method:      loc,
+				template:    tpl,
+				literals:    countLiterals(tpl),
+				literalChar: countLiteralChars(tpl),
+				segments:    len(strings.Split(tpl, "/")),
+			})
+		}
 		doc.WalkMethods(func(m *Method) {
 			candidates := []struct {
 				tpl  string

@@ -59,6 +59,12 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	}
 	entities := make(map[string]map[string]Entity)
 	for _, row := range snap.Entities {
+		// Backfill create_time for a snapshot written before it was tracked, so
+		// a restored entity never surfaces a zero create_time (which every
+		// transport would omit).
+		if row.Entity.CreateTime.IsZero() {
+			row.Entity.CreateTime = row.Entity.UpdateTime
+		}
 		if entities[row.Project] == nil {
 			entities[row.Project] = make(map[string]Entity)
 		}
@@ -98,7 +104,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var row snapRow
 		var nameOrID string
 		var props []byte
-		if err := rows.Scan(&row.Project, &row.Entity.Kind, &nameOrID, &props, &row.Entity.Version, &row.Entity.UpdateTime); err != nil {
+		if err := rows.Scan(&row.Project, &row.Entity.Kind, &nameOrID, &props, &row.Entity.Version, &row.Entity.CreateTime, &row.Entity.UpdateTime); err != nil {
 			return err
 		}
 		if len(props) > 0 {
@@ -158,10 +164,15 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if version == 0 {
 			version = 1
 		}
+		// Backfill create_time for a snapshot written before it was tracked.
+		createTime := row.Entity.CreateTime
+		if createTime.IsZero() {
+			createTime = row.Entity.UpdateTime
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6)
-		`, row.Project, kind, nameOrID, propertiesJSON(row.Entity.Properties), version, row.Entity.UpdateTime); err != nil {
+			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+		`, row.Project, kind, nameOrID, propertiesJSON(row.Entity.Properties), version, createTime, row.Entity.UpdateTime); err != nil {
 			return err
 		}
 	}

@@ -10,10 +10,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	core "jaiscloud/internal/gcp/service/dataproc"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (whose
@@ -147,7 +147,7 @@ func jobStatusToProto(s dpstore.JobStatus) *dataprocpb.JobStatus {
 	out := &dataprocpb.JobStatus{
 		State:          dataprocpb.JobStatus_State(dataprocpb.JobStatus_State_value[s.State]),
 		Details:        s.Details,
-		StateStartTime: timestamppb.New(s.StateStartTime),
+		StateStartTime: timestamp.Proto(s.StateStartTime),
 	}
 	if s.Substate != "" {
 		out.Substate = dataprocpb.JobStatus_Substate(dataprocpb.JobStatus_Substate_value[s.Substate])

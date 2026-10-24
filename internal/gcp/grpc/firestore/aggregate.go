@@ -9,9 +9,8 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	"jaiscloud/internal/clock"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // RunAggregationQuery executes a StructuredAggregationQuery over the existing
@@ -51,7 +50,7 @@ func (s *Service) RunAggregationQuery(req *firestorepb.RunAggregationQueryReques
 
 	return stream.Send(&firestorepb.RunAggregationQueryResponse{
 		Result:   &firestorepb.AggregationResult{AggregateFields: fields},
-		ReadTime: timestamppb.New(clock.Now()),
+		ReadTime: timestamp.Proto(clock.Now()),
 	})
 }
 

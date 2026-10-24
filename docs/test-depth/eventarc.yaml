@@ -1,0 +1,31 @@
+# Behavioural depth record - eventarc (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+#
+# The c1-c3 delivery classes the k8s e2e (EV4) proves locally are asserted in CI
+# by depth_test.go over an httptest sink: the emulator's own delivery engine
+# posts binary-mode CloudEvents to an httpEndpoint destination. The
+# deployed-sink / Cloud Run destination leg stays the local
+# `make test-e2e-eventarc-k8s` gate.
+service: eventarc
+classes:
+  p2:
+    state: present
+    suites: [sdk-eventarc]
+    note: "stale-etag (OCC) trigger update/delete rejected, plus four goroutines churning trigger create/delete on one topic while 15 events are delivered to a stable trigger on another: every event is delivered exactly once (no drop, no duplicate) and a deleted trigger receives no further event; the client runs under -race"
+  p3:
+    state: present
+    suites: [sdk-eventarc]
+    note: "destination oneof and shape rejected (two members set, cloudRun without service or region, a cross-project service, a non-object httpEndpoint), the eventFilters contract (no type filter, a Cloud Storage trigger without a bucket) rejected, duplicate triggerId 409, get-after-delete 404, stale-etag delete 409"
+  p4:
+    state: present
+    suites: [sdk-eventarc]
+    note: "triggers.list across a location boundary with pageSize/pageToken (every trigger exactly once), orderBy name/name desc/trigger_id/createTime desc, the AIP-160 filter (labels.<k>=v, destination:<member>) composed with the order and the page cursor, and an unsupported filter/orderBy failing loud with 400 instead of returning the unfiltered list"
+  p5:
+    state: present
+    suites: [sdk-eventarc]
+    note: "delivery fan-out at volume: 12 Pub/Sub triggers on one topic and 3 Cloud Storage triggers on one bucket each receive a single produced event exactly once (a trigger on another topic receives none), and a destination answering 500 is attempted exactly once — the documented fire-and-forget, no-retry httpEndpoint posture"

@@ -1,0 +1,17 @@
+{
+  "index": 21,
+  "service": "pubsub",
+  "op": "msg_grpc_acknowledge",
+  "method": "google.pubsub.v1.Subscriber/Acknowledge",
+  "path": "projects/<project>/subscriptions/<subscription>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "ackIds": [
+      "<ackId>"
+    ],
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {}
+}
+

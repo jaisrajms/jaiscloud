@@ -14,16 +14,19 @@ metadata:
 rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["pods", "pods/log", "pods/exec"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["configmaps", "services"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -37,4 +40,64 @@ subjects:
 roleRef:
   kind: Role
   name: jaiscloud-executor
+  apiGroup: rbac.authorization.k8s.io
+---
+# ClusterRole form of the executor rules. Engines that create one namespace per
+# pod-owning resource (Dataproc per-cluster namespaces) bind this ClusterRole to
+# the ServiceAccount with a RoleBinding in each new namespace, so the executor's
+# permissions are not limited to the `jaiscloud` namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jaiscloud-executor
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+---
+# Namespace lifecycle for per-resource isolation: cluster-scoped namespace
+# create/delete plus the per-namespace RoleBinding that lets the executor run in
+# a freshly provisioned namespace. If the deployment cannot grant this (a
+# namespaced-only ServiceAccount), the engine falls back to JAISCLOUD_K8S_NAMESPACE.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jaiscloud-namespace-admin
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # Needed to create a RoleBinding that references the executor ClusterRole
+  # (RBAC escalation prevention otherwise rejects the per-namespace RoleBinding).
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["jaiscloud-executor"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jaiscloud-namespace-admin
+subjects:
+  - kind: ServiceAccount
+    name: jaiscloud
+    namespace: jaiscloud
+roleRef:
+  kind: ClusterRole
+  name: jaiscloud-namespace-admin
   apiGroup: rbac.authorization.k8s.io

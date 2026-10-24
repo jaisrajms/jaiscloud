@@ -1,0 +1,33 @@
+{
+  "index": 44,
+  "service": "bigquery",
+  "op": "bqsql_null_eq_int",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 400,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT 1 = NULL",
+    "useLegacySql": false
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "q",
+          "locationType": "parameter",
+          "message": "Operands of = cannot be literal NULL at [1:12]",
+          "reason": "invalidQuery"
+        }
+      ],
+      "message": "Operands of = cannot be literal NULL at [1:12]",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

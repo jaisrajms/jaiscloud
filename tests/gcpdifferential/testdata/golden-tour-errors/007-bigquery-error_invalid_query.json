@@ -1,0 +1,29 @@
+{
+  "index": 7,
+  "service": "bigquery",
+  "op": "error_invalid_query",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 400,
+  "request": {
+    "query": "SELECT * FROM",
+    "useLegacySql": false
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "q",
+          "locationType": "parameter",
+          "message": "Syntax error: Unexpected end of script at [1:14]",
+          "reason": "invalidQuery"
+        }
+      ],
+      "message": "Syntax error: Unexpected end of script at [1:14]",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

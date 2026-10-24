@@ -7,8 +7,18 @@ import (
 
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
+
+// maskStatus returns the HTTP status of a ProviderError, or 0 for any other
+// error (including nil).
+func maskStatus(err error) int {
+	if perr, ok := err.(*model.ProviderError); ok {
+		return perr.HTTPStatus
+	}
+	return 0
+}
 
 func TestMaskHelpers(t *testing.T) {
 	if maskPaths("") != nil {
@@ -28,11 +38,19 @@ func TestMaskHelpers(t *testing.T) {
 	if err != nil || merged["a"] != 1 || merged["b"] != 2 {
 		t.Fatalf("empty-mask merge = %v, %v", merged, err)
 	}
-	if _, err := applyTriggerMask(nil, nil, []string{"bogus"}); err == nil {
-		t.Fatal("expected unsupported trigger mask error")
+	// A mask root that names no field is a client error (400 InvalidArgument).
+	if _, err := applyTriggerMask(nil, nil, []string{"bogus"}); maskStatus(err) != 400 {
+		t.Fatalf("unknown trigger mask err = %v, want 400", err)
 	}
-	if _, err := applyChannelMask(nil, nil, []string{"bogus"}); err == nil {
-		t.Fatal("expected unsupported channel mask error")
+	if _, err := applyChannelMask(nil, nil, []string{"bogus"}); maskStatus(err) != 400 {
+		t.Fatalf("unknown channel mask err = %v, want 400", err)
+	}
+	// A real-but-unimplemented (output-only) field stays Unimplemented (501).
+	if _, err := applyTriggerMask(nil, nil, []string{"conditions"}); maskStatus(err) != 501 {
+		t.Fatalf("output-only trigger mask err = %v, want 501", err)
+	}
+	if _, err := applyChannelMask(nil, nil, []string{"state"}); maskStatus(err) != 501 {
+		t.Fatalf("output-only channel mask err = %v, want 501", err)
 	}
 	if checkEtag("", "x") != nil || checkEtag("x", "x") != nil {
 		t.Fatal("checkEtag rejected an empty/matching etag")
@@ -72,7 +90,7 @@ func TestCoreTriggerRoundTrip(t *testing.T) {
 	if got.Name != "t1" || got.UID != trig.UID {
 		t.Fatalf("get = %+v", got)
 	}
-	page, _, err := svc.ListTriggers(ctx, "proj", "us-central1", 0, "")
+	page, _, err := svc.ListTriggers(ctx, "proj", "us-central1", "", "", 0, "")
 	if err != nil || len(page) != 1 {
 		t.Fatalf("ListTriggers = %v, %v", page, err)
 	}
@@ -100,7 +118,7 @@ func TestCoreChannelRoundTrip(t *testing.T) {
 	if _, err := svc.GetChannel(ctx, "proj", "us-central1", "c1"); err == nil {
 		t.Fatal("expected NotFound after delete")
 	}
-	providers, _, err := svc.ListProviders(ctx, "proj", "us-central1", 0, "")
+	providers, _, err := svc.ListProviders(ctx, "proj", "us-central1", "", "", 0, "")
 	if err != nil || len(providers) == 0 {
 		t.Fatalf("ListProviders = %v, %v", providers, err)
 	}

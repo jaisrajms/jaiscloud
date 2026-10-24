@@ -147,6 +147,75 @@ func TestGCSVersioningPersistenceAcrossRestart(t *testing.T) {
 	readGen(gen2, "two")
 }
 
+// TestGCSSnapshotRoundTrip proves the /_jaiscloud/export → reset → import path
+// round-trips GCS state (bucket metadata in the gcs_objects store and object
+// bytes in the blob store): it creates a bucket and object, exports the full
+// state, resets, asserts they are gone, then re-imports the snapshot and asserts
+// both the metadata and the object bytes are restored.
+func TestGCSSnapshotRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping snapshot round-trip test")
+	}
+
+	port := persistPort()
+	host := fmt.Sprintf("http://localhost:%d", port)
+	blobDir := t.TempDir()
+
+	bucket := fmt.Sprintf("snap-bucket-%d", time.Now().UnixNano())
+	const object = "data/hello.txt"
+	const content = "snapshot round-trip payload"
+
+	proc := startGCPProcess(t, port, dsn, blobDir)
+	defer stopProcess(t, proc)
+	waitForHealth(t, host)
+
+	if code, body := doRequest(t, host, "POST", "/storage/v1/b?project=proj",
+		`{"name":"`+bucket+`"}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create bucket: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "POST",
+		"/upload/storage/v1/b/"+bucket+"/o?uploadType=media&name="+object,
+		content, "text/plain"); code != http.StatusOK {
+		t.Fatalf("upload object: got HTTP %d: %s", code, body)
+	}
+
+	assertState := func(want int, phase string) {
+		t.Helper()
+		if code, body := doRequest(t, host, "GET", "/storage/v1/b/"+bucket, "", ""); code != want {
+			t.Errorf("%s: get bucket got HTTP %d (want %d): %s", phase, code, want, body)
+		}
+		code, body := doRequest(t, host, "GET", "/storage/v1/b/"+bucket+"/o/"+object+"?alt=media", "", "")
+		if code != want {
+			t.Errorf("%s: get object got HTTP %d (want %d): %s", phase, code, want, body)
+		} else if want == http.StatusOK && body != content {
+			t.Errorf("%s: object content = %q, want %q", phase, body, content)
+		}
+	}
+
+	// ── Export ───────────────────────────────────────────────────────────────
+	code, tarball := doRequest(t, host, "GET", "/_jaiscloud/export", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("export: got HTTP %d: %s", code, tarball)
+	}
+	if len(tarball) < 2 || tarball[0] != 0x1f || tarball[1] != 0x8b {
+		t.Fatalf("export did not return a gzip tarball (first bytes %x)", tarball[:min(len(tarball), 2)])
+	}
+
+	// ── Reset: the stores must clear (Resetter registration) ────────────────
+	if code, body := doRequest(t, host, "POST", "/_jaiscloud/reset", "", ""); code != http.StatusOK {
+		t.Fatalf("reset: got HTTP %d: %s", code, body)
+	}
+	assertState(http.StatusNotFound, "after reset")
+
+	// ── Import: the stores must restore (Snapshotter + blob snapshot) ───────
+	code, body := doRequest(t, host, "POST", "/_jaiscloud/import?reset_first=true", tarball, "application/gzip")
+	if code != http.StatusOK {
+		t.Fatalf("import: got HTTP %d: %s", code, body)
+	}
+	assertState(http.StatusOK, "after import")
+}
+
 func stopProcess(t *testing.T, cmd *exec.Cmd) {
 	t.Helper()
 	if err := cmd.Process.Kill(); err != nil {

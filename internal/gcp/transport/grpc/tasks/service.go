@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/tasks"
 	"jaiscloud/internal/model"
@@ -51,9 +52,9 @@ func (s *Service) ListQueues(ctx context.Context, req *cloudtaskspb.ListQueuesRe
 	if err != nil {
 		return nil, mapError(err)
 	}
-	pageSize := int(req.GetPageSize())
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	pageSize, err := paging.Size(int(req.GetPageSize()), core.MaxQueuesPageSize)
+	if err != nil {
+		return nil, mapError(err)
 	}
 	offset := pageOffset(req.GetPageToken(), len(queues))
 	end := offset + pageSize
@@ -202,9 +203,9 @@ func (s *Service) ListTasks(ctx context.Context, req *cloudtaskspb.ListTasksRequ
 	if err != nil {
 		return nil, mapError(err)
 	}
-	pageSize := int(req.GetPageSize())
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	pageSize, err := paging.Size(int(req.GetPageSize()), core.MaxTasksPageSize)
+	if err != nil {
+		return nil, mapError(err)
 	}
 	offset := pageOffset(req.GetPageToken(), len(items))
 	end := offset + pageSize

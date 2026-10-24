@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -30,7 +31,16 @@ type MatrixSummary struct {
 	ByState          map[string]int            `json:"by_state"`
 	ByTransport      map[string]map[string]int `json:"by_transport"`
 	ByService        map[string]map[string]int `json:"by_service"`
+	Evidence         EvidenceSummary           `json:"evidence"`
 	GRPCOnlyServices []string                  `json:"grpc_only_services,omitempty"`
+}
+
+// EvidenceSummary is the recorded-evidence rollup, per transport: how many
+// cells are backed by a validated transcript response (REST) or a passing
+// official-client check (gRPC), and how many are not.
+type EvidenceSummary struct {
+	Verified   map[string]int `json:"verified"`
+	Unverified map[string]int `json:"unverified"`
 }
 
 // stateOrder fixes the reporting order of states (best to worst).
@@ -55,11 +65,17 @@ func Render(cells []Cell, grpcOnly []string) MatrixDoc {
 		ByState:     map[string]int{},
 		ByTransport: map[string]map[string]int{},
 		ByService:   map[string]map[string]int{},
+		Evidence:    EvidenceSummary{Verified: map[string]int{}, Unverified: map[string]int{}},
 	}
 	for _, c := range sorted {
 		sum.ByState[c.State]++
 		bump(sum.ByTransport, c.Transport, c.State)
 		bump(sum.ByService, c.Service, c.State)
+		if c.Verified {
+			sum.Evidence.Verified[c.Transport]++
+		} else {
+			sum.Evidence.Unverified[c.Transport]++
+		}
 	}
 	sum.GRPCOnlyServices = grpcOnly
 
@@ -103,11 +119,11 @@ func writeCSV(path string, doc MatrixDoc) error {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	if err := w.Write([]string{"service", "operation", "transport", "state", "reason"}); err != nil {
+	if err := w.Write([]string{"service", "operation", "transport", "state", "verified", "reason"}); err != nil {
 		return err
 	}
 	for _, c := range doc.Cells {
-		if err := w.Write([]string{c.Service, c.Operation, c.Transport, c.State, c.Reason}); err != nil {
+		if err := w.Write([]string{c.Service, c.Operation, c.Transport, c.State, strconv.FormatBool(c.Verified), c.Reason}); err != nil {
 			return err
 		}
 	}
@@ -142,6 +158,16 @@ func writeMarkdown(path string, doc MatrixDoc) error {
 			strings.Join(doc.Summary.GRPCOnlyServices, ", "))
 	}
 
+	b.WriteString("\n### Evidence\n\n")
+	b.WriteString("Cells backed by **real recorded evidence** (`verified`): a schema-validated transcript " +
+		"response (REST) or a passing official-client check (gRPC). A `ga` cell without `verified` is a " +
+		"registration claim, not a response guarantee — the gap AUD2 closes.\n\n")
+	b.WriteString("| transport | verified | unverified |\n| --- | --- | --- |\n")
+	for _, tr := range []string{"rest", "grpc"} {
+		fmt.Fprintf(&b, "| %s | %d | %d |\n",
+			tr, doc.Summary.Evidence.Verified[tr], doc.Summary.Evidence.Unverified[tr])
+	}
+
 	services := make([]string, 0, len(doc.Summary.ByService))
 	for svc := range doc.Summary.ByService {
 		services = append(services, svc)
@@ -153,13 +179,13 @@ func writeMarkdown(path string, doc MatrixDoc) error {
 		fmt.Fprintf(&b, "\n## %s\n\n", svc)
 		fmt.Fprintf(&b, "_%d cell(s): ga=%d limited=%d preview=%d unsupported=%d_\n\n",
 			totalStates(m), m[StateGA], m[StateLimited], m[StatePreview], m[StateUnsupported])
-		b.WriteString("| operation | transport | state | reason |\n| --- | --- | --- | --- |\n")
+		b.WriteString("| operation | transport | state | verified | reason |\n| --- | --- | --- | --- | --- |\n")
 		for _, c := range doc.Cells {
 			if c.Service != svc {
 				continue
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n",
-				c.Operation, c.Transport, c.State, mdCell(c.Reason))
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
+				c.Operation, c.Transport, c.State, yesNo(c.Verified), mdCell(c.Reason))
 		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
@@ -171,6 +197,14 @@ func totalStates(m map[string]int) int {
 		n += v
 	}
 	return n
+}
+
+// yesNo renders a boolean for the human-readable matrix.
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }
 
 // mdCell escapes a value for a markdown table cell.

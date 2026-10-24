@@ -12,9 +12,9 @@ import (
 	"strconv"
 
 	"jaiscloud/internal/aws/arn"
-	"jaiscloud/internal/aws/ui/middleware"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/ui/middleware"
 )
 
 // AsSlice coerces a provider response value that may be a typed slice

@@ -1,0 +1,27 @@
+# Behavioural depth record - serviceusage (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: serviceusage
+classes:
+  p2:
+    state: present
+    suites: [sdk-rest]
+    note: "concurrent enables under -race: enabling one service from eight writers is idempotent (one enforced resource, final state ENABLED) and concurrent enables of distinct services each land"
+  p3:
+    state: present
+    suites: [sdk-rest]
+    note: "batch-enable validation rejects bad input"
+  p4:
+    state: present
+    suites: [sdk-rest]
+    note: "pageSize/pageToken walk over services.list composed with state:ENABLED / state:DISABLED, so the cursor walks the filtered set and never leaks a service of the other state; the Discovery document specifies no order, so it is compared as a set"
+  p5:
+    state: exempt
+    reason: "no scale/boundary surface: services.list is a flat, bounded enablement set with no streamed, large-payload or lineage dimension to stress; the documented caps (pageSize 200, batchEnable 20, batchGet 30) are request-validation negatives, already asserted as p3"
+    date: "2026-10-16"
+    owner: DC3
+    review_by: "2027-04-16"

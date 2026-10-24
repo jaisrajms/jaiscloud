@@ -2,10 +2,15 @@
 // v1 project surface (cloudresourcemanager.googleapis.com/v1) that the
 // hashicorp/google Terraform and Pulumi Google providers require:
 //
-//	GET  /v1/projects/{project}                      (projects.get)
-//	POST /v1/projects/{project}:getIamPolicy         (projects.getIamPolicy)
-//	POST /v1/projects/{project}:setIamPolicy         (projects.setIamPolicy)
-//	POST /v1/projects/{project}:testIamPermissions   (projects.testIamPermissions)
+//	GET    /v1/projects                            (projects.list)
+//	POST   /v1/projects                            (projects.create)
+//	GET    /v1/projects/{project}                  (projects.get)
+//	PUT    /v1/projects/{project}                  (projects.update)
+//	DELETE /v1/projects/{project}                  (projects.delete)
+//	POST   /v1/projects/{project}:undelete         (projects.undelete)
+//	POST   /v1/projects/{project}:getIamPolicy     (projects.getIamPolicy)
+//	POST   /v1/projects/{project}:setIamPolicy     (projects.setIamPolicy)
+//	POST   /v1/projects/{project}:testIamPermissions (projects.testIamPermissions)
 //
 // Real GCP's proto-defined Resource Manager surface is v3 and is served over
 // both gRPC and REST, but this legacy v1 REST surface has no v3 transcode: the
@@ -56,8 +61,31 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 			break
 		}
 	}
-	if pi < 0 || pi+1 >= len(seg) {
+	if pi < 0 {
 		return nil, model.NewProviderError("InvalidRequest", "missing project in resource path", 404)
+	}
+
+	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
+	queryToParams(r, nr.Params)
+	m, err := parseJSON(body)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+	}
+	if m != nil {
+		nr.Params["body"] = m
+	}
+
+	// The collection route has no project segment: /v1/projects (create/list).
+	if pi == len(seg)-1 {
+		switch r.Method {
+		case http.MethodPost:
+			nr.Action = "ProjectCreate"
+		case http.MethodGet:
+			nr.Action = "ProjectList"
+		default:
+			return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		}
+		return nr, nil
 	}
 	// The router only claims the project-last shape, but stay defensive: a
 	// trailing resource segment is not part of the supported surface.
@@ -75,20 +103,11 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	if project == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing project in resource path", 404)
 	}
-
-	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = project
-	queryToParams(r, nr.Params)
-	m, err := parseJSON(body)
-	if err != nil {
-		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
-	}
-	if m != nil {
-		nr.Params["body"] = m
-	}
 
-	// The project IAM custom methods are POST-only per Discovery; a bare
-	// project read is GET.
+	// The project lifecycle + IAM custom methods are POST-only per Discovery; a
+	// bare project read is GET, a bare project update is PUT and a bare project
+	// delete is DELETE.
 	switch {
 	case custom == "getIamPolicy" && r.Method == http.MethodPost:
 		nr.Action = "ProjectGetIamPolicy"
@@ -96,8 +115,14 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Action = "ProjectSetIamPolicy"
 	case custom == "testIamPermissions" && r.Method == http.MethodPost:
 		nr.Action = "ProjectTestIamPermissions"
+	case custom == "undelete" && r.Method == http.MethodPost:
+		nr.Action = "ProjectUndelete"
 	case custom == "" && r.Method == http.MethodGet:
 		nr.Action = "ProjectGet"
+	case custom == "" && r.Method == http.MethodPut:
+		nr.Action = "ProjectUpdate"
+	case custom == "" && r.Method == http.MethodDelete:
+		nr.Action = "ProjectDelete"
 	default:
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}

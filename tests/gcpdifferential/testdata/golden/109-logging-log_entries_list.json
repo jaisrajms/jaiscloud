@@ -1,0 +1,35 @@
+{
+  "index": 109,
+  "service": "logging",
+  "op": "log_entries_list",
+  "method": "POST",
+  "path": "/v2/entries:list",
+  "status": 200,
+  "request": {
+    "filter": "logName=\"projects/<project>/logs/<logName>\"",
+    "orderBy": "timestamp desc",
+    "pageSize": 10,
+    "resourceNames": [
+      "projects/<project>"
+    ]
+  },
+  "response": {
+    "entries": [
+      {
+        "insertId": "<insertId>",
+        "logName": "projects/<project>/logs/<logName>",
+        "receiveTimestamp": "<time>",
+        "resource": {
+          "labels": {
+            "project_id": "<project>"
+          },
+          "type": "global"
+        },
+        "severity": "INFO",
+        "textPayload": "hello jaiscloud",
+        "timestamp": "<time>"
+      }
+    ]
+  }
+}
+

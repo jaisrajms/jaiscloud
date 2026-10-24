@@ -89,15 +89,61 @@ func TestCodecParsesCreateBody(t *testing.T) {
 	}
 }
 
+func TestCodecRoutesNodePoolsAndSetters(t *testing.T) {
+	cases := []struct {
+		method  string
+		path    string
+		action  string
+		cluster string
+		pool    string
+	}{
+		{http.MethodPut, "/v1/projects/p/locations/l/clusters/c1", "UpdateCluster", "c1", ""},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1:setAddons", "SetAddonsConfig", "c1", ""},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1:setResourceLabels", "SetLabels", "c1", ""},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1:setMasterAuth", "SetMasterAuth", "c1", ""},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1:updateMaster", "UpdateMaster", "c1", ""},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1:startIpRotation", "StartIPRotation", "c1", ""},
+		{http.MethodGet, "/v1/projects/p/locations/l/clusters/c1/nodePools", "ListNodePools", "c1", ""},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1/nodePools", "CreateNodePool", "c1", ""},
+		{http.MethodGet, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1", "GetNodePool", "c1", "np1"},
+		{http.MethodDelete, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1", "DeleteNodePool", "c1", "np1"},
+		{http.MethodPut, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1", "UpdateNodePool", "c1", "np1"},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1:setSize", "SetNodePoolSize", "c1", "np1"},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1:setAutoscaling", "SetNodePoolAutoscaling", "c1", "np1"},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1:rollback", "RollbackNodePoolUpgrade", "c1", "np1"},
+		{http.MethodPost, "/v1/projects/p/locations/l/operations/operation-1:cancel", "CancelOperation", "", ""},
+	}
+	codec := NewCodec()
+	for _, tc := range cases {
+		t.Run(tc.action, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			nr, err := codec.Decode(r, nil)
+			if err != nil {
+				t.Fatalf("Decode(%s %s): %v", tc.method, tc.path, err)
+			}
+			if nr.Action != tc.action {
+				t.Fatalf("action = %q, want %q", nr.Action, tc.action)
+			}
+			if tc.cluster != "" && nr.Params["cluster"] != tc.cluster {
+				t.Fatalf("cluster = %v, want %q", nr.Params["cluster"], tc.cluster)
+			}
+			if tc.pool != "" && nr.Params["nodepool"] != tc.pool {
+				t.Fatalf("nodepool = %v, want %q", nr.Params["nodepool"], tc.pool)
+			}
+		})
+	}
+}
+
 func TestCodecRejectsUnsupported(t *testing.T) {
 	codec := NewCodec()
 	for _, tc := range []struct {
 		method string
 		path   string
 	}{
-		{http.MethodPut, "/v1/projects/p/locations/l/clusters/c1"},
 		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1"},
 		{http.MethodGet, "/v1/projects/p/locations/l/nodePools"},
+		{http.MethodPost, "/v1/projects/p/locations/l/clusters/c1:bogus"},
+		{http.MethodGet, "/v1/projects/p/locations/l/clusters/c1/nodePools/np1:bogus"},
 	} {
 		r := httptest.NewRequest(tc.method, tc.path, nil)
 		if _, err := codec.Decode(r, nil); err == nil {

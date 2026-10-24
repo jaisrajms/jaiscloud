@@ -15,7 +15,6 @@ import {
   TopNavigation,
 } from '@cloudscape-design/components'
 import type {
-  BreadcrumbGroupProps,
   SideNavigationProps,
   TopNavigationProps,
 } from '@cloudscape-design/components'
@@ -23,7 +22,9 @@ import { AccountProvider, useAccount, useAccounts } from '../context/AccountCont
 import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
 import { useServices } from '../hooks/useServices'
-import { groupByCategory, serviceForPath, type NavSection } from './nav'
+import { useActiveTerminology } from '../hooks/useTerminology'
+import { docsLink } from '../lib/cloudLinks'
+import { buildBreadcrumbItems, groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
 import { ServiceTierBadge } from './ServiceTierBadge'
 import { serviceIconName } from './serviceIcons'
@@ -74,17 +75,10 @@ function useConsoleNav(services: NavSection[]) {
     navigate(event.detail.href.replace(BASE, '') || '/')
   }
 
-  const breadcrumbItems = useMemo<BreadcrumbGroupProps.Item[]>(() => {
-    const items: BreadcrumbGroupProps.Item[] = [{ text: 'JaisCloud', href: href('/') }]
-    const parts = pathname.split('/').filter(Boolean)
-    if (parts[0] === 'aws') {
-      const service = serviceForPath(services, pathname)
-      if (service) items.push({ text: service.label, href: href(service.rootPath) })
-    } else if (parts[0] === 'admin') {
-      items.push({ text: 'Admin', href: href('/admin') })
-    }
-    return items
-  }, [pathname, services])
+  const breadcrumbItems = useMemo(
+    () => buildBreadcrumbItems(services, pathname, href),
+    [pathname, services],
+  )
 
   return { breadcrumbItems, onFollow }
 }
@@ -112,6 +106,8 @@ function Shell({ children }: Props) {
   const currentService = serviceForPath(services, pathname)
   const { breadcrumbItems, onFollow } = useConsoleNav(services)
   const { items: notifications } = useNotifications()
+  const terminology = useActiveTerminology(meta?.cloud ?? 'aws')
+  const docs = docsLink(meta?.cloud)
 
   useEffect(() => {
     applyMode(mode)
@@ -173,7 +169,7 @@ function Shell({ children }: Props) {
     const items: TopNavigationProps.Utility[] = [
       {
         type: 'menu-dropdown',
-        text: accountId || 'Account',
+        text: accountId || terminology['account-id-label'] || 'Account',
         iconName: 'user-profile',
         items: accounts.map((account) => ({ id: account, text: account })),
         onItemClick: (event) => {
@@ -237,7 +233,18 @@ function Shell({ children }: Props) {
       items.push({ type: 'button', text: version, disableUtilityCollapse: true })
     }
     return items
-  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode, density, navigate])
+  }, [
+    meta,
+    accountId,
+    accounts,
+    connected,
+    refetchAccounts,
+    setAccountId,
+    mode,
+    density,
+    navigate,
+    terminology,
+  ])
 
   return (
     <>
@@ -298,11 +305,12 @@ function Shell({ children }: Props) {
             <HelpPanel header={<h2>{currentService.label}</h2>}>
               <SpaceBetween size="m">
                 <p>
-                  JaisCloud emulates {currentService.label}. Manage its resources in account{' '}
-                  {accountId || '—'} ({meta?.region ?? '—'}).
+                  JaisCloud emulates {currentService.label}. Manage its resources in{' '}
+                  {terminology['account-id-label'] ?? 'account'} {accountId || '—'} (
+                  {meta?.region ?? '—'}).
                 </p>
-                <Link external href="https://docs.aws.amazon.com/">
-                  AWS documentation
+                <Link external href={docs.href}>
+                  {docs.label}
                 </Link>
               </SpaceBetween>
             </HelpPanel>

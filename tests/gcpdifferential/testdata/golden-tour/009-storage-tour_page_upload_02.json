@@ -1,0 +1,30 @@
+{
+  "index": 9,
+  "service": "storage",
+  "op": "tour_page_upload_02",
+  "method": "POST",
+  "path": "/upload/storage/v1/b/<bucket>/o?uploadType=media&name=page%2F02.txt",
+  "status": 200,
+  "request": "page-2",
+  "response": {
+    "bucket": "<bucket>",
+    "contentType": "text/plain",
+    "crc32c": "<crc32c>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "id": "<bucket>/page/02.txt/<generation>",
+    "kind": "storage#object",
+    "md5Hash": "<md5Hash>",
+    "mediaLink": "<mediaLink>",
+    "metageneration": "<metageneration>",
+    "name": "page/02.txt",
+    "selfLink": "<selfLink>",
+    "size": "6",
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "timeFinalized": "<time>",
+    "timeStorageClassUpdated": "<time>",
+    "updated": "<time>"
+  }
+}
+

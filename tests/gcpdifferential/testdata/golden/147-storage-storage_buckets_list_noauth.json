@@ -1,0 +1,24 @@
+{
+  "index": 147,
+  "service": "storage",
+  "op": "storage_buckets_list_noauth",
+  "method": "GET",
+  "path": "/storage/v1/b?project=<project>",
+  "status": 401,
+  "response": {
+    "error": {
+      "code": 401,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "Authorization",
+          "locationType": "header",
+          "message": "Anonymous caller does not have storage.buckets.list access to the Google Cloud project. Permission 'storage.buckets.list' denied on resource (or it may not exist).",
+          "reason": "required"
+        }
+      ],
+      "message": "Anonymous caller does not have storage.buckets.list access to the Google Cloud project. Permission 'storage.buckets.list' denied on resource (or it may not exist)."
+    }
+  }
+}
+

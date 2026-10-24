@@ -49,6 +49,39 @@ func driverCommand(job ClientModeJob) string {
 	return nonEmptyOr(job.SparkSubmitPath, "spark-submit")
 }
 
+// DriverCommand returns the driver container's binary: the spark-sql CLI for a
+// SqlEntryPoint, spark-submit otherwise (with SparkSubmitPath or the SparkSqlPath
+// sibling resolved exactly as the k8s driver does). It is exported so the Docker
+// executor launches the same driver binary as a k8s driver pod.
+func DriverCommand(job ClientModeJob) string {
+	return driverCommand(job)
+}
+
+// BuildDockerArgs returns the driver argv for a k8s-free (Docker) driver. It
+// mirrors BuildClientModeArgs but targets a local master: `--master local[*]`
+// with `--deploy-mode client`, so the driver and its executors run in one
+// process inside the Spark container. No k8s pod-template / namespace /
+// service-account confs apply. Argv order matches the k8s path: emulator confs
+// first (so caller args win, last-value-wins), then the caller's spark-submit
+// args, then the entry-point args and the positional jar/script args.
+func BuildDockerArgs(job ClientModeJob) []string {
+	args := []string{
+		"--master", "local[*]",
+		"--deploy-mode", "client",
+	}
+	args = append(args, job.ExtraSparkConfs...)
+	args = append(args, job.SparkSubmitArgs...)
+	if job.EntryPoint != nil {
+		preJarArgs, jarOrScript := EntryPointArgs(job.EntryPoint)
+		args = append(args, preJarArgs...)
+		if jarOrScript != "" {
+			args = append(args, jarOrScript)
+		}
+	}
+	args = append(args, job.JarArgs...)
+	return args
+}
+
 // sanitizeJobID lowercases the jobID, replaces non-alphanumeric chars with '-',
 // and truncates to 52 chars (to stay within k8s 63-char limit with prefix).
 func sanitizeJobID(jobID string) string {

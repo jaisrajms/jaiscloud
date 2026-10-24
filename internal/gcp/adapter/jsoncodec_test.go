@@ -25,6 +25,7 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/secrets/s:testIamPermissions", "TestIamPermissions"},
 		// Pub/Sub
 		{"PUT", "/v1/projects/p/topics/t", "TopicCreate"},
+		{"PATCH", "/v1/projects/p/topics/t", "TopicUpdate"},
 		{"GET", "/v1/projects/p/topics", "TopicList"},
 		{"GET", "/v1/projects/p/topics/t", "TopicGet"},
 		{"DELETE", "/v1/projects/p/topics/t", "TopicDelete"},
@@ -121,6 +122,39 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"DELETE", "/v1/projects/p/locations/us-central1/channels/c", "DeleteChannel"},
 		{"GET", "/v1/projects/p/locations/us-central1/providers", "ListProviders"},
 		{"GET", "/v1/projects/p/locations/us-central1/providers/pubsub.googleapis.com", "GetProvider"},
+		// Eventarc advanced surface (message buses / enrollments / pipelines /
+		// Google API sources / channel connections / Google channel config).
+		{"POST", "/v1/projects/p/locations/us-central1/messageBuses", "CreateMessageBus"},
+		{"GET", "/v1/projects/p/locations/us-central1/messageBuses", "ListMessageBuses"},
+		{"GET", "/v1/projects/p/locations/us-central1/messageBuses/mb", "GetMessageBus"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/messageBuses/mb", "UpdateMessageBus"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/messageBuses/mb", "DeleteMessageBus"},
+		{"GET", "/v1/projects/p/locations/us-central1/messageBuses/mb:listEnrollments", "ListMessageBusEnrollments"},
+		{"GET", "/v1/projects/p/locations/us-central1/messageBuses/mb:getIamPolicy", "MessageBusGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us-central1/messageBuses/mb:setIamPolicy", "MessageBusSetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us-central1/messageBuses/mb:testIamPermissions", "MessageBusTestIamPermissions"},
+		{"POST", "/v1/projects/p/locations/us-central1/enrollments", "CreateEnrollment"},
+		{"GET", "/v1/projects/p/locations/us-central1/enrollments", "ListEnrollments"},
+		{"GET", "/v1/projects/p/locations/us-central1/enrollments/e", "GetEnrollment"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/enrollments/e", "UpdateEnrollment"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/enrollments/e", "DeleteEnrollment"},
+		{"POST", "/v1/projects/p/locations/us-central1/pipelines", "CreatePipeline"},
+		{"GET", "/v1/projects/p/locations/us-central1/pipelines", "ListPipelines"},
+		{"GET", "/v1/projects/p/locations/us-central1/pipelines/pl", "GetPipeline"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/pipelines/pl", "UpdatePipeline"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/pipelines/pl", "DeletePipeline"},
+		{"POST", "/v1/projects/p/locations/us-central1/googleApiSources", "CreateGoogleApiSource"},
+		{"GET", "/v1/projects/p/locations/us-central1/googleApiSources", "ListGoogleApiSources"},
+		{"GET", "/v1/projects/p/locations/us-central1/googleApiSources/s", "GetGoogleApiSource"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/googleApiSources/s", "UpdateGoogleApiSource"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/googleApiSources/s", "DeleteGoogleApiSource"},
+		{"POST", "/v1/projects/p/locations/us-central1/channelConnections", "CreateChannelConnection"},
+		{"GET", "/v1/projects/p/locations/us-central1/channelConnections", "ListChannelConnections"},
+		{"GET", "/v1/projects/p/locations/us-central1/channelConnections/cc", "GetChannelConnection"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/channelConnections/cc", "DeleteChannelConnection"},
+		{"GET", "/v1/projects/p/locations/us-central1/channelConnections/cc:getIamPolicy", "ChannelConnectionGetIamPolicy"},
+		{"GET", "/v1/projects/p/locations/us-central1/googleChannelConfig", "GetGoogleChannelConfig"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/googleChannelConfig", "UpdateGoogleChannelConfig"},
 		// Cloud Functions v1 top-level operations (J60).
 		{"GET", "/v1/operations", "ListOperations"},
 		{"GET", "/v1/operations/op1", "GetOperation"},
@@ -139,15 +173,21 @@ func TestJSONCodecDecode(t *testing.T) {
 	}
 }
 
-func TestWorkflowsListRevisionsUnsupported(t *testing.T) {
-	// Workflow revision history is not modelled: the REST path must fail loud
-	// (404) rather than fall through to GetWorkflow and return the workflow.
+func TestWorkflowsListRevisions(t *testing.T) {
+	// The GET :listRevisions custom method routes to ListWorkflowRevisions; a
+	// non-GET request is not a real method and must fail loud (404) rather than
+	// fall through to GetWorkflow and return the workflow.
 	codec := &JSONCodec{Service: "workflows"}
-	for _, method := range []string{"GET", "POST"} {
-		path := "/v1/projects/p/locations/us-central1/workflows/w:listRevisions"
-		if _, err := codec.Decode(httptest.NewRequest(method, path, nil), nil); err == nil {
-			t.Errorf("%s %s: expected unsupported (404)", method, path)
-		}
+	path := "/v1/projects/p/locations/us-central1/workflows/w:listRevisions"
+	nr, err := codec.Decode(httptest.NewRequest("GET", path, nil), nil)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	if nr.Action != "ListWorkflowRevisions" {
+		t.Errorf("GET action = %q, want ListWorkflowRevisions", nr.Action)
+	}
+	if _, err := codec.Decode(httptest.NewRequest("POST", path, nil), nil); err == nil {
+		t.Errorf("POST %s: expected unsupported (404)", path)
 	}
 }
 
@@ -233,22 +273,112 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us-central1/triggers/t":                      "eventarc",
 		"/v1/projects/p/locations/us-central1/channels/c":                      "eventarc",
 		"/v1/projects/p/locations/us-central1/providers/pubsub.googleapis.com": "eventarc",
+		"/v1/projects/p/locations/us-central1/messageBuses/mb":                 "eventarc",
+		"/v1/projects/p/locations/us-central1/enrollments/e":                   "eventarc",
+		"/v1/projects/p/locations/us-central1/pipelines/pl":                    "eventarc",
+		"/v1/projects/p/locations/us-central1/googleApiSources/s":              "eventarc",
+		"/v1/projects/p/locations/us-central1/channelConnections/cc":           "eventarc",
+		"/v1/projects/p/locations/us-central1/googleChannelConfig":             "eventarc",
 		// Service Usage v1 (services collection + service custom verbs).
 		"/v1/projects/p/services":                            "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com":         "serviceusage",
 		"/v1/projects/p/services:batchEnable":                "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com:enable":  "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com:disable": "serviceusage",
-		// Cloud Resource Manager v1 project surface (project segment is last).
+		// Firestore Admin control plane (REST under the firestore service).
+		"/v1/projects/p/databases":                                 "firestore",
+		"/v1/projects/p/databases/db":                              "firestore",
+		"/v1/projects/p/databases/db/documents/c/d":                "firestore",
+		"/v1/projects/p/databases/db/collectionGroups/cg/indexes":  "firestore",
+		"/v1/projects/p/databases/db/collectionGroups/cg/fields":   "firestore",
+		"/v1/projects/p/databases/db/collectionGroups/cg/fields/f": "firestore",
+		"/v1/projects/p/databases/db/backupSchedules":              "firestore",
+		"/v1/projects/p/databases/db/backupSchedules/1":            "firestore",
+		"/v1/projects/p/databases/db/userCreds":                    "firestore",
+		"/v1/projects/p/databases/db/userCreds/uc:enable":          "firestore",
+		"/v1/projects/p/databases/db/operations":                   "firestore",
+		"/v1/projects/p/databases/db/operations/op1":               "firestore",
+		"/v1/projects/p/databases/db/operations/op1:cancel":        "firestore", "/v1/projects/p/locations/us/backups": "firestore",
+		"/v1/projects/p/locations/us/backups/b": "firestore",
+		// Cloud KMS locations.generateRandomBytes shares the bare locations path
+		// with Memorystore's location discovery; the verb discriminates.
+		"/v1/projects/p/locations/us-central1:generateRandomBytes": "kms",
+		// Cloud Resource Manager v1 project surface (project segment is last),
+		// including the collection route.
+		"/v1/projects":                      "resourcemanager",
 		"/v1/projects/p":                    "resourcemanager",
 		"/v1/projects/p:getIamPolicy":       "resourcemanager",
 		"/v1/projects/p:setIamPolicy":       "resourcemanager",
 		"/v1/projects/p:testIamPermissions": "resourcemanager",
+		"/v1/projects/p:undelete":           "resourcemanager",
 		"/storage/v1/b/bkt/o":               "",
 	}
 	for path, want := range cases {
 		if got := detectV1Service(path); got != want {
 			t.Errorf("detectV1Service(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestFirestoreAdminDecode covers the Firestore Admin REST control-plane paths:
+// the five resource families decode to their registry actions, and the
+// data-plane / disaster-recovery custom verbs fail loud rather than dispatch as
+// CreateDatabase.
+func TestFirestoreAdminDecode(t *testing.T) {
+	cases := []struct{ method, path, action string }{
+		{"POST", "/v1/projects/p/databases?databaseId=db", "CreateDatabase"},
+		{"GET", "/v1/projects/p/databases", "ListDatabases"},
+		{"GET", "/v1/projects/p/databases/db", "GetDatabase"},
+		{"PATCH", "/v1/projects/p/databases/db?updateMask=concurrencyMode", "UpdateDatabase"},
+		{"DELETE", "/v1/projects/p/databases/db", "DeleteDatabase"},
+		{"POST", "/v1/projects/p/databases/db/backupSchedules", "CreateBackupSchedule"},
+		{"GET", "/v1/projects/p/databases/db/backupSchedules", "ListBackupSchedules"},
+		{"GET", "/v1/projects/p/databases/db/backupSchedules/1", "GetBackupSchedule"},
+		{"PATCH", "/v1/projects/p/databases/db/backupSchedules/1?updateMask=retention", "UpdateBackupSchedule"},
+		{"DELETE", "/v1/projects/p/databases/db/backupSchedules/1", "DeleteBackupSchedule"},
+		{"POST", "/v1/projects/p/databases/db/userCreds?userCredsId=uc", "CreateUserCreds"},
+		{"GET", "/v1/projects/p/databases/db/userCreds", "ListUserCreds"},
+		{"GET", "/v1/projects/p/databases/db/userCreds/uc", "GetUserCreds"},
+		{"POST", "/v1/projects/p/databases/db/userCreds/uc:enable", "EnableUserCreds"},
+		{"POST", "/v1/projects/p/databases/db/userCreds/uc:disable", "DisableUserCreds"},
+		{"POST", "/v1/projects/p/databases/db/userCreds/uc:resetPassword", "ResetUserPassword"},
+		{"DELETE", "/v1/projects/p/databases/db/userCreds/uc", "DeleteUserCreds"},
+		{"GET", "/v1/projects/p/databases/db/collectionGroups/cg/fields", "ListFields"},
+		{"GET", "/v1/projects/p/databases/db/collectionGroups/cg/fields/f", "GetField"},
+		{"PATCH", "/v1/projects/p/databases/db/collectionGroups/cg/fields/f?updateMask=indexConfig", "UpdateField"},
+		{"GET", "/v1/projects/p/locations/us/backups", "ListBackups"},
+		{"GET", "/v1/projects/p/locations/us/backups/b", "GetBackup"},
+		{"DELETE", "/v1/projects/p/locations/us/backups/b", "DeleteBackup"},
+		{"GET", "/v1/projects/p/databases/db/operations", "ListOperations"},
+		{"GET", "/v1/projects/p/databases/db/operations/op1", "GetOperation"},
+		{"DELETE", "/v1/projects/p/databases/db/operations/op1", "DeleteOperation"},
+		{"POST", "/v1/projects/p/databases/db/operations/op1:cancel", "CancelOperation"},
+	}
+	for _, tc := range cases {
+		c := &JSONCodec{Service: "firestore"}
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		nr, err := c.Decode(r, nil)
+		if err != nil {
+			t.Errorf("Decode(%s %s): %v", tc.method, tc.path, err)
+			continue
+		}
+		if nr.Action != tc.action {
+			t.Errorf("Decode(%s %s) action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+	}
+
+	// Data-plane / disaster-recovery verbs are not modelled: fail loud instead of
+	// dispatching the collection-level POSTs as CreateDatabase.
+	for _, p := range []string{
+		"/v1/projects/p/databases:restore",
+		"/v1/projects/p/databases:clone",
+		"/v1/projects/p/databases/db:exportDocuments",
+		"/v1/projects/p/databases/db:importDocuments",
+		"/v1/projects/p/databases/db:bulkDeleteDocuments",
+	} {
+		r := httptest.NewRequest("POST", p, nil)
+		if _, err := (&JSONCodec{Service: "firestore"}).Decode(r, nil); err == nil {
+			t.Errorf("Decode(%q) succeeded, want a fail-loud error", p)
 		}
 	}
 }

@@ -40,6 +40,15 @@ jobs:
         with:
           package_json_file: ui/package.json
 
+      # Fail the tag on a bad release config before spending a UI build on it
+      # (the same check runs on every PR in ci.yml's release-config job).
+      # Pinned to v2: a v3 flip should not wait for a tag to be discovered.
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: check
+
       - name: Build UI assets
         working-directory: ui
         run: |
@@ -55,7 +64,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

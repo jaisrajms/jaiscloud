@@ -1,0 +1,13 @@
+{
+  "index": 3,
+  "service": "pubsub",
+  "op": "error_topic_create",
+  "method": "PUT",
+  "path": "/v1/projects/<project>/topics/<topic>",
+  "status": 200,
+  "request": {},
+  "response": {
+    "name": "projects/<project>/topics/<topic>"
+  }
+}
+

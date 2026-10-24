@@ -25,10 +25,18 @@ jobs:
             echo "version=sha-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
           fi
 
-  # ─── Build and push single image ───────────────────────────────────────────
+  # ─── Build and push one image per cloud ────────────────────────────────────
   build-and-push:
     needs: setup
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cloud: aws
+            port: 4566
+          - cloud: gcp
+            port: 8080
     steps:
       - name: Checkout (full history for git describe)
         uses: actions/checkout@v4
@@ -50,7 +58,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push jaiscloud-aws
+      - name: Build and push jaiscloud-${{ matrix.cloud }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -59,9 +67,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ needs.setup.outputs.version }}
-            CLOUD=aws
+            CLOUD=${{ matrix.cloud }}
+            PORT=${{ matrix.port }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/jaiscloud-aws:${{ needs.setup.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/jaiscloud-aws:latest
-          cache-from: type=gha,scope=jaiscloud-aws
-          cache-to: type=gha,mode=max,scope=jaiscloud-aws
+            ghcr.io/${{ github.repository_owner }}/jaiscloud-${{ matrix.cloud }}:${{ needs.setup.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/jaiscloud-${{ matrix.cloud }}:latest
+          cache-from: type=gha,scope=jaiscloud-${{ matrix.cloud }}
+          cache-to: type=gha,mode=max,scope=jaiscloud-${{ matrix.cloud }}

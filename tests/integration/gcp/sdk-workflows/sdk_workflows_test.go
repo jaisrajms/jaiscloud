@@ -112,6 +112,49 @@ func TestSDKWorkflows(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestSDKWorkflowsOperationsListDelete exercises the location-scoped operations
+// surface through the official client: a create LRO is listed by
+// projects.locations.operations.list, then removed by operations.delete (which
+// answers Empty) so a subsequent poll is NotFound.
+func TestSDKWorkflowsOperationsListDelete(t *testing.T) {
+	ctx := context.Background()
+	wfs, err := workflows.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	const parent = "projects/proj/locations/us-central1"
+	id := unique("wfops")
+	name := parent + "/workflows/" + id
+	op, err := wfs.Projects.Locations.Workflows.Create(parent, &workflows.Workflow{
+		SourceContents: source,
+	}).WorkflowId(id).Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, op.Name)
+
+	// The create operation appears in the location's operations list. (Its done
+	// state is mode-dependent — the opt-in async mode returns it in flight — so
+	// only its presence is asserted here.)
+	list, err := wfs.Projects.Locations.Operations.List(parent).Do()
+	require.NoError(t, err)
+	var found bool
+	for _, o := range list.Operations {
+		if o.Name == op.Name {
+			found = true
+			require.Equal(t, op.Name, o.Name)
+			break
+		}
+	}
+	require.Truef(t, found, "create operation %s not listed", op.Name)
+
+	// Delete answers Empty and the operation is gone.
+	_, err = wfs.Projects.Locations.Operations.Delete(op.Name).Do()
+	require.NoError(t, err)
+	_, err = wfs.Projects.Locations.Operations.Get(op.Name).Do()
+	require.Error(t, err, "operation must be gone after delete")
+
+	_, err = wfs.Projects.Locations.Workflows.Delete(name).Do()
+	require.NoError(t, err)
+}
+
 func TestSDKWorkflowsFailureFailsLoud(t *testing.T) {
 	ctx := context.Background()
 	wfs, err := workflows.NewService(ctx, opts()...)

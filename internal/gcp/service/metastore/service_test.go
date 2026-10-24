@@ -373,3 +373,32 @@ func isCode(err error, code string) bool {
 	var perr *model.ProviderError
 	return errors.As(err, &perr) && perr.Code == code
 }
+
+// TestListPageSizeNegativeRejected pins AIP-158 on metastore's five cursor-paged
+// list surfaces: a negative pageSize is INVALID_ARGUMENT, not a fall-back to the
+// shared default.
+func TestListPageSizeNegativeRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newCore()
+	if _, _, err := s.CreateService(ctx, "proj", "us-central1", "svc1", nil); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"ListServices", func() error { _, _, err := s.ListServices(ctx, "proj", "us-central1", -1, ""); return err }},
+		{"ListBackups", func() error { _, _, err := s.ListBackups(ctx, "proj", "us-central1", "svc1", -1, ""); return err }},
+		{"ListMetadataImports", func() error {
+			_, _, err := s.ListMetadataImports(ctx, "proj", "us-central1", "svc1", -1, "")
+			return err
+		}},
+		{"ListOperations", func() error { _, _, err := s.ListOperations(ctx, "proj", "us-central1", -1, ""); return err }},
+		{"ListFederations", func() error { _, _, err := s.ListFederations(ctx, "proj", "us-central1", -1, ""); return err }},
+	}
+	for _, tc := range cases {
+		if err := tc.call(); !isCode(err, "InvalidArgument") {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
+	}
+}

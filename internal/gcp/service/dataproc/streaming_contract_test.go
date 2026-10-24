@@ -334,7 +334,7 @@ func runRestartJob(t *testing.T, p *Service, client *fake.Clientset, j dpstore.J
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
 	}()
 
 	base := "jc-spark-cm-" + strings.ToLower(j.JobID)

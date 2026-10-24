@@ -1,0 +1,10 @@
+{
+  "index": 123,
+  "service": "managedkafka",
+  "op": "managedkafka_clusters_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/us-central1/clusters",
+  "status": 200,
+  "response": {}
+}
+

@@ -47,6 +47,31 @@ func bucketParams() *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: map[string]any{}, ResourceID: resource.ResourceID("proj")}
 }
 
+// TestBucketsInsertRejectsInvalidName pins the GCS bucket-naming rule the
+// differential harness found missing: a name with uppercase letters or an
+// out-of-place separator is INVALID_ARGUMENT (400), while a legal name still
+// creates.
+func TestBucketsInsertRejectsInvalidName(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"INVALID_BUCKET_NAME", "Upper", "-lead", "trail-", "has space"} {
+		p := newTestProvider()
+		nr := bucketParams()
+		nr.Params["body"] = map[string]any{"name": name}
+		_, err := p.BucketsInsert(ctx, nr)
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 {
+			t.Errorf("BucketsInsert(%q) err = %v, want 400 ProviderError", name, err)
+		}
+	}
+
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "conf-bucket-a1b2c3"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Errorf("BucketsInsert(valid) err = %v, want nil", err)
+	}
+}
+
 // TestObjectsScopeToBucketProject verifies that object operations scope to the
 // bucket's owning project rather than the request's default project (object
 // requests carry no ?project=). Without this, a bucket created under
@@ -390,6 +415,159 @@ func TestObjectsListMaxResultsCappedAt1000(t *testing.T) {
 	}
 	if token, _ := resp.Data["nextPageToken"].(string); token == "" {
 		t.Error("expected nextPageToken when more than 1000 objects remain")
+	}
+}
+
+// TestObjectsListNegativeMaxResults pins the Discovery document's uint32
+// maxResults contract on the REST listings: a negative, fractional, signed,
+// out-of-uint32 or explicitly empty value is a 400 (reason invalidParameter) on
+// the plain, delimiter and versions object listings and on buckets.list,
+// instead of being folded into the 1,000-item default; a bad value is validated
+// before the bucket lookup; and an explicit zero is a literal empty page (DC39,
+// empty value pinned with DC63).
+func TestObjectsListNegativeMaxResults(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	for _, name := range []string{"logs/a", "logs/b", "data/c"} {
+		nr = bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = name
+		nr.Params[wire.MediaKey] = []byte(name)
+		if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	lists := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{"plain", nil},
+		{"delimiter", map[string]any{"delimiter": "/"}},
+		{"versions", map[string]any{"versions": "true"}},
+	}
+	// The Discovery document declares maxResults a uint32 with minimum 0, so a
+	// negative, fractional, signed, out-of-uint32 or explicitly empty value is
+	// INVALID_ARGUMENT (400, reason invalidParameter). GCS's JSON API rejects
+	// the empty binding on its own — the behaviour the shared resolvers adopt in
+	// DC63 — so this is also the consistency pin for the two surfaces. GCS renders
+	// its own text ("Invalid unsigned integer value: '<v>'.") and also names the
+	// parameter on the errors[] entry (DC68).
+	for _, bad := range []string{"", "-1", "abc", "1.5", "+5", "4294967296"} {
+		wantMsg := "Invalid unsigned integer value: '" + bad + "'."
+		assertInvalid := func(where string, err error) {
+			t.Helper()
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidRequest" || perr.HTTPStatus != 400 {
+				t.Fatalf("%s maxResults=%q: expected InvalidRequest/400, got %v", where, bad, err)
+			}
+			if perr.Message != wantMsg {
+				t.Fatalf("%s maxResults=%q: message = %q, want %q", where, bad, perr.Message, wantMsg)
+			}
+			if reason, _ := perr.Data["reason"].(string); reason != "invalidParameter" {
+				t.Fatalf("%s maxResults=%q: reason = %q, want invalidParameter", where, bad, reason)
+			}
+			if loc, _ := perr.Data["location"].(string); loc != "maxResults" {
+				t.Fatalf("%s maxResults=%q: location = %q, want maxResults", where, bad, loc)
+			}
+			if locType, _ := perr.Data["locationType"].(string); locType != "parameter" {
+				t.Fatalf("%s maxResults=%q: locationType = %q, want parameter", where, bad, locType)
+			}
+		}
+		for _, tc := range lists {
+			nr = bucketParams()
+			nr.Params["bucket"] = "bkt"
+			nr.Params["maxResults"] = bad
+			for k, v := range tc.extra {
+				nr.Params[k] = v
+			}
+			_, err := p.ObjectsList(ctx, nr)
+			assertInvalid(tc.name+" listing", err)
+		}
+
+		nr = bucketParams()
+		nr.Params["maxResults"] = bad
+		_, err := p.BucketsList(ctx, nr)
+		assertInvalid("buckets.list", err)
+	}
+
+	// A typed (non-string) out-of-range value renders the same text as a string
+	// one, quoting the value plainly (no JSON escaping).
+	for _, tc := range []struct {
+		v    any
+		want string
+	}{{int(-1), "-1"}, {float64(-0.5), "-0.5"}} {
+		nr = bucketParams()
+		nr.Params["maxResults"] = tc.v
+		_, err := p.BucketsList(ctx, nr)
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidRequest" {
+			t.Fatalf("buckets.list maxResults=%#v: expected InvalidRequest, got %v", tc.v, err)
+		}
+		if want := "Invalid unsigned integer value: '" + tc.want + "'."; perr.Message != want {
+			t.Fatalf("buckets.list maxResults=%#v: message = %q, want %q", tc.v, perr.Message, want)
+		}
+	}
+
+	// A bad maxResults is validated before the bucket lookup, as real GCS does
+	// (400 rather than 404 for a missing bucket).
+	nr = bucketParams()
+	nr.Params["bucket"] = "missing-bucket"
+	nr.Params["maxResults"] = "-1"
+	if _, err := p.ObjectsList(ctx, nr); err == nil {
+		t.Fatal("missing bucket + maxResults=-1: expected an error, got nil")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidRequest" {
+		t.Fatalf("missing bucket + maxResults=-1: expected InvalidRequest, got %v", err)
+	}
+
+	// An explicit zero is a literal empty page with no continuation token; an
+	// absent maxResults still selects the 1,000-item default.
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["maxResults"] = "0"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("maxResults=0: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 0 {
+		t.Fatalf("maxResults=0: expected an empty page, got %d items", len(items))
+	}
+	if token, hasNext := resp.Data["nextPageToken"]; hasNext {
+		t.Fatalf("maxResults=0: expected no nextPageToken, got %v", token)
+	}
+	// The delimiter-grouped listing has its own pager arm; zero is empty there
+	// too, with neither items nor prefixes.
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["delimiter"] = "/"
+	nr.Params["maxResults"] = "0"
+	resp, err = p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("delimiter maxResults=0: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 0 {
+		t.Fatalf("delimiter maxResults=0: expected no items, got %d", len(items))
+	}
+	if prefixes, _ := resp.Data["prefixes"].([]any); len(prefixes) != 0 {
+		t.Fatalf("delimiter maxResults=0: expected no prefixes, got %d", len(prefixes))
+	}
+	if _, hasNext := resp.Data["nextPageToken"]; hasNext {
+		t.Fatal("delimiter maxResults=0: expected no nextPageToken")
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	resp, err = p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("absent maxResults: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 3 {
+		t.Fatalf("absent maxResults: expected all 3 objects, got %d", len(items))
 	}
 }
 
@@ -2390,7 +2568,8 @@ func TestFetchObjectBytesRoundTrip(t *testing.T) {
 // TestPutObjectBytesRoundTrip verifies the server-side object write used by
 // other emulated services (e.g. Dataproc driver output): the bucket is created
 // lazily, the bytes round-trip through the encryption + blob path, and an
-// overwrite replaces the live generation and cleans up the prior blob.
+// overwrite replaces the live generation while retaining the replaced one as a
+// soft-deleted copy (the default bucket soft delete policy).
 func TestPutObjectBytesRoundTrip(t *testing.T) {
 	blobs := blobfs.NewMemoryBlobStore()
 	p := New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobs, crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
@@ -2421,7 +2600,19 @@ func TestPutObjectBytesRoundTrip(t *testing.T) {
 	if string(got) != "world" {
 		t.Fatalf("overwrite round-trip = %q, want %q", got, "world")
 	}
-	if _, err := blobs.Get(ctx, blobsNamespace, blobKey("stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)); err == nil {
-		t.Error("prior generation blob was not cleaned up on overwrite")
+	// The replaced generation is soft-deleted, not dropped: its metadata row and
+	// bytes stay until the soft delete window closes.
+	if _, err := blobs.Get(ctx, blobsNamespace, blobKey("stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)); err != nil {
+		t.Errorf("prior generation blob was dropped on overwrite: %v", err)
+	}
+	retained, err := p.objects.GetObjectGeneration(ctx, "stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)
+	if err != nil {
+		t.Fatalf("prior generation metadata missing: %v", err)
+	}
+	if !retained.SoftDeleted {
+		t.Error("overwritten generation was not soft-deleted")
+	}
+	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("stage-bkt", "meta/jobs/j1/driveroutput")); err != nil {
+		t.Fatalf("live object missing after overwrite: %v", err)
 	}
 }

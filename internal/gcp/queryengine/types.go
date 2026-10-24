@@ -6,7 +6,7 @@
 // it is never persisted and the caller's catalog remains the source of truth.
 //
 // The engine deliberately implements only the frozen v1 subset (see
-// docs/gcp-bigquery-sql-engine.md). Any construct it cannot translate fails
+// docs/gcp/bigquery-sql-engine.md). Any construct it cannot translate fails
 // loud (UnsupportedError) rather than silently returning wrong rows.
 package queryengine
 

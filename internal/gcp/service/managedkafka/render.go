@@ -8,15 +8,16 @@ import (
 
 	"jaiscloud/internal/clock"
 	mkstore "jaiscloud/internal/gcp/store/managedkafka"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // operationMetadataType is the @type of the Managed Kafka v1 OperationMetadata.
 const operationMetadataType = "type.googleapis.com/google.cloud.managedkafka.v1.OperationMetadata"
 
-// formatTimestamp renders a business timestamp as the RFC3339Nano string the
-// Discovery JSON shape uses.
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // ClusterJSON renders a stored Cluster as the Discovery cluster shape.
@@ -226,5 +227,6 @@ func (s *Service) settle(op mkstore.Operation) mkstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	s.tracker.EmitOperation("managedkafka", op.ID, op.ID, op.Verb)
 	return op
 }

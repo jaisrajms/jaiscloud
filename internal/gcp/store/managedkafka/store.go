@@ -119,6 +119,10 @@ type Store interface {
 	UpdateClusterAtomic(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error)
 	DeleteCluster(ctx context.Context, projectID, location, name string) error
 	ListClusters(ctx context.Context, projectID, location string) ([]Cluster, error)
+	// ListClustersByProject returns every cluster in a project across all
+	// locations, ordered by location then name. It backs the region-optional
+	// console list.
+	ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error)
 
 	CreateTopic(ctx context.Context, projectID, location, clusterName string, t Topic) error
 	GetTopic(ctx context.Context, projectID, location, clusterName, topicName string) (Topic, error)
@@ -132,6 +136,10 @@ type Store interface {
 	UpdateTopicAtomic(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error)
 	DeleteTopic(ctx context.Context, projectID, location, clusterName, topicName string) error
 	ListTopics(ctx context.Context, projectID, location, clusterName string) ([]Topic, error)
+	// ListTopicsByProject returns every topic in a project across all
+	// locations and clusters, ordered by location, cluster, then name. It
+	// backs the region-optional console list.
+	ListTopicsByProject(ctx context.Context, projectID string) ([]Topic, error)
 
 	// Operations persist the done google.longrunning.Operation returned by
 	// cluster create/update/delete so a poll can read it back. They are

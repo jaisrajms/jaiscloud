@@ -13,11 +13,11 @@ import (
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Service implements firestorepb.FirestoreServer over the shared, transport-
@@ -144,9 +144,12 @@ func (s *Service) UpdateDocument(ctx context.Context, req *firestorepb.UpdateDoc
 	if err != nil {
 		return nil, mapError(model.NewProviderError("InvalidArgument", err.Error(), 400))
 	}
-	var mask []string
+	// Presence of the mask matters: an unset update_mask replaces the whole
+	// document, while a set-but-empty one is AIP-134's no-op. `mask` is the
+	// unrelated response projection ("fields to return").
+	var mask *firestoreprovider.UpdateMask
 	if req.GetUpdateMask() != nil {
-		mask = req.GetUpdateMask().GetFieldPaths()
+		mask = &firestoreprovider.UpdateMask{Paths: req.GetUpdateMask().GetFieldPaths()}
 	}
 	pre, err := decodeStorePrecondition(req.GetCurrentDocument())
 	if err != nil {
@@ -156,7 +159,7 @@ func (s *Service) UpdateDocument(ctx context.Context, req *firestorepb.UpdateDoc
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return encodeDocument(out), nil
+	return encodeDocument(firestoreprovider.ProjectDocument(out, req.GetMask().GetFieldPaths())), nil
 }
 
 func (s *Service) DeleteDocument(ctx context.Context, req *firestorepb.DeleteDocumentRequest) (*emptypb.Empty, error) {
@@ -192,7 +195,7 @@ func (s *Service) ListDocuments(ctx context.Context, req *firestorepb.ListDocume
 		mask = req.GetMask().GetFieldPaths()
 	}
 	page := firestoreprovider.NewPageParams(int(req.GetPageSize()), req.GetPageToken())
-	docs, nextToken, err := s.svc.ListDocuments(ctx, project, database, path, req.GetTransaction(), mask, page)
+	docs, nextToken, err := s.svc.ListDocuments(ctx, project, database, path, req.GetTransaction(), mask, req.GetShowMissing(), page)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -240,7 +243,7 @@ func (s *Service) Commit(ctx context.Context, req *firestorepb.CommitRequest) (*
 		return nil, mapError(err)
 	}
 	return &firestorepb.CommitResponse{
-		CommitTime:   timestamppb.New(commitTime),
+		CommitTime:   timestamp.Proto(commitTime),
 		WriteResults: wr,
 	}, nil
 }
@@ -299,7 +302,7 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 	if err != nil {
 		return mapError(err)
 	}
-	readTime := timestamppb.New(clock.Now())
+	readTime := timestamp.Proto(clock.Now())
 	for _, d := range docs {
 		if err := stream.Send(&firestorepb.RunQueryResponse{
 			Document: encodeDocument(d),
@@ -309,6 +312,7 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 		}
 	}
 	return stream.Send(&firestorepb.RunQueryResponse{
+		ReadTime:             readTime,
 		ContinuationSelector: &firestorepb.RunQueryResponse_Done{Done: true},
 	})
 }
@@ -319,13 +323,28 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 // projection, so req.Mask is ignored.
 func (s *Service) BatchGetDocuments(req *firestorepb.BatchGetDocumentsRequest, stream firestorepb.Firestore_BatchGetDocumentsServer) error {
 	ctx := stream.Context()
-	items, err := s.svc.BatchGet(ctx, req.GetDocuments(), req.GetTransaction())
+	txn := req.GetTransaction()
+	// Real Firestore starts a new transaction when new_transaction is set and
+	// returns its id on the first response in the stream. Clients that begin
+	// transactions lazily through a read (e.g. the Node SDK's runTransaction)
+	// rely on this; without it they cannot obtain a transaction id.
+	if req.GetNewTransaction() != nil {
+		var err error
+		txn, err = s.svc.BeginTransaction(ctx)
+		if err != nil {
+			return mapError(err)
+		}
+	}
+	items, err := s.svc.BatchGet(ctx, req.GetDocuments(), txn)
 	if err != nil {
 		return mapError(err)
 	}
-	readTime := timestamppb.New(clock.Now())
-	for _, item := range items {
+	readTime := timestamp.Proto(clock.Now())
+	for i, item := range items {
 		resp := &firestorepb.BatchGetDocumentsResponse{ReadTime: readTime}
+		if i == 0 && len(txn) > 0 {
+			resp.Transaction = txn
+		}
 		if name, ok := item["missing"].(string); ok {
 			resp.Result = &firestorepb.BatchGetDocumentsResponse_Missing{Missing: name}
 		} else if found, ok := item["found"].(map[string]any); ok {
@@ -386,7 +405,7 @@ func writeResultToProto(m map[string]any) (*firestorepb.WriteResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		wr.UpdateTime = timestamppb.New(t)
+		wr.UpdateTime = timestamp.Proto(t)
 	}
 	if tr, ok := m["transformResults"].([]any); ok {
 		for _, v := range tr {

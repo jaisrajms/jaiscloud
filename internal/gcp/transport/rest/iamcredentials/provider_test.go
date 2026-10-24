@@ -38,8 +38,8 @@ func TestGenerateAccessTokenRoute(t *testing.T) {
 		t.Fatalf("GenerateAccessToken: %v", err)
 	}
 	token, _ := resp.Data["accessToken"].(string)
-	if !strings.HasPrefix(token, core.AccessTokenPrefix) {
-		t.Errorf("accessToken = %q, want the emulator prefix", token)
+	if strings.Count(token, ".") != 2 {
+		t.Errorf("accessToken = %q, want an opaque 3-part JWT", token)
 	}
 	exp, _ := resp.Data["expireTime"].(string)
 	parsed, err := time.Parse(time.RFC3339, exp)

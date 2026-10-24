@@ -3,6 +3,7 @@ package firestore
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,8 +64,9 @@ type batchWriteRequestWire struct {
 }
 
 type batchGetRequestWire struct {
-	Documents   []string `json:"documents,omitempty"`
-	Transaction string   `json:"transaction,omitempty"`
+	Documents      []string        `json:"documents,omitempty"`
+	Transaction    string          `json:"transaction,omitempty"`
+	NewTransaction json.RawMessage `json:"newTransaction,omitempty"`
 }
 
 type rollbackRequestWire struct {
@@ -74,6 +76,36 @@ type rollbackRequestWire struct {
 type runQueryRequestWire struct {
 	StructuredQuery *structuredQuery `json:"structuredQuery,omitempty"`
 	Transaction     string           `json:"transaction,omitempty"`
+}
+
+type partitionQueryRequestWire struct {
+	StructuredQuery *structuredQuery `json:"structuredQuery,omitempty"`
+	PartitionCount  jsonInt          `json:"partitionCount,omitempty"`
+	PageToken       string           `json:"pageToken,omitempty"`
+	PageSize        jsonInt          `json:"pageSize,omitempty"`
+}
+
+// jsonInt decodes an integer field that may arrive as either a JSON number or
+// the quoted string proto3 uses for its int64 JSON mapping (Firestore's
+// PartitionQueryRequest.partitionCount is format:int64, so official clients
+// send it quoted).
+type jsonInt int
+
+func (n *jsonInt) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		return nil
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return err
+	}
+	*n = jsonInt(v)
+	return nil
 }
 
 // ─── error helpers ────────────────────────────────────────────────────────────

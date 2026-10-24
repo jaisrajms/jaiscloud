@@ -1,0 +1,57 @@
+{
+  "index": 137,
+  "service": "monitoring",
+  "op": "mon_alert_policy_create",
+  "method": "POST",
+  "path": "/v3/projects/<project>/alertPolicies",
+  "status": 200,
+  "request": {
+    "combiner": "OR",
+    "conditions": [
+      {
+        "conditionThreshold": {
+          "comparison": "COMPARISON_GT",
+          "duration": "0s",
+          "filter": "metric.type = \"<demoMetric>\" AND resource.type = \"global\"",
+          "thresholdValue": 5
+        },
+        "displayName": "trades per minute high"
+      }
+    ],
+    "displayName": "<alertDisplay>",
+    "enabled": true,
+    "notificationChannels": [
+      "projects/<project>/notificationChannels/<notificationChannelId>"
+    ]
+  },
+  "response": {
+    "combiner": "OR",
+    "conditions": [
+      {
+        "conditionThreshold": {
+          "comparison": "COMPARISON_GT",
+          "duration": "0s",
+          "filter": "metric.type = \"<demoMetric>\" AND resource.type = \"global\"",
+          "thresholdValue": 5
+        },
+        "displayName": "trades per minute high",
+        "name": "projects/<project>/alertPolicies/<alertPolicyId>/conditions/<condition>"
+      }
+    ],
+    "creationRecord": {
+      "mutateTime": "<time>",
+      "mutatedBy": "<userEmail>"
+    },
+    "displayName": "<alertDisplay>",
+    "enabled": true,
+    "mutationRecord": {
+      "mutateTime": "<time>",
+      "mutatedBy": "<userEmail>"
+    },
+    "name": "projects/<project>/alertPolicies/<alertPolicyId>",
+    "notificationChannels": [
+      "projects/<project>/notificationChannels/<notificationChannelId>"
+    ]
+  }
+}
+

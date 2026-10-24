@@ -1,0 +1,61 @@
+{
+  "index": 23,
+  "service": "bigquery",
+  "op": "tour_bq_load_table_create",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/datasets/<dataset>/tables",
+  "status": 200,
+  "request": {
+    "schema": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "name",
+          "type": "STRING"
+        }
+      ]
+    },
+    "tableReference": {
+      "datasetId": "<dataset>",
+      "projectId": "<project>",
+      "tableId": "<table>_load"
+    }
+  },
+  "response": {
+    "creationTime": "<time>",
+    "etag": "<etag>",
+    "id": "<project>:<dataset>.<table>_load",
+    "kind": "bigquery#table",
+    "lastModifiedTime": "<time>",
+    "location": "US",
+    "numActiveLogicalBytes": "0",
+    "numBytes": "0",
+    "numLongTermBytes": "0",
+    "numLongTermLogicalBytes": "0",
+    "numRows": "0",
+    "numTotalLogicalBytes": "0",
+    "schema": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "name",
+          "type": "STRING"
+        }
+      ]
+    },
+    "selfLink": "<selfLink>",
+    "tableReference": {
+      "datasetId": "<dataset>",
+      "projectId": "<project>",
+      "tableId": "<table>_load"
+    },
+    "type": "TABLE"
+  }
+}
+

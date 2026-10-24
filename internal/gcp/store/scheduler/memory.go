@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -96,6 +97,28 @@ func (s *MemoryStore) ListJobs(_ context.Context, projectID, location string) ([
 		result = append(result, j)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func (s *MemoryStore) ListJobsByProject(_ context.Context, projectID string) ([]Job, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Job
+	for key, m := range s.jobs {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, j := range m {
+			result = append(result, j)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
 	return result, nil
 }
 

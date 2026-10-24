@@ -1,0 +1,31 @@
+{
+  "index": 77,
+  "service": "bigquery",
+  "op": "bqsql_err_missing_table",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 404,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT * FROM missing_table",
+    "useLegacySql": false
+  },
+  "response": {
+    "error": {
+      "code": 404,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "Not found: Table <project>:bqsql_ds_<suffix>.missing_table was not found in location US",
+          "reason": "notFound"
+        }
+      ],
+      "message": "Not found: Table <project>:bqsql_ds_<suffix>.missing_table was not found in location US",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

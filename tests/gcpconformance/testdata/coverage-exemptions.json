@@ -1,0 +1,72 @@
+{
+  "exemptions": [
+    {
+      "operation": "BigQuery.CancelJob",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "BigQuery.DeleteJob",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "BigQuery.UpdateDataset",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "BigQuery.UpdateTable",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "CloudDNS.ChangeGet",
+      "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
+    },
+    {
+      "operation": "CloudDNS.ResourceRecordSetDelete",
+      "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
+    },
+    {
+      "operation": "CloudDNS.ResourceRecordSetGet",
+      "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
+    },
+    {
+      "operation": "CloudSQL.OperationsGet",
+      "reason": "Cloud SQL operations are LROs with server-assigned names; users.delete/update address the user by a query/body name that must match a previously inserted user."
+    },
+    {
+      "operation": "CloudSQL.UsersDelete",
+      "reason": "Cloud SQL operations are LROs with server-assigned names; users.delete/update address the user by a query/body name that must match a previously inserted user."
+    },
+    {
+      "operation": "CloudSQL.UsersUpdate",
+      "reason": "Cloud SQL operations are LROs with server-assigned names; users.delete/update address the user by a query/body name that must match a previously inserted user."
+    },
+    {
+      "operation": "Compute.OperationsGet",
+      "reason": "Compute operations are LROs with server-assigned names; there is no create surface to stage one."
+    },
+    {
+      "operation": "Dataproc.DiagnoseCluster",
+      "reason": "Dataproc DiagnoseCluster is an explicit Unimplemented stub (docs/fidelity-overrides.yaml, unsupported), so the probe answers 501 rather than a validatable shape."
+    },
+    {
+      "operation": "Metastore.AlterMetadataResourceLocation",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.ExportMetadata",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.MoveTableToDatabase",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.QueryMetadata",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.RestoreService",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    }
+  ]
+}

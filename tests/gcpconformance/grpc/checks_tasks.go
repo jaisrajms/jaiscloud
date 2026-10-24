@@ -149,6 +149,14 @@ func checkTasksListQueues(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	// AIP-158: a negative page_size is INVALID_ARGUMENT on both list methods,
+	// rather than a silent fall-back to the documented maximum.
+	if _, err := client.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: tasksParent(cfg), PageSize: -1}).Next(); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("ListQueues(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := client.ListTasks(ctx, &cloudtaskspb.ListTasksRequest{Parent: created.GetName(), PageSize: -1}).Next(); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("ListTasks(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
 	it := client.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: tasksParent(cfg)})
 	for {
 		q, err := it.Next()

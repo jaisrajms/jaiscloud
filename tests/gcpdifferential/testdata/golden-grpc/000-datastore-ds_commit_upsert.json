@@ -1,0 +1,49 @@
+{
+  "index": 0,
+  "service": "datastore",
+  "op": "ds_commit_upsert",
+  "method": "google.datastore.v1.Datastore/Commit",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "mode": "NON_TRANSACTIONAL",
+    "mutations": [
+      {
+        "upsert": {
+          "key": {
+            "partitionId": {
+              "projectId": "<project>"
+            },
+            "path": [
+              {
+                "kind": "<dsKind>",
+                "name": "<dsEntity>"
+              }
+            ]
+          },
+          "properties": {
+            "count": {
+              "integerValue": "7"
+            },
+            "greeting": {
+              "stringValue": "hello jaiscloud"
+            }
+          }
+        }
+      }
+    ],
+    "projectId": "<project>"
+  },
+  "response": {
+    "indexUpdates": "<indexUpdates>",
+    "mutationResults": [
+      {
+        "createTime": "<time>",
+        "updateTime": "<time>",
+        "version": "<version>"
+      }
+    ]
+  }
+}
+

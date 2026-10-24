@@ -11,12 +11,12 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // ─── metric descriptors ───────────────────────────────────────────────────────
@@ -108,10 +108,10 @@ func timeSeriesFromProto(p *monitoringpb.TimeSeries) (monitoringstore.TimeSeries
 func pointToProto(p monitoringstore.Point) *monitoringpb.Point {
 	iv := &monitoringpb.TimeInterval{}
 	if !p.EndTime.IsZero() {
-		iv.EndTime = timestamppb.New(p.EndTime)
+		iv.EndTime = timestamp.Proto(p.EndTime)
 	}
 	if !p.StartTime.IsZero() {
-		iv.StartTime = timestamppb.New(p.StartTime)
+		iv.StartTime = timestamp.Proto(p.StartTime)
 	}
 	return &monitoringpb.Point{Interval: iv, Value: typedValueToProto(p.Value)}
 }
@@ -217,7 +217,7 @@ func distributionToProto(d monitoringstore.Distribution) *distributionpb.Distrib
 	for _, ex := range d.Exemplars {
 		pe := &distributionpb.Distribution_Exemplar{Value: ex.Value}
 		if !ex.Timestamp.IsZero() {
-			pe.Timestamp = timestamppb.New(ex.Timestamp)
+			pe.Timestamp = timestamp.Proto(ex.Timestamp)
 		}
 		for _, raw := range ex.Attachments {
 			var a anypb.Any
@@ -349,10 +349,10 @@ func notificationChannelToProto(c monitoringstore.NotificationChannel, project s
 		out.Enabled = wrapperspb.Bool(*c.Enabled)
 	}
 	if !c.CreateTime.IsZero() {
-		out.CreationRecord = &monitoringpb.MutationRecord{MutateTime: timestamppb.New(c.CreateTime)}
+		out.CreationRecord = &monitoringpb.MutationRecord{MutateTime: timestamp.Proto(c.CreateTime)}
 	}
 	if !c.UpdateTime.IsZero() {
-		out.MutationRecords = []*monitoringpb.MutationRecord{{MutateTime: timestamppb.New(c.UpdateTime)}}
+		out.MutationRecords = []*monitoringpb.MutationRecord{{MutateTime: timestamp.Proto(c.UpdateTime)}}
 	}
 	return out
 }

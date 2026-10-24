@@ -57,7 +57,7 @@ func TestLROAsync(t *testing.T) {
 		{
 			name:       "workflows",
 			createPath: "/v1/projects/" + lroProject + "/locations/" + lroLocation + "/workflows?workflowId=async-wf",
-			createBody: `{"sourceContents":"main:\n  steps:\n    - return: ok"}`,
+			createBody: `{"sourceContents":"main:\n  steps:\n    - done:\n        return: ok"}`,
 			wantName:   "projects/" + lroProject + "/locations/" + lroLocation + "/workflows/async-wf",
 		},
 		{
@@ -163,6 +163,55 @@ func TestLROAsyncServiceUsage(t *testing.T) {
 	}
 }
 
+// TestLROAsyncResourceManager proves the top-level operations/{id} namespace is
+// also pollable for Cloud Resource Manager: a projects.create returns an
+// in-flight operation named operations/{id}, and GET /v1/operations/{id}
+// resolves it through the Resource Manager fallback wired into the Functions v1
+// REST route until it settles with the typed v1 Project response.
+func TestLROAsyncResourceManager(t *testing.T) {
+	if os.Getenv("JAISCLOUD_LRO_ASYNC") != "1" {
+		t.Skip("set JAISCLOUD_LRO_ASYNC=1 and start jaiscloud-gcp with JAISCLOUD_LRO_MODE=async")
+	}
+	resetState(t)
+
+	const projectID = "async-proj-1234"
+	resp, body := do(t, "POST", "/v1/projects",
+		[]byte(`{"projectId":"`+projectID+`","name":"Async Project"}`), lroJSONHeaders())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create: %s", body)
+
+	op := jsonMap(t, body)
+	done, ok := op["done"].(bool)
+	require.True(t, ok, "create operation has no boolean done: %s", body)
+	require.False(t, done, "async create must return done:false: %s", body)
+
+	name, _ := op["name"].(string)
+	require.Regexp(t, regexp.MustCompile(`^operations/[^/]+$`), name,
+		"resourcemanager operation name must be top-level: %s", body)
+	_, hasResponse := op["response"]
+	require.False(t, hasResponse, "in-flight operation must not carry response: %s", body)
+
+	pollPath := "/v1/" + name
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		presp, pbody := do(t, "GET", pollPath, nil, nil)
+		require.Equal(t, http.StatusOK, presp.StatusCode, "poll: %s", pbody)
+		settled := jsonMap(t, pbody)
+		if isDone, _ := settled["done"].(bool); isDone {
+			response, ok := settled["response"].(map[string]any)
+			require.True(t, ok, "settled operation must carry response: %s", pbody)
+			require.Equal(t, "type.googleapis.com/google.cloudresourcemanager.v1.Project", response["@type"],
+				"settled response @type: %s", pbody)
+			require.Equal(t, projectID, response["projectId"], "settled projectId: %s", pbody)
+			require.Equal(t, "ACTIVE", response["lifecycleState"], "settled state: %s", pbody)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation %s did not settle within 20s; last: %s", name, pbody)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // TestLROAsyncOperationsRegistry proves the generic google.longrunning.Operations
 // gRPC service is registry-backed in the opt-in async mode: a Service Usage
 // enable's top-level operations/{id} is Get- and List-able through the official
@@ -200,10 +249,20 @@ func TestLROAsyncOperationsRegistry(t *testing.T) {
 	_, err = client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: "operations/does-not-exist"})
 	require.Equal(t, codes.NotFound, status.Code(err), "GetOperation(unknown)")
 
-	// The top-level parent lists the persisted operation. The make target sets
-	// JAISCLOUD_GCP_PROJECT_ID=proj so the registry resolves the same project
-	// the REST create used.
-	list, err := client.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: "operations"})
+	// The top-level parent lists the persisted operation. The generic
+	// google.longrunning.Operations service is endpoint-scoped (GA14/GA15): a
+	// client addressed at a service's endpoint sees only that service's
+	// operations, and an untokened request lists no endpoint-scoped service. So
+	// list at the Service Usage endpoint, the owner of this operation. The make
+	// target sets JAISCLOUD_GCP_PROJECT_ID=proj so the registry resolves the
+	// same project the REST create used.
+	suConn, err := grpc.NewClient(lroGRPCEndpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithAuthority("serviceusage."+lroGRPCEndpoint))
+	require.NoError(t, err, "dial gRPC (serviceusage endpoint)")
+	t.Cleanup(func() { _ = suConn.Close() })
+	suClient := longrunningpb.NewOperationsClient(suConn)
+	list, err := suClient.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: "operations"})
 	require.NoError(t, err, "ListOperations")
 	found := false
 	for _, listed := range list.GetOperations() {

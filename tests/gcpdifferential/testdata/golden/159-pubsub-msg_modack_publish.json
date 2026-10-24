@@ -1,0 +1,21 @@
+{
+  "index": 159,
+  "service": "pubsub",
+  "op": "msg_modack_publish",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/<topic>:publish",
+  "status": 200,
+  "request": {
+    "messages": [
+      {
+        "data": "bXNnLW1vZGFjaw=="
+      }
+    ]
+  },
+  "response": {
+    "messageIds": [
+      "<messageId>"
+    ]
+  }
+}
+

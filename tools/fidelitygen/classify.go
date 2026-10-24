@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Fidelity states, ordered best (ga) to worst (unsupported).
@@ -67,16 +68,35 @@ type Facts struct {
 	// Both are zero for non-gRPC transports.
 	GRPCChecksPassed int
 	GRPCChecksTotal  int
+	// GRPCCheckLabels are the human RPC labels of the gRPC checks that cover
+	// this method, deduplicated and sorted ("which check(s) cover it").
+	GRPCCheckLabels []string
+	// RESTEvidenceEntries is the number of committed-transcript 2xx responses
+	// whose matched Discovery method equals DiscoveryMethod. Zero means no
+	// schema-validated response backs this REST cell (the "ga without a
+	// validated response" gap). It is zero for non-REST transports.
+	RESTEvidenceEntries int
+	// Verified is the evidence signal distinct from State: a cell is verified
+	// when real recorded evidence backs it — a validated transcript response
+	// (REST) or a passing official-client check (gRPC). A cell can be ga
+	// without being verified (a registration claim), and verified without
+	// being ga (evidence exists, but a fidelity caveat still applies).
+	Verified bool
 }
 
 // Cell is one row of the fidelity matrix.
 type Cell struct {
-	Service   string   `json:"service"`
-	Operation string   `json:"operation"`
-	Transport string   `json:"transport"`
-	State     string   `json:"state"`
-	Reason    string   `json:"reason,omitempty"`
-	Evidence  []string `json:"evidence,omitempty"`
+	Service   string `json:"service"`
+	Operation string `json:"operation"`
+	Transport string `json:"transport"`
+	State     string `json:"state"`
+	Reason    string `json:"reason,omitempty"`
+	// DiscoveryMethod is the official Discovery method this REST cell maps to
+	// ("" when none). It is a machine-readable mirror of the evidence token.
+	DiscoveryMethod string `json:"discovery,omitempty"`
+	// Verified is the cell's recorded-evidence signal (see Facts.Verified).
+	Verified bool     `json:"verified"`
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 // Classify turns Facts into a Cell. An override wins, but may only downgrade
@@ -85,7 +105,8 @@ type Cell struct {
 func Classify(f Facts) Cell {
 	state, reason := deriveState(f)
 
-	cell := Cell{Service: f.Service, Operation: f.Operation, Transport: f.Transport}
+	cell := Cell{Service: f.Service, Operation: f.Operation, Transport: f.Transport,
+		DiscoveryMethod: f.DiscoveryMethod, Verified: f.Verified}
 	switch ov := f.Override; {
 	case ov == nil:
 		cell.State, cell.Reason = state, reason
@@ -151,8 +172,22 @@ func evidenceFor(f Facts) []string {
 		if f.GRPCChecksTotal > 0 {
 			ev = append(ev, fmt.Sprintf("transport=grpc (conformance=%d/%d pass)",
 				f.GRPCChecksPassed, f.GRPCChecksTotal))
+			if len(f.GRPCCheckLabels) > 0 {
+				ev = append(ev, "grpc-checks="+strings.Join(f.GRPCCheckLabels, ","))
+			}
 		} else {
 			ev = append(ev, "transport=grpc (proto-conformance pending)")
+		}
+		ev = append(ev, fmt.Sprintf("verified=%t (grpc)", f.Verified))
+	}
+	if f.Transport == "rest" {
+		switch {
+		case f.Verified:
+			ev = append(ev, fmt.Sprintf("verified=true (rest, %d transcript entries)", f.RESTEvidenceEntries))
+		case f.DiscoveryMethod != "":
+			ev = append(ev, "verified=false (rest, no validated transcript response)")
+		default:
+			ev = append(ev, "verified=false (rest, no Discovery method)")
 		}
 	}
 	if f.DiscoveryMethod != "" {

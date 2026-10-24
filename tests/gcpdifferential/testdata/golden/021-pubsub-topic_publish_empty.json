@@ -1,0 +1,19 @@
+{
+  "index": 21,
+  "service": "pubsub",
+  "op": "topic_publish_empty",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/<topic>:publish",
+  "status": 400,
+  "request": {
+    "messages": []
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "message": "The value for message_count is too small. You passed 0 in the request, but the minimum value is 1.",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

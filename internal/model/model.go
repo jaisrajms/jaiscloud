@@ -132,6 +132,23 @@ type ProviderError struct {
 	// error. The GCP transport surfaces it as a google.rpc.RetryInfo detail and
 	// a Retry-After header (see internal/gcp/throttle); AWS/Azure ignore it.
 	RetryAfter time.Duration
+	// Details carries structured google.rpc detail protos merged into the GCP
+	// error envelope's "details" array (REST) and the gRPC status details. nil
+	// is safe. AWS/Azure ignore it.
+	Details []ErrorDetail
+}
+
+// ErrorDetail is a structured detail attached to a ProviderError. The GCP
+// transports render it as a google.rpc.* message; ErrorDetail currently models
+// google.rpc.ErrorInfo (the shape Pub/Sub exactly-once failures use).
+type ErrorDetail struct {
+	// Type is the fully-qualified proto name without the URL prefix, e.g.
+	// "google.rpc.ErrorInfo".
+	Type string
+	// Reason, Domain and Metadata are the google.rpc.ErrorInfo fields.
+	Reason   string
+	Domain   string
+	Metadata map[string]string
 }
 
 func (e *ProviderError) Error() string {

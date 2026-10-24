@@ -7,11 +7,13 @@ import (
 	"time"
 
 	runstore "jaiscloud/internal/gcp/store/run"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // google.protobuf.Any type URLs used on Cloud Run operation responses.
 const (
-	serviceTypeURL = "type.googleapis.com/google.cloud.run.v2.Service"
+	serviceTypeURL  = "type.googleapis.com/google.cloud.run.v2.Service"
+	revisionTypeURL = "type.googleapis.com/google.cloud.run.v2.Revision"
 )
 
 // conditionLastTransition returns the RFC3339 timestamp used on a Ready
@@ -24,7 +26,7 @@ func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // readyCondition is the terminal Ready condition the mock reports.
@@ -72,7 +74,14 @@ func trafficStatuses(s runstore.Service) []any {
 		if !ok {
 			continue
 		}
-		status := map[string]any{"percent": intFrom(m["percent"]), "uri": s.Uri}
+		tag, _ := m["tag"].(string)
+		status := map[string]any{"percent": intFrom(m["percent"])}
+		// Real Cloud Run sets a target's status `uri` only when the target
+		// carries a tag, and then it is the tag-qualified URL
+		// (https://{tag}---{service-host}); an untagged target has no `uri` key.
+		if tag != "" {
+			status["uri"] = taggedURI(s.Uri, tag)
+		}
 		if v, ok := m["type"]; ok {
 			status["type"] = v
 		}
@@ -91,10 +100,25 @@ func trafficStatuses(s runstore.Service) []any {
 			"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
 			"revision": s.LatestReadyRevision,
 			"percent":  100,
-			"uri":      s.Uri,
 		})
 	}
 	return out
+}
+
+// taggedURI rewrites a service uri into the tag-qualified form real Cloud Run
+// returns for the target carrying a traffic tag. The tag becomes the leading
+// host label — https://{tag}---{service-host} (e.g.
+// https://stable---svc-0123456789ab.us-central1.run.app) — the string the
+// Discovery's TrafficTargetStatus.tag describes as "used in the URI to
+// exclusively reference this target". An empty tag leaves the uri unchanged.
+func taggedURI(uri, tag string) string {
+	if tag == "" {
+		return uri
+	}
+	if i := strings.Index(uri, "://"); i >= 0 {
+		return uri[:i+3] + tag + "---" + uri[i+3:]
+	}
+	return uri
 }
 
 // RevisionJSON renders a stored revision as the google.cloud.run.v2.Revision
@@ -109,33 +133,47 @@ func RevisionJSON(r runstore.Revision) map[string]any {
 	out["etag"] = r.Etag
 	out["createTime"] = formatTime(r.CreateTime)
 	out["updateTime"] = formatTime(r.UpdateTime)
+	if !r.DeleteTime.IsZero() {
+		out["deleteTime"] = formatTime(r.DeleteTime)
+	}
 	out["conditions"] = []any{readyCondition(r.UpdateTime)}
 	out["reconciling"] = false
 	return out
 }
 
 // OperationJSON renders a stored operation as the google.longrunning.Operation
-// wire map. An in-flight operation omits the response, matching real GCP. The
-// response/metadata is the service snapshot wrapped as a typed Any (the @type
-// discriminator gax clients require to unpack it).
+// wire map. The metadata snapshot is present from creation — an in-flight
+// operation carries it too, matching real GCP (the mutation's
+// google.longrunning.operation_info metadata_type: Service for service
+// mutations, Revision for revision deletes) — while the response is only
+// present once the operation is done. Both are the service snapshot wrapped as
+// a typed Any (the @type discriminator gax clients require to unpack it).
 func OperationJSON(op runstore.Operation) map[string]any {
 	out := map[string]any{
 		"name": OperationName(op.ProjectID, op.Location, op.ID),
 		"done": op.Done,
 	}
-	if op.Done && op.Service != nil {
-		out["metadata"] = serviceAny(*op.Service)
-		out["response"] = serviceAny(*op.Service)
+	switch {
+	case op.Service != nil:
+		out["metadata"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
+		if op.Done {
+			out["response"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
+		}
+	case op.Revision != nil:
+		out["metadata"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
+		if op.Done {
+			out["response"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
+		}
 	}
 	return out
 }
 
-// serviceAny wraps a rendered service body as the Any-shaped JSON a
-// google.longrunning.Operation response carries.
-func serviceAny(s runstore.Service) map[string]any {
-	body := ServiceJSON(s)
+// typedAny wraps a rendered body as the Any-shaped JSON a
+// google.longrunning.Operation response carries (the @type discriminator gax
+// clients require to unpack it).
+func typedAny(typeURL string, body map[string]any) map[string]any {
 	out := make(map[string]any, len(body)+1)
-	out["@type"] = serviceTypeURL
+	out["@type"] = typeURL
 	for k, v := range body {
 		out[k] = v
 	}
@@ -146,7 +184,7 @@ func serviceAny(s runstore.Service) map[string]any {
 // (*.run.app), which addresses the data plane rather than the control plane.
 func IsInvocationHost(host string) bool {
 	h := strings.ToLower(stripHostPort(host))
-	suffix := "." + DefaultURLSuffix
+	suffix := "." + invocationHost.Suffix
 	return strings.HasSuffix(h, suffix) && len(h) > len(suffix)
 }
 

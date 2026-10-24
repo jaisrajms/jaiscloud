@@ -340,7 +340,12 @@ func operationMetadataMap(v Version, op Operation) map[string]any {
 	md := map[string]any{
 		"@type":  operationMetadataType,
 		"target": op.Target,
-		"type":   operationTypeFor(op.Verb),
+	}
+	// OperationMetadataV1.type is an enum; protojson omits a zero value, and the
+	// upgrade verbs have no documented enum member, so emit it only when the
+	// verb maps to one.
+	if t := operationTypeFor(op.Verb); t != "" {
+		md["type"] = t
 	}
 	if op.Done {
 		md["updateTime"] = formatTimestamp(end)

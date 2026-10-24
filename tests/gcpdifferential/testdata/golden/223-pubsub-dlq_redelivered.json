@@ -1,0 +1,32 @@
+{
+  "index": 223,
+  "service": "pubsub",
+  "op": "dlq_redelivered",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/<subscription>:pull",
+  "status": 200,
+  "request": {
+    "maxMessages": 1,
+    "returnImmediately": true
+  },
+  "response": {
+    "receivedMessages": [
+      {
+        "ackId": "<ackId>",
+        "message": {
+          "attributes": {
+            "CloudPubSubDeadLetterSourceDeliveryCount": "<deadLetterDeliveryCount>",
+            "CloudPubSubDeadLetterSourceSubscription": "<subscription>",
+            "CloudPubSubDeadLetterSourceSubscriptionProject": "<project>",
+            "CloudPubSubDeadLetterSourceTopicPublishTime": "<time>",
+            "k": "v"
+          },
+          "data": "ZGxxLXBheWxvYWQ=",
+          "messageId": "<messageId>",
+          "publishTime": "<time>"
+        }
+      }
+    ]
+  }
+}
+

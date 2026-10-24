@@ -1,0 +1,20 @@
+{
+  "index": 2,
+  "service": "kms",
+  "op": "tour_kms_asym_get_public_key",
+  "method": "google.cloud.kms.v1.KeyManagementService/GetPublicKey",
+  "path": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1"
+  },
+  "response": {
+    "algorithm": "RSA_SIGN_PKCS1_2048_SHA256",
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+    "pem": "<pem>",
+    "pemCrc32c": "<crc32c>",
+    "protectionLevel": "SOFTWARE"
+  }
+}
+

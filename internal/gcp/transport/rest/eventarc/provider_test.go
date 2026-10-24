@@ -3,6 +3,7 @@ package eventarc
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -457,8 +458,27 @@ func TestRoutes_AllHandlersRegistered(t *testing.T) {
 		"Eventarc.CreateChannel", "Eventarc.GetChannel", "Eventarc.ListChannels",
 		"Eventarc.UpdateChannel", "Eventarc.DeleteChannel",
 		"Eventarc.ListProviders", "Eventarc.GetProvider",
+		"Eventarc.ListOperations", "Eventarc.GetOperation", "Eventarc.DeleteOperation", "Eventarc.CancelOperation",
 		"Eventarc.TriggerGetIamPolicy", "Eventarc.TriggerSetIamPolicy", "Eventarc.TriggerTestIamPermissions",
 		"Eventarc.ChannelGetIamPolicy", "Eventarc.ChannelSetIamPolicy", "Eventarc.ChannelTestIamPermissions",
+		"Eventarc.ListMessageBusEnrollments",
+		"Eventarc.GetGoogleChannelConfig", "Eventarc.UpdateGoogleChannelConfig",
+	}
+	// The advanced surface registers an identical CRUD+IAM shape per collection
+	// kind (minus update for channel connections).
+	for _, k := range eventarccore.AdvancedKinds {
+		want = append(want,
+			"Eventarc.Create"+k.Proto,
+			"Eventarc.Get"+k.Proto,
+			"Eventarc."+k.ListMethod,
+			"Eventarc.Delete"+k.Proto,
+			"Eventarc."+k.Proto+"GetIamPolicy",
+			"Eventarc."+k.Proto+"SetIamPolicy",
+			"Eventarc."+k.Proto+"TestIamPermissions",
+		)
+		if !k.NoUpdate {
+			want = append(want, "Eventarc.Update"+k.Proto)
+		}
 	}
 	for _, k := range want {
 		if routes[k] == nil {
@@ -817,6 +837,105 @@ func TestPagination(t *testing.T) {
 	}
 }
 
+// TestListTriggersFilterAndOrder verifies the documented triggers.list
+// `filter` and `orderBy` parameters reach the core rather than being dropped:
+// the old provider read neither, so a client that sorted or filtered silently
+// got the unfiltered, name-ascending list.
+func TestListTriggersFilterAndOrder(t *testing.T) {
+	ctx := context.Background()
+	p, _, workflows := newProvider()
+	createWorkflow(t, workflows, "us-central1", "w1")
+	wfName := "projects/proj/locations/us-central1/workflows/w1"
+
+	createWith := func(id string, body map[string]any) {
+		t.Helper()
+		if _, err := p.CreateTrigger(ctx, newNR(map[string]any{"location": "us-central1", "triggerId": id, "body": body})); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	createWith("t1", triggerBody(wfName))
+	createWith("t2", map[string]any{
+		"destination":  map[string]any{"cloudRun": map[string]any{"service": "svc", "region": "us-central1"}},
+		"eventFilters": []any{map[string]any{"attribute": "type", "value": "google.cloud.pubsub.topic.v1.messagePublished"}},
+		"labels":       map[string]any{"env": "prod"},
+	})
+	createWith("t3", triggerBody(wfName))
+
+	ids := func(params map[string]any) []string {
+		t.Helper()
+		params["location"] = "us-central1"
+		resp, err := p.ListTriggers(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("ListTriggers %v: %v", params, err)
+		}
+		triggers, _ := resp.Data["triggers"].([]any)
+		out := make([]string, 0, len(triggers))
+		for _, raw := range triggers {
+			m, _ := raw.(map[string]any)
+			name, _ := m["name"].(string)
+			out = append(out, name)
+		}
+		return out
+	}
+	wantNames := func(ids []string) []string {
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, "projects/proj/locations/us-central1/triggers/"+id)
+		}
+		return out
+	}
+
+	if got := ids(map[string]any{}); len(got) != 3 {
+		t.Fatalf("unfiltered list = %v", got)
+	}
+	if got, want := ids(map[string]any{"filter": "destination:workflow"}), wantNames([]string{"t1", "t3"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("filter=destination:workflow = %v, want %v", got, want)
+	}
+	if got, want := ids(map[string]any{"filter": "destination:cloudRun"}), wantNames([]string{"t2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("filter=destination:cloudRun = %v, want %v", got, want)
+	}
+	if got, want := ids(map[string]any{"filter": "labels.env=prod"}), wantNames([]string{"t2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("filter=labels.env=prod = %v, want %v", got, want)
+	}
+	if got, want := ids(map[string]any{"orderBy": "name desc"}), wantNames([]string{"t3", "t2", "t1"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("orderBy=name desc = %v, want %v", got, want)
+	}
+	// The filter and the order compose with each other and with the page cursor.
+	page1, err := p.ListTriggers(ctx, newNR(map[string]any{
+		"location": "us-central1", "filter": "destination:workflow", "orderBy": "name desc", "pageSize": "1",
+	}))
+	if err != nil {
+		t.Fatalf("filtered page 1: %v", err)
+	}
+	triggers1, _ := page1.Data["triggers"].([]any)
+	token, _ := page1.Data["nextPageToken"].(string)
+	if len(triggers1) != 1 || token == "" {
+		t.Fatalf("filtered page 1 = %v, token=%q", page1.Data, token)
+	}
+	page2, err := p.ListTriggers(ctx, newNR(map[string]any{
+		"location": "us-central1", "filter": "destination:workflow", "orderBy": "name desc", "pageSize": "1", "pageToken": token,
+	}))
+	if err != nil {
+		t.Fatalf("filtered page 2: %v", err)
+	}
+	triggers2, _ := page2.Data["triggers"].([]any)
+	if len(triggers2) != 1 || page2.Data["nextPageToken"] != nil {
+		t.Fatalf("filtered page 2 = %v", page2.Data)
+	}
+	first, _ := triggers1[0].(map[string]any)
+	second, _ := triggers2[0].(map[string]any)
+	if first["name"] != wantNames([]string{"t3"})[0] || second["name"] != wantNames([]string{"t1"})[0] {
+		t.Fatalf("paged order = %v then %v", first["name"], second["name"])
+	}
+
+	// An unsupported filter/orderBy is InvalidArgument, never a silently
+	// ignored parameter.
+	_, err = p.ListTriggers(ctx, newNR(map[string]any{"location": "us-central1", "filter": "bogus=1"}))
+	expectProviderError(t, err, "InvalidArgument", 400)
+	_, err = p.ListTriggers(ctx, newNR(map[string]any{"location": "us-central1", "orderBy": "bogus"}))
+	expectProviderError(t, err, "InvalidArgument", 400)
+}
+
 func TestUidIsUUID4(t *testing.T) {
 	p, _, workflows := newProvider()
 	tr := seedTrigger(t, p, workflows)
@@ -1046,5 +1165,242 @@ func TestBoolParamNativeBool(t *testing.T) {
 	}
 	if _, err := p.GetTrigger(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/triggers/t1"})); err == nil {
 		t.Fatal("native-bool validateOnly create persisted")
+	}
+}
+
+// TestAdvancedSurfaceREST drives the advanced-surface REST routes end to end:
+// a message bus (full CRUD + IAM), an enrollment referencing it with the
+// listEnrollments custom method, a pipeline, and the Google channel config
+// singleton. The route keys are fetched from Routes() so a missing registration
+// fails the test.
+func TestAdvancedSurfaceREST(t *testing.T) {
+	ctx := context.Background()
+	p, _, _ := newProvider()
+	routes := p.Routes()
+
+	call := func(t *testing.T, key string, params map[string]any) *model.ProviderResponse {
+		t.Helper()
+		h := routes[key]
+		if h == nil {
+			t.Fatalf("route %q not registered", key)
+		}
+		resp, err := h(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		return resp
+	}
+
+	busName := "projects/proj/locations/us-central1/messageBuses/mb1"
+
+	// Create → done operation wrapping the message bus.
+	create := call(t, "Eventarc.CreateMessageBus", map[string]any{
+		"location": "us-central1", "messageBusId": "mb1",
+		"body": map[string]any{"displayName": "demo"},
+	})
+	if create.Data["done"] != true {
+		t.Fatalf("create done = %v", create.Data["done"])
+	}
+	created, _ := create.Data["response"].(map[string]any)
+	if created["name"] != busName || created["@type"] != eventarccore.MessageBusKind.TypeURL() {
+		t.Fatalf("created = %v", created)
+	}
+	if created["uid"] == "" || created["etag"] == "" {
+		t.Fatalf("uid/etag missing: %v", created)
+	}
+
+	// Get / List.
+	got := call(t, "Eventarc.GetMessageBus", map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"})
+	if got.Data["name"] != busName {
+		t.Fatalf("get = %v", got.Data)
+	}
+	list := call(t, "Eventarc.ListMessageBuses", map[string]any{"location": "us-central1"})
+	if items, _ := list.Data["messageBuses"].([]any); len(items) != 1 {
+		t.Fatalf("list = %v", list.Data)
+	}
+
+	// Masked update.
+	upd := call(t, "Eventarc.UpdateMessageBus", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+		"updateMask": "labels", "body": map[string]any{"labels": map[string]any{"a": "b"}},
+	})
+	updated, _ := upd.Data["response"].(map[string]any)
+	if labels, _ := updated["labels"].(map[string]string); labels["a"] != "b" {
+		t.Fatalf("updated labels = %v", updated["labels"])
+	}
+
+	// Enrollment referencing the bus, then listEnrollments.
+	call(t, "Eventarc.CreateEnrollment", map[string]any{
+		"location": "us-central1", "enrollmentId": "e1",
+		"body": map[string]any{"messageBus": busName},
+	})
+	enr := call(t, "Eventarc.ListMessageBusEnrollments", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+	})
+	if names, _ := enr.Data["enrollments"].([]string); len(names) != 1 || names[0] != "projects/proj/locations/us-central1/enrollments/e1" {
+		t.Fatalf("listEnrollments = %v", enr.Data)
+	}
+
+	// A pipeline is pure metadata.
+	call(t, "Eventarc.CreatePipeline", map[string]any{
+		"location": "us-central1", "pipelineId": "p1", "body": map[string]any{"displayName": "p"},
+	})
+
+	// IAM trio on the message bus.
+	if pol := call(t, "Eventarc.MessageBusGetIamPolicy", map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"}); pol.Data["etag"] == nil {
+		t.Fatalf("getIamPolicy = %v", pol.Data)
+	}
+	call(t, "Eventarc.MessageBusSetIamPolicy", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+		"body": map[string]any{"bindings": []any{map[string]any{"role": "roles/eventarc.viewer", "members": []any{"allUsers"}}}},
+	})
+	perms := call(t, "Eventarc.MessageBusTestIamPermissions", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+		"body": map[string]any{"permissions": []any{"eventarc.messageBuses.get"}},
+	})
+	if got, _ := perms.Data["permissions"].([]string); len(got) != 1 {
+		t.Fatalf("testIamPermissions = %v", perms.Data)
+	}
+
+	// Google channel config singleton: default get, then update.
+	def := call(t, "Eventarc.GetGoogleChannelConfig", map[string]any{"location": "us-central1"})
+	if def.Data["name"] != "projects/proj/locations/us-central1/googleChannelConfig" {
+		t.Fatalf("default config = %v", def.Data)
+	}
+	cfg := call(t, "Eventarc.UpdateGoogleChannelConfig", map[string]any{
+		"location": "us-central1", "updateMask": "crypto_key_name",
+		"body": map[string]any{"cryptoKeyName": "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k"},
+	})
+	if cfg.Data["cryptoKeyName"] == nil {
+		t.Fatalf("updated config = %v", cfg.Data)
+	}
+
+	// Delete the bus and confirm it is gone.
+	call(t, "Eventarc.DeleteMessageBus", map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"})
+	if _, err := routes["Eventarc.GetMessageBus"](ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"})); err == nil {
+		t.Fatal("message bus still present after delete")
+	}
+}
+
+// TestAdvancedListFilterAndOrderREST verifies the documented filter/orderBy
+// parameters reach the core through the REST routes rather than being dropped:
+// the advanced list handlers read neither, so a client that sorted or filtered
+// silently got the unfiltered, name-ascending list (TD17).
+func TestAdvancedListFilterAndOrderREST(t *testing.T) {
+	ctx := context.Background()
+	p, _, _ := newProvider()
+	routes := p.Routes()
+
+	call := func(t *testing.T, key string, params map[string]any) *model.ProviderResponse {
+		t.Helper()
+		h := routes[key]
+		if h == nil {
+			t.Fatalf("route %q not registered", key)
+		}
+		resp, err := h(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		return resp
+	}
+	// names extracts a list response's resource names in order.
+	names := func(resp *model.ProviderResponse, field string) []string {
+		items, _ := resp.Data[field].([]any)
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			m, _ := it.(map[string]any)
+			out = append(out, fmt.Sprint(m["name"]))
+		}
+		return out
+	}
+	// status returns a ProviderError's HTTP status, or 0 for any other error.
+	status := func(err error) int {
+		if perr, ok := err.(*model.ProviderError); ok {
+			return perr.HTTPStatus
+		}
+		return 0
+	}
+
+	for _, mb := range []struct{ id, dn, env string }{
+		{"mb1", "alpha", "test"}, {"mb2", "beta", "prod"}, {"mb3", "gamma", "test"},
+	} {
+		call(t, "Eventarc.CreateMessageBus", map[string]any{
+			"location": "us-central1", "messageBusId": mb.id,
+			"body": map[string]any{"displayName": mb.dn, "labels": map[string]any{"env": mb.env}},
+		})
+	}
+
+	if got, want := names(call(t, "Eventarc.ListMessageBuses",
+		map[string]any{"location": "us-central1", "filter": "labels.env=test"}), "messageBuses"),
+		[]string{"projects/proj/locations/us-central1/messageBuses/mb1", "projects/proj/locations/us-central1/messageBuses/mb3"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("filtered message buses = %v, want %v", got, want)
+	}
+	if got, want := names(call(t, "Eventarc.ListMessageBuses",
+		map[string]any{"location": "us-central1", "orderBy": "name desc"}), "messageBuses"),
+		[]string{"projects/proj/locations/us-central1/messageBuses/mb3", "projects/proj/locations/us-central1/messageBuses/mb2", "projects/proj/locations/us-central1/messageBuses/mb1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("message buses orderBy name desc = %v, want %v", got, want)
+	}
+
+	// An unsupported filter/orderBy is InvalidArgument, never a silently
+	// unfiltered list.
+	if _, err := routes["Eventarc.ListMessageBuses"](ctx, newNR(map[string]any{"location": "us-central1", "filter": "bogus=1"})); status(err) != 400 {
+		t.Errorf("bad message bus filter err = %v, want 400", err)
+	}
+	if _, err := routes["Eventarc.ListMessageBuses"](ctx, newNR(map[string]any{"location": "us-central1", "orderBy": "bogus"})); status(err) != 400 {
+		t.Errorf("bad message bus orderBy err = %v, want 400", err)
+	}
+
+	// channels.list honors orderBy (it documents no filter).
+	call(t, "Eventarc.CreateChannel", map[string]any{"location": "us-central1", "channelId": "ch1", "body": map[string]any{}})
+	call(t, "Eventarc.CreateChannel", map[string]any{"location": "us-central1", "channelId": "ch2", "body": map[string]any{}})
+	if got, want := names(call(t, "Eventarc.ListChannels",
+		map[string]any{"location": "us-central1", "orderBy": "name desc"}), "channels"),
+		[]string{"projects/proj/locations/us-central1/channels/ch2", "projects/proj/locations/us-central1/channels/ch1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("channels orderBy name desc = %v, want %v", got, want)
+	}
+
+	// providers.list honors filter and orderBy.
+	if got, want := names(call(t, "Eventarc.ListProviders",
+		map[string]any{"location": "us-central1", "filter": `displayName:"Storage"`}), "providers"),
+		[]string{"projects/proj/locations/us-central1/providers/storage.googleapis.com"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("filtered providers = %v, want %v", got, want)
+	}
+	if got, want := names(call(t, "Eventarc.ListProviders",
+		map[string]any{"location": "us-central1", "orderBy": "displayName desc"}), "providers"),
+		[]string{"projects/proj/locations/us-central1/providers/storage.googleapis.com", "projects/proj/locations/us-central1/providers/pubsub.googleapis.com"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("providers orderBy displayName desc = %v, want %v", got, want)
+	}
+}
+
+// TestListNonIntegerPageSize pins the int32 query binding: an unparseable or
+// fractional pageSize is INVALID_ARGUMENT, never a silent zero that would page
+// from the beginning as if the parameter were absent.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p, _, _ := newProvider()
+	for _, tc := range []struct {
+		name string
+		call func(*model.NormalizedRequest) (*model.ProviderResponse, error)
+	}{
+		{"triggers", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListTriggers(ctx, nr)
+		}},
+		{"channels", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListChannels(ctx, nr)
+		}},
+		{"providers", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListProviders(ctx, nr)
+		}},
+	} {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := tc.call(newNR(map[string]any{"location": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", tc.name, v, err)
+			}
+		}
+		if _, err := tc.call(newNR(map[string]any{"location": "us-central1", "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", tc.name, err)
+		}
 	}
 }

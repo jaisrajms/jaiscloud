@@ -24,10 +24,10 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	core "jaiscloud/internal/gcp/service/eventarc"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (which
@@ -68,6 +68,39 @@ func providerToProto(project, location string, d core.Provider) *eventarcpb.Prov
 	return out
 }
 
+// emptyAdvancedProto returns a fresh, empty proto message for an advanced-surface
+// kind. It is the only place the gRPC transport maps a core kind onto a protobuf
+// type, keeping the core free of any proto dependency.
+func emptyAdvancedProto(k core.Kind) proto.Message {
+	switch k {
+	case core.MessageBusKind:
+		return &eventarcpb.MessageBus{}
+	case core.EnrollmentKind:
+		return &eventarcpb.Enrollment{}
+	case core.PipelineKind:
+		return &eventarcpb.Pipeline{}
+	case core.GoogleApiSourceKind:
+		return &eventarcpb.GoogleApiSource{}
+	case core.ChannelConnectionKind:
+		return &eventarcpb.ChannelConnection{}
+	case core.GoogleChannelConfigKind:
+		return &eventarcpb.GoogleChannelConfig{}
+	}
+	return nil
+}
+
+// advancedToProto renders a stored advanced record as its proto message, driven
+// by the core's AdvancedJSON map so the REST and gRPC renders of the same record
+// cannot drift.
+func advancedToProto(project string, k core.Kind, r core.AdvancedRecord) proto.Message {
+	out := emptyAdvancedProto(k)
+	if out == nil {
+		return nil
+	}
+	unmarshalProtoJSON(core.AdvancedJSON(project, k, r), out)
+	return out
+}
+
 // protoConfig marshals a request message to the camelCase JSON body the core
 // stores verbatim. A nil message yields a nil body.
 func protoConfig(m proto.Message) json.RawMessage {
@@ -90,8 +123,8 @@ func maskString(paths []string) string { return strings.Join(paths, ",") }
 // caller-supplied response message (a Trigger/Channel, or Empty for delete).
 func (s *Service) operationToProto(project string, op core.Operation, response proto.Message) (*longrunningpb.Operation, error) {
 	metadata, err := anypb.New(&eventarcpb.OperationMetadata{
-		CreateTime: timestamppb.New(op.CreateTime),
-		EndTime:    timestamppb.New(op.CreateTime),
+		CreateTime: timestamp.Proto(op.CreateTime),
+		EndTime:    timestamp.Proto(op.CreateTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",

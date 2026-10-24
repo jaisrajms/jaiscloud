@@ -2,7 +2,7 @@
 // long-running operations (LROs).
 //
 // The default is synchronous: with the mode disabled every service stores and
-// returns done=true operations inline, exactly as the v1.1.0 contract and the
+// returns done=true operations inline, exactly as the default synchronous contract and the
 // conformance transcripts require. The mode is opt-in (JAISCLOUD_LRO_MODE=async)
 // so a client that polls Operations.GetOperation is genuinely exercised without
 // changing the default behavior for anyone else.

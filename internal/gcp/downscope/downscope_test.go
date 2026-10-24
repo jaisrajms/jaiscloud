@@ -110,11 +110,11 @@ func token(t *testing.T, rules []Rule) string {
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	return TokenPrefix + "hdr." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+	return "hdr." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
 
 func TestAllowedNonDownscopedIsUnrestricted(t *testing.T) {
-	for _, auth := range []string{"", "Bearer some-access-token", "Bearer floci-gcp-impersonated-abc"} {
+	for _, auth := range []string{"", "Bearer some-access-token", "Bearer opaque-jwt-like.token.value"} {
 		if err := Allowed(auth, ReadObject, "bkt", "anything"); err != nil {
 			t.Errorf("Allowed(%q) = %v, want nil", auth, err)
 		}
@@ -210,16 +210,32 @@ func TestAllowedWholeBucketRule(t *testing.T) {
 	}
 }
 
-func TestAllowedMalformedDownscopedTokenDenies(t *testing.T) {
+// TestAllowedTokenWithoutBoundaryIsUnrestricted asserts that an opaque token
+// whose payload has no access_boundary claim (an ordinary access token, a
+// non-JWT opaque token, or a malformed JWT) is not treated as downscoped.
+func TestAllowedTokenWithoutBoundaryIsUnrestricted(t *testing.T) {
+	noClaim, _ := json.Marshal(map[string]any{"email": "sa@example.com"})
 	for _, token := range []string{
-		TokenPrefix + "garbage",
-		TokenPrefix + "a.b", // payload not valid base64
-		TokenPrefix + "a." + base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".c",
-		TokenPrefix + "hdr." + base64.RawURLEncoding.EncodeToString([]byte(`{}`)) + ".sig", // no boundary
+		"garbage",
+		"a.b", // payload not valid base64
+		"a." + base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".c",
+		"hdr." + base64.RawURLEncoding.EncodeToString(noClaim) + ".sig", // valid payload, no access_boundary
 	} {
-		if err := Allowed("Bearer "+token, ReadObject, "bkt", "o"); !errors.Is(err, ErrDenied) {
-			t.Errorf("Allowed(%q) = %v, want ErrDenied", token, err)
+		if err := Allowed("Bearer "+token, ReadObject, "bkt", "o"); err != nil {
+			t.Errorf("Allowed(%q) = %v, want unrestricted (nil)", token, err)
 		}
+	}
+}
+
+// TestAllowedEmptyBoundaryDenies asserts that a downscoped token whose boundary
+// claim is present but empty is enforced and denies every operation.
+func TestAllowedEmptyBoundaryDenies(t *testing.T) {
+	auth := "Bearer " + token(t, []Rule{})
+	if err := Allowed(auth, ReadObject, "bkt", "o"); !errors.Is(err, ErrDenied) {
+		t.Errorf("Allowed(empty boundary) = %v, want ErrDenied", err)
+	}
+	if _, downscoped := RulesFromAuthorization(auth); !downscoped {
+		t.Error("empty boundary claim must still be reported as downscoped")
 	}
 }
 
@@ -231,9 +247,6 @@ func TestRulesFromAuthorization(t *testing.T) {
 	}
 	if _, downscoped := RulesFromAuthorization("Bearer ordinary"); downscoped {
 		t.Error("ordinary token must not be reported as downscoped")
-	}
-	if _, downscoped := RulesFromAuthorization("Bearer " + TokenPrefix + "x"); !downscoped {
-		t.Error("prefixed token must be reported as downscoped even if malformed")
 	}
 }
 
@@ -248,7 +261,7 @@ func TestTokenWithIdentityClaims(t *testing.T) {
 		"exp":             clock.RealNow().Unix() + 3600,
 		"access_boundary": []Rule{{Bucket: "bkt", Permissions: []string{PermissionObjectViewer}}},
 	})
-	auth := "Bearer " + TokenPrefix + "hdr." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+	auth := "Bearer hdr." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 	if err := Allowed(auth, ReadObject, "bkt", "o"); err != nil {
 		t.Fatalf("expected identity-carrying downscoped token to allow read: %v", err)
 	}

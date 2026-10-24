@@ -225,7 +225,7 @@ func (s *Service) serveTokenExchange(w http.ResponseWriter, r *http.Request, for
 
 	// Carry the source credential's identity when it is one of the emulator's
 	// own JWTs; opaque source tokens fall back to the configured identity (real
-	// STS does not validate the source token, and neither does floci).
+	// STS does not validate the source token, matching the emulator).
 	sa := identity.ServiceAccountFromToken(subjectToken)
 	if sa == "" {
 		sa = s.cfg.ServiceAccount
@@ -360,13 +360,14 @@ func MintAccessToken(sa, project string) string {
 	})
 }
 
-// MintDownscopedToken builds a downscoped access token: the emulator
-// TokenPrefix followed by an HS256 JWT carrying the caller's identity and the
-// access-boundary rules. internal/gcp/identity still recovers the identity
-// (the JWT payload is the second dot-separated segment), while
-// internal/gcp/downscope recovers and enforces the boundary.
+// MintDownscopedToken builds a downscoped access token: an opaque HS256 JWT
+// carrying the caller's identity and the access-boundary rules. Real STS tokens
+// are opaque; there is no emulator-specific prefix. internal/gcp/identity
+// recovers the identity (the JWT payload is the second dot-separated segment),
+// while internal/gcp/downscope recognizes the token by its `access_boundary`
+// claim and enforces the boundary.
 func MintDownscopedToken(sa, project string, rules []downscope.Rule) string {
-	return downscope.TokenPrefix + signJWT(downscopedClaims{
+	return signJWT(downscopedClaims{
 		Email:          sa,
 		Subject:        sa,
 		ProjectID:      project,

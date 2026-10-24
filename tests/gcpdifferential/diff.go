@@ -15,21 +15,22 @@ import (
 //	status_mismatch, missing_field, extra_field, type_mismatch,
 //	value_mismatch, array_length_mismatch, body_mismatch
 type Divergence struct {
-	Service  string `json:"service"`
-	Op       string `json:"op"`
-	Method   string `json:"method"`
-	Path     string `json:"path"`
-	Kind     string `json:"kind"`
-	Severity string `json:"severity"`
-	Location string `json:"location"`
-	Expected string `json:"expected"`
-	Actual   string `json:"actual"`
+	Service   string `json:"service"`
+	Op        string `json:"op"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Transport string `json:"transport,omitempty"`
+	Kind      string `json:"kind"`
+	Severity  string `json:"severity"`
+	Location  string `json:"location"`
+	Expected  string `json:"expected"`
+	Actual    string `json:"actual"`
 }
 
 // DiffExchanges compares a golden exchange (real GCP) against a replayed one
 // (emulator) and returns the divergences.
 func DiffExchanges(golden, actual Exchange) []Divergence {
-	base := Divergence{Service: golden.Service, Op: golden.Op, Method: golden.Method, Path: golden.Path}
+	base := Divergence{Service: golden.Service, Op: golden.Op, Method: golden.Method, Path: golden.Path, Transport: golden.Transport}
 	var divs []Divergence
 
 	add := func(kind, severity, location, expected, actual string) {

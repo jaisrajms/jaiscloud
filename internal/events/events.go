@@ -15,6 +15,11 @@ const (
 	EventEMRStepState    EventType = "emr.step.state"    // EMR step state changed
 	EventEMRJobRunState  EventType = "emr.jobrun.state"  // EMR Containers job run state changed
 	EventEMRClusterState EventType = "emr.cluster.state" // EMR cluster state changed
+
+	// EventStatus is the cloud-neutral status-change event. Unlike the AWS
+	// service-specific types above, any cloud publishes it with a StatusEvent
+	// payload; the UI SSE broker maps it to a browser message.
+	EventStatus EventType = "status"
 )
 
 // Event is a domain event published by a provider.
@@ -83,6 +88,20 @@ type EMRClusterStateEvent struct {
 	AccountID         string
 	Cloud             model.Cloud
 	OccurredAt        time.Time
+}
+
+// StatusEvent is a cloud-neutral resource status transition published by a
+// cloud core for live UI updates. The console invalidates the React Query key
+// prefix in Keys on receipt (e.g. ["gcp","run"]); Resource is a display and
+// diagnostic label; ID, State and Detail describe the transition. A producer
+// that has no console surface yet may still publish it with a broad key.
+type StatusEvent struct {
+	Cloud    model.Cloud
+	Keys     []string
+	Resource string
+	ID       string
+	State    string
+	Detail   string
 }
 
 // Handler is a function that handles an event.

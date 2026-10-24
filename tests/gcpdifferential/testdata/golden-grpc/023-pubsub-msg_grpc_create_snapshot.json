@@ -1,0 +1,19 @@
+{
+  "index": 23,
+  "service": "pubsub",
+  "op": "msg_grpc_create_snapshot",
+  "method": "google.pubsub.v1.Subscriber/CreateSnapshot",
+  "path": "projects/<project>/snapshots/<snapshot>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/snapshots/<snapshot>",
+    "subscription": "projects/<project>/subscriptions/<subscription>"
+  },
+  "response": {
+    "expireTime": "<time>",
+    "name": "projects/<project>/snapshots/<snapshot>",
+    "topic": "projects/<project>/topics/<topic>"
+  }
+}
+

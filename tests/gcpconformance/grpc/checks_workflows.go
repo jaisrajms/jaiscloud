@@ -19,9 +19,9 @@ import (
 // (google.cloud.workflows.v1.Workflows) via the official generated
 // cloud.google.com/go/workflows/apiv1 client: the CRUD RPCs whose
 // create/update/delete forms return a done long-running operation the client's
-// Wait observes without polling. GetOperation is the shared
-// google.longrunning.Operations service and ListWorkflowRevisions is an
-// explicit Unimplemented stub, so neither is probed here.
+// Wait observes without polling, plus the revision history
+// (ListWorkflowRevisions, and revision-scoped GetWorkflow). GetOperation is the
+// shared google.longrunning.Operations service, so it is not probed here.
 //
 // Every probe is self-contained and run-unique (cfg.ResourceName), so a
 // long-lived emulator never sees cross-run collisions.
@@ -32,6 +32,7 @@ func workflowsChecks() []Check {
 		{Service: "workflows", RPC: "ListWorkflows", Method: "ListWorkflows", KeyField: "created workflow present in list", Run: checkWorkflowsList},
 		{Service: "workflows", RPC: "UpdateWorkflow", Method: "UpdateWorkflow", KeyField: "LRO done + description updated, source preserved", Run: checkWorkflowsUpdate},
 		{Service: "workflows", RPC: "DeleteWorkflow", Method: "DeleteWorkflow", KeyField: "LRO done + subsequent get NotFound", Run: checkWorkflowsDelete},
+		{Service: "workflows", RPC: "ListWorkflowRevisions", Method: "ListWorkflowRevisions", KeyField: "one revision on create, second on source update (newest first)", Run: checkWorkflowsListRevisions},
 	}
 }
 
@@ -197,6 +198,85 @@ func checkWorkflowsUpdate(ctx context.Context, cfg Config) error {
 	}
 	if updated.GetSourceContents() != workflowSource {
 		return fmt.Errorf("UpdateWorkflow sourceContents = %q, want preserved", updated.GetSourceContents())
+	}
+	return nil
+}
+
+// ListWorkflowRevisions reports one revision on create and a second
+// after a source update (newest first), and revision-scoped GetWorkflow
+// returns the historical revision.
+func checkWorkflowsListRevisions(ctx context.Context, cfg Config) error {
+	client, err := newWorkflowsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	created, err := createWorkflow(ctx, client, cfg, "gcpc-grpc-wf-revisions", "rev")
+	if err != nil {
+		return err
+	}
+
+	listRevisions := func() ([]*workflowspb.Workflow, error) {
+		it := client.ListWorkflowRevisions(ctx, &workflowspb.ListWorkflowRevisionsRequest{Name: created.GetName()})
+		var revs []*workflowspb.Workflow
+		for {
+			w, err := it.Next()
+			if err == iterator.Done {
+				return revs, nil
+			}
+			if err != nil {
+				return nil, fmt.Errorf("ListWorkflowRevisions: %w", err)
+			}
+			revs = append(revs, w)
+		}
+	}
+
+	revs, err := listRevisions()
+	if err != nil {
+		return err
+	}
+	if len(revs) != 1 {
+		return fmt.Errorf("revisions after create = %d, want 1", len(revs))
+	}
+	first := revs[0].GetRevisionId()
+	if first == "" || revs[0].GetSourceContents() != workflowSource {
+		return fmt.Errorf("first revision = %+v", revs[0])
+	}
+
+	op, err := client.UpdateWorkflow(ctx, &workflowspb.UpdateWorkflowRequest{
+		Workflow: &workflowspb.Workflow{Name: created.GetName(),
+			SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: workflowSource + "    - r2:\n        return: 2\n"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"source_contents"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateWorkflow: %w", err)
+	}
+	if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("UpdateWorkflow Wait: %w", err)
+	}
+
+	revs, err = listRevisions()
+	if err != nil {
+		return err
+	}
+	if len(revs) != 2 {
+		return fmt.Errorf("revisions after source update = %d, want 2", len(revs))
+	}
+	if revs[0].GetRevisionId() == first {
+		return fmt.Errorf("newest revision = oldest %q", first)
+	}
+	if revs[1].GetRevisionId() != first || revs[1].GetSourceContents() != workflowSource {
+		return fmt.Errorf("oldest revision = %+v", revs[1])
+	}
+
+	// revisionId-scoped GetWorkflow returns the historical revision.
+	got, err := client.GetWorkflow(ctx, &workflowspb.GetWorkflowRequest{Name: created.GetName(), RevisionId: first})
+	if err != nil {
+		return fmt.Errorf("GetWorkflow(revision): %w", err)
+	}
+	if got.GetRevisionId() != first || got.GetSourceContents() != workflowSource {
+		return fmt.Errorf("GetWorkflow(revision) = %+v", got)
 	}
 	return nil
 }

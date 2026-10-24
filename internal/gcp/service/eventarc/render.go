@@ -1,6 +1,7 @@
 package eventarc
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/resource"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // OperationMetadataType is the @type of the Eventarc v1 OperationMetadata.
@@ -25,16 +27,11 @@ const (
 )
 
 // Operation is the transport-neutral description of a completed Eventarc
-// long-running operation. Eventarc operations are never persisted — every
-// control-plane mutation completes synchronously — so this is built on demand
-// and rendered by each transport.
-type Operation struct {
-	Location   string
-	ID         string
-	Verb       string
-	Target     string
-	CreateTime time.Time
-}
+// long-running operation. Eventarc mutations complete synchronously, but real
+// GCP still records each done operation in the shared google.longrunning
+// operations surface, so the core persists it (see store.Operation) and both
+// transports render it.
+type Operation = eventarcstore.Operation
 
 // newOperation builds a synchronous (done) operation for a mutation.
 func newOperation(location, verb, target string) Operation {
@@ -45,6 +42,24 @@ func newOperation(location, verb, target string) Operation {
 		Target:     target,
 		CreateTime: clock.Now().UTC(),
 	}
+}
+
+// recordOperation persists a completed operation together with its rendered
+// response so operations.get/list can return it later (real GCP keeps a
+// completed operation's response after its target is deleted).
+func (s *Service) recordOperation(ctx context.Context, project string, op Operation, response map[string]any) (Operation, error) {
+	if response != nil {
+		body, err := json.Marshal(response)
+		if err != nil {
+			return Operation{}, err
+		}
+		op.Response = body
+	}
+	op.ProjectID = project
+	if err := s.store.CreateOperation(ctx, project, op.Location, op); err != nil {
+		return Operation{}, err
+	}
+	return op, nil
 }
 
 // OperationJSON renders an Operation as the google.longrunning.Operation wire
@@ -60,6 +75,18 @@ func OperationJSON(op Operation, project string, response map[string]any) map[st
 		"done":     true,
 		"response": response,
 	}
+}
+
+// StoredOperationJSON renders a persisted operation, using the response body
+// recorded when the mutation completed. The bytes are the JSON the core
+// marshalled at write time, so a decode failure (only reachable through manual
+// store edits) degrades to a response-less operation rather than an error.
+func StoredOperationJSON(op Operation, project string) map[string]any {
+	var response map[string]any
+	if len(op.Response) > 0 {
+		_ = json.Unmarshal(op.Response, &response)
+	}
+	return OperationJSON(op, project, response)
 }
 
 // OperationResponse wraps a rendered resource body as the Any JSON a
@@ -89,10 +116,10 @@ func operationMetadata(op Operation) map[string]any {
 	}
 }
 
-// formatTimestamp renders a business timestamp as the RFC3339Nano string the
-// Discovery JSON shape (and protojson) uses.
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // randomHex returns n hex characters of crypto/rand randomness. It is used only

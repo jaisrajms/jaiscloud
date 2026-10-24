@@ -1,0 +1,15 @@
+{
+  "index": 13,
+  "service": "monitoring",
+  "op": "mon_list_metric_descriptors",
+  "method": "google.monitoring.v3.MetricService/ListMetricDescriptors",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "filter": "metric.type = \"<metricType>\"",
+    "name": "projects/<project>"
+  },
+  "response": {}
+}
+

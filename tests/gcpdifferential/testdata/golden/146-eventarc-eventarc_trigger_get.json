@@ -1,0 +1,33 @@
+{
+  "index": 146,
+  "service": "eventarc",
+  "op": "eventarc_trigger_get",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/us-central1/triggers/<trigger>",
+  "status": 200,
+  "response": {
+    "createTime": "<time>",
+    "destination": {
+      "cloudRun": {
+        "region": "us-central1",
+        "service": "<runService>"
+      }
+    },
+    "eventDataContentType": "application/json",
+    "eventFilters": [
+      {
+        "attribute": "type",
+        "value": "google.cloud.storage.object.v1.finalized"
+      },
+      {
+        "attribute": "bucket",
+        "value": "<eventBucket>"
+      }
+    ],
+    "name": "projects/<project>/locations/us-central1/triggers/<trigger>",
+    "serviceAccount": "<serviceAccount>",
+    "uid": "<uid>",
+    "updateTime": "<time>"
+  }
+}
+

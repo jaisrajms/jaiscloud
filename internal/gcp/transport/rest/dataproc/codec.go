@@ -172,6 +172,8 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 			return "ListJobs"
 		case method == http.MethodGet:
 			return "GetJob"
+		case method == http.MethodPatch:
+			return "UpdateJob"
 		case method == http.MethodDelete:
 			return "DeleteJob"
 		}

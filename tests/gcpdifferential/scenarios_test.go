@@ -25,7 +25,7 @@ func TestScenariosValid(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	var haveDNS, haveWorkflows, haveIAM, haveFirestore bool
+	have := map[string]bool{}
 	for _, sc := range scenarios {
 		if sc.Service == "" || sc.Op == "" || sc.Method == "" || sc.Path == "" {
 			t.Errorf("scenario %+v has an empty required field", sc)
@@ -38,28 +38,20 @@ func TestScenariosValid(t *testing.T) {
 			t.Errorf("duplicate (Service, Op): %s/%s", sc.Service, sc.Op)
 		}
 		seen[k] = true
-		switch sc.Service {
-		case "dns":
-			haveDNS = true
-		case "workflows":
-			haveWorkflows = true
-		case "iam":
-			haveIAM = true
-		case "firestore":
-			haveFirestore = true
+		have[sc.Service] = true
+	}
+	// The original twelve plus the AUD6 breadth services must each stay
+	// represented, so a dropped scenario block is caught offline.
+	for _, svc := range []string{
+		"dns", "workflows", "iam", "firestore",
+		"container", "dataproc", "monitoring", "logging", "datastore",
+		"workflowexecutions", "serviceusage",
+		"resourcemanager", "eventarc", "tasks", "run", "functions",
+		"metastore", "managedkafka",
+	} {
+		if !have[svc] {
+			t.Errorf("expected at least one %s scenario", svc)
 		}
-	}
-	if !haveDNS {
-		t.Error("expected at least one dns scenario")
-	}
-	if !haveWorkflows {
-		t.Error("expected at least one workflows scenario")
-	}
-	if !haveIAM {
-		t.Error("expected at least one iam scenario")
-	}
-	if !haveFirestore {
-		t.Error("expected at least one firestore scenario")
 	}
 }
 
@@ -88,6 +80,16 @@ func TestNormalizerCoversResources(t *testing.T) {
 		{names.ComputeInstance, "<computeInstance>"},
 		{names.SQLInstance, "<sqlInstance>"},
 		{names.RedisInstance, "<redisInstance>"},
+		{names.ContainerCluster, "<containerCluster>"},
+		{names.DataprocCluster, "<dataprocCluster>"},
+		{names.LogName, "<logName>"},
+		{names.MetricType, "<metricType>"},
+		{names.DSKind, "<dsKind>"},
+		{names.DSEntity, "<dsEntity>"},
+		{names.MsgTopic, "<topic>"},
+		{names.MsgSub, "<subscription>"},
+		{names.OrderTopic, "<topic>"},
+		{names.OrderSub, "<subscription>"},
 		{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{names.ServiceAccount, "<serviceAccountId>"},
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -98,6 +100,26 @@ func TestNormalizerCoversResources(t *testing.T) {
 		if got := norm.substitute(tc.in); got != tc.want {
 			t.Errorf("substitute(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestNormalizerFoldsAckIDs guards that a server-generated Pub/Sub ack id never
+// lands in a committed golden, in a request (Acknowledge/ModifyAckDeadline) or a
+// response (Pull). The tokens are delivery-scoped and differ every run.
+func TestNormalizerFoldsAckIDs(t *testing.T) {
+	names := Names("abc123")
+	norm := NewNormalizer("differential-proj", "", "abc123", names)
+
+	req := string(norm.RequestBytes([]byte(`{"subscription":"projects/differential-proj/subscriptions/s","ackIds":["UAYWLF1GSFE3GQhoUQ-opaque"]}`)))
+	if !strings.Contains(req, `"ackIds":["<ackId>"]`) {
+		t.Errorf("request ackIds were not folded: %s", req)
+	}
+	if strings.Contains(req, "opaque") {
+		t.Errorf("request still carries the raw ack id: %s", req)
+	}
+	resp := string(norm.Bytes([]byte(`{"receivedMessages":[{"ackId":"UAYWLF1GSFE3GQhoUQ-opaque"}]}`)))
+	if !strings.Contains(resp, `"ackId":"<ackId>"`) {
+		t.Errorf("response ackId was not folded: %s", resp)
 	}
 }
 
@@ -123,6 +145,13 @@ func TestNormalizerFoldsOpaqueIDs(t *testing.T) {
 	op := string(norm.Bytes([]byte(`{"name":"projects/differential-proj/locations/us-central1/operations/abcdef123456"}`)))
 	if !strings.Contains(op, "/operations/<operation>") {
 		t.Errorf("operation name was not folded: %s", op)
+	}
+
+	// Dataproc publishes region-scoped operation names; the region segment must
+	// survive while the id folds (AUD6-4).
+	dpop := string(norm.Bytes([]byte(`{"name":"projects/differential-proj/regions/us-central1/operations/12345678-abcd"}`)))
+	if !strings.Contains(dpop, "regions/us-central1/operations/<operation>") {
+		t.Errorf("Dataproc region-scoped operation name was not folded: %s", dpop)
 	}
 }
 

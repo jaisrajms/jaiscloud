@@ -1,0 +1,31 @@
+# Behavioural depth record - operations (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves
+# a class unaccounted for.
+service: operations
+classes:
+  p2:
+    state: exempt
+    reason: "shared LRO service - no resource contention surface"
+    date: "2026-10-13"
+    owner: DC9
+    review_by: "2027-04-16"
+  p3:
+    state: exempt
+    reason: "shared LRO service - error envelopes asserted by owning services"
+    date: "2026-10-13"
+    owner: DC9
+    review_by: "2027-04-16"
+  p4:
+    state: exempt
+    reason: "shared LRO service - no listing/paging suite"
+    date: "2026-10-13"
+    owner: DC9
+    review_by: "2027-04-16"
+  p5:
+    state: present
+    suites: [.]
+    note: "async LRO lifecycle (JAISCLOUD_LRO_MODE=async) poll/get"

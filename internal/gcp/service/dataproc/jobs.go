@@ -94,8 +94,8 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 
 	// Mock mode: the job stays PENDING and advances through SETUP_DONE /
 	// RUNNING / DONE lazily on reads (advanceJob), so pollers observe the state
-	// machine. K8s mode: run it for real and let the driver signals drive it.
-	if s.k8sClient == nil {
+	// machine. A real executor runs the job and lets the driver signals drive it.
+	if s.mockMode() {
 		return j, nil
 	}
 
@@ -112,7 +112,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		defer s.wg.Done()
 		defer runCancel()
 		defer s.unregisterCancel(key)
-		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint)
+		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, cluster.Namespace)
 	}()
 	return j, nil
 }
@@ -224,8 +224,33 @@ func (s *Service) ListJobs(ctx context.Context, project, region, clusterName, fi
 		}
 		filtered = append(filtered, advanced)
 	}
-	page, next := paging.Page(filtered, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(filtered, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// ListAllJobs lists every job in a project across all regions, sorted by region
+// then job id, settling each transitional job first. It backs the
+// region-optional console list.
+func (s *Service) ListAllJobs(ctx context.Context, project string) ([]dpstore.Job, error) {
+	jobs, err := s.store.ListJobsByProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	settled := make([]dpstore.Job, 0, len(jobs))
+	for _, j := range jobs {
+		advanced, advErr := s.advanceJob(ctx, j.ProjectID, j.Region, j.JobID)
+		if errors.Is(advErr, dpstore.ErrNoSuchJob) {
+			continue
+		}
+		if advErr != nil {
+			return nil, mapErr(advErr)
+		}
+		settled = append(settled, advanced)
+	}
+	return settled, nil
 }
 
 // UpdateJob applies the masked fields of a job update. Dataproc jobs are

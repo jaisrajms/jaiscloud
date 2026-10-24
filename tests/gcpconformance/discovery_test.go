@@ -78,6 +78,31 @@ func TestMatchMethod(t *testing.T) {
 	}
 }
 
+// TestCommonLocationGetMatchesLocationSchema guards the synthetic
+// projects.locations.get entry: a bare GetLocation request must validate
+// against the Location schema, not fuzzy-match a flat /{version}/{+name}
+// method (which produced false unknown_field divergences for displayName /
+// locationId).
+func TestCommonLocationGetMatchesLocationSchema(t *testing.T) {
+	docs := loadDocs(t)
+	ix := BuildMethodIndex(docs)
+	doc, m, ok := ix.MatchMethodInService("functions", "GET", "/v1/projects/p/locations/us-central1")
+	if !ok {
+		t.Fatal("GetLocation path did not match any method")
+	}
+	if m.Response == nil || m.Response.Ref != "Location" {
+		t.Fatalf("matched %s with response %+v, want Location", m.ID, m.Response)
+	}
+	if _, ok := doc.ResolveRef("Location"); !ok {
+		t.Fatal("Location schema not resolvable")
+	}
+	// A deeper resource path under locations/{location} must not match the
+	// synthetic GetLocation method.
+	if _, m, ok := ix.MatchMethodInService("functions", "GET", "/v1/projects/p/locations/us-central1/functions"); ok && m.Response != nil && m.Response.Ref == "Location" {
+		t.Fatalf("functions list matched the Location method: %s", m.ID)
+	}
+}
+
 func TestResolveRefForms(t *testing.T) {
 	docs := loadDocs(t)
 	storage := docs["storage"]

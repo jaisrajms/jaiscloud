@@ -74,6 +74,21 @@ func TestPostgresOperationCRUD(t *testing.T) {
 		t.Fatalf("unexpected op list: %+v", all)
 	}
 
+	// The v1 top-level operations collection spans every location in a project.
+	if err := s.CreateOperation(ctx, "proj", "europe-west1", Operation{ID: "op3", Done: true, Verb: "create"}); err != nil {
+		t.Fatalf("create other-location op: %v", err)
+	}
+	everywhere, err := s.ListOperationsAllLocations(ctx, "proj")
+	if err != nil {
+		t.Fatalf("list ops all locations: %v", err)
+	}
+	if len(everywhere) != 3 || everywhere[0].ID != "op1" || everywhere[2].ID != "op3" {
+		t.Fatalf("unexpected all-locations op list: %+v", everywhere)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "europe-west1", "op3"); err != nil {
+		t.Fatalf("delete other-location op: %v", err)
+	}
+
 	// Snapshot/restore round-trip (the --dsn restart path).
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {

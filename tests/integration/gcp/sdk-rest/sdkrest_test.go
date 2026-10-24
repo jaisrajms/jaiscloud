@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,7 +135,8 @@ func TestSDKKMS(t *testing.T) {
 	keyName := krName + "/cryptoKeys/" + keyID
 
 	enc, err := svc.Projects.Locations.KeyRings.CryptoKeys.Encrypt(keyName, &cloudkms.EncryptRequest{
-		Plaintext: "aGVsbG8=",
+		Plaintext:       "aGVsbG8=",
+		PlaintextCrc32c: crc32c([]byte("hello")),
 	}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, enc.Ciphertext)
@@ -233,6 +235,14 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	_, err = svc.Projects.Topics.Create(dlq, &pubsub.Topic{Name: dlq}).Do()
 	require.NoError(t, err)
 
+	// A subscription on the dead-letter topic so the forwarded copy lands in a
+	// readable queue (a topic with no subscription drops its messages).
+	dlqSub := "projects/proj/subscriptions/" + unique("dlq-sub")
+	_, err = svc.Projects.Subscriptions.Create(dlqSub, &pubsub.Subscription{
+		Name: dlqSub, Topic: dlq, AckDeadlineSeconds: 10,
+	}).Do()
+	require.NoError(t, err)
+
 	sub := "projects/proj/subscriptions/" + unique("sub")
 	_, err = svc.Projects.Subscriptions.Create(sub, &pubsub.Subscription{
 		Name:  sub,
@@ -244,10 +254,12 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	}).Do()
 	require.NoError(t, err)
 
-	_, err = svc.Projects.Topics.Publish(src, &pubsub.PublishRequest{
-		Messages: []*pubsub.PubsubMessage{{Data: "aGk="}},
+	pr, err := svc.Projects.Topics.Publish(src, &pubsub.PublishRequest{
+		Messages: []*pubsub.PubsubMessage{{Data: "aGk=", OrderingKey: "ord-key"}},
 	}).Do()
 	require.NoError(t, err)
+	require.Len(t, pr.MessageIds, 1)
+	srcID := pr.MessageIds[0]
 
 	pull := func() (int, []string) {
 		r, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
@@ -275,4 +287,23 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	}
 	n, _ := pull()
 	require.Equal(t, 0, n)
+
+	// The forwarded copy carries real GCP's CloudPubSubDeadLetterSource*
+	// attributes: the source subscription's short id + project, the delivery
+	// count, and the original publish time.
+	dr, err := svc.Projects.Subscriptions.Pull(dlqSub, &pubsub.PullRequest{MaxMessages: 1}).Do()
+	require.NoError(t, err)
+	require.Len(t, dr.ReceivedMessages, 1)
+	attrs := dr.ReceivedMessages[0].Message.Attributes
+	subID := sub[strings.LastIndex(sub, "/")+1:]
+	require.Equal(t, subID, attrs["CloudPubSubDeadLetterSourceSubscription"])
+	require.Equal(t, "proj", attrs["CloudPubSubDeadLetterSourceSubscriptionProject"])
+	require.Equal(t, "5", attrs["CloudPubSubDeadLetterSourceDeliveryCount"])
+	require.NotEmpty(t, attrs["CloudPubSubDeadLetterSourceTopicPublishTime"])
+	// PSM5: real GCP wraps the original in a new message, so the forwarded
+	// message carries a fresh messageId and preserves the source ordering key.
+	fwd := dr.ReceivedMessages[0].Message
+	require.NotEmpty(t, fwd.MessageId)
+	require.NotEqual(t, srcID, fwd.MessageId)
+	require.Equal(t, "ord-key", fwd.OrderingKey)
 }

@@ -13,18 +13,29 @@
 //     lifecycleState = State. The v1 API has no separate resource name or etag
 //     field, so the REST adapter emits only the v1 fields.
 //
-// Multi-tenancy is keyed by project id and the emulator never creates or
-// deletes projects, so every project id resolves to an ACTIVE, synthesized
-// project with a stable synthetic projectNumber and a stable etag. Project
-// create/update/delete lifecycle times are not modelled (the fields are exposed
-// for v3 shape parity but stay zero). IAM policies are stored in the shared
-// ResourceStore through internal/gcp/policy (etag optimistic concurrency
-// control, fresh etag per set), so memory and PostgreSQL backends behave
-// identically and no provider-level Reset/Snapshotter is needed. Bindings are
-// not enforced — they never restrict access to emulated resources. As with the
-// other GCP IAM surfaces in this emulator, only role+members bindings are
-// modelled: binding conditions are not preserved and the reported policy
-// version stays at the default.
+// Multi-tenancy is keyed by project id. The emulator synthesizes an ACTIVE
+// project with a stable synthetic projectNumber and a stable etag for any id
+// that has not been explicitly created, so existing clients and tests that
+// address arbitrary projects keep working. On top of that fallback a lightweight
+// project registry (registry.go) persists created ids — displayName, labels,
+// lifecycle state, and create/delete times — in the shared ResourceStore, so
+// create/get/list/delete/undelete round-trip and are enumerable. Project
+// administration is modelled on top of that registry (projectadmin.go): the
+// parent reference (organizations/{id} or folders/{id}) is stored and mutable
+// via MoveProject, mutable metadata (display name, labels) via UpdateProject,
+// and SearchProjects evaluates the v3 query grammar over the same set. A
+// project's etag rotates on every successful update/move and a supplied stale
+// etag is rejected with ABORTED. Billing, quota, a real org/folder hierarchy
+// (only the parent reference is kept), IAM enforcement, and real project-number
+// allocation are still not modelled. IAM policies are stored in the shared ResourceStore
+// through internal/gcp/policy (etag optimistic concurrency control, fresh etag
+// per set), so memory and PostgreSQL backends behave identically and no
+// provider-level Reset/Snapshotter is needed — the registry shares the same
+// store, so reset and snapshot cover it too. Bindings are not enforced — they
+// never restrict access to emulated resources. As with the other GCP IAM
+// surfaces in this emulator, only role+members bindings are modelled: binding
+// conditions are not preserved and the reported policy version stays at the
+// default.
 package resourcemanager
 
 import (
@@ -32,6 +43,8 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/events"
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/model"
@@ -42,22 +55,74 @@ import (
 // ResourceStore. The entry id and owning account are both the project id.
 const rtProjectPolicy = "gcp_resourcemanager_project_iam"
 
-// StateActive is the v3 Project state the emulator reports for every project.
+// StateActive is the v3 Project state the emulator reports for a live project.
 const StateActive = "ACTIVE"
+
+// StateDeleteRequested is the v3 Project state for a project marked for
+// deletion (real GCP keeps it restorable for a 30-day window).
+const StateDeleteRequested = "DELETE_REQUESTED"
 
 // Service is the transport-neutral Cloud Resource Manager core.
 type Service struct {
 	resources store.ResourceStore
+	// defaultProject and extraProjects are the configured project ids that
+	// always exist (cfg.ProjectID and JAISCLOUD_EXTRA_ACCOUNTS). They are listed
+	// alongside created projects and cannot be created again.
+	defaultProject string
+	extraProjects  []string
+	// lroMode controls project mutation operation timing. The zero value is
+	// synchronous: every operation is returned done=true inline. An enabled mode
+	// stores operations done=false and settles them lazily on read.
+	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
+}
+
+// Option configures Service.
+type Option func(*Service)
+
+// WithKnownProjects seeds the project ids that always exist: the configured
+// default project (cfg.ProjectID) and the additional accounts
+// (JAISCLOUD_EXTRA_ACCOUNTS). They appear in ListProjects and a CreateProject
+// for one is AlreadyExists. An empty defaultProject is ignored.
+func WithKnownProjects(defaultProject string, extra []string) Option {
+	return func(s *Service) {
+		s.defaultProject = defaultProject
+		s.extraProjects = append([]string(nil), extra...)
+	}
+}
+
+// WithLROMode sets the long-running-operation timing mode. The zero value is
+// synchronous; Mode{Enabled: true, Delay: d} stores project mutation operations
+// done=false and settles them on read once d has elapsed.
+func WithLROMode(m lro.Mode) Option {
+	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // NewService returns a Service backed by the shared ResourceStore.
-func NewService(resources store.ResourceStore) *Service {
-	return &Service{resources: resources}
+func NewService(resources store.ResourceStore, opts ...Option) *Service {
+	s := &Service{resources: resources}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
-// Project is the canonical v3 project resource. The zero CreateTime/UpdateTime/
-// DeleteTime, empty Parent, and nil Labels reflect that the emulator does not
-// model project lifecycle or metadata — only the identity and IAM policy.
+// Project is the canonical v3 project resource. A synthesized project (an id
+// that was never explicitly created) leaves the lifecycle timestamps and Labels
+// zero and Parent empty; a registry-backed project carries the values supplied
+// at creation.
 type Project struct {
 	ProjectID     string
 	ProjectNumber string
@@ -94,18 +159,33 @@ func ParseProjectName(name string) (string, bool) {
 	return rest, true
 }
 
-// GetProject returns the synthesized project resource for an id.
-func (s *Service) GetProject(_ context.Context, project string) (Project, error) {
+// GetProject returns the registry-backed project for a created id, or a
+// synthesized ACTIVE project for an id that was never explicitly created
+// (backward compatibility: arbitrary ids keep resolving).
+func (s *Service) GetProject(ctx context.Context, project string) (Project, error) {
 	if project == "" {
 		return Project{}, invalidArgument("project is required")
 	}
+	p, ok, err := s.registryProject(ctx, project)
+	if err != nil {
+		return Project{}, err
+	}
+	if ok {
+		return p, nil
+	}
+	return synthesizeProject(project), nil
+}
+
+// synthesizeProject builds the ACTIVE placeholder the emulator returns for any
+// id it has no registry entry for.
+func synthesizeProject(project string) Project {
 	return Project{
 		ProjectID:     project,
 		ProjectNumber: resource.ProjectNumber(project),
 		DisplayName:   project,
 		State:         StateActive,
 		Etag:          policy.Etag(ProjectName(project)),
-	}, nil
+	}
 }
 
 // GetIamPolicy returns the stored project policy (or an empty default policy).

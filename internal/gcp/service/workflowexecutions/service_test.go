@@ -84,14 +84,14 @@ func TestListExecutionsPagingAndView(t *testing.T) {
 		}
 	}
 
-	page, next, err := s.ListExecutions(ctx, "proj", "us-central1", "wf1", ViewFull, 2, "")
+	page, next, err := s.ListExecutions(ctx, "proj", "us-central1", "wf1", ViewFull, "", "", 2, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(page) != 2 || next == "" {
 		t.Fatalf("page len = %d next = %q, want 2 and non-empty", len(page), next)
 	}
-	rest, next2, err := s.ListExecutions(ctx, "proj", "us-central1", "wf1", ViewFull, 2, next)
+	rest, next2, err := s.ListExecutions(ctx, "proj", "us-central1", "wf1", ViewFull, "", "", 2, next)
 	if err != nil {
 		t.Fatalf("list page 2: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestListExecutionsPagingAndView(t *testing.T) {
 	}
 
 	// BASIC list omits results.
-	basic, _, err := s.ListExecutions(ctx, "proj", "us-central1", "wf1", ViewBasic, 10, "")
+	basic, _, err := s.ListExecutions(ctx, "proj", "us-central1", "wf1", ViewBasic, "", "", 10, "")
 	if err != nil {
 		t.Fatalf("list basic: %v", err)
 	}

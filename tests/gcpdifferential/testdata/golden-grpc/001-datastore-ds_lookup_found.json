@@ -1,0 +1,57 @@
+{
+  "index": 1,
+  "service": "datastore",
+  "op": "ds_lookup_found",
+  "method": "google.datastore.v1.Datastore/Lookup",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "keys": [
+      {
+        "partitionId": {
+          "projectId": "<project>"
+        },
+        "path": [
+          {
+            "kind": "<dsKind>",
+            "name": "<dsEntity>"
+          }
+        ]
+      }
+    ],
+    "projectId": "<project>"
+  },
+  "response": {
+    "found": [
+      {
+        "createTime": "<time>",
+        "entity": {
+          "key": {
+            "partitionId": {
+              "projectId": "<project>"
+            },
+            "path": [
+              {
+                "kind": "<dsKind>",
+                "name": "<dsEntity>"
+              }
+            ]
+          },
+          "properties": {
+            "count": {
+              "integerValue": "7"
+            },
+            "greeting": {
+              "stringValue": "hello jaiscloud"
+            }
+          }
+        },
+        "updateTime": "<time>",
+        "version": "<version>"
+      }
+    ],
+    "readTime": "<time>"
+  }
+}
+

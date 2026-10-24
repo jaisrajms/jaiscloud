@@ -6,10 +6,10 @@ import (
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	core "jaiscloud/internal/gcp/service/scheduler"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // jobToProto renders a core Job as the proto Job message.
@@ -42,13 +42,13 @@ func jobToProto(j schedstore.Job) *schedulerpb.Job {
 		out.AttemptDeadline = durationpb.New(j.AttemptDeadline)
 	}
 	if !j.ScheduleTime.IsZero() {
-		out.ScheduleTime = timestamppb.New(j.ScheduleTime)
+		out.ScheduleTime = timestamp.Proto(j.ScheduleTime)
 	}
 	if !j.LastAttemptTime.IsZero() {
-		out.LastAttemptTime = timestamppb.New(j.LastAttemptTime)
+		out.LastAttemptTime = timestamp.Proto(j.LastAttemptTime)
 	}
 	if !j.UserUpdateTime.IsZero() {
-		out.UserUpdateTime = timestamppb.New(j.UserUpdateTime)
+		out.UserUpdateTime = timestamp.Proto(j.UserUpdateTime)
 	}
 	if j.Status != nil {
 		out.Status = &statuspb.Status{Code: j.Status.Code, Message: j.Status.Message}

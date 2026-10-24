@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -79,6 +80,15 @@ func (s *PostgresStore) GetTrigger(ctx context.Context, projectID, location, id 
 // this call's write. See store/firestore/postgres.go's Commit for the same
 // convention.
 func (s *PostgresStore) UpdateTriggerAtomic(ctx context.Context, projectID, location, id string, mutate func(Trigger) (Trigger, error)) (Trigger, error) {
+	// A concurrent writer on the same row can abort the SERIALIZABLE
+	// read-modify-write (SQLSTATE 40001/40P01) — a benign race, so retry the
+	// whole transaction instead of surfacing it as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Trigger, error) {
+		return s.updateTriggerAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateTriggerAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Trigger) (Trigger, error)) (Trigger, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Trigger{}, err
@@ -136,6 +146,14 @@ func (s *PostgresStore) DeleteTrigger(ctx context.Context, projectID, location, 
 // so an etag precondition checked in guard is evaluated against a snapshot no
 // concurrent update can invalidate before the DELETE commits.
 func (s *PostgresStore) DeleteTriggerAtomic(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteTriggerAtomicOnce(ctx, projectID, location, id, guard)
+	})
+}
+
+func (s *PostgresStore) deleteTriggerAtomicOnce(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
@@ -265,6 +283,14 @@ func (s *PostgresStore) GetChannel(ctx context.Context, projectID, location, id 
 // so a concurrent UpdateChannelAtomic on the same channel blocks until this
 // transaction commits or rolls back. See store/firestore/postgres.go's Commit.
 func (s *PostgresStore) UpdateChannelAtomic(ctx context.Context, projectID, location, id string, mutate func(Channel) (Channel, error)) (Channel, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) instead of
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Channel, error) {
+		return s.updateChannelAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateChannelAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Channel) (Channel, error)) (Channel, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Channel{}, err
@@ -319,6 +345,12 @@ func (s *PostgresStore) DeleteChannel(ctx context.Context, projectID, location, 
 
 // DeleteChannelAtomic mirrors DeleteTriggerAtomic for channels.
 func (s *PostgresStore) DeleteChannelAtomic(ctx context.Context, projectID, location, id string, guard func(Channel) error) error {
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteChannelAtomicOnce(ctx, projectID, location, id, guard)
+	})
+}
+
+func (s *PostgresStore) deleteChannelAtomicOnce(ctx context.Context, projectID, location, id string, guard func(Channel) error) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
@@ -369,9 +401,105 @@ func (s *PostgresStore) ListChannels(ctx context.Context, projectID, location st
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListChannelsAllLocations(ctx context.Context, projectID string) ([]Channel, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
+		FROM jc_eventarc_channels WHERE project_id=$1 ORDER BY location, channel_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Channel
+	for rows.Next() {
+		c, err := scanChannel(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_triggers`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_channels`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_operations`)
+}
+
+// --- Operations ---
+
+func (s *PostgresStore) CreateOperation(ctx context.Context, projectID, location string, op Operation) error {
+	if op.CreateTime.IsZero() {
+		op.CreateTime = clock.Now()
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_eventarc_operations
+			(project_id, location, operation_id, verb, target, response, create_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (project_id, location, operation_id) DO UPDATE
+			SET verb = EXCLUDED.verb, target = EXCLUDED.target,
+			    response = EXCLUDED.response, create_time = EXCLUDED.create_time
+	`, projectID, location, op.ID, op.Verb, op.Target, nullableJSONRaw(op.Response, "{}"), op.CreateTime)
+	return err
+}
+
+func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, id string) (Operation, error) {
+	var op Operation
+	var response []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT project_id, location, operation_id, verb, target, response, create_time
+		FROM jc_eventarc_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id).Scan(&op.ProjectID, &op.Location, &op.ID, &op.Verb, &op.Target, &response, &op.CreateTime)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Operation{}, ErrNoSuchOperation
+	}
+	if err != nil {
+		return Operation{}, err
+	}
+	op.Response = json.RawMessage(response)
+	return op, nil
+}
+
+func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location string) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, operation_id, verb, target, response, create_time
+		FROM jc_eventarc_operations WHERE project_id=$1 AND location=$2 ORDER BY operation_id
+	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Operation
+	for rows.Next() {
+		var op Operation
+		var response []byte
+		if err := rows.Scan(&op.ProjectID, &op.Location, &op.ID, &op.Verb, &op.Target, &response, &op.CreateTime); err != nil {
+			return nil, err
+		}
+		op.Response = json.RawMessage(response)
+		result = append(result, op)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) DeleteOperation(ctx context.Context, projectID, location, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_eventarc_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchOperation
+	}
+	return nil
 }
 
 // nullableJSONRaw returns a json.RawMessage for a JSONB column, substituting the

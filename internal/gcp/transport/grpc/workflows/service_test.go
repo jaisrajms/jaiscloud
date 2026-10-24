@@ -214,10 +214,89 @@ func TestProjectFallsBackToDefault(t *testing.T) {
 	}
 }
 
-func TestListWorkflowRevisionsUnimplemented(t *testing.T) {
+const source2 = "main:\n  steps:\n    - r:\n        return: 2\n"
+
+// TestListWorkflowRevisions verifies the revision history over gRPC: one
+// revision on create, a second on a source update (newest first, the old source
+// preserved), and revision-scoped GetWorkflow.
+func TestListWorkflowRevisions(t *testing.T) {
+	ctx := context.Background()
 	s := newService()
-	_, err := s.ListWorkflowRevisions(context.Background(), &workflowspb.ListWorkflowRevisionsRequest{})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("ListWorkflowRevisions code = %v, want Unimplemented", status.Code(err))
+
+	op, err := s.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		WorkflowId: "wf1",
+		Workflow:   &workflowspb.Workflow{SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: source}},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("CreateWorkflow operation not done: %v", op)
+	}
+
+	revs, err := s.ListWorkflowRevisions(ctx, &workflowspb.ListWorkflowRevisionsRequest{Name: workflowName})
+	if err != nil {
+		t.Fatalf("ListWorkflowRevisions: %v", err)
+	}
+	if len(revs.GetWorkflows()) != 1 {
+		t.Fatalf("revisions = %d, want 1", len(revs.GetWorkflows()))
+	}
+	first := revs.GetWorkflows()[0]
+	if first.GetRevisionId() == "" || first.GetSourceContents() != source {
+		t.Fatalf("first revision = %+v", first)
+	}
+
+	uop, err := s.UpdateWorkflow(ctx, &workflowspb.UpdateWorkflowRequest{
+		Workflow: &workflowspb.Workflow{Name: workflowName,
+			SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: source2}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"source_contents"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorkflow: %v", err)
+	}
+	if !uop.GetDone() {
+		t.Fatalf("UpdateWorkflow operation not done: %v", uop)
+	}
+
+	revs, err = s.ListWorkflowRevisions(ctx, &workflowspb.ListWorkflowRevisionsRequest{Name: workflowName})
+	if err != nil {
+		t.Fatalf("ListWorkflowRevisions after update: %v", err)
+	}
+	if len(revs.GetWorkflows()) != 2 {
+		t.Fatalf("revisions = %d, want 2", len(revs.GetWorkflows()))
+	}
+	newest, oldest := revs.GetWorkflows()[0], revs.GetWorkflows()[1]
+	if newest.GetRevisionId() == first.GetRevisionId() {
+		t.Fatalf("newest revision = oldest revision %q", newest.GetRevisionId())
+	}
+	if newest.GetSourceContents() != source2 {
+		t.Fatalf("newest source = %q, want updated", newest.GetSourceContents())
+	}
+	if oldest.GetSourceContents() != source {
+		t.Fatalf("oldest source = %q, want original preserved", oldest.GetSourceContents())
+	}
+
+	// GetWorkflow by revisionId returns that revision's source.
+	got, err := s.GetWorkflow(ctx, &workflowspb.GetWorkflowRequest{Name: workflowName, RevisionId: first.GetRevisionId()})
+	if err != nil {
+		t.Fatalf("GetWorkflow(revision): %v", err)
+	}
+	if got.GetSourceContents() != source || got.GetRevisionId() != first.GetRevisionId() {
+		t.Fatalf("GetWorkflow(revision) = %+v", got)
+	}
+
+	// An unknown revision is NotFound.
+	if _, err := s.GetWorkflow(ctx, &workflowspb.GetWorkflowRequest{Name: workflowName, RevisionId: "000999-zzz"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetWorkflow(unknown revision) code = %v, want NotFound", status.Code(err))
+	}
+}
+
+// TestListWorkflowRevisionsMissingWorkflow is NotFound for an unknown workflow.
+func TestListWorkflowRevisionsMissingWorkflow(t *testing.T) {
+	s := newService()
+	_, err := s.ListWorkflowRevisions(context.Background(), &workflowspb.ListWorkflowRevisionsRequest{Name: workflowName})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("ListWorkflowRevisions code = %v, want NotFound", status.Code(err))
 	}
 }

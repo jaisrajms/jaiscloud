@@ -51,6 +51,14 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("labels not preserved: %+v", got.Labels)
 	}
 
+	revs, err := dst.ListRevisions(ctx, "proj", "us-central1", "a")
+	if err != nil {
+		t.Fatalf("list revisions after restore: %v", err)
+	}
+	if len(revs) != 1 || revs[0].RevisionID != "000001-a4d" || revs[0].SourceContents != w.SourceContents {
+		t.Fatalf("revisions not preserved: %+v", revs)
+	}
+
 	gex, err := dst.GetExecution(ctx, "proj", "us-central1", "a", "e1")
 	if err != nil {
 		t.Fatalf("get execution after restore: %v", err)

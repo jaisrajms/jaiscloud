@@ -69,15 +69,18 @@ type Value struct {
 // (see KeyOfPath/ParseKey), encoding the key's partition (database +
 // namespace) and full ancestor path; the store's primary key is (project,
 // Key). Properties is the property map keyed by property name.
-// Version and UpdateTime are server-managed bookkeeping used only by
-// ApplyMutation/DeleteConflictChecked's optimistic-concurrency check — a
-// caller constructing an Entity for Insert/Update/Upsert/ApplyMutation does
-// not set these; the store stamps them on write.
+// Version, CreateTime and UpdateTime are server-managed bookkeeping used only by
+// ApplyMutation/DeleteConflictChecked's optimistic-concurrency check and by
+// the output-only create_time/update_time response fields — a caller
+// constructing an Entity for Insert/Update/Upsert/ApplyMutation does not set
+// these; the store stamps them on write (CreateTime on first creation only,
+// preserved across updates).
 type Entity struct {
 	Kind       string           `json:"kind"`
 	Key        string           `json:"key"`
 	Properties map[string]Value `json:"properties"`
 	Version    int64            `json:"version,omitempty"`
+	CreateTime time.Time        `json:"createTime,omitempty"`
 	UpdateTime time.Time        `json:"updateTime,omitempty"`
 }
 
@@ -241,39 +244,53 @@ func resolveWrite(current Entity, exists bool, w Write) (Entity, error) {
 	if !preconditionMatches(current, exists, w.Precondition) {
 		return Entity{}, ErrConflict
 	}
-	// Derive the stamp from the stored value so it is strictly monotonic per
-	// entity even under a frozen clock (the optimistic-concurrency token a
-	// Mutation.update_time precondition compares against) — see nextUpdateTime.
-	// For an insert the current entity is absent (zero UpdateTime), so the
-	// stamp is plain clock.Now().
-	stamp := nextUpdateTime(current.UpdateTime, clock.Now())
+	// stampWrite derives the create/update stamps from the stored value so
+	// update_time stays strictly monotonic per entity even under a frozen
+	// clock (the optimistic-concurrency token a Mutation.update_time
+	// precondition compares against) — see nextUpdateTime.
 	switch w.Op {
 	case WriteInsert:
 		if exists {
 			return Entity{}, ErrEntityExists
 		}
-		e := w.Entity
+		e := stampWrite(current, exists, w.Entity)
 		e.Version = 1
-		e.UpdateTime = stamp
 		return e, nil
 	case WriteUpdate:
 		if !exists {
 			return Entity{}, ErrEntityNotFound
 		}
-		e := w.Entity
+		e := stampWrite(current, exists, w.Entity)
 		e.Version = current.Version + 1
-		e.UpdateTime = stamp
 		return e, nil
 	case WriteUpsert:
-		e := w.Entity
+		e := stampWrite(current, exists, w.Entity)
 		e.Version = current.Version + 1
-		e.UpdateTime = stamp
 		return e, nil
 	case WriteDelete:
 		return Entity{Key: w.Key}, nil
 	default:
 		return Entity{}, ErrInvalidKey
 	}
+}
+
+// stampWrite fills the server-managed CreateTime and UpdateTime on e for a
+// write against the entity currently stored (current, exists). UpdateTime is
+// nextUpdateTime(current.UpdateTime, clock.Now()) — strictly monotonic per
+// entity even under a frozen clock; CreateTime is stamped on first creation and
+// preserved thereafter, matching real Datastore's create_time semantics. An
+// existing entity whose CreateTime is zero (e.g. restored from a snapshot
+// written before create_time was tracked) is backfilled with this write's
+// stamp rather than keeping a zero that every transport would then omit.
+func stampWrite(current Entity, exists bool, e Entity) Entity {
+	stamp := nextUpdateTime(current.UpdateTime, clock.Now())
+	if exists && !current.CreateTime.IsZero() {
+		e.CreateTime = current.CreateTime
+	} else {
+		e.CreateTime = stamp
+	}
+	e.UpdateTime = stamp
+	return e
 }
 
 // nextUpdateTime returns the update timestamp to stamp on a write, guaranteed

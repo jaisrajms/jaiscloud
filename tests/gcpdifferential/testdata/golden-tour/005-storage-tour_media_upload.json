@@ -1,0 +1,30 @@
+{
+  "index": 5,
+  "service": "storage",
+  "op": "tour_media_upload",
+  "method": "POST",
+  "path": "/upload/storage/v1/b/<bucket>/o?uploadType=media&name=checksum.txt",
+  "status": 200,
+  "request": "jaiscloud-sdk-tour-checksum",
+  "response": {
+    "bucket": "<bucket>",
+    "contentType": "text/plain",
+    "crc32c": "<crc32c>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "id": "<bucket>/checksum.txt/<generation>",
+    "kind": "storage#object",
+    "md5Hash": "<md5Hash>",
+    "mediaLink": "<mediaLink>",
+    "metageneration": "<metageneration>",
+    "name": "checksum.txt",
+    "selfLink": "<selfLink>",
+    "size": "27",
+    "storageClass": "STANDARD",
+    "timeCreated": "<time>",
+    "timeFinalized": "<time>",
+    "timeStorageClassUpdated": "<time>",
+    "updated": "<time>"
+  }
+}
+

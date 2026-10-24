@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	testDiscoveryDir  = "../../tests/gcpconformance/discovery"
-	testReportPath    = "../../tests/gcpconformance/testdata/report/report.json"
-	testOverridesPath = "../../docs/fidelity-overrides.yaml"
+	testDiscoveryDir   = "../../tests/gcpconformance/discovery"
+	testReportPath     = "../../tests/gcpconformance/testdata/report/report.json"
+	testTranscriptPath = "../../tests/gcpconformance/testdata/transcripts.json"
+	testOverridesPath  = "../../docs/fidelity-overrides.yaml"
 )
 
 func loadDocsForTest(t *testing.T) map[string]*conf.DiscoveryDoc {
@@ -30,6 +31,17 @@ func loadReportForTest(t *testing.T) *conf.Report {
 		t.Fatalf("ReadReport: %v", err)
 	}
 	return rep
+}
+
+// restCoverageForTest derives the transcript coverage join over the committed
+// transcript, mirroring what fidelitygen's run() feeds RestFacts.
+func restCoverageForTest(t *testing.T, ops []conf.Operation, docs map[string]*conf.DiscoveryDoc) map[string]int {
+	t.Helper()
+	tr, err := conf.ReadTranscript(testTranscriptPath)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	return conf.TranscriptCoverage(ops, docs, tr)
 }
 
 func loadOverridesForTest(t *testing.T, ops []conf.Operation) *Overrides {
@@ -56,7 +68,7 @@ func findFact(t *testing.T, facts []Facts, operation string) Facts {
 // enumerated operation, Implemented, transport rest.
 func TestRestFactsCount(t *testing.T) {
 	ops := conf.Enumerate()
-	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops))
+	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops), restCoverageForTest(t, ops, loadDocsForTest(t)))
 
 	if len(facts) != len(ops) {
 		t.Fatalf("got %d facts, want one per enumerated op (%d)", len(facts), len(ops))
@@ -93,7 +105,7 @@ func TestRestFactsCount(t *testing.T) {
 // and known-uncovered ops to no method.
 func TestRestFactsDiscoveryCoverage(t *testing.T) {
 	ops := conf.Enumerate()
-	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops))
+	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops), restCoverageForTest(t, ops, loadDocsForTest(t)))
 
 	if got := findFact(t, facts, "Storage.ObjectsGet"); got.DiscoveryMethod == "" {
 		t.Errorf("Storage.ObjectsGet: DiscoveryMethod is empty, want a method id")
@@ -127,12 +139,70 @@ func TestRestFactsMutating(t *testing.T) {
 	}
 
 	ops := conf.Enumerate()
-	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops))
+	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops), restCoverageForTest(t, ops, loadDocsForTest(t)))
 	if got := findFact(t, facts, "Storage.ObjectsInsert"); !got.Mutating {
 		t.Errorf("Storage.ObjectsInsert: Mutating = false, want true")
 	}
 	if got := findFact(t, facts, "Storage.ObjectsGet"); got.Mutating {
 		t.Errorf("Storage.ObjectsGet: Mutating = true, want false")
+	}
+}
+
+// TestRestFactsVerified checks the response-evidence signal: a Discovery-mapped
+// op with a validated transcript response is Verified, while a Discovery-mapped
+// op with no recorded response stays unverified. The signal is independent of
+// State (an op can be `limited` yet verified, or `ga` yet unverified) and of the
+// conformance report, so this test passes a nil report and derives the two
+// examples from the coverage map rather than pinning a specific operation
+// (which drifts as transcripts are re-recorded).
+func TestRestFactsVerified(t *testing.T) {
+	ops := conf.Enumerate()
+	docs := loadDocsForTest(t)
+	coverage := restCoverageForTest(t, ops, docs)
+	facts := RestFacts(ops, docs, nil, loadOverridesForTest(t, ops), coverage)
+
+	var covered, unverified *Facts
+	for i := range facts {
+		f := &facts[i]
+		if f.DiscoveryMethod == "" {
+			continue // unmapped ops can never be verified
+		}
+		switch {
+		case f.Verified && covered == nil:
+			covered = f
+		case !f.Verified && unverified == nil:
+			unverified = f
+		}
+	}
+	if covered == nil {
+		t.Fatalf("no Discovery-mapped op with a validated transcript response (coverage map empty?)")
+	}
+	if covered.RESTEvidenceEntries == 0 {
+		t.Errorf("%s: RESTEvidenceEntries = 0, want > 0", covered.Operation)
+	}
+	if !Classify(*covered).Verified {
+		t.Errorf("%s: cell Verified = false, want true", covered.Operation)
+	}
+	if unverified == nil {
+		t.Fatalf("no Discovery-mapped op without a validated transcript response (coverage is total?)")
+	}
+	if unverified.RESTEvidenceEntries != 0 {
+		t.Errorf("%s: RESTEvidenceEntries = %d, want 0", unverified.Operation, unverified.RESTEvidenceEntries)
+	}
+	if Classify(*unverified).Verified {
+		t.Errorf("%s: cell Verified = true, want false", unverified.Operation)
+	}
+}
+
+// TestRestFactsNilCoverageIsTolerated keeps RestFacts usable without a
+// transcript (a fresh clone): nil coverage leaves every op unverified.
+func TestRestFactsNilCoverageIsTolerated(t *testing.T) {
+	ops := conf.Enumerate()
+	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops), nil)
+	for _, f := range facts {
+		if f.Verified {
+			t.Fatalf("%s: Verified = true with nil coverage", f.Operation)
+		}
 	}
 }
 
@@ -151,7 +221,7 @@ func operationAction(t *testing.T, operation string) string {
 // TestRestFactsOverrideWiring checks the curated override reaches the fact.
 func TestRestFactsOverrideWiring(t *testing.T) {
 	ops := conf.Enumerate()
-	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops))
+	facts := RestFacts(ops, loadDocsForTest(t), loadReportForTest(t), loadOverridesForTest(t, ops), restCoverageForTest(t, ops, loadDocsForTest(t)))
 
 	got := findFact(t, facts, "Dataproc.SubmitJob")
 	if got.Override == nil {
@@ -191,7 +261,7 @@ func TestRestFactsFindingAttribution(t *testing.T) {
 			Expected: "absent", Actual: "1",
 		},
 	}}
-	facts := RestFacts(ops, docs, report, loadOverridesForTest(t, ops))
+	facts := RestFacts(ops, docs, report, loadOverridesForTest(t, ops), restCoverageForTest(t, ops, docs))
 
 	// The tabledata.list finding lands on BigQuery.ListRows (the unknown-method
 	// finding also falls back to the whole service, so ListRows carries both).

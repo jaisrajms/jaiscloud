@@ -1,0 +1,86 @@
+{
+  "index": 17,
+  "service": "datastore",
+  "op": "ds_run_query_start_cursor",
+  "method": "google.datastore.v1.Datastore/RunQuery",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "projectId": "<project>",
+    "query": {
+      "kind": [
+        {
+          "name": "<dsPageKind>"
+        }
+      ],
+      "startCursor": "<cursor>"
+    }
+  },
+  "response": {
+    "batch": {
+      "endCursor": "<cursor>",
+      "entityResultType": "FULL",
+      "entityResults": [
+        {
+          "createTime": "<time>",
+          "cursor": "<cursor>",
+          "entity": {
+            "key": {
+              "partitionId": {
+                "projectId": "<project>"
+              },
+              "path": [
+                {
+                  "kind": "<dsPageKind>",
+                  "name": "<dsPage>b"
+                }
+              ]
+            },
+            "properties": {
+              "count": {
+                "integerValue": "7"
+              },
+              "greeting": {
+                "stringValue": "hello jaiscloud"
+              }
+            }
+          },
+          "updateTime": "<time>",
+          "version": "<version>"
+        },
+        {
+          "createTime": "<time>",
+          "cursor": "<cursor>",
+          "entity": {
+            "key": {
+              "partitionId": {
+                "projectId": "<project>"
+              },
+              "path": [
+                {
+                  "kind": "<dsPageKind>",
+                  "name": "<dsPage>c"
+                }
+              ]
+            },
+            "properties": {
+              "count": {
+                "integerValue": "7"
+              },
+              "greeting": {
+                "stringValue": "hello jaiscloud"
+              }
+            }
+          },
+          "updateTime": "<time>",
+          "version": "<version>"
+        }
+      ],
+      "moreResults": "NO_MORE_RESULTS",
+      "readTime": "<time>",
+      "snapshotVersion": "<snapshotVersion>"
+    }
+  }
+}
+

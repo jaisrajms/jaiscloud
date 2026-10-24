@@ -44,9 +44,10 @@ func TestNewModeSelection(t *testing.T) {
 	}{
 		{"empty defaults to mock", Config{}, ModeMock},
 		{"explicit mock", Config{Mode: "mock"}, ModeMock},
-		{"unknown degrades to mock", Config{Mode: "docker"}, ModeMock},
+		{"unknown degrades to mock", Config{Mode: "bogus"}, ModeMock},
+		{"docker selects the docker backend", Config{Mode: "docker"}, ModeDocker},
 		{"k8s without client degrades to mock", Config{Mode: "k8s"}, ModeMock},
-		{"k8s with client", Config{Mode: "k8s", Client: fake.NewSimpleClientset()}, ModeK8s},
+		{"k8s with client", Config{Mode: "k8s", K8sClient: fake.NewSimpleClientset()}, ModeK8s},
 		{"native without binary degrades to mock", Config{Mode: "native"}, ModeMock},
 		{"native with binary", Config{Mode: "native", BinaryPath: "/bin/true"}, ModeNative},
 	}
@@ -67,6 +68,7 @@ func TestK8sBrokerEnsureEndpointAndReap(t *testing.T) {
 	ctx := context.Background()
 	key := ClusterKey{Project: "proj", Location: "us-central1", Cluster: "My_Cluster"}
 	name := brokerResourceName(key)
+	ns := ClusterNamespace(key.Project, key.Location, key.Cluster)
 
 	// Endpoint before ensure is empty and does not start anything.
 	if ep := b.Endpoint(key.Project, key.Location, key.Cluster); ep != "" {
@@ -77,7 +79,7 @@ func TestK8sBrokerEnsureEndpointAndReap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureCluster: %v", err)
 	}
-	want := name + ".jaiscloud.svc.cluster.local:9092"
+	want := name + "." + ns + ".svc.cluster.local:9092"
 	if got != want {
 		t.Fatalf("endpoint = %q, want %q", got, want)
 	}
@@ -85,11 +87,17 @@ func TestK8sBrokerEnsureEndpointAndReap(t *testing.T) {
 		t.Fatalf("Endpoint after ensure = %q, want %q", ep, want)
 	}
 
-	// Service and Pod exist with the same name as the DNS label.
-	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err != nil {
+	// The per-cluster namespace was provisioned and is emulator-owned.
+	if nso, err := client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err != nil {
+		t.Fatalf("per-cluster namespace not created: %v", err)
+	} else if nso.Labels["jaiscloud.io/managed-by"] != "jaiscloud" || nso.Labels["jaiscloud.io/service"] != "managedkafka" {
+		t.Errorf("namespace labels = %v, want the managedkafka ownership labels", nso.Labels)
+	}
+	// Service and Pod exist with the same name as the DNS label, in the cluster ns.
+	if _, err := client.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{}); err != nil {
 		t.Fatalf("service not created: %v", err)
 	}
-	pod, err := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{})
+	pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
@@ -112,12 +120,122 @@ func TestK8sBrokerEnsureEndpointAndReap(t *testing.T) {
 	if ep := b.Endpoint(key.Project, key.Location, key.Cluster); ep != "" {
 		t.Fatalf("Endpoint after stop = %q, want empty", ep)
 	}
-	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		t.Error("pod still present after StopCluster")
+	}
+	// Deleting the cluster removes the namespace it owned.
+	if _, err := client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err == nil {
+		t.Error("owned per-cluster namespace survived StopCluster")
 	}
 	// Reaping an unknown cluster is a no-op.
 	if err := b.StopCluster(ctx, "p", "l", "absent"); err != nil {
 		t.Errorf("StopCluster(absent): %v", err)
+	}
+}
+
+// TestClusterNamespace proves the per-cluster namespace derivation is stable and
+// collision-free across clusters, including same-name clusters in two regions.
+func TestClusterNamespace(t *testing.T) {
+	a := ClusterNamespace("proj", "us-central1", "c1")
+	if a != ClusterNamespace("proj", "us-central1", "c1") {
+		t.Error("ClusterNamespace is not deterministic")
+	}
+	if a == ClusterNamespace("proj", "us-central1", "c2") {
+		t.Error("distinct clusters produced the same namespace")
+	}
+	if a == ClusterNamespace("proj", "europe-west1", "c1") {
+		t.Error("same cluster name in two regions produced the same namespace")
+	}
+	if len(a) > 63 {
+		t.Errorf("namespace %q exceeds 63 chars", a)
+	}
+}
+
+// TestK8sBrokerPerClusterNamespaceIsolation proves two clusters get distinct
+// namespaces and their broker resources land in their own namespace.
+func TestK8sBrokerPerClusterNamespaceIsolation(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.probe = func(string) bool { return true }
+
+	ctx := context.Background()
+	ns1 := ClusterNamespace("p", "l", "c1")
+	ns2 := ClusterNamespace("p", "l", "c2")
+	if ns1 == ns2 {
+		t.Fatal("two clusters share a namespace")
+	}
+
+	for _, c := range []string{"c1", "c2"} {
+		if _, err := b.EnsureCluster(ctx, "p", "l", c); err != nil {
+			t.Fatalf("EnsureCluster(%s): %v", c, err)
+		}
+	}
+	for _, tc := range []struct{ cluster, ns string }{{"c1", ns1}, {"c2", ns2}} {
+		name := brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: tc.cluster})
+		if _, err := client.CoreV1().Pods(tc.ns).Get(ctx, name, metav1.GetOptions{}); err != nil {
+			t.Errorf("cluster %s pod not in its namespace %s: %v", tc.cluster, tc.ns, err)
+		}
+		if ep := b.Endpoint("p", "l", tc.cluster); !strings.Contains(ep, "."+tc.ns+".svc.cluster.local") {
+			t.Errorf("cluster %s endpoint %q is not in namespace %s", tc.cluster, ep, tc.ns)
+		}
+	}
+}
+
+// TestK8sBrokerStopDeletesOnlyOwnNamespace proves deleting one cluster reaps its
+// namespace and workload without touching another cluster's.
+func TestK8sBrokerStopDeletesOnlyOwnNamespace(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.probe = func(string) bool { return true }
+
+	ctx := context.Background()
+	ns1 := ClusterNamespace("p", "l", "c1")
+	ns2 := ClusterNamespace("p", "l", "c2")
+	name1 := brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: "c1"})
+	name2 := brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: "c2"})
+	for _, c := range []string{"c1", "c2"} {
+		if _, err := b.EnsureCluster(ctx, "p", "l", c); err != nil {
+			t.Fatalf("EnsureCluster(%s): %v", c, err)
+		}
+	}
+
+	if err := b.StopCluster(ctx, "p", "l", "c1"); err != nil {
+		t.Fatalf("StopCluster(c1): %v", err)
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, ns1, metav1.GetOptions{}); err == nil {
+		t.Error("c1 namespace survived its cluster delete")
+	}
+	if _, err := client.CoreV1().Pods(ns1).Get(ctx, name1, metav1.GetOptions{}); err == nil {
+		t.Error("c1 broker pod survived its cluster delete")
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, ns2, metav1.GetOptions{}); err != nil {
+		t.Errorf("c2 namespace was removed by c1's delete: %v", err)
+	}
+	if _, err := client.CoreV1().Pods(ns2).Get(ctx, name2, metav1.GetOptions{}); err != nil {
+		t.Errorf("c2 broker pod was removed by c1's delete: %v", err)
+	}
+}
+
+// TestK8sBrokerAdoptedNamespaceNotDeleted proves an existing namespace the
+// emulator merely adopted (never created) is left in place on cluster delete.
+func TestK8sBrokerAdoptedNamespaceNotDeleted(t *testing.T) {
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	ns := ClusterNamespace(key.Project, key.Location, key.Cluster)
+	client := fake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: ns}, // no ownership labels
+	})
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.probe = func(string) bool { return true }
+
+	ctx := context.Background()
+	if _, err := b.EnsureCluster(ctx, key.Project, key.Location, key.Cluster); err != nil {
+		t.Fatalf("EnsureCluster: %v", err)
+	}
+	if err := b.StopCluster(ctx, key.Project, key.Location, key.Cluster); err != nil {
+		t.Fatalf("StopCluster: %v", err)
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err != nil {
+		t.Errorf("adopted namespace was deleted: %v", err)
 	}
 }
 
@@ -129,8 +247,18 @@ func TestK8sBrokerForbiddenNamespaceGetIsNotFatal(t *testing.T) {
 	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
 	b.probe = func(string) bool { return true }
 
-	if _, err := b.EnsureCluster(context.Background(), "p", "l", "c1"); err != nil {
+	got, err := b.EnsureCluster(context.Background(), "p", "l", "c1")
+	if err != nil {
 		t.Fatalf("EnsureCluster with a forbidden namespace Get: %v", err)
+	}
+	// No namespace RBAC means the broker falls back to the process-wide
+	// namespace rather than failing.
+	name := brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: "c1"})
+	if want := name + ".jaiscloud.svc.cluster.local:9092"; got != want {
+		t.Fatalf("fallback endpoint = %q, want %q", got, want)
+	}
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("fallback broker pod not created in the process-wide namespace: %v", err)
 	}
 }
 
@@ -167,6 +295,7 @@ func TestK8sBrokerResetReapsAndSweeps(t *testing.T) {
 	if _, err := b.EnsureCluster(ctx, "p", "l", "c1"); err != nil {
 		t.Fatalf("EnsureCluster: %v", err)
 	}
+	ns := ClusterNamespace("p", "l", "c1")
 	name := brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: "c1"})
 
 	if _, err := client.CoreV1().Pods("jaiscloud").Create(ctx, &corev1.Pod{
@@ -181,11 +310,15 @@ func TestK8sBrokerResetReapsAndSweeps(t *testing.T) {
 	if ep := b.Endpoint("p", "l", "c1"); ep != "" {
 		t.Errorf("Endpoint after Reset = %q, want empty", ep)
 	}
-	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		t.Error("tracked broker pod survived Reset")
 	}
-	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
 		t.Error("tracked broker service survived Reset")
+	}
+	// Reset deletes the per-cluster namespace the emulator owns.
+	if _, err := client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err == nil {
+		t.Error("tracked broker namespace survived Reset")
 	}
 	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, "mkbroker-orphan", metav1.GetOptions{}); err == nil {
 		t.Error("untracked orphan pod survived Reset")
@@ -219,6 +352,32 @@ func TestK8sBrokerSweepOrphans(t *testing.T) {
 	}
 }
 
+// TestK8sBrokerSweepOrphansNamespaces proves the startup sweep reaps the
+// per-cluster namespaces the emulator owns (deleting a namespace cascades its
+// broker workloads). An adopted namespace without the ownership label is left
+// untouched; its workloads are reaped on cluster delete/reset instead.
+func TestK8sBrokerSweepOrphansNamespaces(t *testing.T) {
+	owned := ClusterNamespace("p", "l", "c1")
+	adopted := ClusterNamespace("p", "l", "c2")
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: owned, Labels: map[string]string{
+			"jaiscloud.io/managed-by": "jaiscloud", "jaiscloud.io/service": "managedkafka",
+		}}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: adopted}}, // no ownership labels
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mkbroker-owned", Namespace: owned, Labels: map[string]string{brokerLabelKey: brokerLabelValue}}},
+	)
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.sweepOrphans()
+
+	ctx := context.Background()
+	if _, err := client.CoreV1().Namespaces().Get(ctx, owned, metav1.GetOptions{}); err == nil {
+		t.Error("emulator-owned namespace was not swept")
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, adopted, metav1.GetOptions{}); err != nil {
+		t.Errorf("adopted namespace was swept: %v", err)
+	}
+}
+
 // TestK8sBrokerEnsureFailureReapsResources proves a broker that never becomes
 // ready does not leak the Pod/Service it created.
 func TestK8sBrokerEnsureFailureReapsResources(t *testing.T) {
@@ -228,17 +387,22 @@ func TestK8sBrokerEnsureFailureReapsResources(t *testing.T) {
 
 	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
 	name := brokerResourceName(key)
+	ns := ClusterNamespace(key.Project, key.Location, key.Cluster)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	if _, err := b.EnsureCluster(ctx, key.Project, key.Location, key.Cluster); err == nil {
 		t.Fatal("EnsureCluster succeeded with a never-ready broker; want error")
 	}
-	if _, err := client.CoreV1().Pods("jaiscloud").Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().Pods(ns).Get(context.Background(), name, metav1.GetOptions{}); err == nil {
 		t.Error("pod leaked after a failed broker start")
 	}
-	if _, err := client.CoreV1().Services("jaiscloud").Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+	if _, err := client.CoreV1().Services(ns).Get(context.Background(), name, metav1.GetOptions{}); err == nil {
 		t.Error("service leaked after a failed broker start")
+	}
+	// The namespace created for the failed broker is not leaked either.
+	if _, err := client.CoreV1().Namespaces().Get(context.Background(), ns, metav1.GetOptions{}); err == nil {
+		t.Error("namespace leaked after a failed broker start")
 	}
 	if ep := b.Endpoint(key.Project, key.Location, key.Cluster); ep != "" {
 		t.Errorf("Endpoint after failed start = %q, want empty", ep)

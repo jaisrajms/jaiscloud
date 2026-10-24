@@ -1,0 +1,16 @@
+{
+  "index": 189,
+  "service": "pubsub",
+  "op": "redel_nack_b",
+  "method": "POST",
+  "path": "/v1/projects/<project>/subscriptions/conf-pubsub-redel-sub-<suffix>:modifyAckDeadline",
+  "status": 200,
+  "request": {
+    "ackDeadlineSeconds": 0,
+    "ackIds": [
+      "<ackId>"
+    ]
+  },
+  "response": {}
+}
+

@@ -1,0 +1,69 @@
+{
+  "index": 53,
+  "service": "bigquery",
+  "op": "bqsql_agg_distinct",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT DISTINCT s FROM nums ORDER BY s",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "3",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": null
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "a"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "b"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "s",
+          "type": "STRING"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "3",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

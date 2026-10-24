@@ -90,6 +90,13 @@ func TestLoggingWriteAndList(t *testing.T) {
 		if e.GetResource().GetType() != "global" {
 			t.Fatalf("resource type = %q, want global", e.GetResource().GetType())
 		}
+		// Output-only fields Cloud Logging assigns (AUD6-5).
+		if e.GetInsertId() == "" {
+			t.Fatal("entry insert_id must be generated when the client omitted one")
+		}
+		if e.GetReceiveTimestamp() == nil {
+			t.Fatal("entry receive_timestamp must be set")
+		}
 	}
 
 	// Severity filter.

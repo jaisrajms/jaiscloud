@@ -142,27 +142,56 @@ func (s *Service) GetExecution(ctx context.Context, project, location, workflowI
 	return applyView(e, view), nil
 }
 
-// ListExecutions returns a cursor page of executions for a workflow, projected
-// to the requested view. The page token is the shared cursor encoding used by
-// the other GCP v1 list methods.
+// ListExecutions returns a cursor page of executions for a workflow, applying
+// the documented AIP-160 filter and orderBy and projecting to the requested
+// view. An empty filter matches every execution; a filter or orderBy outside
+// the supported grammar is InvalidArgument (never silently ignored). A list for
+// a workflow that does not exist is NotFound. A negative pageSize is rejected;
+// an unspecified pageSize defaults to 100 and is coerced to the view's maximum
+// (1000 for BASIC, 100 for FULL, per the Discovery doc).
 //
-// Documented approximation: the emulator paginates on the execution ID rather
-// than the (startTime, id) cursor real GCP uses, so a page is ordered by ID
-// instead of start-time-newest-first. The result set and page boundaries are
-// otherwise correct.
-func (s *Service) ListExecutions(ctx context.Context, project, location, workflowID string, view View, pageSize int, pageToken string) ([]workflowsstore.Execution, string, error) {
+// With no orderBy the ordering is the documented default, descending
+// createTime. createTime is read from the stored startTime: the emulator runs
+// an execution synchronously, so the two coincide.
+func (s *Service) ListExecutions(ctx context.Context, project, location, workflowID string, view View, filter, orderBy string, pageSize int, pageToken string) ([]workflowsstore.Execution, string, error) {
 	if location == "" || workflowID == "" {
 		return nil, "", invalidArgument("missing workflow in parent")
+	}
+	// A list under an unknown workflow is NotFound (real GCP), decided before
+	// the filter/orderBy grammar so a bad filter cannot mask a missing parent.
+	if _, err := s.workflows.GetWorkflow(ctx, project, location, workflowID); err != nil {
+		return nil, "", mapStoreError(err)
+	}
+	if strings.TrimSpace(orderBy) == "" {
+		orderBy = "createTime desc"
+	}
+	flt, err := compileExecutionFilter(filter)
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := executionOrderSpec.Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument("workflowexecutions ListExecutions orderBy: " + err.Error())
 	}
 	execs, err := s.workflows.ListExecutions(ctx, project, location, workflowID)
 	if err != nil {
 		return nil, "", mapStoreError(err)
 	}
-	params := map[string]any{"pageSize": pageSize}
+	matched := make([]workflowsstore.Execution, 0, len(execs))
+	for _, e := range execs {
+		if flt.match(e) {
+			matched = append(matched, e)
+		}
+	}
+	order.Sort(matched)
+	params := map[string]any{"pageSize": executionPageSize(pageSize, view)}
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(execs, func(e workflowsstore.Execution) string { return e.ID }, params)
+	page, next, err := paging.PageOrdered(matched, params, order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	out := make([]workflowsstore.Execution, 0, len(page))
 	for _, e := range page {
 		out = append(out, applyView(e, view))

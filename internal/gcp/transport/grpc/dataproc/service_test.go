@@ -94,6 +94,26 @@ func TestListClusters_IncludesCreated(t *testing.T) {
 	if len(resp.GetClusters()) != 1 || resp.GetClusters()[0].GetClusterName() != "c1" {
 		t.Fatalf("clusters = %+v", resp.GetClusters())
 	}
+
+	// The ListClustersRequest.filter is honored, not silently ignored.
+	resp, err = s.ListClusters(context.Background(), &dataprocpb.ListClustersRequest{
+		ProjectId: "proj", Region: "us-central1", Filter: `labels.env = dev`,
+	})
+	if err != nil {
+		t.Fatalf("ListClusters(filter match): %v", err)
+	}
+	if len(resp.GetClusters()) != 1 {
+		t.Fatalf("filter labels.env=dev clusters = %+v, want c1", resp.GetClusters())
+	}
+	resp, err = s.ListClusters(context.Background(), &dataprocpb.ListClustersRequest{
+		ProjectId: "proj", Region: "us-central1", Filter: `clusterName = other`,
+	})
+	if err != nil {
+		t.Fatalf("ListClusters(filter miss): %v", err)
+	}
+	if len(resp.GetClusters()) != 0 {
+		t.Fatalf("filter clusterName=other clusters = %+v, want none", resp.GetClusters())
+	}
 }
 
 func TestUpdateCluster_LabelsMask(t *testing.T) {

@@ -222,7 +222,10 @@ func (p *Provider) ListNamespaces(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(namespaces, func(n icebergstore.Namespace) string { return n.Namespace }, nr.Params)
+	page, next, err := paging.Page(namespaces, func(n icebergstore.Namespace) string { return n.Namespace }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, n := range page {
 		items = append(items, splitNamespace(n.Namespace))
@@ -312,7 +315,10 @@ func (p *Provider) ListTables(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(tables, func(t icebergstore.Table) string { return t.Name }, nr.Params)
+	page, next, err := paging.Page(tables, func(t icebergstore.Table) string { return t.Name }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	identifiers := make([]any, 0, len(page))
 	for _, t := range page {
 		identifiers = append(identifiers, map[string]any{

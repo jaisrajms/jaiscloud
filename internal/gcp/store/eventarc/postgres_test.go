@@ -3,6 +3,7 @@
 package eventarc
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -32,4 +33,29 @@ func TestPostgresStore(t *testing.T) {
 	s.Reset(ctx)
 
 	runStoreTests(t, s)
+
+	// Snapshot/restore round-trip, including the persisted operations.
+	ctx = context.Background()
+	_ = s.CreateTrigger(ctx, "proj", "us-central1", Trigger{Name: "t", UID: "u", Etag: "e", Config: []byte(`{"eventFilters":[]}`)})
+	_ = s.CreateOperation(ctx, "proj", "us-central1", Operation{
+		ID: "op-1", Verb: "create", Target: "target", Response: []byte(`{"@type":"x"}`),
+	})
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := s.GetTrigger(ctx, "proj", "us-central1", "t"); err != nil {
+		t.Fatalf("trigger lost after restore: %v", err)
+	}
+	op, err := s.GetOperation(ctx, "proj", "us-central1", "op-1")
+	if err != nil || op.Verb != "create" || !jsonEqual(op.Response, []byte(`{"@type":"x"}`)) {
+		t.Fatalf("operation lost after restore: %v %+v", err, op)
+	}
+	if empty, err := s.IsEmpty(ctx); err != nil || empty {
+		t.Fatalf("IsEmpty after restore = %v, %v; want false", empty, err)
+	}
 }

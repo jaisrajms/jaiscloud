@@ -1,0 +1,76 @@
+{
+  "index": 67,
+  "service": "bigquery",
+  "op": "bqsql_setop_union_all",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 200,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT id FROM nums WHERE id > 1 UNION ALL SELECT id FROM nums WHERE id < 3 ORDER BY id",
+    "useLegacySql": false
+  },
+  "response": {
+    "cacheHit": false,
+    "creationTime": "<time>",
+    "endTime": "<time>",
+    "jobComplete": true,
+    "jobCreationReason": {
+      "code": "REQUESTED"
+    },
+    "jobReference": {},
+    "kind": "bigquery#queryResponse",
+    "location": "US",
+    "pageRowCount": "4",
+    "queryId": "<queryId>",
+    "rows": [
+      {
+        "f": [
+          {
+            "v": "1"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "2"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "2"
+          }
+        ]
+      },
+      {
+        "f": [
+          {
+            "v": "3"
+          }
+        ]
+      }
+    ],
+    "schema": {
+      "fields": [
+        {
+          "mode": "NULLABLE",
+          "name": "id",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    "startTime": "<time>",
+    "statementType": "SELECT",
+    "totalBytesBilled": "0",
+    "totalBytesProcessed": "0",
+    "totalRows": "4",
+    "totalSlotMs": "<totalSlotMs>"
+  }
+}
+

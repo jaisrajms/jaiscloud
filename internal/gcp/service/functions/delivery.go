@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
+	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 )
 
 // Delivery tuning. Real Cloud Functions retries a failed invocation for up to
@@ -52,6 +54,10 @@ type deliveryJob struct {
 	// subscription is the backing subscription whose deadLetterPolicy governs
 	// the dead-letter outcome, or "" when the target has none.
 	subscription string
+	// occurredAt is the producer's event time (ev.OccurredAt), carried
+	// in-memory so the delivered CloudEvent's time/publishTime is the event time
+	// rather than the delivery-record creation time.
+	occurredAt time.Time
 }
 
 // deliveryEngine delivers produced events to event-triggered functions. It runs
@@ -125,7 +131,7 @@ func (e *deliveryEngine) dispatch(ctx context.Context, ev eventing.Event) {
 			slog.Warn("functions: persist delivery", "function", t.id, "err", err)
 			continue
 		}
-		job := deliveryJob{gen: e.gen.Load(), rec: rec, retry: t.retry, subscription: t.subscription}
+		job := deliveryJob{gen: e.gen.Load(), rec: rec, retry: t.retry, subscription: t.subscription, occurredAt: ev.OccurredAt}
 		if !e.started.Load() {
 			// Not started (unit tests, or a binary that never called Start):
 			// run inline so the event is never silently dropped.
@@ -161,7 +167,11 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 		if !e.active(ctx, job.gen) {
 			return
 		}
-		_, result, invokeErr, err := e.svc.CallFunction(ctx, rec.Project, rec.Location, rec.FunctionID, rec.Data)
+		_, result, invokeErr, err := e.svc.CallFunction(ctx, rec.Project, rec.Location, rec.FunctionID, CallInput{
+			Data:          rec.Data,
+			SignatureType: "cloudevent",
+			Event:         deliveryCloudEvent(rec, job.subscription, job.occurredAt),
+		})
 		if err == nil && invokeErr == "" {
 			rec.Attempts = attempt
 			rec.UpdateTime = now()
@@ -210,7 +220,7 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	}
 	if job.retry {
 		rec.Status = functionsstore.DeliveryDeadLetter
-		if dlqTopic != "" && e.forwardToDeadLetter(ctx, rec, job.subscription, dlqTopic) {
+		if dlqTopic != "" && e.forwardToDeadLetter(ctx, rec, job.subscription, dlqTopic, job.occurredAt) {
 			rec.DeadLetterTopic = dlqTopic
 		}
 	} else {
@@ -247,16 +257,19 @@ func (e *deliveryEngine) deadLetter(ctx context.Context, job deliveryJob) (strin
 // the real Pub/Sub CloudPubSubDeadLetterSource* attributes, reporting whether it
 // was forwarded. A dead-letter topic equal to the event's own source topic is
 // skipped to prevent a self-retry loop.
-func (e *deliveryEngine) forwardToDeadLetter(ctx context.Context, rec functionsstore.Delivery, subscription, topic string) bool {
+func (e *deliveryEngine) forwardToDeadLetter(ctx context.Context, rec functionsstore.Delivery, subscription, topic string, occurredAt time.Time) bool {
 	if eventing.ResourceID(rec.Resource) == topic {
 		slog.Warn("functions: dead-letter topic equals source topic; not forwarding", "topic", topic)
 		return false
 	}
-	attrs := map[string]string{
-		"CloudPubSubDeadLetterSourceSubscription":        subscription,
-		"CloudPubSubDeadLetterSourceSubscriptionProject": rec.Project,
-		"CloudPubSubDeadLetterSourceDeliveryCount":       strconv.Itoa(rec.Attempts),
+	// The same four CloudPubSubDeadLetterSource* attributes real Pub/Sub attaches
+	// (shared with the Pub/Sub republish paths). The original event time is the
+	// producer's occurredAt, falling back to the delivery record's creation time.
+	publishedAt := occurredAt
+	if publishedAt.IsZero() {
+		publishedAt = rec.CreateTime
 	}
+	attrs := pubsubstore.DeadLetterMessageAttributes(rec.Project, subscription, rec.Attempts, publishedAt, rec.Attributes)
 	if err := e.svc.subscriptions.PublishDeadLetter(ctx, rec.Project, topic, []byte(rec.Data), attrs); err != nil {
 		slog.Warn("functions: forward dead-letter", "topic", topic, "err", err)
 		return false
@@ -350,6 +363,74 @@ func newDelivery(ev eventing.Event, t deliveryTarget) functionsstore.Delivery {
 		CreateTime: now(),
 		UpdateTime: now(),
 	}
+}
+
+// deliveryCloudEvent maps a delivery record onto the CloudEvent the GCP profile
+// sends (binary content mode): the real gen2 CloudEvent type, source and body,
+// not the emulator's internal canonical spellings. A Pub/Sub event is delivered
+// as a google.cloud.pubsub.topic.v1.messagePublished CloudEvent whose data is
+// the MessagePublishedData envelope ({message:{data(base64),attributes,
+// messageId,publishTime},subscription}) so a handler written for real GCP
+// (cloud_event.data["message"]["data"]) works; a Cloud Storage event is the
+// google.cloud.storage.object.v1.(finalized|deleted) CloudEvent carrying the
+// StorageObjectData JSON the producer already encoded. subscription is the short
+// id of the function's backing Pub/Sub subscription (the dead-letter surface),
+// or "" to fall back to the deterministic Eventarc subscription id. occurredAt
+// is the producer's event time; the delivery record's creation time is used only
+// when it is unset.
+func deliveryCloudEvent(rec functionsstore.Delivery, subscription string, occurredAt time.Time) *container.CloudEvent {
+	when := occurredAt
+	if when.IsZero() {
+		when = rec.CreateTime
+	}
+	if when.IsZero() {
+		when = rec.UpdateTime
+	}
+	ce := &container.CloudEvent{
+		SpecVersion:     "1.0",
+		ID:              rec.EventID,
+		DataContentType: "application/json",
+		Time:            when,
+	}
+	switch rec.Source {
+	case eventing.SourceStorage:
+		// ce-id is minted fresh: the producer's EventID (bucket/object/generation)
+		// would collide between a finalize and a delete of the same generation,
+		// and a CloudEvent's source+id must be unique. Shares the Eventarc
+		// dispatcher's convention.
+		ce.ID = newUUID()
+		ce.Type = eventing.StorageCloudEventType(rec.EventType)
+		ce.Source = eventing.StorageSource(rec.Resource)
+		ce.Subject = eventing.StorageObjectSubject(rec.Attributes)
+		ce.Data = []byte(rec.Data)
+	case eventing.SourcePubSub:
+		ce.Type = eventing.TypePubSubPublishCloudEvent
+		ce.Source = eventing.PubSubSource(rec.Resource)
+		ce.Data = eventing.PubSubMessagePublished(rec.EventID, when, []byte(rec.Data), rec.Attributes, subscriptionResource(rec, subscription))
+	default:
+		// An unrecognized source (e.g. an emulator-defined Dataproc event): keep
+		// the emulator's own event type/source and raw payload rather than
+		// mislabeling it as a Pub/Sub message.
+		source := rec.Source
+		if source == "" {
+			source = rec.Resource
+		}
+		ce.Type = rec.EventType
+		ce.Source = source
+		ce.Data = []byte(rec.Data)
+	}
+	return ce
+}
+
+// subscriptionResource returns the full resource name of the Pub/Sub
+// subscription the event arrived on. A record with no backing subscription (no
+// trigger provisioner, e.g. in unit tests) falls back to the deterministic
+// Eventarc subscription id the provisioner would have created.
+func subscriptionResource(rec functionsstore.Delivery, subscription string) string {
+	if subscription == "" {
+		subscription = eventing.EventarcSubscriptionID(rec.Location, eventing.FunctionTriggerID(rec.FunctionID))
+	}
+	return resource.ResourceID(rec.Project)("pubsub-subscription", subscription)
 }
 
 // backoffFor returns the exponential backoff before retry attempt n (1-based).

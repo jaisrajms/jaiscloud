@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -57,9 +58,9 @@ func (p *Provider) ListQueues(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	pageSize := intFrom(nr.Params["pageSize"])
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	pageSize, err := paging.SizeFrom(nr.Params["pageSize"], core.MaxQueuesPageSize)
+	if err != nil {
+		return nil, err
 	}
 	offset := pageOffset(nr)
 	if offset > len(queues) {
@@ -174,9 +175,9 @@ func (p *Provider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	pageSize := intFrom(nr.Params["pageSize"])
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	pageSize, err := paging.SizeFrom(nr.Params["pageSize"], core.MaxTasksPageSize)
+	if err != nil {
+		return nil, err
 	}
 	offset := pageOffset(nr)
 	if offset > len(tasks) {
@@ -198,7 +199,14 @@ func (p *Provider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) CreateTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	t, err := taskFromBody(bodyOf(nr))
+	body := bodyOf(nr)
+	// The v2 `CreateTask` request body is a CreateTaskRequest that wraps the
+	// task in a "task" field (the official REST client sends {"task": {...}});
+	// accept the flat task body too, which the emulator's own handlers use.
+	if inner, ok := body["task"].(map[string]any); ok {
+		body = inner
+	}
+	t, err := taskFromBody(body)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +241,11 @@ func (p *Provider) BatchCreateTasks(ctx context.Context, nr *model.NormalizedReq
 		}
 		created = append(created, taskToJSON(tk))
 	}
-	return provider.OK(map[string]any{"tasks": created}), nil
+	// cloudtasks/v2 declares tasks:batchCreate as a long-running operation
+	// whose response is a BatchCreateTasksResponse. The emulator creates
+	// synchronously, so it returns a done operation carrying the created tasks.
+	return provider.OK(batchOperationJSON(p.project(nr), strParam(nr, "location"), batchCreateMetadataType,
+		map[string]any{"@type": batchCreateResponseType, "tasks": created})), nil
 }
 
 // BatchDeleteTasks handles POST .../tasks:batchDelete.
@@ -253,7 +265,11 @@ func (p *Provider) BatchDeleteTasks(ctx context.Context, nr *model.NormalizedReq
 			return nil, err
 		}
 	}
-	return provider.OK(map[string]any{}), nil
+	// cloudtasks/v2 declares tasks:batchDelete as a long-running operation
+	// whose response is google.protobuf.Empty. As with batchCreate the emulator
+	// deletes synchronously and returns a done operation.
+	return provider.OK(batchOperationJSON(p.project(nr), strParam(nr, "location"), batchDeleteMetadataType,
+		map[string]any{"@type": emptyTypeURL})), nil
 }
 
 func (p *Provider) GetTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

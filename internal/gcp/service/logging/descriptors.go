@@ -15,15 +15,24 @@ import (
 // pageSize/pageToken are honored via the shared cursor pager. The Logging
 // descriptors surface carries no `parent` or `filter`, so the catalog is global
 // and unfiltered.
-func (s *Service) ListMonitoredResourceDescriptors(pageSize int, pageToken string) ([]MonitoredResourceDescriptor, string) {
+func (s *Service) ListMonitoredResourceDescriptors(pageSize int, pageToken string) ([]MonitoredResourceDescriptor, string, error) {
 	entries := rescatalog.Catalog()
 	all := make([]MonitoredResourceDescriptor, 0, len(entries))
 	for _, e := range entries {
 		all = append(all, descriptorFromCatalog(e))
 	}
-	page, next := paging.Page(all, func(d MonitoredResourceDescriptor) string { return d.Type },
+	// monitoredResourceDescriptors.list's Discovery document says non-positive
+	// page sizes are ignored (a documented exception to AIP-158), so a negative
+	// size takes the default rather than raising InvalidArgument.
+	if pageSize < 0 {
+		pageSize = 0
+	}
+	page, next, err := paging.Page(all, func(d MonitoredResourceDescriptor) string { return d.Type },
 		map[string]any{"pageSize": pageSize, "pageToken": pageToken})
-	return page, next
+	if err != nil {
+		return nil, "", err
+	}
+	return page, next, nil
 }
 
 // descriptorFromCatalog converts a canonical catalog descriptor to the

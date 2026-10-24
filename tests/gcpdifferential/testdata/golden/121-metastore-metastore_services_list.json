@@ -1,0 +1,10 @@
+{
+  "index": 121,
+  "service": "metastore",
+  "op": "metastore_services_list",
+  "method": "GET",
+  "path": "/v1/projects/<project>/locations/us-central1/services",
+  "status": 200,
+  "response": {}
+}
+

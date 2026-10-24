@@ -142,7 +142,7 @@ func runJobWithDriverPod(t *testing.T, p *Service, client *fake.Clientset, j dat
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
 	}()
 
 	// Wait until the spark-submit Job exists (SubmitClientMode finished), then
@@ -311,7 +311,7 @@ func TestCancelJob_TransitionsToCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
 	}()
 
 	require.Eventually(t, func() bool {
@@ -481,7 +481,7 @@ func TestCancelJob_ConcurrentCancels_SingleTerminal(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
 	}()
 	require.Eventually(t, func() bool {
 		jobs, _ := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
@@ -534,7 +534,7 @@ func TestRunJob_WaitError_ReapsDriverAndFails(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
 	}()
 
 	select {

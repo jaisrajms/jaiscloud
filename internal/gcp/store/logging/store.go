@@ -37,8 +37,11 @@ type LogEntry struct {
 	TextPayload    string            `json:"textPayload,omitempty"`
 	JsonPayload    map[string]any    `json:"jsonPayload,omitempty"`
 	Timestamp      time.Time         `json:"timestamp"`
-	InsertID       string            `json:"insertId,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	// ReceiveTimestamp is the time Cloud Logging received the entry (output
+	// only). It is stamped once at write and returned on every read.
+	ReceiveTimestamp time.Time         `json:"receiveTimestamp,omitempty"`
+	InsertID         string            `json:"insertId,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
 }
 
 // LogSink is a stored Cloud Logging sink (an export route). Name is the
@@ -54,8 +57,19 @@ type LogSink struct {
 	Exclusions      []LogExclusion `json:"exclusions,omitempty"`
 	WriterIdentity  string         `json:"writerIdentity,omitempty"`
 	IncludeChildren bool           `json:"includeChildren,omitempty"`
-	CreateTime      time.Time      `json:"createTime,omitempty"`
-	UpdateTime      time.Time      `json:"updateTime,omitempty"`
+	// InterceptChildren is the organization/folder-only legacy flag (REST-only:
+	// the pinned gRPC proto dropped `intercept_children`).
+	InterceptChildren   bool                `json:"interceptChildren,omitempty"`
+	OutputVersionFormat string              `json:"outputVersionFormat,omitempty"` // deprecated: "V2" | "V1"
+	BigQueryOptions     *LogBigQueryOptions `json:"bigqueryOptions,omitempty"`
+	CreateTime          time.Time           `json:"createTime,omitempty"`
+	UpdateTime          time.Time           `json:"updateTime,omitempty"`
+}
+
+// LogBigQueryOptions is a sink's BigQuery destination options.
+type LogBigQueryOptions struct {
+	UsePartitionedTables            bool `json:"usePartitionedTables,omitempty"`
+	UsesTimestampColumnPartitioning bool `json:"usesTimestampColumnPartitioning,omitempty"`
 }
 
 // LogExclusion is a stored Cloud Logging exclusion. For a resource-level
@@ -157,6 +171,37 @@ type Store interface {
 	ListMetrics(ctx context.Context, scope string) ([]LogMetric, error)
 	UpdateMetric(ctx context.Context, scope string, m LogMetric) error
 	DeleteMetric(ctx context.Context, scope, name string) error
+
+	// Admin v2 registries (log buckets, views, links, log scopes, and the
+	// per-scope Settings/CMEK records). scope is the owning resource parent and
+	// the id/name the short client-assigned identifier. See admin.go.
+	CreateBucket(ctx context.Context, scope string, b LogBucket) error
+	GetBucket(ctx context.Context, scope, id string) (LogBucket, error)
+	ListBuckets(ctx context.Context, scope string) ([]LogBucket, error)
+	UpdateBucket(ctx context.Context, scope string, b LogBucket) error
+	DeleteBucket(ctx context.Context, scope, id string) error
+
+	CreateView(ctx context.Context, scope string, v LogView) error
+	GetView(ctx context.Context, scope, id string) (LogView, error)
+	ListViews(ctx context.Context, scope string) ([]LogView, error)
+	UpdateView(ctx context.Context, scope string, v LogView) error
+	DeleteView(ctx context.Context, scope, id string) error
+
+	CreateLink(ctx context.Context, scope string, l LogLink) error
+	GetLink(ctx context.Context, scope, id string) (LogLink, error)
+	ListLinks(ctx context.Context, scope string) ([]LogLink, error)
+	DeleteLink(ctx context.Context, scope, id string) error
+
+	CreateLogScope(ctx context.Context, scope string, ls LogScope) error
+	GetLogScope(ctx context.Context, scope, id string) (LogScope, error)
+	ListLogScopes(ctx context.Context, scope string) ([]LogScope, error)
+	UpdateLogScope(ctx context.Context, scope string, ls LogScope) error
+	DeleteLogScope(ctx context.Context, scope, id string) error
+
+	GetSettings(ctx context.Context, scope string) (LogSettings, bool, error)
+	SetSettings(ctx context.Context, scope string, s LogSettings) error
+	GetCmekSettings(ctx context.Context, scope string) (LogCmekSettings, bool, error)
+	SetCmekSettings(ctx context.Context, scope string, c LogCmekSettings) error
 
 	Reset(ctx context.Context)
 }

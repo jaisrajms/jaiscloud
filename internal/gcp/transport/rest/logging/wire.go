@@ -3,12 +3,12 @@ package logging
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/paging"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -184,8 +184,16 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 		}
 		out["resource"] = res
 	}
+	// A LogEntry's own timestamp/receiveTimestamp are proto Timestamps with
+	// nanosecond accuracy (the Discovery: "Timestamps have nanosecond
+	// accuracy"), so they keep the caller's/server's full precision and are
+	// spelled without truncation — unlike the server-clock metadata fields
+	// below (sink/metric/bucket create/update times).
 	if !e.Timestamp.IsZero() {
-		out["timestamp"] = e.Timestamp.UTC().Format(time.RFC3339Nano)
+		out["timestamp"] = timestamp.ProtoJSON(e.Timestamp)
+	}
+	if !e.ReceiveTimestamp.IsZero() {
+		out["receiveTimestamp"] = timestamp.ProtoJSON(e.ReceiveTimestamp)
 	}
 	if e.Severity != 0 {
 		out["severity"] = core.SeverityName(e.Severity)
@@ -209,23 +217,14 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 
 // ─── sink / exclusion transcoding ─────────────────────────────────────────────
 
-// intParam reads a signed integer request parameter that may arrive as a JSON
-// number (body) or a query string. Unlike intFrom it preserves a leading minus,
-// so an out-of-range pageSize (e.g. -1) reaches the core's validation and is
-// rejected consistently with the gRPC transport.
-func intParam(nr *model.NormalizedRequest, key string) int {
-	switch v := nr.Params[key].(type) {
-	case float64:
-		return int(v)
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return 0
-		}
-		return n
-	default:
-		return 0
-	}
+// intParam reads the pageSize request parameter (a query string or a JSON body
+// number) as the int32 the Logging Discovery documents declare. A value the
+// int32 binding cannot parse is INVALID_ARGUMENT rather than a silent zero; a
+// negative value is still passed through so the core can apply each method's
+// documented non-positive rule (the non-positive-ignored lists take the default,
+// entries.list rejects it).
+func intParam(nr *model.NormalizedRequest, key string) (int, error) {
+	return paging.ParseSize(nr.Params[key])
 }
 
 // boolParam reads a boolean request parameter that may arrive as a JSON bool
@@ -284,12 +283,21 @@ func splitComma(s string) []string {
 // (resourceName, writerIdentity, createTime, updateTime) are ignored.
 func sinkFromWire(v map[string]any) loggingstore.LogSink {
 	s := loggingstore.LogSink{
-		Name:            strFrom(v["name"]),
-		Destination:     strFrom(v["destination"]),
-		Filter:          strFrom(v["filter"]),
-		Description:     strFrom(v["description"]),
-		Disabled:        boolFrom(v["disabled"]),
-		IncludeChildren: boolFrom(v["includeChildren"]),
+		Name:                strFrom(v["name"]),
+		Destination:         strFrom(v["destination"]),
+		Filter:              strFrom(v["filter"]),
+		Description:         strFrom(v["description"]),
+		Disabled:            boolFrom(v["disabled"]),
+		IncludeChildren:     boolFrom(v["includeChildren"]),
+		InterceptChildren:   boolFrom(v["interceptChildren"]),
+		OutputVersionFormat: versionFormatFromWire(strFrom(v["outputVersionFormat"])),
+	}
+	if bo, ok := v["bigqueryOptions"].(map[string]any); ok {
+		// Only `usePartitionedTables` is writable; `usesTimestampColumnPartitioning`
+		// is output-only and is never taken from the request.
+		s.BigQueryOptions = &loggingstore.LogBigQueryOptions{
+			UsePartitionedTables: boolFrom(bo["usePartitionedTables"]),
+		}
 	}
 	if arr, ok := v["exclusions"].([]any); ok {
 		for _, e := range arr {
@@ -299,6 +307,16 @@ func sinkFromWire(v map[string]any) loggingstore.LogSink {
 		}
 	}
 	return s
+}
+
+// versionFormatFromWire maps the Deprecated LogSink.outputVersionFormat enum
+// string to the stored form: the unspecified zero value becomes "" (as gRPC's
+// enum 0 does), while the two documented versions pass through.
+func versionFormatFromWire(v string) string {
+	if v == "VERSION_FORMAT_UNSPECIFIED" {
+		return ""
+	}
+	return v
 }
 
 // sinkToWire encodes a stored sink as the Discovery LogSink JSON. fullName is
@@ -337,11 +355,27 @@ func sinkToWire(s loggingstore.LogSink, fullName string) map[string]any {
 	if s.IncludeChildren {
 		out["includeChildren"] = true
 	}
+	if s.InterceptChildren {
+		out["interceptChildren"] = true
+	}
+	if s.OutputVersionFormat != "" {
+		out["outputVersionFormat"] = s.OutputVersionFormat
+	}
+	if s.BigQueryOptions != nil {
+		bo := map[string]any{}
+		if s.BigQueryOptions.UsePartitionedTables {
+			bo["usePartitionedTables"] = true
+		}
+		if s.BigQueryOptions.UsesTimestampColumnPartitioning {
+			bo["usesTimestampColumnPartitioning"] = true
+		}
+		out["bigqueryOptions"] = bo
+	}
 	if !s.CreateTime.IsZero() {
-		out["createTime"] = s.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(s.CreateTime)
 	}
 	if !s.UpdateTime.IsZero() {
-		out["updateTime"] = s.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out["updateTime"] = timestamp.Canonical(s.UpdateTime)
 	}
 	return out
 }
@@ -375,10 +409,10 @@ func exclusionToWire(e loggingstore.LogExclusion) map[string]any {
 		out["disabled"] = true
 	}
 	if !e.CreateTime.IsZero() {
-		out["createTime"] = e.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(e.CreateTime)
 	}
 	if !e.UpdateTime.IsZero() {
-		out["updateTime"] = e.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out["updateTime"] = timestamp.Canonical(e.UpdateTime)
 	}
 	return out
 }
@@ -468,10 +502,10 @@ func metricToWire(scopeParent string, m loggingstore.LogMetric) map[string]any {
 	}
 	out["metricDescriptor"] = metricDescriptorToWire(m.Descriptor)
 	if !m.CreateTime.IsZero() {
-		out["createTime"] = m.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(m.CreateTime)
 	}
 	if !m.UpdateTime.IsZero() {
-		out["updateTime"] = m.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out["updateTime"] = timestamp.Canonical(m.UpdateTime)
 	}
 	return out
 }

@@ -1,0 +1,22 @@
+{
+  "index": 3,
+  "service": "kms",
+  "op": "tour_kms_asym_sign",
+  "method": "google.cloud.kms.v1.KeyManagementService/AsymmetricSign",
+  "path": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "digest": {
+      "sha256": "UmYKu0bT93kJCCiuZ9jNu6AAch9Y3QO4KGquvDsjtgk="
+    },
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1"
+  },
+  "response": {
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+    "protectionLevel": "SOFTWARE",
+    "signature": "<signature>",
+    "signatureCrc32c": "<crc32c>"
+  }
+}
+

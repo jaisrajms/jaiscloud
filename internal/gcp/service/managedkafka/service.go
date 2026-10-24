@@ -40,8 +40,10 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"sync"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	mkstore "jaiscloud/internal/gcp/store/managedkafka"
@@ -110,11 +112,24 @@ type Broker interface {
 type Service struct {
 	store mkstore.Store
 	// lroMode controls operation timing. The zero value is synchronous: every
-	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// operation is stored done=true inline, matching the default synchronous contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 	// broker is the optional real broker manager. Nil means mock-only.
 	broker Broker
+	// mockGroups is the mock topology's stand-in for the Kafka group
+	// coordinator: "project/location/cluster" → group id → group state. A live
+	// broker is the source of truth whenever one is wired; with no broker there
+	// is no coordinator, so the control plane keeps the minimal client-visible
+	// state itself, seeded by the cluster ACL flow (a LITERAL GROUP ACL names a
+	// group) so the consumerGroups get/update/delete surface is reachable
+	// without inventing a create RPC. Like broker state these records are
+	// runtime state and are not snapshotted.
+	mockGroupsMu sync.RWMutex
+	mockGroups   map[string]map[string]ConsumerGroup
 }
 
 // Option configures Service.
@@ -125,6 +140,16 @@ type Option func(*Service)
 // operations done=false and settles them on read once d has elapsed.
 func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // WithBroker injects the broker manager that backs cluster bootstrapAddresses.
@@ -139,7 +164,7 @@ func WithBroker(b Broker) Option {
 
 // NewService returns a Managed Kafka core backed by the given store.
 func NewService(s mkstore.Store, opts ...Option) *Service {
-	svc := &Service{store: s}
+	svc := &Service{store: s, mockGroups: make(map[string]map[string]ConsumerGroup)}
 	for _, o := range opts {
 		o(svc)
 	}
@@ -156,6 +181,9 @@ func (s *Service) Reset(ctx context.Context) {
 			slog.Warn("managedkafka: broker reset failed", "err", err)
 		}
 	}
+	s.mockGroupsMu.Lock()
+	s.mockGroups = make(map[string]map[string]ConsumerGroup)
+	s.mockGroupsMu.Unlock()
 	s.store.Reset(ctx)
 }
 
@@ -432,7 +460,10 @@ func (s *Service) ListClusters(ctx context.Context, project, location string, pa
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(clusters, func(c mkstore.Cluster) string { return c.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(clusters, func(c mkstore.Cluster) string { return c.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	for i := range page {
 		page[i].BootstrapAddress = s.brokerEndpoint(project, page[i].Location, page[i].Name)
 	}
@@ -489,6 +520,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, clusterI
 		return mkstore.Operation{}, mapStoreError(err)
 	}
 	s.stopBroker(ctx, project, location, clusterID)
+	s.dropMockGroups(project, location, clusterID)
 	target := ClusterName(project, location, clusterID)
 	op, err := s.storeOperation(ctx, project, location, "delete", target, map[string]any{})
 	if err != nil {
@@ -521,7 +553,10 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(ops, func(op mkstore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(ops, func(op mkstore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	for i := range page {
 		page[i] = s.settle(page[i])
 	}
@@ -616,7 +651,10 @@ func (s *Service) ListTopics(ctx context.Context, project, location, clusterID s
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(topics, func(t mkstore.Topic) string { return t.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(topics, func(t mkstore.Topic) string { return t.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

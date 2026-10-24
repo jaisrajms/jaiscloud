@@ -5,10 +5,8 @@ package dataproc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
@@ -16,15 +14,30 @@ import (
 	"jaiscloud/internal/store"
 )
 
-// jsonEqual reports whether two JSON documents are semantically equal, ignoring
-// object key order (JSONB normalizes key order on the round trip, so byte-for-byte
-// comparison is not meaningful against Postgres — unlike the memory store).
-func jsonEqual(a, b string) bool {
-	var av, bv any
-	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
-		return false
+// TestPostgresStore runs the shared store matrix against the Postgres backend so
+// the two backends are held to the identical contract (the matrix covers the
+// CRUD + atomic-update paths; the round-trip/snapshot paths have their own
+// tests below).
+func TestPostgresStore(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres store test")
 	}
-	return reflect.DeepEqual(av, bv)
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	runStoreTests(t, s)
 }
 
 // TestPostgresStoreSnapshotVerbatim verifies that cluster config, job type_job,
@@ -51,7 +64,7 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 
 	const config = `{"gceClusterConfig":{"zoneUri":"z"},"softwareConfig":{"imageVersion":"2.2"},"initializationActions":[{"executableFile":"gs://b/init.sh"}]}`
 	const vcc = `{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke"}},"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"projects/p/locations/us-central1/services/hms"}}}`
-	c := Cluster{Name: "c1", Config: []byte(config), VirtualClusterConfig: []byte(vcc), Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}}
+	c := Cluster{Name: "c1", Config: []byte(config), VirtualClusterConfig: []byte(vcc), Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}, Namespace: "gcp-dataproc-proj-c1-deadbeef", NamespaceOwned: true}
 	if err := s.CreateCluster(ctx, "proj", "us-central1", c); err != nil {
 		t.Fatalf("create cluster: %v", err)
 	}
@@ -82,6 +95,10 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	}
 	if got.Labels["k"] != "v" || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster fields lost: %+v", got)
+	}
+	if got.Namespace != c.Namespace || got.NamespaceOwned != c.NamespaceOwned {
+		t.Fatalf("namespace not preserved: got (%q, %v) want (%q, %v)",
+			got.Namespace, got.NamespaceOwned, c.Namespace, c.NamespaceOwned)
 	}
 
 	gotJob, err := s.GetJob(ctx, "proj", "us-central1", "j1")
@@ -260,6 +277,27 @@ func TestPostgresStoreProjectRegionRoundTrip(t *testing.T) {
 	if gotOp.ProjectID != project || gotOp.Region != region {
 		t.Fatalf("operation projectId/region lost (drives operation name region): %+v", gotOp)
 	}
+}
+
+// TestPostgresStoreByProject runs the shared cross-region list contract against
+// Postgres so the SQL paths order and scope identically to the memory store.
+func TestPostgresStoreByProject(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres by-project test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	runByProjectTests(t, NewPostgresStore(pg.Pool()))
 }
 
 // TestPostgresStoreSnapshotRoundTrip verifies that terminal-job fields

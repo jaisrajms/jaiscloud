@@ -71,11 +71,13 @@ func GRPCFacts(services []conf.GRPCService, ov *Overrides, report *grpcReport) [
 			var override *Override
 			var findings []Finding
 			var passed, total int
+			verified := false
 			switch {
 			case cov.total > 0 && cov.failed == 0:
 				// Verified against the official client: leave override nil so the
 				// derived state is ga (mutating cells still need a backend).
 				passed, total = cov.passed, cov.total
+				verified = true
 			case cov.total > 0:
 				findings = append(findings, Finding{
 					Severity: "high",
@@ -105,6 +107,8 @@ func GRPCFacts(services []conf.GRPCService, ov *Overrides, report *grpcReport) [
 				Override:          override,
 				GRPCChecksPassed:  passed,
 				GRPCChecksTotal:   total,
+				GRPCCheckLabels:   cov.labels,
+				Verified:          verified,
 			})
 		}
 	}

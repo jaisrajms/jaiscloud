@@ -1,0 +1,53 @@
+{
+  "index": 13,
+  "service": "firestore",
+  "op": "tour_fs_query_page_3",
+  "method": "google.firestore.v1.Firestore/RunQuery",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "parent": "projects/<project>/databases/(default)/documents",
+    "structuredQuery": {
+      "from": [
+        {
+          "collectionId": "<fsCollection>"
+        }
+      ],
+      "limit": 2,
+      "orderBy": [
+        {
+          "direction": "ASCENDING",
+          "field": {
+            "fieldPath": "i"
+          }
+        }
+      ],
+      "startAt": {
+        "values": [
+          {
+            "integerValue": "3"
+          }
+        ]
+      }
+    }
+  },
+  "response": {
+    "frames": [
+      {
+        "document": {
+          "createTime": "<time>",
+          "fields": {
+            "i": {
+              "integerValue": "4"
+            }
+          },
+          "name": "projects/<project>/databases/(default)/documents/<fsCollection>/d4",
+          "updateTime": "<time>"
+        },
+        "readTime": "<time>"
+      }
+    ]
+  }
+}
+

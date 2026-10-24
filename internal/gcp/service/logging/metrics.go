@@ -317,14 +317,9 @@ func (s *Service) ListMetrics(ctx context.Context, parent string, pageSize int, 
 	if err != nil {
 		return nil, "", err
 	}
-	// The metrics list contract treats a non-positive page size as unset.
-	if pageSize < 0 {
-		pageSize = 0
-	}
-	page, next, err := paginateConfig(list, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	// metrics.list documents "Non-positive values are ignored", the shared
+	// config-list contract paginateConfig applies.
+	page, next := paginateConfig(list, pageSize, pageToken)
 	out := make([]loggingstore.LogMetric, 0, len(page))
 	for _, m := range page {
 		out = append(out, metricView(scope, m))

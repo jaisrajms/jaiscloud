@@ -1,0 +1,32 @@
+{
+  "index": 17,
+  "service": "pubsub",
+  "op": "tour_pubsub_publish",
+  "method": "google.pubsub.v1.Publisher/Publish",
+  "path": "projects/<project>/topics/<topic>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "messages": [
+      {
+        "data": "YmF0Y2gtMDA="
+      },
+      {
+        "data": "YmF0Y2gtMDE="
+      },
+      {
+        "data": "YmF0Y2gtMDI="
+      },
+      {
+        "data": "YmF0Y2gtMDM="
+      }
+    ],
+    "topic": "projects/<project>/topics/<topic>"
+  },
+  "response": {
+    "messageIds": [
+      "<messageId>"
+    ]
+  }
+}
+

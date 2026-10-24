@@ -1,0 +1,10 @@
+{
+  "index": 115,
+  "service": "tasks",
+  "op": "tasks_queues_list",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/queues",
+  "status": 200,
+  "response": {}
+}
+

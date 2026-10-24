@@ -17,7 +17,7 @@ JaisCloud is a free, open-source AWS emulator that lets developers test AWS appl
 |---|---|---|
 | AWS | `jaiscloud-aws` | Full implementation |
 | Azure | `jaiscloud-azure` | In pipeline |
-| GCP | `jaiscloud-gcp` | In pipeline — see the [GCP guide](README-GCP.md) |
+| GCP | `jaiscloud-gcp` | Released from `v0.2.0` — see the [GCP guide](README-GCP.md) |
 
 ---
 
@@ -484,6 +484,8 @@ All endpoints are available at the emulator's base URL (default `http://localhos
 > **Coming Soon** — Under active development; shipping in an upcoming release. **Free and open-source.**
 
 The JaisCloud UI Console is a browser-based interface that mirrors the AWS Management Console experience — without the AWS bill. It ships as part of the single binary: no separate server, no external service, no subscription.
+
+> The GCP binary has its own **Material Design** console, matching the Google Cloud Console — see the [GCP guide](README-GCP.md#ui-console).
 
 **Planned capabilities:**
 

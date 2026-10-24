@@ -42,13 +42,33 @@ var catalog = []Provider{
 }
 
 // ListProviders returns a cursor page of the catalogued providers in a
-// location.
-func (s *Service) ListProviders(ctx context.Context, project, location string, pageSize int, pageToken string) ([]Provider, string, error) {
+// location, restricted by the AIP-160 filter and ordered by orderBy (both
+// documented on providers.list; see listparams.go). An empty filter matches
+// every provider and an empty orderBy is the default ascending-by-id order.
+func (s *Service) ListProviders(ctx context.Context, project, location, filter, orderBy string, pageSize int, pageToken string) ([]Provider, string, error) {
 	_ = ctx
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
 	}
-	page, next := paging.Page(catalog, func(d Provider) string { return d.ID }, pageParams(pageSize, pageToken))
+	compiledFilter, err := compileListFilter("eventarc ListProviders", filter, providerFilterFields(project, location))
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := providerOrderSpec.Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument("eventarc ListProviders orderBy: " + err.Error())
+	}
+	filtered := make([]Provider, 0, len(catalog))
+	for _, d := range catalog {
+		if compiledFilter.match(d) {
+			filtered = append(filtered, d)
+		}
+	}
+	order.Sort(filtered)
+	page, next, err := paging.PageOrdered(filtered, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

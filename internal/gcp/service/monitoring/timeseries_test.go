@@ -225,3 +225,31 @@ func TestListTimeSeriesSecondaryAggregation(t *testing.T) {
 		t.Fatal("expected secondary aggregation without primary to be rejected")
 	}
 }
+
+// TestListTimeSeriesFolderScope covers the folders arm of timeSeries.list: the
+// emulator has no folder→project membership, so a folders parent aggregates the
+// same series store across every project instead of being rejected.
+func TestListTimeSeriesFolderScope(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	end := clockNow()
+	typ := "custom.googleapis.com/folder"
+	if err := s.CreateTimeSeries(ctx, "proj-a", []monitoringstore.TimeSeries{
+		testSeries(typ, "env", "a", pointAt(end.Add(-30*time.Second), 1)),
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries proj-a: %v", err)
+	}
+	if err := s.CreateTimeSeries(ctx, "proj-b", []monitoringstore.TimeSeries{
+		testSeries(typ, "env", "b", pointAt(end.Add(-20*time.Second), 2)),
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries proj-b: %v", err)
+	}
+
+	page, _, err := s.ListTimeSeries(ctx, "folders/123", `metric.type = "`+typ+`"`, nil, nil, nil, "", false, 0, "")
+	if err != nil {
+		t.Fatalf("ListTimeSeries(folders): %v", err)
+	}
+	if len(page) != 2 {
+		t.Fatalf("folders arm returned %d series, want both projects' series", len(page))
+	}
+}

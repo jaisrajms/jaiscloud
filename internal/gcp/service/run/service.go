@@ -1,13 +1,12 @@
 // Package run is the transport-neutral core for Cloud Run Admin v2
 // (run.googleapis.com). It implements the behavioural control plane the emulator
 // exposes — services CRUD, revisions, service IAM, and google.longrunning
-// operations — over a Store. Both the REST adapter and any future transport
-// share one instance, so they cannot drift.
+// operations — over a Store. The REST adapter and the gRPC adapter
+// (internal/gcp/transport/grpc/run) share one instance, so they cannot drift.
 //
-// The runtime is behind a RuntimeManager seam whose W1.1 implementation is the
-// MockRuntime: a service is a stored record, not a running container. W1.2 adds
-// a k8s runtime that actually launches the template image. REST-first (gRPC is
-// deferred; see the wave plan CR4).
+// The runtime is behind a RuntimeManager seam whose default implementation is
+// the MockRuntime: a service is a stored record, not a running container; the
+// k8s executor (internal/gcp/runexec) launches the template image instead.
 package run
 
 import (
@@ -22,6 +21,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
 	runstore "jaiscloud/internal/gcp/store/run"
@@ -29,15 +29,26 @@ import (
 	"jaiscloud/internal/store"
 )
 
-// DefaultURLSuffix is the DNS suffix of a synthesized service uri when
-// JAISCLOUD_CLOUDRUN_URL_SUFFIX is unset. It matches the real *.run.app host.
-const DefaultURLSuffix = "run.app"
-
 // servicePolicy is the policy resource type for a Cloud Run service IAM policy.
 const servicePolicy = "run-service-policy"
 
 // validServiceID is Cloud Run's service-id grammar (RFC 1035 label).
 var validServiceID = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,47}[a-z0-9])?$`)
+
+// Cloud Run traffic-tag rules, probed against real GCP (the API answers 400
+// INVALID_ARGUMENT otherwise). A tag is an RFC 1035 label — lowercase letters,
+// digits and hyphens, beginning with a letter and not ending with a hyphen — 3
+// to 47 characters long, and the tag and the service id together may not exceed
+// 46 characters. Tags must also be unique within a service. The tag becomes the
+// leading DNS label of the tag-qualified host ("{tag}---{service-host}").
+const (
+	trafficTagMinLen      = 3
+	trafficTagMaxLen      = 47
+	trafficTagCombinedMax = 46
+)
+
+// validTrafficTag is the RFC 1035 label shape of a traffic tag.
+var validTrafficTag = regexp.MustCompile(`^[a-z][a-z0-9-]*[a-z0-9]$`)
 
 // Service is the transport-neutral Cloud Run core.
 type Service struct {
@@ -45,7 +56,14 @@ type Service struct {
 	resources store.ResourceStore
 	lro       lro.Mode
 	runtime   RuntimeManager
-	urlSuffix string
+	host      HostConfig
+	// eventBus publishes cloud-neutral status events for the console's live
+	// stream. Nil disables them (unit tests that only exercise the control
+	// plane).
+	eventBus *events.EventBus
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 }
 
 // Option customises a Service.
@@ -66,11 +84,30 @@ func WithRuntimeManager(m RuntimeManager) Option {
 	}
 }
 
-// WithURLSuffix sets the DNS suffix used to synthesize a service uri.
+// WithURLSuffix sets the DNS suffix used to synthesize a service uri, leaving
+// the scheme and port from the process-wide default.
 func WithURLSuffix(suffix string) Option {
 	return func(s *Service) {
 		if suffix != "" {
-			s.urlSuffix = strings.TrimPrefix(suffix, ".")
+			s.host.Suffix = strings.TrimPrefix(suffix, ".")
+		}
+	}
+}
+
+// WithInvocationHost overrides the full invocation host config (scheme, suffix,
+// port) for this core. It is used by k8s execution mode so the synthesized uri
+// is the http authority the client can send back as a Host header.
+func WithInvocationHost(c HostConfig) Option {
+	return func(s *Service) { s.host = normalizeHostConfig(c) }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.eventBus = bus
+			s.tracker = lro.NewTracker(bus)
 		}
 	}
 }
@@ -81,7 +118,7 @@ func NewService(s runstore.Store, resources store.ResourceStore, opts ...Option)
 		store:     s,
 		resources: resources,
 		runtime:   MockRuntime{},
-		urlSuffix: DefaultURLSuffix,
+		host:      invocationHost,
 	}
 	for _, o := range opts {
 		o(svc)
@@ -97,7 +134,17 @@ func (s *Service) Reset(ctx context.Context) {
 
 // CreateService validates and stores a new service and its first revision, and
 // returns the create operation (done inline in the default synchronous mode).
-func (s *Service) CreateService(ctx context.Context, project, location, serviceID string, body map[string]any) (runstore.Operation, error) {
+// validateOnly validates the request, including the duplicate-id check, and
+// returns an unpersisted operation whose response previews the would-be service
+// without touching the store or the runtime.
+func (s *Service) CreateService(ctx context.Context, project, location, serviceID string, body map[string]any, validateOnly bool) (runstore.Operation, error) {
+	return s.createService(ctx, project, location, serviceID, body, validateOnly, "create")
+}
+
+// createService is the shared create implementation for CreateService and
+// UpdateService's allowMissing upsert. verb labels the operation ("create", or
+// "update" for the upsert) but does not affect the wire shape.
+func (s *Service) createService(ctx context.Context, project, location, serviceID string, body map[string]any, validateOnly bool, verb string) (runstore.Operation, error) {
 	if project == "" || location == "" {
 		return runstore.Operation{}, invalidArgument("project and location are required")
 	}
@@ -113,6 +160,9 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 	if _, err := s.store.GetService(ctx, project, location, serviceID); err == nil {
 		return runstore.Operation{}, model.NewProviderError("AlreadyExists", "service already exists: "+serviceID, 409)
 	} else if !errors.Is(err, runstore.ErrNoSuchService) {
+		return runstore.Operation{}, err
+	}
+	if err := validateTraffic(serviceID, body); err != nil {
 		return runstore.Operation{}, err
 	}
 
@@ -145,16 +195,18 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 		Data:       revisionData(body),
 	}
 
-	if err := s.runtime.EnsureRevision(ctx, svc, rev); err != nil {
-		return runstore.Operation{}, err
+	if !validateOnly {
+		if err := s.runtime.EnsureRevision(ctx, svc, rev); err != nil {
+			return runstore.Operation{}, err
+		}
+		if err := s.store.CreateService(ctx, project, location, svc); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
+		if err := s.store.CreateRevision(ctx, project, location, serviceID, rev); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
 	}
-	if err := s.store.CreateService(ctx, project, location, svc); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
-	}
-	if err := s.store.CreateRevision(ctx, project, location, serviceID, rev); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
-	}
-	return s.recordOperation(ctx, project, location, "create", svc)
+	return s.recordOperation(ctx, project, location, verb, svc, validateOnly)
 }
 
 // GetService returns a service by id.
@@ -175,19 +227,43 @@ func (s *Service) ListServices(ctx context.Context, project, location string) ([
 	return svcs, nil
 }
 
+// ListAllServices lists every service in a project across all locations,
+// sorted by location then id. It backs the region-optional console list.
+func (s *Service) ListAllServices(ctx context.Context, project string) ([]runstore.Service, error) {
+	svcs, err := s.store.ListServicesByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return svcs, nil
+}
+
 // UpdateService applies an update mask and returns the update operation. A
-// template change mints the next revision.
-func (s *Service) UpdateService(ctx context.Context, project, location, id string, body map[string]any, updateMask string) (runstore.Operation, error) {
+// template change mints the next revision. The request body's top-level etag is
+// an optimistic-concurrency precondition (a mismatch is Aborted). allowMissing
+// upserts: a missing service is created instead of NotFound. validateOnly
+// validates and previews the result without persisting or touching the runtime.
+func (s *Service) UpdateService(ctx context.Context, project, location, id string, body map[string]any, updateMask string, validateOnly, allowMissing bool) (runstore.Operation, error) {
 	existing, err := s.store.GetService(ctx, project, location, id)
 	if err != nil {
+		if allowMissing && errors.Is(err, runstore.ErrNoSuchService) {
+			return s.createService(ctx, project, location, id, body, validateOnly, "update")
+		}
 		return runstore.Operation{}, mapStoreErr(err)
 	}
-	now := clock.Now()
-	updated := existing
-	if updated.Data == nil {
-		updated.Data = map[string]any{}
+	if err := checkEtag(str(body, "etag"), existing.Etag); err != nil {
+		return runstore.Operation{}, err
 	}
+	now := clock.Now()
+	// Copy the writable Data map before merging: a store may hand back a struct
+	// that aliases the stored map (memory), so applyUpdate on the shared map
+	// would mutate persisted state even on a validate-only request and would
+	// rewrite the map an earlier operation snapshot points at.
+	updated := existing
+	updated.Data = cloneMap(existing.Data)
 	applyUpdate(updated.Data, body, updateMask)
+	if err := validateTraffic(id, updated.Data); err != nil {
+		return runstore.Operation{}, err
+	}
 
 	templateChanged := templateMasked(updateMask) || (strings.TrimSpace(updateMask) == "" && bodyHasTemplate(body))
 	updated.Generation++
@@ -196,6 +272,14 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 
 	var rev runstore.Revision
 	if templateChanged {
+		// Tear down the revision currently serving traffic before standing up
+		// its replacement. Revisions are always-on, so the old runtime is only
+		// removed here (and on service delete/reset/orphan sweep). Teardown is
+		// best-effort: a failure must not block the update. A validate-only
+		// request previews the new revision but touches nothing.
+		if !validateOnly {
+			s.removeServingRevision(ctx, existing)
+		}
 		revID := nextRevisionID(id, existing.LatestCreatedRevision)
 		rev = runstore.Revision{
 			ProjectID:  project,
@@ -211,38 +295,69 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 		}
 		updated.LatestCreatedRevision = RevisionName(project, location, id, revID)
 		updated.LatestReadyRevision = updated.LatestCreatedRevision
-		if err := s.runtime.EnsureRevision(ctx, updated, rev); err != nil {
-			return runstore.Operation{}, err
+		if !validateOnly {
+			if err := s.runtime.EnsureRevision(ctx, updated, rev); err != nil {
+				return runstore.Operation{}, err
+			}
 		}
 	}
-	if err := s.store.UpdateService(ctx, project, location, updated); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
-	}
-	if templateChanged {
-		if err := s.store.CreateRevision(ctx, project, location, id, rev); err != nil {
+	if !validateOnly {
+		if err := s.store.UpdateService(ctx, project, location, updated); err != nil {
 			return runstore.Operation{}, mapStoreErr(err)
 		}
+		if templateChanged {
+			if err := s.store.CreateRevision(ctx, project, location, id, rev); err != nil {
+				return runstore.Operation{}, mapStoreErr(err)
+			}
+		}
 	}
-	return s.recordOperation(ctx, project, location, "update", updated)
+	return s.recordOperation(ctx, project, location, "update", updated, validateOnly)
+}
+
+// removeServingRevision tears down the runtime of the revision currently
+// serving a service (best-effort). It is called when a template-changing update
+// replaces the serving revision.
+func (s *Service) removeServingRevision(ctx context.Context, svc runstore.Service) {
+	name := svc.LatestReadyRevision
+	if name == "" {
+		name = svc.LatestCreatedRevision
+	}
+	project, location, service, id, ok := ParseRevisionName(name)
+	if !ok {
+		return
+	}
+	_ = s.runtime.RemoveRevision(ctx, runstore.Revision{
+		ProjectID: project,
+		Location:  location,
+		Service:   service,
+		ID:        id,
+	})
 }
 
 // DeleteService removes a service and its revisions and returns the delete
 // operation. The operation's response/metadata is the removed service snapshot.
-func (s *Service) DeleteService(ctx context.Context, project, location, id string) (runstore.Operation, error) {
+// etag is an optimistic-concurrency precondition (a mismatch is Aborted).
+// validateOnly validates the request without removing the service.
+func (s *Service) DeleteService(ctx context.Context, project, location, id string, validateOnly bool, etag string) (runstore.Operation, error) {
 	existing, err := s.store.GetService(ctx, project, location, id)
 	if err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
 	}
-	if err := s.runtime.RemoveService(ctx, existing); err != nil {
+	if err := checkEtag(etag, existing.Etag); err != nil {
 		return runstore.Operation{}, err
 	}
 	deleted := existing
-	deleted.DeleteTime = clock.Now()
-	deleted.UpdateTime = deleted.DeleteTime
-	if err := s.store.DeleteService(ctx, project, location, id); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
+	if !validateOnly {
+		if err := s.runtime.RemoveService(ctx, existing); err != nil {
+			return runstore.Operation{}, err
+		}
+		deleted.DeleteTime = clock.Now()
+		deleted.UpdateTime = deleted.DeleteTime
+		if err := s.store.DeleteService(ctx, project, location, id); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
 	}
-	return s.recordOperation(ctx, project, location, "delete", deleted)
+	return s.recordOperation(ctx, project, location, "delete", deleted, validateOnly)
 }
 
 // GetRevision returns a revision by id.
@@ -267,6 +382,71 @@ func (s *Service) ListRevisions(ctx context.Context, project, location, service 
 		return nil, mapStoreErr(err)
 	}
 	return revs, nil
+}
+
+// DeleteRevision removes a retired revision and returns the delete operation
+// (its response/metadata is the removed Revision). Cloud Run only permits
+// deleting retired revisions — the revision currently serving the service (the
+// latest ready/created one) is a FailedPrecondition. etag is an
+// optimistic-concurrency precondition (a mismatch is Aborted). validateOnly
+// validates the request without deleting or recording an operation.
+func (s *Service) DeleteRevision(ctx context.Context, project, location, service, id string, validateOnly bool, etag string) (runstore.Operation, error) {
+	svc, err := s.store.GetService(ctx, project, location, service)
+	if err != nil {
+		return runstore.Operation{}, mapStoreErr(err)
+	}
+	rev, err := s.store.GetRevision(ctx, project, location, service, id)
+	if err != nil {
+		return runstore.Operation{}, mapStoreErr(err)
+	}
+	if err := checkEtag(etag, rev.Etag); err != nil {
+		return runstore.Operation{}, err
+	}
+	revName := RevisionName(project, location, service, id)
+	if revName == svc.LatestReadyRevision || revName == svc.LatestCreatedRevision {
+		return runstore.Operation{}, model.NewProviderError("FailedPrecondition",
+			"only retired revisions can be deleted: "+revName, 400)
+	}
+	if !validateOnly {
+		// A retired revision has no live runtime, so teardown is best-effort.
+		_ = s.runtime.RemoveRevision(ctx, rev)
+		if err := s.store.DeleteRevision(ctx, project, location, service, id); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
+	}
+	return s.recordRevisionOperation(ctx, project, location, svc.ID, rev, validateOnly)
+}
+
+// recordRevisionOperation builds (and, unless the request was validate-only,
+// persists) the operation for a revision mutation. The response snapshot is the
+// Revision, matching the proto's operation_info response_type.
+func (s *Service) recordRevisionOperation(ctx context.Context, project, location, service string, rev runstore.Revision, validateOnly bool) (runstore.Operation, error) {
+	now := clock.Now()
+	if !validateOnly {
+		rev.DeleteTime = now
+	}
+	op := runstore.Operation{
+		ProjectID:  project,
+		Location:   location,
+		ID:         "operation-run-" + newUUID(),
+		Verb:       "delete",
+		Target:     RevisionName(project, location, service, rev.ID),
+		CreateTime: now,
+		Revision:   &rev,
+	}
+	// A validate-only operation is never persisted, so it must be terminal:
+	// an in-flight op the client cannot poll would be a dead end.
+	if validateOnly || !s.lro.Async() {
+		op.Done = true
+		op.EndTime = now
+	}
+	if validateOnly {
+		return op, nil
+	}
+	if err := s.store.CreateOperation(ctx, project, location, op); err != nil {
+		return runstore.Operation{}, mapStoreErr(err)
+	}
+	return op, nil
 }
 
 // --- IAM ---
@@ -359,12 +539,24 @@ func (s *Service) Invoke(ctx context.Context, req InvocationRequest) (Invocation
 }
 
 // URLSuffix returns the configured synthesized-uri DNS suffix.
-func (s *Service) URLSuffix() string { return s.urlSuffix }
+func (s *Service) URLSuffix() string { return s.host.Suffix }
+
+// ServiceAuthority returns the invocation authority (host[:port]) of a service
+// under this core's configuration. The runtime manager registers revisions
+// under the same authority so Invoke can resolve a request Host to a revision.
+func (s *Service) ServiceAuthority(project, location, id string) string {
+	host := id + "-" + projectToken(project) + "." + strings.ToLower(location) + "." + s.host.Suffix
+	if s.host.Port != "" {
+		host += ":" + s.host.Port
+	}
+	return host
+}
 
 // uri synthesizes the service uri. Mock mode uses the real
-// https://{id}-{token}.{location}.{suffix} form; W1.2 rewrites it for k8s mode.
+// https://{id}-{token}.{location}.{suffix} form; k8s execution mode overrides
+// the scheme/port via WithInvocationHost.
 func (s *Service) uri(project, location, id string) string {
-	return "https://" + id + "-" + projectToken(project) + "." + strings.ToLower(location) + "." + s.urlSuffix
+	return s.host.Scheme + "://" + s.ServiceAuthority(project, location, id)
 }
 
 // projectToken is the 12-hex-char SHA-256 prefix of the project, matching the
@@ -377,7 +569,9 @@ func projectToken(project string) string {
 // --- helpers ---
 
 // recordOperation builds and persists the operation for a service mutation.
-func (s *Service) recordOperation(ctx context.Context, project, location, verb string, svc runstore.Service) (runstore.Operation, error) {
+// A validateOnly request returns the operation unpersisted and emits no status
+// event, so a dry run mutates nothing observable.
+func (s *Service) recordOperation(ctx context.Context, project, location, verb string, svc runstore.Service, validateOnly bool) (runstore.Operation, error) {
 	now := clock.Now()
 	op := runstore.Operation{
 		ProjectID:  project,
@@ -388,14 +582,44 @@ func (s *Service) recordOperation(ctx context.Context, project, location, verb s
 		CreateTime: now,
 		Service:    &svc,
 	}
-	if !s.lro.Async() {
+	// A validate-only operation is never persisted, so it must be terminal:
+	// an in-flight op the client cannot poll would be a dead end.
+	if validateOnly || !s.lro.Async() {
 		op.Done = true
 		op.EndTime = now
+	}
+	if validateOnly {
+		return op, nil
 	}
 	if err := s.store.CreateOperation(ctx, project, location, op); err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
 	}
+	s.emitStatus(verb, svc)
 	return op, nil
+}
+
+// emitStatus publishes a console status event for a service mutation on the
+// shared event bus. It is best-effort: a nil bus is a no-op, so the control
+// plane never fails because of the UI stream.
+func (s *Service) emitStatus(verb string, svc runstore.Service) {
+	if s.eventBus == nil {
+		return
+	}
+	state := "READY"
+	if verb == "delete" {
+		state = "DELETED"
+	}
+	s.eventBus.Publish(events.Event{
+		Type: events.EventStatus,
+		Payload: events.StatusEvent{
+			Cloud:    model.CloudGCP,
+			Keys:     []string{"gcp", "run"},
+			Resource: "gcp-run-service",
+			ID:       svc.ID,
+			State:    state,
+			Detail:   verb + " " + ServiceName(svc.ProjectID, svc.Location, svc.ID),
+		},
+	})
 }
 
 // settle derives the rendered state of a persisted operation from its stored
@@ -407,6 +631,7 @@ func (s *Service) settle(op runstore.Operation) runstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lro.Delay)
+	s.tracker.EmitOperation("run", op.ID, op.ID, op.Verb)
 	return op
 }
 
@@ -527,6 +752,72 @@ func str(m map[string]any, key string) string {
 
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// validateTraffic checks every traffic target's tag against the rules real
+// Cloud Run enforces, answering 400 INVALID_ARGUMENT for a violation. Probed
+// against the live API: the tag is an RFC 1035 label (3–47 characters, lowercase
+// letters/digits/hyphens, beginning with a letter and not ending with a hyphen),
+// the tag and the service id together may not exceed 46 characters, and tags are
+// unique within a service. An absent traffic list, a non-array value, a
+// malformed entry or an empty tag are tolerated here — the tag is the only field
+// this validates.
+func validateTraffic(serviceID string, data map[string]any) error {
+	targets, ok := data["traffic"].([]any)
+	if !ok {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, t := range targets {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag, _ := m["tag"].(string)
+		if tag == "" {
+			continue
+		}
+		if n := len(tag); n < trafficTagMinLen || n > trafficTagMaxLen {
+			return invalidArgument(fmt.Sprintf(
+				"invalid traffic tag %q: length must be between %d and %d characters",
+				tag, trafficTagMinLen, trafficTagMaxLen))
+		}
+		if !validTrafficTag.MatchString(tag) {
+			return invalidArgument("invalid traffic tag: must conform to RFC 1035: " +
+				"only lowercase, digits, and hyphens; must begin with letter, and cannot end with hyphen")
+		}
+		if serviceID != "" && len(tag)+len(serviceID) > trafficTagCombinedMax {
+			return invalidArgument(fmt.Sprintf(
+				"traffic tag %q and service name %q together are too long: combined length cannot exceed %d characters",
+				tag, serviceID, trafficTagCombinedMax))
+		}
+		if seen[tag] {
+			return invalidArgument("traffic targets may not contain a duplicate tag: " + tag)
+		}
+		seen[tag] = true
+	}
+	return nil
+}
+
+// abortedEtagMismatch is the etag-precondition failure, returned as HTTP 409
+// with the ABORTED google.rpc status (matching the shared-IAM/Eventarc OCC
+// contract).
+func abortedEtagMismatch() error {
+	return &model.ProviderError{
+		Code:       "Aborted",
+		Message:    "etag mismatch: optimistic concurrency control failed",
+		HTTPStatus: 409,
+		Status:     "ABORTED",
+	}
+}
+
+// checkEtag enforces a request-supplied etag precondition against the stored
+// value. An empty request etag is a no-op (the caller opted out of OCC).
+func checkEtag(reqEtag, storedEtag string) error {
+	if reqEtag != "" && reqEtag != storedEtag {
+		return abortedEtagMismatch()
+	}
+	return nil
 }
 
 func mapStoreErr(err error) error {

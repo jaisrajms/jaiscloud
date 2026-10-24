@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -95,6 +97,14 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, location strin
 }
 
 func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, location, name string, mutate func(Job) (Job, error)) (Job, error) {
+	// Retry a transient transaction conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Job, error) {
+		return s.updateJobAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateJobAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Job) (Job, error)) (Job, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Job{}, err
@@ -172,6 +182,35 @@ func (s *PostgresStore) ListJobs(ctx context.Context, projectID, location string
 		var name string
 		var data []byte
 		if err := rows.Scan(&name, &data); err != nil {
+			return nil, err
+		}
+		j, err := decodeJob(data)
+		if err != nil {
+			return nil, err
+		}
+		j.ProjectID = projectID
+		j.Location = location
+		j.Name = name
+		result = append(result, j)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) ListJobsByProject(ctx context.Context, projectID string) ([]Job, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT job_name, location, data FROM jc_scheduler_jobs
+		WHERE project_id=$1
+		ORDER BY location, job_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Job
+	for rows.Next() {
+		var name, location string
+		var data []byte
+		if err := rows.Scan(&name, &location, &data); err != nil {
 			return nil, err
 		}
 		j, err := decodeJob(data)

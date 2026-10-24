@@ -19,8 +19,10 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/pubsubfilter"
 	"jaiscloud/internal/gcp/resource"
+	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -49,10 +51,16 @@ type Provider struct {
 	messages   pubsubstore.Messages // published messages (data plane)
 	encryptor  crypto.EnvelopeEncryptor
 	dispatcher eventing.Dispatcher // event-trigger delivery; nil = disabled
+	core       *pubsubcore.Service // seek + push-config (shared with the gRPC transport)
 }
 
 func New(resources store.ResourceStore, messages pubsubstore.Messages, encryptor crypto.EnvelopeEncryptor) *Provider {
-	return &Provider{resources: resources, messages: messages, encryptor: encryptor}
+	return &Provider{
+		resources: resources,
+		messages:  messages,
+		encryptor: encryptor,
+		core:      pubsubcore.NewService(resources, messages),
+	}
 }
 
 // SetFunctionDispatcher wires the Cloud Functions event-delivery engine, so a
@@ -65,6 +73,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"PubSub.TopicCreate":                    p.TopicCreate,
 		"PubSub.TopicGet":                       p.TopicGet,
+		"PubSub.TopicUpdate":                    p.TopicUpdate,
 		"PubSub.TopicDelete":                    p.TopicDelete,
 		"PubSub.TopicList":                      p.TopicList,
 		"PubSub.TopicPublish":                   p.TopicPublish,
@@ -77,6 +86,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"PubSub.SubscriptionPull":               p.SubscriptionPull,
 		"PubSub.SubscriptionAcknowledge":        p.SubscriptionAcknowledge,
 		"PubSub.SubscriptionModifyAckDeadline":  p.SubscriptionModifyAckDeadline,
+		"PubSub.SubscriptionSeek":               p.SubscriptionSeek,
+		"PubSub.SubscriptionModifyPushConfig":   p.SubscriptionModifyPushConfig,
 		"PubSub.TopicGetIamPolicy":              p.TopicGetIamPolicy,
 		"PubSub.TopicSetIamPolicy":              p.TopicSetIamPolicy,
 		"PubSub.TopicTestIamPermissions":        p.TopicTestIamPermissions,
@@ -233,7 +244,10 @@ func (p *Provider) TopicList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paging.Apply(entries, nr.Params)
+	page, nextToken, err := paging.Apply(entries, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, e := range page {
 		var m map[string]any
@@ -270,6 +284,11 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 
 	body, _ := nr.Params["body"].(map[string]any)
 	msgs, _ := body["messages"].([]any)
+	if len(msgs) == 0 {
+		// Real Pub/Sub requires at least one message per publish request.
+		return nil, model.NewProviderError("InvalidRequest",
+			"The value for message_count is too small. You passed 0; it must be at least 1.", 400)
+	}
 	ids := make([]string, 0, len(msgs))
 	stored := make([]pubsubstore.Message, 0, len(msgs))
 	plainData := make([]string, 0, len(msgs))
@@ -515,7 +534,7 @@ func (p *Provider) deliverPush(ctx context.Context, accountID, topicFull string,
 			"message": map[string]any{
 				"messageId":   msg.MessageID,
 				"data":        data,
-				"publishTime": msg.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
+				"publishTime": timestamp.Canonical(msg.PublishTime),
 			},
 			"subscription": sub["name"],
 		}
@@ -621,7 +640,10 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		}
 		meta["deadLetterPolicy"] = normalized
 	}
-	if raw, ok := body["retryPolicy"]; ok {
+	// An explicit JSON null for a message-typed field means "unset" (real GCP
+	// treats it that way, and the hashicorp/google provider emits null for
+	// absent nested blocks); only a non-null non-object is a type error.
+	if raw, ok := body["retryPolicy"]; ok && raw != nil {
 		rp, isObject := raw.(map[string]any)
 		if !isObject {
 			return nil, model.NewProviderError("InvalidArgument", "retryPolicy must be an object", 400)
@@ -685,7 +707,10 @@ func (p *Provider) SubscriptionList(ctx context.Context, nr *model.NormalizedReq
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paging.Apply(entries, nr.Params)
+	page, nextToken, err := paging.Apply(entries, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, e := range page {
 		var m map[string]any
@@ -794,12 +819,21 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		// greater threshold).
 		if dlqTopic != "" && maxDeliveryAttempts > 0 && m.DeliveryAttempt > maxDeliveryAttempts {
 			_ = p.messages.Delete(ctx, s, m.MessageID)
+			// Real GCP forwards the message wrapped in a new one: a fresh
+			// messageId and the forward time as publishTime, with the original
+			// publish time preserved in the CloudPubSubDeadLetterSource*
+			// attributes. DeliveryAttempt was incremented by this
+			// (non-delivering) claim, so the delivery count actually made to the
+			// source subscription is one less — the configured
+			// maxDeliveryAttempts, which is what real GCP reports.
+			fwdID, err := p.messages.NextID(ctx)
+			if err != nil {
+				return nil, err
+			}
+			fwd := pubsubstore.ForwardedMessage(m, dlqTopic, "", fwdID, clock.Now(), nr.AccountID, s, m.DeliveryAttempt-1)
 			for _, sid := range p.pullSubscriptionIDs(ctx, nr.AccountID, dlqTopic) {
-				_ = p.messages.Put(ctx, pubsubstore.Message{
-					Topic: dlqTopic, Subscription: sid, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
-					PublishTime: m.PublishTime, DeliveryAttempt: 0,
-					KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
-				})
+				fwd.Subscription = sid
+				_ = p.messages.Put(ctx, fwd)
 			}
 			continue
 		}
@@ -822,7 +856,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		msg := map[string]any{
 			"messageId":   m.MessageID,
 			"data":        data,
-			"publishTime": m.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
+			"publishTime": timestamp.Canonical(m.PublishTime),
 		}
 		if len(m.Attributes) > 0 {
 			msg["attributes"] = m.Attributes
@@ -831,7 +865,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 			msg["orderingKey"] = m.OrderingKey
 		}
 		received = append(received, map[string]any{
-			"ackId":           encodeAckID(s, m.MessageID),
+			"ackId":           pubsubstore.EncodeAckID(s, m.MessageID, m.DeliveryVersion),
 			"message":         msg,
 			"deliveryAttempt": deliveryAttempt(m.DeliveryAttempt, hasDeadLetterPolicy),
 		})
@@ -840,17 +874,18 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 }
 
 // longPoll repeatedly claims messages until at least one is deliverable or the
-// bounded window elapses. The deadline is derived from clock.Now() (so a frozen
-// test clock yields a consistent remaining duration) while time.Sleep drives the
-// real poll cadence — the emulator's analogue of SQS WaitForMessages.
+// bounded window elapses. The window is a request-bounded wall-clock deadline
+// (clock.RealNow), so a frozen or offset business clock cannot stall or skew the
+// poll — the emulator's analogue of SQS WaitForMessages. The retention and
+// ack-deadline inputs to Pull are business time and stay clock.Now().
 func (p *Provider) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
-	deadline := clock.Now().Add(longPollTimeout)
+	deadline := clock.RealNow().Add(longPollTimeout)
 	for {
 		msgs, err := p.messages.Pull(ctx, queue, maxMsgs, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return nil, err
 		}
-		if len(msgs) > 0 || !clock.Now().Before(deadline) {
+		if len(msgs) > 0 || !clock.RealNow().Before(deadline) {
 			return msgs, nil
 		}
 		time.Sleep(longPollInterval)
@@ -858,20 +893,45 @@ func (p *Provider) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadl
 }
 
 func (p *Provider) SubscriptionAcknowledge(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	// Exactly-once delivery validates the ack ID's encoded version; a plain (or
+	// unresolvable) subscription keeps the lenient accept-anything path.
+	eod := false
+	if e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s); err == nil {
+		eod = subscriptionEOD(e)
+	}
+	now := clock.Now()
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = p.messageIndex(ctx, s)
+	}
 	body, _ := nr.Params["body"].(map[string]any)
 	ackIDs, _ := body["ackIds"].([]any)
+	var invalid []string
 	for _, a := range ackIDs {
-		if id, ok := a.(string); ok {
-			decoded, ok := decodeAckID(id)
-			if !ok {
+		id, ok := a.(string)
+		if !ok {
+			continue
+		}
+		queue, msgID, version, ok := pubsubstore.DecodeAckID(id)
+		// An ackId is valid only for the subscription in the request path.
+		if !ok || queue != s {
+			continue
+		}
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
+				invalid = append(invalid, id)
 				continue
 			}
-			// decoded ackId = topicID + "/" + messageID
-			parts := strings.SplitN(decoded, "/", 2)
-			if len(parts) == 2 {
-				_ = p.messages.Delete(ctx, parts[0], parts[1])
-			}
 		}
+		_ = p.messages.Acknowledge(ctx, queue, msgID)
+	}
+	if len(invalid) > 0 {
+		return nil, eodAckFailure(invalid)
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
@@ -882,20 +942,16 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 		return nil, err
 	}
 	s := strings.TrimPrefix(name, "subscriptions/")
-	if _, err = p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s); err != nil {
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "subscription not found", 404)
 		}
 		return nil, err
 	}
+	eod := subscriptionEOD(e)
 	body, _ := nr.Params["body"].(map[string]any)
 	ackIDs := toStrings(body["ackIds"])
-	decoded := make([]string, 0, len(ackIDs))
-	for _, id := range ackIDs {
-		if d, ok := decodeAckID(id); ok {
-			decoded = append(decoded, d)
-		}
-	}
 	seconds := 0
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
 		seconds = int(ad)
@@ -904,24 +960,135 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 			return nil, model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 0 and 600 (got %d)", seconds), 400)
 		}
 	}
-	if err := p.messages.ModifyAckDeadline(ctx, s, decoded, seconds, clock.Now()); err != nil {
+	now := clock.Now()
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = p.messageIndex(ctx, s)
+	}
+	decoded := make([]string, 0, len(ackIDs))
+	var invalid []string
+	for _, id := range ackIDs {
+		queue, msgID, version, ok := pubsubstore.DecodeAckID(id)
+		// An ackId is valid only for the subscription in the request path.
+		if !ok || queue != s {
+			continue
+		}
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
+				invalid = append(invalid, id)
+				continue
+			}
+		}
+		decoded = append(decoded, s+"/"+msgID)
+	}
+	if err := p.messages.ModifyAckDeadline(ctx, s, decoded, seconds, now); err != nil {
+		return nil, err
+	}
+	if len(invalid) > 0 {
+		return nil, eodAckFailure(invalid)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// subscriptionEOD reports whether a subscription resource has exactly-once
+// delivery enabled.
+// SubscriptionSeek implements subscriptions.seek over REST. Exactly one of the
+// request's `time` / `snapshot` fields selects the target; both are handed to
+// the shared core, which owns the ack-version (EOD2) invariants.
+func (p *Provider) SubscriptionSeek(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	body, _ := nr.Params["body"].(map[string]any)
+	var at *time.Time
+	if ts, _ := body["time"].(string); ts != "" {
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidArgument", "time must be an RFC 3339 timestamp", 400)
+		}
+		at = &t
+	}
+	snapshot, _ := body["snapshot"].(string)
+	if err := p.core.Seek(ctx, nr.AccountID, s, at, snapshot); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
 
-// encodeAckID renders the opaque wire ackId: base64url of "topicID/messageID".
-func encodeAckID(topicID, messageID string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(topicID + "/" + messageID))
+// SubscriptionModifyPushConfig implements subscriptions.modifyPushConfig over
+// REST. An absent or empty pushConfig clears the stored configuration.
+func (p *Provider) SubscriptionModifyPushConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	body, _ := nr.Params["body"].(map[string]any)
+	var pc *pubsubcore.PushConfig
+	if raw, ok := body["pushConfig"].(map[string]any); ok {
+		if endpoint, _ := raw["pushEndpoint"].(string); endpoint != "" {
+			pc = &pubsubcore.PushConfig{Endpoint: endpoint}
+			if a, ok := raw["attributes"].(map[string]any); ok {
+				attrs := make(map[string]string, len(a))
+				for k, v := range a {
+					if sv, ok := v.(string); ok {
+						attrs[k] = sv
+					}
+				}
+				if len(attrs) > 0 {
+					pc.Attributes = attrs
+				}
+			}
+			if ot, ok := raw["oidcToken"].(map[string]any); ok {
+				aud, _ := ot["audience"].(string)
+				sa, _ := ot["serviceAccountEmail"].(string)
+				pc.OIDCToken = &pubsubcore.OIDCToken{Audience: aud, ServiceAccountEmail: sa}
+			}
+		}
+	}
+	if err := p.core.ModifyPushConfig(ctx, nr.AccountID, s, pc); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
 
-// decodeAckID reverses encodeAckID, returning "topicID/messageID".
-func decodeAckID(s string) (string, bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
-		return "", false
+func subscriptionEOD(e store.ResourceEntry) bool {
+	var meta map[string]any
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		return false
 	}
-	return string(raw), true
+	eod, _ := meta["enableExactlyOnceDelivery"].(bool)
+	return eod
+}
+
+// messageIndex lists a queue's messages by ID for ack-ID validation. A store
+// error yields a nil index, so validation degrades to the lenient path.
+func (p *Provider) messageIndex(ctx context.Context, queue string) map[string]pubsubstore.Message {
+	msgs, err := p.messages.List(ctx, queue)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]pubsubstore.Message, len(msgs))
+	for _, m := range msgs {
+		out[m.MessageID] = m
+	}
+	return out
+}
+
+// eodAckFailure builds real GCP's exactly-once invalid-ack-ID error: an
+// INVALID_ARGUMENT whose google.rpc.ErrorInfo detail maps each bad ack ID to
+// PERMANENT_FAILURE_INVALID_ACK_ID.
+func eodAckFailure(invalidAckIDs []string) *model.ProviderError {
+	perr := model.NewProviderError("InvalidArgument", pubsubstore.EODAckFailureMessage, 400)
+	perr.Details = []model.ErrorDetail{{
+		Type:     "google.rpc.ErrorInfo",
+		Reason:   pubsubstore.EODAckFailureReason,
+		Domain:   pubsubstore.EODAckFailureDomain,
+		Metadata: pubsubstore.EODAckFailureMetadata(invalidAckIDs),
+	}}
+	return perr
 }
 
 // pullSubscriptionIDs returns the IDs of a topic's pull subscriptions. Push

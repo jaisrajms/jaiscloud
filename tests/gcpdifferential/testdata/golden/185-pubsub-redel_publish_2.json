@@ -1,0 +1,22 @@
+{
+  "index": 185,
+  "service": "pubsub",
+  "op": "redel_publish_2",
+  "method": "POST",
+  "path": "/v1/projects/<project>/topics/conf-pubsub-redel-<suffix>:publish",
+  "status": 200,
+  "request": {
+    "messages": [
+      {
+        "data": "cmVkZWwtMg==",
+        "orderingKey": "rk"
+      }
+    ]
+  },
+  "response": {
+    "messageIds": [
+      "<messageId>"
+    ]
+  }
+}
+

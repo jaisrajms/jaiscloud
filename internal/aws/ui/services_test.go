@@ -135,8 +135,8 @@ func TestServicesHandler_TiersPinnedToImplementationMatrix(t *testing.T) {
 				t.Errorf("%s: metadata-only service should carry a note", service.ID)
 			}
 		case stubs[service.ID]:
-			if service.Tier != TierStub {
-				t.Errorf("%s: tier = %q, want %q", service.ID, service.Tier, TierStub)
+			if service.Tier != TierShape {
+				t.Errorf("%s: tier = %q, want %q", service.ID, service.Tier, TierShape)
 			}
 		default:
 			if service.Tier != TierFull {

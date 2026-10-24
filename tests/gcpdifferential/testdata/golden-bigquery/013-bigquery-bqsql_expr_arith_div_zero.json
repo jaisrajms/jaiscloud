@@ -1,0 +1,33 @@
+{
+  "index": 13,
+  "service": "bigquery",
+  "op": "bqsql_expr_arith_div_zero",
+  "method": "POST",
+  "path": "/bigquery/v2/projects/<project>/queries",
+  "status": 400,
+  "request": {
+    "defaultDataset": {
+      "datasetId": "bqsql_ds_<suffix>",
+      "projectId": "<project>"
+    },
+    "query": "SELECT 1/0",
+    "useLegacySql": false
+  },
+  "response": {
+    "error": {
+      "code": 400,
+      "errors": [
+        {
+          "domain": "global",
+          "location": "q",
+          "locationType": "parameter",
+          "message": "division by zero: 1 / 0",
+          "reason": "invalidQuery"
+        }
+      ],
+      "message": "division by zero: 1 / 0",
+      "status": "INVALID_ARGUMENT"
+    }
+  }
+}
+

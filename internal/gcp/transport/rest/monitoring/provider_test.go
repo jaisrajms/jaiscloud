@@ -154,6 +154,20 @@ func TestRESTTimeSeriesRoundTrip(t *testing.T) {
 		t.Fatalf("value = %+v", val)
 	}
 
+	// The folders arm serves list only (the Discovery document declares create
+	// on the projects surface only); it aggregates the same series store.
+	folderList, err := call(t, c, p, http.MethodGet,
+		"/v3/folders/123/timeSeries?filter="+`metric.type%3D%22`+tstype+`%22`, nil)
+	if err != nil {
+		t.Fatalf("list folders timeSeries: %v", err)
+	}
+	if got := wireData(t, folderList)["timeSeries"].([]any); len(got) == 0 {
+		t.Fatalf("folders timeSeries = %+v, want the project's series", wireData(t, folderList))
+	}
+	if _, err := call(t, c, p, http.MethodPost, "/v3/folders/123/timeSeries", map[string]any{}); err == nil {
+		t.Fatal("create at folders scope succeeded, want NotFound")
+	}
+
 	// createService mirrors create.
 	if _, err := call(t, c, p, http.MethodPost, "/v3/projects/test/timeSeries:createService", map[string]any{
 		"timeSeries": []any{map[string]any{
@@ -592,6 +606,31 @@ func TestRESTValueTypeEnumIsCanonical(t *testing.T) {
 	for name, want := range map[string]int32{"BOOL": 1, "INT64": 2, "DOUBLE": 3, "STRING": 4, "DISTRIBUTION": 5} {
 		if got := enumValue(valueTypeValue, name); got != want {
 			t.Errorf("enumValue(valueTypeValue, %q) = %d, want %d", name, got, want)
+		}
+	}
+}
+
+// TestListNonIntegerPageSize pins the int32 query binding on the REST path: a
+// non-integer pageSize answers 400 INVALID_ARGUMENT rather than paging from the
+// start as if the parameter were absent.
+func TestListNonIntegerPageSize(t *testing.T) {
+	c, p := newTestProvider(t)
+	for _, path := range []string{
+		"/v3/projects/test/metricDescriptors",
+		"/v3/projects/test/monitoredResourceDescriptors",
+		"/v3/projects/test/alertPolicies",
+		"/v3/projects/test/notificationChannels",
+		"/v3/projects/test/services",
+	} {
+		for _, v := range []string{"abc", "-0.5", "1.5"} {
+			_, err := call(t, c, p, http.MethodGet, path+"?pageSize="+v, nil)
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("GET %s?pageSize=%s err = %v, want InvalidArgument/400", path, v, err)
+			}
+		}
+		if _, err := call(t, c, p, http.MethodGet, path+"?pageSize=5", nil); err != nil {
+			t.Errorf("GET %s?pageSize=5: %v", path, err)
 		}
 	}
 }

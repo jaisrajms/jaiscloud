@@ -1,0 +1,20 @@
+{
+  "index": 0,
+  "service": "kms",
+  "op": "tour_kms_encrypt",
+  "method": "google.cloud.kms.v1.KeyManagementService/Encrypt",
+  "path": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>",
+    "plaintext": "c2RrLXRvdXI="
+  },
+  "response": {
+    "ciphertext": "<ciphertext>",
+    "ciphertextCrc32c": "<crc32c>",
+    "name": "projects/<project>/locations/global/keyRings/<keyRing>/cryptoKeys/<cryptoKey>/cryptoKeyVersions/1",
+    "protectionLevel": "SOFTWARE"
+  }
+}
+

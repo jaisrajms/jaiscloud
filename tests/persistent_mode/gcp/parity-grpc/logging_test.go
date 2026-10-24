@@ -127,11 +127,13 @@ func (d *driver) loggingMetricPresent(ctx context.Context, metricName string) (b
 	}
 }
 
-// seedLogging writes a log entry and a logs-based metric, and returns checks
-// that read them back after a restart and assert their absence after a reset.
+// seedLogging writes a log entry, a logs-based metric, and an Admin v2 log
+// bucket, and returns checks that read them back after a restart and assert
+// their absence after a reset.
 func seedLogging(d *driver, suffix string) (func() error, func() error, func() error, error) {
 	logName := fmt.Sprintf("projects/%s/logs/%s", projectID(), "parity-log-"+suffix)
 	metricName := "parity-metric-" + suffix
+	bucketID := "parity-bucket-" + suffix
 	payload := "parity-seed-" + suffix
 
 	seeded := func() error {
@@ -150,6 +152,13 @@ func seedLogging(d *driver, suffix string) (func() error, func() error, func() e
 		}
 		if !present {
 			return errors.New("log metric not visible immediately after create")
+		}
+		bucket, err := d.loggingBucketPresent(ctx, bucketID)
+		if err != nil {
+			return fmt.Errorf("bucket read after seed: %w", err)
+		}
+		if !bucket {
+			return errors.New("log bucket not visible immediately after create")
 		}
 		return nil
 	}
@@ -170,6 +179,13 @@ func seedLogging(d *driver, suffix string) (func() error, func() error, func() e
 		if !present {
 			return errors.New("log metric not present after restart")
 		}
+		bucket, err := d.loggingBucketPresent(ctx, bucketID)
+		if err != nil {
+			return fmt.Errorf("bucket read after restart: %w", err)
+		}
+		if !bucket {
+			return errors.New("log bucket not present after restart")
+		}
 		return nil
 	}
 	cleared := func() error {
@@ -189,6 +205,13 @@ func seedLogging(d *driver, suffix string) (func() error, func() error, func() e
 		if present {
 			return errors.New("log metric still present after reset")
 		}
+		bucket, err := d.loggingBucketPresent(ctx, bucketID)
+		if err != nil {
+			return fmt.Errorf("bucket read after reset: %w", err)
+		}
+		if bucket {
+			return errors.New("log bucket still present after reset")
+		}
 		return nil
 	}
 
@@ -200,8 +223,61 @@ func seedLogging(d *driver, suffix string) (func() error, func() error, func() e
 	if err := d.loggingCreateMetric(ctx, metricName); err != nil {
 		return nil, nil, nil, err
 	}
+	if err := d.loggingCreateBucket(ctx, bucketID); err != nil {
+		return nil, nil, nil, err
+	}
 	if err := seeded(); err != nil {
 		return nil, nil, nil, err
 	}
 	return seeded, survived, cleared, nil
+}
+
+// loggingCreateBucket creates one Admin v2 log bucket through the official
+// ConfigServiceV2 client.
+func (d *driver) loggingCreateBucket(ctx context.Context, bucketID string) error {
+	conn, err := dialGRPC(d.target("LOGGING_EMULATOR_HOST"))
+	if err != nil {
+		return fmt.Errorf("logging config dial: %w", err)
+	}
+	defer conn.Close()
+	client, err := logging.NewConfigClient(ctx, option.WithGRPCConn(conn))
+	if err != nil {
+		return fmt.Errorf("logging config client: %w", err)
+	}
+	defer client.Close()
+	_, err = client.CreateBucket(ctx, &loggingpb.CreateBucketRequest{
+		Parent:   fmt.Sprintf("projects/%s/locations/global", projectID()),
+		BucketId: bucketID,
+		Bucket:   &loggingpb.LogBucket{Description: "parity"},
+	})
+	if err != nil {
+		return fmt.Errorf("create log bucket: %w", err)
+	}
+	return nil
+}
+
+// loggingBucketPresent reports whether the named log bucket is readable
+// (present=true) or absent (present=false, NotFound).
+func (d *driver) loggingBucketPresent(ctx context.Context, bucketID string) (bool, error) {
+	conn, err := dialGRPC(d.target("LOGGING_EMULATOR_HOST"))
+	if err != nil {
+		return false, fmt.Errorf("logging config dial: %w", err)
+	}
+	defer conn.Close()
+	client, err := logging.NewConfigClient(ctx, option.WithGRPCConn(conn))
+	if err != nil {
+		return false, fmt.Errorf("logging config client: %w", err)
+	}
+	defer client.Close()
+	_, err = client.GetBucket(ctx, &loggingpb.GetBucketRequest{
+		Name: fmt.Sprintf("projects/%s/locations/global/buckets/%s", projectID(), bucketID),
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case status.Code(err) == codes.NotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("get log bucket: %w", err)
+	}
 }

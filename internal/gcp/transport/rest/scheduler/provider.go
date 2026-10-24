@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -43,9 +44,9 @@ func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	pageSize := intFrom(nr.Params["pageSize"])
-	if pageSize <= 0 || pageSize > 500 {
-		pageSize = 500
+	pageSize, err := paging.SizeFrom(nr.Params["pageSize"], core.MaxPageSize)
+	if err != nil {
+		return nil, err
 	}
 	offset := 0
 	if t := strParam(nr, "pageToken"); t != "" {

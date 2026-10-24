@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -32,8 +33,10 @@ import (
 	"jaiscloud/internal/gcp/downscope"
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -133,9 +136,20 @@ func (s *Service) Reset(_ context.Context) {
 
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
+// Documented page-size ceilings for the gRPC list methods: "The service will
+// use this parameter or 1,000 items, whichever is smaller."
+// ListBuckets drops to 200 when the read_mask asks for acl; this surface does
+// not implement read_mask yet, so the 1,000 cap is what applies.
+const (
+	listBucketsMaxPageSize = 1000
+	listObjectsMaxPageSize = 1000
+)
+
 // ─── resource-name helpers ───────────────────────────────────────────────────
 
-func bucketResourceName(bucket string) string { return "projects/_/buckets/" + bucket }
+func bucketResourceName(bucket string) string {
+	return resource.ResourceID("")("gcs-bucket-resource", bucket)
+}
 
 // parseBucketName returns the bucket name from a full resource name
 // ("projects/_/buckets/{bucket}" → "{bucket}") or a bare name.
@@ -194,9 +208,9 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 	o := &storagepb.Object{
 		Name:            m.Name,
 		Bucket:          bucketResourceName(m.Bucket),
-		Etag:            "CAE=",
 		Generation:      genToInt64(m.Generation),
 		Metageneration:  genToInt64(m.Metageneration),
+		Etag:            storageprovider.ObjectEtag(m.Generation, m.Metageneration),
 		StorageClass:    m.StorageClass,
 		Size:            m.Size,
 		ContentType:     m.ContentType,
@@ -212,7 +226,16 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 	// response (true or false), so clients can distinguish it from "unknown".
 	o.EventBasedHold = &m.EventBasedHold
 	if m.TimeDeleted != nil {
-		o.DeleteTime = ts(*m.TimeDeleted)
+		if m.SoftDeleted {
+			// A soft-deleted generation reports its soft/hard delete window
+			// instead of the noncurrent delete_time (proto fields 28/29).
+			o.SoftDeleteTime = ts(*m.TimeDeleted)
+			if !m.HardDeleteTime.IsZero() {
+				o.HardDeleteTime = ts(m.HardDeleteTime)
+			}
+		} else {
+			o.DeleteTime = ts(*m.TimeDeleted)
+		}
 	}
 	if m.CRC32C != "" {
 		if v, ok := decodeCRC32C(m.CRC32C); ok {
@@ -246,13 +269,19 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 // bucketToProto converts a stored bucket map into the proto Bucket.
 func bucketToProto(m map[string]any) *storagepb.Bucket {
 	name, _ := m["name"].(string)
+	location, _ := m["location"].(string)
+	metageneration, _ := m["metageneration"].(string)
 	b := &storagepb.Bucket{
 		Name:           bucketResourceName(name),
 		BucketId:       name,
 		Metageneration: genToInt64(gcs.BucketMetageneration(m)),
+		// The proto defines etag and locationType; real GCP populates both, so a
+		// gRPC client must see them, matching the REST storage#bucket body.
+		Etag:         storageprovider.BucketEtag(metageneration),
+		LocationType: storageprovider.BucketLocationType(location),
 	}
-	if v, _ := m["location"].(string); v != "" {
-		b.Location = v
+	if location != "" {
+		b.Location = location
 	}
 	if v, _ := m["storageClass"].(string); v != "" {
 		b.StorageClass = v
@@ -303,6 +332,37 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		}
 		b.RetentionPolicy = policy
 	}
+	// iamConfig mirrors the REST iamConfiguration the provider derives (uniform
+	// bucket-level access disabled, public access prevention inherited). The
+	// proto defines iam_config, so real GCP returns it over gRPC too.
+	b.IamConfig = &storagepb.Bucket_IamConfig{
+		UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: false},
+		PublicAccessPrevention:   "inherited",
+	}
+	// softDeletePolicy mirrors the REST default: real GCS enables soft delete on
+	// every bucket with a 7-day window, and effectiveTime defaults to the
+	// bucket's creation time when no policy was set explicitly.
+	sd := &storagepb.Bucket_SoftDeletePolicy{RetentionDuration: durationpb.New(604800 * time.Second)}
+	if sp, ok := m["softDeletePolicy"].(map[string]any); ok {
+		if v, _ := sp["retentionDurationSeconds"].(string); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				sd.RetentionDuration = durationpb.New(time.Duration(n) * time.Second)
+			}
+		}
+		if et, _ := sp["effectiveTime"].(string); et != "" {
+			if t, err := time.Parse(time.RFC3339Nano, et); err == nil {
+				sd.EffectiveTime = timestamppb.New(t)
+			}
+		}
+	}
+	if sd.EffectiveTime == nil {
+		if tc, _ := m["timeCreated"].(string); tc != "" {
+			if t, err := time.Parse(time.RFC3339Nano, tc); err == nil {
+				sd.EffectiveTime = timestamppb.New(t)
+			}
+		}
+	}
+	b.SoftDeletePolicy = sd
 	return b
 }
 
@@ -532,6 +592,9 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if name == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket name", 400))
 	}
+	if !resource.ValidBucketName(name) {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "Invalid bucket name: "+name, 400))
+	}
 	project := parseProject(req.GetBucket().GetProject())
 	if project == "" {
 		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
@@ -633,7 +696,11 @@ func (s *Service) ListBuckets(ctx context.Context, req *storagepb.ListBucketsReq
 		nj, _ := filtered[j]["name"].(string)
 		return ni < nj
 	})
-	page, next := pageBuckets(filtered, int(req.GetPageSize()), req.GetPageToken())
+	pageSize, err := paging.Size(int(req.GetPageSize()), listBucketsMaxPageSize)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	page, next := pageBuckets(filtered, pageSize, req.GetPageToken())
 	out := make([]*storagepb.Bucket, 0, len(page))
 	for _, m := range page {
 		out = append(out, bucketToProto(m))
@@ -642,6 +709,7 @@ func (s *Service) ListBuckets(ctx context.Context, req *storagepb.ListBucketsReq
 }
 
 // pageBuckets applies cursor pagination over a name-sorted bucket slice.
+// pageSize is already resolved by paging.Size, so it is always positive.
 func pageBuckets(buckets []map[string]any, pageSize int, pageToken string) ([]map[string]any, string) {
 	start := 0
 	if pageToken != "" {
@@ -654,9 +722,6 @@ func pageBuckets(buckets []map[string]any, pageSize int, pageToken string) ([]ma
 				start++
 			}
 		}
-	}
-	if pageSize <= 0 {
-		pageSize = len(buckets)
 	}
 	end := start + pageSize
 	if end > len(buckets) {
@@ -924,6 +989,11 @@ func (s *Service) GetObject(ctx context.Context, req *storagepb.GetObjectRequest
 		}
 		return nil, mapError(err)
 	}
+	// A soft-deleted generation is only visible when the request opts in with
+	// soft_deleted (the proto equivalent of REST's ?softDeleted=true).
+	if meta.SoftDeleted && !req.GetSoftDeleted() {
+		return nil, mapError(model.NewProviderError("NotFound", "object not found", 404))
+	}
 	return objectToProto(meta), nil
 }
 
@@ -934,9 +1004,19 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 	}
 	var objs []gcs.ObjectMeta
 	var err error
-	if req.GetVersions() {
+	switch {
+	case req.GetSoftDeleted():
+		// Soft-deleted copies have their own listing surface.
 		objs, err = s.objects.ListObjectVersions(ctx, bucket)
-	} else {
+		if err == nil {
+			objs = storageprovider.FilterSoftDeleted(objs, true)
+		}
+	case req.GetVersions():
+		objs, err = s.objects.ListObjectVersions(ctx, bucket)
+		if err == nil {
+			objs = storageprovider.FilterSoftDeleted(objs, false)
+		}
+	default:
 		objs, err = s.objects.ListObjects(ctx, bucket)
 	}
 	if err != nil {
@@ -968,17 +1048,41 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 	}
 
 	// Cursor pagination over object names (already name-sorted by the store).
-	pageSize := int(req.GetPageSize())
+	// A versions listing is ordered by name ascending then generation
+	// descending, so its cursor must also carry the generation: with the
+	// documented 1,000-item default page, a boundary landing inside a name's
+	// generations would otherwise skip every remaining generation of that name.
+	pageSize, err := paging.Size(int(req.GetPageSize()), listObjectsMaxPageSize)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	versions := req.GetVersions()
 	start := 0
-	if req.GetPageToken() != "" {
-		if cursor := decodeCursor(req.GetPageToken()); cursor != "" {
+	if tok := req.GetPageToken(); tok != "" {
+		if versions {
+			if cur, ok := decodeVersionCursor(tok); ok {
+				for start < len(objs) {
+					m := objs[start]
+					if m.Name < cur.Name {
+						start++
+						continue
+					}
+					if m.Name == cur.Name {
+						mg, _ := strconv.ParseInt(m.Generation, 10, 64)
+						cg, _ := strconv.ParseInt(cur.Generation, 10, 64)
+						if mg >= cg {
+							start++
+							continue
+						}
+					}
+					break
+				}
+			}
+		} else if cursor := decodeCursor(tok); cursor != "" {
 			for start < len(objs) && objs[start].Name <= cursor {
 				start++
 			}
 		}
-	}
-	if pageSize <= 0 {
-		pageSize = len(objs)
 	}
 	end := start + pageSize
 	if end > len(objs) {
@@ -987,7 +1091,12 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 	page := objs[start:end]
 	next := ""
 	if end < len(objs) {
-		next = encodeCursor(page[len(page)-1].Name)
+		last := page[len(page)-1]
+		if versions {
+			next = encodeVersionCursor(last.Name, last.Generation)
+		} else {
+			next = encodeCursor(last.Name)
+		}
 	}
 
 	out := make([]*storagepb.Object, 0, len(page))
@@ -1081,14 +1190,12 @@ func checkObjectPreconditions(live gcs.ObjectMeta, ifGenMatch, ifGenNotMatch, if
 	return nil
 }
 
-// RestoreObject restores a non-live (soft-deleted/tombstoned) generation to
-// live. The emulator models GCS soft-delete as versioning tombstones (TimeDeleted
-// set), so this delegates to the store's atomic RestoreObjectGeneration, which
-// flips the targeted generation live and marks the current live generation
-// non-live. The if_* preconditions are validated against the current live
-// generation inside that same atomic mutation. copy_source_acl and restore_token
-// are accepted but ignored (the emulator has no ACL plane and no hierarchical
-// namespaces).
+// RestoreObject restores a soft-deleted (tombstoned) generation. It delegates to
+// the REST provider's transport-neutral restore core, so both transports create
+// the same new-generation copy with the documented failure modes (400
+// SoftDeletePolicyRequired, 412 objectNotSoftDeleted, 403 retentionPolicyNotMet).
+// copy_source_acl and restore_token are accepted but ignored (the emulator has no
+// ACL plane and no hierarchical namespaces).
 func (s *Service) RestoreObject(ctx context.Context, req *storagepb.RestoreObjectRequest) (*storagepb.Object, error) {
 	bucket := parseBucketName(req.GetBucket())
 	object := req.GetObject()
@@ -1099,15 +1206,9 @@ func (s *Service) RestoreObject(ctx context.Context, req *storagepb.RestoreObjec
 		return nil, mapError(model.NewProviderError("InvalidArgument", "restore requires bucket, object, and a positive generation", 400))
 	}
 	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
-	meta, err := s.objects.RestoreObjectGeneration(ctx, bucket, object, int64ToGen(req.GetGeneration()), pre)
+	meta, err := s.provider.RestoreObjectCore(ctx, bucket, object, int64ToGen(req.GetGeneration()), pre)
 	if err != nil {
-		if errors.Is(err, gcs.ErrNoSuchBucket) {
-			return nil, mapError(model.NewProviderError("NotFound", "bucket not found", 404))
-		}
-		if errors.Is(err, gcs.ErrNoSuchObject) {
-			return nil, mapError(model.NewProviderError("NotFound", "object generation not found", 404))
-		}
-		return nil, mapError(preconditionResult(err))
+		return nil, mapError(storageprovider.MapRestoreStoreError(err))
 	}
 	return objectToProto(meta), nil
 }
@@ -2059,4 +2160,32 @@ func decodeCursor(token string) string {
 		return ""
 	}
 	return string(b)
+}
+
+// versionCursor is the page token of a versions=true listing: the REST
+// provider's objects.list cursor carries (name, generation) for the same
+// reason, because ListObjectVersions orders a name's generations newest first.
+type versionCursor struct {
+	Name       string `json:"n"`
+	Generation string `json:"g"`
+}
+
+func encodeVersionCursor(name, generation string) string {
+	b, err := json.Marshal(versionCursor{Name: name, Generation: generation})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeVersionCursor(token string) (versionCursor, bool) {
+	b, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return versionCursor{}, false
+	}
+	var c versionCursor
+	if err := json.Unmarshal(b, &c); err != nil {
+		return versionCursor{}, false
+	}
+	return c, true
 }

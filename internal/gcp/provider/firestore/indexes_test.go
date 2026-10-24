@@ -143,3 +143,57 @@ func TestListIndexesPaginationAndFilter(t *testing.T) {
 		t.Errorf("expected 1 index matching filter 'c', got %d", len(indexes))
 	}
 }
+
+// TestListIndexesWildcardCollectionGroup verifies the AIP-123 "-" wildcard lists
+// indexes from every collection group (the real API behavior gcloud and the
+// console rely on), not just one.
+func TestListIndexesWildcardCollectionGroup(t *testing.T) {
+	ctx := context.Background()
+	p := New(nil, store.NewMemoryResourceStore())
+
+	for _, cg := range []string{"cities", "states"} {
+		nr := &model.NormalizedRequest{
+			AccountID:  "proj",
+			Params:     map[string]any{},
+			ResourceID: func(rt, n string) string { return "projects/proj/" + n },
+		}
+		nr.Params["name"] = "databases/(default)/collectionGroups/" + cg + "/indexes"
+		nr.Params["body"] = map[string]any{
+			"queryScope": "COLLECTION",
+			"fields": []any{
+				map[string]any{"fieldPath": "a", "order": "ASCENDING"},
+				map[string]any{"fieldPath": "b", "order": "ASCENDING"},
+			},
+		}
+		if _, err := p.CreateIndex(ctx, nr); err != nil {
+			t.Fatalf("seed index in %s: %v", cg, err)
+		}
+	}
+
+	nr := &model.NormalizedRequest{
+		AccountID:  "proj",
+		Params:     map[string]any{},
+		ResourceID: func(rt, n string) string { return "projects/proj/" + n },
+	}
+	nr.Params["name"] = "databases/(default)/collectionGroups/-/indexes"
+
+	resp, err := p.ListIndexes(ctx, nr)
+	if err != nil {
+		t.Fatalf("ListIndexes wildcard: %v", err)
+	}
+	indexes, _ := resp.Data["indexes"].([]any)
+	if len(indexes) != 2 {
+		t.Fatalf("wildcard list returned %d indexes, want 2 (all collection groups)", len(indexes))
+	}
+
+	// A concrete group must still be scoped to itself.
+	nr.Params["name"] = "databases/(default)/collectionGroups/cities/indexes"
+	resp, err = p.ListIndexes(ctx, nr)
+	if err != nil {
+		t.Fatalf("ListIndexes cities: %v", err)
+	}
+	indexes, _ = resp.Data["indexes"].([]any)
+	if len(indexes) != 1 {
+		t.Fatalf("cities list returned %d indexes, want 1", len(indexes))
+	}
+}

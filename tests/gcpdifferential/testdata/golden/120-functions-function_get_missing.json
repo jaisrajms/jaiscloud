@@ -1,0 +1,22 @@
+{
+  "index": 120,
+  "service": "functions",
+  "op": "function_get_missing",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/functions/<missing>",
+  "status": 404,
+  "response": {
+    "error": {
+      "code": 404,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ResourceInfo",
+          "resourceName": "projects/<project>/locations/us-central1/functions/<missing>"
+        }
+      ],
+      "message": "Resource 'projects/<project>/locations/us-central1/functions/<missing>' was not found",
+      "status": "NOT_FOUND"
+    }
+  }
+}
+

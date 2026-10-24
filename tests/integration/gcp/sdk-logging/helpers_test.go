@@ -36,6 +36,40 @@ func LoggingClient(ctx context.Context) *logging.Client {
 	return client
 }
 
+// grpcConn dials the emulator's gRPC endpoint (LOGGING_EMULATOR_HOST). The
+// caller owns the returned connection and must Close it.
+func grpcConn() *grpc.ClientConn {
+	host := os.Getenv("LOGGING_EMULATOR_HOST")
+	if host == "" {
+		host = "localhost:8081"
+	}
+	conn, err := grpc.NewClient(host, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		panic("failed to create gRPC connection: " + err.Error())
+	}
+	return conn
+}
+
+// ConfigClient returns a ConfigServiceV2 client (sinks/exclusions) over the
+// emulator's gRPC endpoint.
+func ConfigClient(ctx context.Context) *logging.ConfigClient {
+	client, err := logging.NewConfigClient(ctx, option.WithGRPCConn(grpcConn()))
+	if err != nil {
+		panic("failed to create config client: " + err.Error())
+	}
+	return client
+}
+
+// MetricsClient returns a MetricsServiceV2 client (logs-based metrics) over the
+// emulator's gRPC endpoint.
+func MetricsClient(ctx context.Context) *logging.MetricsClient {
+	client, err := logging.NewMetricsClient(ctx, option.WithGRPCConn(grpcConn()))
+	if err != nil {
+		panic("failed to create metrics client: " + err.Error())
+	}
+	return client
+}
+
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)

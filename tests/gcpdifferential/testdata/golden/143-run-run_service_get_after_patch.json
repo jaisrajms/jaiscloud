@@ -1,0 +1,103 @@
+{
+  "index": 143,
+  "service": "run",
+  "op": "run_service_get_after_patch",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/services/<runService>",
+  "status": 200,
+  "response": {
+    "conditions": [
+      {
+        "lastTransitionTime": "<time>",
+        "state": "CONDITION_SUCCEEDED",
+        "type": "RoutesReady"
+      },
+      {
+        "lastTransitionTime": "<time>",
+        "state": "CONDITION_SUCCEEDED",
+        "type": "ConfigurationsReady"
+      }
+    ],
+    "createTime": "<time>",
+    "creator": "<userEmail>",
+    "etag": "<etag>",
+    "generation": "<generation>",
+    "ingress": "INGRESS_TRAFFIC_ALL",
+    "lastModifier": "<userEmail>",
+    "latestCreatedRevision": "projects/<project>/locations/us-central1/services/<runService>/revisions/<revision>",
+    "latestReadyRevision": "projects/<project>/locations/us-central1/services/<runService>/revisions/<revision>",
+    "launchStage": "GA",
+    "name": "projects/<project>/locations/us-central1/services/<runService>",
+    "observedGeneration": "<observedGeneration>",
+    "scaling": {
+      "maxInstanceCount": 20
+    },
+    "sshEnabled": false,
+    "template": {
+      "containers": [
+        {
+          "env": [
+            {
+              "name": "DEMO",
+              "value": "parity"
+            }
+          ],
+          "image": "us-docker.pkg.dev/cloudrun/container/hello",
+          "ports": [
+            {
+              "containerPort": 8080,
+              "name": "http1"
+            }
+          ],
+          "resources": {
+            "cpuIdle": true,
+            "limits": {
+              "cpu": "1000m",
+              "memory": "512Mi"
+            }
+          },
+          "startupProbe": {
+            "failureThreshold": 1,
+            "periodSeconds": 240,
+            "tcpSocket": {
+              "port": 8080
+            },
+            "timeoutSeconds": 240
+          }
+        }
+      ],
+      "maxInstanceRequestConcurrency": 80,
+      "scaling": {
+        "maxInstanceCount": 20
+      },
+      "serviceAccount": "<serviceAccount>",
+      "timeout": "300s"
+    },
+    "terminalCondition": {
+      "lastTransitionTime": "<time>",
+      "state": "CONDITION_SUCCEEDED",
+      "type": "Ready"
+    },
+    "traffic": [
+      {
+        "percent": 100,
+        "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+      }
+    ],
+    "trafficStatuses": [
+      {
+        "percent": 100,
+        "revision": "<runService>-00002-6b8",
+        "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+      }
+    ],
+    "uid": "<uid>",
+    "updateTime": "<time>",
+    "uri": "<runUrl>",
+    "urls": [
+      "<runUrl>",
+      "<runUrl>"
+    ]
+  }
+}
+

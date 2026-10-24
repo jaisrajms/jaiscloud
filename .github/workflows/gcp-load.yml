@@ -1,0 +1,68 @@
+name: GCP load gate
+
+# TD12 — the GCP load / concurrency gate. Deliberately NOT wired into
+# pull_request: it boots an ephemeral emulator and drives three hot paths at
+# -c 100, which is too heavy for a per-PR runner budget (the same reason the
+# k3d/Docker e2e gates are local). Run it manually from the Actions tab
+# (`gh workflow run gcp-load.yml`) or on the weekly schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: Concurrent workers per hot path
+        required: false
+        default: '100'
+      window:
+        description: Load window per hot path (Go duration, e.g. 5s)
+        required: false
+        default: '5s'
+      race:
+        description: Build a race-instrumented emulator (1) and fail on a detected data race
+        required: false
+        default: '1'
+  schedule:
+    - cron: '17 4 * * 1' # Mondays 04:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    name: Load / concurrency gate (GCS / PubSub / Firestore)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Run GCP load / concurrency gate
+        env:
+          LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '100' }}
+          LOAD_WINDOW: ${{ github.event.inputs.window || '5s' }}
+          LOAD_RACE: ${{ github.event.inputs.race || '1' }}
+        run: make test-gcp-load
+
+      - name: Upload emulator log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jaiscloud-gcp-load-log
+          path: /tmp/jaiscloud-gcp-load.log
+          if-no-files-found: ignore

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -26,6 +27,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	runpb "cloud.google.com/go/run/apiv2/runpb"
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
@@ -35,22 +37,24 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpcfirestoreadmin "jaiscloud/internal/gcp/grpc/firestoreadmin"
-	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	grpccontainer "jaiscloud/internal/gcp/transport/grpc/container"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
+	grpckms "jaiscloud/internal/gcp/transport/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
+	grpcrun "jaiscloud/internal/gcp/transport/grpc/run"
 	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
@@ -78,38 +82,42 @@ type GRPCService struct {
 // they are standard gRPC infrastructure, not GCP API surface, and would not
 // belong in the fidelity matrix.
 var grpcWireService = map[string]string{
-	"google.cloud.dataproc.v1.ClusterController":         "dataproc",
-	"google.cloud.dataproc.v1.JobController":             "dataproc",
-	"google.cloud.dataproc.v1.WorkflowTemplateService":   "dataproc",
-	"google.cloud.functions.v1.CloudFunctionsService":    "functions",
-	"google.cloud.functions.v2.FunctionService":          "functions",
-	"google.storage.v2.Storage":                          "storage",
-	"google.firestore.v1.Firestore":                      "firestore",
-	"google.firestore.admin.v1.FirestoreAdmin":           "firestoreadmin",
-	"google.datastore.v1.Datastore":                      "datastore",
-	"google.pubsub.v1.Publisher":                         "pubsub",
-	"google.pubsub.v1.Subscriber":                        "pubsub",
-	"google.cloud.kms.v1.KeyManagementService":           "kms",
-	"google.logging.v2.LoggingServiceV2":                 "logging",
-	"google.logging.v2.ConfigServiceV2":                  "logging",
-	"google.logging.v2.MetricsServiceV2":                 "logging",
-	"google.monitoring.v3.MetricService":                 "monitoring",
-	"google.monitoring.v3.AlertPolicyService":            "monitoring",
-	"google.monitoring.v3.NotificationChannelService":    "monitoring",
-	"google.monitoring.v3.ServiceMonitoringService":      "monitoring",
-	"google.cloud.secretmanager.v1.SecretManagerService": "secretmanager",
-	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
-	"google.cloud.workflows.v1.Workflows":                "workflows",
-	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
-	"google.cloud.metastore.v1.DataprocMetastore":        "metastore",
-	"google.cloud.eventarc.v1.Eventarc":                  "eventarc",
-	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
-	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
-	"google.cloud.scheduler.v1.CloudScheduler":           "scheduler",
-	"google.cloud.tasks.v2.CloudTasks":                   "tasks",
-	"google.iam.v1.IAMPolicy":                            "iam",
-	"google.iam.credentials.v1.IAMCredentials":           "iamcredentials",
-	"google.longrunning.Operations":                      "operations",
+	"google.cloud.dataproc.v1.ClusterController":            "dataproc",
+	"google.cloud.dataproc.v1.JobController":                "dataproc",
+	"google.cloud.dataproc.v1.WorkflowTemplateService":      "dataproc",
+	"google.container.v1.ClusterManager":                    "container",
+	"google.cloud.functions.v1.CloudFunctionsService":       "functions",
+	"google.cloud.functions.v2.FunctionService":             "functions",
+	"google.storage.v2.Storage":                             "storage",
+	"google.firestore.v1.Firestore":                         "firestore",
+	"google.firestore.admin.v1.FirestoreAdmin":              "firestoreadmin",
+	"google.datastore.v1.Datastore":                         "datastore",
+	"google.pubsub.v1.Publisher":                            "pubsub",
+	"google.pubsub.v1.Subscriber":                           "pubsub",
+	"google.cloud.kms.v1.KeyManagementService":              "kms",
+	"google.logging.v2.LoggingServiceV2":                    "logging",
+	"google.logging.v2.ConfigServiceV2":                     "logging",
+	"google.logging.v2.MetricsServiceV2":                    "logging",
+	"google.monitoring.v3.MetricService":                    "monitoring",
+	"google.monitoring.v3.AlertPolicyService":               "monitoring",
+	"google.monitoring.v3.NotificationChannelService":       "monitoring",
+	"google.monitoring.v3.ServiceMonitoringService":         "monitoring",
+	"google.cloud.secretmanager.v1.SecretManagerService":    "secretmanager",
+	"google.cloud.workflows.executions.v1.Executions":       "workflowexecutions",
+	"google.cloud.workflows.v1.Workflows":                   "workflows",
+	"google.cloud.managedkafka.v1.ManagedKafka":             "managedkafka",
+	"google.cloud.metastore.v1.DataprocMetastore":           "metastore",
+	"google.cloud.metastore.v1.DataprocMetastoreFederation": "metastore",
+	"google.cloud.eventarc.v1.Eventarc":                     "eventarc",
+	"google.api.serviceusage.v1.ServiceUsage":               "serviceusage",
+	"google.cloud.resourcemanager.v3.Projects":              "resourcemanager",
+	"google.cloud.run.v2.Services":                          "run",
+	"google.cloud.run.v2.Revisions":                         "run",
+	"google.cloud.scheduler.v1.CloudScheduler":              "scheduler",
+	"google.cloud.tasks.v2.CloudTasks":                      "tasks",
+	"google.iam.v1.IAMPolicy":                               "iam",
+	"google.iam.credentials.v1.IAMCredentials":              "iamcredentials",
+	"google.longrunning.Operations":                         "operations",
 }
 
 // EnumerateGRPC returns the emulator's gRPC surface without any network I/O.
@@ -149,6 +157,7 @@ func EnumerateGRPC() []GRPCService {
 	workflowspb.RegisterWorkflowsServer(reg, &grpcworkflows.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	metastorepb.RegisterDataprocMetastoreServer(reg, &grpcmetastore.Service{})
+	metastorepb.RegisterDataprocMetastoreFederationServer(reg, &grpcmetastore.Service{})
 	eventarcpb.RegisterEventarcServer(reg, &grpceventarc.Service{})
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
@@ -157,11 +166,15 @@ func EnumerateGRPC() []GRPCService {
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})
+	containerpb.RegisterClusterManagerServer(reg, &grpccontainer.Service{})
+	runSvc := &grpcrun.Service{}
+	runpb.RegisterServicesServer(reg, runSvc)
+	runpb.RegisterRevisionsServer(reg, runSvc)
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})
 	// Pub/Sub, KMS and Eventarc share one google.iam.v1.IAMPolicy registration.
-	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}))
+	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}, &grpcmetastore.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())
 
 	info := reg.GetServiceInfo()

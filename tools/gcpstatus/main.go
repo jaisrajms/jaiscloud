@@ -51,7 +51,7 @@ type Item struct {
 	Kind        string   `json:"kind,omitempty"` // backlog | debt | remainder | prose | wave | pr
 	Archived    bool     `json:"archived,omitempty"`
 	DocState    string   `json:"docState,omitempty"`
-	Disposition string   `json:"disposition,omitempty"` // fix | follow-up | no-fix | optional | unknown
+	Disposition string   `json:"disposition,omitempty"` // fix | follow-up | revisit | no-fix | optional | unknown
 	Impact      string   `json:"impact,omitempty"`
 	Pri         int      `json:"pri,omitempty"`   // rank from a Pri column (P1=1)
 	Order       int      `json:"order,omitempty"` // global execution order (lower = earlier)
@@ -190,6 +190,15 @@ func assignOrders(items []*Item, seriesOrder []string) {
 	for _, it := range items {
 		w, seq := parseWave(it)
 		if w == 0 {
+			// Backlog items carry no wave, but they still belong to a family.
+			// Rank them within their family (after that family's wave rows) so
+			// the SERIES family order governs backlog too, not just waves --
+			// otherwise an earlier family's remaining backlog always sorts
+			// behind a later family's waves.
+			if it.Kind == "backlog" && it.Series != "" {
+				it.Order = rank[it.Series]*100000 + 99999
+				it.OrderSource = "backlog"
+			}
 			continue
 		}
 		it.Order = rank[it.Series]*100000 + w*100 + seq
@@ -217,6 +226,22 @@ func main() {
 	check := flag.Bool("check", false, "with -query/-service, exit 2 if already done, 3 if in flight")
 	audit := flag.Bool("audit", false, "print the audit classification of not-done items")
 	coverage := flag.Bool("coverage", false, "report per-doc coverage and fail if any doc has status markers but no rows")
+	coverageInventory := flag.Bool("coverage-inventory", false, "print the derived per-service behavioral-coverage inventory")
+	coverageGate := flag.Bool("coverage-gate", false, "fail if a `ga` service has no official-client behavioral suite and no reasoned exemption")
+	coverageExemptions := flag.String("coverage-exemptions", defaultCoverageExemptionsPath, "reasoned-exemption list for the behavioral-coverage gate ('' to disable)")
+	depthGate := flag.Bool("depth-gate", false, "fail if any `ga` service has no behavioural-depth record (each p2–p5 present or dated-exempt)")
+	depthDir := flag.String("depth-dir", defaultDepthDir, "per-service behavioural-depth records directory ('' to disable)")
+	coverageRatchet := flag.Bool("coverage-ratchet", false, "gate a Go coverprofile against the per-package floor (needs -coverage-profile)")
+	coverageProfile := flag.String("coverage-profile", "", "Go coverprofile (from `go test -coverprofile`) for -coverage-ratchet / -coverage-floor-update")
+	coverageFloor := flag.String("coverage-floor", defaultCoverageFloorPath, "per-package statement-coverage floor file")
+	coverageFloorUpdate := flag.Bool("coverage-floor-update", false, "rewrite the coverage floor from -coverage-profile (ratchet up; needs -allow-lower to drop)")
+	coverageAllowLower := flag.Bool("allow-lower", false, "with -coverage-floor-update: permit lowering a recorded floor")
+	mutationRatchet := flag.Bool("mutation-ratchet", false, "gate a go-mutesting report against the per-target mutation floor (needs -mutation-report and -mutation-target)")
+	mutationReport := flag.String("mutation-report", "", "go-mutesting JSON report (bin/gcp-mutation-report.json) for -mutation-ratchet / -mutation-floor-update")
+	mutationFloor := flag.String("mutation-floor", defaultMutationFloorPath, "per-target mutation-score floor file")
+	mutationFloorUpdate := flag.Bool("mutation-floor-update", false, "rewrite the mutation floor from -mutation-report (ratchet up; needs -allow-lower to drop)")
+	mutationTarget := flag.String("mutation-target", "", "the mutation target (Go package dir) the report was produced for")
+	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
 	by := flag.String("by", "wave", "ordering for -next: wave (execution order) or pri (P-list rank)")
@@ -234,7 +259,7 @@ func main() {
 	matrixPath := flag.String("matrix", "docs/fidelity/fidelity-matrix.json", "fidelity matrix JSON")
 	fromMatrix := flag.Bool("from-matrix", false, "also ingest non-ga fidelity cells as matrix gaps (kind=matrix)")
 	matrixDiff := flag.String("matrix-diff", "", "git ref to diff the fidelity matrix against; exit 1 on a ga->worse regression")
-	templatePath := flag.String("template", "docs/gcp-wave-plan-template.md", "template appended to -new-plan output")
+	templatePath := flag.String("template", "docs/gcp/wave-plan-template.md", "template appended to -new-plan output")
 	includeArchive := flag.Bool("include-archive", false, "also parse plan_docs/archive/**")
 	verbose := flag.Bool("v", false, "log parsing/PR diagnostics to stderr")
 	flag.Parse()
@@ -255,6 +280,61 @@ func main() {
 	}
 	if *matrixDiff != "" {
 		os.Exit(runMatrixDiff(*matrixDiff, *matrixPath))
+	}
+	if *coverageGate {
+		os.Exit(runCoverageGate(*matrixPath, gcpTestRoot, *coverageExemptions))
+	}
+	if *depthGate {
+		os.Exit(runDepthGate(*matrixPath, gcpTestRoot, *depthDir))
+	}
+	if *coverageRatchet || *coverageFloorUpdate {
+		if strings.TrimSpace(*coverageProfile) == "" {
+			fmt.Fprintln(os.Stderr, "gcpstatus: -coverage-ratchet/-coverage-floor-update require -coverage-profile")
+			os.Exit(2)
+		}
+		if *coverageFloorUpdate {
+			if err := runCoverageRatchetUpdate(*coverageProfile, *coverageFloor, *coverageAllowLower); err != nil {
+				fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		os.Exit(runCoverageRatchet(*coverageProfile, *coverageFloor))
+	}
+	if *mutationRatchet || *mutationFloorUpdate {
+		if strings.TrimSpace(*mutationReport) == "" {
+			fmt.Fprintln(os.Stderr, "gcpstatus: -mutation-ratchet/-mutation-floor-update require -mutation-report")
+			os.Exit(2)
+		}
+		if *mutationFloorUpdate {
+			if err := runMutationRatchetUpdate(*mutationReport, *mutationFloor, *mutationTarget, *coverageAllowLower); err != nil {
+				fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		os.Exit(runMutationRatchet(*mutationReport, *mutationFloor, *mutationTarget))
+	}
+	if *coverageInventory {
+		rows, err := gatherCoverage(*matrixPath, gcpTestRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
+			os.Exit(1)
+		}
+		exemptions, err := loadCoverageExemptions(*coverageExemptions, rows)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
+			os.Exit(1)
+		}
+		depth, err := loadDepthDir(*depthDir, rows)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
+			os.Exit(1)
+		}
+		var b strings.Builder
+		renderCoverageSection(&b, rows, exemptions, depth)
+		fmt.Print(b.String())
+		return
 	}
 
 	items, docPaths, waves := collect(*docs, *includeArchive, *verbose)
@@ -285,6 +365,9 @@ func main() {
 	if *coverage {
 		os.Exit(runCoverage(*docs, *includeArchive, items))
 	}
+	if *evidence {
+		os.Exit(runEvidence(*matrixPath))
+	}
 	if *next {
 		runNext(items, *nextN, *by)
 		return
@@ -296,6 +379,13 @@ func main() {
 	if *query != "" || *service != "" {
 		os.Exit(runQuery(items, *query, *service, *check))
 	}
+	// Derived: the per-service behavioral-coverage inventory. A missing
+	// matrix/tree just omits the section; it never fails the build (the gate is
+	// -coverage-gate / `make gcp-status-behavioral-gate`).
+	coverageRows, _ := gatherCoverage(*matrixPath, gcpTestRoot)
+	coverageExempt, _ := loadCoverageExemptions(*coverageExemptions, coverageRows)
+	depthRecords, _ := loadDepthDir(*depthDir, coverageRows)
+
 	if *jsonOut != "" {
 		if err := writeJSON(*jsonOut, items); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
@@ -303,12 +393,12 @@ func main() {
 		}
 	}
 	if *out != "" {
-		if err := writeMarkdown(*out, items); err != nil {
+		if err := writeMarkdown(*out, items, coverageRows, coverageExempt, depthRecords); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	printSummary(items, *out, *jsonOut)
+	printSummary(items, *out, *jsonOut, *matrixPath, coverageRows, depthRecords)
 }
 
 // ─── document parsing ─────────────────────────────────────────────────────────
@@ -951,6 +1041,8 @@ func dispositionFrom(verdict, section string) string {
 		return "optional"
 	case hasAny(v, "follow-up", "follow up"):
 		return "follow-up"
+	case hasAny(v, "revisit"):
+		return "revisit"
 	case hasAny(v, "fix"):
 		return "fix"
 	case hasAny(strings.ToLower(section), "deferred"):
@@ -1856,6 +1948,51 @@ func runCoverage(root string, includeArchive bool, items []*Item) int {
 	return 0
 }
 
+// runCoverageGate enforces the behavioral-suite Definition of Done: every `ga`
+// service must be exercised by an official-client suite in tests/integration/gcp
+// or carry a reasoned exemption. Exit 1 on any violation (the CI gate).
+func runCoverageGate(matrixPath, testRoot, exemptionsPath string) int {
+	rows, err := gatherCoverage(matrixPath, testRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: coverage gate: %v\n", err)
+		return 1
+	}
+	// An explicit (non-empty) exemption path must exist: a wrong path would
+	// otherwise disable every exemption and mask the configuration mistake.
+	if strings.TrimSpace(exemptionsPath) != "" {
+		if _, err := os.Stat(exemptionsPath); err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage gate: %v\n", err)
+			return 1
+		}
+	}
+	exemptions, err := loadCoverageExemptions(exemptionsPath, rows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: coverage gate: %v\n", err)
+		return 1
+	}
+	covered, total := gaCoverageTotals(rows)
+	violations := coverageGateViolations(rows, exemptions)
+	fmt.Printf("gcp-status behavioral gate: %d/%d `ga` services have an official-client suite", covered, total)
+	if len(exemptions) > 0 {
+		fmt.Printf("; %d reasoned exemption(s)", len(exemptions))
+	}
+	fmt.Println()
+	if len(violations) > 0 {
+		fmt.Printf("\n=> %d `ga` service(s) have no behavioral suite and no reasoned exemption:\n", len(violations))
+		for _, svc := range violations {
+			fmt.Printf("  - %s\n", svc)
+		}
+		if strings.TrimSpace(exemptionsPath) != "" {
+			fmt.Printf("\nAdd a tests/integration/gcp official-client suite, or a reasoned exemption in %s.\n", exemptionsPath)
+		} else {
+			fmt.Println("\nAdd a tests/integration/gcp official-client suite for each service.")
+		}
+		return 1
+	}
+	fmt.Println("=> every `ga` service has an official-client behavioral suite or a reasoned exemption.")
+	return 0
+}
+
 // runLintPlans fails if any plan-shaped doc produced no ledger rows — i.e. it
 // skipped (or malformed) the wave-plan template index/detail tables.
 func runLintPlans(root string, includeArchive bool, items []*Item) int {
@@ -1874,7 +2011,7 @@ func runLintPlans(root string, includeArchive bool, items []*Item) int {
 		fmt.Printf("  %-4s rows=%-4d %s\n", status, s.rows, s.rel)
 	}
 	if fail > 0 {
-		fmt.Printf("\n=> %d plan doc(s) have no parseable index/detail. Use docs/gcp-wave-plan-template.md.\n", fail)
+		fmt.Printf("\n=> %d plan doc(s) have no parseable index/detail. Use docs/gcp/wave-plan-template.md.\n", fail)
 		return 1
 	}
 	fmt.Println("\n=> all plan docs carry a parseable index/detail.")
@@ -1889,6 +2026,11 @@ type matrixCell struct {
 	Transport string `json:"transport"`
 	State     string `json:"state"`
 	Reason    string `json:"reason"`
+	// Discovery is the official Discovery method a REST cell maps to ("" none).
+	Discovery string `json:"discovery"`
+	// Verified is the recorded-evidence signal (validated transcript response
+	// for REST, passing official-client check for gRPC).
+	Verified bool `json:"verified"`
 }
 
 type matrixFile struct {
@@ -2096,7 +2238,7 @@ func generatePlan(svc, effort string, force bool, matrixPath, templatePath strin
 	fmt.Fprintf(&b, "# %s preview → GA — wave plan\n\n", svc)
 	fmt.Fprintf(&b, "Scaffolded by `make gcp-plan-new SERVICE=%s EFFORT=%s` from `%s` (`%d` non-ga cells across `%d` operations).\n\n", svc, effort, matrixPath, nonGA, len(order))
 	fmt.Fprintf(&b, "Provenance: `%s`. Fill in impact/effort and group operations into sensible sessions before starting.\n", matrixPath)
-	fmt.Fprintf(&b, "Exit criteria: `%s` has 0 preview/limited cells; no `%s` downgrade in `docs/fidelity-overrides.yaml`; `docs/GA.md` §2/§7 + README updated; `make gen-gcp-fidelity-matrix` + `make ga-check` green.\n\n", svc, svcLower)
+	fmt.Fprintf(&b, "Exit criteria: `%s` has 0 preview/limited cells; no `%s` downgrade in `docs/fidelity-overrides.yaml`; `docs/gcp/wire-contract.md` + README updated; `make gen-gcp-fidelity-matrix` + `make ga-check` green.\n\n", svc, svcLower)
 	fmt.Fprintf(&b, "Plan family (Series): `%s` (from the filename). Order with `make gcp-status-next SERIES=\"java-compat,%s\"` (or the reverse).\n\n", family, family)
 
 	b.WriteString("## 1. Index\n\n")
@@ -2179,7 +2321,7 @@ func writeJSON(path string, items []*Item) error {
 	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
-func writeMarkdown(path string, items []*Item) error {
+func writeMarkdown(path string, items []*Item, coverage []coverageRow, coverageExempt map[string]string, depth map[string]depthRecord) error {
 	counts := classCounts(items)
 	var backlog, prs, matrix []*Item
 	for _, it := range items {
@@ -2199,7 +2341,7 @@ func writeMarkdown(path string, items []*Item) error {
 	fmt.Fprintf(&b, "> Regenerate with `make gcp-status`; audit with `make gcp-status-audit`. Sources: every\n")
 	fmt.Fprintf(&b, "> `plan_docs/**/*.md` table + the debt-plan remainder list + base-gcp PRs, joined with git.\n")
 	fmt.Fprintf(&b, "> `state` is evidence-derived (merged/branch/pr from git/gh); `disp` is the declared intent\n")
-	fmt.Fprintf(&b, "> (fix/no-fix/optional); `done?` = a doc claims done but no merged PR/branch was found.\n\n")
+	fmt.Fprintf(&b, "> (fix/follow-up/revisit/no-fix/optional); `done?` = a doc claims done but no merged PR/branch was found.\n\n")
 
 	sections := []struct {
 		title string
@@ -2258,6 +2400,7 @@ func writeMarkdown(path string, items []*Item) error {
 		}
 		b.WriteString("\n")
 	}
+	renderCoverageSection(&b, coverage, coverageExempt, depth)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -2278,7 +2421,7 @@ func writeTable(b *strings.Builder, rows []*Item) {
 	}
 }
 
-func printSummary(items []*Item, out, jsonOut string) {
+func printSummary(items []*Item, out, jsonOut, matrixPath string, coverage []coverageRow, depth map[string]depthRecord) {
 	backlog, prs, matrix := 0, 0, 0
 	for _, it := range items {
 		switch it.Kind {
@@ -2291,12 +2434,127 @@ func printSummary(items []*Item, out, jsonOut string) {
 		}
 	}
 	fmt.Printf("gcp-status: %d items (%d backlog + %d PR + %d matrix) — %s\n", len(items), backlog, prs, matrix, countsLine(classCounts(items)))
+	if ev, ok := loadEvidence(matrixPath); ok {
+		fmt.Printf("  conformance evidence: rest %d/%d verified, grpc %d/%d verified (run `-evidence` for the REST gaps)\n",
+			ev.restVerified, ev.restTotal, ev.grpcVerified, ev.grpcTotal)
+	}
+	if len(coverage) > 0 {
+		gaCovered, gaTotal := gaCoverageTotals(coverage)
+		fmt.Printf("  behavioral coverage: %d/%d ga services have a real-client suite (gate: make gcp-status-behavioral-gate)\n", gaCovered, gaTotal)
+		if uncovered := uncoveredGAServices(coverage); len(uncovered) > 0 {
+			fmt.Printf("    ga services without a suite: %s (exempt or gate violations)\n", strings.Join(uncovered, ", "))
+		}
+		recorded, present, exempt := depthTotalsFor(coverage, depth)
+		fmt.Printf("  behavioral depth: %d/%d ga services recorded (p2–p5: %d present + %d exempt) (gate: make gcp-status-depth-gate)\n",
+			recorded, gaTotal, present, exempt)
+		if v := depthGateViolations(coverage, depth); len(v) > 0 {
+			fmt.Printf("    unaccounted-for depth cells: %s\n", strings.Join(v, ", "))
+		}
+	}
 	if out != "" {
 		fmt.Printf("  wrote %s\n", out)
 	}
 	if jsonOut != "" {
 		fmt.Printf("  wrote %s\n", jsonOut)
 	}
+}
+
+// evidenceCounts is the per-transport verified/total rollup of the matrix.
+type evidenceCounts struct {
+	restVerified, restTotal int
+	grpcVerified, grpcTotal int
+}
+
+// loadEvidence reads the fidelity matrix and rolls up its evidence signal. A
+// missing/unreadable matrix is reported as ok=false so the caller can skip.
+func loadEvidence(path string) (evidenceCounts, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return evidenceCounts{}, false
+	}
+	var mf matrixFile
+	if json.Unmarshal(raw, &mf) != nil {
+		return evidenceCounts{}, false
+	}
+	return rollupEvidence(mf), true
+}
+
+// rollupEvidence counts verified/total cells per transport.
+func rollupEvidence(mf matrixFile) evidenceCounts {
+	var ev evidenceCounts
+	for _, c := range mf.Cells {
+		switch c.Transport {
+		case "rest":
+			ev.restTotal++
+			if c.Verified {
+				ev.restVerified++
+			}
+		case "grpc":
+			ev.grpcTotal++
+			if c.Verified {
+				ev.grpcVerified++
+			}
+		}
+	}
+	return ev
+}
+
+// runEvidence prints the per-operation conformance-evidence ledger: the
+// per-transport verified rollup, then every Discovery-mapped REST operation
+// with no validated transcript response, grouped by service — the AUD2 work
+// list. Report-only (exit 0); it never fails the build.
+func runEvidence(path string) int {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: read matrix %s: %v\n", path, err)
+		return 2
+	}
+	var mf matrixFile
+	if err := json.Unmarshal(raw, &mf); err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: parse matrix %s: %v\n", path, err)
+		return 2
+	}
+
+	ev := rollupEvidence(mf)
+	fmt.Printf("conformance evidence (%s)\n", path)
+	fmt.Printf("  rest: %d/%d cells verified (%d without a validated transcript response)\n",
+		ev.restVerified, ev.restTotal, ev.restTotal-ev.restVerified)
+	fmt.Printf("  grpc: %d/%d cells verified (%d without a passing check)\n",
+		ev.grpcVerified, ev.grpcTotal, ev.grpcTotal-ev.grpcVerified)
+
+	// A mapped REST op with no validated response is the actionable gap.
+	byService := map[string][]string{}
+	unmapped := 0
+	for _, c := range mf.Cells {
+		if c.Transport != "rest" || c.Verified {
+			continue
+		}
+		if c.Discovery == "" {
+			unmapped++
+			continue
+		}
+		byService[c.Service] = append(byService[c.Service], c.Operation+" ["+c.Discovery+"]")
+	}
+
+	total := 0
+	for _, ops := range byService {
+		total += len(ops)
+	}
+	fmt.Printf("\nMapped REST operations without a validated response: %d (%d more cells have no Discovery method)\n", total, unmapped)
+	svcs := make([]string, 0, len(byService))
+	for svc := range byService {
+		svcs = append(svcs, svc)
+	}
+	sort.Strings(svcs)
+	for _, svc := range svcs {
+		ops := byService[svc]
+		sort.Strings(ops)
+		fmt.Printf("  %s (%d)\n", svc, len(ops))
+		for _, op := range ops {
+			fmt.Printf("    %s\n", op)
+		}
+	}
+	return 0
 }
 
 func classCounts(items []*Item) map[string]int {

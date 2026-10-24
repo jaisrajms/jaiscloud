@@ -11,22 +11,24 @@ import (
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.triggers) == 0 && len(s.channels) == 0, nil
+	return len(s.triggers) == 0 && len(s.channels) == 0 && len(s.operations) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return json.NewEncoder(w).Encode(map[string]any{
-		"triggers": s.triggers,
-		"channels": s.channels,
+		"triggers":   s.triggers,
+		"channels":   s.channels,
+		"operations": s.operations,
 	})
 }
 
 func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	var snap struct {
-		Triggers map[string]map[string]Trigger `json:"triggers"`
-		Channels map[string]map[string]Channel `json:"channels"`
+		Triggers   map[string]map[string]Trigger   `json:"triggers"`
+		Channels   map[string]map[string]Channel   `json:"channels"`
+		Operations map[string]map[string]Operation `json:"operations"`
 	}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
@@ -37,10 +39,14 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	if snap.Channels == nil {
 		snap.Channels = map[string]map[string]Channel{}
 	}
+	if snap.Operations == nil {
+		snap.Operations = map[string]map[string]Operation{}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.triggers = snap.Triggers
 	s.channels = snap.Channels
+	s.operations = snap.Operations
 	return nil
 }
 
@@ -57,6 +63,12 @@ func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_eventarc_channels`).Scan(&n); err != nil {
 		return false, err
 	}
+	if n > 0 {
+		return false, nil
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_eventarc_operations`).Scan(&n); err != nil {
+		return false, err
+	}
 	return n == 0, nil
 }
 
@@ -69,9 +81,14 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		ProjectID string  `json:"projectId"`
 		Channel   Channel `json:"channel"`
 	}
+	type operationRow struct {
+		ProjectID string    `json:"projectId"`
+		Operation Operation `json:"operation"`
+	}
 
 	triggers := make([]triggerRow, 0)
 	channels := make([]channelRow, 0)
+	operations := make([]operationRow, 0)
 
 	trows, err := s.pool.Query(ctx, `
 		SELECT project_id, location, trigger_id, config, labels, uid, etag, create_time, update_time
@@ -121,9 +138,33 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		return err
 	}
 
+	orows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, operation_id, verb, target, response, create_time
+		FROM jc_eventarc_operations ORDER BY project_id, location, operation_id
+	`)
+	if err != nil {
+		return err
+	}
+	for orows.Next() {
+		var r operationRow
+		var response []byte
+		if err := orows.Scan(&r.ProjectID, &r.Operation.Location, &r.Operation.ID, &r.Operation.Verb,
+			&r.Operation.Target, &response, &r.Operation.CreateTime); err != nil {
+			orows.Close()
+			return err
+		}
+		r.Operation.Response = json.RawMessage(response)
+		operations = append(operations, r)
+	}
+	orows.Close()
+	if err := orows.Err(); err != nil {
+		return err
+	}
+
 	return json.NewEncoder(w).Encode(map[string]any{
-		"triggers": triggers,
-		"channels": channels,
+		"triggers":   triggers,
+		"channels":   channels,
+		"operations": operations,
 	})
 }
 
@@ -137,6 +178,10 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			ProjectID string  `json:"projectId"`
 			Channel   Channel `json:"channel"`
 		} `json:"channels"`
+		Operations []struct {
+			ProjectID string    `json:"projectId"`
+			Operation Operation `json:"operation"`
+		} `json:"operations"`
 	}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
@@ -146,7 +191,7 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	for _, tbl := range []string{"jc_eventarc_triggers", "jc_eventarc_channels"} {
+	for _, tbl := range []string{"jc_eventarc_triggers", "jc_eventarc_channels", "jc_eventarc_operations"} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+tbl); err != nil {
 			return err
 		}
@@ -170,6 +215,16 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		`, r.ProjectID, r.Channel.Location, r.Channel.Name, nullableJSONRaw(r.Channel.Config, "{}"), nullableJSONRaw(labels, "{}"),
 			r.Channel.UID, r.Channel.Etag, r.Channel.ActivationToken, r.Channel.CreateTime, r.Channel.UpdateTime); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.Operations {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_eventarc_operations
+				(project_id, location, operation_id, verb, target, response, create_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+		`, r.ProjectID, r.Operation.Location, r.Operation.ID, r.Operation.Verb, r.Operation.Target,
+			nullableJSONRaw(r.Operation.Response, "{}"), r.Operation.CreateTime); err != nil {
 			return err
 		}
 	}

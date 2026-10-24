@@ -36,3 +36,29 @@ export function serviceForPath(
       ),
   )
 }
+
+export interface Crumb {
+  text: string
+  href: string
+}
+
+/**
+ * Build the breadcrumb trail for a router pathname: the console root, then the
+ * owning service (any cloud) or the Admin section. `href` maps a router path to
+ * a full link.
+ */
+export function buildBreadcrumbItems(
+  services: NavSection[],
+  pathname: string,
+  href: (path: string) => string,
+): Crumb[] {
+  const items: Crumb[] = [{ text: 'JaisCloud', href: href('/') }]
+  const parts = pathname.split('/').filter(Boolean)
+  if (parts[0] === 'admin') {
+    items.push({ text: 'Admin', href: href('/admin') })
+    return items
+  }
+  const service = serviceForPath(services, pathname)
+  if (service) items.push({ text: service.label, href: href(service.rootPath) })
+  return items
+}

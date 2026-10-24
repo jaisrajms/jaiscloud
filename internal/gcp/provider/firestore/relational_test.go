@@ -20,7 +20,7 @@ func TestProjectDocumentsDeepCopiesNestedValues(t *testing.T) {
 		{FieldPath: "meta"},
 		{FieldPath: "meta.n"},
 	}}
-	out := ProjectDocuments([]firestorestore.Document{src}, proj)
+	out := projectDocuments([]firestorestore.Document{src}, proj)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 projected document, got %d", len(out))
 	}
@@ -39,7 +39,7 @@ func TestFilterDocumentsValidatesLimits(t *testing.T) {
 		Op:    "IN",
 		Value: firestorestore.ArrayVal(), // IN requires a non-empty array
 	}}
-	if _, err := FilterDocuments(nil, empty); err == nil {
+	if _, err := filterDocuments(nil, empty); err == nil {
 		t.Fatal("expected IN with an empty array to be rejected")
 	}
 }
@@ -54,7 +54,7 @@ func TestDistinctDocumentsFieldAndWhole(t *testing.T) {
 		{Name: "c", Fields: map[string]*firestorestore.Value{"x": firestorestore.IntVal(2)}},
 	}
 
-	byField := DistinctDocuments(docs, &projection{Fields: []fieldReference{{FieldPath: "x"}}})
+	byField := distinctDocuments(docs, &projection{Fields: []fieldReference{{FieldPath: "x"}}})
 	if len(byField) != 2 {
 		t.Fatalf("distinct by field: got %d results, want 2", len(byField))
 	}
@@ -62,7 +62,7 @@ func TestDistinctDocumentsFieldAndWhole(t *testing.T) {
 		t.Fatalf("distinct by field must preserve first occurrence: got %s, %s", byField[0].Name, byField[1].Name)
 	}
 
-	whole := DistinctDocuments(docs, nil)
+	whole := distinctDocuments(docs, nil)
 	if len(whole) != 3 {
 		t.Fatalf("whole-document distinct: got %d results, want 3 (names differ)", len(whole))
 	}

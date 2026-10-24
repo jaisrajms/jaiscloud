@@ -6,19 +6,21 @@ import (
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ConfigService implements the Cloud Logging v2 config-plane RPCs
-// (google.logging.v2.ConfigServiceV2) for sinks and exclusions over the shared
-// transport-neutral core. Every other ConfigServiceV2 RPC (buckets, views,
-// links, CMEK/settings, CopyLogEntries) is inherited from the generated
-// Unimplemented stub and fails loud — those planes are out of scope for the
-// emulator.
+// (google.logging.v2.ConfigServiceV2) over the shared transport-neutral core.
+// It covers sinks and exclusions (config.go), and the Admin v2 surface
+// (admin.go): log buckets (sync + async), views, BigQuery links, log scopes,
+// and the Settings/CMEK records. CopyLogEntries is inherited from the generated
+// Unimplemented stub and fails loud — the emulator has no per-bucket entry data
+// plane, so a cross-project copy has nothing faithful to copy.
 type ConfigService struct {
 	loggingpb.UnimplementedConfigServiceV2Server
 
@@ -37,7 +39,7 @@ func (s *ConfigService) configParent(ctx context.Context, parent string) string 
 	if parent != "" {
 		return parent
 	}
-	return "projects/" + grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	return resource.ResourceID(grpcutil.ProjectFromMetadata(ctx, s.defaultProj))("project", "")
 }
 
 // ─── sinks ────────────────────────────────────────────────────────────────────
@@ -142,12 +144,20 @@ func sinkFromProto(p *loggingpb.LogSink) loggingstore.LogSink {
 		return loggingstore.LogSink{}
 	}
 	s := loggingstore.LogSink{
-		Name:            p.GetName(),
-		Destination:     p.GetDestination(),
-		Filter:          p.GetFilter(),
-		Description:     p.GetDescription(),
-		Disabled:        p.GetDisabled(),
-		IncludeChildren: p.GetIncludeChildren(),
+		Name:                p.GetName(),
+		Destination:         p.GetDestination(),
+		Filter:              p.GetFilter(),
+		Description:         p.GetDescription(),
+		Disabled:            p.GetDisabled(),
+		IncludeChildren:     p.GetIncludeChildren(),
+		OutputVersionFormat: versionFormatName(p.GetOutputVersionFormat()),
+	}
+	if bo := p.GetBigqueryOptions(); bo != nil {
+		// Only `use_partitioned_tables` is writable; the sibling
+		// `uses_timestamp_column_partitioning` is output-only.
+		s.BigQueryOptions = &loggingstore.LogBigQueryOptions{
+			UsePartitionedTables: bo.GetUsePartitionedTables(),
+		}
 	}
 	for _, ex := range p.GetExclusions() {
 		s.Exclusions = append(s.Exclusions, exclusionFromProto(ex))
@@ -155,24 +165,49 @@ func sinkFromProto(p *loggingpb.LogSink) loggingstore.LogSink {
 	return s
 }
 
+// versionFormatName maps the deprecated OutputVersionFormat enum to its wire
+// string, collapsing the unspecified zero value to "" so an unset field is not
+// echoed back.
+func versionFormatName(v loggingpb.LogSink_VersionFormat) string {
+	if v == loggingpb.LogSink_VERSION_FORMAT_UNSPECIFIED {
+		return ""
+	}
+	return v.String()
+}
+
+// versionFormatValue maps a stored OutputVersionFormat string back to the enum.
+func versionFormatValue(name string) loggingpb.LogSink_VersionFormat {
+	if v, ok := loggingpb.LogSink_VersionFormat_value[name]; ok {
+		return loggingpb.LogSink_VersionFormat(v)
+	}
+	return loggingpb.LogSink_VERSION_FORMAT_UNSPECIFIED
+}
+
 func sinkToProto(s loggingstore.LogSink) *loggingpb.LogSink {
 	out := &loggingpb.LogSink{
-		Name:            s.Name,
-		Destination:     s.Destination,
-		Filter:          s.Filter,
-		Description:     s.Description,
-		Disabled:        s.Disabled,
-		WriterIdentity:  s.WriterIdentity,
-		IncludeChildren: s.IncludeChildren,
+		Name:                s.Name,
+		Destination:         s.Destination,
+		Filter:              s.Filter,
+		Description:         s.Description,
+		Disabled:            s.Disabled,
+		WriterIdentity:      s.WriterIdentity,
+		IncludeChildren:     s.IncludeChildren,
+		OutputVersionFormat: versionFormatValue(s.OutputVersionFormat),
+	}
+	if s.BigQueryOptions != nil {
+		out.Options = &loggingpb.LogSink_BigqueryOptions{BigqueryOptions: &loggingpb.BigQueryOptions{
+			UsePartitionedTables:            s.BigQueryOptions.UsePartitionedTables,
+			UsesTimestampColumnPartitioning: s.BigQueryOptions.UsesTimestampColumnPartitioning,
+		}}
 	}
 	for _, ex := range s.Exclusions {
 		out.Exclusions = append(out.Exclusions, exclusionToProto(ex))
 	}
 	if !s.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(s.CreateTime)
+		out.CreateTime = timestamp.Proto(s.CreateTime)
 	}
 	if !s.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(s.UpdateTime)
+		out.UpdateTime = timestamp.Proto(s.UpdateTime)
 	}
 	return out
 }
@@ -197,10 +232,10 @@ func exclusionToProto(e loggingstore.LogExclusion) *loggingpb.LogExclusion {
 		Disabled:    e.Disabled,
 	}
 	if !e.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(e.CreateTime)
+		out.CreateTime = timestamp.Proto(e.CreateTime)
 	}
 	if !e.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(e.UpdateTime)
+		out.UpdateTime = timestamp.Proto(e.UpdateTime)
 	}
 	return out
 }

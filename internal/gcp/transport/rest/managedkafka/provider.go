@@ -90,7 +90,11 @@ func (p *Provider) GetCluster(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListClusters(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListClusters(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +161,11 @@ func (p *Provider) ResolveOperation(ctx context.Context, project, location, opID
 
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +202,11 @@ func (p *Provider) GetTopic(ctx context.Context, nr *model.NormalizedRequest) (*
 
 func (p *Provider) ListTopics(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListTopics(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListTopics(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -230,8 +242,12 @@ func (p *Provider) DeleteTopic(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *Provider) ListConsumerGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListConsumerGroups(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"),
-		strParam(nr, "view"), strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		strParam(nr, "view"), strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +310,11 @@ func (p *Provider) GetAcl(ctx context.Context, nr *model.NormalizedRequest) (*mo
 
 func (p *Provider) ListAcls(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListAcls(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListAcls(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

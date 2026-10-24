@@ -365,6 +365,11 @@ func TestSFN_GetExecutionHistory_LiteMode_TwoEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// StartExecution returns as soon as the execution is queued; with the
+	// asynchronous engine the history is still being appended, so wait for the
+	// terminal state before asserting on the final event.
+	pollUntilTerminal(t, client, aws.ToString(startOut.ExecutionArn), 10*time.Second)
+
 	histOut, err := client.GetExecutionHistory(ctx, &awssfn.GetExecutionHistoryInput{
 		ExecutionArn: startOut.ExecutionArn,
 	})

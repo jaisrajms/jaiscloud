@@ -1,0 +1,34 @@
+{
+  "index": 9,
+  "service": "firestore",
+  "op": "tour_fs_tx_commit",
+  "method": "google.firestore.v1.Firestore/Commit",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>/counter",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "database": "projects/<project>/databases/(default)",
+    "transaction": "<transaction>",
+    "writes": [
+      {
+        "update": {
+          "fields": {
+            "n": {
+              "integerValue": "1"
+            }
+          },
+          "name": "projects/<project>/databases/(default)/documents/<fsCollection>/counter"
+        }
+      }
+    ]
+  },
+  "response": {
+    "commitTime": "<time>",
+    "writeResults": [
+      {
+        "updateTime": "<time>"
+      }
+    ]
+  }
+}
+

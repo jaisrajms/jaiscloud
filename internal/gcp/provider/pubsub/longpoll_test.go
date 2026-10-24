@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // setupLongPoll creates a provider with a topic and subscription, ready for
@@ -69,6 +71,40 @@ func TestPubSubLongPollBounded(t *testing.T) {
 	// window for slow CI machines.
 	if elapsed > 3*time.Second {
 		t.Fatalf("empty long-poll took %v; expected bounded return", elapsed)
+	}
+}
+
+// TestPubSubLongPollBoundedFrozenClock verifies the long-poll window is real
+// wall time, not the (possibly frozen) business clock: with the global clock
+// frozen, an empty pull must still return within the bounded window rather than
+// polling forever (the loop comparison uses clock.RealNow, so a frozen business
+// clock cannot stall it). Regression for the clock.Now() deadline (TD15).
+func TestPubSubLongPollBoundedFrozenClock(t *testing.T) {
+	at := time.Date(2024, 3, 15, 10, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	p := setupLongPoll(t)
+
+	done := make(chan int, 1)
+	go func() {
+		resp, err := p.SubscriptionPull(context.Background(), newNR(map[string]any{"name": "subscriptions/my-sub"}))
+		if err != nil {
+			t.Errorf("pull: %v", err)
+			done <- -1
+			return
+		}
+		received, _ := resp.Data["receivedMessages"].([]any)
+		done <- len(received)
+	}()
+
+	select {
+	case n := <-done:
+		if n != 0 {
+			t.Fatalf("expected 0 messages, got %d", n)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("empty long-poll did not return under a frozen clock; deadline used the business clock")
 	}
 }
 

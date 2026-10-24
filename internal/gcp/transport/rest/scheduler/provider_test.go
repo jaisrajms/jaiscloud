@@ -101,6 +101,31 @@ func TestProviderListPagination(t *testing.T) {
 	}
 }
 
+func TestProviderListJobsNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	p, _ := newProvider(t)
+	// AIP-158: projects.locations.jobs.list documents no non-positive exception,
+	// so a negative pageSize is INVALID_ARGUMENT instead of a silent first page.
+	_, err := p.ListJobs(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": float64(-1)}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("ListJobs(pageSize=-1) err = %v, want InvalidArgument/400", err)
+	}
+	// Zero still selects the documented maximum (500).
+	if _, err := p.ListJobs(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": float64(0)})); err != nil {
+		t.Fatalf("ListJobs(pageSize=0): %v", err)
+	}
+	// A non-integer value fails the int32 query binding instead of being folded
+	// into zero (an absent parameter).
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListJobs(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Fatalf("ListJobs(pageSize=%#v) err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+}
+
 func TestProviderEncodeError(t *testing.T) {
 	codec := NewCodec()
 	perr := model.NewProviderError("NotFound", "job not found", 404)

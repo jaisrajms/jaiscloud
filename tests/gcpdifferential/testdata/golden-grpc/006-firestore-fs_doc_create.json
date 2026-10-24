@@ -1,0 +1,38 @@
+{
+  "index": 6,
+  "service": "firestore",
+  "op": "fs_doc_create",
+  "method": "google.firestore.v1.Firestore/CreateDocument",
+  "path": "projects/<project>/databases/(default)/documents/<fsCollection>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "collectionId": "<fsCollection>",
+    "document": {
+      "fields": {
+        "count": {
+          "integerValue": "1"
+        },
+        "greeting": {
+          "stringValue": "hello"
+        }
+      }
+    },
+    "documentId": "<fsDoc>",
+    "parent": "projects/<project>/databases/(default)/documents"
+  },
+  "response": {
+    "createTime": "<time>",
+    "fields": {
+      "count": {
+        "integerValue": "1"
+      },
+      "greeting": {
+        "stringValue": "hello"
+      }
+    },
+    "name": "projects/<project>/databases/(default)/documents/<fsCollection>/<fsDoc>",
+    "updateTime": "<time>"
+  }
+}
+

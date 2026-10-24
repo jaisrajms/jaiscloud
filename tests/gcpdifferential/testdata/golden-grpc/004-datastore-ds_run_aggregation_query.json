@@ -1,0 +1,43 @@
+{
+  "index": 4,
+  "service": "datastore",
+  "op": "ds_run_aggregation_query",
+  "method": "google.datastore.v1.Datastore/RunAggregationQuery",
+  "path": "projects/<project>",
+  "transport": "grpc",
+  "status": 0,
+  "request": {
+    "aggregationQuery": {
+      "aggregations": [
+        {
+          "alias": "total",
+          "count": {}
+        }
+      ],
+      "nestedQuery": {
+        "kind": [
+          {
+            "name": "<dsKind>"
+          }
+        ]
+      }
+    },
+    "projectId": "<project>"
+  },
+  "response": {
+    "batch": {
+      "aggregationResults": [
+        {
+          "aggregateProperties": {
+            "total": {
+              "integerValue": "1"
+            }
+          }
+        }
+      ],
+      "moreResults": "NO_MORE_RESULTS",
+      "readTime": "<time>"
+    }
+  }
+}
+

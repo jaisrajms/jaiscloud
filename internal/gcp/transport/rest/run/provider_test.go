@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -90,6 +91,79 @@ func TestProviderServiceLifecycle(t *testing.T) {
 	}
 }
 
+// TestProviderValidateOnly proves the dry-run flags are threaded from the REST
+// query parameters into the core: a validateOnly request previews the resource
+// but persists nothing, and etag mismatches are Aborted/409.
+func TestProviderValidateOnly(t *testing.T) {
+	ctx := context.Background()
+	p := testProvider()
+	body := map[string]any{"template": map[string]any{"containers": []any{
+		map[string]any{"image": "nginx:latest"},
+	}}}
+
+	// validateOnly create: the operation previews the service, but nothing is
+	// stored (a following get is NotFound).
+	resp, err := p.CreateService(ctx, req("CreateService", map[string]any{
+		"serviceId": "svc", "validateOnly": "true", "body": body}))
+	if err != nil {
+		t.Fatalf("validateOnly CreateService: %v", err)
+	}
+	if resp.Data["done"] != true {
+		t.Errorf("validateOnly create done = %v", resp.Data["done"])
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"})); err == nil {
+		t.Fatal("validateOnly create persisted the service")
+	}
+
+	// Real create; then a validateOnly template update must not change it.
+	if _, err := p.CreateService(ctx, req("CreateService", map[string]any{"serviceId": "svc", "body": body})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, _ := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"}))
+	newBody := map[string]any{"template": map[string]any{"containers": []any{map[string]any{"image": "httpd:latest"}}}}
+	if _, err := p.UpdateService(ctx, req("UpdateService", map[string]any{
+		"service": "svc", "updateMask": "template", "validateOnly": "true", "body": newBody})); err != nil {
+		t.Fatalf("validateOnly UpdateService: %v", err)
+	}
+	after, _ := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"}))
+	if after.Data["latestReadyRevision"] != before.Data["latestReadyRevision"] {
+		t.Errorf("validateOnly update changed the revision: %v -> %v",
+			before.Data["latestReadyRevision"], after.Data["latestReadyRevision"])
+	}
+
+	// etag mismatch on delete is Aborted/409 and leaves the service.
+	if _, err := p.DeleteService(ctx, req("DeleteService", map[string]any{
+		"service": "svc", "etag": "stale-token"})); err == nil {
+		t.Fatal("stale-etag DeleteService accepted")
+	} else {
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.HTTPStatus != 409 {
+			t.Fatalf("stale-etag delete err = %v, want 409", err)
+		}
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"})); err != nil {
+		t.Fatalf("stale-etag delete removed the service: %v", err)
+	}
+
+	// validateOnly delete keeps the service.
+	if _, err := p.DeleteService(ctx, req("DeleteService", map[string]any{
+		"service": "svc", "validateOnly": "true"})); err != nil {
+		t.Fatalf("validateOnly DeleteService: %v", err)
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"})); err != nil {
+		t.Fatalf("validateOnly delete removed the service: %v", err)
+	}
+
+	// allowMissing update upserts a missing service.
+	if _, err := p.UpdateService(ctx, req("UpdateService", map[string]any{
+		"service": "upsert", "updateMask": "template", "allowMissing": "true", "body": body})); err != nil {
+		t.Fatalf("allowMissing UpdateService: %v", err)
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "upsert"})); err != nil {
+		t.Fatalf("allowMissing update did not create the service: %v", err)
+	}
+}
+
 func TestProviderInvokeNoRuntime(t *testing.T) {
 	ctx := context.Background()
 	p := testProvider()
@@ -100,6 +174,27 @@ func TestProviderInvokeNoRuntime(t *testing.T) {
 		Params:  map[string]any{},
 		Raw:     &http.Request{Host: "svc-abcdef012345.us-central1.run.app", Method: http.MethodGet, URL: u},
 	}
+	_, err := p.Invoke(ctx, nr)
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.HTTPStatus != 503 {
+		t.Fatalf("Invoke err = %v, want 503 ProviderError", err)
+	}
+}
+
+func TestProviderInvokeLegacyPathForm(t *testing.T) {
+	ctx := context.Background()
+	p := testProvider()
+	if _, err := p.CreateService(ctx, req("CreateService", map[string]any{"serviceId": "svc", "body": map[string]any{}})); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	u, _ := url.Parse("/run/v2/projects/p/locations/l/services/svc/hello")
+	nr := &model.NormalizedRequest{
+		Service: "run",
+		Action:  "Invoke",
+		Params:  map[string]any{"project": "p", "location": "l", "service": "svc", "invokePath": "/hello"},
+		Raw:     &http.Request{Host: "localhost:8080", Method: http.MethodGet, URL: u},
+	}
+	// The mock runtime runs no container, so the resolved path still reports 503.
 	_, err := p.Invoke(ctx, nr)
 	perr, ok := err.(*model.ProviderError)
 	if !ok || perr.HTTPStatus != 503 {
@@ -120,5 +215,63 @@ func TestInvocationCodecRoundTrip(t *testing.T) {
 	})
 	if status != 200 || string(outBody) != "ok" {
 		t.Errorf("Encode = %d %q", status, outBody)
+	}
+}
+
+// TestListNegativePageSizeRejected pins the shared paging contract on Cloud
+// Run's REST list surfaces: a negative pageSize is INVALID_ARGUMENT.
+func TestListNegativePageSizeRejected(t *testing.T) {
+	ctx := context.Background()
+	p := testProvider()
+	body := map[string]any{"template": map[string]any{"containers": []any{
+		map[string]any{"image": "nginx:latest", "ports": []any{map[string]any{"containerPort": float64(80)}}},
+	}}}
+	if _, err := p.CreateService(ctx, req("CreateService", map[string]any{"serviceId": "svc", "body": body})); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	cases := []struct {
+		name string
+		call func() (*model.ProviderResponse, error)
+	}{
+		{"ListServices", func() (*model.ProviderResponse, error) {
+			return p.ListServices(ctx, req("ListServices", map[string]any{"pageSize": "-1"}))
+		}},
+		{"ListRevisions", func() (*model.ProviderResponse, error) {
+			return p.ListRevisions(ctx, req("ListRevisions", map[string]any{"pageSize": "-1", "service": "svc"}))
+		}},
+	}
+	for _, tc := range cases {
+		_, err := tc.call()
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
+	}
+
+	// run.projects.locations.operations.list documents "If not set or set to
+	// less than or equal to 0, the default page size is 100" — a documented
+	// exception to the reject-negative rule, so a negative size takes the
+	// default rather than raising InvalidArgument.
+	if _, err := p.ListOperations(ctx, req("ListOperations", map[string]any{"pageSize": "-1"})); err != nil {
+		t.Errorf("ListOperations(pageSize=-1) = %v, want nil (documented default)", err)
+	}
+	// A non-integer pageSize still fails the int32 query binding on every list
+	// method — including operations.list, whose non-positive exception must not
+	// swallow an unparseable value.
+	for name, call := range map[string]func() error{
+		"ListServices": func() error {
+			_, err := p.ListServices(ctx, req("ListServices", map[string]any{"pageSize": "abc"}))
+			return err
+		},
+		"ListOperations": func() error {
+			_, err := p.ListOperations(ctx, req("ListOperations", map[string]any{"pageSize": "-0.5"}))
+			return err
+		},
+	} {
+		err := call()
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("%s(non-integer pageSize) = %v, want InvalidArgument/400", name, err)
+		}
 	}
 }

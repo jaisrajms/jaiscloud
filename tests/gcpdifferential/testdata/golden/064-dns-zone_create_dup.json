@@ -1,0 +1,27 @@
+{
+  "index": 64,
+  "service": "dns",
+  "op": "zone_create_dup",
+  "method": "POST",
+  "path": "/dns/v1/projects/<project>/managedZones",
+  "status": 409,
+  "request": {
+    "description": "jaiscloud differential",
+    "dnsName": "<dnsName>",
+    "name": "<dnsZone>"
+  },
+  "response": {
+    "error": {
+      "code": 409,
+      "errors": [
+        {
+          "domain": "global",
+          "message": "The resource 'entity.managedZone' named '<dnsZone>' already exists",
+          "reason": "alreadyExists"
+        }
+      ],
+      "message": "The resource 'entity.managedZone' named '<dnsZone>' already exists"
+    }
+  }
+}
+

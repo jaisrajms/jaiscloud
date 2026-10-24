@@ -39,13 +39,15 @@ func WaitTerminalWith(ctx context.Context, k8s kubernetes.Interface, handle k8sh
 	if err != nil {
 		return Final{}, err
 	}
-	return classify(base, collectLogs(ctx, k8s, handle), opts), nil
+	return Classify(base, collectLogs(ctx, k8s, handle), opts), nil
 }
 
-// classify applies the Spark classification rules to a pod-level result and the
-// driver log lines. Split out from WaitTerminalWith so the rules are unit
-// testable without a fake log source.
-func classify(base k8shelpers.Final, logLines []string, opts TerminalOptions) Final {
+// Classify applies the Spark classification rules to a backend-level result
+// (k8s pod terminal state, or a Docker container exit) and the driver log
+// lines. Split out from WaitTerminalWith so the rules are unit testable without
+// a fake log source, and shared by the k8s and Docker executors so a driver's
+// success/failure is decided identically regardless of orchestrator.
+func Classify(base k8shelpers.Final, logLines []string, opts TerminalOptions) Final {
 	f := Final{Final: base}
 
 	// Rule 1: exit 0.
@@ -91,10 +93,11 @@ func collectLogs(ctx context.Context, k8s kubernetes.Interface, handle k8shelper
 	if err := k8shelpers.TailLogs(ctx, k8s, handle, k8shelpers.LogKindMain, &buf); err != nil {
 		slog.Warn("sparkhelpers: could not fetch driver logs for Spark classification", "job", handle.JobName, "err", err)
 	}
-	return splitLines(buf.String())
+	return SplitLines(buf.String())
 }
 
-func splitLines(s string) []string {
+// SplitLines splits a raw driver log into individual lines for classification.
+func SplitLines(s string) []string {
 	if s == "" {
 		return nil
 	}

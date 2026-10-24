@@ -3,6 +3,8 @@ package clouddns
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
@@ -370,10 +372,133 @@ func TestNumericIDStableAndFQDN(t *testing.T) {
 	}
 }
 
+// boundValue renders the offending query value the way the frontend's binding
+// error echoes it: a string value is re-quoted verbatim.
+func boundValue(v any) string {
+	if s, ok := v.(string); ok {
+		return strconv.Quote(s)
+	}
+	return fmt.Sprint(v)
+}
+
 func isCode(err error, code string) bool {
 	var perr *model.ProviderError
 	if !errors.As(err, &perr) {
 		return false
 	}
 	return perr.Code == code
+}
+
+// TestListMaxResultsBinding pins Cloud DNS's maxResults int32 query binding on
+// every paged listing: an unparseable value ("abc", "1.5"), a fraction, an
+// explicitly empty one (DC63) or an out-of-int32 one is INVALID_ARGUMENT/400
+// with real GCP's binding envelope ("Invalid value at 'max_results'
+// (TYPE_INT32), \"abc\""), never a silently absent parameter served from the
+// default 100, while a legal integer still pages. Found in the DC41 review
+// (DC55); the message was corrected in DC67. The binding is resolved before the
+// parent-zone lookup, so a bad maxResults beats the missing-zone 404.
+func TestListMaxResultsBinding(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateZone(t, p, "zone-a")
+	handlers := []struct {
+		name string
+		call func(map[string]any) (*model.ProviderResponse, error)
+	}{
+		{"ListManagedZones", func(extra map[string]any) (*model.ProviderResponse, error) {
+			return p.ListManagedZones(ctx, newNR(extra))
+		}},
+		{"ListResourceRecordSets", func(extra map[string]any) (*model.ProviderResponse, error) {
+			if _, ok := extra["managedZone"]; !ok {
+				extra["managedZone"] = "zone-a"
+			}
+			return p.ListResourceRecordSets(ctx, newNR(extra))
+		}},
+		{"ListChanges", func(extra map[string]any) (*model.ProviderResponse, error) {
+			if _, ok := extra["managedZone"]; !ok {
+				extra["managedZone"] = "zone-a"
+			}
+			return p.ListChanges(ctx, newNR(extra))
+		}},
+	}
+	for _, h := range handlers {
+		for _, v := range []any{"", "abc", "1.5", "-0.5", "2147483648", float64(1.5)} {
+			_, err := h.call(map[string]any{"maxResults": v})
+			var perr *model.ProviderError
+			if !errors.As(err, &perr) {
+				t.Errorf("%s(maxResults=%#v) error = %v, want a *model.ProviderError", h.name, v, err)
+				continue
+			}
+			if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s(maxResults=%#v) = %+v, want InvalidArgument/400", h.name, v, perr)
+			}
+			if want := `Invalid value at 'max_results' (TYPE_INT32), ` + boundValue(v); perr.Message != want {
+				t.Errorf("%s(maxResults=%#v) message = %q, want %q", h.name, v, perr.Message, want)
+			}
+		}
+		if resp, err := h.call(map[string]any{"maxResults": "2"}); err != nil || resp == nil {
+			t.Errorf("%s(maxResults=2) = %v, %v; want a page", h.name, resp, err)
+		}
+		// A negative int32 parses but is outside the 1..1000 range real GCP's
+		// list backend accepts, so it is the parameter-validation 400, not the
+		// default page (DC62).
+		for _, v := range []string{"-1", "0", "1001", "2147483647"} {
+			_, err := h.call(map[string]any{"maxResults": v})
+			var perr *model.ProviderError
+			if !errors.As(err, &perr) {
+				t.Errorf("%s(maxResults=%s) error = %v, want a *model.ProviderError", h.name, v, err)
+				continue
+			}
+			if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s(maxResults=%s) = %+v, want InvalidArgument/400", h.name, v, perr)
+			}
+			if want := "Invalid value for 'parameters.maxResults': '" + v + "'"; perr.Message != want {
+				t.Errorf("%s(maxResults=%s) message = %q, want %q", h.name, v, perr.Message, want)
+			}
+		}
+		// The documented range's edges are accepted and still page.
+		for _, v := range []string{"1", "1000"} {
+			if resp, err := h.call(map[string]any{"maxResults": v}); err != nil || resp == nil {
+				t.Errorf("%s(maxResults=%s) = %v, %v; want a page", h.name, v, resp, err)
+			}
+		}
+		// The pageSize alias the emulator accepts resolves through the same
+		// contract, since the emulator cannot ignore it the way real GCP
+		// ignores an unknown query parameter.
+		if _, err := h.call(map[string]any{"pageSize": "abc"}); !isCode(err, "InvalidArgument") {
+			t.Errorf("%s(pageSize=abc) = %v, want InvalidArgument", h.name, err)
+		}
+		if _, err := h.call(map[string]any{"pageSize": "0"}); !isCode(err, "InvalidArgument") {
+			t.Errorf("%s(pageSize=0) = %v, want InvalidArgument", h.name, err)
+		}
+	}
+	// Real GCP validates the query binding in the frontend, before routing, but
+	// the backend's 1..1000 range after resolving the parent zone — so an
+	// unparseable value beats the missing-zone 404 while an out-of-range one
+	// does not (probed: rrsets?maxResults=abc on a missing zone is 400,
+	// ?maxResults=0 is the zone's 404).
+	resp, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing", "maxResults": "abc"}))
+	if !isCode(err, "InvalidArgument") {
+		t.Errorf("ListResourceRecordSets(missing zone, maxResults=abc) = %v, %v; want InvalidArgument", resp, err)
+	}
+	// An explicitly empty value is the same frontend binding rejection, so it
+	// too precedes the missing-zone lookup (DC63).
+	if _, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing", "maxResults": ""})); !isCode(err, "InvalidArgument") {
+		t.Errorf("ListResourceRecordSets(missing zone, maxResults=) = %v, want InvalidArgument", err)
+	}
+	for _, h := range handlers[1:] { // the two lists with a parent zone
+		for _, v := range []string{"0", "-1", "1001"} {
+			if resp, err := h.call(map[string]any{"managedZone": "missing", "maxResults": v}); !isCode(err, "NotFound") {
+				t.Errorf("%s(missing zone, maxResults=%s) = %v, %v; want the zone's NotFound", h.name, v, resp, err)
+			}
+		}
+	}
+	if _, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing"})); !isCode(err, "NotFound") {
+		t.Errorf("ListResourceRecordSets(missing zone) = %v, want NotFound", err)
+	}
+	// changes.list verifies its parent zone like rrsets.list does: real GCP
+	// answers 404 for a missing zone rather than an empty page (probed).
+	if _, err := p.ListChanges(ctx, newNR(map[string]any{"managedZone": "missing"})); !isCode(err, "NotFound") {
+		t.Errorf("ListChanges(missing zone) = %v, want NotFound", err)
+	}
 }

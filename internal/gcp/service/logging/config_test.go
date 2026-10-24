@@ -2,10 +2,12 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/model"
 )
 
 func TestSinkCRUD(t *testing.T) {
@@ -96,18 +98,131 @@ func TestSinkCreateValidation(t *testing.T) {
 	}
 }
 
-func TestSinkUpdateUnsupportedMaskFailsLoud(t *testing.T) {
+func TestSinkUpdateInvalidMaskIsInvalidArgument(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()
 	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{Name: "s", Destination: "d"}, false, ""); err != nil {
 		t.Fatalf("CreateSink: %v", err)
 	}
-	_, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{}, []string{"writerIdentity"}, false, "")
-	if err == nil {
-		t.Fatal("unsupported mask = nil error")
+	// `labels` is not a field of LogSink: an unmappable mask path is a client
+	// error (400 INVALID_ARGUMENT), not an unimplemented operation.
+	_, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{}, []string{"labels"}, false, "")
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid mask = %v, want InvalidArgument/400", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported update_mask") {
-		t.Fatalf("error = %v, want unsupported update_mask", err)
+	if !strings.Contains(err.Error(), "unsupported update_mask path: labels") {
+		t.Fatalf("error = %v, want the named path", err)
+	}
+}
+
+func TestSinkUpdateFullWritableMask(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{Name: "s", Destination: "d"}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+	updated, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{
+		Destination:         "logging.googleapis.com/projects/p",
+		IncludeChildren:     true,
+		InterceptChildren:   true,
+		OutputVersionFormat: "V1",
+		BigQueryOptions:     &loggingstore.LogBigQueryOptions{UsePartitionedTables: true},
+	}, []string{"destination", "includeChildren", "interceptChildren", "outputVersionFormat", "bigqueryOptions"}, false, "")
+	if err != nil {
+		t.Fatalf("UpdateSink: %v", err)
+	}
+	if !updated.InterceptChildren || updated.OutputVersionFormat != "V1" {
+		t.Fatalf("updated = %+v", updated)
+	}
+	if updated.BigQueryOptions == nil || !updated.BigQueryOptions.UsePartitionedTables {
+		t.Fatalf("bigqueryOptions = %+v", updated.BigQueryOptions)
+	}
+}
+
+func TestSinkUpdateNestedBigQueryMask(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{
+		Name:        "bq",
+		Destination: "bigquery.googleapis.com/projects/p/datasets/d",
+		BigQueryOptions: &loggingstore.LogBigQueryOptions{
+			UsePartitionedTables:            true,
+			UsesTimestampColumnPartitioning: true,
+		},
+	}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+
+	// A nested leaf path updates only use_partitioned_tables; the output-only
+	// uses_timestamp_column_partitioning sibling is preserved rather than the
+	// whole message being replaced (AIP-134/AIP-161).
+	upd, err := s.UpdateSink(ctx, "projects/p/sinks/bq", loggingstore.LogSink{
+		BigQueryOptions: &loggingstore.LogBigQueryOptions{UsePartitionedTables: false},
+	}, []string{"bigqueryOptions.usePartitionedTables"}, false, "")
+	if err != nil {
+		t.Fatalf("UpdateSink: %v", err)
+	}
+	if upd.BigQueryOptions == nil || upd.BigQueryOptions.UsePartitionedTables {
+		t.Fatalf("use_partitioned_tables not applied: %+v", upd.BigQueryOptions)
+	}
+	if !upd.BigQueryOptions.UsesTimestampColumnPartitioning {
+		t.Fatalf("output-only subfield was cleared: %+v", upd.BigQueryOptions)
+	}
+
+	// A nested path that names no writable subfield is a 400, not a silent
+	// whole-message replace.
+	_, err = s.UpdateSink(ctx, "projects/p/sinks/bq", loggingstore.LogSink{}, []string{"bigqueryOptions.bogus"}, false, "")
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("unknown nested mask = %v, want InvalidArgument/400", err)
+	}
+}
+
+func TestSinkUpdateWildcardFullReplacement(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{
+		Name:        "s",
+		Destination: "d",
+		Filter:      "severity>=ERROR",
+		Description: "old",
+		Disabled:    true,
+	}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+
+	// The AIP-134 `*` wildcard replaces every writable field, so omitted ones
+	// are cleared.
+	upd, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{
+		Destination: "storage.googleapis.com/b",
+	}, []string{"*"}, false, "")
+	if err != nil {
+		t.Fatalf("UpdateSink *: %v", err)
+	}
+	if upd.Destination != "storage.googleapis.com/b" {
+		t.Fatalf("destination = %q", upd.Destination)
+	}
+	if upd.Filter != "" || upd.Description != "" || upd.Disabled {
+		t.Fatalf("* did not clear omitted writable fields: %+v", upd)
+	}
+}
+
+func TestExclusionUpdateWildcardMask(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateExclusion(ctx, "projects/p", loggingstore.LogExclusion{
+		Name: "e", Filter: "severity<DEBUG", Description: "old",
+	}); err != nil {
+		t.Fatalf("CreateExclusion: %v", err)
+	}
+	upd, err := s.UpdateExclusion(ctx, "projects/p/exclusions/e",
+		loggingstore.LogExclusion{Filter: "severity<INFO"}, []string{"*"})
+	if err != nil {
+		t.Fatalf("UpdateExclusion *: %v", err)
+	}
+	if upd.Filter != "severity<INFO" || upd.Description != "" {
+		t.Fatalf("exclusion wildcard = %+v", upd)
 	}
 }
 
@@ -156,6 +271,32 @@ func TestExclusionCRUD(t *testing.T) {
 	}
 	if _, err := s.GetExclusion(ctx, "projects/p/exclusions/no-debug"); err == nil {
 		t.Fatal("GetExclusion after delete = nil error")
+	}
+}
+
+// TestConfigListNonPositivePageSize pins the documented config-list contract:
+// sinks.list and exclusions.list say "Non-positive values are ignored", so a
+// negative page size selects the default page instead of raising
+// InvalidArgument (the exception entries.list does not take — see
+// TestCorePageSizeValidation), and a size above the 1000 maximum is clamped per
+// AIP-158.
+func TestConfigListNonPositivePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{Name: "s", Destination: "d"}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+	if _, err := s.CreateExclusion(ctx, "projects/p", loggingstore.LogExclusion{Name: "e", Filter: "severity<DEBUG"}); err != nil {
+		t.Fatalf("CreateExclusion: %v", err)
+	}
+
+	for _, pageSize := range []int{-1, 1001} {
+		if page, _, err := s.ListSinks(ctx, "projects/p", pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListSinks(%d) = %v, %v; want the single sink", pageSize, page, err)
+		}
+		if page, _, err := s.ListExclusions(ctx, "projects/p", pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListExclusions(%d) = %v, %v; want the single exclusion", pageSize, page, err)
+		}
 	}
 }
 

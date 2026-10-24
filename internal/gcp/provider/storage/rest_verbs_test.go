@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
@@ -133,44 +135,264 @@ func TestObjectsMoveMissingSource(t *testing.T) {
 func TestObjectsRestoreSoftDeletedGeneration(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
-	insertVersionedBucket(t, p, "bkt")
-
-	nr := bucketParams()
-	nr.Params["bucket"] = "bkt"
-	nr.Params["object"] = "o.txt"
-	nr.Params[wire.MediaKey] = []byte("hello")
-	ins, err := p.ObjectsInsert(ctx, nr)
-	if err != nil {
-		t.Fatalf("insert object: %v", err)
-	}
+	// Soft delete is a bucket policy (default on); the deleted generation must
+	// stay restorable, and the restore produces a NEW object copy.
+	ins := insertTestObject(t, p, "bkt", "o.txt", "text/plain", map[string]any{"k": "v"})
 	gen, _ := ins.Data["generation"].(string)
 	if gen == "" {
 		t.Fatal("expected a generation on insert")
 	}
 
-	// Deleting in a versioned bucket tombstones the live generation.
 	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
 		t.Fatalf("delete object: %v", err)
 	}
 	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "o.txt")); err == nil {
-		t.Fatal("expected object to be soft-deleted")
+		t.Fatal("expected the deleted object to be gone from the live surface")
 	}
 
-	nr = bucketParamsWithObj("bkt", "o.txt")
+	nr := bucketParamsWithObj("bkt", "o.txt")
 	nr.Params["generation"] = gen
 	resp, err := p.ObjectsRestore(ctx, nr)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if resp.Data["generation"] != gen {
-		t.Errorf("expected restored generation %q, got %v", gen, resp.Data["generation"])
+	// Real GCS assigns a fresh generation and resets the metageneration.
+	if resp.Data["generation"] == gen {
+		t.Errorf("restore reused generation %q, want a new one", gen)
 	}
-	if _, present := resp.Data["timeDeleted"]; present {
-		t.Errorf("expected timeDeleted cleared on restore, got %v", resp.Data["timeDeleted"])
+	if resp.Data["metageneration"] != "1" {
+		t.Errorf("metageneration = %v, want 1", resp.Data["metageneration"])
+	}
+	if _, present := resp.Data["softDeleteTime"]; present {
+		t.Errorf("expected softDeleteTime cleared on restore, got %v", resp.Data["softDeleteTime"])
+	}
+	// Metadata is inherited from the soft-deleted object.
+	meta, _ := resp.Data["metadata"].(map[string]any)
+	if meta["k"] != "v" {
+		t.Errorf("expected inherited metadata, got %v", resp.Data["metadata"])
 	}
 
-	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
+	live, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "o.txt"))
+	if err != nil {
 		t.Fatalf("expected restored object to be live: %v", err)
+	}
+	if live.Data["generation"] != resp.Data["generation"] {
+		t.Errorf("live generation = %v, want %v", live.Data["generation"], resp.Data["generation"])
+	}
+
+	// The soft-deleted source is retained for its retention window, so restoring
+	// it again creates another live copy (real GCS keeps the original).
+	nr = bucketParamsWithObj("bkt", "o.txt")
+	nr.Params["generation"] = gen
+	again, err := p.ObjectsRestore(ctx, nr)
+	if err != nil {
+		t.Fatalf("second restore of a retained soft-deleted generation: %v", err)
+	}
+	if again.Data["generation"] == resp.Data["generation"] {
+		t.Errorf("second restore reused generation %v, want a new one", again.Data["generation"])
+	}
+
+	// Soft-deleted generations are invisible to the live and versions listings,
+	// and visible only through ?softDeleted=true.
+	listParams := bucketParams()
+	listParams.Params["bucket"] = "bkt"
+	listed, err := p.ObjectsList(ctx, listParams)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := listed.Data["items"].([]any)
+	for _, it := range items {
+		if m, _ := it.(map[string]any); m["generation"] == gen {
+			t.Errorf("soft-deleted generation appeared in the live listing")
+		}
+	}
+	soft := bucketParams()
+	soft.Params["bucket"] = "bkt"
+	soft.Params["softDeleted"] = "true"
+	listed, err = p.ObjectsList(ctx, soft)
+	if err != nil {
+		t.Fatalf("list softDeleted: %v", err)
+	}
+	items, _ = listed.Data["items"].([]any)
+	if len(items) == 0 {
+		t.Error("expected the soft-deleted generation in the ?softDeleted=true listing")
+	}
+}
+
+// TestSoftDeletedGenerationIsInaccessible pins the documented restrictions: a
+// soft-deleted generation cannot be read, downloaded, modified or permanently
+// deleted through the normal object surface.
+func TestSoftDeletedGenerationIsInaccessible(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	ins := insertTestObject(t, p, "bkt", "o.txt", "text/plain", nil)
+	gen, _ := ins.Data["generation"].(string)
+	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	get := bucketParamsWithObj("bkt", "o.txt")
+	get.Params["generation"] = gen
+	if _, err := p.ObjectsGet(ctx, get); err == nil || getErrStatus(err) != 404 {
+		t.Fatalf("Get of a soft-deleted generation = %v, want 404", err)
+	}
+	show := bucketParamsWithObj("bkt", "o.txt")
+	show.Params["generation"] = gen
+	show.Params["softDeleted"] = "true"
+	if _, err := p.ObjectsGet(ctx, show); err != nil {
+		t.Fatalf("Get?softDeleted=true: %v", err)
+	}
+	media := bucketParamsWithObj("bkt", "o.txt")
+	media.Params["generation"] = gen
+	media.Params["softDeleted"] = "true"
+	if _, err := p.ObjectsGetMedia(ctx, media); err == nil || getErrStatus(err) != 404 {
+		t.Fatalf("media download of a soft-deleted generation = %v, want 404", err)
+	}
+	patch := bucketParamsWithObj("bkt", "o.txt")
+	patch.Params["generation"] = gen
+	patch.Params["body"] = map[string]any{"metadata": map[string]any{"k": "v"}}
+	if _, err := p.ObjectsPatch(ctx, patch); err == nil || getErrStatus(err) != 404 {
+		t.Fatalf("patch of a soft-deleted generation = %v, want 404", err)
+	}
+	// objects.delete?generation= cannot permanently delete a soft-deleted copy.
+	del := bucketParamsWithObj("bkt", "o.txt")
+	del.Params["generation"] = gen
+	if _, err := p.ObjectsDelete(ctx, del); err == nil || getErrStatus(err) != 404 {
+		t.Fatalf("delete?generation of a soft-deleted copy = %v, want 404", err)
+	}
+}
+
+// TestOverwriteRetainsSoftDeletedPrior pins the soft-delete overwrite rule: a
+// re-upload keeps the replaced generation as a soft-deleted copy, and a later
+// upload must not destroy it.
+func TestOverwriteRetainsSoftDeletedPrior(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	first := insertTestObject(t, p, "bkt", "o.txt", "text/plain", nil)
+	oldGen, _ := first.Data["generation"].(string)
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "o.txt"
+	nr.Params[wire.MediaKey] = []byte("second")
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	retained, err := p.objects.GetObjectGeneration(ctx, "bkt", "o.txt", oldGen)
+	if err != nil || !retained.SoftDeleted {
+		t.Fatalf("overwritten generation not soft-deleted: meta=%+v err=%v", retained, err)
+	}
+
+	// Another upload of the same name must leave the retained copy alone.
+	nr.Params[wire.MediaKey] = []byte("third")
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("second overwrite: %v", err)
+	}
+	if _, err := p.objects.GetObjectGeneration(ctx, "bkt", "o.txt", oldGen); err != nil {
+		t.Fatalf("retained soft-deleted copy was destroyed by a later upload: %v", err)
+	}
+}
+
+// TestSoftDeletedOnlyBucketCanBeDeleted pins buckets.delete: a bucket holding
+// nothing but soft-deleted objects can be deleted (live/noncurrent block it).
+func TestSoftDeletedOnlyBucketCanBeDeleted(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertTestObject(t, p, "bkt", "o.txt", "text/plain", nil)
+	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
+		t.Fatalf("delete object: %v", err)
+	}
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	if _, err := p.BucketsDelete(ctx, nr); err != nil {
+		t.Fatalf("delete bucket with only soft-deleted objects: %v", err)
+	}
+}
+
+// TestRestoreExpiredSoftDeletedGeneration pins the documented expiry: a copy
+// whose soft-delete window closed is gone (404) and is reclaimed.
+func TestRestoreExpiredSoftDeletedGeneration(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	ins := insertTestObject(t, p, "bkt", "o.txt", "text/plain", nil)
+	gen, _ := ins.Data["generation"].(string)
+	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	// Advance past the 7-day default soft-delete window the delete recorded.
+	clock.SetGlobalClock(clock.FixedClock{T: clock.RealNow().Add(8 * 24 * time.Hour)})
+	defer clock.SetGlobalClock(clock.RealClock{})
+	nr := bucketParamsWithObj("bkt", "o.txt")
+	nr.Params["generation"] = gen
+	if _, err := p.ObjectsRestore(ctx, nr); err == nil || getErrStatus(err) != 404 {
+		t.Fatalf("restore of an expired copy = %v, want 404", err)
+	}
+}
+
+// TestObjectsRestoreRejectsNoncurrentGeneration pins the documented 412: a
+// noncurrent (archived) version is not soft-deleted, so restore refuses it.
+func TestObjectsRestoreRejectsNoncurrentGeneration(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertVersionedBucket(t, p, "bkt")
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "o.txt"
+	nr.Params[wire.MediaKey] = []byte("v1")
+	first, err := p.ObjectsInsert(ctx, nr)
+	if err != nil {
+		t.Fatalf("insert v1: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "o.txt"
+	nr.Params[wire.MediaKey] = []byte("v2")
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert v2: %v", err)
+	}
+
+	// Versioned buckets archive the live generation on delete, which is a
+	// noncurrent version, not a soft-deleted one.
+	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
+		t.Fatalf("delete object: %v", err)
+	}
+	nr = bucketParamsWithObj("bkt", "o.txt")
+	nr.Params["generation"] = first.Data["generation"].(string)
+	if _, err := p.ObjectsRestore(ctx, nr); err == nil || getErrStatus(err) != 412 {
+		t.Fatalf("expected 412 restoring a noncurrent generation, got %v", err)
+	}
+}
+
+// TestObjectsRestoreRejectedWhenSoftDeleteDisabled pins the documented 400: a
+// bucket with soft delete turned off has nothing to restore.
+func TestObjectsRestoreRejectedWhenSoftDeleteDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	bucket := bucketParams()
+	bucket.Params["body"] = map[string]any{
+		"name":             "bkt",
+		"softDeletePolicy": map[string]any{"retentionDurationSeconds": "0"},
+		"versioning":       map[string]any{"enabled": true},
+	}
+	if _, err := p.BucketsInsert(ctx, bucket); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "o.txt"
+	nr.Params[wire.MediaKey] = []byte("v1")
+	ins, err := p.ObjectsInsert(ctx, nr)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("bkt", "o.txt")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	nr = bucketParamsWithObj("bkt", "o.txt")
+	nr.Params["generation"] = ins.Data["generation"].(string)
+	if _, err := p.ObjectsRestore(ctx, nr); err == nil || getErrStatus(err) != 400 {
+		t.Fatalf("expected 400 with soft delete disabled, got %v", err)
 	}
 }
 

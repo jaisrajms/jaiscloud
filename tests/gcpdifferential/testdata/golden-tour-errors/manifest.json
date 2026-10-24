@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "project": "<project>",
+  "ops": 13,
+  "services": [
+    "bigquery",
+    "pubsub",
+    "storage"
+  ],
+  "files": [
+    {
+      "file": "000-storage-error_bucket_create.json",
+      "op": "error_bucket_create",
+      "sha256": "479c6c4d91f7e64f54960e724abc0895c32754b6c0fabd28e6378653c8476655",
+      "status": 200
+    },
+    {
+      "file": "001-storage-error_bucket_already_exists.json",
+      "op": "error_bucket_already_exists",
+      "sha256": "63fe54005d8f72e53efbaff8582fb7d89951b65d5958369ab7d21987e23afb49",
+      "status": 409
+    },
+    {
+      "file": "002-storage-error_object_not_found.json",
+      "op": "error_object_not_found",
+      "sha256": "7817b4f16432a49f2db03ccb1969469ff67c487fbbc33af3229f3a1560b3e08d",
+      "status": 404
+    },
+    {
+      "file": "003-pubsub-error_topic_create.json",
+      "op": "error_topic_create",
+      "sha256": "dbc735b13ed5e9216bd607d87ab0fff46df6d1d3ff89eab416fb281f57cbb55d",
+      "status": 200
+    },
+    {
+      "file": "004-pubsub-error_iam_get.json",
+      "op": "error_iam_get",
+      "sha256": "df482748701ec85b2dc04e3645f63e615d6eed2f05be536f2fb991db05fc4837",
+      "status": 200
+    },
+    {
+      "file": "005-pubsub-error_iam_set_ok.json",
+      "op": "error_iam_set_ok",
+      "sha256": "3feb987dc2b0d802585e97c00edcaf26feca8f9a5f1a91f358485ed1b824a0e5",
+      "status": 200
+    },
+    {
+      "file": "006-pubsub-error_iam_set_stale.json",
+      "op": "error_iam_set_stale",
+      "sha256": "369fb7ae57a9178ed71d078bbcd5c09ad30db14b5bcb3c1eb94dfff111a50759",
+      "status": 409
+    },
+    {
+      "file": "007-bigquery-error_invalid_query.json",
+      "op": "error_invalid_query",
+      "sha256": "7db1f70debe3042c90784a3c0af5fdf75c8f38e86dae642b2faafdeb7a46d5ed",
+      "status": 400
+    },
+    {
+      "file": "008-bigquery-error_bq_dataset_create.json",
+      "op": "error_bq_dataset_create",
+      "sha256": "f3427df905fa294d60c381fad79f067dec8d493cb84f9c125f999977a9879bf6",
+      "status": 200
+    },
+    {
+      "file": "009-bigquery-error_bq_table_create.json",
+      "op": "error_bq_table_create",
+      "sha256": "1b963e5d13e61e00d01cd49e7472f774ffe9a9cbf2971c3bdca72795d431bdb6",
+      "status": 200
+    },
+    {
+      "file": "010-bigquery-error_insertall_seed.json",
+      "op": "error_insertall_seed",
+      "sha256": "b5d296e04659fe24f2bc29d9f6b90b8b3d31d9330ff6146cf3c320778ac17627",
+      "status": 200
+    },
+    {
+      "file": "011-bigquery-error_insertall_duplicate.json",
+      "op": "error_insertall_duplicate",
+      "sha256": "389ef81f3f04dfbad63331f6018eafb18e0aa75a017d81a6b6a44fad63b5c01b",
+      "status": 200
+    },
+    {
+      "file": "012-bigquery-error_insertall_count.json",
+      "op": "error_insertall_count",
+      "sha256": "b4aa6a7b54df52f954bd8d1c0122570e55402ecfc69603911502aa6a2e064906",
+      "status": 200
+    }
+  ]
+}
+

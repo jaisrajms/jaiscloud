@@ -71,6 +71,9 @@ type Revision struct {
 
 	CreateTime time.Time `json:"createTime,omitempty"`
 	UpdateTime time.Time `json:"updateTime,omitempty"`
+	// DeleteTime is populated only on the operation snapshot a revision delete
+	// returns (the stored revision is removed).
+	DeleteTime time.Time `json:"deleteTime,omitempty"`
 
 	Data map[string]any `json:"data,omitempty"`
 }
@@ -94,6 +97,10 @@ type Operation struct {
 	// Service is the operation's response/metadata snapshot. It is stored so a
 	// delete operation can still render the removed service.
 	Service *Service `json:"service,omitempty"`
+	// Revision is the operation's response/metadata snapshot for a revision
+	// delete (the google.longrunning.Operation response_type is Revision). It
+	// is mutually exclusive with Service.
+	Revision *Revision `json:"revision,omitempty"`
 }
 
 // Store is the Cloud Run service/revision/operation store.
@@ -103,10 +110,17 @@ type Store interface {
 	UpdateService(ctx context.Context, project, location string, s Service) error
 	DeleteService(ctx context.Context, project, location, id string) error
 	ListServices(ctx context.Context, project, location string) ([]Service, error)
+	// ListServicesByProject lists every service in a project across all
+	// locations, sorted by location then id. It backs the region-optional
+	// console list, which shows every service without a location picker.
+	ListServicesByProject(ctx context.Context, project string) ([]Service, error)
 
 	CreateRevision(ctx context.Context, project, location, service string, r Revision) error
 	GetRevision(ctx context.Context, project, location, service, id string) (Revision, error)
 	ListRevisions(ctx context.Context, project, location, service string) ([]Revision, error)
+	// DeleteRevision removes a single revision record (revisions.delete).
+	DeleteRevision(ctx context.Context, project, location, service, id string) error
+	// DeleteRevisions removes every revision of a service (service delete).
 	DeleteRevisions(ctx context.Context, project, location, service string) error
 
 	CreateOperation(ctx context.Context, project, location string, op Operation) error

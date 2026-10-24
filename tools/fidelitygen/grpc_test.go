@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	conf "jaiscloud/tests/gcpconformance"
@@ -150,13 +151,25 @@ func TestGRPCFactsConsumesReport(t *testing.T) {
 	if verified.GRPCChecksPassed != 2 || verified.GRPCChecksTotal != 2 {
 		t.Errorf("GetObject: evidence = %d/%d, want 2/2", verified.GRPCChecksPassed, verified.GRPCChecksTotal)
 	}
+	if !verified.Verified {
+		t.Errorf("GetObject: Verified = false, want true (all checks passed)")
+	}
+	if got := strings.Join(verified.GRPCCheckLabels, ","); got != "GetObject,GetObject (raw)" {
+		t.Errorf("GetObject: GRPCCheckLabels = %q, want the two covering checks", got)
+	}
 	if c := Classify(verified); c.State != StateGA {
 		t.Errorf("GetObject: state = %q, want ga (reason %q)", c.State, c.Reason)
+	}
+	if c := Classify(verified); !c.Verified {
+		t.Errorf("GetObject: cell Verified = false, want true")
 	}
 
 	failed := byOp["PutObject"]
 	if failed.Override == nil || failed.Override.State != StateLimited {
 		t.Errorf("PutObject: override = %+v, want default limited", failed.Override)
+	}
+	if failed.Verified {
+		t.Errorf("PutObject: Verified = true, want false (a check failed)")
 	}
 	if len(failed.Findings) != 1 || failed.Findings[0].Kind != "grpc_conformance" ||
 		failed.Findings[0].Severity != "high" || failed.Findings[0].Allowlisted {
@@ -172,6 +185,9 @@ func TestGRPCFactsConsumesReport(t *testing.T) {
 	}
 	if uncovered.GRPCChecksTotal != 0 {
 		t.Errorf("DeleteObject: evidence total = %d, want 0", uncovered.GRPCChecksTotal)
+	}
+	if uncovered.Verified {
+		t.Errorf("DeleteObject: Verified = true, want false (no check covers it)")
 	}
 }
 

@@ -1,0 +1,9 @@
+# Downloaded toolchains, SDK caches and generated artifacts (never committed).
+results/
+results-errors/
+results-streaming/
+python/.venv/
+node/node_modules/
+java/target/
+*.log
+go/jaiscloud-demo-sdk-tour-go

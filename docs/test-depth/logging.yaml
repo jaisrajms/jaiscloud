@@ -1,0 +1,25 @@
+# Behavioural depth record - logging (TD1).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: logging
+classes:
+  p2:
+    state: present
+    suites: [sdk-logging]
+    note: "concurrent writes to one log under -race (distinct insert_ids)"
+  p3:
+    state: present
+    suites: [sdk-logging]
+    note: "invalid-filter and validation envelopes"
+  p4:
+    state: present
+    suites: [sdk-logging]
+    note: "entries filtering plus sink/exclusion/metric listing"
+  p5:
+    state: present
+    suites: [sdk-logging]
+    note: "TailLogEntries bounded stream"

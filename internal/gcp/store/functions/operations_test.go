@@ -109,3 +109,35 @@ func TestMemoryStoreSnapshotKeepsOperations(t *testing.T) {
 		t.Fatalf("store with an operation reported empty")
 	}
 }
+
+// TestMemoryStoreListOperationsAllLocations covers the v1 top-level operations
+// collection: it is project-scoped and spans every location, ordered by id.
+func TestMemoryStoreListOperationsAllLocations(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	for _, op := range []Operation{
+		{ID: "b", Location: "us-central1", Done: true},
+		{ID: "a", Location: "europe-west1", Done: true},
+		{ID: "c", Location: "us-central1", Done: true},
+	} {
+		if err := s.CreateOperation(ctx, "proj", op.Location, op); err != nil {
+			t.Fatalf("create op %s: %v", op.ID, err)
+		}
+	}
+	if err := s.CreateOperation(ctx, "other", "us-central1", Operation{ID: "z", Done: true}); err != nil {
+		t.Fatalf("create other-project op: %v", err)
+	}
+
+	ops, err := s.ListOperationsAllLocations(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ListOperationsAllLocations: %v", err)
+	}
+	if len(ops) != 3 {
+		t.Fatalf("got %d operations, want 3: %+v", len(ops), ops)
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		if ops[i].ID != want {
+			t.Errorf("operations[%d].ID = %q, want %q", i, ops[i].ID, want)
+		}
+	}
+}

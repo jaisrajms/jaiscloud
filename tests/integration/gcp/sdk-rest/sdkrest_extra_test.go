@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"hash/crc32"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,11 @@ import (
 
 // b64 base64-encodes a string (the wire encoding for all GCP binary payloads).
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// crc32c is the Castagnoli checksum Cloud KMS request fields carry.
+func crc32c(v []byte) int64 {
+	return int64(crc32.Checksum(v, crc32.MakeTable(crc32.Castagnoli)))
+}
 
 // requireNotFound asserts err is a GCP 404 (googleapi.Error) rather than some
 // other failure mode.
@@ -68,21 +74,25 @@ func TestSDKPubSubOrderingKeyAndAttributes(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// Ordering-key FIFO: only one message per key is in flight at a time, so
-	// pull+ack one at a time and verify strict delivery order.
-	for i := 0; i < n; i++ {
-		pull, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
-		require.NoError(t, err)
-		require.Len(t, pull.ReceivedMessages, 1, "exactly one message per ordering-key group is delivered at a time")
-		rm := pull.ReceivedMessages[0]
+	// Ordering-key contract: a key's available messages are returned together in
+	// one batch, in publish order; the key is then withheld while that batch is
+	// outstanding (only one batch per key at a time).
+	pull, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
+	require.NoError(t, err)
+	require.Len(t, pull.ReceivedMessages, n, "all available messages for the ordering key are one batch")
+	ackIds := make([]string, 0, n)
+	for i, rm := range pull.ReceivedMessages {
 		require.Equal(t, "group-1", rm.Message.OrderingKey, "orderingKey must round-trip")
 		require.Equal(t, b64(string(rune('a'+i))), rm.Message.Data, "FIFO order must be preserved")
 		require.Equal(t, string(rune('0'+i)), rm.Message.Attributes["seq"])
-		_, err = svc.Projects.Subscriptions.Acknowledge(sub, &pubsub.AcknowledgeRequest{
-			AckIds: []string{rm.AckId},
-		}).Do()
-		require.NoError(t, err)
+		ackIds = append(ackIds, rm.AckId)
 	}
+	// The key is gated while the batch is in flight.
+	gated, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
+	require.NoError(t, err)
+	require.Len(t, gated.ReceivedMessages, 0, "an ordering key with an outstanding batch is withheld")
+	_, err = svc.Projects.Subscriptions.Acknowledge(sub, &pubsub.AcknowledgeRequest{AckIds: ackIds}).Do()
+	require.NoError(t, err)
 }
 
 // TestSDKPubSubModifyAckDeadlineRedelivery exercises ack-deadline reset: a
@@ -249,8 +259,12 @@ func TestSDKSecretManagerRotation(t *testing.T) {
 	svc, err := secretmanager.NewService(ctx, opts()...)
 	require.NoError(t, err)
 
+	// A rotation schedule requires at least one topic (DC65), so the fixture
+	// carries one; the topic itself need not exist for the schedule to be set.
+	topic := "projects/proj/topics/" + unique("rot-events")
 	secret, err := svc.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
 		Replication: &secretmanager.Replication{Automatic: &secretmanager.Automatic{}},
+		Topics:      []*secretmanager.Topic{{Name: topic}},
 		Rotation: &secretmanager.Rotation{
 			NextRotationTime: "2030-01-01T00:00:00Z",
 			RotationPeriod:   "86400s",
@@ -259,6 +273,8 @@ func TestSDKSecretManagerRotation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, secret.Rotation)
 	require.Equal(t, "86400s", secret.Rotation.RotationPeriod)
+	require.Len(t, secret.Topics, 1)
+	require.Equal(t, topic, secret.Topics[0].Name)
 
 	got, err := svc.Projects.Secrets.Get(secret.Name).Do()
 	require.NoError(t, err)
@@ -275,6 +291,93 @@ func TestSDKSecretManagerRotation(t *testing.T) {
 	got, err = svc.Projects.Secrets.Get(secret.Name).Do()
 	require.NoError(t, err)
 	require.Equal(t, "2031-01-01T00:00:00Z", got.Rotation.NextRotationTime)
+}
+
+// TestSDKSecretManagerEventNotifications verifies the Secret Manager event
+// notifications reach the secret's Pub/Sub topic end to end (DC64): a create
+// sends TOPIC_CONFIGURED then SECRET_CREATE, and adding a version sends
+// SECRET_VERSION_ADD with the version's full name.
+func TestSDKSecretManagerEventNotifications(t *testing.T) {
+	ctx := context.Background()
+	sm, err := secretmanager.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	ps, err := pubsub.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	topic := "projects/proj/topics/" + unique("sm-events")
+	_, err = ps.Projects.Topics.Create(topic, &pubsub.Topic{Name: topic}).Do()
+	require.NoError(t, err)
+	sub := "projects/proj/subscriptions/" + unique("sm-events-sub")
+	_, err = ps.Projects.Subscriptions.Create(sub, &pubsub.Subscription{Name: sub, Topic: topic}).Do()
+	require.NoError(t, err)
+
+	secret, err := sm.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
+		Replication: &secretmanager.Replication{Automatic: &secretmanager.Automatic{}},
+		Topics:      []*secretmanager.Topic{{Name: topic}},
+	}).SecretId(unique("notify")).Do()
+	require.NoError(t, err)
+
+	pull := func() []*pubsub.ReceivedMessage {
+		t.Helper()
+		resp, err := ps.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
+		require.NoError(t, err)
+		return resp.ReceivedMessages
+	}
+
+	// TOPIC_CONFIGURED (test message, no body) precedes SECRET_CREATE.
+	msgs := pull()
+	require.Len(t, msgs, 2)
+	require.Equal(t, "TOPIC_CONFIGURED", msgs[0].Message.Attributes["eventType"])
+	require.Empty(t, msgs[0].Message.Data)
+	require.Equal(t, "SECRET_CREATE", msgs[1].Message.Attributes["eventType"])
+	require.Equal(t, secret.Name, msgs[1].Message.Attributes["secretId"])
+	require.Equal(t, "JSON_API_V1", msgs[1].Message.Attributes["dataFormat"])
+	decoded, err := base64.StdEncoding.DecodeString(msgs[1].Message.Data)
+	require.NoError(t, err)
+	require.Contains(t, string(decoded), secret.Name, "SECRET_CREATE data carries the secret resource")
+	require.Contains(t, string(decoded), topic, "SECRET_CREATE data carries the topic list")
+
+	version, err := sm.Projects.Secrets.AddVersion(secret.Name, &secretmanager.AddSecretVersionRequest{
+		Payload: &secretmanager.SecretPayload{Data: b64("s3cret")},
+	}).Do()
+	require.NoError(t, err)
+
+	msgs = pull()
+	require.Len(t, msgs, 1)
+	require.Equal(t, "SECRET_VERSION_ADD", msgs[0].Message.Attributes["eventType"])
+	require.Equal(t, secret.Name, msgs[0].Message.Attributes["secretId"])
+	require.Equal(t, version.Name, msgs[0].Message.Attributes["versionId"])
+}
+
+// TestSDKSecretManagerRotationScheduleValidation verifies the documented
+// rotation constraints answer 400 rather than being stored (DC65).
+func TestSDKSecretManagerRotationScheduleValidation(t *testing.T) {
+	ctx := context.Background()
+	sm, err := secretmanager.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	topic := "projects/proj/topics/" + unique("rot-invalid")
+	for _, tc := range []struct {
+		name   string
+		secret *secretmanager.Secret
+	}{
+		{"period under an hour", &secretmanager.Secret{
+			Topics:   []*secretmanager.Topic{{Name: topic}},
+			Rotation: &secretmanager.Rotation{NextRotationTime: "2030-01-01T00:00:00Z", RotationPeriod: "3599s"},
+		}},
+		{"period without next rotation time", &secretmanager.Secret{
+			Topics:   []*secretmanager.Topic{{Name: topic}},
+			Rotation: &secretmanager.Rotation{RotationPeriod: "3600s"},
+		}},
+		{"schedule without topics", &secretmanager.Secret{
+			Rotation: &secretmanager.Rotation{NextRotationTime: "2030-01-01T00:00:00Z"},
+		}},
+	} {
+		_, err := sm.Projects.Secrets.Create("projects/proj", tc.secret).SecretId(unique("rot-bad")).Do()
+		var ae *googleapi.Error
+		require.True(t, errors.As(err, &ae), "%s: expected googleapi.Error, got %v", tc.name, err)
+		require.Equal(t, 400, ae.Code, "%s: status", tc.name)
+	}
 }
 
 // TestSDKSecretManagerDeleteNotFound verifies secret deletion plus 404 on get.
@@ -381,7 +484,10 @@ func TestSDKKMSAsymmetricSignVerify(t *testing.T) {
 	msg := []byte("hello asymmetric")
 	digest := sha256.Sum256(msg)
 	sig, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.AsymmetricSign(verName,
-		&cloudkms.AsymmetricSignRequest{Digest: &cloudkms.Digest{Sha256: base64.StdEncoding.EncodeToString(digest[:])}}).Do()
+		&cloudkms.AsymmetricSignRequest{
+			Digest:       &cloudkms.Digest{Sha256: base64.StdEncoding.EncodeToString(digest[:])},
+			DigestCrc32c: crc32c(digest[:]),
+		}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, sig.Signature)
 	require.True(t, sig.VerifiedDigestCrc32c)
@@ -409,7 +515,7 @@ func TestSDKKMSMacSignVerify(t *testing.T) {
 	verName := keyName + "/cryptoKeyVersions/1"
 
 	signed, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.MacSign(verName,
-		&cloudkms.MacSignRequest{Data: b64("payload")}).Do()
+		&cloudkms.MacSignRequest{Data: b64("payload"), DataCrc32c: crc32c([]byte("payload"))}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, signed.Mac)
 	require.True(t, signed.VerifiedDataCrc32c)

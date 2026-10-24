@@ -6,6 +6,8 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
+	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 )
@@ -54,6 +56,40 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Logging.MetricList":   p.MetricList,
 		"Logging.MetricUpdate": p.MetricUpdate,
 		"Logging.MetricDelete": p.MetricDelete,
+
+		"Logging.BucketCreate":      p.BucketCreate,
+		"Logging.BucketCreateAsync": p.BucketCreateAsync,
+		"Logging.BucketGet":         p.BucketGet,
+		"Logging.BucketList":        p.BucketList,
+		"Logging.BucketUpdate":      p.BucketUpdate,
+		"Logging.BucketUpdateAsync": p.BucketUpdateAsync,
+		"Logging.BucketDelete":      p.BucketDelete,
+		"Logging.BucketUndelete":    p.BucketUndelete,
+
+		"Logging.ViewCreate":             p.ViewCreate,
+		"Logging.ViewGet":                p.ViewGet,
+		"Logging.ViewList":               p.ViewList,
+		"Logging.ViewUpdate":             p.ViewUpdate,
+		"Logging.ViewDelete":             p.ViewDelete,
+		"Logging.ViewGetIamPolicy":       p.ViewGetIamPolicy,
+		"Logging.ViewSetIamPolicy":       p.ViewSetIamPolicy,
+		"Logging.ViewTestIamPermissions": p.ViewTestIamPermissions,
+
+		"Logging.LinkCreate": p.LinkCreate,
+		"Logging.LinkGet":    p.LinkGet,
+		"Logging.LinkList":   p.LinkList,
+		"Logging.LinkDelete": p.LinkDelete,
+
+		"Logging.LogScopeCreate": p.LogScopeCreate,
+		"Logging.LogScopeGet":    p.LogScopeGet,
+		"Logging.LogScopeList":   p.LogScopeList,
+		"Logging.LogScopeUpdate": p.LogScopeUpdate,
+		"Logging.LogScopeDelete": p.LogScopeDelete,
+
+		"Logging.SettingsGet":    p.SettingsGet,
+		"Logging.SettingsUpdate": p.SettingsUpdate,
+		"Logging.CmekGet":        p.CmekGet,
+		"Logging.CmekUpdate":     p.CmekUpdate,
 	}
 }
 
@@ -116,14 +152,19 @@ func (p *Provider) EntryList(ctx context.Context, nr *model.NormalizedRequest) (
 	// projectIds is the legacy request field; the proto specifies it is added to
 	// resourceNames, so both spellings resolve to the same scope set.
 	for _, pid := range strListFrom(body["projectIds"]) {
-		resourceNames = append(resourceNames, "projects/"+pid)
+		resourceNames = append(resourceNames, resource.ResourceID(pid)("project", ""))
+	}
+
+	pageSize, err := paging.ParseSize(body["pageSize"])
+	if err != nil {
+		return nil, err
 	}
 
 	res, err := p.core.ListEntries(ctx, &core.ListEntriesRequest{
 		ResourceNames: resourceNames,
 		Filter:        strFrom(body["filter"]),
 		OrderBy:       strFrom(body["orderBy"]),
-		PageSize:      intFrom(body["pageSize"]),
+		PageSize:      pageSize,
 		PageToken:     strFrom(body["pageToken"]),
 		Scope:         p.defaultScope(nr),
 	})
@@ -146,10 +187,14 @@ func (p *Provider) EntryList(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) LogList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
 	names, next, err := p.core.ListLogs(ctx,
 		strParam(nr, "parent"),
 		p.defaultScope(nr),
-		intFrom(nr.Params["pageSize"]),
+		pageSize,
 		strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
@@ -172,8 +217,15 @@ func (p *Provider) LogDelete(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) MonitoredResourceDescriptorList(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next := p.core.ListMonitoredResourceDescriptors(
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListMonitoredResourceDescriptors(
+		pageSize, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]any{}
 	if len(page) > 0 {
 		descs := make([]any, 0, len(page))
@@ -211,8 +263,12 @@ func (p *Provider) SinkGet(ctx context.Context, nr *model.NormalizedRequest) (*m
 
 func (p *Provider) SinkList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	parent := strParam(nr, "parent")
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
 	sinks, next, err := p.core.ListSinks(ctx, parent,
-		intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -285,8 +341,12 @@ func (p *Provider) ExclusionGet(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) ExclusionList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
 	list, next, err := p.core.ListExclusions(ctx, strParam(nr, "parent"),
-		intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -342,8 +402,12 @@ func (p *Provider) MetricGet(ctx context.Context, nr *model.NormalizedRequest) (
 
 func (p *Provider) MetricList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	parent := strParam(nr, "parent")
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
 	metrics, next, err := p.core.ListMetrics(ctx, parent,
-		intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

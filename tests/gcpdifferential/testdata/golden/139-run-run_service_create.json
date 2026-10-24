@@ -1,0 +1,86 @@
+{
+  "index": 139,
+  "service": "run",
+  "op": "run_service_create",
+  "method": "POST",
+  "path": "/v2/projects/<project>/locations/us-central1/services?serviceId=<runService>",
+  "status": 200,
+  "request": {
+    "template": {
+      "containers": [
+        {
+          "image": "us-docker.pkg.dev/cloudrun/container/hello",
+          "ports": [
+            {
+              "containerPort": 8080
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "metadata": {
+      "@type": "type.googleapis.com/google.cloud.run.v2.Service",
+      "createTime": "<time>",
+      "creator": "<userEmail>",
+      "etag": "<etag>",
+      "generation": "<generation>",
+      "lastModifier": "<userEmail>",
+      "launchStage": "GA",
+      "name": "projects/<project>/locations/us-central1/services/<runService>",
+      "reconciling": true,
+      "scaling": {
+        "maxInstanceCount": 20
+      },
+      "sshEnabled": false,
+      "template": {
+        "containers": [
+          {
+            "image": "us-docker.pkg.dev/cloudrun/container/hello",
+            "ports": [
+              {
+                "containerPort": 8080,
+                "name": "http1"
+              }
+            ],
+            "resources": {
+              "cpuIdle": true,
+              "limits": {
+                "cpu": "1000m",
+                "memory": "512Mi"
+              }
+            },
+            "startupProbe": {
+              "failureThreshold": 1,
+              "periodSeconds": 240,
+              "tcpSocket": {
+                "port": 8080
+              },
+              "timeoutSeconds": 240
+            }
+          }
+        ],
+        "maxInstanceRequestConcurrency": 80,
+        "serviceAccount": "<serviceAccount>",
+        "timeout": "300s"
+      },
+      "terminalCondition": {
+        "state": "CONDITION_PENDING"
+      },
+      "traffic": [
+        {
+          "percent": 100,
+          "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+        }
+      ],
+      "uid": "<uid>",
+      "updateTime": "<time>",
+      "urls": [
+        "<runUrl>"
+      ]
+    },
+    "name": "projects/<project>/locations/us-central1/operations/<operation>"
+  }
+}
+

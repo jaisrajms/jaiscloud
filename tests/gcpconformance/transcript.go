@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,11 @@ type Entry struct {
 	Status  int             `json:"status"`
 	Request json.RawMessage `json:"request,omitempty"`
 	Body    json.RawMessage `json:"body,omitempty"`
+	// Stream holds a server-streaming response body. Google's REST transcoder
+	// renders a server-streaming RPC as newline-delimited JSON (e.g. Firestore
+	// documents:runQuery), so the whole body is not one JSON document; each
+	// element is validated against the method's response schema in order.
+	Stream []json.RawMessage `json:"stream,omitempty"`
 }
 
 // Transcript is the on-disk recorded-response format.
@@ -27,14 +33,54 @@ type Transcript struct {
 	Entries []Entry `json:"entries"`
 }
 
-// WriteTranscript writes a transcript as indented JSON.
+// WriteTranscript writes a transcript as JSON with one compact entry per line.
+// The entries array is the whole file, so a pretty-printed layout makes every
+// re-record rewrite the entire fixture (inserting one service's entries shifts
+// the tail); one entry per line turns that into a line-level diff of only the
+// entries that changed.
 func WriteTranscript(path string, tr Transcript) error {
-	data, err := json.MarshalIndent(tr, "", "  ")
-	if err != nil {
-		return err
+	var b bytes.Buffer
+	b.WriteString("{\n  \"entries\": [\n")
+	for i, e := range tr.Entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		b.WriteString("    ")
+		b.Write(line)
+		if i < len(tr.Entries)-1 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('\n')
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
+	b.WriteString("  ]\n}\n")
+	return os.WriteFile(path, b.Bytes(), 0o644)
+}
+
+// jsonStream splits a newline-delimited JSON body into its elements. It reports
+// false unless every non-empty line is a JSON object or array (a raw media
+// download or an HTML error page is not a stream and stays uncaptured).
+func jsonStream(body []byte) ([]json.RawMessage, bool) {
+	var out []json.RawMessage
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		if !json.Valid(line) {
+			return nil, false
+		}
+		switch line[0] {
+		case '{', '[':
+		default:
+			return nil, false
+		}
+		out = append(out, json.RawMessage(line))
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
 }
 
 // ReadTranscript reads a transcript from JSON. A missing file is reported as a
@@ -103,6 +149,28 @@ func ValidateTranscripts(docs map[string]*DiscoveryDoc, tr Transcript) []Diverge
 				// empty 204 body) — nothing to validate.
 				continue
 			}
+			if len(e.Stream) > 0 {
+				// A transposed server-streaming response: every element is one
+				// response message, so each is validated against the same schema.
+				for i, raw := range e.Stream {
+					var v any
+					if err := json.Unmarshal(raw, &v); err != nil {
+						divs = append(divs, Divergence{
+							Path: fmt.Sprintf("%s %s.stream[%d]", ctx, m.ID, i), Kind: kindWrongType,
+							Expected: "valid JSON", Actual: err.Error(), Severity: "high",
+							Service: e.Service, Method: m.ID,
+						})
+						continue
+					}
+					for _, d := range ValidateValue(doc, schema, v, fmt.Sprintf("%s.stream[%d]", m.ID, i)) {
+						d.Service = e.Service
+						d.Method = m.ID
+						d.Path = ctx + " " + d.Path
+						divs = append(divs, d)
+					}
+				}
+				continue
+			}
 			if len(bytes.TrimSpace(e.Body)) == 0 {
 				continue
 			}
@@ -140,11 +208,41 @@ func Record(jaiscloudHost string) (Transcript, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	suffix := runSuffix()
 
+	docs, err := LoadSnapshots("discovery")
+	if err != nil {
+		return Transcript{}, fmt.Errorf("load discovery snapshots: %w", err)
+	}
+	scenarios := append(Scenarios(suffix), SynthPrelude()...)
+	scenarios = append(scenarios, SynthScenarios(docs, suffix)...)
+
 	var tr Transcript
 	vars := map[string]string{}
-	for _, sc := range Scenarios(suffix) {
+	clockMoved := false
+	defer func() {
+		// A failed record run must not leave the shared emulator in the future.
+		if clockMoved {
+			_ = setEmulatorClock(client, jaiscloudHost, "real")
+		}
+	}()
+	for _, sc := range scenarios {
 		path := expandVars(sc.Path, vars)
 		reqBody := expandVars(sc.Body, vars)
+		if sc.Prepare != nil {
+			prepared, err := sc.Prepare(vars)
+			if err != nil {
+				return tr, fmt.Errorf("%s %s: prepare body: %w", sc.Method, path, err)
+			}
+			reqBody = prepared
+		}
+		if sc.AdvanceClock != "" {
+			if err := setEmulatorClock(client, jaiscloudHost, sc.AdvanceClock); err != nil {
+				return tr, fmt.Errorf("%s %s: set clock %q: %w", sc.Method, path, sc.AdvanceClock, err)
+			}
+			clockMoved = sc.AdvanceClock != "real"
+		}
+		if strings.Contains(reqBody, "${") {
+			return tr, fmt.Errorf("%s %s: unresolved variable in request body", sc.Method, path)
+		}
 		url := jaiscloudHost + path
 		var body io.Reader
 		if reqBody != "" {
@@ -153,6 +251,12 @@ func Record(jaiscloudHost string) (Transcript, error) {
 		req, err := http.NewRequest(sc.Method, url, body)
 		if err != nil {
 			return tr, fmt.Errorf("%s %s: %w", sc.Method, path, err)
+		}
+		// A host-discriminated scenario (a service sharing a canonical path on
+		// one origin) sends its own Host header; the transport still dials
+		// jaiscloudHost.
+		if sc.Host != "" {
+			req.Host = sc.Host
 		}
 		if reqBody != "" {
 			ct := sc.ContentType
@@ -177,7 +281,14 @@ func Record(jaiscloudHost string) (Transcript, error) {
 			Status:  resp.StatusCode,
 		}
 		if len(bytes.TrimSpace(respBody)) > 0 {
-			entry.Body = json.RawMessage(respBody)
+			if json.Valid(respBody) {
+				entry.Body = json.RawMessage(respBody)
+			} else if stream, ok := jsonStream(respBody); ok {
+				// A server-streaming response (newline-delimited JSON): keep every
+				// element so the schema check can validate the stream instead of
+				// silently counting the status code as evidence.
+				entry.Stream = stream
+			}
 		}
 		// Only JSON request bodies map to a Discovery `request` schema; media
 		// uploads and other raw bodies are skipped.

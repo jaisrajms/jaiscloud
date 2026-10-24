@@ -256,7 +256,7 @@ func runJobCapturingLogs(t *testing.T, p *Service, client *fake.Clientset, j dat
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
 	}()
 	require.Eventually(t, func() bool {
 		jobs, err := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})

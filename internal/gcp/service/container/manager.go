@@ -9,7 +9,7 @@ import (
 // ClusterManager is the seam between the metadata control plane and the
 // (currently absent) real Kubernetes control plane. The emulator ships only the
 // mock: provisioning materializes the stored record and returns it instantly
-// RUNNING. A future real engine (k3s-per-cluster; see docs/GA.md §7) would
+// RUNNING. A future real engine (k3s-per-cluster; see docs/gcp/wire-contract.md §5) would
 // implement this interface to start/stop a control plane; the metadata core
 // would not change.
 type ClusterManager interface {

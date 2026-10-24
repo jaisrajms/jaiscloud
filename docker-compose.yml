@@ -29,10 +29,30 @@ services:
       JAISCLOUD_EXECUTOR_MODE: ${JAISCLOUD_EXECUTOR_MODE:-docker}
       JAISCLOUD_SPARK_IMAGE: ${JAISCLOUD_SPARK_IMAGE:-apache/spark:3.5.0}
       JAISCLOUD_LAMBDA_IMAGE: ${JAISCLOUD_LAMBDA_IMAGE:-public.ecr.aws/lambda/python:3.12}
-      JAISCLOUD_DOCKER_NETWORK: jaiscloud_jaiscloud
+      # The emulator runs in a container on the Docker daemon (the socket is
+      # mounted below), so it cannot reach a workload on the host loopback or
+      # bind-mount an emulator-local path. Declare the container deployment: the
+      # executors then publish no host port, address workloads by container name
+      # on the shared network, and stage bind sources under the shared root.
+      JAISCLOUD_DOCKER_MODE: ${JAISCLOUD_DOCKER_MODE:-container}
+      # The network the emulator and its workloads share. Compose names it
+      # <project>_jaiscloud; override both if COMPOSE_PROJECT_NAME changes.
+      JAISCLOUD_DOCKER_NETWORK: ${JAISCLOUD_DOCKER_NETWORK:-jaiscloud_jaiscloud}
+      # Where bind sources (function code archives, extracted layers) are staged.
+      # The daemon resolves a bind source on the HOST, so this must be a host
+      # path mounted at the SAME path inside the emulator (see volumes below) —
+      # a named volume would give the emulator a different host path and the
+      # daemon would mount nothing.
+      JAISCLOUD_DOCKER_BIND_ROOT: ${JAISCLOUD_DOCKER_BIND_ROOT:-/var/lib/jaiscloud/binds}
       JAISCLOUD_ENDPOINT: http://jaiscloud-server:4566
+    # Driving the host docker daemon needs the socket, and the bind root must be
+    # writable by the emulator: run as root (the socket is root:docker, and a
+    # freshly created host bind dir is root-owned). A deployment that grants the
+    # docker group and a pre-chowned bind root can drop this.
+    user: "0:0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${JAISCLOUD_DOCKER_BIND_ROOT:-/var/lib/jaiscloud/binds}:${JAISCLOUD_DOCKER_BIND_ROOT:-/var/lib/jaiscloud/binds}
     healthcheck:
       test: ["CMD", "/jaiscloud", "doctor"]
       interval: 5s

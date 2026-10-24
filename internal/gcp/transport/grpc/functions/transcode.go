@@ -2,6 +2,7 @@ package functions
 
 import (
 	"encoding/json"
+	"time"
 
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
@@ -10,11 +11,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (whose
@@ -87,13 +88,12 @@ func runtimeToProto(rt core.Runtime) *apiv2functionspb.ListRuntimesResponse_Runt
 // the response and the metadata completion timestamp are omitted, matching real
 // GCP; a done operation keeps the original output exactly.
 func operationToProtoV1(project string, op core.Operation) (*longrunningpb.Operation, error) {
-	ts := timestamppb.New(clock.Now().UTC())
 	meta := &functionspb.OperationMetadataV1{
 		Target: op.Target,
 		Type:   operationTypeV1(op.Verb),
 	}
 	if op.Done {
-		meta.UpdateTime = ts
+		meta.UpdateTime = timestamp.Proto(operationEndTime(op))
 	}
 	metaAny, err := anypb.New(meta)
 	if err != nil {
@@ -116,16 +116,15 @@ func operationToProtoV1(project string, op core.Operation) (*longrunningpb.Opera
 // response and metadata.endTime are omitted, matching real GCP; a done operation
 // keeps the original output exactly.
 func operationToProtoV2(project string, op core.Operation) (*longrunningpb.Operation, error) {
-	ts := timestamppb.New(clock.Now().UTC())
 	meta := &apiv2functionspb.OperationMetadata{
 		Target:        op.Target,
 		Verb:          op.Verb,
 		ApiVersion:    "v2",
-		CreateTime:    ts,
+		CreateTime:    timestamp.Proto(operationStartTime(op)),
 		OperationType: operationTypeV2(op.Verb),
 	}
 	if op.Done {
-		meta.EndTime = ts
+		meta.EndTime = timestamp.Proto(operationEndTime(op))
 	}
 	metaAny, err := anypb.New(meta)
 	if err != nil {
@@ -140,6 +139,24 @@ func operationToProtoV2(project string, op core.Operation) (*longrunningpb.Opera
 		out.Result = &longrunningpb.Operation_Response{Response: respAny}
 	}
 	return out, nil
+}
+
+// operationStartTime and operationEndTime mirror the REST core renderer
+// (service/functions operationMetadataMap): a zero CreateTime falls back to the
+// business clock and a zero EndTime to the start, so both transports report the
+// same operation instants.
+func operationStartTime(op core.Operation) time.Time {
+	if op.CreateTime.IsZero() {
+		return clock.Now()
+	}
+	return op.CreateTime
+}
+
+func operationEndTime(op core.Operation) time.Time {
+	if op.EndTime.IsZero() {
+		return operationStartTime(op)
+	}
+	return op.EndTime
 }
 
 func operationResponseProtoV1(project string, op core.Operation) (*anypb.Any, error) {

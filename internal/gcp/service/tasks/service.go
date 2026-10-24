@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -26,6 +27,14 @@ import (
 )
 
 const rtQueuePolicy = "gcp_tasks_queue_policy"
+
+// Documented page-size ceilings for the two list methods, shared by the REST
+// and gRPC adapters: projects.locations.queues.list documents "The maximum page
+// size is 9800" while projects.locations.queues.tasks.list documents 1000.
+const (
+	MaxQueuesPageSize = 9800
+	MaxTasksPageSize  = 1000
+)
 
 var (
 	queueIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,100}$`)
@@ -95,23 +104,39 @@ func (s *Service) GetQueue(ctx context.Context, project, location, name string) 
 	return q, nil
 }
 
-// ListQueues lists queues under a location, sorted by id. filter is applied as
-// a best-effort substring match on the queue name (empty filter lists all).
+// ListQueues lists queues under a location, sorted by id. filter is the
+// documented Cloud Tasks filter expression (Stackdriver/Logging syntax:
+// `=` equality, `:` contains); see queueFilter for the accepted keys.
+// An empty filter lists every queue.
 func (s *Service) ListQueues(ctx context.Context, project, location, filter string) ([]tasksstore.Queue, error) {
+	keep, err := queueFilter(project, location, filter)
+	if err != nil {
+		return nil, err
+	}
 	queues, err := s.store.ListQueues(ctx, project, location)
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
-	if filter == "" {
+	if strings.TrimSpace(filter) == "" {
 		return queues, nil
 	}
-	out := queues[:0]
+	out := make([]tasksstore.Queue, 0, len(queues))
 	for _, q := range queues {
-		if matchQueueFilter(filter, q) {
+		if keep.Match(q) {
 			out = append(out, q)
 		}
 	}
 	return out, nil
+}
+
+// ListQueuesByProject lists every queue in a project across all locations,
+// sorted by location then id. It backs the location-optional console list.
+func (s *Service) ListQueuesByProject(ctx context.Context, project string) ([]tasksstore.Queue, error) {
+	queues, err := s.store.ListQueuesByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return queues, nil
 }
 
 // UpdateQueue applies a partial update. An empty mask replaces every mutable

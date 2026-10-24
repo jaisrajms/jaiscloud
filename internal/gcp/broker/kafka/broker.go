@@ -26,12 +26,16 @@ package kafka
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 
+	"jaiscloud/internal/docker"
 	core "jaiscloud/internal/gcp/service/managedkafka"
+	"jaiscloud/internal/platform"
 )
 
 // Mode selects the broker backend.
@@ -44,6 +48,10 @@ const (
 	ModeK8s Mode = "k8s"
 	// ModeNative runs a Redpanda subprocess on loopback ports.
 	ModeNative Mode = "native"
+	// ModeDocker runs the Redpanda image as a container on the local Docker
+	// daemon, publishing a loopback listener the broker advertises. It needs
+	// only the Docker daemon — no cluster and no host Redpanda toolchain.
+	ModeDocker Mode = "docker"
 )
 
 // ClusterKey identifies the Managed Kafka cluster a broker serves.
@@ -129,25 +137,50 @@ type Broker interface {
 
 // Config configures New.
 type Config struct {
-	// Mode is "mock" (default), "k8s", or "native".
+	// Mode is "mock" (default), "k8s", "native", or "docker".
 	Mode string
 	// Namespace is the Kubernetes namespace for k8s mode (default "jaiscloud").
 	Namespace string
-	// Image is the Redpanda image for k8s mode.
+	// Image is the Redpanda image for k8s and docker modes.
 	Image string
 	// BinaryPath overrides the native Redpanda CLI (`rpk`) location.
 	BinaryPath string
 	// DataDir is the root data directory for native brokers.
 	DataDir string
-	// Client is the Kubernetes client used by k8s mode.
-	Client kubernetes.Interface
+	// K8sClient is the Kubernetes client used by k8s mode.
+	K8sClient kubernetes.Interface
+	// InstanceID scopes docker container names and labels so emulator
+	// instances sharing one Docker daemon do not reap each other's containers.
+	InstanceID string
+	// Platform carries the TLS PEM bundle / extra volumes / extra env applied to
+	// every docker broker container; may be nil.
+	Platform *platform.PlatformConfig
+	// Socket overrides the Docker API unix socket for docker mode; defaults to
+	// the shared default (/var/run/docker.sock).
+	Socket string
+	// DockerClient overrides the Docker API HTTP client for docker mode (tests).
+	// When nil, a client that dials Socket is built.
+	DockerClient *http.Client
+	// ReadyTimeout bounds the docker broker readiness wait; defaults to
+	// brokerReadyTimeout.
+	ReadyTimeout time.Duration
+	// Network is the Docker network a docker broker container joins; empty uses
+	// the daemon default (host mode relies on the published loopback port).
+	Network string
+	// Addressing is how the emulator reaches the broker containers it launches:
+	// host (published loopback port) or container (by container name on the
+	// shared network). The zero value is host mode. The startup wiring resolves
+	// it with docker.ResolveAddressing and gates docker mode on docker.Probe.
+	Addressing docker.Addressing
 	// Logger receives lifecycle logs (default slog.Default()).
 	Logger *slog.Logger
 }
 
 // New returns the Broker for cfg. An unknown mode, or k8s mode without a
 // Kubernetes client, degrades to mock with a warning. Native mode without a
-// resolvable Redpanda binary also degrades to mock.
+// resolvable Redpanda binary also degrades to mock. Docker mode does not probe
+// the daemon here — the caller pings and substitutes mock so the daemon check
+// stays in the wiring (mirroring the Cloud Run/Dataproc docker executors).
 func New(cfg Config) Broker {
 	logger := cfg.Logger
 	if logger == nil {
@@ -155,7 +188,7 @@ func New(cfg Config) Broker {
 	}
 	switch Mode(cfg.Mode) {
 	case ModeK8s:
-		if cfg.Client == nil {
+		if cfg.K8sClient == nil {
 			logger.Warn("managedkafka broker: k8s mode requested without a kubernetes client; falling back to mock")
 			return mockBroker{}
 		}
@@ -167,7 +200,7 @@ func New(cfg Config) Broker {
 		if image == "" {
 			image = defaultRedpandaImage
 		}
-		return newK8sBroker(cfg.Client, ns, image, logger)
+		return newK8sBroker(cfg.K8sClient, ns, image, logger)
 	case ModeNative:
 		binary := resolveNativeBinary(cfg.BinaryPath)
 		if binary == "" {
@@ -175,6 +208,8 @@ func New(cfg Config) Broker {
 			return mockBroker{}
 		}
 		return newNativeBroker(binary, cfg.DataDir, logger)
+	case ModeDocker:
+		return newDockerBroker(cfg, logger)
 	case "", ModeMock:
 		return mockBroker{}
 	default:

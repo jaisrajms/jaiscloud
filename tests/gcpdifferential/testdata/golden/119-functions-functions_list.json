@@ -1,0 +1,10 @@
+{
+  "index": 119,
+  "service": "functions",
+  "op": "functions_list",
+  "method": "GET",
+  "path": "/v2/projects/<project>/locations/us-central1/functions",
+  "status": 200,
+  "response": {}
+}
+

@@ -78,11 +78,13 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	tail := rest[2:]
 
 	// Long-running operations: locations/{location}/operations[/{id}]. The path
-	// is path-ambiguous with Cloud Workflows' LRO surface on a single host and
-	// is routed to Workflows; decoding it here keeps the registered
-	// ManagedKafka.GetOperation/ListOperations handlers reachable by direct
-	// dispatch (operations are returned inline with done:true, so no client
-	// needs to poll them).
+	// is path-ambiguous with Cloud Workflows' LRO surface on a single host: the
+	// default host routes it to Workflows, while the managedkafka host token
+	// (managedkafka.localhost / managedkafka.googleapis.com) routes it here (see
+	// the adapter's operationsHostService), so the registered
+	// ManagedKafka.GetOperation/ListOperations handlers are reachable under the
+	// service's canonical endpoint as well as by direct dispatch. Operations are
+	// returned inline with done:true, so no client needs to poll them.
 	if len(tail) > 0 && tail[0] == "operations" {
 		nr.Params["resourceType"] = "operations"
 		nr.Params["name"] = strings.Join(rest, "/")

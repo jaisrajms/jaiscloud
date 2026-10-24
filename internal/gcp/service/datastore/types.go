@@ -111,6 +111,10 @@ type MutationResult struct {
 	Version          int64
 	Key              *Key // non-nil when an ID was allocated for the mutation
 	ConflictDetected bool
+	// CreateTime is the entity's creation time (create_time): set for an applied
+	// insert/update/upsert and for a rejected mutation (the current entity's
+	// stamp), and zero for a delete. Real Datastore is output-only here.
+	CreateTime time.Time
 	// UpdateTime is the server-stamped entity update time: the new stamp after
 	// an applied insert/update/upsert, the current entity's stamp when a
 	// mutation is rejected (conflict_detected — the mutation changed nothing),
@@ -125,18 +129,29 @@ type CommitResponse struct {
 	Results []MutationResult
 	// CommitTime is zero for a non-transactional commit (the proto omits it).
 	CommitTime time.Time
+	// IndexUpdates is the number of index entries updated during the commit
+	// (real Datastore's output-only CommitResponse.index_updates). The emulator
+	// approximates it with the number of mutations that changed the datastore.
+	IndexUpdates int32
 }
 
-// EntityResult is a found entity plus its per-entity version.
+// EntityResult is a found entity plus its per-entity version and output-only
+// timestamps. Cursor is the position marker after the entity, set only for a
+// RunQuery result (real Datastore sets it only within a QueryResultBatch).
 type EntityResult struct {
-	Entity  dsstore.Entity
-	Version int64
+	Entity     dsstore.Entity
+	Version    int64
+	CreateTime time.Time
+	Cursor     []byte
 }
 
 // LookupResult is the transport-neutral result of a Lookup.
 type LookupResult struct {
 	Found   []EntityResult
 	Missing []Key
+	// ReadTime is the timestamp at which the lookup was served. Both the REST
+	// and gRPC responses carry it (real Datastore returns it on every lookup).
+	ReadTime time.Time
 }
 
 // MoreResults mirrors Datastore's QueryResultBatch.MoreResults for the two
@@ -146,6 +161,9 @@ type MoreResults int
 const (
 	MoreResultsNoMoreResults MoreResults = iota
 	MoreResultsAfterLimit
+	// MoreResultsAfterCursor mirrors real Datastore's MORE_RESULTS_AFTER_CURSOR:
+	// the request's end cursor bounded the batch.
+	MoreResultsAfterCursor
 )
 
 // Query is a transport-neutral Datastore query. Both the structured form and
@@ -156,9 +174,76 @@ type Query struct {
 	Filter *Filter
 	Offset int
 	Limit  *int // nil = unbounded
+	// StartCursor and EndCursor are opaque positions in the ordered result
+	// stream: StartCursor resumes strictly after the position it names and
+	// EndCursor stops at (and includes) the position it names. The emulator's
+	// cursor is the canonical key of the entity the position follows, so an
+	// end cursor round-trips a page's last result and a start cursor resumes
+	// at the next one.
+	StartCursor []byte
+	EndCursor   []byte
 	// Namespace and Database scope the query's partition ("" = default).
 	Namespace string
 	Database  string
+	// Projection, when non-nil, restricts each result entity to the named
+	// properties (the entity's key is always included). A non-nil projection
+	// with no properties is a keys-only query: results carry only their key.
+	// A nil Projection returns full entities.
+	Projection *Projection
+}
+
+// Projection is a structured (or GQL) query's property projection. Properties
+// are top-level property names; "__key__" is accepted as a no-op (the key is
+// always present).
+type Projection struct {
+	Properties []string
+}
+
+// ResultType classifies what a query's result entities carry.
+type ResultType int
+
+const (
+	// ResultFull means the query has no projection: entities carry all properties.
+	ResultFull ResultType = iota
+	// ResultProjection means each entity carries only the projected properties.
+	ResultProjection
+	// ResultKeysOnly means each entity carries only its key.
+	ResultKeysOnly
+)
+
+// ResultType returns the result classification for the query. A projection
+// that names only "__key__" (how the clients express a keys-only query) is
+// keys-only.
+func (q *Query) ResultType() ResultType {
+	if q == nil || q.Projection == nil {
+		return ResultFull
+	}
+	for _, p := range q.Projection.Properties {
+		if p != "__key__" {
+			return ResultProjection
+		}
+	}
+	return ResultKeysOnly
+}
+
+// projectEntity returns a copy of e carrying only the projected properties
+// (plus its key and metadata). named may include "__key__", which is a no-op.
+func projectEntity(e dsstore.Entity, named []string) dsstore.Entity {
+	if len(named) == 0 {
+		e.Properties = map[string]dsstore.Value{}
+		return e
+	}
+	keep := make(map[string]dsstore.Value, len(named))
+	for _, name := range named {
+		if name == "__key__" {
+			continue
+		}
+		if v, ok := e.Properties[name]; ok {
+			keep[name] = v
+		}
+	}
+	e.Properties = keep
+	return e
 }
 
 // QueryResult is the transport-neutral result of RunQuery.
@@ -166,6 +251,17 @@ type QueryResult struct {
 	Entities    []EntityResult
 	Skipped     int
 	MoreResults MoreResults
+	// ResultType classifies what the entities carry (full / projected / keys-only).
+	ResultType ResultType
+	// ReadTime is the timestamp the batch was read from, and SnapshotVersion a
+	// monotonically increasing version of the snapshot it came from. EndCursor
+	// points to the position after the last result, and SkippedCursor to the
+	// position after the last skipped result (set only when Skipped > 0). All
+	// are output-only QueryResultBatch fields real Datastore sets.
+	ReadTime        time.Time
+	SnapshotVersion int64
+	EndCursor       []byte
+	SkippedCursor   []byte
 }
 
 // PropertyOp is a transport-neutral PropertyFilter operator. Unsupported and

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/eventing"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/store"
@@ -101,6 +102,37 @@ func jobEventStates(msgs []recordedMessage) []string {
 		out = append(out, m.attrs["state"])
 	}
 	return out
+}
+
+// A wired event bus receives a cloud-neutral status event per job transition,
+// independent of the Pub/Sub publisher and the functions dispatcher, so the
+// console's live stream can invalidate the GCP query tree.
+func TestJobStateEvents_PublishStatusToBus(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+
+	bus := events.NewEventBus()
+	var mu sync.Mutex
+	var got []events.StatusEvent
+	bus.Subscribe(events.EventStatus, func(e events.Event) {
+		if se, ok := e.Payload.(events.StatusEvent); ok {
+			mu.Lock()
+			got = append(got, se)
+			mu.Unlock()
+		}
+	})
+
+	p := newJobStateProvider(t, 30*time.Second, WithEventBus(bus))
+	submitTestJob(t, p, "j1")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, got, "expected a status event for the job transition")
+	last := got[len(got)-1]
+	require.Equal(t, "gcp-dataproc-job", last.Resource)
+	require.Equal(t, "j1", last.ID)
+	require.NotEmpty(t, last.State)
+	require.Equal(t, []string{"gcp", "dataproc"}, last.Keys)
 }
 
 // TestJobStateEvents_PublishAndDispatch verifies one CloudEvents message and one

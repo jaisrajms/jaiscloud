@@ -341,6 +341,50 @@ func TestSubmitJob_MockProgression(t *testing.T) {
 	}
 }
 
+// TestUpdateJob_Labels covers the REST jobs.patch handler (the body is the Job
+// itself and updateMask is a query parameter) and that labels persist.
+func TestUpdateJob_Labels(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	}))
+	if _, err := p.SubmitJob(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"job": map[string]any{
+				"reference":  map[string]any{"projectId": "proj", "jobId": "j1"},
+				"placement":  map[string]any{"clusterName": "c1"},
+				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+
+	resp, err := p.UpdateJob(ctx, testNR(map[string]any{
+		"region":     "us-central1",
+		"jobId":      "j1",
+		"updateMask": "labels",
+		"body":       map[string]any{"labels": map[string]any{"env": "prod"}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateJob: %v", err)
+	}
+	if labels, _ := resp.Data["labels"].(map[string]string); labels["env"] != "prod" {
+		t.Fatalf("response labels = %v", resp.Data["labels"])
+	}
+
+	got, err := p.GetJob(ctx, testNR(map[string]any{"region": "us-central1", "jobId": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if labels, _ := got.Data["labels"].(map[string]string); labels["env"] != "prod" {
+		t.Fatalf("persisted labels = %v", got.Data["labels"])
+	}
+}
+
 // TestSubmitJob_SchedulingRoundTrip verifies Job.scheduling is parsed from the
 // REST job body and echoed back on the response.
 func TestSubmitJob_SchedulingRoundTrip(t *testing.T) {
@@ -609,6 +653,68 @@ func TestListJobs_FilterAndMatcher(t *testing.T) {
 	}
 }
 
+// TestListClusters_FilterAndPageSize verifies the REST query params filter and
+// pageSize are honored (and a negative pageSize is 400).
+func TestListClusters_FilterAndPageSize(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	create := func(name string, labels map[string]any) {
+		t.Helper()
+		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+			"region": "us-central1",
+			"body":   map[string]any{"projectId": "proj", "clusterName": name, "labels": labels},
+		})); err != nil {
+			t.Fatalf("CreateCluster(%s): %v", name, err)
+		}
+	}
+	create("c1", map[string]any{"env": "staging"})
+	create("c2", map[string]any{"env": "prod"})
+	create("c3", map[string]any{"env": "staging"})
+
+	names := func(params map[string]any) string {
+		t.Helper()
+		params["region"] = "us-central1"
+		resp, err := p.ListClusters(ctx, testNR(params))
+		if err != nil {
+			t.Fatalf("ListClusters(%v): %v", params, err)
+		}
+		clusters, _ := resp.Data["clusters"].([]any)
+		out := make([]string, 0, len(clusters))
+		for _, raw := range clusters {
+			c, _ := raw.(map[string]any)
+			if n, ok := c["clusterName"].(string); ok {
+				out = append(out, n)
+			}
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+
+	if got := names(map[string]any{}); got != "c1,c2,c3" {
+		t.Fatalf("unfiltered list = %q, want c1,c2,c3", got)
+	}
+	if got := names(map[string]any{"filter": `labels.env = staging`}); got != "c1,c3" {
+		t.Fatalf("label filter = %q, want c1,c3", got)
+	}
+	if got := names(map[string]any{"filter": `status.state = ACTIVE`}); got != "c1,c2,c3" {
+		t.Fatalf("ACTIVE filter = %q, want c1,c2,c3", got)
+	}
+	if got := names(map[string]any{"filter": `status.state = INACTIVE`}); got != "" {
+		t.Fatalf("INACTIVE filter = %q, want none", got)
+	}
+
+	if _, err := p.ListClusters(ctx, testNR(map[string]any{"region": "us-central1", "filter": "bogus = 1"})); err == nil {
+		t.Fatal("malformed filter should be InvalidArgument")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("malformed filter error = %v, want 400", err)
+	}
+	if _, err := p.ListClusters(ctx, testNR(map[string]any{"region": "us-central1", "pageSize": -1})); err == nil {
+		t.Fatal("negative pageSize should be InvalidArgument")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("negative pageSize error = %v, want 400", err)
+	}
+}
+
 func TestSubmitJobAsOperation(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
@@ -807,5 +913,35 @@ func TestJobSubstateTerminalOmitted(t *testing.T) {
 	}
 	if !sawRunning {
 		t.Fatalf("expected a RUNNING statusHistory entry, got %v", data["statusHistory"])
+	}
+}
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"clusters": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListClusters(ctx, n)
+		},
+		"jobs": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListJobs(ctx, n)
+		},
+		"workflowTemplates": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListWorkflowTemplates(ctx, n)
+		},
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(testNR(map[string]any{"region": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		if _, err := call(testNR(map[string]any{"region": "us-central1", "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", name, err)
+		}
 	}
 }

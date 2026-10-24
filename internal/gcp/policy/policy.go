@@ -104,9 +104,15 @@ func Set(ctx context.Context, s store.ResourceStore, account, resourceType, id s
 	return pol, nil
 }
 
-// ToMap renders a Policy as a response map.
+// ToMap renders a Policy as a response map. An absent binding list is rendered
+// as an empty array, not JSON null: the Discovery Policy schema declares
+// "bindings" as an array, so null is a wire-shape violation.
 func ToMap(p Policy) map[string]any {
-	return map[string]any{"version": p.Version, "etag": p.Etag, "bindings": p.Bindings}
+	bindings := p.Bindings
+	if bindings == nil {
+		bindings = []any{}
+	}
+	return map[string]any{"version": p.Version, "etag": p.Etag, "bindings": bindings}
 }
 
 // TestPermissions returns the permissions the caller is allowed. JaisCloud does

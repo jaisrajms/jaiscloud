@@ -68,7 +68,7 @@ func (c *CloudDNSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 
 	nr.Action = cloudDNSAction(rest, r.Method, nr)
 	if nr.Action == "" {
-		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 501)
 	}
 	return nr, nil
 }

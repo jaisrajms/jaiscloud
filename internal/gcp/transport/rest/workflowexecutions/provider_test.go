@@ -157,3 +157,24 @@ func TestProviderRoundTrip(t *testing.T) {
 		t.Fatalf("cancel changed terminal execution: %v", cresp.Data["state"])
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT, not a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListExecutions(ctx, &model.NormalizedRequest{AccountID: "proj", Params: map[string]any{
+			"location": "us-central1", "workflowId": "wf1", "pageSize": v,
+		}})
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListExecutions pageSize=%#v err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+	if _, err := p.ListExecutions(ctx, &model.NormalizedRequest{AccountID: "proj", Params: map[string]any{
+		"location": "us-central1", "workflowId": "wf1", "pageSize": "5",
+	}}); err != nil {
+		t.Errorf("ListExecutions pageSize=5: %v", err)
+	}
+}

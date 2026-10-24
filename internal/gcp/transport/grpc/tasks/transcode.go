@@ -12,10 +12,10 @@ import (
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	core "jaiscloud/internal/gcp/service/tasks"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // queueToProto renders a core Queue as the proto Queue message.
@@ -41,7 +41,7 @@ func queueToProto(q tasksstore.Queue) *cloudtaskspb.Queue {
 		out.StackdriverLoggingConfig = &cloudtaskspb.StackdriverLoggingConfig{SamplingRatio: q.StackdriverLoggingConfig.SamplingRatio}
 	}
 	if !q.PurgeTime.IsZero() {
-		out.PurgeTime = timestamppb.New(q.PurgeTime)
+		out.PurgeTime = timestamp.Proto(q.PurgeTime)
 	}
 	return out
 }
@@ -102,10 +102,10 @@ func taskToProto(t tasksstore.Task) *cloudtaskspb.Task {
 		}
 	}
 	if !t.ScheduleTime.IsZero() {
-		out.ScheduleTime = timestamppb.New(t.ScheduleTime)
+		out.ScheduleTime = timestamp.Proto(t.ScheduleTime)
 	}
 	if !t.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(t.CreateTime)
+		out.CreateTime = timestamp.Proto(t.CreateTime)
 	}
 	if t.DispatchDeadline > 0 {
 		out.DispatchDeadline = durationpb.New(t.DispatchDeadline)
@@ -255,13 +255,13 @@ func retryToProto(rc *tasksstore.RetryConfig) *cloudtaskspb.RetryConfig {
 func attemptToProto(a *tasksstore.Attempt) *cloudtaskspb.Attempt {
 	out := &cloudtaskspb.Attempt{}
 	if !a.ScheduleTime.IsZero() {
-		out.ScheduleTime = timestamppb.New(a.ScheduleTime)
+		out.ScheduleTime = timestamp.Proto(a.ScheduleTime)
 	}
 	if !a.DispatchTime.IsZero() {
-		out.DispatchTime = timestamppb.New(a.DispatchTime)
+		out.DispatchTime = timestamp.Proto(a.DispatchTime)
 	}
 	if !a.ResponseTime.IsZero() {
-		out.ResponseTime = timestamppb.New(a.ResponseTime)
+		out.ResponseTime = timestamp.Proto(a.ResponseTime)
 	}
 	if a.ResponseStatus != nil {
 		out.ResponseStatus = &statuspb.Status{Code: a.ResponseStatus.Code, Message: a.ResponseStatus.Message}

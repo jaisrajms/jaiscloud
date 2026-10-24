@@ -25,6 +25,14 @@ func DatastoreClient(ctx context.Context) *datastore.Client {
 	return client
 }
 
+// emulatorAddr returns the gRPC endpoint the generated client should target.
+func emulatorAddr() string {
+	if h := os.Getenv("DATASTORE_EMULATOR_HOST"); h != "" {
+		return h
+	}
+	return "localhost:8081"
+}
+
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)

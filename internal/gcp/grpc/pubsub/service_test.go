@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
@@ -53,6 +55,64 @@ func pubsubTestService(t *testing.T) (pubsubpb.PublisherClient, pubsubpb.Subscri
 		srv.Stop()
 	}
 	return pubsubpb.NewPublisherClient(conn), pubsubpb.NewSubscriberClient(conn), iampb.NewIAMPolicyClient(conn), messages, cleanup
+}
+
+// TestCreateSubscriptionAppliesRealGCPDefaults pins the REST↔gRPC parity fix for
+// AUD3-12: the gRPC CreateSubscription must persist and return the same
+// real-GCP defaults the REST provider applies (state ACTIVE, 7-day retention,
+// 31-day expiration policy), and an explicit request value must win.
+func TestCreateSubscriptionAppliesRealGCPDefaults(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/defaults-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	created, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: "projects/test/subscriptions/defaults-sub", Topic: topic,
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if created.GetState() != pubsubpb.Subscription_ACTIVE {
+		t.Errorf("state = %v, want ACTIVE", created.GetState())
+	}
+	if got := created.GetMessageRetentionDuration().AsDuration(); got != 7*24*time.Hour {
+		t.Errorf("messageRetentionDuration = %v, want 168h", got)
+	}
+	if got := created.GetExpirationPolicy().GetTtl().AsDuration(); got != 31*24*time.Hour {
+		t.Errorf("expirationPolicy.ttl = %v, want 744h", got)
+	}
+
+	// A read renders the same defaults (they are persisted, not synthesized on
+	// create only).
+	got, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if got.GetState() != pubsubpb.Subscription_ACTIVE || got.GetExpirationPolicy().GetTtl().AsDuration() != 31*24*time.Hour {
+		t.Errorf("GetSubscription defaults = state %v, ttl %v", got.GetState(), got.GetExpirationPolicy().GetTtl())
+	}
+
+	// Explicit request values win.
+	explicit, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:                     "projects/test/subscriptions/explicit-sub",
+		Topic:                    topic,
+		MessageRetentionDuration: durationpb.New(2 * time.Hour),
+		ExpirationPolicy:         &pubsubpb.ExpirationPolicy{Ttl: durationpb.New(3 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription(explicit): %v", err)
+	}
+	if got := explicit.GetMessageRetentionDuration().AsDuration(); got != 2*time.Hour {
+		t.Errorf("explicit messageRetentionDuration = %v, want 2h", got)
+	}
+	if got := explicit.GetExpirationPolicy().GetTtl().AsDuration(); got != 3*time.Hour {
+		t.Errorf("explicit expirationPolicy.ttl = %v, want 3h", got)
+	}
 }
 
 func TestPubSubEndToEnd(t *testing.T) {
@@ -225,16 +285,28 @@ func TestPullOrderingKeyGating(t *testing.T) {
 		t.Fatalf("Publish second: %v", err)
 	}
 
-	// A single pull must return only the first message of the group.
+	// A single pull returns the whole key batch, in publish order.
 	pull, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: subscription, MaxMessages: 10, ReturnImmediately: true})
 	if err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
-	if len(pull.GetReceivedMessages()) != 1 {
-		t.Fatalf("Pull received %d messages, want 1 (ordering-key gate)", len(pull.GetReceivedMessages()))
+	if len(pull.GetReceivedMessages()) != 2 {
+		t.Fatalf("Pull received %d messages, want 2 (one keyed batch)", len(pull.GetReceivedMessages()))
 	}
-	if string(pull.GetReceivedMessages()[0].GetMessage().GetData()) != "first" {
-		t.Fatalf("Pull data = %q, want first", string(pull.GetReceivedMessages()[0].GetMessage().GetData()))
+	if got := string(pull.GetReceivedMessages()[0].GetMessage().GetData()); got != "first" {
+		t.Fatalf("Pull data[0] = %q, want first", got)
+	}
+	if got := string(pull.GetReceivedMessages()[1].GetMessage().GetData()); got != "second" {
+		t.Fatalf("Pull data[1] = %q, want second", got)
+	}
+
+	// The key is gated while that batch is outstanding.
+	pull, err = subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: subscription, MaxMessages: 10, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull 2: %v", err)
+	}
+	if len(pull.GetReceivedMessages()) != 0 {
+		t.Fatalf("Pull 2 received %d messages, want 0 (key gated while in-flight)", len(pull.GetReceivedMessages()))
 	}
 }
 
@@ -707,6 +779,47 @@ func TestPubSubUpdateTopicGRPC(t *testing.T) {
 	}
 }
 
+// TestTopicRetentionStoredAsProtoJSON guards F1: the stored
+// messageRetentionDuration must be the protobuf-JSON form ("600s"), not Go's
+// "10m0s", or the official REST client cannot unmarshal every later read of the
+// topic as a google.protobuf.Duration.
+func TestTopicRetentionStoredAsProtoJSON(t *testing.T) {
+	resources := store.NewMemoryResourceStore()
+	svc := NewService(resources, pubsubstore.NewMemoryMessages(), crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore()), "test")
+	ctx := context.Background()
+
+	if _, err := svc.CreateTopic(ctx, &pubsubpb.Topic{
+		Name:                     "projects/test/topics/ret",
+		MessageRetentionDuration: durationpb.New(10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	assertStoredRetention(t, resources, "ret", "600s")
+
+	if _, err := svc.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+		Topic:      &pubsubpb.Topic{Name: "projects/test/topics/ret", MessageRetentionDuration: durationpb.New(15 * time.Minute)},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"message_retention_duration"}},
+	}); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	assertStoredRetention(t, resources, "ret", "900s")
+}
+
+func assertStoredRetention(t *testing.T, resources store.ResourceStore, id, want string) {
+	t.Helper()
+	e, err := resources.Get(context.Background(), "test", store.GlobalRegion, rtTopic, id)
+	if err != nil {
+		t.Fatalf("store get: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := meta["messageRetentionDuration"].(string); got != want {
+		t.Errorf("stored retention = %q, want %q", got, want)
+	}
+}
+
 func TestPubSubListTopicSubscriptionsGRPC(t *testing.T) {
 	pub, subc, _, _, cleanup := pubsubTestService(t)
 	defer cleanup()
@@ -979,6 +1092,101 @@ func TestPubSubDeliveryAttemptRequiresDLQGRPC(t *testing.T) {
 	}
 }
 
+// TestPubSubDLQAttributesGRPC verifies the gRPC republish path attaches real
+// GCP's CloudPubSubDeadLetterSource* attributes (source subscription short id,
+// project, delivery count, original publish time) and preserves the publisher's
+// own attributes.
+func TestPubSubDLQAttributesGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/dlqsrc"
+	const dlq = "projects/test/topics/dlqtopic"
+	for _, tp := range []string{topic, dlq} {
+		if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: tp}); err != nil {
+			t.Fatalf("CreateTopic %s: %v", tp, err)
+		}
+	}
+	const srcSub = "projects/test/subscriptions/dlqsrc-sub"
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: srcSub, Topic: topic, AckDeadlineSeconds: 10,
+		DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: dlq, MaxDeliveryAttempts: 5},
+	}); err != nil {
+		t.Fatalf("source sub: %v", err)
+	}
+	const dlqSub = "projects/test/subscriptions/dlqtopic-sub"
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: dlqSub, Topic: dlq, AckDeadlineSeconds: 10}); err != nil {
+		t.Fatalf("dlq sub: %v", err)
+	}
+
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("hi"), Attributes: map[string]string{"k": "v"}, OrderingKey: "ord-key"}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Five delivering pulls (each nacked), then the next claim forwards it.
+	// Capture the source message's identity from its first delivery: real GCP
+	// mints a new messageId and a forward-time publishTime on the copy (PSM5).
+	var srcID string
+	var srcPublishTime time.Time
+	for i := 0; i < 6; i++ {
+		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: srcSub, MaxMessages: 1, ReturnImmediately: true})
+		if err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		for _, rm := range resp.GetReceivedMessages() {
+			if srcID == "" {
+				srcID = rm.GetMessage().GetMessageId()
+				srcPublishTime = rm.GetMessage().GetPublishTime().AsTime()
+			}
+			if _, err := subc.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{
+				Subscription: srcSub, AckIds: []string{rm.GetAckId()}, AckDeadlineSeconds: 0,
+			}); err != nil {
+				t.Fatalf("ModifyAckDeadline: %v", err)
+			}
+		}
+	}
+
+	resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: dlqSub, MaxMessages: 1, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull DLQ: %v", err)
+	}
+	if len(resp.GetReceivedMessages()) != 1 {
+		t.Fatalf("DLQ pull: got %d messages, want 1", len(resp.GetReceivedMessages()))
+	}
+	msg := resp.GetReceivedMessages()[0].GetMessage()
+	attrs := msg.GetAttributes()
+	if attrs[pubsubstore.AttrDeadLetterSourceSubscription] != "dlqsrc-sub" {
+		t.Errorf("source subscription = %q, want dlqsrc-sub", attrs[pubsubstore.AttrDeadLetterSourceSubscription])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceSubscriptionProject] != "test" {
+		t.Errorf("source project = %q, want test", attrs[pubsubstore.AttrDeadLetterSourceSubscriptionProject])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount] != "5" {
+		t.Errorf("delivery count = %q, want 5", attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount])
+	}
+	wantTime := srcPublishTime.UTC().Format("2006-01-02T15:04:05.000-07:00")
+	if got := attrs[pubsubstore.AttrDeadLetterSourceTopicPublishTime]; got != wantTime {
+		t.Errorf("source publish time = %q, want %q", got, wantTime)
+	}
+	if attrs["k"] != "v" {
+		t.Errorf("publisher attribute k = %q, want v", attrs["k"])
+	}
+	// PSM5: real GCP wraps the original in a new message — a fresh messageId, a
+	// forward-time publishTime, and the source ordering key preserved.
+	if msg.GetMessageId() == srcID {
+		t.Errorf("forwarded message id = %q, want a fresh id (source %q)", msg.GetMessageId(), srcID)
+	}
+	if msg.GetPublishTime().AsTime().Equal(srcPublishTime) {
+		t.Errorf("forwarded publishTime = %v, want the forward time (source %v)", msg.GetPublishTime().AsTime(), srcPublishTime)
+	}
+	if msg.GetOrderingKey() != "ord-key" {
+		t.Errorf("forwarded ordering key = %q, want ord-key", msg.GetOrderingKey())
+	}
+}
+
 // TestPubSubAckDeadlineValidationGRPC verifies the [10,600] create bounds, the
 // 0→10 default, the [0,600] ModifyAckDeadline bounds, and the same bounds on
 // UpdateSubscription.
@@ -1062,5 +1270,47 @@ func TestPubSubDeadLetterPolicyValidationGRPC(t *testing.T) {
 	}
 	if got := created.GetDeadLetterPolicy().GetMaxDeliveryAttempts(); got != 5 {
 		t.Fatalf("maxDeliveryAttempts default = %d, want 5", got)
+	}
+}
+
+// TestLongPollBoundedFrozenClock mirrors the REST provider's TD15 regression:
+// the gRPC long-poll window is real wall time, so a frozen business clock still
+// returns an empty pull within the bounded window instead of polling forever.
+func TestLongPollBoundedFrozenClock(t *testing.T) {
+	at := time.Date(2024, 3, 15, 10, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/frozen-longpoll"
+	const sub = "projects/test/subscriptions/frozen-longpoll"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: sub, Topic: topic}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 10})
+		if err != nil {
+			t.Errorf("Pull: %v", err)
+			done <- -1
+			return
+		}
+		done <- len(resp.GetReceivedMessages())
+	}()
+
+	select {
+	case n := <-done:
+		if n != 0 {
+			t.Fatalf("expected 0 messages, got %d", n)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("empty gRPC long-poll did not return under a frozen clock; deadline used the business clock")
 	}
 }

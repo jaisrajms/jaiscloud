@@ -29,6 +29,23 @@ func TestMetastoreCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/locations/us/services/s:queryMetadata", "QueryMetadata"},
 		{"POST", "/v1/projects/p/locations/us/services/s:moveTableToDatabase", "MoveTableToDatabase"},
 		{"POST", "/v1/projects/p/locations/us/services/s:alterLocation", "AlterMetadataResourceLocation"},
+		{"POST", "/v1/projects/p/locations/us/federations?federationId=f", "CreateFederation"},
+		{"GET", "/v1/projects/p/locations/us/federations", "ListFederations"},
+		{"GET", "/v1/projects/p/locations/us/federations/f", "GetFederation"},
+		{"PATCH", "/v1/projects/p/locations/us/federations/f", "UpdateFederation"},
+		{"DELETE", "/v1/projects/p/locations/us/federations/f", "DeleteFederation"},
+		{"GET", "/v1/projects/p/locations/us/services/s:getIamPolicy", "ServiceGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/services/s:setIamPolicy", "ServiceSetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/services/s:testIamPermissions", "ServiceTestIamPermissions"},
+		{"GET", "/v1/projects/p/locations/us/services/s/backups/b:getIamPolicy", "BackupGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/services/s/backups/b:setIamPolicy", "BackupSetIamPolicy"},
+		{"GET", "/v1/projects/p/locations/us/services/s/databases/d:getIamPolicy", "DatabaseGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/services/s/databases/d:setIamPolicy", "DatabaseSetIamPolicy"},
+		{"GET", "/v1/projects/p/locations/us/services/s/databases/d/tables/t:getIamPolicy", "TableGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/services/s/databases/d/tables/t:setIamPolicy", "TableSetIamPolicy"},
+		{"GET", "/v1/projects/p/locations/us/federations/f:getIamPolicy", "FederationGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/federations/f:setIamPolicy", "FederationSetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/federations/f:testIamPermissions", "FederationTestIamPermissions"},
 	}
 	for _, tc := range cases {
 		codec := NewCodec()

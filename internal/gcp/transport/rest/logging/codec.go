@@ -16,9 +16,10 @@
 //	GET/POST        /v2/{parent}/metrics              metrics.list / metrics.create
 //	GET/PUT/DELETE  /v2/{metricName}                  metrics.get/update/delete
 //
-// entries.tail is bidirectional-streaming and stays gRPC-only; the
-// settings/buckets/views and entries.copy families are not implemented (they are
-// out of scope for this phase).
+// entries.tail is bidirectional-streaming and stays gRPC-only; entries.copy is
+// not modelled (the emulator has no per-bucket entry data plane). The
+// settings/buckets/views/links/logScopes families are implemented — see
+// admin.go.
 //
 // The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the core's typed
 // API); the Provider holds the routes. Neither owns business logic — both
@@ -55,8 +56,9 @@ func (c *Codec) ServiceName() string { return ServiceName }
 
 // knownUnimplemented are real Logging v2 methods the emulator deliberately does
 // not serve over REST: entries.tail is bidirectional-streaming (gRPC-only) and
-// entries.copy is out of scope for this phase. They are reported as 501
-// UNIMPLEMENTED, distinct from an unknown path (404 NOT_FOUND).
+// entries.copy has no faithful emulation (no per-bucket entry data plane). They
+// are reported as 501 UNIMPLEMENTED, distinct from an unknown path (404
+// NOT_FOUND).
 var knownUnimplemented = map[string]bool{
 	"entries:tail": true,
 	"entries:copy": true,
@@ -83,6 +85,9 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		// Action/params are set by the helper. Checked before the log family so
 		// a (non-canonical) raw-slash metric id containing a "logs" segment is
 		// not misrouted.
+	case decodeAdminPath(r, rest, nr):
+		// Admin v2 (buckets/views/links/logScopes/settings/cmek): action/params
+		// are set by the helper.
 	case r.Method == http.MethodGet && strings.HasSuffix(rest, "/logs"):
 		nr.Action = "LogList"
 		nr.Params["parent"] = strings.TrimSuffix(rest, "/logs")

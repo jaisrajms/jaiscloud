@@ -1,0 +1,10 @@
+{
+  "index": 6,
+  "service": "storage",
+  "op": "tour_media_download",
+  "method": "GET",
+  "path": "/storage/v1/b/<bucket>/o/checksum.txt?alt=media",
+  "status": 200,
+  "response": "jaiscloud-sdk-tour-checksum"
+}
+

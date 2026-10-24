@@ -165,6 +165,11 @@ func (s *Service) StoreSource(ctx context.Context, project, location, id string,
 // configured and the input carries a resolvable GCS reference. It is a no-op
 // otherwise, so metadata-only creates keep working without GCS.
 func (s *Service) resolveSource(ctx context.Context, project, location, id string, in FunctionInput) (sha256hex string, size int64, blobKey string, err error) {
+	// A console inline archive is persisted directly; it bypasses the GCS
+	// reference/fetcher path (which the wire transports use).
+	if len(in.SourceArchive) > 0 {
+		return s.StoreSource(ctx, project, location, id, in.SourceArchive)
+	}
 	bucket, object := sourceRef(in)
 	if s.sourceFetcher == nil || bucket == "" || object == "" {
 		return "", 0, "", nil
@@ -188,7 +193,7 @@ func (s *Service) discardSource(ctx context.Context, blobKey string) {
 }
 
 // codeKeySeparator joins a function's location and id into the single opaque
-// CodeKey string the shared Lambda executor's CodeLoader receives (the executor
+// CodeKey string the shared container executor's CodeLoader receives (the executor
 // interface carries account + one name, not a location). It is "." rather than
 // "/" so the key is safe both as a Docker container-name fragment and as the
 // K8s pod/route identifier. Neither GCP locations nor function ids may contain
@@ -207,7 +212,7 @@ func splitCodeKey(key string) (location, id string, ok bool) {
 	return key[:i], key[i+1:], true
 }
 
-// LoadCode implements lambdaexec.CodeLoader for Cloud Functions. funcName is
+// LoadCode implements container.CodeLoader for Cloud Functions. funcName is
 // the composite CodeKey ("location.id") set by CallFunction; the version
 // argument is unused because a GCP function has one stored revision. A function
 // with no persisted source yields (nil, nil), so the executor mounts nothing

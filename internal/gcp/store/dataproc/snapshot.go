@@ -108,7 +108,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	templates := make([]templateRow, 0)
 
 	crows, err := s.pool.Query(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters ORDER BY project_id, region, cluster_name
 	`)
 	if err != nil {
@@ -118,7 +118,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var r clusterRow
 		var config, vcc, labels, status, history []byte
 		if err := crows.Scan(&r.ProjectID, &r.Cluster.Region, &r.Cluster.Name, &config, &vcc, &labels, &status, &history,
-			&r.Cluster.ClusterUUID, &r.Cluster.CreateTime, &r.Cluster.UpdateTime); err != nil {
+			&r.Cluster.ClusterUUID, &r.Cluster.Namespace, &r.Cluster.NamespaceOwned, &r.Cluster.CreateTime, &r.Cluster.UpdateTime); err != nil {
 			crows.Close()
 			return err
 		}
@@ -262,10 +262,10 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		history, _ := json.Marshal(r.Cluster.StatusHistory)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_dataproc_clusters
-				(project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				(project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		`, r.ProjectID, r.Cluster.Region, r.Cluster.Name, nullableJSONRaw(r.Cluster.Config, "{}"), nullableJSONRaw(r.Cluster.VirtualClusterConfig, "{}"),
-			nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), r.Cluster.ClusterUUID, r.Cluster.CreateTime, r.Cluster.UpdateTime); err != nil {
+			nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), r.Cluster.ClusterUUID, r.Cluster.Namespace, r.Cluster.NamespaceOwned, r.Cluster.CreateTime, r.Cluster.UpdateTime); err != nil {
 			return err
 		}
 	}

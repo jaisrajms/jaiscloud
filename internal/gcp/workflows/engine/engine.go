@@ -178,6 +178,19 @@ func (e *Engine) ExecuteWithContext(ctx context.Context, source string, argument
 	return Result{Value: nil, Step: last}
 }
 
+// Validate parses a workflow definition and returns a *ValidationError when it
+// is malformed (bad YAML, no `main` routine, malformed `main.params`/`steps`).
+// It applies exactly the structural validation ExecuteWithContext runs before
+// executing, exposed so the management plane can reject an invalid definition
+// at create/update time — as real Cloud Workflows does — instead of accepting
+// it and failing only when an execution is attempted. A nil return means the
+// definition is structurally valid; it says nothing about the runtime
+// resolvability of a step (an unsupported stdlib call still fails at run time).
+func Validate(source string) error {
+	_, err := parseWorkflow(source)
+	return err
+}
+
 type workflow struct {
 	params []string
 	steps  []step

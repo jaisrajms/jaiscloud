@@ -120,7 +120,15 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 	if err != nil {
 		return nil, "", invalidArgument("invalid filter: " + err.Error())
 	}
-	series, err := s.store.ListTimeSeries(ctx, project)
+	// The Discovery document declares timeSeries.list on the folders scope as
+	// well as projects. The emulator has no folder→project membership, so a
+	// folders parent aggregates the same series store across every project.
+	var series []monitoringstore.TimeSeries
+	if strings.HasPrefix(project, "folders/") {
+		series, err = s.store.ListAllTimeSeries(ctx)
+	} else {
+		series, err = s.store.ListTimeSeries(ctx, project)
+	}
 	if err != nil {
 		return nil, "", mapStoreError(err)
 	}
@@ -332,6 +340,18 @@ func (s *Service) DeleteAlertPolicy(ctx context.Context, project, id string) err
 	return mapStoreError(s.store.DeleteAlertPolicy(ctx, project, id))
 }
 
+// alertPolicyMaskFields is the full update_mask field set of a Cloud Monitoring
+// AlertPolicy (Discovery schema google.monitoring.v3.AlertPolicy), normalized
+// to snake_case roots. alertStrategy, severity, validity, creationRecord and
+// mutationRecord are real fields the emulator does not store, so a mask naming
+// one stays a 501 UnsupportedOperation rather than a client error.
+var alertPolicyMaskFields = maskFieldSet(
+	"displayName", "documentation", "conditions", "combiner", "enabled",
+	"notificationChannels", "userLabels",
+	"alertStrategy", "severity", "validity", "creationRecord", "mutationRecord",
+	"name",
+)
+
 // applyAlertPolicyMask merges an incoming alert policy into the stored policy
 // according to the field paths in updateMask. For each masked path the incoming
 // value wins; every other field retains the stored value.
@@ -339,10 +359,12 @@ func (s *Service) DeleteAlertPolicy(ctx context.Context, project, id string) err
 // Mask paths are normalized so both the proto (snake_case) and the REST
 // FieldMask JSON (camelCase) spellings are accepted; a nested path is collapsed
 // to its root field (e.g. documentation.content updates the whole documentation
-// message, matching the emulator's opaque-JSON storage).
+// message, matching the emulator's opaque-JSON storage). A path that names no
+// field is a 400 InvalidArgument, a real-but-unimplemented field a 501.
 func applyAlertPolicyMask(stored, incoming monitoringstore.AlertPolicy, updateMask []string) (monitoringstore.AlertPolicy, error) {
 	for _, raw := range updateMask {
-		switch normalizeMaskPath(raw) {
+		path := normalizeMaskPath(raw)
+		switch path {
 		case "display_name":
 			stored.DisplayName = incoming.DisplayName
 		case "documentation":
@@ -358,6 +380,9 @@ func applyAlertPolicyMask(stored, incoming monitoringstore.AlertPolicy, updateMa
 		case "user_labels":
 			stored.UserLabels = incoming.UserLabels
 		default:
+			if !alertPolicyMaskFields[path] {
+				return stored, invalidMaskPath(raw)
+			}
 			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
 		}
 	}
@@ -504,12 +529,22 @@ func (s *Service) VerifyNotificationChannel(ctx context.Context, project, id str
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+// notificationChannelMaskFields is the full update_mask field set of a Cloud
+// Monitoring NotificationChannel (Discovery schema
+// google.monitoring.v3.NotificationChannel), normalized to snake_case roots.
+var notificationChannelMaskFields = maskFieldSet(
+	"type", "displayName", "description", "labels", "userLabels", "enabled",
+	"creationRecord", "mutationRecords", "verificationStatus", "name",
+)
+
 // applyNotificationChannelMask merges an incoming channel into the stored
 // channel according to the field paths in updateMask. Paths are normalized the
-// same way as applyAlertPolicyMask (camelCase or snake_case).
+// same way as applyAlertPolicyMask (camelCase or snake_case); a path that names
+// no field is a 400 InvalidArgument, a real-but-unimplemented field a 501.
 func applyNotificationChannelMask(stored, incoming monitoringstore.NotificationChannel, updateMask []string) (monitoringstore.NotificationChannel, error) {
 	for _, raw := range updateMask {
-		switch normalizeMaskPath(raw) {
+		path := normalizeMaskPath(raw)
+		switch path {
 		case "type":
 			stored.Type = incoming.Type
 		case "display_name":
@@ -523,6 +558,9 @@ func applyNotificationChannelMask(stored, incoming monitoringstore.NotificationC
 		case "enabled":
 			stored.Enabled = incoming.Enabled
 		default:
+			if !notificationChannelMaskFields[path] {
+				return stored, invalidMaskPath(raw)
+			}
 			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
 		}
 	}

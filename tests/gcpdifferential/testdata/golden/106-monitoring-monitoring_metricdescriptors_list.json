@@ -1,0 +1,10 @@
+{
+  "index": 106,
+  "service": "monitoring",
+  "op": "monitoring_metricdescriptors_list",
+  "method": "GET",
+  "path": "/v3/projects/<project>/metricDescriptors?filter=metric.type%3D%22<metricType>%22",
+  "status": 200,
+  "response": {}
+}
+

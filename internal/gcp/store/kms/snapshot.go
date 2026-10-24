@@ -78,22 +78,29 @@ type kmsCryptokeyRow struct {
 	Labels           map[string]string `json:"labels,omitempty"`
 	RotationPeriod   time.Duration     `json:"rotationPeriod,omitempty"`
 	NextRotationTime time.Time         `json:"nextRotationTime,omitempty"`
+	ProtectionLevel  string            `json:"protectionLevel,omitempty"`
+	ImportOnly       bool              `json:"importOnly,omitempty"`
+	NextVersion      int               `json:"nextVersion,omitempty"`
 }
 
 type kmsVersionRow struct {
-	ProjectID        string    `json:"projectId"`
-	Location         string    `json:"location"`
-	KeyRingID        string    `json:"keyRingId"`
-	KeyID            string    `json:"keyId"`
-	Version          string    `json:"version"`
-	State            string    `json:"state"`
-	Algorithm        string    `json:"algorithm"`
-	CreateTime       time.Time `json:"createTime"`
-	KeyMaterial      []byte    `json:"keyMaterial,omitempty"`
-	PrivateKey       []byte    `json:"privateKey,omitempty"`
-	PublicKey        []byte    `json:"publicKey,omitempty"`
-	DestroyTime      time.Time `json:"destroyTime,omitempty"`
-	DestroyEventTime time.Time `json:"destroyEventTime,omitempty"`
+	ProjectID              string    `json:"projectId"`
+	Location               string    `json:"location"`
+	KeyRingID              string    `json:"keyRingId"`
+	KeyID                  string    `json:"keyId"`
+	Version                string    `json:"version"`
+	State                  string    `json:"state"`
+	Algorithm              string    `json:"algorithm"`
+	CreateTime             time.Time `json:"createTime"`
+	KeyMaterial            []byte    `json:"keyMaterial,omitempty"`
+	PrivateKey             []byte    `json:"privateKey,omitempty"`
+	PublicKey              []byte    `json:"publicKey,omitempty"`
+	DestroyTime            time.Time `json:"destroyTime,omitempty"`
+	DestroyEventTime       time.Time `json:"destroyEventTime,omitempty"`
+	ProtectionLevel        string    `json:"protectionLevel,omitempty"`
+	ImportTime             time.Time `json:"importTime,omitempty"`
+	TrustedWrappingEnabled bool      `json:"trustedWrappingEnabled,omitempty"`
+	HsmTrusted             bool      `json:"hsmTrusted,omitempty"`
 }
 
 func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
@@ -124,7 +131,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	cryptokeys := make([]kmsCryptokeyRow, 0)
-	crows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time FROM jc_kms_cryptokeys ORDER BY project_id, location, keyring_id, key_id`)
+	crows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time, protection_level, import_only, next_version FROM jc_kms_cryptokeys ORDER BY project_id, location, keyring_id, key_id`)
 	if err != nil {
 		return err
 	}
@@ -133,7 +140,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var labels []byte
 		var rotationSecs *int64
 		var next *time.Time
-		if err := crows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.ID, &r.Purpose, &r.Algorithm, &r.CreateTime, &r.PrimaryVersion, &labels, &rotationSecs, &next); err != nil {
+		if err := crows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.ID, &r.Purpose, &r.Algorithm, &r.CreateTime, &r.PrimaryVersion, &labels, &rotationSecs, &next, &r.ProtectionLevel, &r.ImportOnly, &r.NextVersion); err != nil {
 			crows.Close()
 			return err
 		}
@@ -154,14 +161,14 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	versions := make([]kmsVersionRow, 0)
-	vrows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time FROM jc_kms_cryptokey_versions ORDER BY project_id, location, keyring_id, key_id, version`)
+	vrows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time, protection_level, import_time, trusted_wrapping_enabled, hsm_trusted FROM jc_kms_cryptokey_versions ORDER BY project_id, location, keyring_id, key_id, version`)
 	if err != nil {
 		return err
 	}
 	for vrows.Next() {
 		var r kmsVersionRow
-		var destroyTime, destroyEventTime *time.Time
-		if err := vrows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.KeyID, &r.Version, &r.State, &r.Algorithm, &r.CreateTime, &r.KeyMaterial, &r.PrivateKey, &r.PublicKey, &destroyTime, &destroyEventTime); err != nil {
+		var destroyTime, destroyEventTime, importTime *time.Time
+		if err := vrows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.KeyID, &r.Version, &r.State, &r.Algorithm, &r.CreateTime, &r.KeyMaterial, &r.PrivateKey, &r.PublicKey, &destroyTime, &destroyEventTime, &r.ProtectionLevel, &importTime, &r.TrustedWrappingEnabled, &r.HsmTrusted); err != nil {
 			vrows.Close()
 			return err
 		}
@@ -170,6 +177,9 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		}
 		if destroyEventTime != nil {
 			r.DestroyEventTime = *destroyEventTime
+		}
+		if importTime != nil {
+			r.ImportTime = *importTime
 		}
 		versions = append(versions, r)
 	}
@@ -246,14 +256,20 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 	}
 	for _, r := range snap.CryptoKeys {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			r.ProjectID, r.Location, r.KeyRingID, r.ID, r.Purpose, r.Algorithm, r.CreateTime, r.PrimaryVersion, labelsJSON(r.Labels), rotationSeconds(r.RotationPeriod), nullableTime(r.NextRotationTime)); err != nil {
+		nextVersion := r.NextVersion
+		if nextVersion == 0 {
+			// Snapshots written before the counter was captured: fall back to
+			// the schema default.
+			nextVersion = 2
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time, protection_level, import_only, next_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			r.ProjectID, r.Location, r.KeyRingID, r.ID, r.Purpose, r.Algorithm, r.CreateTime, r.PrimaryVersion, labelsJSON(r.Labels), rotationSeconds(r.RotationPeriod), nullableTime(r.NextRotationTime), protectionLevelOrDefault(r.ProtectionLevel), r.ImportOnly, nextVersion); err != nil {
 			return err
 		}
 	}
 	for _, r := range snap.Versions {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			r.ProjectID, r.Location, r.KeyRingID, r.KeyID, r.Version, r.State, r.Algorithm, r.CreateTime, r.KeyMaterial, r.PrivateKey, r.PublicKey, nullableTime(r.DestroyTime), nullableTime(r.DestroyEventTime)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time, protection_level, import_time, trusted_wrapping_enabled, hsm_trusted) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			r.ProjectID, r.Location, r.KeyRingID, r.KeyID, r.Version, r.State, r.Algorithm, r.CreateTime, r.KeyMaterial, r.PrivateKey, r.PublicKey, nullableTime(r.DestroyTime), nullableTime(r.DestroyEventTime), protectionLevelOrDefault(r.ProtectionLevel), nullableTime(r.ImportTime), r.TrustedWrappingEnabled, r.HsmTrusted); err != nil {
 			return err
 		}
 	}

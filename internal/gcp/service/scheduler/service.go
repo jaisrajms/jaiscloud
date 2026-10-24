@@ -21,6 +21,11 @@ var (
 	appEngineMethod = map[string]bool{"": true, "POST": true, "GET": true, "HEAD": true, "PUT": true, "DELETE": true}
 )
 
+// MaxPageSize is the documented maximum for projects.locations.jobs.list
+// ("The maximum page size is 500. If unspecified, the page size will be the
+// maximum."), shared by the REST and gRPC adapters.
+const MaxPageSize = 500
+
 // Service is the transport-neutral Cloud Scheduler core. Both the REST and gRPC
 // adapters share one instance (and one store), so the two transports cannot
 // drift.
@@ -87,6 +92,16 @@ func (s *Service) GetJob(ctx context.Context, project, location, name string) (s
 // ListJobs lists jobs under a location, sorted by id.
 func (s *Service) ListJobs(ctx context.Context, project, location string) ([]schedstore.Job, error) {
 	jobs, err := s.store.ListJobs(ctx, project, location)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return jobs, nil
+}
+
+// ListJobsByProject lists every job in a project across all locations, sorted
+// by location then id. It backs the location-optional console list.
+func (s *Service) ListJobsByProject(ctx context.Context, project string) ([]schedstore.Job, error) {
+	jobs, err := s.store.ListJobsByProject(ctx, project)
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
@@ -160,7 +175,7 @@ func (s *Service) RunJob(ctx context.Context, project, location, name string) (s
 		return cur, nil
 	}
 	now := clock.Now()
-	status := s.engine.disp.Deliver(ctx, cur)
+	status := s.engine.disp.Deliver(ctx, cur, cur.ScheduleTime)
 	return s.store.UpdateJobAtomic(ctx, project, location, name, func(j schedstore.Job) (schedstore.Job, error) {
 		j.LastAttemptTime = now
 		if status.Code == 0 {

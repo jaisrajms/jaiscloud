@@ -3,6 +3,7 @@ package bigquery
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -356,4 +357,83 @@ func modeOr(m string) string {
 		return "NULLABLE"
 	}
 	return strings.ToUpper(m)
+}
+
+// pageQueryResponse applies BigQuery result-set paging to an already-encoded
+// jobs.query (bigquery#queryResponse) or getQueryResults
+// (bigquery#getQueryResultsResponse) body. start is the resolved zero-based
+// start row (see resolveResultPageStart) and maxResults the per-page row limit;
+// 0 means the emulator's documented default — the complete (bounded) result
+// set. When the page ends before the last row, a pageToken for the next page is
+// attached. withPageRowCount adds QueryResponse.pageRowCount (jobs.query only —
+// GetQueryResultsResponse does not model it). A response with no result set
+// (DML/DDL) is left untouched.
+func pageQueryResponse(resp map[string]any, start, maxResults int, withPageRowCount bool) {
+	raw, ok := resp["rows"].([]any)
+	if !ok {
+		return
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > len(raw) {
+		start = len(raw)
+	}
+	end := len(raw)
+	// Guard the bound so a huge maxResults cannot overflow start+maxResults.
+	if maxResults > 0 && maxResults < end-start {
+		end = start + maxResults
+	}
+	rows := raw[start:end]
+	if rows == nil {
+		rows = []any{}
+	}
+	resp["rows"] = rows
+	if withPageRowCount {
+		resp["pageRowCount"] = strconv.Itoa(len(rows))
+	}
+	if end < len(raw) {
+		resp["pageToken"] = encodeResultPageToken(end)
+	}
+}
+
+// resolveResultPageStart resolves getQueryResults' start row: a non-empty
+// pageToken (returned by a previous page) takes precedence over startIndex. An
+// undecodable token is InvalidArgument rather than being silently ignored (real
+// GCP rejects a bad page token; a silently ignored one would return page 1 with
+// a 200 — a wrong answer).
+func resolveResultPageStart(startIndex int, pageToken string) (int, error) {
+	if pageToken == "" {
+		if startIndex < 0 {
+			return 0, nil
+		}
+		return startIndex, nil
+	}
+	off, ok := decodeResultPageToken(pageToken)
+	if !ok {
+		return 0, invalidArgument("invalid pageToken")
+	}
+	return off, nil
+}
+
+// encodeResultPageToken renders a query-result page offset as the opaque
+// pageToken real BigQuery returns; decodeResultPageToken is its inverse. The
+// token is the base64url of the next page's zero-based start row.
+func encodeResultPageToken(start int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(start)))
+}
+
+func decodeResultPageToken(token string) (int, bool) {
+	if token == "" {
+		return 0, false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(b))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }

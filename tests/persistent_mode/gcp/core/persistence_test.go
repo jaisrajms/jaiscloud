@@ -228,3 +228,96 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 		t.Fatalf("function row did not survive restart: %s", body)
 	}
 }
+
+// TestSnapshotRoundTrip proves the /_jaiscloud/export → reset → import path
+// round-trips the core services' state through the Postgres-backed stores:
+// topic (pubsub), secret (secretmanager), keyring (kms), service account
+// (resources) and function (functions). It seeds each, exports the full state,
+// resets (asserting the resources are gone — the Resetter registration), then
+// re-imports the snapshot and asserts equivalent reads (the Snapshotter
+// registration and field fidelity).
+func TestSnapshotRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping snapshot round-trip test")
+	}
+
+	port := persistPort()
+	host := fmt.Sprintf("http://localhost:%d", port)
+	blobDir := t.TempDir()
+
+	proc := startGCPProcess(t, port, dsn, blobDir)
+	defer stopProcess(t, proc)
+	waitForHealth(t, host)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	topic := "snap-topic-" + suffix
+	secret := "snap-secret-" + suffix
+	keyring := "snap-kr-" + suffix
+	sa := "snap-sa-" + suffix
+	function := "snap-fn-" + suffix
+	saEmail := sa + "@proj.iam.gserviceaccount.com"
+
+	// ── Seed ─────────────────────────────────────────────────────────────────
+	if code, body := doRequest(t, host, "PUT", "/v1/projects/proj/topics/"+topic, "{}", "application/json"); code != http.StatusOK {
+		t.Fatalf("create topic: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "POST", "/v1/projects/proj/secrets?secretId="+secret,
+		`{"replication":{"automatic":{}},"annotations":{"snap":"yes"}}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create secret: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "POST", "/v1/projects/proj/locations/global/keyRings?keyRingId="+keyring,
+		"{}", "application/json"); code != http.StatusOK {
+		t.Fatalf("create keyring: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "POST", "/v1/projects/proj/serviceAccounts",
+		`{"accountId":"`+sa+`"}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create SA: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "POST", "/v1/projects/proj/locations/us-central1/functions?functionId="+function,
+		`{"runtime":"nodejs20","entryPoint":"h"}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create function: got HTTP %d: %s", code, body)
+	}
+
+	paths := map[string]string{
+		"topic":    "/v1/projects/proj/topics/" + topic,
+		"secret":   "/v1/projects/proj/secrets/" + secret,
+		"keyring":  "/v1/projects/proj/locations/global/keyRings/" + keyring,
+		"sa":       "/v1/projects/proj/serviceAccounts/" + saEmail,
+		"function": "/v1/projects/proj/locations/us-central1/functions/" + function,
+	}
+	assertAll := func(want int, phase string) {
+		t.Helper()
+		for name, path := range paths {
+			code, body := doRequest(t, host, "GET", path, "", "")
+			if code != want {
+				t.Errorf("%s: %s %s got HTTP %d (want %d): %s", phase, name, path, code, want, body)
+			}
+		}
+	}
+
+	// ── Export the full state ────────────────────────────────────────────────
+	code, tarball := doRequest(t, host, "GET", "/_jaiscloud/export", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("export: got HTTP %d: %s", code, tarball)
+	}
+	if len(tarball) < 2 || tarball[0] != 0x1f || tarball[1] != 0x8b {
+		t.Fatalf("export did not return a gzip tarball (first bytes %x)", tarball[:min(len(tarball), 2)])
+	}
+
+	// ── Reset: every seeded store must clear (Resetter registration) ─────────
+	if code, body := doRequest(t, host, "POST", "/_jaiscloud/reset", "", ""); code != http.StatusOK {
+		t.Fatalf("reset: got HTTP %d: %s", code, body)
+	}
+	assertAll(http.StatusNotFound, "after reset")
+
+	// ── Import: every seeded store must restore (Snapshotter registration) ──
+	code, body := doRequest(t, host, "POST", "/_jaiscloud/import?reset_first=true", tarball, "application/gzip")
+	if code != http.StatusOK {
+		t.Fatalf("import: got HTTP %d: %s", code, body)
+	}
+	assertAll(http.StatusOK, "after import")
+	if code, body := doRequest(t, host, "GET", paths["secret"], "", ""); code == http.StatusOK && !strings.Contains(body, `"snap":"yes"`) {
+		t.Errorf("secret annotations did not survive import: %s", body)
+	}
+}

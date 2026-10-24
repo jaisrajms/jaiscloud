@@ -2,12 +2,16 @@ package functions
 
 import (
 	"context"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -237,5 +241,78 @@ func TestFunctionsLROAsyncUpgradeOp(t *testing.T) {
 	}
 	if !got.Done || got.Function == nil {
 		t.Fatalf("settled upgrade operation = done=%v function=%v", got.Done, got.Function)
+	}
+}
+
+// TestFunctionsLROAsyncSettleEmitsStatusEvent verifies that settling an
+// in-flight operation publishes exactly one cloud-neutral status event on the
+// wired bus, keyed so the console refetches the Functions pages, and that a
+// repeated read does not re-emit.
+func TestFunctionsLROAsyncSettleEmitsStatusEvent(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+	ctx := context.Background()
+
+	bus := events.NewEventBus()
+	var mu sync.Mutex
+	var published []events.StatusEvent
+	bus.Subscribe(events.EventStatus, func(e events.Event) {
+		if p, ok := e.Payload.(events.StatusEvent); ok {
+			mu.Lock()
+			published = append(published, p)
+			mu.Unlock()
+		}
+	})
+
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithLROMode(lro.Mode{Enabled: true, Delay: 30 * time.Second}),
+		WithEventBus(bus))
+
+	_, op, err := s.CreateFunction(ctx, "proj", "us-central1", "hello", lroCreateInput(), V1)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	name := OperationName(V1, "proj", op)
+
+	// Before the delay a read stays in flight, so nothing is published.
+	if loaded, err := s.LoadOperation(ctx, "proj", name); err != nil || loaded.Done {
+		t.Fatalf("read before delay = done=%v err=%v; want in flight", loaded.Done, err)
+	}
+	if n := len(published); n != 0 {
+		t.Fatalf("published %d events before settle, want 0", n)
+	}
+
+	// The first settled read publishes exactly one event.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
+	if _, err := s.LoadOperation(ctx, "proj", name); err != nil {
+		t.Fatalf("load past delay: %v", err)
+	}
+	mu.Lock()
+	if len(published) != 1 {
+		mu.Unlock()
+		t.Fatalf("published %d events after settle, want 1", len(published))
+	}
+	ev := published[0]
+	mu.Unlock()
+	want := events.StatusEvent{
+		Cloud:    model.CloudGCP,
+		Keys:     []string{"gcp", "functions"},
+		Resource: "gcp-functions-operation",
+		ID:       op.ID,
+		State:    "DONE",
+		Detail:   "create",
+	}
+	if !reflect.DeepEqual(ev, want) {
+		t.Fatalf("settle event = %+v, want %+v", ev, want)
+	}
+
+	// A repeated read of the same operation must not re-emit.
+	if _, err := s.LoadOperation(ctx, "proj", name); err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(published) != 1 {
+		t.Fatalf("published %d events after repeat read, want 1", len(published))
 	}
 }

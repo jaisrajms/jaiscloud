@@ -24,8 +24,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 
 Deliberately **excluded** because it makes `apply` fail (and abort the run):
 
-- **Cloud Run v2** — not implemented; declared out of scope for v1.0 in
-  `docs/GA.md` §7.
+- **Cloud Run v2** — not implemented; declared out of scope in
+  `docs/gcp/wire-contract.md` §5.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
@@ -68,7 +68,12 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
 - IAM service account exists
 - Secret Manager secret exists with automatic replication; version 1 is
   `ENABLED`
-- KMS key ring + crypto key (`purpose: ENCRYPT_DECRYPT`) exist
+- Secret Manager CMEK secret reads back its `global`-location key under
+  `replication.automatic.customerManagedEncryption.kmsKeyName`, and the
+  user-managed secret reads back both replica locations and its per-replica
+  CMEK key verbatim (DC45)
+- KMS key ring + crypto key (`purpose: ENCRYPT_DECRYPT`) exist, plus the
+  `global` key ring/key the automatic-replication CMEK secret requires
 - Pub/Sub topic + subscription exist
 - Pub/Sub topic IAM keeps **both** member grants across the provider's
   `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC)
@@ -83,7 +88,9 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
 
 ## Provenance
 
-Distilled from the floci-gcp `compat-terraform` / `compat-opentofu` suites,
-pruned to the implemented services and made self-contained (no BATS, no external
-compat repo). See `plan_docs/gcp-terraform-compat-2026-09-22.md` for the
-findings that motivated it.
+Originally adapted from the floci-gcp `compat-terraform` / `compat-opentofu`
+suites, pruned to the implemented services and made self-contained (no BATS, no
+external compat repo). It is now an independent Terraform/OpenTofu provider
+conformance suite; floci-gcp is not its spec (real GCP is). See
+`plan_docs/gcp-terraform-compat-2026-09-22.md` for the findings that motivated
+it.

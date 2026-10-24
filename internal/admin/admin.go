@@ -111,6 +111,7 @@ type Handler struct {
 	ebScheduler      EBSchedulerTicker
 	schedulerTicker  SchedulerTicker
 	tasksTicker      TasksTicker
+	monitoringTicker MonitoringTicker
 	throttle         ThrottleController
 }
 

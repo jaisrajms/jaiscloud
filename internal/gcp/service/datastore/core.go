@@ -33,6 +33,7 @@
 package datastore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sort"
@@ -204,6 +205,9 @@ func (s *Service) Rollback(_ context.Context, transaction []byte) {
 // re-validates the read-set and applies atomically; otherwise each mutation is
 // applied independently, reporting per-mutation conflicts in the result.
 func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest) (*CommitResponse, error) {
+	if err := validateReservedMutations(req.Mutations); err != nil {
+		return nil, err
+	}
 	txn := req.Transaction
 
 	// MODE_UNSPECIFIED (the zero value) is treated as non-transactional unless
@@ -243,6 +247,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			case errors.Is(err, dsstore.ErrConflict):
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				// A rejected mutation changed nothing, so real Datastore
 				// reports the current entity's update_time (not the absent
 				// "after processing" stamp).
@@ -253,6 +258,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
 				if allocated {
 					mr.Key = keyFromCanonical(e.Key)
@@ -270,13 +276,16 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			case errors.Is(err, dsstore.ErrConflict):
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
-			case errors.Is(err, dsstore.ErrEntityNotFound):
-				return nil, failedPrecondition("entity not found", 400)
 			case err != nil:
+				// Includes ErrEntityNotFound, which maps to NOT_FOUND (real
+				// Datastore's status for an update on an absent entity) on both
+				// this path and the transactional one — see mapStoreError.
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
 			}
 		case MutationDelete:
@@ -296,7 +305,22 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 		}
 		results = append(results, mr)
 	}
-	return &CommitResponse{Results: results}, nil
+	return &CommitResponse{Results: results, IndexUpdates: indexUpdates(results)}, nil
+}
+
+// indexUpdates approximates real Datastore's output-only
+// CommitResponse.index_updates: the number of mutations that changed the
+// datastore (a conflict-detected mutation changed nothing, and a delete still
+// updates indexes). The exact server-side count is unspecified, so this is the
+// emulator's documented approximation.
+func indexUpdates(results []MutationResult) int32 {
+	var n int32
+	for _, r := range results {
+		if !r.ConflictDetected {
+			n++
+		}
+	}
+	return n
 }
 
 // commitTransactional implements the Datastore transaction commit protocol. It
@@ -353,7 +377,7 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 		}
 	}
 
-	commitTime := clock.Now()
+	commitTime := truncateTimestamp(clock.Now())
 	applied, err := s.store.Commit(ctx, project, reads, writes)
 	s.clearReadSet(txn)
 	if err != nil {
@@ -362,13 +386,13 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 
 	results := make([]MutationResult, 0, len(applied))
 	for i := range applied {
-		mr := MutationResult{Version: applied[i].Version, UpdateTime: applied[i].UpdateTime}
+		mr := MutationResult{Version: applied[i].Version, CreateTime: applied[i].CreateTime, UpdateTime: applied[i].UpdateTime}
 		if allocatedKeys[i] != nil {
 			mr.Key = allocatedKeys[i]
 		}
 		results = append(results, mr)
 	}
-	return &CommitResponse{Results: results, CommitTime: commitTime}, nil
+	return &CommitResponse{Results: results, CommitTime: commitTime, IndexUpdates: indexUpdates(results)}, nil
 }
 
 // ─── Lookup / RunQuery ────────────────────────────────────────────────────────
@@ -380,7 +404,7 @@ func (s *Service) Lookup(ctx context.Context, project string, keys []Key, txn []
 	if err := s.requireActive(txn); err != nil {
 		return nil, err
 	}
-	resp := &LookupResult{}
+	resp := &LookupResult{ReadTime: truncateTimestamp(clock.Now())}
 	for _, k := range keys {
 		if !k.Complete() {
 			return nil, invalidArgument("lookup key is incomplete")
@@ -398,7 +422,7 @@ func (s *Service) Lookup(ctx context.Context, project string, keys []Key, txn []
 			return nil, mapStoreError(err)
 		default:
 			s.recordRead(txn, key, true, e.Version)
-			resp.Found = append(resp.Found, EntityResult{Entity: e, Version: e.Version})
+			resp.Found = append(resp.Found, EntityResult{Entity: e, Version: e.Version, CreateTime: e.CreateTime})
 		}
 	}
 	return resp, nil
@@ -412,17 +436,52 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if q == nil {
 		return nil, invalidArgument("run query request has no query")
 	}
+	if err := validateFilter(q.Filter); err != nil {
+		return nil, err
+	}
 	offset, limit, err := queryWindow(q)
 	if err != nil {
 		return nil, err
 	}
-	entities, err := s.store.ListKind(ctx, project, q.Kind)
+	entities, err := s.queryCandidates(ctx, project, q.Kind, q.Namespace, q.Database)
 	if err != nil {
-		return nil, mapStoreError(err)
+		return nil, err
 	}
-	out := &QueryResult{MoreResults: MoreResultsNoMoreResults}
+	// Resolve the request's cursor positions against the ordered candidate
+	// stream. The documented stage order is kind → filter → order + start/end
+	// cursor → offset → limit: a cursor bounds the ordered stream, then offset
+	// skips within that bound. StartCursor resumes strictly after the entity it
+	// names; EndCursor stops at (and includes) the entity it names, so an end
+	// cursor round-trips the page it came from.
+	lo, hi := 0, len(entities)
+	if len(q.StartCursor) > 0 {
+		i := cursorIndex(entities, q.StartCursor)
+		if i < 0 {
+			return nil, invalidArgument("invalid start cursor")
+		}
+		lo = i + 1
+	}
+	if len(q.EndCursor) > 0 {
+		i := cursorIndex(entities, q.EndCursor)
+		if i < 0 {
+			return nil, invalidArgument("invalid end cursor")
+		}
+		hi = i + 1
+	}
+	if hi < lo {
+		hi = lo
+	}
+	now := truncateTimestamp(clock.Now())
+	out := &QueryResult{
+		MoreResults:     MoreResultsNoMoreResults,
+		ResultType:      q.ResultType(),
+		ReadTime:        now,
+		SnapshotVersion: now.UnixMicro(),
+	}
 	skipped := 0
-	for _, e := range entities {
+	limitHit := false
+	var lastSkipped *dsstore.Entity
+	for _, e := range entities[lo:hi] {
 		if !entityInScope(e, q.Namespace, q.Database) {
 			continue
 		}
@@ -437,6 +496,8 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// so a cursor-based client can reconcile them.
 		if skipped < offset {
 			skipped++
+			ent := e
+			lastSkipped = &ent
 			continue
 		}
 		// Limit caps the returned entities. The scan keeps going only far
@@ -444,18 +505,68 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// report MORE_RESULTS_AFTER_LIMIT (real Datastore's signal that a
 		// limit, not the data set, ended the batch).
 		if limit >= 0 && len(out.Entities) == limit {
-			out.MoreResults = MoreResultsAfterLimit
+			limitHit = true
 			break
 		}
 		// Internal approximation: the emulator records the version of every
 		// entity the query returned and re-validates exactly those entities.
 		s.recordRead(txn, e.Key, true, e.Version)
-		out.Entities = append(out.Entities, EntityResult{Entity: e, Version: e.Version})
+		// A projection restricts the returned properties (the key is always
+		// kept); a keys-only projection strips every property.
+		if q.Projection != nil {
+			e = projectEntity(e, q.Projection.Properties)
+		}
+		out.Entities = append(out.Entities, EntityResult{
+			Entity:     e,
+			Version:    e.Version,
+			CreateTime: e.CreateTime,
+			Cursor:     entityCursor(e),
+		})
 	}
 	if skipped > 0 {
 		out.Skipped = skipped
+		if lastSkipped != nil {
+			out.SkippedCursor = entityCursor(*lastSkipped)
+		}
+	}
+	// MoreResults: a limit that cut the batch is MORE_RESULTS_AFTER_LIMIT;
+	// otherwise a request end_cursor that bounded it is
+	// MORE_RESULTS_AFTER_CURSOR. Real Datastore reports the latter even when
+	// the end cursor names the last result, because the cursor — not the data
+	// set — ended the scan.
+	if limitHit {
+		out.MoreResults = MoreResultsAfterLimit
+	} else if len(q.EndCursor) > 0 {
+		out.MoreResults = MoreResultsAfterCursor
+	}
+	// EndCursor points to the position after the last result, matching real
+	// Datastore's QueryResultBatch.end_cursor. Fed back as a request
+	// start_cursor it resumes at the next entity; fed back as an end_cursor it
+	// reproduces this page.
+	if len(out.Entities) > 0 {
+		out.EndCursor = out.Entities[len(out.Entities)-1].Cursor
 	}
 	return out, nil
+}
+
+// entityCursor returns the opaque position cursor after an entity. Real
+// Datastore uses a base64-encoded protobuf; the emulator's cursor wraps the
+// entity's canonical key, which is enough for a client to treat the value as
+// opaque and for the differential to fold it.
+func entityCursor(e dsstore.Entity) []byte {
+	return []byte(e.Key)
+}
+
+// cursorIndex returns the index of the candidate whose cursor equals the given
+// request cursor, or -1 when the stream has no such position. The candidate
+// slice is ordered by canonical key, the same encoding entityCursor returns.
+func cursorIndex(entities []dsstore.Entity, cursor []byte) int {
+	for i := range entities {
+		if bytes.Equal(entityCursor(entities[i]), cursor) {
+			return i
+		}
+	}
+	return -1
 }
 
 // queryWindow extracts a query's non-negative offset and limit. limit is -1
@@ -503,10 +614,13 @@ func (s *Service) RunAggregationQuery(ctx context.Context, project string, aq *A
 	if len(aggs) > maxAggregations {
 		return nil, invalidArgument("aggregation query supports at most five aggregations")
 	}
+	if err := validateFilter(aq.Nested.Filter); err != nil {
+		return nil, err
+	}
 
-	entities, err := s.store.ListKind(ctx, project, aq.Nested.Kind)
+	entities, err := s.queryCandidates(ctx, project, aq.Nested.Kind, aq.Nested.Namespace, aq.Nested.Database)
 	if err != nil {
-		return nil, mapStoreError(err)
+		return nil, err
 	}
 
 	// Reduce the nested query once, recording every matching entity in the
@@ -529,7 +643,7 @@ func (s *Service) RunAggregationQuery(ctx context.Context, project string, aq *A
 
 	// A non-grouped aggregation query returns one result whose aggregate
 	// properties map holds one entry per aggregation.
-	result := &AggregationResult{Aggregates: make(map[string]dsstore.Value, len(aggs)), ReadTime: clock.Now()}
+	result := &AggregationResult{Aggregates: make(map[string]dsstore.Value, len(aggs)), ReadTime: truncateTimestamp(clock.Now())}
 	unnamed := 0
 	for _, agg := range aggs {
 		alias := agg.Alias

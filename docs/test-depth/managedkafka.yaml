@@ -1,0 +1,25 @@
+# Behavioural depth record - managedkafka (TD1, filled in by TD10).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+service: managedkafka
+classes:
+  p2:
+    state: present
+    suites: [sdk-managed-kafka]
+    note: "depth_test.go (official gRPC client, under -race) races six goroutines on one clusterId — exactly one create wins, every loser is ALREADY_EXISTS; eight concurrent distinct topic creates all land with matching read-back; eight concurrent AddAclEntry calls onto one ACL add each distinct entry exactly once and are idempotent for a repeated entry. The data-plane half (parallel producer and reader sessions against a live broker) is the local Docker gate in tests/persistent_mode/gcp/managedkafka-broker, which needs the managedkafka_broker_e2e tag and a Docker daemon, so it is not part of this hermetic suite"
+  p3:
+    state: present
+    suites: [sdk-managed-kafka]
+    note: "the gRPC status codes for an unknown cluster (get/delete/child-create → NOT_FOUND; ListAcls is the cluster-scoped case, an acl get is acl-scoped), a duplicate cluster create (ALREADY_EXISTS), an invalid topic partition count and an invalid/absent-etag ACL update (INVALID_ARGUMENT), a stale ACL etag (ABORTED), an unknown topic/acl (NOT_FOUND) and — with no live broker — an empty consumer-group list plus NOT_FOUND get/update/delete of a group"
+  p4:
+    state: present
+    suites: [sdk-managed-kafka]
+    note: "pageSize/pageToken walks over clusters, topics and ACLs end on an empty token, never emit an empty non-terminal page and return every resource once in name-ascending order across page boundaries. Consumer-group paging is the broker-present case in the local Docker gate (a group exists only once a client commits offsets); with no broker the group list is empty and get/update/delete are NOT_FOUND, which p3 asserts"
+  p5:
+    state: present
+    suites: [sdk-managed-kafka]
+    note: "a 40-topic cluster listed back in one walk, and the cluster create → done operation → operations.get → update → get lifecycle: the operation is done inline with its metadata/response persisted, and the updated labels/capacityConfig are durable"

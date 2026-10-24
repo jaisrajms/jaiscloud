@@ -14,6 +14,7 @@ type MemoryStore struct {
 	services        map[string]map[string]Service        // project+"/"+location → name → service
 	backups         map[string]map[string]Backup         // project+"/"+location+"/"+service → name → backup
 	metadataImports map[string]map[string]MetadataImport // project+"/"+location+"/"+service → name → import
+	federations     map[string]map[string]Federation     // project+"/"+location → name → federation
 	operations      map[string]map[string]Operation      // project+"/"+location → id → operation
 }
 
@@ -23,6 +24,7 @@ func NewMemoryStore() *MemoryStore {
 		services:        make(map[string]map[string]Service),
 		backups:         make(map[string]map[string]Backup),
 		metadataImports: make(map[string]map[string]MetadataImport),
+		federations:     make(map[string]map[string]Federation),
 		operations:      make(map[string]map[string]Operation),
 	}
 }
@@ -237,6 +239,75 @@ func (s *MemoryStore) ListMetadataImports(_ context.Context, projectID, location
 	return result, nil
 }
 
+// --- Federations ---
+
+func (s *MemoryStore) CreateFederation(_ context.Context, projectID, location string, f Federation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := serviceScope(projectID, location)
+	if s.federations[key] == nil {
+		s.federations[key] = make(map[string]Federation)
+	}
+	if _, ok := s.federations[key][f.Name]; ok {
+		return ErrAlreadyExists
+	}
+	f.ProjectID = projectID
+	f.Location = location
+	s.federations[key][f.Name] = f
+	return nil
+}
+
+func (s *MemoryStore) GetFederation(_ context.Context, projectID, location, name string) (Federation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f, ok := s.federations[serviceScope(projectID, location)][name]
+	if !ok {
+		return Federation{}, ErrNoSuchFederation
+	}
+	return f, nil
+}
+
+func (s *MemoryStore) UpdateFederationAtomic(_ context.Context, projectID, location, name string, mutate func(Federation) (Federation, error)) (Federation, error) {
+	key := serviceScope(projectID, location)
+	return storeutil.AtomicUpdate(&s.mu,
+		func() (Federation, bool) { f, ok := s.federations[key][name]; return f, ok },
+		func(current Federation, exists bool) (Federation, error) {
+			if !exists {
+				return Federation{}, ErrNoSuchFederation
+			}
+			return mutate(current)
+		},
+		func(f Federation) {
+			f.ProjectID = projectID
+			f.Location = location
+			s.federations[key][name] = f
+		},
+	)
+}
+
+func (s *MemoryStore) DeleteFederation(_ context.Context, projectID, location, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := serviceScope(projectID, location)
+	if _, ok := s.federations[key][name]; !ok {
+		return ErrNoSuchFederation
+	}
+	delete(s.federations[key], name)
+	return nil
+}
+
+func (s *MemoryStore) ListFederations(_ context.Context, projectID, location string) ([]Federation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.federations[serviceScope(projectID, location)]
+	result := make([]Federation, 0, len(m))
+	for _, f := range m {
+		result = append(result, f)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
 func (s *MemoryStore) CreateOperation(_ context.Context, projectID, location string, op Operation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,5 +349,6 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	s.services = make(map[string]map[string]Service)
 	s.backups = make(map[string]map[string]Backup)
 	s.metadataImports = make(map[string]map[string]MetadataImport)
+	s.federations = make(map[string]map[string]Federation)
 	s.operations = make(map[string]map[string]Operation)
 }

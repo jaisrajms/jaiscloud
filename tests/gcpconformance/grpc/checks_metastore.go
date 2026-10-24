@@ -30,6 +30,10 @@ import (
 // exercises one RPC. Names are run-unique via cfg.ResourceName, so a long-lived
 // emulator never sees cross-run collisions.
 func metastoreChecks() []Check {
+	return append(append(metastoreBaseChecks(), metastoreFederationChecks()...), metastoreIAMChecks()...)
+}
+
+func metastoreBaseChecks() []Check {
 	return []Check{
 		{Service: "metastore", RPC: "CreateService", Method: "CreateService", KeyField: "LRO done + ACTIVE service", Run: checkMSCreateService},
 		{Service: "metastore", RPC: "GetService", Method: "GetService", KeyField: "name/state round-trip", Run: checkMSGetService},

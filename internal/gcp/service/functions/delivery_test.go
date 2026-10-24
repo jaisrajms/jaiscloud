@@ -2,11 +2,14 @@ package functions
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
@@ -16,9 +19,9 @@ import (
 // failingExecutor always fails an invocation, for retry/dead-letter tests.
 type failingExecutor struct{ calls int }
 
-func (e *failingExecutor) Invoke(context.Context, lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
+func (e *failingExecutor) Invoke(context.Context, container.Request) (container.Result, error) {
 	e.calls++
-	return lambdaexec.InvokeResult{}, errors.New("boom")
+	return container.Result{}, errors.New("boom")
 }
 func (e *failingExecutor) DeleteFunction(context.Context, string) {}
 func (e *failingExecutor) Reset(context.Context)                  {}
@@ -239,10 +242,11 @@ func TestDispatchForwardToDeadLetter(t *testing.T) {
 	})
 	setDeliverySubscription(t, fs, "fn", "eventarc-us-central1-functions-fn")
 
+	occurredAt := time.Date(2026, 10, 10, 4, 24, 54, 929_000_000, time.UTC)
 	s.DispatchEvent(ctx, eventing.Event{
 		Project: "proj", EventType: eventing.TypePubSubPublish,
 		Resource: "projects/proj/topics/t", Source: eventing.SourcePubSub,
-		EventID: "m1", Data: []byte("payload"),
+		EventID: "m1", Data: []byte("payload"), OccurredAt: occurredAt,
 	})
 
 	got := deliveries(t, s)
@@ -261,6 +265,11 @@ func TestDispatchForwardToDeadLetter(t *testing.T) {
 	}
 	if subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"] != "2" {
 		t.Fatalf("delivery count attr = %q", subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"])
+	}
+	// The fourth attribute (the one the emulator previously omitted) carries the
+	// original publish time in real GCP's layout.
+	if subs.lastAttrs["CloudPubSubDeadLetterSourceTopicPublishTime"] != "2026-10-10T04:24:54.929+00:00" {
+		t.Fatalf("source publish time attr = %q", subs.lastAttrs["CloudPubSubDeadLetterSourceTopicPublishTime"])
 	}
 }
 
@@ -739,4 +748,153 @@ func TestDispatchPersistentThrottleDoesNotDeadLetter(t *testing.T) {
 		t.Fatalf("throttled delivery was dead-lettered: %+v published=%d", d, subs.published)
 	}
 	exec.releaseAll()
+}
+
+// TestDeliveryCloudEventPubSubEnvelope covers FNX5: a Pub/Sub event is mapped
+// onto the real gen2 CloudEvent — the messagePublished type, the
+// //pubsub.googleapis.com source, and the MessagePublishedData envelope (base64
+// data + subscription) a handler written for real GCP expects.
+func TestDeliveryCloudEventPubSubEnvelope(t *testing.T) {
+	when := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	rec := functionsstore.Delivery{
+		Project: "proj", Location: "us-central1", FunctionID: "fn",
+		Source: eventing.SourcePubSub, EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t", EventID: "m1",
+		Data: `{"marker":"x"}`, Attributes: map[string]string{"k": "v"},
+		CreateTime: when,
+	}
+	ce := deliveryCloudEvent(rec, "eventarc-us-central1-functions-fn", when)
+	if ce.Type != eventing.TypePubSubPublishCloudEvent {
+		t.Fatalf("type = %q, want %q", ce.Type, eventing.TypePubSubPublishCloudEvent)
+	}
+	if ce.Source != "//pubsub.googleapis.com/projects/proj/topics/t" {
+		t.Fatalf("source = %q", ce.Source)
+	}
+	if ce.ID != "m1" || !ce.Time.Equal(when) || ce.DataContentType != "application/json" {
+		t.Fatalf("cloud event = %+v", ce)
+	}
+	var body struct {
+		Message struct {
+			MessageID   string            `json:"messageId"`
+			Data        string            `json:"data"`
+			Attributes  map[string]string `json:"attributes"`
+			PublishTime string            `json:"publishTime"`
+		} `json:"message"`
+		Subscription string `json:"subscription"`
+	}
+	if err := json.Unmarshal(ce.Data, &body); err != nil {
+		t.Fatalf("envelope: %v (%s)", err, ce.Data)
+	}
+	if body.Message.Data != base64.StdEncoding.EncodeToString([]byte(rec.Data)) {
+		t.Fatalf("message.data = %q, want base64 of the published payload", body.Message.Data)
+	}
+	if body.Message.MessageID != "m1" || body.Message.Attributes["k"] != "v" {
+		t.Fatalf("message = %+v", body.Message)
+	}
+	if body.Message.PublishTime != when.Format(time.RFC3339Nano) {
+		t.Fatalf("publishTime = %q", body.Message.PublishTime)
+	}
+	if body.Subscription != "projects/proj/subscriptions/eventarc-us-central1-functions-fn" {
+		t.Fatalf("subscription = %q", body.Subscription)
+	}
+}
+
+// TestDeliveryCloudEventStorageEnvelope covers the Cloud Storage side of FNX5:
+// the Eventarc CloudEvent type/source/subject with the StorageObjectData JSON
+// body, and a fresh ce-id per event.
+func TestDeliveryCloudEventStorageEnvelope(t *testing.T) {
+	cases := map[string]string{
+		eventing.TypeStorageFinalize: "google.cloud.storage.object.v1.finalized",
+		eventing.TypeStorageDelete:   "google.cloud.storage.object.v1.deleted",
+	}
+	ids := map[string]bool{}
+	for eventType, wantType := range cases {
+		rec := functionsstore.Delivery{
+			Project: "proj", Location: "us-central1", FunctionID: "gcsfn",
+			Source: eventing.SourceStorage, EventType: eventType,
+			Resource: "projects/_/buckets/bkt", EventID: "bkt/obj.txt/1", Data: `{"name":"obj.txt"}`,
+			Attributes: map[string]string{"objectId": "obj.txt"},
+		}
+		ce := deliveryCloudEvent(rec, "", time.Time{})
+		if ce.Type != wantType {
+			t.Fatalf("%s type = %q, want %q", eventType, ce.Type, wantType)
+		}
+		if ce.Source != "//storage.googleapis.com/projects/_/buckets/bkt" {
+			t.Fatalf("%s source = %q", eventType, ce.Source)
+		}
+		if ce.Subject != "objects/obj.txt" {
+			t.Fatalf("%s subject = %q, want objects/obj.txt", eventType, ce.Subject)
+		}
+		if string(ce.Data) != rec.Data {
+			t.Fatalf("%s body = %q, want the StorageObjectData %q", eventType, ce.Data, rec.Data)
+		}
+		// ce-id is unique per event, not the producer's composite EventID: a
+		// finalize and a delete of the same generation must not collide.
+		if ce.ID == rec.EventID || ce.ID == "" {
+			t.Fatalf("%s ce-id = %q, want a fresh id distinct from %q", eventType, ce.ID, rec.EventID)
+		}
+		ids[ce.ID] = true
+	}
+	if len(ids) != len(cases) {
+		t.Fatalf("storage ce-ids are not unique across events: %v", ids)
+	}
+}
+
+// TestDeliveryCloudEventSubscriptionFallback covers a function with no backing
+// subscription (no trigger provisioner): the envelope still names the
+// deterministic Eventarc subscription the provisioner would have created.
+func TestDeliveryCloudEventSubscriptionFallback(t *testing.T) {
+	rec := functionsstore.Delivery{
+		Project: "proj", Location: "us-central1", FunctionID: "fn",
+		Source: eventing.SourcePubSub, EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t", EventID: "m1", Data: "x",
+	}
+	var body struct {
+		Subscription string `json:"subscription"`
+	}
+	if err := json.Unmarshal(deliveryCloudEvent(rec, "", time.Time{}).Data, &body); err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	if body.Subscription != "projects/proj/subscriptions/eventarc-us-central1-functions-fn" {
+		t.Fatalf("subscription = %q", body.Subscription)
+	}
+}
+
+// TestDispatchDeliversRealCloudEventToExecutor proves the whole delivery path
+// hands the executor the real CloudEvent (type/source/envelope) while the
+// persisted delivery record keeps the raw published payload.
+func TestDispatchDeliversRealCloudEventToExecutor(t *testing.T) {
+	ctx := context.Background()
+	eventTime := time.Date(2026, 4, 5, 6, 7, 8, 0, time.UTC)
+	exec := &recordingExecutor{}
+	s, _ := newDeliveryService(t, WithExecutor(exec))
+	createEventFunction(t, s, "fn", map[string]any{
+		"eventType": "google.pubsub.topic.publish", "resource": "projects/proj/topics/t",
+	})
+
+	s.DispatchEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t", Source: eventing.SourcePubSub,
+		EventID: "m1", Data: []byte(`{"marker":"x"}`),
+		OccurredAt: eventTime,
+	})
+
+	if exec.invoked != 1 || exec.req.Event == nil {
+		t.Fatalf("executor not invoked with an event: %+v", exec.req)
+	}
+	if exec.req.Event.Type != eventing.TypePubSubPublishCloudEvent {
+		t.Fatalf("event type = %q", exec.req.Event.Type)
+	}
+	if exec.req.Event.Source != "//pubsub.googleapis.com/projects/proj/topics/t" {
+		t.Fatalf("event source = %q", exec.req.Event.Source)
+	}
+	if !exec.req.Event.Time.Equal(eventTime) {
+		t.Fatalf("event time = %v, want the producer event time %v", exec.req.Event.Time, eventTime)
+	}
+	if !strings.Contains(string(exec.req.Event.Data), `"message"`) {
+		t.Fatalf("event body = %q, want the MessagePublishedData envelope", exec.req.Event.Data)
+	}
+	if string(exec.req.Payload) != `{"marker":"x"}` {
+		t.Fatalf("executor payload = %q, want the raw published data", exec.req.Payload)
+	}
 }

@@ -84,11 +84,12 @@ func TestUpdateServiceMask(t *testing.T) {
 		t.Fatalf("identifier = %s", got.Identifier)
 	}
 
-	// An unsupported path is a 501 UnsupportedOperation.
+	// A mask path that names no field of a Service is a client error, not an
+	// unimplemented operation (AIP-134/AIP-161).
 	if _, err := s.UpdateService(ctx, "test", created.ID, monitoringstore.Service{}, []string{"bogus"}); err == nil {
-		t.Fatal("unsupported mask path should error")
-	} else if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 501 {
-		t.Fatalf("unsupported mask err = %v, want 501", err)
+		t.Fatal("unknown mask path should error")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 400 || perr.Code != "InvalidArgument" {
+		t.Fatalf("unknown mask err = %v, want 400 InvalidArgument", err)
 	}
 
 	// A full replace that drops the identifier is rejected.

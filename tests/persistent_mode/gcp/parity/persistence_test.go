@@ -19,13 +19,19 @@
 //	  iceberg                           — tests/persistent_mode/gcp/iceberg
 //
 //	probed here:
-//	  bigquery, clouddns, cloudsql, compute, eventarc, firestore, functions,
-//	  managedkafka, memorystore, metastore, scheduler, tasks, workflowexecutions, workflows
+//	  bigquery, clouddns, cloudsql, compute, container, eventarc, firestore,
+//	  functions, managedkafka, memorystore, metastore, run, scheduler, tasks,
+//	  workflowexecutions, workflows
 //
 // No provider service is skipped: each has a simple, schema-correct
 // REST create/read pair. Services whose data lives in the shared ResourceStore
 // (clouddns, cloudsql, compute, memorystore) are cleared by the resources
 // resetter; the rest are cleared by their own store resetter.
+//
+// TestPersistenceProbeCoverage fails if a service in
+// adapter.KnownServiceNames() is neither probed here nor documented in
+// probedElsewhere / persistenceExemptions, so a new service cannot land without
+// proving (or explicitly disclaiming) its persistence round-trip.
 //
 // Required env:
 //
@@ -38,6 +44,7 @@
 package parity_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,10 +53,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	gcpadapter "jaiscloud/internal/gcp/adapter"
 )
 
 const (
@@ -72,12 +82,14 @@ var probes = []probe{
 	{"clouddns", seedCloudDNS},
 	{"cloudsql", seedCloudSQL},
 	{"compute", seedCompute},
+	{"container", seedContainer},
 	{"eventarc", seedEventarc},
 	{"firestore", seedFirestore},
 	{"functions", seedFunctions},
 	{"managedkafka", seedManagedKafka},
 	{"memorystore", seedMemorystore},
 	{"metastore", seedMetastore},
+	{"run", seedRun},
 	{"scheduler", seedScheduler},
 	{"tasks", seedTasks},
 	{"workflowexecutions", seedWorkflowExecutions},
@@ -93,16 +105,31 @@ type driver struct {
 }
 
 func (d *driver) do(method, path, body string) (int, string, error) {
-	var rd io.Reader
+	var data []byte
 	if body != "" {
-		rd = strings.NewReader(body)
+		data = []byte(body)
+	}
+	ct := ""
+	if body != "" {
+		ct = "application/json"
+	}
+	return d.doBytes(method, path, data, ct)
+}
+
+// doBytes is do for binary/typed payloads (the /_jaiscloud/export tarball and
+// its /import round-trip), where the body is raw bytes and the caller chooses
+// the Content-Type.
+func (d *driver) doBytes(method, path string, data []byte, contentType string) (int, string, error) {
+	var rd io.Reader
+	if data != nil {
+		rd = bytes.NewReader(data)
 	}
 	req, err := http.NewRequest(method, d.base+path, rd)
 	if err != nil {
 		return 0, "", err
 	}
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -522,6 +549,47 @@ func seedWorkflowExecutions(d *driver, suffix string) (func() error, func() erro
 	return d.verifyPresent(get), d.verifyGone(get), nil
 }
 
+// seedContainer creates a GKE cluster
+// (container.googleapis.com/v1/{parent}/clusters, projects.locations.clusters.create).
+// The cluster name is carried in the body (the classic GKE create shape). GKE
+// shares the canonical /v1/projects/{p}/locations/{l}/clusters path with Managed
+// Kafka on the single emulator origin, so the probe uses the "/container/" path
+// prefix — jaiscloud's routing convention for GKE, which Terraform/gcloud also
+// emit. Real SDK clients instead address container.googleapis.com, which the
+// emulator accepts via the Host discriminator (covered by the adapter routing
+// tests, not here).
+func seedContainer(d *driver, suffix string) (func() error, func() error, error) {
+	id := "gke-" + suffix
+	post := fmt.Sprintf("/container/v1/projects/%s/locations/%s/clusters", project, location)
+	if err := d.expect("POST", post, jsonBody(map[string]any{
+		"cluster": map[string]any{
+			"name":             id,
+			"initialNodeCount": 1,
+		},
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	get := fmt.Sprintf("/container/v1/projects/%s/locations/%s/clusters/%s", project, location, id)
+	return d.verifyPresent(get), d.verifyGone(get), nil
+}
+
+// seedRun creates a Cloud Run service (run/v2 projects.locations.services.create).
+func seedRun(d *driver, suffix string) (func() error, func() error, error) {
+	id := "run-" + suffix
+	post := fmt.Sprintf("/v2/projects/%s/locations/%s/services?serviceId=%s", project, location, url.QueryEscape(id))
+	if err := d.expect("POST", post, jsonBody(map[string]any{
+		"template": map[string]any{
+			"containers": []any{
+				map[string]any{"image": "us-docker.pkg.dev/cloudrun/container/hello"},
+			},
+		},
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	get := fmt.Sprintf("/v2/projects/%s/locations/%s/services/%s", project, location, id)
+	return d.verifyPresent(get), d.verifyGone(get), nil
+}
+
 // ── process harness (mirrors tests/persistent_mode/gcp/core, self-contained) ──
 
 func gcpBin() string {
@@ -687,5 +755,216 @@ func TestPersistenceParity(t *testing.T) {
 				t.Errorf("resource not cleared by reset: %v", err)
 			}
 		})
+	}
+}
+
+// TestSnapshotRoundTrip proves the /_jaiscloud/export → reset → import path
+// round-trips every probed service's state through the Postgres-backed stores:
+// it seeds one resource per probe, captures the full snapshot, resets, asserts
+// the state is gone, re-imports the snapshot and asserts the seed's "survived"
+// reads succeed again with equivalent data. A store that is not registered as a
+// Resetter fails the reset phase; a store that is not registered as a
+// Snapshotter (or whose Snapshot/Restore drops fields) fails the import phase.
+func TestSnapshotRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping snapshot round-trip test")
+	}
+
+	port := persistPort()
+	base := fmt.Sprintf("http://localhost:%d", port)
+	blobDir := t.TempDir()
+	d := &driver{base: base, client: &http.Client{Timeout: 60 * time.Second}}
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	proc := startGCPProcess(t, port, dsn, blobDir)
+	defer stopProcess(t, proc, port)
+	waitForHealth(t, base)
+
+	type seeded struct {
+		service  string
+		survived func() error
+		cleared  func() error
+	}
+	var seeds []seeded
+	for _, p := range probes {
+		survived, cleared, err := p.seed(d, suffix)
+		if err != nil {
+			t.Errorf("seed %s: %v", p.service, err)
+			continue
+		}
+		seeds = append(seeds, seeded{p.service, survived, cleared})
+	}
+	if len(seeds) == 0 {
+		t.Fatal("no probe seeded — nothing to round-trip")
+	}
+
+	// ── Export the full state ────────────────────────────────────────────────
+	code, tarball, err := d.doBytes("GET", "/_jaiscloud/export", nil, "")
+	if err != nil {
+		t.Fatalf("GET /_jaiscloud/export: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Fatalf("GET /_jaiscloud/export: got HTTP %d: %s", code, truncate(tarball))
+	}
+	if len(tarball) < 2 || tarball[0] != 0x1f || tarball[1] != 0x8b {
+		t.Fatalf("export is not a gzip tarball (first bytes %x)", []byte(tarball[:min(len(tarball), 2)]))
+	}
+
+	// ── Reset: every seeded store must clear (Resetter registration) ─────────
+	if code, body, err := d.do("POST", "/_jaiscloud/reset", ""); err != nil {
+		t.Fatalf("POST /_jaiscloud/reset: %v", err)
+	} else if code != http.StatusOK {
+		t.Fatalf("POST /_jaiscloud/reset: got HTTP %d: %s", code, truncate(body))
+	}
+	for _, s := range seeds {
+		s := s
+		t.Run(s.service+"/cleared-by-reset", func(t *testing.T) {
+			if err := s.cleared(); err != nil {
+				t.Errorf("resource not cleared by reset: %v", err)
+			}
+		})
+	}
+
+	// ── Import: every seeded store must restore (Snapshotter registration) ──
+	code, body, err := d.doBytes("POST", "/_jaiscloud/import?reset_first=true", []byte(tarball), "application/gzip")
+	if err != nil {
+		t.Fatalf("POST /_jaiscloud/import: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Fatalf("POST /_jaiscloud/import: got HTTP %d: %s", code, truncate(body))
+	}
+	for _, s := range seeds {
+		s := s
+		t.Run(s.service+"/restored-by-import", func(t *testing.T) {
+			if err := s.survived(); err != nil {
+				t.Errorf("resource not restored by import: %v", err)
+			}
+		})
+	}
+}
+
+// probedElsewhere maps a wire service (as named by adapter.KnownServiceNames)
+// to where its restart/snapshot round-trip is otherwise proven: a sibling
+// gcp_persistence suite (a separate Go module or dedicated harness), or — for a
+// metadata-only service whose state lives in the shared ResourceStore — the
+// "resources" snapshotters exercised by the probes above.
+var probedElsewhere = map[string]string{
+	"storage":       "tests/persistent_mode/gcp/storage (restart + export/import)",
+	"pubsub":        "tests/persistent_mode/gcp/core (restart + export/import); parity-grpc covers the gRPC-only ack-state",
+	"secretmanager": "tests/persistent_mode/gcp/core (restart + export/import)",
+	"kms":           "tests/persistent_mode/gcp/core (restart + export/import); parity-grpc covers the gRPC-only state",
+	"iam":           "tests/persistent_mode/gcp/core (restart + export/import)",
+	"dataproc":      "tests/persistent_mode/gcp/dataproc (restart + export/import)",
+	"iceberg":       "tests/persistent_mode/gcp/iceberg (iceberg_e2e — Spark round-trip; heavier than the offline gate)",
+	"datastore":     "tests/persistent_mode/gcp/parity-grpc (restart + export/import)",
+	"logging":       "tests/persistent_mode/gcp/parity-grpc (restart + export/import)",
+	"monitoring":    "tests/persistent_mode/gcp/parity-grpc (restart + export/import)",
+	// The shared ResourceStore (registered as the "resources" snapshotter and
+	// resetter) backs the metadata-only services below; its round-trip is
+	// exercised here by the clouddns/cloudsql/compute/memorystore probes.
+	"firestoreadmin":  "gRPC wire service (the REST control plane is served under the firestore service); its database/field/backup/user-creds state is the firestore provider's shared ResourceStore",
+	"serviceusage":    "service enable/disable state and operations live in the shared ResourceStore",
+	"resourcemanager": "project lifecycle state and operations live in the shared ResourceStore",
+}
+
+// persistenceExemptions documents a wire service with no persisted resource
+// state of its own to round-trip.
+var persistenceExemptions = map[string]string{
+	"iamcredentials": "token-only surface (generateAccessToken/generateIdToken) with no resource lifecycle",
+}
+
+// wireAlias maps a wire service name to the probe/fidelity name used in the
+// probes table; the legacy GCP hosts (dns/sqladmin/redis) differ.
+var wireAlias = map[string]string{
+	"dns":      "clouddns",
+	"sqladmin": "cloudsql",
+	"redis":    "memorystore",
+}
+
+// TestPersistenceProbeCoverage fails if a wire service the adapter knows has
+// neither a round-trip probe here nor a documented sibling-suite/exemption
+// classification, so the persistence matrix cannot drift silently as services
+// gain a store. It also rejects a service classified more than once, and stale
+// classifications that name something the adapter no longer serves (a
+// probedElsewhere/exemption/wireAlias entry or a probe whose service is
+// unknown).
+func TestPersistenceProbeCoverage(t *testing.T) {
+	probed := map[string]bool{}
+	for _, p := range probes {
+		if probed[p.service] {
+			t.Errorf("duplicate probe for service %q", p.service)
+		}
+		probed[p.service] = true
+	}
+
+	known := map[string]bool{}
+	var missing []string
+	for _, wire := range gcpadapter.KnownServiceNames() {
+		known[wire] = true
+		name := wire
+		if alias, ok := wireAlias[wire]; ok {
+			name = alias
+		}
+		if probed[name] {
+			continue
+		}
+		if _, ok := probedElsewhere[wire]; ok {
+			continue
+		}
+		if _, ok := persistenceExemptions[wire]; ok {
+			continue
+		}
+		missing = append(missing, wire)
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("persistence-probe coverage: %d wire service(s) have neither a probe nor a documented classification: %v", len(missing), missing)
+	}
+
+	var stale []string
+	for wire := range probedElsewhere {
+		if !known[wire] {
+			stale = append(stale, "probedElsewhere:"+wire)
+		}
+	}
+	for wire := range persistenceExemptions {
+		if !known[wire] {
+			stale = append(stale, "exemption:"+wire)
+		}
+	}
+	aliasTargets := map[string]bool{}
+	for _, target := range wireAlias {
+		aliasTargets[target] = true
+	}
+	for wire := range wireAlias {
+		if !known[wire] {
+			stale = append(stale, "wireAlias:"+wire)
+		}
+	}
+	// A probe whose service is neither a known wire service nor an alias target
+	// is orphaned (the adapter renamed/removed it), so the round-trip no longer
+	// covers what it claims.
+	for name := range probed {
+		if !known[name] && !aliasTargets[name] {
+			stale = append(stale, "probe:"+name)
+		}
+	}
+	sort.Strings(stale)
+	if len(stale) > 0 {
+		t.Fatalf("persistence-probe coverage: %d stale classification(s): %v", len(stale), stale)
+	}
+
+	for _, wire := range gcpadapter.KnownServiceNames() {
+		name := wire
+		if alias, ok := wireAlias[wire]; ok {
+			name = alias
+		}
+		_, here := probed[name]
+		_, elsewhere := probedElsewhere[wire]
+		_, exempt := persistenceExemptions[wire]
+		if (here && elsewhere) || (here && exempt) || (elsewhere && exempt) {
+			t.Errorf("service %q is classified more than once (probe=%v elsewhere=%v exempt=%v)", wire, here, elsewhere, exempt)
+		}
 	}
 }

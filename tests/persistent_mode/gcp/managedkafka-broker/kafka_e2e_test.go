@@ -35,6 +35,8 @@ import (
 	"testing"
 	"text/template"
 	"time"
+
+	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 )
 
 // kafkaProbeResult mirrors the JSON line the emulator's `kafka-probe` command
@@ -99,7 +101,8 @@ func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
 		t.Fatalf("create topic: HTTP %d: %v", code, topicBody)
 	}
 
-	// The advertised address must be the in-cluster Service the broker owns.
+	// The advertised address must be the in-cluster Service the broker owns, in
+	// the cluster's own namespace (KNS4).
 	code, cl := api(t, httpClient, http.MethodGet, base+clusterPath(cluster), nil)
 	if code < 200 || code >= 300 {
 		t.Fatalf("get cluster: HTTP %d: %v", code, cl)
@@ -108,7 +111,8 @@ func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
 	if addr == "" || strings.HasSuffix(addr, ".cloud.goog") {
 		t.Fatalf("bootstrapAddress = %q, want a live broker endpoint (is the emulator running JAISCLOUD_KAFKA_BROKER_MODE=k8s?)", addr)
 	}
-	if want := fmt.Sprintf(".%s.svc.cluster.local:9092", namespace()); !strings.HasSuffix(addr, want) {
+	clusterNS := kafkabroker.ClusterNamespace(testProject, testRegion, cluster)
+	if want := fmt.Sprintf(".%s.svc.cluster.local:9092", clusterNS); !strings.HasSuffix(addr, want) {
 		t.Fatalf("bootstrapAddress %q does not end with %q", addr, want)
 	}
 	svcName := strings.SplitN(addr, ".", 2)[0]
@@ -176,10 +180,12 @@ func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
 		t.Fatalf("control plane committed offsets sum to %d, want %d (from the broker)", committed, records)
 	}
 
-	// Delete the cluster and assert the broker is reaped.
+	// Delete the cluster and assert the broker is reaped, including the
+	// namespace it owned.
 	deleteCluster(t, base, cluster)
-	waitForResourceGone(t, "svc", svcName, 60*time.Second)
-	waitForResourceGone(t, "pod", svcName, 90*time.Second)
+	waitForResourceGone(t, clusterNS, "svc", svcName, 60*time.Second)
+	waitForResourceGone(t, clusterNS, "pod", svcName, 90*time.Second)
+	waitForNamespaceGone(t, clusterNS, 60*time.Second)
 }
 
 // emulatorImage returns the image the running emulator Deployment uses, so the

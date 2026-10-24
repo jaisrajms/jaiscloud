@@ -87,8 +87,8 @@ func TestTemporaryHoldBlocksDeleteAndOverwrite(t *testing.T) {
 
 	_, err = p.ObjectsDelete(ctx, bucketParamsWithObj("hold-tmp", "obj.txt"))
 	perr := providerErr(t, err, 403)
-	if !strings.Contains(perr.Message, "temporary hold") {
-		t.Fatalf("delete message = %q, want it to contain %q", perr.Message, "temporary hold")
+	if !strings.Contains(perr.Message, "active Temporary hold") {
+		t.Fatalf("delete message = %q, want it to contain %q", perr.Message, "active Temporary hold")
 	}
 
 	// Overwriting a held object is rejected too.
@@ -96,8 +96,8 @@ func TestTemporaryHoldBlocksDeleteAndOverwrite(t *testing.T) {
 	over.Params[wire.MediaKey] = []byte("new")
 	_, err = p.ObjectsInsert(ctx, over)
 	perr = providerErr(t, err, 403)
-	if !strings.Contains(perr.Message, "temporary hold") {
-		t.Fatalf("overwrite message = %q, want it to contain %q", perr.Message, "temporary hold")
+	if !strings.Contains(perr.Message, "active Temporary hold") {
+		t.Fatalf("overwrite message = %q, want it to contain %q", perr.Message, "active Temporary hold")
 	}
 
 	// Releasing the hold allows both.
@@ -117,16 +117,16 @@ func TestEventBasedHoldBlocksDeleteAndOverwrite(t *testing.T) {
 
 	_, err := p.ObjectsDelete(ctx, bucketParamsWithObj("hold-evt", "obj.txt"))
 	perr := providerErr(t, err, 403)
-	if !strings.Contains(perr.Message, "event-based hold") {
-		t.Fatalf("delete message = %q, want it to contain %q", perr.Message, "event-based hold")
+	if !strings.Contains(perr.Message, "active Event-Based hold") {
+		t.Fatalf("delete message = %q, want it to contain %q", perr.Message, "active Event-Based hold")
 	}
 
 	over := bucketParamsWithObj("hold-evt", "obj.txt")
 	over.Params[wire.MediaKey] = []byte("new")
 	_, err = p.ObjectsInsert(ctx, over)
 	perr = providerErr(t, err, 403)
-	if !strings.Contains(perr.Message, "event-based hold") {
-		t.Fatalf("overwrite message = %q, want it to contain %q", perr.Message, "event-based hold")
+	if !strings.Contains(perr.Message, "active Event-Based hold") {
+		t.Fatalf("overwrite message = %q, want it to contain %q", perr.Message, "active Event-Based hold")
 	}
 }
 
@@ -156,8 +156,8 @@ func TestBucketDefaultEventBasedHoldInherited(t *testing.T) {
 	}
 	_, err = p.ObjectsDelete(ctx, bucketParamsWithObj("hold-def", "inherited.txt"))
 	perr := providerErr(t, err, 403)
-	if !strings.Contains(perr.Message, "event-based hold") {
-		t.Fatalf("delete message = %q, want it to contain %q", perr.Message, "event-based hold")
+	if !strings.Contains(perr.Message, "active Event-Based hold") {
+		t.Fatalf("delete message = %q, want it to contain %q", perr.Message, "active Event-Based hold")
 	}
 
 	// Overwriting the inherited-hold object is blocked too.
@@ -165,8 +165,8 @@ func TestBucketDefaultEventBasedHoldInherited(t *testing.T) {
 	over.Params[wire.MediaKey] = []byte("new")
 	_, err = p.ObjectsInsert(ctx, over)
 	perr = providerErr(t, err, 403)
-	if !strings.Contains(perr.Message, "event-based hold") {
-		t.Fatalf("overwrite message = %q, want it to contain %q", perr.Message, "event-based hold")
+	if !strings.Contains(perr.Message, "active Event-Based hold") {
+		t.Fatalf("overwrite message = %q, want it to contain %q", perr.Message, "active Event-Based hold")
 	}
 
 	// An explicit eventBasedHold=false on the insert overrides the default.
