@@ -308,6 +308,34 @@ func startCmd() *cobra.Command {
 				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
 			}
 
+			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
+			// Load returns (nil, nil) and nothing below runs.
+			callbackURL := viper.GetString("plugin_callback_url")
+			if callbackURL == "" {
+				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
+			}
+			pluginHost, err := pluginhost.Load(ctx, viper.GetStringSlice("plugins"), pluginhost.Deps{
+				Cloud: model.CloudAWS, Version: version, Registry: app.Registry, Adapter: cloudAdapter,
+				Resources: s.resources, CallbackURL: callbackURL,
+				Timeout:   viper.GetDuration("plugin_timeout"),
+				StartWait: viper.GetDuration("plugin_wait"),
+				CallRetry: viper.GetDuration("plugin_retry"),
+				Secret:    viper.GetString("plugin_secret"),
+			})
+			if err != nil {
+				return err
+			}
+			if pluginHost != nil {
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
+				adminHandler.RegisterResetter(pluginHost)
+				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
+				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+			}
+
+			// Everything that calls services on its own starts only now: the registry is
+			// final, so a plugin that overrides a service is used from the first call.
+			app.Start()
+
 			var uiServer *ui.UIServer
 			if cfg.UIEnabled {
 				uiProviders := &ui.AWSProviders{
@@ -363,30 +391,6 @@ func startCmd() *cobra.Command {
 						prevCleanup5()
 					}
 				}
-			}
-
-			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
-			// Load returns (nil, nil) and nothing below runs.
-			callbackURL := viper.GetString("plugin_callback_url")
-			if callbackURL == "" {
-				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
-			}
-			pluginHost, err := pluginhost.Load(ctx, viper.GetStringSlice("plugins"), pluginhost.Deps{
-				Cloud: model.CloudAWS, Version: version, Registry: app.Registry, Adapter: cloudAdapter,
-				Resources: s.resources, CallbackURL: callbackURL,
-				Timeout:   viper.GetDuration("plugin_timeout"),
-				StartWait: viper.GetDuration("plugin_wait"),
-				CallRetry: viper.GetDuration("plugin_retry"),
-				Secret:    viper.GetString("plugin_secret"),
-			})
-			if err != nil {
-				return err
-			}
-			if pluginHost != nil {
-				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
-				adminHandler.RegisterResetter(pluginHost)
-				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
-				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
 			}
 
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
@@ -550,6 +554,8 @@ type AppContext struct {
 	DNSP           *dns.DNSProvider
 	StackP         *stackprovider.StackProvider
 	Sched          *ebscheduler.Scheduler
+	// Start launches the background workers; call it once plugins are loaded.
+	Start func()
 }
 
 // appStores holds all store instances that the server depends on.
@@ -689,9 +695,16 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
+	// The registry exists before the providers so cross-service seams can hold it:
+	// every call from one service to another goes through Registry.Dispatch (see
+	// internal/aws/seams), and a plugin that overrides a key is used by all of them.
+	reg := provider.NewRegistry()
+	seamSet := seams.NewSet(reg, awsadapter.NewAdapter(nil).ServiceToProvider,
+		seams.Scope{Account: cfg.AccountID, Region: cfg.Region, Clock: cfg.Clock, Port: cfg.Port})
+
 	sparkMode, _ := config.ExecutorMode("spark", "mock")
 
-	s3Fetcher := blobfs.NewS3BlobFetcher(s.blobs)
+	s3Fetcher := seamSet.S3() // EMR bootstrap scripts are read through the registry too
 	bootstrapPrefixes := []string{"/etc/pki", "/home/hadoop"}
 	if v := os.Getenv("JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES"); v != "" {
 		bootstrapPrefixes = nil
@@ -800,7 +813,9 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		keyStore = keyprovider.NewMemoryKeyStore()
 	}
 	keyProv := keyprovider.New(keyStore, nil, dek)
-	kmsEncryptor := keyProv.AsKeyEncryptor()
+	// Secrets and SSM encrypt through the registry (Key.Encrypt/Decrypt/GenerateDataKey),
+	// so a KMS plugin protects what they store.
+	kmsEncryptor := seamSet.KMS()
 	secretProv := secretprovider.New(s.secrets, kmsEncryptor)
 	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
@@ -849,11 +864,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
 	queueP := queue.New(s.resources, s.messages, bus)
-	// The registry exists before the providers so cross-service seams can hold it:
-	// every internal call goes through Registry.Dispatch (see internal/aws/seams).
-	reg := provider.NewRegistry()
-	seamSet := seams.NewSet(reg, awsadapter.NewAdapter(nil).ServiceToProvider,
-		seams.Scope{Account: cfg.AccountID, Region: cfg.Region, Clock: cfg.Clock, Port: cfg.Port})
 	sqsSeam, lambdaSeam, snsSeam, ebSeam := seamSet.SQS(), seamSet.Lambda(), seamSet.SNS(), seamSet.EventBridge()
 	logsSeam, s3Seam := seamSet.Logs(), seamSet.S3()
 	iamP := iamprovider.New(s.resources)
@@ -867,7 +877,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	esmProvider := lambdaesm.New(ctx, s.resources, lambdaSeam, seamSet.SQSConsumer(), seamSet.Streams(), slog.Default())
 	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: sqsSeam})
-	esmProvider.RehydratePollers(ctx)
 	prevCleanup2 := cleanup
 	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
 
@@ -888,7 +897,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	cwP := cloudwatchprovider.New(s.resources, bus)
 	logsProvider := cwlogs.New()
 	sesP := sesprovider.New(s.resources)
-	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(s.s3Meta).WithS3Writer(s3Seam)
+	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(seamSet.S3()).WithS3Writer(s3Seam)
 
 	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
@@ -914,8 +923,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	if cfg.AWSEmulatorEndpoint != "" {
 		ecsP.SetJaisCloudEndpoint(cfg.AWSEmulatorEndpoint)
 	}
-
-	firehoseP.Start()
 
 	// ── Register all providers via the builder chain ──────────────────────────
 	// All providers are fully constructed and wired above; registration is a
@@ -985,7 +992,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	workerReg.Add("eventbridge-scheduler", sched)
 	workerReg.Add("cw-alarm-evaluator", cwP.Evaluator())
 	workerReg.Add("lambda-async-queue", funcP.AsyncQueue())
-	workerReg.Start(ctx)
 	prevCleanup3 := cleanup
 	cleanup = func() { workerReg.Stop(); prevCleanup3() }
 
@@ -1030,6 +1036,15 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		DNSP:           dnsP,
 		StackP:         stackP,
 		Sched:          sched,
+		// Start launches everything that dispatches on its own (event-source pollers,
+		// the Firehose flusher, the EventBridge scheduler, the alarm evaluator and the
+		// Lambda async queue). main calls it after plugins are loaded, so no
+		// background work ever runs against a registry that is still being wrapped.
+		Start: func() {
+			esmProvider.RehydratePollers(ctx)
+			firehoseP.Start()
+			workerReg.Start(ctx)
+		},
 	}
 }
 

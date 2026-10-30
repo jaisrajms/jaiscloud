@@ -768,6 +768,12 @@ func (o *observer) plugin() *sdk.Mux {
 	return m
 }
 
+func (o *observer) reset() {
+	o.mu.Lock()
+	o.seen = nil
+	o.mu.Unlock()
+}
+
 func (o *observer) has(want string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -979,6 +985,7 @@ func TestEveryInternalSeamGoesThroughThePlugin(t *testing.T) {
 	e := startEmulator(t, "--plugin", s.URL)
 	for _, c := range internalSeams {
 		t.Run(c.name, func(t *testing.T) {
+			obs.reset() // an earlier scenario must not satisfy this one
 			c.trigger(t, e)
 			deadline := time.Now().Add(20 * time.Second)
 			for time.Now().Before(deadline) {
@@ -993,5 +1000,29 @@ func TestEveryInternalSeamGoesThroughThePlugin(t *testing.T) {
 			}
 			t.Fatalf("%s: the plugin must see %v as internal calls; saw %v — a caller bypasses the registry\n%s", c.name, c.want, obs.all(), e.logs())
 		})
+	}
+}
+
+// A plugin's answer to an internal call must be what the caller uses, not just
+// something the plugin got to see: SSM resolving a Secrets Manager reference
+// returns the value the plugin supplied.
+func TestInternalCallerUsesThePluginsAnswer(t *testing.T) {
+	m := sdk.NewMux("acme-secrets", "0.1.0")
+	m.Replace("aws", "secretsmanager", "GetSecretValue", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		if c.Req.Origin != "internal" {
+			return sdk.Result{NotHandled: true}, nil
+		}
+		return sdk.Result{Resp: &sdk.Response{Data: map[string]any{"Name": "x", "SecretString": "from-plugin"}}}, nil
+	})
+	s := httptest.NewServer(sdk.Serve(m))
+	defer s.Close()
+	e := startEmulator(t, "--plugin", s.URL)
+
+	st, out := e.call(t, "AmazonSSM.GetParameter", map[string]any{"Name": "/aws/reference/secretsmanager/anything"})
+	if st != 200 {
+		t.Fatalf("GetParameter: %d %v\n%s", st, out, e.logs())
+	}
+	if v, _ := out["Parameter"].(map[string]any)["Value"].(string); v != "from-plugin" {
+		t.Fatalf("SSM must return the plugin's secret, got %v", out)
 	}
 }

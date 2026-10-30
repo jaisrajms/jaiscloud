@@ -76,7 +76,7 @@ When a plugin overrides a built-in, every caller inside the emulator uses it too
 
 | Origin | Callers |
 |---|---|
-| `internal` | SNS, S3 notifications, EventBridge targets, CloudWatch alarms, Lambda DLQ and rotation delivering to SQS/SNS/Lambda; the Lambda event-source pollers (SQS and DynamoDB Streams); log writes from Lambda, ECS, EMR and Step Functions; log metric filters publishing metrics; EMR and Firehose writing to S3; Glue crawlers reading S3; SSM reading Secrets Manager references |
+| `internal` | SNS, S3 notifications, EventBridge targets, CloudWatch alarms, Lambda DLQ and rotation delivering to SQS/SNS/Lambda; the Lambda event-source pollers (SQS and DynamoDB Streams); log writes from the Lambda (docker/k8s), ECS, EMR on EKS and Step Functions executors; log metric filters publishing metrics; EMR and Firehose writing to S3; Glue crawlers reading S3; SSM reading Secrets Manager references; Secrets Manager and SSM encrypting through KMS; EMR bootstrap scripts and the Firehose bucket check reading S3 |
 | `service` | Step Functions task states and CloudFormation resource handlers, with the parameters a client would send |
 | `ui` | the console |
 
@@ -87,6 +87,12 @@ things to know when you override a service:
   plugin). A wire `GetObject` streams and cannot be replaced by an out-of-process plugin.
 * A few console-only helpers (for example SQS "peek messages") are not API actions; they keep
   reading the built-in's state.
+* Not routed through the registry yet: the gateway's S3 CORS preflight lookup, the admin test
+  hooks (`/_jaiscloud/*-tick`, Firehose flush, Lambda code fetch), and a few flows the emulator does
+  not implement at all (S3 to EventBridge notifications, EMR on EC2 log forwarding).
+* If your plugin fails or times out on `ReceiveMessage`, the Lambda event-source mapping counts the
+  errors like any other and disables itself after repeated failures, exactly as it would for a
+  failing built-in.
 
 ## State
 

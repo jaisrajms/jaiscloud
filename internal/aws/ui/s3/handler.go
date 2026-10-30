@@ -36,7 +36,7 @@ func (h *Handler) ListBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, _ := resp.Data["Buckets"].([]map[string]any)
+	raw := uihelper.Maps(resp.Data["Buckets"])
 	buckets := make([]Bucket, 0, len(raw))
 	for _, b := range raw {
 		name, _ := b["Name"].(string)
@@ -132,7 +132,7 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawContents, _ := resp.Data["Contents"].([]map[string]any)
+	rawContents := uihelper.Maps(resp.Data["Contents"])
 	objects := make([]S3Object, 0, len(rawContents))
 	for _, obj := range rawContents {
 		o := S3Object{
@@ -154,10 +154,10 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 		objects = append(objects, o)
 	}
 
-	rawCPs, _ := resp.Data["CommonPrefixes"].([]string)
+	rawCPs := uihelper.Strings(resp.Data["CommonPrefixes"])
 	truncated, _ := resp.Data["IsTruncated"].(bool)
 	nextToken, _ := resp.Data["_nextPageToken"].(string)
-	keyCount, _ := resp.Data["KeyCount"].(int)
+	keyCount := uihelper.Int(resp.Data["KeyCount"])
 
 	uihelper.WriteJSON(w, ListObjectsResponse{
 		Items:            objects,
@@ -402,8 +402,8 @@ func (h *Handler) ListObjectVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawVersions, _ := resp.Data["Versions"].([]map[string]any)
-	rawMarkers, _ := resp.Data["DeleteMarkers"].([]map[string]any)
+	rawVersions := uihelper.Maps(resp.Data["Versions"])
+	rawMarkers := uihelper.Maps(resp.Data["DeleteMarkers"])
 	items := make([]ObjectVersion, 0, len(rawVersions)+len(rawMarkers))
 
 	for _, v := range rawVersions {
@@ -454,7 +454,7 @@ func (h *Handler) ListMultipartUploads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawUploads, _ := resp.Data["Uploads"].([]map[string]any)
+	rawUploads := uihelper.Maps(resp.Data["Uploads"])
 	items := make([]MultipartUpload, 0, len(rawUploads))
 	for _, u := range rawUploads {
 		items = append(items, MultipartUpload{
@@ -507,7 +507,7 @@ func (h *Handler) GetBucketTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawTags, _ := resp.Data["TagSet"].([]map[string]any)
+	rawTags := uihelper.Maps(resp.Data["TagSet"])
 	tags := make(map[string]string, len(rawTags))
 	for _, t := range rawTags {
 		k, _ := t["Key"].(string)

@@ -26,7 +26,8 @@ func (h *Handler) CWEvaluateHandler(w http.ResponseWriter, r *http.Request) {
 	ev := h.cwAlarmEvaluator
 	h.mu.Unlock()
 	if ev != nil {
-		ev.EvaluateAll(r.Context())
+		// Alarm actions fan out in goroutines that outlive this request.
+		ev.EvaluateAll(context.WithoutCancel(r.Context()))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "evaluated"}) //nolint:errcheck

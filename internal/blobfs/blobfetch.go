@@ -52,6 +52,9 @@ func (f *S3BlobFetcher) Fetch(ctx context.Context, uri string) ([]byte, error) {
 	return data, nil
 }
 
+// ParseS3URI parses an s3:// or s3a:// URI into (bucket, key).
+func ParseS3URI(uri string) (bucket, key string, err error) { return parseS3URI(uri) }
+
 // parseS3URI parses an s3:// or s3a:// URI into (bucket, key).
 func parseS3URI(uri string) (bucket, key string, err error) {
 	var rest string

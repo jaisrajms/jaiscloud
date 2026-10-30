@@ -41,18 +41,27 @@ func TestBuildRegistryWiresServicesThroughSeams(t *testing.T) {
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || !(strings.HasPrefix(sel.Sel.Name, "Set") || strings.HasPrefix(sel.Sel.Name, "With")) {
+		name := ""
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			name = fun.Sel.Name
+		case *ast.Ident:
+			name = fun.Name
+		}
+		// Registration is how a provider enters the registry; everything else that
+		// receives a provider (setters, options and constructors alike) is a way for
+		// one service to call another directly.
+		if name == "" || strings.HasPrefix(name, "Register") || strings.HasPrefix(name, "register") {
 			return true
 		}
-		if _, ok := wiringExceptions[sel.Sel.Name]; ok {
+		if _, ok := wiringExceptions[name]; ok {
 			return true
 		}
 		for _, arg := range call.Args {
 			if id, ok := arg.(*ast.Ident); ok && providerIdent.MatchString(id.Name) {
 				t.Errorf("%s: %s(%s) hands a concrete provider to another service; "+
 					"pass a seam from internal/aws/seams so the call goes through the registry",
-					fset.Position(call.Pos()), sel.Sel.Name, id.Name)
+					fset.Position(call.Pos()), name, id.Name)
 			}
 		}
 		return true

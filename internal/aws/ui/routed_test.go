@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/aws/provider/queue"
+	"jaiscloud/internal/aws/ui/uihelper"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -34,5 +35,36 @@ func TestConsoleCallsGoThroughTheRegistry(t *testing.T) {
 	// Without a registry (unit tests of the console) the provider is used directly.
 	if _, ok := routeQueue(queue.New(nil, nil, nil), uiCaller{}).(*queue.QueueProvider); !ok {
 		t.Fatal("a nil registry must leave the provider unwrapped")
+	}
+}
+
+// A plugin's response is JSON-decoded: lists arrive as []any and numbers as
+// float64. The console must render them like the built-in's typed values.
+func TestConsoleHelpersAcceptPluginShapedData(t *testing.T) {
+	pluginShaped := map[string]any{
+		"Buckets": []any{map[string]any{"Name": "b1"}, "not-an-object"},
+		"Names":   []any{"a", 7, "b"},
+		"Count":   float64(3),
+		"Attrs":   map[string]any{"k": "v", "n": 1},
+	}
+	builtinShaped := map[string]any{
+		"Buckets": []map[string]any{{"Name": "b1"}},
+		"Names":   []string{"a", "b"},
+		"Count":   3,
+		"Attrs":   map[string]string{"k": "v"},
+	}
+	for name, d := range map[string]map[string]any{"plugin": pluginShaped, "builtin": builtinShaped} {
+		if got := uihelper.Maps(d["Buckets"]); len(got) != 1 || got[0]["Name"] != "b1" {
+			t.Errorf("%s: Maps = %v", name, got)
+		}
+		if got := uihelper.Strings(d["Names"]); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+			t.Errorf("%s: Strings = %v", name, got)
+		}
+		if got := uihelper.Int(d["Count"]); got != 3 {
+			t.Errorf("%s: Int = %d", name, got)
+		}
+		if got := uihelper.StringMap(d["Attrs"]); got["k"] != "v" {
+			t.Errorf("%s: StringMap = %v", name, got)
+		}
 	}
 }

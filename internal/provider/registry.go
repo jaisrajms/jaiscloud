@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"jaiscloud/internal/model"
 )
@@ -22,6 +23,9 @@ import (
 // When Dispatch looks up "EMR.RunJobFlow" and finds no exact match,
 // it falls back to the wildcard handler registered for prefix "EMR".
 type Registry struct {
+	// mu guards both maps: background workers dispatch while startup code (plugin
+	// loading) is still wrapping handlers. Handlers run outside the lock.
+	mu       sync.RWMutex
 	handlers map[string]HandlerFunc
 	plugins  map[string]HandlerFunc // prefix → wildcard handler (plugin fallback)
 }
@@ -35,6 +39,8 @@ func NewRegistry() *Registry {
 
 // RegisterAll bulk-registers a route map. Returns the registry for chaining.
 func (r *Registry) RegisterAll(routes map[string]HandlerFunc) *Registry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for k, v := range routes {
 		r.handlers[k] = v
 	}
@@ -59,6 +65,8 @@ func (r *Registry) Register(p Provider) *Registry {
 // When Dispatch finds no exact key match, it tries the plugin handler for the prefix.
 // A plugin handler takes precedence over the built-in wildcard fallback.
 func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// Override any built-in exact-match handlers whose prefix matches,
 	// so the plugin receives all actions for this service.
 	for key := range r.handlers {
@@ -78,12 +86,16 @@ func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
 
 // Has reports whether an exact handler is registered for key.
 func (r *Registry) Has(key string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	_, ok := r.handlers[key]
 	return ok
 }
 
 // Keys returns the sorted exact-match keys whose provider prefix is prefix.
 func (r *Registry) Keys(prefix string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []string
 	for key := range r.handlers {
 		if keyPrefix(key) == prefix {
@@ -99,8 +111,10 @@ func (r *Registry) Keys(prefix string) []string {
 // returns its replacement, so the original stays reachable as `next`. When key
 // has no handler, next answers UnknownAction as Dispatch does today.
 //
-// Like RegisterAll, it is for startup only: the maps are not locked.
+// It is for startup, but safe against concurrent Dispatch.
 func (r *Registry) Intercept(key string, mw func(next HandlerFunc) HandlerFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	next, ok := r.handlers[key]
 	if !ok {
 		next = unknownAction
@@ -111,6 +125,8 @@ func (r *Registry) Intercept(key string, mw func(next HandlerFunc) HandlerFunc) 
 // InterceptFallback wraps the wildcard handler for prefix, which Dispatch
 // consults when no exact key matches (actions the built-in does not have).
 func (r *Registry) InterceptFallback(prefix string, mw func(next HandlerFunc) HandlerFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	next, ok := r.plugins[prefix]
 	if !ok {
 		next = unknownAction
@@ -135,8 +151,14 @@ func keyPrefix(key string) string {
 //  2. Plugin wildcard for the provider prefix (full-mode plugins).
 //  3. ProviderError(UnknownAction).
 func (r *Registry) Dispatch(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if h, ok := r.handlers[key]; ok {
-		resp, err := h(ctx, nr)
+	prefix := keyPrefix(key)
+	r.mu.RLock()
+	exact, isExact := r.handlers[key]
+	wild, isWild := r.plugins[prefix]
+	r.mu.RUnlock()
+
+	if isExact {
+		resp, err := exact(ctx, nr)
 		if err != nil {
 			if _, isProvider := err.(*model.ProviderError); !isProvider {
 				slog.Error("provider handler error",
@@ -147,17 +169,8 @@ func (r *Registry) Dispatch(ctx context.Context, key string, nr *model.Normalize
 		}
 		return resp, err
 	}
-
-	// Extract prefix from "Prefix.Action"
-	prefix := key
-	for i, c := range key {
-		if c == '.' {
-			prefix = key[:i]
-			break
-		}
-	}
-	if h, ok := r.plugins[prefix]; ok {
-		resp, err := h(ctx, nr)
+	if isWild {
+		resp, err := wild(ctx, nr)
 		if err != nil {
 			if _, isProvider := err.(*model.ProviderError); !isProvider {
 				slog.Error("plugin handler error",

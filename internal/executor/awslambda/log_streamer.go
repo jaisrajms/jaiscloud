@@ -79,7 +79,8 @@ func (s *LogStreamer) Stream(ctx context.Context, src io.Reader) {
 		}
 	}
 	if s.logsAPI != nil && len(batch) > 0 {
-		_ = s.logsAPI.InternalPutEvents(ctx, s.logGroupName, s.logStreamName, batch)
+		// The last lines are the ones worth keeping after a timeout; ctx may be done.
+		_ = s.logsAPI.InternalPutEvents(context.WithoutCancel(ctx), s.logGroupName, s.logStreamName, batch)
 	}
 }
 

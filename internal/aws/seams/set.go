@@ -2,6 +2,7 @@ package seams
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"jaiscloud/internal/aws/provider/notification"
 	"jaiscloud/internal/aws/provider/queue"
 	streamstore "jaiscloud/internal/aws/store/stream"
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -251,6 +253,13 @@ func (s *Set) Invoke(ctx context.Context, key string, nr *model.NormalizedReques
 	if nr.Cloud == "" {
 		nr.Cloud = model.CloudAWS
 	}
+	// CloudFormation Delete handlers have no request to inherit a scope from.
+	if nr.AccountID == "" {
+		nr.AccountID = s.scope.Account
+	}
+	if nr.Region == "" {
+		nr.Region = s.scope.Region
+	}
 	if nr.Clock == nil {
 		nr.Clock = s.scope.Clock
 	}
@@ -289,7 +298,12 @@ func (o *S3) InternalGetObject(ctx context.Context, bucket, key string) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	body, _ := resp.Data["_body"].([]byte)
+	body, ok := resp.Data["_body"].([]byte)
+	if !ok {
+		// A plugin that replaces GetObject must answer internal calls with "_body"
+		// bytes ({"$base64": "..."} over JSON); an empty file would hide the mistake.
+		return nil, fmt.Errorf("s3 GetObject %s/%s: response has no _body bytes (got %T)", bucket, key, resp.Data["_body"])
+	}
 	return body, nil
 }
 
@@ -328,8 +342,11 @@ func (g *Secrets) InternalGetSecretValue(ctx context.Context, accountID, secretI
 	if v, ok := resp.Data["SecretString"].(string); ok {
 		return v, nil
 	}
-	if b, ok := resp.Data["SecretBinary"].([]byte); ok {
+	switch b := resp.Data["SecretBinary"].(type) {
+	case []byte:
 		return string(b), nil
+	case string: // a plugin that did not use the {"$base64": ...} marker
+		return b, nil
 	}
 	return "", fmt.Errorf("secret %s has no value", secretID)
 }
@@ -486,4 +503,94 @@ func toInt64(v any) int64 {
 		return int64(n)
 	}
 	return 0
+}
+
+// ---- KMS --------------------------------------------------------------------------------
+
+// KMS lets Secrets Manager and SSM encrypt what they store through the registry.
+// It implements model.KeyEncryptor. Plaintext and ciphertext cross as base64
+// strings, like the wire actions.
+type KMS struct{ s *Set }
+
+var _ model.KeyEncryptor = (*KMS)(nil)
+
+func (s *Set) KMS() *KMS { return &KMS{s} }
+
+func (k *KMS) call(ctx context.Context, action, keyID string, params map[string]any) (*model.ProviderResponse, error) {
+	return k.s.call(ctx, "kms", action, keyID, params, queue.SourceContext{})
+}
+
+func encCtxParam(c map[string]string) map[string]any {
+	if len(c) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(c))
+	for k, v := range c {
+		out[k] = v
+	}
+	return out
+}
+
+func (k *KMS) Encrypt(ctx context.Context, keyID string, pt []byte, encCtx map[string]string) ([]byte, error) {
+	p := map[string]any{"KeyId": keyID, "Plaintext": base64.StdEncoding.EncodeToString(pt)}
+	if c := encCtxParam(encCtx); c != nil {
+		p["EncryptionContext"] = c
+	}
+	resp, err := k.call(ctx, "Encrypt", keyID, p)
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(str(resp.Data["CiphertextBlob"]))
+}
+
+func (k *KMS) Decrypt(ctx context.Context, keyID string, ct []byte, encCtx map[string]string) ([]byte, error) {
+	p := map[string]any{"CiphertextBlob": base64.StdEncoding.EncodeToString(ct)}
+	if c := encCtxParam(encCtx); c != nil {
+		p["EncryptionContext"] = c
+	}
+	resp, err := k.call(ctx, "Decrypt", keyID, p)
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(str(resp.Data["Plaintext"]))
+}
+
+func (k *KMS) GenerateDataKey(ctx context.Context, keyID string, bits int) (ptDEK, ctDEK []byte, err error) {
+	spec := "AES_256"
+	if bits == 128 {
+		spec = "AES_128"
+	}
+	resp, err := k.call(ctx, "GenerateDataKey", keyID, map[string]any{"KeyId": keyID, "KeySpec": spec})
+	if err != nil {
+		return nil, nil, err
+	}
+	if ptDEK, err = base64.StdEncoding.DecodeString(str(resp.Data["Plaintext"])); err != nil {
+		return nil, nil, err
+	}
+	ctDEK, err = base64.StdEncoding.DecodeString(str(resp.Data["CiphertextBlob"]))
+	return ptDEK, ctDEK, err
+}
+
+// Fetch reads an s3:// or s3a:// object, for EMR bootstrap scripts. It implements
+// blobfs.BlobFetcher.
+func (o *S3) Fetch(ctx context.Context, uri string) ([]byte, error) {
+	bucket, key, err := blobfs.ParseS3URI(uri)
+	if err != nil {
+		return nil, err
+	}
+	body, err := o.InternalGetObject(ctx, bucket, key)
+	if err != nil {
+		return nil, fmt.Errorf("blobfetch %s: %w", uri, err)
+	}
+	return body, nil
+}
+
+// GetBucket reports whether a bucket exists (HeadBucket), for Firehose's
+// destination check. It implements firehose.BucketChecker.
+func (o *S3) GetBucket(ctx context.Context, bucket string) (map[string]any, error) {
+	resp, err := o.s.call(ctx, "s3", "HeadBucket", "", map[string]any{"_bucket": bucket}, queue.SourceContext{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
 }

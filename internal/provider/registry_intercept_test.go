@@ -87,3 +87,32 @@ func TestKeysFiltersByPrefixAndIsSorted(t *testing.T) {
 		t.Fatalf("Keys(Queue) = %q", got)
 	}
 }
+
+// Background workers dispatch while plugin loading still wraps handlers; the
+// registry must tolerate that (run with -race).
+func TestDispatchIsSafeWhileHandlersAreIntercepted(t *testing.T) {
+	r := NewRegistry()
+	r.RegisterAll(map[string]HandlerFunc{"Queue.SendMessage": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return OK(map[string]any{}), nil
+	}})
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = r.Dispatch(context.Background(), "Queue.SendMessage", &model.NormalizedRequest{})
+				_ = r.Has("Queue.SendMessage")
+			}
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		r.Intercept("Queue.SendMessage", func(next HandlerFunc) HandlerFunc { return next })
+		r.InterceptFallback("Queue", func(next HandlerFunc) HandlerFunc { return next })
+	}
+	close(stop)
+	<-done
+}

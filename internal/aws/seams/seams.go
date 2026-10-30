@@ -62,11 +62,13 @@ func (s *SQS) InternalSend(ctx context.Context, target, body string, attrs map[s
 		Service: "sqs", Action: "SendMessage", Cloud: model.CloudAWS, Origin: model.OriginInternal,
 		AccountID: account, Region: region, Params: params,
 		SourceArn: src.SourceArn, ServicePrincipal: src.ServicePrincipal,
+		Clock: s.scope.Clock, Port: s.scope.Port, ResourceID: awsarn.ResourceID(region, account),
 	})
 	return err
 }
 
-// scopeOf derives account and region from an ARN; a URL carries only the account.
+// scopeOf derives account and region from an ARN. Anything else (a queue URL, a
+// bucket or log-group name, a function name) falls back to the default scope.
 func scopeOf(target string, def Scope) (account, region string) {
 	account, region = def.Account, def.Region
 	if strings.HasPrefix(target, "arn:") {

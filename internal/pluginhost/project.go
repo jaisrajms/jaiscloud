@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"reflect"
-	"strings"
 )
 
 // Params and response data cross to a plugin as JSON, but the built-in codecs
@@ -178,5 +177,3 @@ func hasHidden(data map[string]any) bool {
 	}
 	return false
 }
-
-func isInternalKey(k string) bool { return strings.HasPrefix(k, "_") }
