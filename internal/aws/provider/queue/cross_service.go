@@ -8,6 +8,8 @@ import (
 	awsarn "jaiscloud/internal/aws/arn"
 	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 )
 
 // MessageAttribute is a simplified SQS message attribute for internal cross-service use.
@@ -32,23 +34,31 @@ type InternalSendAPI interface {
 // The account and region are extracted from the target ARN/URL so that
 // cross-account deliveries land in the correct per-(account,region) store.
 func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
-	if p.internalSendHook != nil {
-		return p.internalSendHook(ctx, queueARNorURL, body, attrs, src, p.deliverInternal)
-	}
 	return p.deliverInternal(ctx, queueARNorURL, body, attrs, src)
 }
 
-// InternalSendDeliver is the built-in delivery that an InternalSendHook wraps.
-type InternalSendDeliver func(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error
-
-// InternalSendHook lets the plugin host run an internal delivery (SNS, S3
-// notifications, Lambda DLQ → SQS) through the plugin chain for SQS
-// SendMessage, with deliver as the built-in behaviour. It is nil unless a
-// plugin is loaded, in which case InternalSend is unchanged.
-type InternalSendHook func(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext, deliver InternalSendDeliver) error
-
-// SetInternalSendHook installs the hook. Startup only.
-func (p *QueueProvider) SetInternalSendHook(h InternalSendHook) { p.internalSendHook = h }
+// sendMessageInternal serves Queue.SendMessage for an internal origin (SNS, S3
+// notifications, Lambda DLQ, ...). The request carries the wire-shaped params
+// (QueueUrl may be an ARN) so a plugin can read and edit them; this applies
+// whatever the chain left behind.
+func (p *QueueProvider) sendMessageInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	target, _ := nr.Params["QueueUrl"].(string)
+	body, _ := nr.Params["MessageBody"].(string)
+	attrs := map[string]MessageAttribute{}
+	if m, ok := nr.Params["MessageAttributes"].(map[string]any); ok {
+		for k, raw := range m {
+			if a, ok := raw.(map[string]any); ok {
+				dt, _ := a["DataType"].(string)
+				sv, _ := a["StringValue"].(string)
+				attrs[k] = MessageAttribute{DataType: dt, StringValue: sv}
+			}
+		}
+	}
+	if err := p.deliverInternal(ctx, target, body, attrs, SourceContext{SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
 
 func (p *QueueProvider) deliverInternal(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
 	queueURL, account, region, err := p.resolveQueueURLWithScope(ctx, queueARNorURL)

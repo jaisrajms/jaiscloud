@@ -13,20 +13,23 @@ import (
 // Registry dispatches NormalizedRequests to the registered HandlerFunc.
 // Key format: "ProviderPrefix.ActionName" e.g. "Queue.SendMessage".
 //
+// The registry is the ONLY way into a service: wire requests, calls from other
+// services (SNS delivering to SQS, pollers, schedulers), and the console UI all
+// call Dispatch with nr.Origin set. That is what lets a plugin replace a key
+// and be used by every caller, as if the built-in did not exist.
+//
 // Plugins register a wildcard handler via RegisterPlugin("EMR", fn).
 // When Dispatch looks up "EMR.RunJobFlow" and finds no exact match,
 // it falls back to the wildcard handler registered for prefix "EMR".
 type Registry struct {
 	handlers map[string]HandlerFunc
 	plugins  map[string]HandlerFunc // prefix → wildcard handler (plugin fallback)
-	switched map[string]bool        // keys whose innermost handler can be redirected (see WithCore)
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		handlers: make(map[string]HandlerFunc),
 		plugins:  make(map[string]HandlerFunc),
-		switched: make(map[string]bool),
 	}
 }
 
@@ -102,31 +105,7 @@ func (r *Registry) Intercept(key string, mw func(next HandlerFunc) HandlerFunc) 
 	if !ok {
 		next = unknownAction
 	}
-	if !r.switched[key] {
-		// Innermost link: lets an internal caller substitute its own core (WithCore).
-		next, r.switched[key] = coreSwitch(key, next), true
-	}
 	r.handlers[key] = mw(next)
-}
-
-type coreCtxKey struct{ key string }
-
-// WithCore returns a context that makes the innermost handler of key (below
-// every Intercept link) run core instead of the registered built-in. It lets a
-// provider-internal delivery, such as SNS publishing into SQS, go through the
-// same interceptor chain a client request takes while keeping its own
-// built-in behaviour. Keys that were never intercepted are unaffected.
-func WithCore(ctx context.Context, key string, core HandlerFunc) context.Context {
-	return context.WithValue(ctx, coreCtxKey{key}, core)
-}
-
-func coreSwitch(key string, next HandlerFunc) HandlerFunc {
-	return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-		if core, ok := ctx.Value(coreCtxKey{key}).(HandlerFunc); ok {
-			return core(ctx, nr)
-		}
-		return next(ctx, nr)
-	}
 }
 
 // InterceptFallback wraps the wildcard handler for prefix, which Dispatch

@@ -10,7 +10,6 @@ import (
 	"jaiscloud/internal/aws/adapter/services"
 	keyprovider "jaiscloud/internal/aws/key"
 	paramprovider "jaiscloud/internal/aws/parameter"
-	"jaiscloud/internal/aws/pluginseam"
 	apigwprovider "jaiscloud/internal/aws/provider/apigw"
 	cacheprovider "jaiscloud/internal/aws/provider/cache"
 	"jaiscloud/internal/aws/provider/catalog"
@@ -39,6 +38,7 @@ import (
 	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
 	sfndispatcher "jaiscloud/internal/aws/provider/stepfunctions/dispatcher"
 	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
+	"jaiscloud/internal/aws/seams"
 	awsstore "jaiscloud/internal/aws/store"
 	ecrstore "jaiscloud/internal/aws/store/ecr"
 	kinesisstore "jaiscloud/internal/aws/store/kinesis"
@@ -386,10 +386,6 @@ func startCmd() *cobra.Command {
 				adminHandler.RegisterResetter(pluginHost)
 				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
 				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
-				// Internal flows into SQS (SNS, S3 notifications, Lambda DLQ) go through
-				// the plugin chain too, so a plugin overriding SQS sees all of them.
-				app.QueueP.SetInternalSendHook(pluginseam.SQSInternalSend(pluginHost,
-					cloudAdapter.ServiceToProvider("sqs")+".SendMessage", cfg.AccountID, cfg.Region))
 			}
 
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
@@ -852,17 +848,22 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
 	queueP := queue.New(s.resources, s.messages, bus)
+	// The registry exists before the providers so cross-service seams can hold it:
+	// every internal call goes through Registry.Dispatch (see internal/aws/seams).
+	reg := provider.NewRegistry()
+	sqsSeam := seams.NewSQS(reg, awsadapter.NewAdapter(nil).ServiceToProvider("sqs")+".SendMessage",
+		seams.Scope{Account: cfg.AccountID, Region: cfg.Region})
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.NewWithOIDC(s.stsSession, cfg.OIDCIssuers)
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
-	notifP.SetSQSSender(sqsSenderAdapter{q: queueP})
+	notifP.SetSQSSender(sqsSenderAdapter{q: sqsSeam})
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus).WithResourceStore(s.resources)
 	stackP := stackprovider.New(s.resources)
 
 	esmProvider := lambdaesm.New(ctx, s.resources, funcP, queueP, streams, slog.Default())
-	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: queueP})
+	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: sqsSeam})
 	esmProvider.RehydratePollers(ctx)
 	prevCleanup2 := cleanup
 	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
@@ -916,7 +917,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// ── Register all providers via the builder chain ──────────────────────────
 	// All providers are fully constructed and wired above; registration is a
 	// single declarative block. Adding a new service requires one Register call.
-	registry := provider.NewRegistry().
+	registry := reg.
 		Register(keyProv).
 		Register(secretProv).
 		Register(paramProv).
@@ -948,7 +949,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
-		SQS:          queueP,
+		SQS:          sqsSeam,
 		SNSPublisher: notifP,
 		Lambda:       funcP,
 	})
@@ -963,14 +964,14 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	paramProv.SetSecretGetter(secretProv)
 
 	// Wire EventBridge target dispatcher and scheduler.
-	tgtDisp := targets.New(queueP, funcP, notifP, &logsWriterAdapter{logsProvider}, eventsP)
+	tgtDisp := targets.New(sqsSeam, funcP, notifP, &logsWriterAdapter{logsProvider}, eventsP)
 	eventsP.SetTargetDispatcher(tgtDisp)
 	sched := ebscheduler.New(tgtDisp)
 	eventsP.SetScheduler(sched)
 
 	// Wire SQS DLQ sender into the async queue.
 	funcP.SetAsyncSQSSend(func(ctx context.Context, arn string, body string) error {
-		return queueP.InternalSend(ctx, arn, body, nil, queue.SourceContext{
+		return sqsSeam.InternalSend(ctx, arn, body, nil, queue.SourceContext{
 			SourceArn:        "lambda.amazonaws.com",
 			ServicePrincipal: "lambda.amazonaws.com",
 		})
@@ -1708,8 +1709,8 @@ func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupNa
 	return a.p.InternalPutEvents(ctx, logGroupName, logStreamName, lsEvents)
 }
 
-// sqsSenderAdapter adapts *queue.QueueProvider to notification.SQSSender.
-type sqsSenderAdapter struct{ q *queue.QueueProvider }
+// sqsSenderAdapter adapts the SQS seam to notification.SQSSender.
+type sqsSenderAdapter struct{ q queue.InternalSendAPI }
 
 func (a sqsSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]notification.SQSMessageAttribute, src notification.SQSSourceContext) error {
 	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))
@@ -1722,8 +1723,8 @@ func (a sqsSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string
 	})
 }
 
-// esmSQSSenderAdapter adapts *queue.QueueProvider to lambdaesm.SQSSenderAPI.
-type esmSQSSenderAdapter struct{ q *queue.QueueProvider }
+// esmSQSSenderAdapter adapts the SQS seam to lambdaesm.SQSSenderAPI.
+type esmSQSSenderAdapter struct{ q queue.InternalSendAPI }
 
 func (a esmSQSSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]lambdaesm.SQSMessageAttribute, src lambdaesm.SQSSourceContext) error {
 	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))

@@ -128,19 +128,6 @@ func TestLoadWithoutPluginsIsANoOp(t *testing.T) {
 	if got := e.reg.Keys("Queue"); strings.Join(got, ",") != strings.Join(before, ",") {
 		t.Fatalf("registry changed: %v -> %v", before, got)
 	}
-	if (*Host)(nil).Claims("Queue.SendMessage") {
-		t.Fatal("a nil host claims nothing")
-	}
-	// A nil host must run the core directly.
-	called := false
-	_, _ = (*Host)(nil).InternalCall(context.Background(), "Queue.SendMessage", &model.NormalizedRequest{},
-		func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
-			called = true
-			return nil, nil
-		})
-	if !called {
-		t.Fatal("InternalCall on a nil host must call core")
-	}
 }
 
 // ---- chain semantics ----------------------------------------------------------
@@ -308,39 +295,33 @@ func TestServiceNameIsNormalisedForInternalCallers(t *testing.T) {
 	}
 }
 
-func TestInternalCallRunsThePluginChainWithTheInternalCore(t *testing.T) {
+func TestInternalOriginGoesThroughTheSamePluginChain(t *testing.T) {
 	e := newEnv(t)
-	var src string
+	var origin, src string
 	p := muxRoutes("p", func(m *sdk.Mux) {
 		m.Before("aws", "sqs", "SendMessage", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
-			src = c.Req.SourceArn
+			origin, src = c.Req.Origin, c.Req.SourceArn
 			return sdk.Result{Params: map[string]any{"MessageBody": "rewritten"}}, nil
 		})
 	})
-	h, err := e.load(t, serve(t, p).URL)
-	if err != nil {
+	if _, err := e.load(t, serve(t, p).URL); err != nil {
 		t.Fatal(err)
 	}
-	var got string
-	nr := &model.NormalizedRequest{Service: "sqs", Action: "SendMessage", AccountID: "a", Region: "r",
-		SourceArn: "arn:aws:sns:us-east-1:1:t", Params: map[string]any{"MessageBody": "orig"}}
-	_, err = h.InternalCall(context.Background(), "Queue.SendMessage", nr,
-		func(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-			got = fmtBody(nr)
-			return provider.OK(nil), nil
-		})
-	if err != nil || got != "rewritten" || src != "arn:aws:sns:us-east-1:1:t" {
-		t.Fatalf("core body=%q src=%q err=%v", got, src, err)
+	// What a seam does: the same key, Origin=internal.
+	nr := &model.NormalizedRequest{Service: "sqs", Action: "SendMessage", Cloud: model.CloudAWS, Origin: model.OriginInternal,
+		AccountID: "a", Region: "r", SourceArn: "arn:aws:sns:us-east-1:1:t", Params: map[string]any{"MessageBody": "orig"}}
+	if _, err := e.reg.Dispatch(context.Background(), "Queue.SendMessage", nr); err != nil {
+		t.Fatal(err)
 	}
-	if len(e.built) != 0 {
-		t.Fatal("the wire built-in must NOT run for an internal call; the supplied core replaces it")
+	if origin != "internal" || src != "arn:aws:sns:us-east-1:1:t" {
+		t.Fatalf("plugin saw origin=%q source=%q", origin, src)
 	}
-	if !h.Claims("Queue.SendMessage") || h.Claims("Queue.Boom") {
-		t.Fatal("Claims must be exact")
+	if len(e.built) != 1 || e.built[0] != "builtin:rewritten" {
+		t.Fatalf("the single built-in handler must receive the plugin's edit, got %v", e.built)
 	}
-	// A normal dispatch still reaches the wire built-in afterwards.
-	if _, err := send(e, "wire", nil); err != nil || len(e.built) != 1 {
-		t.Fatalf("wire call after internal call: %v built=%v", err, e.built)
+	// A wire request carries origin "wire".
+	if _, err := send(e, "x", nil); err != nil || origin != "wire" {
+		t.Fatalf("wire origin = %q (%v)", origin, err)
 	}
 }
 

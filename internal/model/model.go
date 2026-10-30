@@ -53,6 +53,21 @@ const (
 	CloudGCP   Cloud = "gcp"
 )
 
+// Origin says where a request entered the registry. The zero value is a wire
+// request, so existing codecs and tests are unaffected.
+type Origin string
+
+const (
+	// OriginWire: a client call decoded by a codec (the default).
+	OriginWire Origin = ""
+	// OriginInternal: another part of the emulator calling a service (SNS
+	// delivering to SQS, a poller, a scheduler, ...). Built-in handlers serve it
+	// with their internal behaviour; plugins see it like any other call.
+	OriginInternal Origin = "internal"
+	// OriginUI: the console UI.
+	OriginUI Origin = "ui"
+)
+
 // NormalizedRequest is the cloud-agnostic representation of an API call.
 // Each cloud adapter decodes the wire-format request into this struct.
 type NormalizedRequest struct {
@@ -66,6 +81,11 @@ type NormalizedRequest struct {
 	AccountID string
 	Port      int
 	Cloud     Cloud // which cloud adapter handled this request (aws, azure, gcp)
+
+	// Origin is where the call came from; see Origin. Every caller reaches a
+	// service through Registry.Dispatch, so a plugin that overrides a key is used
+	// by wire, internal and UI callers alike.
+	Origin Origin
 
 	// AccessKey is the raw SigV4/SigV2 access-key-id extracted from the
 	// Authorization header or presigned URL. Empty for anonymous requests.

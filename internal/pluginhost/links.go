@@ -96,7 +96,7 @@ func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *mode
 		Req: &sdk.Request{
 			Cloud: p.host.cloud, Service: wire, Action: nr.Action, Params: project(nr.Params),
 			AccountID: nr.AccountID, Region: nr.Region, AccessKey: nr.AccessKey,
-			SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
+			Origin: originOf(nr), SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
 			RequestID: requestID(ctx, nr), CallID: callID,
 			// Not nr.Clock: that is fixed at config load, while POST
 			// /_jaiscloud/clock replaces the global clock.
@@ -187,6 +187,13 @@ func fromResult(res sdk.Result) (*model.ProviderResponse, error) {
 		data = map[string]any{}
 	}
 	return &model.ProviderResponse{HTTPStatus: status, Data: data}, nil
+}
+
+func originOf(nr *model.NormalizedRequest) string {
+	if nr.Origin == model.OriginWire {
+		return "wire"
+	}
+	return string(nr.Origin)
 }
 
 func isInternal(k string) bool { return strings.HasPrefix(k, "_") }

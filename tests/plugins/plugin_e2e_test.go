@@ -210,7 +210,7 @@ func auditPlugin() (*sdk.Mux, *cache) {
 	m := sdk.NewMux("acme-audit", "0.1.0")
 
 	m.Before("aws", "sqs", "SendMessage", func(ctx context.Context, call *sdk.Call) (sdk.Result, error) {
-		row, _ := json.Marshal(map[string]any{"queueUrl": call.Req.Params["QueueUrl"], "at": call.Req.Now, "src": call.Req.SourceArn})
+		row, _ := json.Marshal(map[string]any{"queueUrl": call.Req.Params["QueueUrl"], "at": call.Req.Now, "src": call.Req.SourceArn, "origin": call.Req.Origin})
 		if err := call.Store.Put(ctx, "audit", call.Req.CallID, row); err != nil {
 			return sdk.Result{}, err
 		}
@@ -253,15 +253,15 @@ func auditPlugin() (*sdk.Mux, *cache) {
 			if err != nil {
 				return sdk.Result{}, err
 			}
-			fromSNS := 0
+			internal := 0
 			for _, a := range audits {
-				var r struct{ Src string }
+				var r struct{ Origin string }
 				_ = json.Unmarshal(a.Data, &r)
-				if r.Src != "" {
-					fromSNS++
+				if r.Origin == "internal" {
+					internal++
 				}
 			}
-			return reply(map[string]any{"Audits": len(audits), "Sent": len(sent), "FromSNS": fromSNS,
+			return reply(map[string]any{"Audits": len(audits), "Sent": len(sent), "Internal": internal,
 				"Now": call.Req.Now.Format(time.RFC3339Nano)})
 		case "AcmeIncr": // read-modify-write with optimistic concurrency
 			for attempt := 0; attempt < 100; attempt++ {
@@ -327,7 +327,7 @@ func count(t *testing.T, e *emulator) (audits, sent, fromSNS int, now string) {
 	}
 	a, _ := out["Audits"].(float64)
 	s, _ := out["Sent"].(float64)
-	f, _ := out["FromSNS"].(float64)
+	f, _ := out["Internal"].(float64)
 	n, _ := out["Now"].(string)
 	return int(a), int(s), int(f), n
 }
@@ -617,5 +617,101 @@ func TestStoreCallbackRejectsStrangers(t *testing.T) {
 	e := startEmulator(t, "--plugin", s.URL)
 	if st, _ := e.admin(t, http.MethodPost, "/_jaiscloud/plugin-store/list", strings.NewReader(`{"callId":"x","accountId":"a","region":"r","kind":"audit"}`)); st != 401 {
 		t.Fatalf("no token: %d, want 401", st)
+	}
+}
+
+// ---- seam conformance ---------------------------------------------------------
+
+func queueArn(t *testing.T, e *emulator, queueURL string) string {
+	t.Helper()
+	_, attrs := e.sqs(t, "GetQueueAttributes", map[string]any{"QueueUrl": queueURL, "AttributeNames": []string{"QueueArn"}})
+	arn, _ := attrs["Attributes"].(map[string]any)["QueueArn"].(string)
+	if arn == "" {
+		t.Fatalf("no queue arn: %v", attrs)
+	}
+	return arn
+}
+
+func (e *emulator) s3(t *testing.T, method, path, body string) int {
+	t.Helper()
+	req, _ := http.NewRequest(method, e.base+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20260101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=00")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+// sqsSeams lists every producer that delivers into SQS. Each one must reach a
+// plugin that overrides SQS: the registry is the only way into a service. A new
+// producer that bypasses the registry fails here once it is added to this table.
+var sqsSeams = []struct {
+	name    string
+	trigger func(t *testing.T, e *emulator, queueURL, queueArn string)
+}{
+	{"sns", func(t *testing.T, e *emulator, _, arn string) {
+		_, xml := e.form(t, url.Values{"Action": {"CreateTopic"}, "Name": {"seam"}})
+		topic := regexp.MustCompile(`<TopicArn>([^<]+)</TopicArn>`).FindStringSubmatch(xml)
+		if topic == nil {
+			t.Fatalf("CreateTopic: %s", xml)
+		}
+		e.form(t, url.Values{"Action": {"Subscribe"}, "TopicArn": {topic[1]}, "Protocol": {"sqs"}, "Endpoint": {arn}})
+		if st, body := e.form(t, url.Values{"Action": {"Publish"}, "TopicArn": {topic[1]}, "Message": {"seam"}}); st != 200 {
+			t.Fatalf("Publish: %d %s", st, body)
+		}
+	}},
+	{"s3-notification", func(t *testing.T, e *emulator, _, arn string) {
+		if st := e.s3(t, http.MethodPut, "/seam-bucket", ""); st != 200 {
+			t.Fatalf("CreateBucket: %d", st)
+		}
+		cfg := `<NotificationConfiguration><QueueConfiguration><Id>n</Id><Queue>` + arn +
+			`</Queue><Event>s3:ObjectCreated:*</Event></QueueConfiguration></NotificationConfiguration>`
+		if st := e.s3(t, http.MethodPut, "/seam-bucket?notification", cfg); st != 200 {
+			t.Fatalf("PutBucketNotificationConfiguration: %d", st)
+		}
+		if st := e.s3(t, http.MethodPut, "/seam-bucket/key.txt", "hello"); st != 200 {
+			t.Fatalf("PutObject: %d", st)
+		}
+	}},
+	{"eventbridge", func(t *testing.T, e *emulator, _, arn string) {
+		call := func(action string, body map[string]any) {
+			if st, out := e.call(t, "AWSEvents."+action, body); st != 200 {
+				t.Fatalf("%s: %d %v", action, st, out)
+			}
+		}
+		call("PutRule", map[string]any{"Name": "seam", "EventPattern": `{"source":["acme.seam"]}`})
+		call("PutTargets", map[string]any{"Rule": "seam", "Targets": []map[string]any{{"Id": "1", "Arn": arn}}})
+		call("PutEvents", map[string]any{"Entries": []map[string]any{{"Source": "acme.seam", "DetailType": "t", "Detail": "{}"}}})
+	}},
+}
+
+func TestEverySQSSeamGoesThroughThePlugin(t *testing.T) {
+	s, _ := sidecar(t)
+	e := startEmulator(t, "--plugin", s.URL)
+	for _, c := range sqsSeams {
+		t.Run(c.name, func(t *testing.T) {
+			q := createQueue(t, e, "seam-"+c.name)
+			_, _, before, _ := count(t, e)
+			c.trigger(t, e, q, queueArn(t, e, q))
+			var delivered []string
+			var internal int
+			for i := 0; i < 50; i++ {
+				if delivered = append(delivered, receive(t, e, q)...); len(delivered) > 0 {
+					if _, _, internal, _ = count(t, e); internal > before {
+						break
+					}
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if len(delivered) == 0 {
+				t.Fatalf("%s: the built-in delivery must still happen (it is the plugin chain's last step)", c.name)
+			}
+			if internal != before+1 {
+				t.Fatalf("%s: the plugin saw %d internal SendMessage calls, want %d — this producer bypasses the registry", c.name, internal-before, 1)
+			}
+		})
 	}
 }

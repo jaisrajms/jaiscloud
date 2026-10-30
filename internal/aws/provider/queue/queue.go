@@ -28,14 +28,12 @@ import (
 // It is cloud-agnostic — the SQS codec translates wire format, this
 // provider works with NormalizedRequest.Params maps.
 type QueueProvider struct {
-	// internalSendHook, when set, wraps InternalSend (see SetInternalSendHook).
-	internalSendHook InternalSendHook
-	resources        store.ResourceStore
-	messages         sqsstore.SQSMessageStore
-	bus              *events.EventBus
-	waiters          *Waiters
-	recentDeletes    map[string]time.Time // queueName → deletion time
-	rdMu             sync.Mutex
+	resources     store.ResourceStore
+	messages      sqsstore.SQSMessageStore
+	bus           *events.EventBus
+	waiters       *Waiters
+	recentDeletes map[string]time.Time // queueName → deletion time
+	rdMu          sync.Mutex
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *events.EventBus) *QueueProvider {
@@ -372,6 +370,9 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 // ─── Data Plane ───────────────────────────────────────────────────────────────
 
 func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.sendMessageInternal(ctx, nr)
+	}
 	queueURL, ok := stringParam(nr.Params, "QueueUrl")
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)

@@ -55,9 +55,8 @@ type Host struct {
 	resource store.ResourceStore
 	registry *provider.Registry
 
-	mu      sync.Mutex
-	calls   map[string]*activeCall // call id -> in-flight call
-	claimed map[string]bool        // registry keys that have plugin links
+	mu    sync.Mutex
+	calls map[string]*activeCall // call id -> in-flight call
 }
 
 type plugin struct {
@@ -99,7 +98,7 @@ func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
 	}
 	registerMetrics()
 	h := &Host{cloud: string(d.Cloud), resource: d.Resources, registry: d.Registry,
-		calls: map[string]*activeCall{}, claimed: map[string]bool{}}
+		calls: map[string]*activeCall{}}
 	seen := map[string]bool{}
 	for _, spec := range specs {
 		p, err := h.connect(ctx, spec, d)
@@ -329,7 +328,6 @@ func (h *Host) apply(d Deps) error {
 		for _, key := range sortedKeys(keys[i]) {
 			if ms := keys[i][key]; ms.replace {
 				d.Registry.Intercept(key, p.replaceLink(ms.wire))
-				h.claimed[key] = true
 			}
 		}
 		for _, prefix := range sortedKeys(fallback[i]) {
@@ -343,7 +341,6 @@ func (h *Host) apply(d Deps) error {
 		for _, key := range sortedKeys(keys[i]) {
 			if ms := keys[i][key]; ms.before || ms.after {
 				d.Registry.Intercept(key, p.aroundLink(ms.wire, ms.before, ms.after))
-				h.claimed[key] = true
 			}
 		}
 		for _, prefix := range sortedKeys(fallback[i]) {
@@ -498,22 +495,6 @@ func truncate(b []byte) string {
 		s = s[:200] + "…"
 	}
 	return s
-}
-
-// Claims reports whether any plugin has a link on the registry key.
-func (h *Host) Claims(key string) bool {
-	return h != nil && h.claimed[key]
-}
-
-// InternalCall runs an emulator-internal delivery (for example SNS publishing
-// to an SQS queue) through the same plugin chain a client request would take.
-// core performs the built-in behaviour. When no plugin claims key, or h is nil,
-// core runs directly and nothing changes.
-func (h *Host) InternalCall(ctx context.Context, key string, nr *model.NormalizedRequest, core provider.HandlerFunc) (*model.ProviderResponse, error) {
-	if !h.Claims(key) {
-		return core(ctx, nr)
-	}
-	return h.registry.Dispatch(provider.WithCore(ctx, key, core), key, nr)
 }
 
 // DoctorInfo describes the loaded plugins for GET /_jaiscloud/doctor.
