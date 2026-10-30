@@ -16,6 +16,9 @@ import (
 // ─── Objects ──────────────────────────────────────────────────────────────────
 
 func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.putObjectInternal(ctx, nr)
+	}
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
 	contentType := strParam(nr.Params, "_content_type")
@@ -228,6 +231,9 @@ func extractUserMetadata(params map[string]any) map[string]string {
 }
 
 func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.getObjectInternal(ctx, nr)
+	}
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
 

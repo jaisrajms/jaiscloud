@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	apigwprovider "jaiscloud/internal/aws/provider/apigw"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewAPIGatewayRestApiHandler returns a ResourceHandler for AWS::ApiGateway::RestApi.
-func NewAPIGatewayRestApiHandler(apigwP *apigwprovider.GatewayProvider) stackprovider.ResourceHandler {
+func NewAPIGatewayRestApiHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "Name", logicalID)
 			params := copyProps(props)
 			params["name"] = name
-			resp, err := apigwP.CreateRestApi(ctx, child(nr, params))
+			resp, err := call(ctx, "Gateway.CreateRestApi", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -27,7 +26,7 @@ func NewAPIGatewayRestApiHandler(apigwP *apigwprovider.GatewayProvider) stackpro
 			if propStr(oldProps, "Name", logicalID) != propStr(newProps, "Name", logicalID) {
 				return "", nil, true, nil
 			}
-			resp, err := apigwP.UpdateRestApi(ctx, child(nr, map[string]any{"restApiId": physicalID}))
+			resp, err := call(ctx, "Gateway.UpdateRestApi", child(nr, map[string]any{"restApiId": physicalID}))
 			if err != nil {
 				return "", nil, false, err
 			}
@@ -36,7 +35,7 @@ func NewAPIGatewayRestApiHandler(apigwP *apigwprovider.GatewayProvider) stackpro
 			return physicalID, map[string]any{"RestApiId": physicalID, "RootResourceId": rootResID, "Arn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := apigwP.DeleteRestApi(ctx, &model.NormalizedRequest{Params: map[string]any{"restApiId": physicalID}})
+			_, err := call(ctx, "Gateway.DeleteRestApi", &model.NormalizedRequest{Params: map[string]any{"restApiId": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"RootResourceId"},

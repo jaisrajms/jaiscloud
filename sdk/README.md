@@ -72,15 +72,21 @@ store the message.
 
 ### Overriding a service covers internal flows
 
-When a plugin overrides a built-in, flows that originate *inside* the emulator use the plugin
-too, with `Req.Origin == "internal"` (and `Req.SourceArn` / `Req.ServicePrincipal` where a service
-is the caller). Covered today: SNS, S3 notification, EventBridge targets, Lambda DLQ and
-CloudWatch alarm deliveries to SQS/SNS/Lambda; the Lambda event-source poller (SQS receive,
-delete and the function invoke); EventBridge, SNS and S3 notification fan-out; and workload
-log writes to CloudWatch Logs. Other internal producers and consumers (S3 puts by Firehose and
-EMR, metrics, tagging, secrets, DynamoDB streams, CloudFormation) are being moved onto the same
-seam one at a time; until then they still call the built-in directly. See the coverage table in
-the design docs.
+When a plugin overrides a built-in, every caller inside the emulator uses it too, and sees `Req.Origin`:
+
+| Origin | Callers |
+|---|---|
+| `internal` | SNS, S3 notifications, EventBridge targets, CloudWatch alarms, Lambda DLQ and rotation delivering to SQS/SNS/Lambda; the Lambda event-source pollers (SQS and DynamoDB Streams); log writes from Lambda, ECS, EMR and Step Functions; log metric filters publishing metrics; EMR and Firehose writing to S3; Glue crawlers reading S3; SSM reading Secrets Manager references |
+| `service` | Step Functions task states and CloudFormation resource handlers, with the parameters a client would send |
+| `ui` | the console |
+
+`Req.SourceArn` / `Req.ServicePrincipal` identify the calling service where there is one. Two
+things to know when you override a service:
+
+* Internal S3 reads and writes carry the whole body as `_body` (bytes; base64 for an out-of-process
+  plugin). A wire `GetObject` streams and cannot be replaced by an out-of-process plugin.
+* A few console-only helpers (for example SQS "peek messages") are not API actions; they keep
+  reading the built-in's state.
 
 ## State
 

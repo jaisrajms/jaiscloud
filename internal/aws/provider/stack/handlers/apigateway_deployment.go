@@ -3,18 +3,17 @@ package handlers
 import (
 	"context"
 
-	apigwprovider "jaiscloud/internal/aws/provider/apigw"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewAPIGatewayDeploymentHandler returns a ResourceHandler for AWS::ApiGateway::Deployment.
-func NewAPIGatewayDeploymentHandler(apigwP *apigwprovider.GatewayProvider) stackprovider.ResourceHandler {
+func NewAPIGatewayDeploymentHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			restAPIID := propStr(props, "RestApiId", "")
 			stageName := propStr(props, "StageName", "")
-			resp, err := apigwP.CreateDeployment(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Gateway.CreateDeployment", child(nr, map[string]any{
 				"restApiId": restAPIID,
 				"stageName": stageName,
 			}))
@@ -30,7 +29,7 @@ func NewAPIGatewayDeploymentHandler(apigwP *apigwprovider.GatewayProvider) stack
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			restAPIID := propStr(props, "RestApiId", "")
-			_, err := apigwP.DeleteDeployment(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Gateway.DeleteDeployment", &model.NormalizedRequest{
 				Params: map[string]any{"restApiId": restAPIID, "deploymentId": physicalID},
 			})
 			return err

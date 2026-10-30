@@ -3,18 +3,17 @@ package handlers
 import (
 	"context"
 
-	functionprovider "jaiscloud/internal/aws/provider/lambda"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLambdaVersionHandler returns a ResourceHandler for AWS::Lambda::Version.
-func NewLambdaVersionHandler(funcP *functionprovider.FunctionProvider) stackprovider.ResourceHandler {
+func NewLambdaVersionHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			funcName := propStr(props, "FunctionName", "")
 			desc := propStr(props, "Description", "")
-			resp, err := funcP.PublishVersion(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Function.PublishVersion", child(nr, map[string]any{
 				"_function_name": funcName,
 				"Description":    desc,
 			}))

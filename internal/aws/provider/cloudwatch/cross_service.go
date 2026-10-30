@@ -10,13 +10,6 @@ import (
 	"jaiscloud/internal/clock"
 )
 
-// MetricDatum is a single metric observation for internal use.
-type MetricDatum struct {
-	Name  string
-	Value float64
-	Unit  string
-}
-
 // SNSPublisher is the narrow interface CloudWatch uses to fire SNS alarm actions.
 type SNSPublisher interface {
 	InternalPublishRaw(ctx context.Context, topicARN string, message string) error
@@ -32,24 +25,6 @@ func (p *Provider) SetSNSPublisher(pub SNSPublisher) { p.snsPublisher = pub }
 
 // SetLambdaInvoker wires the Lambda invoker (second-pass wiring).
 func (p *Provider) SetLambdaInvoker(inv LambdaInvoker) { p.lambdaInvoker = inv }
-
-// InternalPutMetricData stores one or more metric data points bypassing the wire codec.
-func (p *Provider) InternalPutMetricData(_ context.Context, namespace string, data []MetricDatum) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := clock.Now()
-	for _, d := range data {
-		key := ringKey(namespace, d.Name, nil)
-		ring, ok := p.metrics[key]
-		if !ok {
-			ring = &metricRing{namespace: namespace, name: d.Name, points: make([]datapoint, ringSize)}
-			p.metrics[key] = ring
-		}
-		ring.points[ring.idx] = datapoint{Timestamp: now, Value: d.Value, Unit: d.Unit}
-		ring.idx = (ring.idx + 1) % ringSize
-	}
-	return nil
-}
 
 // fireAlarmActions dispatches alarm action ARNs for the given new state.
 // Called after SetAlarmState persists the change.

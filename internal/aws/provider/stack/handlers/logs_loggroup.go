@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLogsLogGroupHandler returns a ResourceHandler for AWS::Logs::LogGroup.
-func NewLogsLogGroupHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandler {
+func NewLogsLogGroupHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "LogGroupName", "/cfn/"+logicalID)
 			params := copyProps(props)
 			params["logGroupName"] = name
-			if _, err := logsP.CreateLogGroup(ctx, child(nr, params)); err != nil {
+			if _, err := call(ctx, "CloudWatchLogs.CreateLogGroup", child(nr, params)); err != nil {
 				return "", nil, err
 			}
 			arn := nr.ResourceID("logs-group", name)
@@ -27,7 +26,7 @@ func NewLogsLogGroupHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandle
 			}
 			// Update retention if changed
 			if v, ok := newProps["RetentionInDays"]; ok {
-				if _, err := logsP.PutRetentionPolicy(ctx, child(nr, map[string]any{
+				if _, err := call(ctx, "CloudWatchLogs.PutRetentionPolicy", child(nr, map[string]any{
 					"logGroupName":    physicalID,
 					"retentionInDays": v,
 				})); err != nil {
@@ -38,7 +37,7 @@ func NewLogsLogGroupHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandle
 			return physicalID, map[string]any{"Arn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := logsP.DeleteLogGroup(ctx, &model.NormalizedRequest{Params: map[string]any{"logGroupName": physicalID}})
+			_, err := call(ctx, "CloudWatchLogs.DeleteLogGroup", &model.NormalizedRequest{Params: map[string]any{"logGroupName": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"Arn"},

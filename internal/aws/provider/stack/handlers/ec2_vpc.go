@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/compute"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEC2VPCHandler returns a ResourceHandler for AWS::EC2::VPC.
-func NewEC2VPCHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+func NewEC2VPCHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			cidr := propStr(props, "CidrBlock", "")
-			resp, err := computeP.CreateVpc(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Compute.CreateVpc", child(nr, map[string]any{
 				"CidrBlock": cidr,
 			}))
 			if err != nil {
@@ -32,7 +31,7 @@ func NewEC2VPCHandler(computeP *compute.ComputeProvider) stackprovider.ResourceH
 			return physicalID, map[string]any{"VpcId": physicalID, "CidrBlock": propStr(newProps, "CidrBlock", ""), "DefaultSecurityGroup": "", "DefaultNetworkAcl": ""}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := computeP.DeleteVpc(ctx, &model.NormalizedRequest{Params: map[string]any{"VpcId": physicalID}})
+			_, err := call(ctx, "Compute.DeleteVpc", &model.NormalizedRequest{Params: map[string]any{"VpcId": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"VpcId", "CidrBlock", "DefaultNetworkAcl", "DefaultSecurityGroup"},

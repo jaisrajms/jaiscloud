@@ -18,12 +18,19 @@ import (
 
 	awsarn "jaiscloud/internal/aws/arn"
 	"jaiscloud/internal/aws/provider/queue"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
 
 // Scope is the account and region used when a target does not carry its own.
-type Scope struct{ Account, Region string }
+type Scope struct {
+	Account, Region string
+	// Clock and Port are what the gateway injects into every wire request;
+	// internal callers get the same so a handler cannot tell them apart.
+	Clock clock.Clock
+	Port  int
+}
 
 // SQS delivers messages to queues on behalf of SNS, S3 notifications, Lambda
 // DLQs and other producers. It implements queue.InternalSendAPI.

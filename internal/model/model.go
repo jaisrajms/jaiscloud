@@ -64,6 +64,10 @@ const (
 	// delivering to SQS, a poller, a scheduler, ...). Built-in handlers serve it
 	// with their internal behaviour; plugins see it like any other call.
 	OriginInternal Origin = "internal"
+	// OriginService: an emulator service acting like a client of another one with
+	// wire-shaped parameters (Step Functions task states, CloudFormation resource
+	// handlers). Built-in handlers treat it exactly like OriginWire.
+	OriginService Origin = "service"
 	// OriginUI: the console UI.
 	OriginUI Origin = "ui"
 )

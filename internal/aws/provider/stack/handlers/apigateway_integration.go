@@ -3,13 +3,12 @@ package handlers
 import (
 	"context"
 
-	apigwprovider "jaiscloud/internal/aws/provider/apigw"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewAPIGatewayIntegrationHandler returns a ResourceHandler for AWS::ApiGateway::Integration.
-func NewAPIGatewayIntegrationHandler(apigwP *apigwprovider.GatewayProvider) stackprovider.ResourceHandler {
+func NewAPIGatewayIntegrationHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			restAPIID := propStr(props, "RestApiId", "")
@@ -17,7 +16,7 @@ func NewAPIGatewayIntegrationHandler(apigwP *apigwprovider.GatewayProvider) stac
 			httpMethod := propStr(props, "HttpMethod", "")
 			intType := propStr(props, "Type", "")
 			uri := propStr(props, "Uri", "")
-			if _, err := apigwP.PutIntegration(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "Gateway.PutIntegration", child(nr, map[string]any{
 				"restApiId":  restAPIID,
 				"resourceId": resourceID,
 				"httpMethod": httpMethod,
@@ -37,7 +36,7 @@ func NewAPIGatewayIntegrationHandler(apigwP *apigwprovider.GatewayProvider) stac
 			restAPIID := propStr(props, "RestApiId", "")
 			resourceID := propStr(props, "ResourceId", "")
 			httpMethod := propStr(props, "HttpMethod", "")
-			_, err := apigwP.DeleteIntegration(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Gateway.DeleteIntegration", &model.NormalizedRequest{
 				Params: map[string]any{
 					"restApiId":  restAPIID,
 					"resourceId": resourceID,

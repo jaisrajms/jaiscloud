@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/notification"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewSNSTopicHandler returns a ResourceHandler for AWS::SNS::Topic.
-func NewSNSTopicHandler(notifP *notification.SNSProvider) stackprovider.ResourceHandler {
+func NewSNSTopicHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "TopicName", logicalID)
-			resp, err := notifP.CreateTopic(ctx, child(nr, map[string]any{"Name": name}))
+			resp, err := call(ctx, "Notification.CreateTopic", child(nr, map[string]any{"Name": name}))
 			if err != nil {
 				return "", nil, err
 			}
@@ -26,7 +25,7 @@ func NewSNSTopicHandler(notifP *notification.SNSProvider) stackprovider.Resource
 			}
 			// In-place: update display name if changed
 			if propStr(oldProps, "DisplayName", "") != propStr(newProps, "DisplayName", "") {
-				if _, err := notifP.SetTopicAttributes(ctx, child(nr, map[string]any{
+				if _, err := call(ctx, "Notification.SetTopicAttributes", child(nr, map[string]any{
 					"TopicArn":       physicalID,
 					"AttributeName":  "DisplayName",
 					"AttributeValue": propStr(newProps, "DisplayName", ""),
@@ -37,7 +36,7 @@ func NewSNSTopicHandler(notifP *notification.SNSProvider) stackprovider.Resource
 			return physicalID, map[string]any{"TopicArn": physicalID}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := notifP.DeleteTopic(ctx, &model.NormalizedRequest{Params: map[string]any{"TopicArn": physicalID}})
+			_, err := call(ctx, "Notification.DeleteTopic", &model.NormalizedRequest{Params: map[string]any{"TopicArn": physicalID}})
 			return err
 		},
 		RefAttr:     "Arn",

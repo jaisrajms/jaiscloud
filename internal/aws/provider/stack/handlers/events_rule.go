@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	eventsprovider "jaiscloud/internal/aws/provider/events"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEventsRuleHandler returns a ResourceHandler for AWS::Events::Rule.
-func NewEventsRuleHandler(eventsP *eventsprovider.EventBridgeProvider) stackprovider.ResourceHandler {
+func NewEventsRuleHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "Name", logicalID)
 			params := copyProps(props)
 			params["Name"] = name
-			resp, err := eventsP.PutRule(ctx, child(nr, params))
+			resp, err := call(ctx, "EventBridge.PutRule", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -26,7 +25,7 @@ func NewEventsRuleHandler(eventsP *eventsprovider.EventBridgeProvider) stackprov
 		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
 			params := copyProps(newProps)
 			params["Name"] = physicalID
-			resp, err := eventsP.PutRule(ctx, child(nr, params))
+			resp, err := call(ctx, "EventBridge.PutRule", child(nr, params))
 			if err != nil {
 				return "", nil, false, err
 			}
@@ -35,7 +34,7 @@ func NewEventsRuleHandler(eventsP *eventsprovider.EventBridgeProvider) stackprov
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			busName := propStr(props, "EventBusName", "default")
-			_, err := eventsP.DeleteRule(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "EventBridge.DeleteRule", &model.NormalizedRequest{
 				Params: map[string]any{"Name": physicalID, "EventBusName": busName},
 			})
 			return err

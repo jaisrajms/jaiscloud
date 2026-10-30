@@ -431,7 +431,7 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 			"newState": map[string]any{"stateValue": stateValue, "stateReason": stateReason},
 		},
 		now)
-	go p.fireAlarmActions(ctx, params, stateValue)
+	go p.fireAlarmActions(context.WithoutCancel(ctx), params, stateValue)
 	return provider.OK(map[string]any{"__action__": "SetAlarmState"}), nil
 }
 

@@ -123,8 +123,11 @@ func (p *Provider) PutLogEvents(ctx context.Context, nr *model.NormalizedRequest
 	// Fan out to subscription filters (Lambda only) and metric filter extraction
 	// without holding the store lock.
 	accountID := nr.AccountID
-	go p.dispatchSubscriptionFilters(ctx, accountID, groupName, streamName, events)
-	go p.extractMetricFilters(ctx, groupName, mfSnap, events)
+	// The request context ends when this call returns; the fan-out outlives it and
+	// may call other services (and plugins) through the registry.
+	bg := context.WithoutCancel(ctx)
+	go p.dispatchSubscriptionFilters(bg, accountID, groupName, streamName, events)
+	go p.extractMetricFilters(bg, groupName, mfSnap, events)
 
 	return provider.OK(map[string]any{
 		"nextSequenceToken": fmt.Sprintf("%056d", counter),

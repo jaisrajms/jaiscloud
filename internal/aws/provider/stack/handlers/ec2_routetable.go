@@ -3,16 +3,15 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/compute"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEC2RouteTableHandler returns a ResourceHandler for AWS::EC2::RouteTable.
-func NewEC2RouteTableHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+func NewEC2RouteTableHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
-			resp, err := computeP.CreateRouteTable(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Compute.CreateRouteTable", child(nr, map[string]any{
 				"VpcId": propStr(props, "VpcId", ""),
 			}))
 			if err != nil {
@@ -31,7 +30,7 @@ func NewEC2RouteTableHandler(computeP *compute.ComputeProvider) stackprovider.Re
 			return physicalID, map[string]any{"RouteTableId": physicalID}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := computeP.DeleteRouteTable(ctx, &model.NormalizedRequest{Params: map[string]any{"RouteTableId": physicalID}})
+			_, err := call(ctx, "Compute.DeleteRouteTable", &model.NormalizedRequest{Params: map[string]any{"RouteTableId": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"RouteTableId"},

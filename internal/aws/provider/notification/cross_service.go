@@ -51,7 +51,7 @@ func (p *SNSProvider) InternalPublish(ctx context.Context, topicARN string, mess
 		case "sqs":
 			p.deliverToSQS(ctx, sd.Endpoint, topicARN, messageID, message, "", "", "", sd.SubscriptionArn, wireAttrs, rawDelivery)
 		case "lambda":
-			go p.deliverToLambda(ctx, sd.SubscriptionArn, topicARN, messageID, message, "", sd.Endpoint, wireAttrs)
+			go p.deliverToLambda(context.WithoutCancel(ctx), sd.SubscriptionArn, topicARN, messageID, message, "", sd.Endpoint, wireAttrs)
 		case "http", "https":
 			go p.deliverToHTTP(topicARN, messageID, message, "", sd.Endpoint, wireAttrs)
 		}

@@ -66,8 +66,10 @@ type Request struct {
 	AccessKey string         `json:"accessKey,omitempty"`
 	// Origin says where the call came from: "wire" (a client), "internal"
 	// (another part of the emulator, e.g. SNS delivering to SQS, a poller or a
-	// scheduler) or "ui" (the console). A plugin that overrides a key receives
-	// all of them; branch on Origin only if you must treat them differently.
+	// scheduler), "service" (a workflow or CloudFormation calling like a client,
+	// with the same parameters a client would send) or "ui" (the console). A
+	// plugin that overrides a key receives all of them; branch on Origin only if
+	// you must treat them differently.
 	Origin string `json:"origin"`
 	// SourceArn / ServicePrincipal are set when another service in the emulator
 	// made this call (for example SNS delivering to SQS).

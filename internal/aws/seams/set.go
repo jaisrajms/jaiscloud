@@ -4,11 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
+	"jaiscloud/internal/aws/arn"
+	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
 	lambdaprovider "jaiscloud/internal/aws/provider/lambda"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	"jaiscloud/internal/aws/provider/notification"
 	"jaiscloud/internal/aws/provider/queue"
+	streamstore "jaiscloud/internal/aws/store/stream"
 	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -32,11 +39,17 @@ func (s *Set) key(service, action string) string { return s.sp(service) + "." + 
 // call dispatches one internal request: the same key a client request would use.
 func (s *Set) call(ctx context.Context, service, action, target string, params map[string]any, src queue.SourceContext) (*model.ProviderResponse, error) {
 	account, region := scopeOf(target, s.scope)
-	return s.reg.Dispatch(ctx, s.key(service, action), &model.NormalizedRequest{
+	return s.reg.Dispatch(ctx, s.key(service, action), s.request(service, action, account, region, params, src))
+}
+
+// request builds an internal request with the fields the gateway would inject.
+func (s *Set) request(service, action, account, region string, params map[string]any, src queue.SourceContext) *model.NormalizedRequest {
+	return &model.NormalizedRequest{
 		Service: service, Action: action, Cloud: model.CloudAWS, Origin: model.OriginInternal,
 		AccountID: account, Region: region, Params: params,
 		SourceArn: src.SourceArn, ServicePrincipal: src.ServicePrincipal,
-	})
+		Clock: s.scope.Clock, Port: s.scope.Port, ResourceID: arn.ResourceID(region, account),
+	}
 }
 
 // SQS returns the producer seam (SNS, S3, EventBridge, Lambda DLQs → SQS).
@@ -225,4 +238,252 @@ func (l *Logs) InternalPutEvents(ctx context.Context, group, stream string, even
 		"logGroupName": group, "logStreamName": stream, "logEvents": list,
 	}, queue.SourceContext{})
 	return err
+}
+
+// ---- Service-to-service calls with wire-shaped params -------------------------------
+
+// Invoke calls registry key (e.g. "Queue.CreateQueue") on behalf of an emulator
+// service that behaves like a client of another one: CloudFormation resource
+// handlers. Params are wire-shaped, so the origin is OriginService and built-in
+// handlers serve it like a wire request.
+func (s *Set) Invoke(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	nr.Origin = model.OriginService
+	if nr.Cloud == "" {
+		nr.Cloud = model.CloudAWS
+	}
+	if nr.Clock == nil {
+		nr.Clock = s.scope.Clock
+	}
+	if nr.Port == 0 {
+		nr.Port = s.scope.Port
+	}
+	if nr.ResourceID == nil {
+		nr.ResourceID = arn.ResourceID(nr.Region, nr.AccountID)
+	}
+	if i := strings.IndexByte(key, '.'); i >= 0 {
+		nr.Action = key[i+1:]
+	}
+	return s.reg.Dispatch(ctx, key, nr)
+}
+
+// ---- S3 -----------------------------------------------------------------------------
+
+// S3 lets EMR and EMR on EKS (log upload), Firehose (delivery) and Glue crawlers
+// (schema inference) use buckets through the registry. Bodies cross whole as
+// "_body" ([]byte); an out-of-process plugin sees them base64-encoded.
+type S3 struct{ s *Set }
+
+func (s *Set) S3() *S3 { return &S3{s} }
+
+// InternalPutObject creates the bucket if needed and writes the object.
+func (o *S3) InternalPutObject(ctx context.Context, bucket, key, contentType string, body []byte) error {
+	_, err := o.s.call(ctx, "s3", "PutObject", "", map[string]any{
+		"_bucket": bucket, "_key": key, "_content_type": contentType, "_body": body,
+	}, queue.SourceContext{})
+	return err
+}
+
+// InternalGetObject returns the whole object body.
+func (o *S3) InternalGetObject(ctx context.Context, bucket, key string) ([]byte, error) {
+	resp, err := o.s.call(ctx, "s3", "GetObject", "", map[string]any{"_bucket": bucket, "_key": key}, queue.SourceContext{})
+	if err != nil {
+		return nil, err
+	}
+	body, _ := resp.Data["_body"].([]byte)
+	return body, nil
+}
+
+// InternalListObjects returns the keys under prefix (one page of up to 10000).
+func (o *S3) InternalListObjects(ctx context.Context, bucket, prefix string) ([]string, error) {
+	resp, err := o.s.call(ctx, "s3", "ListObjectsV2", "", map[string]any{
+		"_bucket": bucket, "prefix": prefix, "max-keys": 10000,
+	}, queue.SourceContext{})
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, c := range asList(resp.Data["Contents"]) {
+		if m, ok := c.(map[string]any); ok {
+			keys = append(keys, str(m["Key"]))
+		}
+	}
+	return keys, nil
+}
+
+// ---- Secrets Manager ----------------------------------------------------------------
+
+// Secrets resolves /aws/reference/secretsmanager/ references for SSM. It
+// implements parameter's secret getter.
+type Secrets struct{ s *Set }
+
+func (s *Set) Secrets() *Secrets { return &Secrets{s} }
+
+func (g *Secrets) InternalGetSecretValue(ctx context.Context, accountID, secretID string) (string, error) {
+	nr := g.s.request("secretsmanager", "GetSecretValue", accountID, g.s.scope.Region,
+		map[string]any{"SecretId": secretID}, queue.SourceContext{})
+	resp, err := g.s.reg.Dispatch(ctx, g.s.key("secretsmanager", "GetSecretValue"), nr)
+	if err != nil {
+		return "", err
+	}
+	if v, ok := resp.Data["SecretString"].(string); ok {
+		return v, nil
+	}
+	if b, ok := resp.Data["SecretBinary"].([]byte); ok {
+		return string(b), nil
+	}
+	return "", fmt.Errorf("secret %s has no value", secretID)
+}
+
+// ---- CloudWatch metrics -------------------------------------------------------------
+
+// Metrics lets CloudWatch Logs metric filters publish to CloudWatch. It
+// implements the logs provider's MetricDataPutter. The wire action carries the
+// Query protocol's flattened "MetricData.member.N.*" keys.
+type Metrics struct{ s *Set }
+
+func (s *Set) Metrics() *Metrics { return &Metrics{s} }
+
+func (m *Metrics) InternalPutMetricData(ctx context.Context, namespace string, data []cwlogs.MetricDatum) error {
+	params := map[string]any{"Namespace": namespace}
+	for i, d := range data {
+		p := fmt.Sprintf("MetricData.member.%d.", i+1)
+		params[p+"MetricName"] = d.Name
+		params[p+"Value"] = d.Value
+		if d.Unit != "" {
+			params[p+"Unit"] = d.Unit
+		}
+	}
+	_, err := m.s.call(ctx, "monitoring", "PutMetricData", "", params, queue.SourceContext{})
+	return err
+}
+
+// ---- DynamoDB Streams → Lambda event source mapping ------------------------------------
+
+// Streams lets the event-source poller read a table's stream through the
+// registry (Streams.ListStreams / DescribeStream / GetShardIterator /
+// GetRecords). It implements lambdaesm.StreamStoreAPI.
+type Streams struct {
+	s    *Set
+	mu   sync.Mutex
+	arns map[string]string // table -> stream ARN
+}
+
+var _ lambdaesm.StreamStoreAPI = (*Streams)(nil)
+
+func (s *Set) Streams() *Streams { return &Streams{s: s, arns: map[string]string{}} }
+
+func (st *Streams) call(ctx context.Context, action string, params map[string]any) (*model.ProviderResponse, error) {
+	return st.s.call(ctx, "dynamodbstreams", action, "", params, queue.SourceContext{})
+}
+
+func (st *Streams) streamArn(ctx context.Context, table string) (string, bool) {
+	st.mu.Lock()
+	arn := st.arns[table]
+	st.mu.Unlock()
+	if arn != "" {
+		return arn, true
+	}
+	resp, err := st.call(ctx, "ListStreams", map[string]any{"TableName": table})
+	if err != nil {
+		return "", false
+	}
+	for _, e := range asList(resp.Data["Streams"]) {
+		if m, ok := e.(map[string]any); ok && str(m["TableName"]) == table {
+			arn = str(m["StreamArn"])
+			st.mu.Lock()
+			st.arns[table] = arn
+			st.mu.Unlock()
+			return arn, arn != ""
+		}
+	}
+	return "", false
+}
+
+func (st *Streams) GetStreamInfo(table string) (streamstore.StreamInfo, bool) {
+	ctx := context.Background()
+	arn, ok := st.streamArn(ctx, table)
+	if !ok {
+		return streamstore.StreamInfo{}, false
+	}
+	resp, err := st.call(ctx, "DescribeStream", map[string]any{"StreamArn": arn})
+	if err != nil {
+		st.mu.Lock()
+		delete(st.arns, table) // the stream may have been re-created
+		st.mu.Unlock()
+		return streamstore.StreamInfo{}, false
+	}
+	d, _ := resp.Data["StreamDescription"].(map[string]any)
+	return streamstore.StreamInfo{
+		StreamArn: arn, TableName: table, StreamLabel: str(d["StreamLabel"]),
+		Enabled: str(d["StreamStatus"]) == "ENABLED",
+	}, true
+}
+
+// GetRecords returns the records after sequence number afterSeq (-1: from the start).
+func (st *Streams) GetRecords(table string, afterSeq int) ([]streamstore.Record, int) {
+	ctx := context.Background()
+	arn, ok := st.streamArn(ctx, table)
+	if !ok {
+		return nil, afterSeq
+	}
+	it := map[string]any{"StreamArn": arn, "ShardIteratorType": "TRIM_HORIZON"}
+	if afterSeq >= 0 {
+		it["ShardIteratorType"], it["SequenceNumber"] = "AFTER_SEQUENCE_NUMBER", strconv.Itoa(afterSeq)
+	}
+	resp, err := st.call(ctx, "GetShardIterator", it)
+	if err != nil {
+		return nil, afterSeq
+	}
+	resp, err = st.call(ctx, "GetRecords", map[string]any{"ShardIterator": str(resp.Data["ShardIterator"])})
+	if err != nil {
+		return nil, afterSeq
+	}
+	var out []streamstore.Record
+	next := afterSeq + 1
+	for _, raw := range asList(resp.Data["Records"]) {
+		m, _ := raw.(map[string]any)
+		d, _ := m["dynamodb"].(map[string]any)
+		seq, _ := strconv.Atoi(str(d["SequenceNumber"]))
+		r := streamstore.Record{
+			SequenceNumber: seq, EventID: str(m["eventID"]), EventName: str(m["eventName"]),
+			ApproximateCreationDateTime: time.Unix(toInt64(d["ApproximateCreationDateTime"]), 0).UTC(),
+			Keys:                        asMap(d["Keys"]), NewImage: asMap(d["NewImage"]), OldImage: asMap(d["OldImage"]),
+		}
+		out = append(out, r)
+		next = seq + 1
+	}
+	return out, next
+}
+
+// asList returns v as a []any, accepting the typed slices built-in handlers
+// return as well as the []any a plugin's JSON decodes to.
+func asList(v any) []any {
+	switch l := v.(type) {
+	case []any:
+		return l
+	case []map[string]any:
+		out := make([]any, len(l))
+		for i := range l {
+			out[i] = l[i]
+		}
+		return out
+	}
+	return nil
+}
+
+func asMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func toInt64(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	}
+	return 0
 }

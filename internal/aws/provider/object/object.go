@@ -627,3 +627,27 @@ func (p *ObjectProvider) InternalListObjects(ctx context.Context, bucket, prefix
 func (p *ObjectProvider) InternalGetObject(ctx context.Context, bucket, key string) ([]byte, error) {
 	return p.blobs.Get(ctx, bucket, key)
 }
+
+// putObjectInternal serves PutObject for origin=internal callers (EMR and EMR on
+// EKS log upload, Firehose delivery): the bucket is created on demand and no
+// bucket notification fires, exactly like InternalPutObject. The body is
+// "_body" ([]byte), the same key a wire PutObject uses.
+func (p *ObjectProvider) putObjectInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body, _ := nr.Params["_body"].([]byte)
+	if err := p.InternalPutObject(ctx, strParam(nr.Params, "_bucket"), strParam(nr.Params, "_key"),
+		strParam(nr.Params, "_content_type"), body); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// getObjectInternal serves GetObject for origin=internal callers (Glue crawlers).
+// Unlike the wire response, which streams, the body comes back whole as "_body"
+// ([]byte) so a plugin can read or replace it.
+func (p *ObjectProvider) getObjectInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body, err := p.InternalGetObject(ctx, strParam(nr.Params, "_bucket"), strParam(nr.Params, "_key"))
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	return provider.OK(map[string]any{"_body": body}), nil
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"jaiscloud/internal/aws/arn"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -21,6 +22,8 @@ type RegistryDispatcher struct {
 	region     string
 	accountID  string
 	resourceID func(string, string) string
+	clock      clock.Clock
+	port       int
 }
 
 // New creates a RegistryDispatcher wired to the given registry and config.
@@ -31,6 +34,8 @@ func New(reg *provider.Registry, cfg *config.Config) *RegistryDispatcher {
 		region:     cfg.Region,
 		accountID:  cfg.AccountID,
 		resourceID: arn.ResourceID(cfg.Region, cfg.AccountID),
+		clock:      cfg.Clock,
+		port:       cfg.Port,
 	}
 }
 
@@ -46,6 +51,9 @@ func (d *RegistryDispatcher) Dispatch(ctx context.Context, providerPrefix, actio
 		Service:    providerPrefix,
 		Action:     action,
 		Params:     params,
+		Origin:     model.OriginService,
+		Clock:      d.clock,
+		Port:       d.port,
 		ResourceID: d.resourceID,
 	}
 	key := fmt.Sprintf("%s.%s", providerPrefix, action)

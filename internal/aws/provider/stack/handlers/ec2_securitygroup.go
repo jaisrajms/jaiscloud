@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/compute"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEC2SecurityGroupHandler returns a ResourceHandler for AWS::EC2::SecurityGroup.
-func NewEC2SecurityGroupHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+func NewEC2SecurityGroupHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			groupName := propStr(props, "GroupName", logicalID)
-			resp, err := computeP.CreateSecurityGroup(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Compute.CreateSecurityGroup", child(nr, map[string]any{
 				"GroupName":        groupName,
 				"GroupDescription": propStr(props, "GroupDescription", groupName),
 				"VpcId":            propStr(props, "VpcId", ""),
@@ -34,7 +33,7 @@ func NewEC2SecurityGroupHandler(computeP *compute.ComputeProvider) stackprovider
 			return physicalID, map[string]any{"GroupId": physicalID}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := computeP.DeleteSecurityGroup(ctx, &model.NormalizedRequest{Params: map[string]any{"GroupId": physicalID}})
+			_, err := call(ctx, "Compute.DeleteSecurityGroup", &model.NormalizedRequest{Params: map[string]any{"GroupId": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"GroupId"},

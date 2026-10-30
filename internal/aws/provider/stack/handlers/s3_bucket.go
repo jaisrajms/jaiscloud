@@ -4,13 +4,12 @@ import (
 	"context"
 	"strings"
 
-	objectprovider "jaiscloud/internal/aws/provider/object"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewS3BucketHandler returns a ResourceHandler for AWS::S3::Bucket.
-func NewS3BucketHandler(objectP *objectprovider.ObjectProvider) stackprovider.ResourceHandler {
+func NewS3BucketHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			stackName, _ := nr.Params["StackName"].(string)
@@ -19,7 +18,7 @@ func NewS3BucketHandler(objectP *objectprovider.ObjectProvider) stackprovider.Re
 				defaultName = strings.ToLower(stackName + "-" + logicalID)
 			}
 			name := propStr(props, "BucketName", defaultName)
-			if _, err := objectP.CreateBucket(ctx, child(nr, map[string]any{"_bucket": name})); err != nil {
+			if _, err := call(ctx, "Object.CreateBucket", child(nr, map[string]any{"_bucket": name})); err != nil {
 				return "", nil, err
 			}
 			arn := nr.ResourceID("s3-bucket", name)
@@ -34,7 +33,7 @@ func NewS3BucketHandler(objectP *objectprovider.ObjectProvider) stackprovider.Re
 			return physicalID, map[string]any{"Arn": arn, "DomainName": physicalID + ".s3.amazonaws.com", "WebsiteURL": ""}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := objectP.DeleteBucket(ctx, &model.NormalizedRequest{Params: map[string]any{"_bucket": physicalID}})
+			_, err := call(ctx, "Object.DeleteBucket", &model.NormalizedRequest{Params: map[string]any{"_bucket": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"Arn", "DomainName", "WebsiteURL"},

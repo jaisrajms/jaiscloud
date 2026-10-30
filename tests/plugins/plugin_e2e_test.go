@@ -74,6 +74,7 @@ func freeAddr(t *testing.T) string {
 type emulator struct {
 	base string
 	out  *bytes.Buffer
+	lw   *lockedWriter
 	cmd  *exec.Cmd
 	done chan error
 }
@@ -87,8 +88,9 @@ func command(t *testing.T, args ...string) (*emulator, string) {
 	cmd := exec.Command(binary(t), all...)
 	cmd.Env = append(os.Environ(), "JAISCLOUD_STATE_DIR="+dir, "JAISCLOUD_DATA_DIR="+dir)
 	out := &bytes.Buffer{}
-	cmd.Stdout, cmd.Stderr = &lockedWriter{w: out}, &lockedWriter{w: out}
-	e := &emulator{base: "http://" + addr, out: out, cmd: cmd, done: make(chan error, 1)}
+	lw := &lockedWriter{w: out} // one writer (one lock) for both streams
+	cmd.Stdout, cmd.Stderr = lw, lw
+	e := &emulator{base: "http://" + addr, out: out, lw: lw, cmd: cmd, done: make(chan error, 1)}
 	return e, addr
 }
 
@@ -104,7 +106,9 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 }
 
 func (e *emulator) logs() string {
-	return e.out.String() // best effort; only read after the process ended or on failure
+	e.lw.mu.Lock()
+	defer e.lw.mu.Unlock()
+	return e.out.String()
 }
 
 func startEmulator(t *testing.T, args ...string) *emulator {
@@ -181,6 +185,22 @@ func (e *emulator) sqs(t *testing.T, action string, body map[string]any) (int, m
 func (e *emulator) form(t *testing.T, vals url.Values) (int, string) {
 	t.Helper()
 	resp, err := http.Post(e.base+"/", "application/x-www-form-urlencoded", strings.NewReader(vals.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
+}
+
+// formAs posts a Query-protocol request signed for service, for actions the
+// router cannot infer from the Action name alone.
+func (e *emulator) formAs(t *testing.T, service string, vals url.Values) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, e.base+"/", strings.NewReader(vals.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20260101/us-east-1/"+service+"/aws4_request, SignedHeaders=host, Signature=00")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,14 +749,20 @@ type observer struct {
 func (o *observer) plugin() *sdk.Mux {
 	m := sdk.NewMux("acme-observer", "0.1.0")
 	rec := func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
-		if c.Req.Origin == "internal" {
+		// "internal": another service called us with seam-shaped params;
+		// "service": a workflow or CloudFormation called us like a client.
+		if c.Req.Origin == "internal" || c.Req.Origin == "service" {
+			entry := c.Req.Service + ":" + c.Req.Action
+			if c.Req.Origin == "service" {
+				entry += "@service"
+			}
 			o.mu.Lock()
-			o.seen = append(o.seen, c.Req.Service+":"+c.Req.Action)
+			o.seen = append(o.seen, entry)
 			o.mu.Unlock()
 		}
 		return sdk.Result{}, nil
 	}
-	for _, svc := range []string{"sqs", "lambda", "sns", "events", "logs"} {
+	for _, svc := range []string{"sqs", "lambda", "sns", "events", "logs", "s3", "secretsmanager", "monitoring", "dynamodbstreams", "states"} {
 		m.Before("aws", svc, "*", rec)
 	}
 	return m
@@ -845,6 +871,101 @@ var internalSeams = []struct {
 	}},
 	{"eventbridge-to-sns", []string{"sns:Publish"}, func(t *testing.T, e *emulator) {
 		ebTarget(t, e, "to-sns", "acme.sns", createTopic(t, e, "eb-topic"))
+	}},
+	{"cloudformation-creates-resources-through-the-registry", []string{"sqs:CreateQueue@service", "sns:CreateTopic@service"}, func(t *testing.T, e *emulator) {
+		tpl := `{"Resources":{"Q":{"Type":"AWS::SQS::Queue","Properties":{"QueueName":"cfn-seam-q"}},` +
+			`"T":{"Type":"AWS::SNS::Topic","Properties":{"TopicName":"cfn-seam-t"}}}}`
+		if st, out := e.formAs(t, "cloudformation", url.Values{"Action": {"CreateStack"}, "StackName": {"seam-stack"}, "TemplateBody": {tpl}}); st != 200 {
+			t.Fatalf("CreateStack: %d %s", st, out)
+		}
+	}},
+	{"step-functions-task-calls-lambda", []string{"lambda:InvokeFunction@service"}, func(t *testing.T, e *emulator) {
+		fn := createFunction(t, e, "sfn-fn")
+		def, _ := json.Marshal(map[string]any{"StartAt": "Call", "States": map[string]any{"Call": map[string]any{
+			"Type": "Task", "Resource": "arn:aws:states:::lambda:invoke", "End": true,
+			"Parameters": map[string]any{"FunctionName": fn, "Payload": map[string]any{"k": "v"}}}}})
+		st, out := e.call(t, "AWSStepFunctions.CreateStateMachine", map[string]any{
+			"name": "seam-sm", "definition": string(def), "roleArn": "arn:aws:iam::000000000000:role/r"})
+		if st != 200 {
+			t.Fatalf("CreateStateMachine: %d %v", st, out)
+		}
+		arn, _ := out["stateMachineArn"].(string)
+		if st, out := e.call(t, "AWSStepFunctions.StartExecution", map[string]any{"stateMachineArn": arn, "input": "{}"}); st != 200 {
+			t.Fatalf("StartExecution: %d %v", st, out)
+		}
+	}},
+	{"ssm-secret-reference", []string{"secretsmanager:GetSecretValue"}, func(t *testing.T, e *emulator) {
+		if st, out := e.call(t, "secretsmanager.CreateSecret", map[string]any{"Name": "seam-secret", "SecretString": "s3cr3t"}); st != 200 {
+			t.Fatalf("CreateSecret: %d %v", st, out)
+		}
+		st, out := e.call(t, "AmazonSSM.GetParameter", map[string]any{"Name": "/aws/reference/secretsmanager/seam-secret"})
+		if st != 200 {
+			t.Fatalf("GetParameter: %d %v", st, out)
+		}
+		if v, _ := out["Parameter"].(map[string]any)["Value"].(string); v != "s3cr3t" {
+			t.Fatalf("the reference must still resolve through the plugin chain, got %v", out)
+		}
+	}},
+	{"logs-metric-filter-to-cloudwatch", []string{"monitoring:PutMetricData"}, func(t *testing.T, e *emulator) {
+		const group = "/seam/metrics"
+		for target, body := range map[string]map[string]any{
+			"Logs_20140328.CreateLogGroup": {"logGroupName": group},
+		} {
+			if st, out := e.call(t, target, body); st != 200 {
+				t.Fatalf("%s: %d %v", target, st, out)
+			}
+		}
+		steps := []struct {
+			target string
+			body   map[string]any
+		}{
+			{"Logs_20140328.PutMetricFilter", map[string]any{"logGroupName": group, "filterName": "errs", "filterPattern": "ERROR",
+				"metricTransformations": []map[string]any{{"metricName": "Errs", "metricNamespace": "Seam", "metricValue": "1"}}}},
+			{"Logs_20140328.CreateLogStream", map[string]any{"logGroupName": group, "logStreamName": "s"}},
+			{"Logs_20140328.PutLogEvents", map[string]any{"logGroupName": group, "logStreamName": "s",
+				"logEvents": []map[string]any{{"timestamp": time.Now().UnixMilli(), "message": "ERROR boom"}}}},
+		}
+		for _, st := range steps {
+			if code, out := e.call(t, st.target, st.body); code != 200 {
+				t.Fatalf("%s: %d %v", st.target, code, out)
+			}
+		}
+	}},
+	{"firehose-delivery-to-s3", []string{"s3:PutObject"}, func(t *testing.T, e *emulator) {
+		cfg := map[string]any{"BucketARN": "arn:aws:s3:::seam-firehose", "RoleARN": "arn:aws:iam::000000000000:role/r"}
+		if st, out := e.call(t, "Firehose_20150804.CreateDeliveryStream", map[string]any{
+			"DeliveryStreamName": "seam-fh", "ExtendedS3DestinationConfiguration": cfg}); st != 200 {
+			t.Fatalf("CreateDeliveryStream: %d %v", st, out)
+		}
+		if st, out := e.call(t, "Firehose_20150804.PutRecord", map[string]any{
+			"DeliveryStreamName": "seam-fh", "Record": map[string]any{"Data": "aGVsbG8="}}); st != 200 {
+			t.Fatalf("PutRecord: %d %v", st, out)
+		}
+		if st, out := e.admin(t, http.MethodPost, "/_jaiscloud/firehose/flush", nil); st >= 300 {
+			t.Fatalf("flush: %d %s", st, out)
+		}
+	}},
+	{"dynamodb-stream-to-lambda-poller", []string{"dynamodbstreams:DescribeStream", "dynamodbstreams:GetRecords"}, func(t *testing.T, e *emulator) {
+		st, out := e.call(t, "DynamoDB_20120810.CreateTable", map[string]any{
+			"TableName":            "seam-ddb",
+			"AttributeDefinitions": []map[string]any{{"AttributeName": "id", "AttributeType": "S"}},
+			"KeySchema":            []map[string]any{{"AttributeName": "id", "KeyType": "HASH"}},
+			"BillingMode":          "PAY_PER_REQUEST",
+			"StreamSpecification":  map[string]any{"StreamEnabled": true, "StreamViewType": "NEW_AND_OLD_IMAGES"},
+		})
+		if st != 200 {
+			t.Fatalf("CreateTable: %d %v", st, out)
+		}
+		arn, _ := out["TableDescription"].(map[string]any)["LatestStreamArn"].(string)
+		fn := createFunction(t, e, "ddb-fn")
+		body := `{"EventSourceArn":"` + arn + `","FunctionName":"` + fn + `","StartingPosition":"TRIM_HORIZON","BatchSize":1}`
+		if code, raw := e.rest(t, "lambda", http.MethodPost, "/2015-03-31/event-source-mappings", body); code >= 300 {
+			t.Fatalf("CreateEventSourceMapping: %d %s", code, raw)
+		}
+		if code, out := e.call(t, "DynamoDB_20120810.PutItem", map[string]any{
+			"TableName": "seam-ddb", "Item": map[string]any{"id": map[string]any{"S": "1"}}}); code != 200 {
+			t.Fatalf("PutItem: %d %v", code, out)
+		}
 	}},
 	{"eventbridge-to-cloudwatch-logs", []string{"logs:CreateLogGroup", "logs:PutLogEvents"}, func(t *testing.T, e *emulator) {
 		ebTarget(t, e, "to-logs", "acme.logs", "arn:aws:logs:us-east-1:000000000000:log-group:/seam/eb")
