@@ -35,6 +35,9 @@ WORKDIR /src
 
 # Download dependencies first (cached layer)
 COPY go.mod go.sum ./
+# go.mod replaces the nested SDK module with ./sdk, so its go.mod must exist
+# before `go mod download` can resolve the module graph.
+COPY sdk/go.mod ./sdk/go.mod
 RUN go mod download
 
 # Copy source and build a fully static binary with the UI embedded

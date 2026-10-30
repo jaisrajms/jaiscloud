@@ -86,6 +86,7 @@ import (
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
 	"jaiscloud/internal/platform"
+	"jaiscloud/internal/pluginhost"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
@@ -362,6 +363,28 @@ func startCmd() *cobra.Command {
 				}
 			}
 
+			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
+			// Load returns (nil, nil) and nothing below runs.
+			pluginSpecs, _ := cmd.Flags().GetStringSlice("plugin")
+			if env := os.Getenv("JAISCLOUD_PLUGINS"); env != "" && len(pluginSpecs) == 0 {
+				pluginSpecs = strings.Split(env, ",")
+			}
+			pluginTimeout, _ := cmd.Flags().GetDuration("plugin-timeout")
+			callbackURL, _ := cmd.Flags().GetString("plugin-callback-url")
+			if callbackURL == "" {
+				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
+			}
+			pluginHost, err := pluginhost.Load(ctx, pluginSpecs, pluginhost.Deps{
+				Cloud: model.CloudAWS, Version: version, Registry: app.Registry, Adapter: cloudAdapter,
+				Resources: s.resources, CallbackURL: callbackURL, Timeout: pluginTimeout,
+			})
+			if err != nil {
+				return err
+			}
+			if pluginHost != nil {
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
+			}
+
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
 			_ = app.Bus
 			return srv.ListenAndServe()
@@ -408,6 +431,11 @@ func startCmd() *cobra.Command {
 	Env var: JAISCLOUD_LAMBDA_KEEPALIVE_SECS`)
 	cmd.Flags().String("aws-emulator-endpoint", "", `AWS emulator endpoint for Spark driver pods (e.g. http://host:4566).
 	Env var: JAISCLOUD_AWS_EMULATOR_ENDPOINT`)
+	cmd.Flags().StringSlice("plugin", nil, `Out-of-process plugin to load (repeatable): http://host:port.
+	Order is precedence order. Env var: JAISCLOUD_PLUGINS (comma-separated)`)
+	cmd.Flags().Duration("plugin-timeout", 10*time.Second, "Timeout for each call to a plugin")
+	cmd.Flags().String("plugin-callback-url", "", `Base URL a plugin uses to reach this emulator's store callbacks.
+	Default http://127.0.0.1:<port>; set it when the plugin runs in another container.`)
 	cmd.Flags().Bool("imds-enabled", false, `Enable the AWS instance-metadata emulator endpoints.
 	Env var: JAISCLOUD_IMDS_ENABLED`)
 	cmd.Flags().String("k8s-namespace", "jaiscloud", `Kubernetes namespace for Spark and Lambda workloads.

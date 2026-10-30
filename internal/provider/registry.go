@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"jaiscloud/internal/model"
 )
@@ -67,6 +69,59 @@ func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
 		}
 	}
 	r.plugins[prefix] = h
+}
+
+// Has reports whether an exact handler is registered for key.
+func (r *Registry) Has(key string) bool {
+	_, ok := r.handlers[key]
+	return ok
+}
+
+// Keys returns the sorted exact-match keys whose provider prefix is prefix.
+func (r *Registry) Keys(prefix string) []string {
+	var out []string
+	for key := range r.handlers {
+		if keyPrefix(key) == prefix {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Intercept wraps the handler registered for key. mw receives the current
+// handler (the original built-in, or the result of an earlier Intercept) and
+// returns its replacement, so the original stays reachable as `next`. When key
+// has no handler, next answers UnknownAction as Dispatch does today.
+//
+// Like RegisterAll, it is for startup only: the maps are not locked.
+func (r *Registry) Intercept(key string, mw func(next HandlerFunc) HandlerFunc) {
+	next, ok := r.handlers[key]
+	if !ok {
+		next = unknownAction
+	}
+	r.handlers[key] = mw(next)
+}
+
+// InterceptFallback wraps the wildcard handler for prefix, which Dispatch
+// consults when no exact key matches (actions the built-in does not have).
+func (r *Registry) InterceptFallback(prefix string, mw func(next HandlerFunc) HandlerFunc) {
+	next, ok := r.plugins[prefix]
+	if !ok {
+		next = unknownAction
+	}
+	r.plugins[prefix] = mw(next)
+}
+
+func unknownAction(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("UnknownAction", fmt.Sprintf("no handler for %q", nr.Service+"."+nr.Action), 400)
+}
+
+func keyPrefix(key string) string {
+	if i := strings.IndexByte(key, '.'); i >= 0 {
+		return key[:i]
+	}
+	return key
 }
 
 // Dispatch routes a request to the matching handler.
