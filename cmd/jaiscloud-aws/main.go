@@ -10,6 +10,7 @@ import (
 	"jaiscloud/internal/aws/adapter/services"
 	keyprovider "jaiscloud/internal/aws/key"
 	paramprovider "jaiscloud/internal/aws/parameter"
+	"jaiscloud/internal/aws/pluginseam"
 	apigwprovider "jaiscloud/internal/aws/provider/apigw"
 	cacheprovider "jaiscloud/internal/aws/provider/cache"
 	"jaiscloud/internal/aws/provider/catalog"
@@ -365,24 +366,30 @@ func startCmd() *cobra.Command {
 
 			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
 			// Load returns (nil, nil) and nothing below runs.
-			pluginSpecs, _ := cmd.Flags().GetStringSlice("plugin")
-			if env := os.Getenv("JAISCLOUD_PLUGINS"); env != "" && len(pluginSpecs) == 0 {
-				pluginSpecs = strings.Split(env, ",")
-			}
-			pluginTimeout, _ := cmd.Flags().GetDuration("plugin-timeout")
-			callbackURL, _ := cmd.Flags().GetString("plugin-callback-url")
+			callbackURL := viper.GetString("plugin_callback_url")
 			if callbackURL == "" {
 				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
 			}
-			pluginHost, err := pluginhost.Load(ctx, pluginSpecs, pluginhost.Deps{
+			pluginHost, err := pluginhost.Load(ctx, viper.GetStringSlice("plugins"), pluginhost.Deps{
 				Cloud: model.CloudAWS, Version: version, Registry: app.Registry, Adapter: cloudAdapter,
-				Resources: s.resources, CallbackURL: callbackURL, Timeout: pluginTimeout,
+				Resources: s.resources, CallbackURL: callbackURL,
+				Timeout:   viper.GetDuration("plugin_timeout"),
+				StartWait: viper.GetDuration("plugin_wait"),
+				CallRetry: viper.GetDuration("plugin_retry"),
+				Secret:    viper.GetString("plugin_secret"),
 			})
 			if err != nil {
 				return err
 			}
 			if pluginHost != nil {
 				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
+				adminHandler.RegisterResetter(pluginHost)
+				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
+				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+				// Internal flows into SQS (SNS, S3 notifications, Lambda DLQ) go through
+				// the plugin chain too, so a plugin overriding SQS sees all of them.
+				app.QueueP.SetInternalSendHook(pluginseam.SQSInternalSend(pluginHost,
+					cloudAdapter.ServiceToProvider("sqs")+".SendMessage", cfg.AccountID, cfg.Region))
 			}
 
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
@@ -433,9 +440,16 @@ func startCmd() *cobra.Command {
 	Env var: JAISCLOUD_AWS_EMULATOR_ENDPOINT`)
 	cmd.Flags().StringSlice("plugin", nil, `Out-of-process plugin to load (repeatable): http://host:port.
 	Order is precedence order. Env var: JAISCLOUD_PLUGINS (comma-separated)`)
-	cmd.Flags().Duration("plugin-timeout", 10*time.Second, "Timeout for each call to a plugin")
+	cmd.Flags().Duration("plugin-timeout", 10*time.Second, "Timeout for each HTTP attempt to a plugin. Env var: JAISCLOUD_PLUGIN_TIMEOUT")
+	cmd.Flags().Duration("plugin-wait", 2*time.Minute, `How long to keep retrying an unreachable plugin at startup before failing.
+	Env var: JAISCLOUD_PLUGIN_WAIT`)
+	cmd.Flags().Duration("plugin-retry", 30*time.Second, `How long to keep retrying an unreachable plugin during a request before returning 503.
+	Env var: JAISCLOUD_PLUGIN_RETRY`)
+	cmd.Flags().String("plugin-secret", "", `Shared secret sent to plugins as a bearer token (pair with sdk.WithSecret).
+	Env var: JAISCLOUD_PLUGIN_SECRET`)
 	cmd.Flags().String("plugin-callback-url", "", `Base URL a plugin uses to reach this emulator's store callbacks.
-	Default http://127.0.0.1:<port>; set it when the plugin runs in another container.`)
+	Default http://127.0.0.1:<port>; set it when the plugin runs in another container.
+	Env var: JAISCLOUD_PLUGIN_CALLBACK_URL`)
 	cmd.Flags().Bool("imds-enabled", false, `Enable the AWS instance-metadata emulator endpoints.
 	Env var: JAISCLOUD_IMDS_ENABLED`)
 	cmd.Flags().String("k8s-namespace", "jaiscloud", `Kubernetes namespace for Spark and Lambda workloads.
@@ -461,6 +475,12 @@ func startCmd() *cobra.Command {
 // them up. Must be called at the start of RunE, after flag parsing is complete.
 func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("port", cmd.Flags().Lookup("port"))
+	viper.BindPFlag("plugins", cmd.Flags().Lookup("plugin"))
+	viper.BindPFlag("plugin_timeout", cmd.Flags().Lookup("plugin-timeout"))
+	viper.BindPFlag("plugin_wait", cmd.Flags().Lookup("plugin-wait"))
+	viper.BindPFlag("plugin_retry", cmd.Flags().Lookup("plugin-retry"))
+	viper.BindPFlag("plugin_secret", cmd.Flags().Lookup("plugin-secret"))
+	viper.BindPFlag("plugin_callback_url", cmd.Flags().Lookup("plugin-callback-url"))
 	viper.BindPFlag("ephemeral", cmd.Flags().Lookup("ephemeral"))
 	viper.BindPFlag("dsn", cmd.Flags().Lookup("dsn"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))

@@ -2,8 +2,7 @@ package pluginhost
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -18,10 +17,10 @@ import (
 
 // replaceLink makes the plugin the core of a key. NotHandled falls through to
 // the handler that was registered before (normally the built-in).
-func (p *plugin) replaceLink() func(provider.HandlerFunc) provider.HandlerFunc {
+func (p *plugin) replaceLink(wire string) func(provider.HandlerFunc) provider.HandlerFunc {
 	return func(next provider.HandlerFunc) provider.HandlerFunc {
 		return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-			res, err := p.call(ctx, sdk.Replace, nr, nil, nil)
+			res, err := p.call(ctx, wire, sdk.Replace, nr, nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -38,18 +37,19 @@ func (p *plugin) replaceLink() func(provider.HandlerFunc) provider.HandlerFunc {
 }
 
 // aroundLink runs the plugin before and/or after the inner handler.
-func (p *plugin) aroundLink(before, after bool) func(provider.HandlerFunc) provider.HandlerFunc {
+func (p *plugin) aroundLink(wire string, before, after bool) func(provider.HandlerFunc) provider.HandlerFunc {
 	return func(next provider.HandlerFunc) provider.HandlerFunc {
 		return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 			if before {
-				res, err := p.call(ctx, sdk.Before, nr, nil, nil)
+				res, err := p.call(ctx, wire, sdk.Before, nr, nil, nil)
 				if err != nil {
 					return nil, err
 				}
-				// Only Params is honoured: codec state (e.g. SQS's wire-protocol
-				// meta) lives on nr and must reach the built-in codec untouched.
-				if res.Req != nil && res.Req.Params != nil {
-					nr.Params = res.Req.Params
+				if res.Params != nil {
+					// Only the plugin-visible params are replaced: "_"-prefixed
+					// internals survive, and codec state (e.g. SQS's wire-protocol
+					// meta) lives on nr and reaches the built-in codec untouched.
+					nr.Params = mergeParams(nr.Params, res.Params)
 				}
 				if res.Resp != nil || res.Err != nil {
 					return fromResult(res)
@@ -66,16 +66,16 @@ func (p *plugin) aroundLink(before, after bool) func(provider.HandlerFunc) provi
 					return resp, err // internal failures are not shown to plugins
 				}
 			}
-			if hasInternalKeys(resp) {
-				slog.Warn("plugin after-hook skipped: response carries non-JSON internal data",
-					"plugin", p.name, "service", nr.Service, "action", nr.Action)
-				return resp, err
-			}
-			res, cerr := p.call(ctx, sdk.After, nr, resp, perr)
+			res, cerr := p.call(ctx, wire, sdk.After, nr, resp, perr)
 			if cerr != nil {
 				return nil, cerr
 			}
 			if res.Resp != nil || res.Err != nil {
+				if res.Resp != nil && hasInternalKeys(resp) {
+					return nil, model.NewProviderError("PluginUnsupportedPayload",
+						fmt.Sprintf("plugin %s cannot replace a response that carries binary or stream data; "+
+							"an out-of-process plugin may observe it but not override it", p.name), 501)
+				}
 				return fromResult(res)
 			}
 			return resp, err
@@ -83,40 +83,89 @@ func (p *plugin) aroundLink(before, after bool) func(provider.HandlerFunc) provi
 	}
 }
 
-// call sends one phase to the plugin and tracks the request as in flight.
-func (p *plugin) call(ctx context.Context, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError) (sdk.Result, error) {
-	rid := middleware.GetRequestID(ctx)
-	if rid == "" {
-		b := make([]byte, 8)
-		_, _ = rand.Read(b)
-		rid = "plg-" + hex.EncodeToString(b)
-	}
-	p.host.inflight.enter(rid)
-	defer p.host.inflight.leave(rid)
+// call sends one phase to the plugin. The call gets its own unique id, which
+// is the only credential its store callbacks accept, and which is revoked (and
+// drained) when the call returns.
+func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError) (sdk.Result, error) {
+	callID := randomID(16)
+	p.host.begin(callID, p, nr.AccountID, nr.Region)
+	defer p.host.end(callID)
 
 	in := sdk.HandleRequest{
 		Phase: phase,
 		Req: &sdk.Request{
-			Cloud: string(nr.Cloud), Service: nr.Service, Action: nr.Action, Params: nr.Params,
+			Cloud: p.host.cloud, Service: wire, Action: nr.Action, Params: project(nr.Params),
 			AccountID: nr.AccountID, Region: nr.Region, AccessKey: nr.AccessKey,
-			RequestID: rid,
+			SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
+			RequestID: requestID(ctx, nr), CallID: callID,
 			// Not nr.Clock: that is fixed at config load, while POST
 			// /_jaiscloud/clock replaces the global clock.
 			Now: clock.Now(),
 		},
 	}
 	if resp != nil {
-		in.Resp = &sdk.Response{Status: resp.HTTPStatus, Data: resp.Data}
+		in.Resp = &sdk.Response{Status: resp.HTTPStatus, Data: project(resp.Data)}
 	}
 	if perr != nil {
 		in.Err = &sdk.Error{Code: perr.Code, Message: perr.Message, Status: perr.HTTPStatus, Data: perr.Data}
 	}
+
+	start := clock.RealNow()
 	var res sdk.Result
-	if err := p.do(ctx, http.MethodPost, "/handle", in, &res); err != nil {
+	err := p.do(ctx, http.MethodPost, "/handle", in, &res, p.retry)
+	if pe, ok := err.(*model.ProviderError); ok && strings.Contains(pe.Message, "not initialised") {
+		// The plugin restarted and lost the store endpoint: hand it back and retry once.
+		if ierr := p.reinit(ctx); ierr == nil {
+			res, err = sdk.Result{}, p.do(ctx, http.MethodPost, "/handle", in, &res, p.retry)
+		}
+	}
+	observe(p.name, string(phase), outcome(err, res), clock.RealNow().Sub(start))
+	if err != nil {
 		return sdk.Result{}, err
+	}
+	if verr := p.validate(res); verr != nil {
+		return sdk.Result{}, verr
 	}
 	slog.Debug("plugin call", "plugin", p.name, "phase", phase, "service", nr.Service, "action", nr.Action)
 	return res, nil
+}
+
+// requestID returns a stable id for the originating request: the HTTP request
+// id when there is one, otherwise one generated once per nr (so before/after
+// of an internal call correlate).
+func requestID(ctx context.Context, nr *model.NormalizedRequest) string {
+	if id := middleware.GetRequestID(ctx); id != "" {
+		return id
+	}
+	if id := nr.GetMeta("plugin_rid"); id != "" {
+		return id
+	}
+	id := "plg-" + randomID(8)
+	nr.SetMeta("plugin_rid", id)
+	return id
+}
+
+// validate rejects results that contradict themselves or the HTTP range, with
+// a protocol error instead of letting them silently misbehave.
+func (p *plugin) validate(res sdk.Result) error {
+	bad := func(msg string) error {
+		return model.NewProviderError("PluginProtocolError", "plugin "+p.name+": "+msg, 502)
+	}
+	if res.Resp != nil && res.Err != nil {
+		return bad("result sets both resp and err")
+	}
+	if res.Resp != nil && res.Resp.Status != 0 && (res.Resp.Status < 100 || res.Resp.Status > 599) {
+		return bad(fmt.Sprintf("resp.status %d is not a valid HTTP status", res.Resp.Status))
+	}
+	if res.Err != nil {
+		if res.Err.Code == "" {
+			return bad("err.code is required")
+		}
+		if res.Err.Status != 0 && (res.Err.Status < 100 || res.Err.Status > 599) {
+			return bad(fmt.Sprintf("err.status %d is not a valid HTTP status", res.Err.Status))
+		}
+	}
+	return nil
 }
 
 func fromResult(res sdk.Result) (*model.ProviderResponse, error) {
@@ -140,6 +189,41 @@ func fromResult(res sdk.Result) (*model.ProviderResponse, error) {
 	return &model.ProviderResponse{HTTPStatus: status, Data: data}, nil
 }
 
+func isInternal(k string) bool { return strings.HasPrefix(k, "_") }
+
+// project copies m without the emulator-internal "_"-prefixed keys.
+func project(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if !isInternal(k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// mergeParams applies a plugin's edited view back onto the original params:
+// visible keys the plugin dropped are removed, the rest are set, and internal
+// keys are always preserved (a plugin cannot see or set them).
+func mergeParams(orig, patch map[string]any) map[string]any {
+	out := make(map[string]any, len(orig)+len(patch))
+	for k, v := range orig {
+		if isInternal(k) {
+			out[k] = v
+			continue
+		}
+		if _, kept := patch[k]; kept {
+			out[k] = v
+		}
+	}
+	for k, v := range patch {
+		if !isInternal(k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // hasInternalKeys reports whether Data carries "_"-prefixed internal values
 // such as "_stream", which are not wire fields and cannot cross to a plugin.
 func hasInternalKeys(resp *model.ProviderResponse) bool {
@@ -147,7 +231,7 @@ func hasInternalKeys(resp *model.ProviderResponse) bool {
 		return false
 	}
 	for k := range resp.Data {
-		if strings.HasPrefix(k, "_") {
+		if isInternal(k) {
 			return true
 		}
 	}

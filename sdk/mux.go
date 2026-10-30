@@ -18,6 +18,7 @@ type Mux struct {
 	name, version string
 	routes        map[muxKey]Func
 	order         []muxKey
+	lifecycle     func(ctx context.Context, event string)
 }
 
 type muxKey struct {
@@ -69,6 +70,17 @@ func (m *Mux) Manifest() Manifest {
 		mf.Routes = append(mf.Routes, Route{Cloud: key.cloud, Service: key.service, Actions: acts, Mode: key.mode})
 	}
 	return mf
+}
+
+// HandleLifecycle registers a function called after the emulator resets or
+// restores state (see LifecycleListener); use it to drop caches.
+func (m *Mux) HandleLifecycle(f func(ctx context.Context, event string)) { m.lifecycle = f }
+
+// OnLifecycle implements LifecycleListener.
+func (m *Mux) OnLifecycle(ctx context.Context, event string) {
+	if m.lifecycle != nil {
+		m.lifecycle(ctx, event)
+	}
 }
 
 func (m *Mux) Init(context.Context, Host) error { return nil }

@@ -1,7 +1,7 @@
 // Command audit is a complete jaiscloud plugin: it audits every SQS SendMessage,
 // rejects bodies containing "BLOCK", and adds a new action, AcmeAuditCount.
 //
-//	go run ./examples/audit            # listens on :9100
+//	go run ./examples/audit            # listens on 127.0.0.1:9100
 //	jaiscloud-aws start --plugin http://127.0.0.1:9100
 package main
 
@@ -20,7 +20,7 @@ func main() {
 	// Middleware: runs before the built-in SendMessage.
 	m.Before("aws", "sqs", "SendMessage", func(ctx context.Context, c *sdk.Call) (sdk.Result, error) {
 		row, _ := json.Marshal(map[string]any{"queue": c.Req.Params["QueueUrl"], "at": c.Req.Now})
-		if err := c.Store.Put(ctx, "audit", c.Req.RequestID, row); err != nil {
+		if err := c.Store.Put(ctx, "audit", c.Req.CallID, row); err != nil {
 			return sdk.Result{}, err
 		}
 		if body, _ := c.Req.Params["MessageBody"].(string); strings.Contains(body, "BLOCK") {

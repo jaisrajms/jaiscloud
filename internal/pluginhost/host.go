@@ -12,10 +12,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -39,45 +42,72 @@ type Deps struct {
 	Adapter     adapter.CloudAdapter
 	Resources   store.ResourceStore
 	CallbackURL string        // base URL a plugin uses to reach this emulator
-	Timeout     time.Duration // per HTTP call to a plugin
+	Timeout     time.Duration // per HTTP attempt to a plugin (default 10s)
+	StartWait   time.Duration // how long to keep retrying an unreachable plugin at startup (default 2m)
+	CallRetry   time.Duration // how long to keep retrying an unreachable plugin during a request (default 30s)
+	Secret      string        // optional shared secret sent to plugins as a bearer token
 }
 
 // Host holds the loaded plugins and serves their store callbacks.
 type Host struct {
+	cloud    string
 	plugins  []*plugin
 	resource store.ResourceStore
-	inflight inflight
+	registry *provider.Registry
+
+	mu      sync.Mutex
+	calls   map[string]*activeCall // call id -> in-flight call
+	claimed map[string]bool        // registry keys that have plugin links
 }
 
 type plugin struct {
-	name, version, baseURL, token string
-	routes                        []sdk.Route // only entries for this binary's cloud
-	client                        *http.Client
-	timeout                       time.Duration
-	host                          *Host
+	name, version, baseURL, shownURL, token string
+	secret                                  string
+	routes                                  []sdk.Route // only entries for this binary's cloud
+	client                                  *http.Client
+	timeout, retry                          time.Duration
+	initReq                                 sdk.InitRequest
+	host                                    *Host
 }
 
-var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+var nameRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`) })
+
+const (
+	defaultTimeout   = 10 * time.Second
+	defaultStartWait = 2 * time.Minute
+	defaultRetry     = 30 * time.Second
+	maxBody          = 32 << 20
+)
 
 // Load connects to every plugin spec, validates them, and installs their
 // routes. Any failure aborts startup (the caller returns the error).
 // Specs are "http://host:port" or "https://host:port"; precedence follows order.
+// An unreachable plugin is retried for d.StartWait before startup fails.
 func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
+	specs = cleanSpecs(specs)
 	if len(specs) == 0 {
 		return nil, nil
 	}
 	if d.Timeout <= 0 {
-		d.Timeout = 10 * time.Second
+		d.Timeout = defaultTimeout
 	}
-	h := &Host{resource: d.Resources, inflight: inflight{n: map[string]int{}}}
+	if d.StartWait <= 0 {
+		d.StartWait = defaultStartWait
+	}
+	if d.CallRetry <= 0 {
+		d.CallRetry = defaultRetry
+	}
+	registerMetrics()
+	h := &Host{cloud: string(d.Cloud), resource: d.Resources, registry: d.Registry,
+		calls: map[string]*activeCall{}, claimed: map[string]bool{}}
 	seen := map[string]bool{}
 	for _, spec := range specs {
 		p, err := h.connect(ctx, spec, d)
 		if err != nil {
-			return nil, fmt.Errorf("plugin %q: %w", spec, err)
+			return nil, fmt.Errorf("plugin %q: %w", redact(spec), err)
 		}
 		if seen[p.name] {
-			return nil, fmt.Errorf("plugin %q: duplicate plugin name %q", spec, p.name)
+			return nil, fmt.Errorf("plugin %q: duplicate plugin name %q", redact(spec), p.name)
 		}
 		seen[p.name] = true
 		h.plugins = append(h.plugins, p)
@@ -87,9 +117,43 @@ func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
 	}
 	for _, p := range h.plugins {
 		slog.Info("plugin loaded", "name", p.name, "version", p.version, "transport", "http",
-			"url", p.baseURL, "abi", sdk.ABI, "routes", len(p.routes))
+			"url", p.shownURL, "abi", sdk.ABI, "routes", len(p.routes))
 	}
 	return h, nil
+}
+
+// cleanSpecs trims whitespace, splits comma-separated entries and drops empties,
+// so both repeated flags and JAISCLOUD_PLUGINS="a, b" work.
+func cleanSpecs(in []string) []string {
+	var out []string
+	for _, s := range in {
+		for _, part := range strings.Split(s, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
+}
+
+// redact removes credentials and query strings from a plugin URL for logs/errors.
+func redact(spec string) string {
+	u, err := url.Parse(spec)
+	if err != nil || u.Host == "" {
+		return spec
+	}
+	u.User, u.RawQuery, u.Fragment = nil, "", ""
+	return u.String()
+}
+
+func newHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConnsPerHost = 32
+	return &http.Client{
+		Transport: tr,
+		// A plugin must answer directly; following a redirect would replay a POST elsewhere.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error) {
@@ -100,16 +164,17 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 	default:
 		return nil, fmt.Errorf("unrecognised plugin spec (want http://… or https://…)")
 	}
-	p := &plugin{baseURL: strings.TrimRight(spec, "/"), client: &http.Client{}, timeout: d.Timeout, host: h}
+	p := &plugin{baseURL: strings.TrimRight(spec, "/"), shownURL: redact(strings.TrimRight(spec, "/")),
+		client: newHTTPClient(), timeout: d.Timeout, retry: d.CallRetry, secret: d.Secret, host: h}
 
 	var m sdk.Manifest
-	if err := p.do(ctx, http.MethodGet, "/manifest", nil, &m); err != nil {
+	if err := p.do(ctx, http.MethodGet, "/manifest", nil, &m, d.StartWait); err != nil {
 		return nil, err
 	}
 	if m.ABI != sdk.ABI {
 		return nil, fmt.Errorf("plugin ABI %d, emulator supports %d", m.ABI, sdk.ABI)
 	}
-	if !nameRe.MatchString(m.Name) {
+	if !nameRe().MatchString(m.Name) {
 		return nil, fmt.Errorf("invalid plugin name %q (want [a-z0-9-]+)", m.Name)
 	}
 	p.name, p.version = m.Name, m.Version
@@ -133,23 +198,33 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 		slog.Warn("plugin declares no routes for this cloud", "name", p.name, "cloud", d.Cloud)
 	}
 
-	tok := make([]byte, 16)
-	if _, err := rand.Read(tok); err != nil {
-		return nil, err
-	}
-	p.token = hex.EncodeToString(tok)
-	init := sdk.InitRequest{ABI: sdk.ABI,
+	p.token = randomID(16)
+	p.initReq = sdk.InitRequest{ABI: sdk.ABI,
 		Host:  sdk.InitHost{Cloud: string(d.Cloud), Version: d.Version},
 		Store: sdk.StoreEndpoint{URL: strings.TrimRight(d.CallbackURL, "/") + storePath, Token: p.token}}
-	if err := p.do(ctx, http.MethodPost, "/init", init, nil); err != nil {
+	if err := p.do(ctx, http.MethodPost, "/init", p.initReq, nil, d.StartWait); err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
-type modeSet struct{ replace, before, after bool }
+// reinit re-sends /init, used when a plugin restarted and lost its state.
+func (p *plugin) reinit(ctx context.Context) error {
+	return p.do(ctx, http.MethodPost, "/init", p.initReq, nil, p.retry)
+}
 
-func (m *modeSet) add(mode sdk.Mode) {
+func randomID(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+type modeSet struct {
+	replace, before, after bool
+	wire                   string // wire service name the plugin used in its route
+}
+
+func (m *modeSet) add(mode sdk.Mode, wire string) {
 	switch mode {
 	case sdk.Replace:
 		m.replace = true
@@ -158,23 +233,30 @@ func (m *modeSet) add(mode sdk.Mode) {
 	case sdk.After:
 		m.after = true
 	}
+	if m.wire == "" {
+		m.wire = wire
+	}
 }
 
-// claims is one plugin's expansion of its routes: modes per exact key, plus
-// modes for actions the built-in does not have (the prefix fallback).
-type claims struct {
-	keys     map[string]*modeSet
-	fallback map[string]*modeSet // provider prefix -> modes
+func get(m map[string]*modeSet, k string) *modeSet {
+	ms := m[k]
+	if ms == nil {
+		ms = &modeSet{}
+		m[k] = ms
+	}
+	return ms
 }
 
 func (h *Host) apply(d Deps) error {
-	// Expand routes. Explicit replace claims first, so a wildcard replace can
-	// skip actions another plugin explicitly owns.
-	all := make([]*claims, len(h.plugins))
-	replaceOwner := map[string]string{} // exact key -> plugin
+	n := len(h.plugins)
+	keys := make([]map[string]*modeSet, n)     // exact registry keys per plugin
+	fallback := make([]map[string]*modeSet, n) // provider prefix -> modes for unknown actions
+	replaceOwner := map[string]string{}        // exact key -> plugin
+	newKeys := map[string]map[string]bool{}    // prefix -> keys named explicitly by any plugin
+
+	// 1. Explicit action claims.
 	for i, p := range h.plugins {
-		c := &claims{keys: map[string]*modeSet{}, fallback: map[string]*modeSet{}}
-		all[i] = c
+		keys[i], fallback[i] = map[string]*modeSet{}, map[string]*modeSet{}
 		for _, r := range p.routes {
 			prefix := d.Adapter.ServiceToProvider(r.Service)
 			for _, a := range r.Actions {
@@ -182,12 +264,11 @@ func (h *Host) apply(d Deps) error {
 					continue
 				}
 				key := prefix + "." + a
-				ms := c.keys[key]
-				if ms == nil {
-					ms = &modeSet{}
-					c.keys[key] = ms
+				get(keys[i], key).add(r.Mode, r.Service)
+				if newKeys[prefix] == nil {
+					newKeys[prefix] = map[string]bool{}
 				}
-				ms.add(r.Mode)
+				newKeys[prefix][key] = true
 				if r.Mode == sdk.Replace {
 					if other, ok := replaceOwner[key]; ok && other != p.name {
 						return fmt.Errorf("plugins %q and %q both replace %s", other, p.name, key)
@@ -197,76 +278,90 @@ func (h *Host) apply(d Deps) error {
 			}
 		}
 	}
-	wildcardOwner := map[string]string{} // prefix -> plugin
+
+	// 2. before/after only make sense on an action that exists or that some
+	// plugin adds with replace; anything else is almost certainly a typo.
 	for i, p := range h.plugins {
-		c := all[i]
-		for _, r := range p.routes {
-			prefix := d.Adapter.ServiceToProvider(r.Service)
-			hasWild := false
-			for _, a := range r.Actions {
-				if a == "*" {
-					hasWild = true
-				}
+		for _, key := range sortedKeys(keys[i]) {
+			ms := keys[i][key]
+			if (ms.before || ms.after) && !d.Registry.Has(key) && replaceOwner[key] == "" {
+				return fmt.Errorf("plugin %q: before/after on unknown action %s (typo?)", p.name, key)
 			}
-			if !hasWild {
+		}
+	}
+
+	// 3. Wildcards cover every existing action plus every action any plugin adds.
+	wildcardOwner := map[string]string{} // prefix -> plugin owning replace "*"
+	for i, p := range h.plugins {
+		for _, r := range p.routes {
+			if !contains(r.Actions, "*") {
 				continue
 			}
+			prefix := d.Adapter.ServiceToProvider(r.Service)
 			if r.Mode == sdk.Replace {
 				if other, ok := wildcardOwner[prefix]; ok && other != p.name {
 					return fmt.Errorf("plugins %q and %q both replace every action of %s", other, p.name, r.Service)
 				}
 				wildcardOwner[prefix] = p.name
 			}
-			fb := c.fallback[prefix]
-			if fb == nil {
-				fb = &modeSet{}
-				c.fallback[prefix] = fb
+			get(fallback[i], prefix).add(r.Mode, r.Service)
+			expanded := map[string]bool{}
+			for _, k := range d.Registry.Keys(prefix) {
+				expanded[k] = true
 			}
-			fb.add(r.Mode)
-			for _, key := range d.Registry.Keys(prefix) {
+			for k := range newKeys[prefix] {
+				expanded[k] = true
+			}
+			for _, key := range sortedKeys(expanded) {
 				if r.Mode == sdk.Replace {
 					if other, ok := replaceOwner[key]; ok && other != p.name {
-						continue // specific replace by another plugin wins
+						continue // a specific replace by another plugin wins
 					}
 				}
-				ms := c.keys[key]
-				if ms == nil {
-					ms = &modeSet{}
-					c.keys[key] = ms
-				}
-				ms.add(r.Mode)
+				get(keys[i], key).add(r.Mode, r.Service)
 			}
 		}
 	}
 
-	// Pass 1: replace links (innermost, directly around the built-in).
+	// 4. Install. Replace links first (innermost, around the built-in), then
+	// before/after links with plugin 1 outermost (so it is applied last).
 	for i, p := range h.plugins {
-		for _, key := range sortedKeys(all[i].keys) {
-			if all[i].keys[key].replace {
-				d.Registry.Intercept(key, p.replaceLink())
+		for _, key := range sortedKeys(keys[i]) {
+			if ms := keys[i][key]; ms.replace {
+				d.Registry.Intercept(key, p.replaceLink(ms.wire))
+				h.claimed[key] = true
 			}
 		}
-		for _, prefix := range sortedKeys(all[i].fallback) {
-			if all[i].fallback[prefix].replace {
-				d.Registry.InterceptFallback(prefix, p.replaceLink())
+		for _, prefix := range sortedKeys(fallback[i]) {
+			if ms := fallback[i][prefix]; ms.replace {
+				d.Registry.InterceptFallback(prefix, p.replaceLink(ms.wire))
 			}
 		}
 	}
-	// Pass 2: before/after links, plugin 1 outermost (so applied last).
-	for i := len(h.plugins) - 1; i >= 0; i-- {
+	for i := n - 1; i >= 0; i-- {
 		p := h.plugins[i]
-		for _, key := range sortedKeys(all[i].keys) {
-			if ms := all[i].keys[key]; ms.before || ms.after {
-				d.Registry.Intercept(key, p.aroundLink(ms.before, ms.after))
+		for _, key := range sortedKeys(keys[i]) {
+			if ms := keys[i][key]; ms.before || ms.after {
+				d.Registry.Intercept(key, p.aroundLink(ms.wire, ms.before, ms.after))
+				h.claimed[key] = true
 			}
 		}
-		for _, prefix := range sortedKeys(all[i].fallback) {
-			if ms := all[i].fallback[prefix]; ms.before || ms.after {
-				d.Registry.InterceptFallback(prefix, p.aroundLink(ms.before, ms.after))
+		for _, prefix := range sortedKeys(fallback[i]) {
+			if ms := fallback[i][prefix]; ms.before || ms.after {
+				d.Registry.InterceptFallback(prefix, p.aroundLink(ms.wire, ms.before, ms.after))
 			}
 		}
 	}
 	return nil
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -278,31 +373,98 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// do performs one JSON call to the plugin. Transport failures are mapped to
-// ProviderErrors so they reach the client through the built-in codec; they
-// never fall back to the built-in handler.
-func (p *plugin) do(ctx context.Context, method, path string, in, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-	var body io.Reader
+// connError marks a failure to even reach the plugin (nothing was delivered),
+// which is the only kind of failure that is safe to retry for any request.
+type connError struct{ err error }
+
+func (e *connError) Error() string { return e.err.Error() }
+func (e *connError) Unwrap() error { return e.err }
+
+// do performs one JSON call to the plugin. If the plugin cannot be reached
+// (connection refused / unresolved), it retries with backoff for up to `retry`
+// before giving up. Failures are ProviderErrors so they reach the client
+// through the built-in codec; they never fall back to the built-in handler.
+func (p *plugin) do(ctx context.Context, method, path string, in, out any, retry time.Duration) error {
+	var body []byte
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
 			return model.NewProviderError("PluginUnsupportedPayload", "request is not JSON-serialisable: "+err.Error(), 500)
 		}
-		body = bytes.NewReader(b)
+		body = b
 	}
-	req, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, body)
+	rctx := ctx
+	if retry > 0 {
+		var cancel context.CancelFunc
+		rctx, cancel = context.WithTimeout(ctx, retry)
+		defer cancel()
+	}
+	backoff, logged := 200*time.Millisecond, false
+	for {
+		err := p.once(ctx, method, path, body, out)
+		var ce *connError
+		if !errors.As(err, &ce) {
+			return toProviderError(err)
+		}
+		if retry <= 0 {
+			return model.NewProviderError("PluginUnavailable", fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), ce.err), 503)
+		}
+		if !logged {
+			slog.Warn("plugin unreachable, retrying", "plugin", p.nameOr(), "retry_for", retry.String(), "err", ce.err)
+			logged = true
+		}
+		select {
+		case <-rctx.Done():
+			return model.NewProviderError("PluginUnavailable",
+				fmt.Sprintf("plugin %s unavailable after retrying for %s: %v", p.nameOr(), retry, ce.err), 503)
+		case <-time.After(backoff):
+		}
+		if backoff < 2*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func toProviderError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pe *model.ProviderError
+	if errors.As(err, &pe) {
+		return pe
+	}
+	return model.NewProviderError("PluginUnavailable", err.Error(), 503)
+}
+
+func (p *plugin) once(ctx context.Context, method, path string, body []byte, out any) error {
+	actx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(actx, method, p.baseURL+path, rd)
 	if err != nil {
 		return err
 	}
-	if in != nil {
+	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	} else if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if p.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+p.secret)
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return model.NewProviderError("PluginTimeout", fmt.Sprintf("plugin %s timed out", p.nameOr()), 504)
+		var oe *net.OpError
+		switch {
+		case errors.Is(actx.Err(), context.DeadlineExceeded):
+			return model.NewProviderError("PluginTimeout", fmt.Sprintf("plugin %s timed out after %s", p.nameOr(), p.timeout), 504)
+		case ctx.Err() != nil:
+			return model.NewProviderError("PluginUnavailable", fmt.Sprintf("plugin %s call cancelled: %v", p.nameOr(), ctx.Err()), 503)
+		case errors.As(err, &oe) && oe.Op == "dial":
+			return &connError{err: err}
 		}
 		return model.NewProviderError("PluginUnavailable", fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), err), 503)
 	}
@@ -323,13 +485,11 @@ func (p *plugin) do(ctx context.Context, method, path string, in, out any) error
 	return nil
 }
 
-const maxBody = 32 << 20
-
 func (p *plugin) nameOr() string {
 	if p.name != "" {
 		return p.name
 	}
-	return p.baseURL
+	return p.shownURL
 }
 
 func truncate(b []byte) string {
@@ -340,19 +500,54 @@ func truncate(b []byte) string {
 	return s
 }
 
-// inflight tracks which request ids currently have a plugin call open, so the
-// store callbacks can reject writes that are not part of a live request.
-type inflight struct {
-	mu sync.Mutex
-	n  map[string]int
+// Claims reports whether any plugin has a link on the registry key.
+func (h *Host) Claims(key string) bool {
+	return h != nil && h.claimed[key]
 }
 
-func (f *inflight) enter(id string) { f.mu.Lock(); f.n[id]++; f.mu.Unlock() }
-func (f *inflight) leave(id string) {
-	f.mu.Lock()
-	if f.n[id]--; f.n[id] <= 0 {
-		delete(f.n, id)
+// InternalCall runs an emulator-internal delivery (for example SNS publishing
+// to an SQS queue) through the same plugin chain a client request would take.
+// core performs the built-in behaviour. When no plugin claims key, or h is nil,
+// core runs directly and nothing changes.
+func (h *Host) InternalCall(ctx context.Context, key string, nr *model.NormalizedRequest, core provider.HandlerFunc) (*model.ProviderResponse, error) {
+	if !h.Claims(key) {
+		return core(ctx, nr)
 	}
-	f.mu.Unlock()
+	return h.registry.Dispatch(provider.WithCore(ctx, key, core), key, nr)
 }
-func (f *inflight) has(id string) bool { f.mu.Lock(); defer f.mu.Unlock(); return f.n[id] > 0 }
+
+// DoctorInfo describes the loaded plugins for GET /_jaiscloud/doctor.
+func (h *Host) DoctorInfo() any {
+	out := make([]map[string]any, 0, len(h.plugins))
+	for _, p := range h.plugins {
+		out = append(out, map[string]any{
+			"name": p.name, "version": p.version, "transport": "http", "url": p.shownURL,
+			"abi": sdk.ABI, "routes": p.routes,
+		})
+	}
+	return out
+}
+
+// Reset implements the admin Resetter: after the stores are wiped, tell
+// plugins so they can drop caches.
+func (h *Host) Reset(ctx context.Context) { h.notify(ctx, sdk.EventReset) }
+
+// RestoreHook returns the admin PostRestoreHook for import and snapshot revert.
+func (h *Host) RestoreHook() RestoreHook { return RestoreHook{h} }
+
+// RestoreHook notifies plugins after state was restored from a snapshot.
+type RestoreHook struct{ h *Host }
+
+func (RestoreHook) Name() string { return "plugins" }
+func (r RestoreHook) OnRestore(ctx context.Context) error {
+	r.h.notify(ctx, sdk.EventRestore)
+	return nil
+}
+
+func (h *Host) notify(ctx context.Context, event string) {
+	for _, p := range h.plugins {
+		if err := p.do(ctx, http.MethodPost, "/lifecycle", sdk.LifecycleRequest{Event: event}, nil, 5*time.Second); err != nil {
+			slog.Warn("plugin lifecycle notification failed", "plugin", p.name, "event", event, "err", err)
+		}
+	}
+}

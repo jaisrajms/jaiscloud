@@ -28,12 +28,14 @@ import (
 // It is cloud-agnostic — the SQS codec translates wire format, this
 // provider works with NormalizedRequest.Params maps.
 type QueueProvider struct {
-	resources     store.ResourceStore
-	messages      sqsstore.SQSMessageStore
-	bus           *events.EventBus
-	waiters       *Waiters
-	recentDeletes map[string]time.Time // queueName → deletion time
-	rdMu          sync.Mutex
+	// internalSendHook, when set, wraps InternalSend (see SetInternalSendHook).
+	internalSendHook InternalSendHook
+	resources        store.ResourceStore
+	messages         sqsstore.SQSMessageStore
+	bus              *events.EventBus
+	waiters          *Waiters
+	recentDeletes    map[string]time.Time // queueName → deletion time
+	rdMu             sync.Mutex
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *events.EventBus) *QueueProvider {

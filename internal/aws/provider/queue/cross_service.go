@@ -32,6 +32,25 @@ type InternalSendAPI interface {
 // The account and region are extracted from the target ARN/URL so that
 // cross-account deliveries land in the correct per-(account,region) store.
 func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
+	if p.internalSendHook != nil {
+		return p.internalSendHook(ctx, queueARNorURL, body, attrs, src, p.deliverInternal)
+	}
+	return p.deliverInternal(ctx, queueARNorURL, body, attrs, src)
+}
+
+// InternalSendDeliver is the built-in delivery that an InternalSendHook wraps.
+type InternalSendDeliver func(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error
+
+// InternalSendHook lets the plugin host run an internal delivery (SNS, S3
+// notifications, Lambda DLQ → SQS) through the plugin chain for SQS
+// SendMessage, with deliver as the built-in behaviour. It is nil unless a
+// plugin is loaded, in which case InternalSend is unchanged.
+type InternalSendHook func(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext, deliver InternalSendDeliver) error
+
+// SetInternalSendHook installs the hook. Startup only.
+func (p *QueueProvider) SetInternalSendHook(h InternalSendHook) { p.internalSendHook = h }
+
+func (p *QueueProvider) deliverInternal(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
 	queueURL, account, region, err := p.resolveQueueURLWithScope(ctx, queueARNorURL)
 	if err != nil {
 		return err

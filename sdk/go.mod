@@ -1,3 +1,3 @@
 module github.com/jaisrajms/jaiscloud/sdk
 
-go 1.26.8
+go 1.22

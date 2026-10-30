@@ -113,6 +113,7 @@ type Handler struct {
 	tasksTicker      TasksTicker
 	monitoringTicker MonitoringTicker
 	throttle         ThrottleController
+	doctorSections   map[string]func() any
 }
 
 func NewHandler() *Handler {
@@ -120,6 +121,17 @@ func NewHandler() *Handler {
 		snapshotters:    make(map[string]Snapshotter),
 		exportSoftLimit: exportSoftLimitDefault,
 	}
+}
+
+// SetDoctorSection adds a named section to the GET /_jaiscloud/doctor response.
+// Nothing is added unless a caller registers a section.
+func (h *Handler) SetDoctorSection(name string, fn func() any) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.doctorSections == nil {
+		h.doctorSections = map[string]func() any{}
+	}
+	h.doctorSections[name] = fn
 }
 
 // RegisterBlobStore wires a blob store into the handler so that
@@ -293,6 +305,16 @@ func (h *Handler) Doctor(w http.ResponseWriter, r *http.Request) {
 		resp["backend"] = backend
 		resp["data_dir"] = dataDir
 		resp["kek_fingerprint"] = kekFP
+	}
+
+	h.mu.Lock()
+	sections := make(map[string]func() any, len(h.doctorSections))
+	for k, v := range h.doctorSections {
+		sections[k] = v
+	}
+	h.mu.Unlock()
+	for name, fn := range sections {
+		resp[name] = fn()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
