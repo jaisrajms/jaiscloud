@@ -851,18 +851,19 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// The registry exists before the providers so cross-service seams can hold it:
 	// every internal call goes through Registry.Dispatch (see internal/aws/seams).
 	reg := provider.NewRegistry()
-	sqsSeam := seams.NewSQS(reg, awsadapter.NewAdapter(nil).ServiceToProvider("sqs")+".SendMessage",
+	seamSet := seams.NewSet(reg, awsadapter.NewAdapter(nil).ServiceToProvider,
 		seams.Scope{Account: cfg.AccountID, Region: cfg.Region})
+	sqsSeam, lambdaSeam, snsSeam, ebSeam := seamSet.SQS(), seamSet.Lambda(), seamSet.SNS(), seamSet.EventBridge()
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.NewWithOIDC(s.stsSession, cfg.OIDCIssuers)
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
-	notifP.SetLambdaInvoker(funcP)
+	notifP.SetLambdaInvoker(lambdaSeam)
 	notifP.SetSQSSender(sqsSenderAdapter{q: sqsSeam})
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus).WithResourceStore(s.resources)
 	stackP := stackprovider.New(s.resources)
 
-	esmProvider := lambdaesm.New(ctx, s.resources, funcP, queueP, streams, slog.Default())
+	esmProvider := lambdaesm.New(ctx, s.resources, lambdaSeam, seamSet.SQSConsumer(), streams, slog.Default())
 	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: sqsSeam})
 	esmProvider.RehydratePollers(ctx)
 	prevCleanup2 := cleanup
@@ -950,21 +951,21 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
 		SQS:          sqsSeam,
-		SNSPublisher: notifP,
-		Lambda:       funcP,
+		SNSPublisher: snsSeam,
+		Lambda:       lambdaSeam,
 	})
-	cwP.SetSNSPublisher(notifP)
-	cwP.SetLambdaInvoker(funcP)
-	logsProvider.SetSubscriptionDispatcher(funcP)
+	cwP.SetSNSPublisher(snsSeam)
+	cwP.SetLambdaInvoker(lambdaSeam)
+	logsProvider.SetSubscriptionDispatcher(lambdaSeam)
 	logsProvider.SetMetricDataPutter(&cwMetricAdapter{cwP})
 	emrcP.SetLogsIngestor(logsProvider)
 	sfnP.SetLogsIngestor(logsProvider)
-	secretProv.SetInvoker(funcP)
-	paramProv.SetEventPublisher(eventsP)
+	secretProv.SetInvoker(lambdaSeam)
+	paramProv.SetEventPublisher(ebSeam)
 	paramProv.SetSecretGetter(secretProv)
 
 	// Wire EventBridge target dispatcher and scheduler.
-	tgtDisp := targets.New(sqsSeam, funcP, notifP, &logsWriterAdapter{logsProvider}, eventsP)
+	tgtDisp := targets.New(sqsSeam, lambdaSeam, snsSeam, &logsWriterAdapter{logsProvider}, ebSeam)
 	eventsP.SetTargetDispatcher(tgtDisp)
 	sched := ebscheduler.New(tgtDisp)
 	eventsP.SetScheduler(sched)

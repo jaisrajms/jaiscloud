@@ -3,6 +3,8 @@ package queue
 import (
 	"context"
 	"fmt"
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 	"strings"
 
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
@@ -86,3 +88,60 @@ var _ interface {
 	InternalReceive(ctx context.Context, queueName string, maxMessages int, waitTimeSec int) ([]lambdaesm.InternalMessage, error)
 	InternalDeleteBatch(ctx context.Context, queueName string, receiptHandles []string) error
 } = (*QueueProvider)(nil)
+
+// receiveMessageInternal serves Queue.ReceiveMessage for an internal origin
+// (the Lambda event-source poller). The queue is named by QueueName, as the
+// poller only knows the name. The answer is wire-shaped so a plugin that
+// overrides ReceiveMessage can produce it.
+func (p *QueueProvider) receiveMessageInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["QueueName"].(string)
+	max, _ := toIntParam(nr.Params["MaxNumberOfMessages"])
+	wait, _ := toIntParam(nr.Params["WaitTimeSeconds"])
+	msgs, err := p.InternalReceive(ctx, name, max, wait)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]any, 0, len(msgs))
+	for _, m := range msgs {
+		attrs := make(map[string]any, len(m.Attributes))
+		for k, v := range m.Attributes {
+			attrs[k] = v
+		}
+		out = append(out, map[string]any{
+			"MessageId": m.MessageID, "ReceiptHandle": m.ReceiptHandle, "Body": m.Body,
+			"MD5OfBody": m.MD5OfBody, "Attributes": attrs, "MessageAttributes": m.MessageAttributes,
+		})
+	}
+	return provider.OK(map[string]any{"Messages": out}), nil
+}
+
+// deleteMessageBatchInternal serves Queue.DeleteMessageBatch for an internal origin.
+func (p *QueueProvider) deleteMessageBatchInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["QueueName"].(string)
+	var handles []string
+	if entries, ok := nr.Params["Entries"].([]any); ok {
+		for _, e := range entries {
+			if m, ok := e.(map[string]any); ok {
+				if rh, _ := m["ReceiptHandle"].(string); rh != "" {
+					handles = append(handles, rh)
+				}
+			}
+		}
+	}
+	if err := p.InternalDeleteBatch(ctx, name, handles); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func toIntParam(v any) (int, bool) {
+	switch t := v.(type) {
+	case int:
+		return t, true
+	case int64:
+		return int(t), true
+	case float64:
+		return int(t), true
+	}
+	return 0, false
+}

@@ -71,9 +71,9 @@ func (p *plugin) aroundLink(wire string, before, after bool) func(provider.Handl
 				return nil, cerr
 			}
 			if res.Resp != nil || res.Err != nil {
-				if res.Resp != nil && hasInternalKeys(resp) {
+				if res.Resp != nil && resp != nil && hasHidden(resp.Data) {
 					return nil, model.NewProviderError("PluginUnsupportedPayload",
-						fmt.Sprintf("plugin %s cannot replace a response that carries binary or stream data; "+
+						fmt.Sprintf("plugin %s cannot replace a response that carries a stream; "+
 							"an out-of-process plugin may observe it but not override it", p.name), 501)
 				}
 				return fromResult(res)
@@ -175,14 +175,14 @@ func fromResult(res sdk.Result) (*model.ProviderResponse, error) {
 			status = http.StatusInternalServerError
 		}
 		pe := model.NewProviderError(res.Err.Code, res.Err.Message, status)
-		pe.Data = res.Err.Data
+		pe.Data = restoreMap(res.Err.Data)
 		return nil, pe
 	}
 	status := res.Resp.Status
 	if status == 0 {
 		status = http.StatusOK
 	}
-	data := res.Resp.Data
+	data := restoreMap(res.Resp.Data)
 	if data == nil {
 		data = map[string]any{}
 	}
@@ -194,53 +194,4 @@ func originOf(nr *model.NormalizedRequest) string {
 		return "wire"
 	}
 	return string(nr.Origin)
-}
-
-func isInternal(k string) bool { return strings.HasPrefix(k, "_") }
-
-// project copies m without the emulator-internal "_"-prefixed keys.
-func project(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		if !isInternal(k) {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-// mergeParams applies a plugin's edited view back onto the original params:
-// visible keys the plugin dropped are removed, the rest are set, and internal
-// keys are always preserved (a plugin cannot see or set them).
-func mergeParams(orig, patch map[string]any) map[string]any {
-	out := make(map[string]any, len(orig)+len(patch))
-	for k, v := range orig {
-		if isInternal(k) {
-			out[k] = v
-			continue
-		}
-		if _, kept := patch[k]; kept {
-			out[k] = v
-		}
-	}
-	for k, v := range patch {
-		if !isInternal(k) {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-// hasInternalKeys reports whether Data carries "_"-prefixed internal values
-// such as "_stream", which are not wire fields and cannot cross to a plugin.
-func hasInternalKeys(resp *model.ProviderResponse) bool {
-	if resp == nil {
-		return false
-	}
-	for k := range resp.Data {
-		if isInternal(k) {
-			return true
-		}
-	}
-	return false
 }

@@ -715,3 +715,159 @@ func TestEverySQSSeamGoesThroughThePlugin(t *testing.T) {
 		})
 	}
 }
+
+// ---- internal-call conformance: poller, Lambda, SNS, EventBridge --------------
+
+// observer records every internal call (origin != wire) to the services a
+// scenario exercises. It overrides nothing: it only watches, so each scenario's
+// built-in behaviour keeps working underneath.
+type observer struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (o *observer) plugin() *sdk.Mux {
+	m := sdk.NewMux("acme-observer", "0.1.0")
+	rec := func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		if c.Req.Origin == "internal" {
+			o.mu.Lock()
+			o.seen = append(o.seen, c.Req.Service+":"+c.Req.Action)
+			o.mu.Unlock()
+		}
+		return sdk.Result{}, nil
+	}
+	for _, svc := range []string{"sqs", "lambda", "sns", "events"} {
+		m.Before("aws", svc, "*", rec)
+	}
+	return m
+}
+
+func (o *observer) has(want string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, s := range o.seen {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *observer) all() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.seen...)
+}
+
+func (e *emulator) rest(t *testing.T, service, method, path, body string) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(method, e.base+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20260101/us-east-1/"+service+"/aws4_request, SignedHeaders=host, Signature=00")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, raw
+}
+
+func createFunction(t *testing.T, e *emulator, name string) string {
+	t.Helper()
+	body := `{"FunctionName":"` + name + `","Runtime":"python3.12","Role":"arn:aws:iam::000000000000:role/r","Handler":"index.handler","Code":{"ZipFile":"UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA=="}}`
+	if st, raw := e.rest(t, "lambda", http.MethodPost, "/2015-03-31/functions", body); st >= 300 {
+		t.Fatalf("CreateFunction: %d %s\n%s", st, raw, e.logs())
+	}
+	return "arn:aws:lambda:us-east-1:000000000000:function:" + name
+}
+
+func createTopic(t *testing.T, e *emulator, name string) string {
+	t.Helper()
+	_, xml := e.form(t, url.Values{"Action": {"CreateTopic"}, "Name": {name}})
+	m := regexp.MustCompile(`<TopicArn>([^<]+)</TopicArn>`).FindStringSubmatch(xml)
+	if m == nil {
+		t.Fatalf("CreateTopic: %s", xml)
+	}
+	return m[1]
+}
+
+func ebTarget(t *testing.T, e *emulator, rule, source, targetArn string) {
+	t.Helper()
+	// Ordered on purpose: the target needs its rule to exist.
+	steps := []struct {
+		action string
+		body   map[string]any
+	}{
+		{"PutRule", map[string]any{"Name": rule, "EventPattern": `{"source":["` + source + `"]}`}},
+		{"PutTargets", map[string]any{"Rule": rule, "Targets": []map[string]any{{"Id": "1", "Arn": targetArn}}}},
+	}
+	for _, st := range steps {
+		if code, out := e.call(t, "AWSEvents."+st.action, st.body); code != 200 {
+			t.Fatalf("%s: %d %v", st.action, code, out)
+		}
+	}
+	if st, out := e.call(t, "AWSEvents.PutEvents", map[string]any{"Entries": []map[string]any{{"Source": source, "DetailType": "t", "Detail": "{}"}}}); st != 200 {
+		t.Fatalf("PutEvents: %d %v", st, out)
+	}
+}
+
+// internalSeams: each scenario triggers background or cross-service work and
+// lists the (service:action) calls the plugin must see with origin=internal.
+var internalSeams = []struct {
+	name    string
+	want    []string
+	trigger func(t *testing.T, e *emulator)
+}{
+	{"lambda-event-source-poller", []string{"sqs:ReceiveMessage", "lambda:InvokeFunction", "sqs:DeleteMessageBatch"}, func(t *testing.T, e *emulator) {
+		q := createQueue(t, e, "poll-q")
+		fn := createFunction(t, e, "poll-fn")
+		body := `{"EventSourceArn":"` + queueArn(t, e, q) + `","FunctionName":"` + fn + `","BatchSize":1}`
+		if st, raw := e.rest(t, "lambda", http.MethodPost, "/2015-03-31/event-source-mappings", body); st >= 300 {
+			t.Fatalf("CreateEventSourceMapping: %d %s", st, raw)
+		}
+		if st, out := e.sqs(t, "SendMessage", map[string]any{"QueueUrl": q, "MessageBody": "work"}); st != 200 {
+			t.Fatalf("SendMessage: %d %v", st, out)
+		}
+	}},
+	{"s3-notification-to-sns", []string{"sns:Publish"}, func(t *testing.T, e *emulator) {
+		topic := createTopic(t, e, "s3-topic")
+		e.s3(t, http.MethodPut, "/seam-sns-bucket", "")
+		cfg := `<NotificationConfiguration><TopicConfiguration><Id>n</Id><Topic>` + topic +
+			`</Topic><Event>s3:ObjectCreated:*</Event></TopicConfiguration></NotificationConfiguration>`
+		if st := e.s3(t, http.MethodPut, "/seam-sns-bucket?notification", cfg); st != 200 {
+			t.Fatalf("PutBucketNotificationConfiguration: %d", st)
+		}
+		e.s3(t, http.MethodPut, "/seam-sns-bucket/k", "x")
+	}},
+	{"eventbridge-to-lambda", []string{"lambda:InvokeFunction"}, func(t *testing.T, e *emulator) {
+		ebTarget(t, e, "to-lambda", "acme.lambda", createFunction(t, e, "eb-fn"))
+	}},
+	{"eventbridge-to-sns", []string{"sns:Publish"}, func(t *testing.T, e *emulator) {
+		ebTarget(t, e, "to-sns", "acme.sns", createTopic(t, e, "eb-topic"))
+	}},
+}
+
+func TestEveryInternalSeamGoesThroughThePlugin(t *testing.T) {
+	obs := &observer{}
+	s := httptest.NewServer(sdk.Serve(obs.plugin()))
+	defer s.Close()
+	e := startEmulator(t, "--plugin", s.URL)
+	for _, c := range internalSeams {
+		t.Run(c.name, func(t *testing.T) {
+			c.trigger(t, e)
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				ok := true
+				for _, w := range c.want {
+					ok = ok && obs.has(w)
+				}
+				if ok {
+					return
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+			t.Fatalf("%s: the plugin must see %v as internal calls; saw %v — a caller bypasses the registry\n%s", c.name, c.want, obs.all(), e.logs())
+		})
+	}
+}

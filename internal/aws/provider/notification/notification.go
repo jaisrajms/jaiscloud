@@ -436,6 +436,9 @@ func subscriptionList(entries []store.ResourceEntry) []map[string]any {
 // ─── Publish ──────────────────────────────────────────────────────────────────
 
 func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.publishInternal(ctx, nr)
+	}
 	tArn := strParam(nr.Params, "TopicArn")
 	message := strParam(nr.Params, "Message")
 	subject := strParam(nr.Params, "Subject")

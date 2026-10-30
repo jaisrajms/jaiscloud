@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +55,7 @@ func newEnv(t *testing.T) *env {
 	e.reg.RegisterAll(map[string]provider.HandlerFunc{
 		"Queue.SendMessage": func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 			e.built = append(e.built, "builtin:"+fmtBody(nr))
-			return provider.OK(map[string]any{"MessageId": "m-1", "_internal": 7}), nil
+			return provider.OK(map[string]any{"MessageId": "m-1", "_stream": io.NopCloser(strings.NewReader("x"))}), nil
 		},
 		"Queue.Boom": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
 			return nil, model.NewProviderError("QueueDoesNotExist", "no such queue", 400)
@@ -170,8 +171,8 @@ func TestBeforeParamsPatchKeepsInternalKeysAndShortCircuit(t *testing.T) {
 			if c.Req.Params["MessageBody"] == "stop" {
 				return sdk.Result{Err: &sdk.Error{Code: "Nope", Message: "stopped", Status: 403}}, nil
 			}
-			if _, leaked := c.Req.Params["_secret"]; leaked {
-				t.Error("internal _ keys must not be visible to plugins")
+			if _, leaked := c.Req.Params["_reader"]; leaked {
+				t.Error("values that cannot be JSON (streams) must not be visible to plugins")
 			}
 			np := map[string]any{"MessageBody": "patched"} // drops "Extra"
 			return sdk.Result{Params: np}, nil
@@ -180,12 +181,13 @@ func TestBeforeParamsPatchKeepsInternalKeysAndShortCircuit(t *testing.T) {
 	if _, err := e.load(t, serve(t, p).URL); err != nil {
 		t.Fatal(err)
 	}
+	rd := io.NopCloser(strings.NewReader("stream"))
 	nr := &model.NormalizedRequest{Service: "sqs", Action: "SendMessage", Params: map[string]any{
-		"MessageBody": "orig", "Extra": 1, "_secret": "keep"}, AccountID: "a", Region: "r"}
+		"MessageBody": "orig", "Extra": 1, "_reader": rd}, AccountID: "a", Region: "r"}
 	if _, err := e.reg.Dispatch(context.Background(), "Queue.SendMessage", nr); err != nil {
 		t.Fatal(err)
 	}
-	if nr.Params["MessageBody"] != "patched" || nr.Params["_secret"] != "keep" {
+	if nr.Params["MessageBody"] != "patched" || nr.Params["_reader"] != rd {
 		t.Fatalf("params = %v", nr.Params)
 	}
 	if _, has := nr.Params["Extra"]; has {
@@ -201,7 +203,7 @@ func TestBeforeParamsPatchKeepsInternalKeysAndShortCircuit(t *testing.T) {
 	}
 }
 
-func TestAfterSeesErrorsAndCannotOverrideInternalResponses(t *testing.T) {
+func TestAfterSeesErrorsAndCannotOverrideStreamResponses(t *testing.T) {
 	e := newEnv(t)
 	var sawErr string
 	p := muxRoutes("p", func(m *sdk.Mux) {
@@ -212,8 +214,8 @@ func TestAfterSeesErrorsAndCannotOverrideInternalResponses(t *testing.T) {
 			return sdk.Result{Resp: &sdk.Response{Data: map[string]any{"recovered": true}}}, nil
 		})
 		m.After("aws", "sqs", "SendMessage", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
-			if _, leaked := c.Resp.Data["_internal"]; leaked {
-				t.Error("_ keys must not reach the plugin in responses")
+			if _, leaked := c.Resp.Data["_stream"]; leaked {
+				t.Error("a stream must not reach the plugin in responses")
 			}
 			return sdk.Result{Resp: &sdk.Response{Data: map[string]any{"x": 1}}}, nil
 		})
@@ -227,7 +229,7 @@ func TestAfterSeesErrorsAndCannotOverrideInternalResponses(t *testing.T) {
 	}
 	_, err = send(e, "x", nil)
 	if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "PluginUnsupportedPayload" {
-		t.Fatalf("overriding a response with internal data: %v, want PluginUnsupportedPayload", err)
+		t.Fatalf("overriding a response that carries a stream: %v, want PluginUnsupportedPayload", err)
 	}
 }
 
@@ -637,18 +639,56 @@ func TestLifecycleNotificationReachesPlugins(t *testing.T) {
 	}
 }
 
-func TestMergeAndProjectHelpers(t *testing.T) {
-	orig := map[string]any{"A": 1, "B": 2, "_k": "keep"}
-	if got := project(orig); len(got) != 2 || got["_k"] != nil {
-		t.Fatalf("project = %v", got)
+func TestProjectionRoundTripsTypes(t *testing.T) {
+	rd := io.NopCloser(strings.NewReader("s"))
+	orig := map[string]any{
+		"A": 1, "B": 2, "_payload": []byte(`{"k":1}`), "_meta": map[string]string{"x": "y"}, "_reader": rd,
 	}
-	got := mergeParams(orig, map[string]any{"A": 9, "_k": "hack", "C": 3})
-	if got["A"] != 9 || got["C"] != 3 || got["_k"] != "keep" {
-		t.Fatalf("merge = %v", got)
+	view := project(orig)
+	if _, has := view["_reader"]; has {
+		t.Fatal("a stream must be hidden")
+	}
+	if m, ok := view["_payload"].(map[string]any); !ok || m["$base64"] == nil {
+		t.Fatalf("bytes must be projected as a $base64 marker, got %v", view["_payload"])
+	}
+
+	// Plugin leaves everything but A alone and drops B.
+	patch := map[string]any{"A": 9, "_payload": view["_payload"], "_meta": view["_meta"], "C": 3}
+	got := mergeParams(orig, patch)
+	if got["A"] != 9 || got["C"] != 3 {
+		t.Fatalf("changes lost: %v", got)
 	}
 	if _, has := got["B"]; has {
 		t.Fatal("B was dropped by the plugin and must be removed")
 	}
+	if _, ok := got["_payload"].([]byte); !ok {
+		t.Fatalf("an unchanged payload must keep its []byte type, got %T", got["_payload"])
+	}
+	if _, ok := got["_meta"].(map[string]string); !ok {
+		t.Fatalf("an unchanged typed map must keep its type, got %T", got["_meta"])
+	}
+	if got["_reader"] != rd {
+		t.Fatal("a hidden stream must be preserved")
+	}
+
+	// Plugin changes the payload: its marker becomes []byte again.
+	edited := mergeParams(orig, map[string]any{"A": 1, "B": 2, "_payload": map[string]any{"$base64": "eyJuIjoyfQ=="}, "_meta": view["_meta"]})
+	if b, ok := edited["_payload"].([]byte); !ok || string(b) != `{"n":2}` {
+		t.Fatalf("edited payload = %v (%T)", edited["_payload"], edited["_payload"])
+	}
+}
+
+func TestResponseMarkersBecomeBytes(t *testing.T) {
+	res, err := fromResult(sdk.Result{Resp: &sdk.Response{Data: map[string]any{"_payload": map[string]any{"$base64": "aGk="}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, ok := res.Data["_payload"].([]byte); !ok || string(b) != "hi" {
+		t.Fatalf("a replaced response must carry []byte, got %T %v", res.Data["_payload"], res.Data["_payload"])
+	}
+}
+
+func TestSpecAndRedactHelpers(t *testing.T) {
 	if specs := cleanSpecs([]string{"a, b", "", " c "}); strings.Join(specs, "|") != "a|b|c" {
 		t.Fatalf("cleanSpecs = %v", specs)
 	}

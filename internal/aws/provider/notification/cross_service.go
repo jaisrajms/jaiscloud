@@ -7,6 +7,8 @@ import (
 	"math/rand"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 )
 
 // MessageAttribute is a simplified SNS message attribute for internal cross-service use.
@@ -66,4 +68,28 @@ func (p *SNSProvider) InternalPublishRaw(ctx context.Context, topicARN string, m
 // internalMsgID generates a message ID for internal use.
 func internalMsgID() string {
 	return fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), clock.Now().UnixNano())
+}
+
+// publishInternal serves Notification.Publish for an internal origin (S3
+// notifications, CloudWatch alarms, EventBridge targets, ...). The params are
+// wire-shaped (TopicArn, Message, MessageAttributes) so a plugin can read and
+// edit them; this applies whatever the chain left behind.
+func (p *SNSProvider) publishInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	topic, _ := nr.Params["TopicArn"].(string)
+	message, _ := nr.Params["Message"].(string)
+	var attrs map[string]MessageAttribute
+	if m, ok := nr.Params["MessageAttributes"].(map[string]any); ok {
+		attrs = make(map[string]MessageAttribute, len(m))
+		for k, raw := range m {
+			if a, ok := raw.(map[string]any); ok {
+				dt, _ := a["DataType"].(string)
+				sv, _ := a["StringValue"].(string)
+				attrs[k] = MessageAttribute{DataType: dt, StringValue: sv}
+			}
+		}
+	}
+	if err := p.InternalPublish(ctx, topic, message, attrs); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }
