@@ -5,7 +5,27 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 )
+
+// putLogEventsInternal serves PutLogEvents for origin=internal callers (the
+// Lambda, ECS, EMR and Step Functions log streamers): the stream is created on
+// demand and a missing group drops the batch, exactly like InternalPutEvents.
+func (p *Provider) putLogEventsInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	raw, _ := nr.Params["logEvents"].([]any)
+	events := make([]logstream.Event, 0, len(raw))
+	for _, r := range raw {
+		m, _ := r.(map[string]any)
+		ts, _ := m["timestamp"].(float64)
+		msg, _ := m["message"].(string)
+		events = append(events, logstream.Event{Timestamp: int64(ts), Message: msg})
+	}
+	if err := p.InternalPutEvents(ctx, paramStr(nr.Params, "logGroupName"), paramStr(nr.Params, "logStreamName"), events); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
 
 // InternalPutEvents implements logstream.Ingestor for the Lambda log streamer.
 // It creates the log stream if absent and appends the events without a NormalizedRequest.

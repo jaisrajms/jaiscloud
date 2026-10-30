@@ -854,6 +854,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	seamSet := seams.NewSet(reg, awsadapter.NewAdapter(nil).ServiceToProvider,
 		seams.Scope{Account: cfg.AccountID, Region: cfg.Region})
 	sqsSeam, lambdaSeam, snsSeam, ebSeam := seamSet.SQS(), seamSet.Lambda(), seamSet.SNS(), seamSet.EventBridge()
+	logsSeam := seamSet.Logs()
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.NewWithOIDC(s.stsSession, cfg.OIDCIssuers)
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
@@ -891,20 +892,20 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
 		dockerExec.SetCodeLoader(funcP)
-		dockerExec.SetLogsAPI(logsProvider)
+		dockerExec.SetLogsAPI(logsSeam)
 	}
 	if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
 		k8sExec.SetCodeLoader(funcP)
-		k8sExec.SetLogsAPI(logsProvider)
+		k8sExec.SetLogsAPI(logsSeam)
 	}
 	// Wire ECS executor.
 	ecsMode, _ := config.ExecutorMode("ecs", "mock")
 	var ecsExec ecsexec.Executor
 	switch ecsMode {
 	case "docker":
-		ecsExec = ecsexec.New(ecsexec.ModeDocker, logsProvider)
+		ecsExec = ecsexec.New(ecsexec.ModeDocker, logsSeam)
 	case "k8s":
-		ecsExec = ecsexec.New(ecsexec.ModeK8s, logsProvider)
+		ecsExec = ecsexec.New(ecsexec.ModeK8s, logsSeam)
 	default:
 		ecsExec = ecsexec.New(ecsexec.ModeMock, nil)
 	}
@@ -958,14 +959,14 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	cwP.SetLambdaInvoker(lambdaSeam)
 	logsProvider.SetSubscriptionDispatcher(lambdaSeam)
 	logsProvider.SetMetricDataPutter(&cwMetricAdapter{cwP})
-	emrcP.SetLogsIngestor(logsProvider)
-	sfnP.SetLogsIngestor(logsProvider)
+	emrcP.SetLogsIngestor(logsSeam)
+	sfnP.SetLogsIngestor(logsSeam)
 	secretProv.SetInvoker(lambdaSeam)
 	paramProv.SetEventPublisher(ebSeam)
 	paramProv.SetSecretGetter(secretProv)
 
 	// Wire EventBridge target dispatcher and scheduler.
-	tgtDisp := targets.New(sqsSeam, lambdaSeam, snsSeam, &logsWriterAdapter{logsProvider}, ebSeam)
+	tgtDisp := targets.New(sqsSeam, lambdaSeam, snsSeam, &logsWriterAdapter{logsSeam}, ebSeam)
 	eventsP.SetTargetDispatcher(tgtDisp)
 	sched := ebscheduler.New(tgtDisp)
 	eventsP.SetScheduler(sched)
@@ -1698,7 +1699,7 @@ func snapshotInspectCmd() *cobra.Command {
 }
 
 // logsWriterAdapter adapts cwlogs.Provider to targets.LogsWriter ([]string events).
-type logsWriterAdapter struct{ p *cwlogs.Provider }
+type logsWriterAdapter struct{ p logstream.Ingestor }
 
 func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupName, logStreamName string, events []string) error {
 	_ = a.p.InternalCreateLogGroup(ctx, logGroupName)

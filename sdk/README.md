@@ -51,14 +51,36 @@ emulator re-sends its `/init` automatically.
 service. Plugins listed first run outermost. `Before`/`After` on a misspelled action fail
 startup instead of silently never firing.
 
+### Override one action, keep the rest
+
+Claim just the action you want; every other action of the service stays on the built-in:
+
+```go
+m.Replace("aws", "sqs", "SendMessage", func(ctx context.Context, c *sdk.Call) (sdk.Result, error) {
+    if !mine(c) {
+        return sdk.Result{NotHandled: true}, nil // this call uses the built-in
+    }
+    return sdk.Result{Resp: &sdk.Response{Data: map[string]any{"MessageId": id}}}, nil
+})
+```
+
+`Replace` cannot edit the params and then fall through; to tweak a call and still run the
+built-in, use `Before` and return `Result{Params: …}`. Be careful with data the built-in reads
+back: if your `SendMessage` keeps messages in your own store, the built-in `ReceiveMessage`
+will not see them. Either replace the actions that share the data together, or let the built-in
+store the message.
+
 ### Overriding a service covers internal flows
 
 When a plugin overrides a built-in, flows that originate *inside* the emulator use the plugin
-too. Today SNS→SQS, S3 notification→SQS and Lambda DLQ→SQS deliveries reach an SQS plugin as a
-`SendMessage` with `Req.SourceArn` / `Req.ServicePrincipal` set (the built-in delivery is the
-innermost step). Other internal producers and consumers (EventBridge→SQS, Lambda event-source
-polling, DynamoDB streams, …) are being moved onto the same seam one at a time; until then
-they still call the built-in directly. See the coverage table in the design docs.
+too, with `Req.Origin == "internal"` (and `Req.SourceArn` / `Req.ServicePrincipal` where a service
+is the caller). Covered today: SNS, S3 notification, EventBridge targets, Lambda DLQ and
+CloudWatch alarm deliveries to SQS/SNS/Lambda; the Lambda event-source poller (SQS receive,
+delete and the function invoke); EventBridge, SNS and S3 notification fan-out; and workload
+log writes to CloudWatch Logs. Other internal producers and consumers (S3 puts by Firehose and
+EMR, metrics, tagging, secrets, DynamoDB streams, CloudFormation) are being moved onto the same
+seam one at a time; until then they still call the built-in directly. See the coverage table in
+the design docs.
 
 ## State
 

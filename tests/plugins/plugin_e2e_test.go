@@ -736,7 +736,7 @@ func (o *observer) plugin() *sdk.Mux {
 		}
 		return sdk.Result{}, nil
 	}
-	for _, svc := range []string{"sqs", "lambda", "sns", "events"} {
+	for _, svc := range []string{"sqs", "lambda", "sns", "events", "logs"} {
 		m.Before("aws", svc, "*", rec)
 	}
 	return m
@@ -845,6 +845,9 @@ var internalSeams = []struct {
 	}},
 	{"eventbridge-to-sns", []string{"sns:Publish"}, func(t *testing.T, e *emulator) {
 		ebTarget(t, e, "to-sns", "acme.sns", createTopic(t, e, "eb-topic"))
+	}},
+	{"eventbridge-to-cloudwatch-logs", []string{"logs:CreateLogGroup", "logs:PutLogEvents"}, func(t *testing.T, e *emulator) {
+		ebTarget(t, e, "to-logs", "acme.logs", "arn:aws:logs:us-east-1:000000000000:log-group:/seam/eb")
 	}},
 }
 

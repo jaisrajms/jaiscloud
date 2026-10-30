@@ -15,8 +15,15 @@ import (
 var logGroupNameRE = regexp.MustCompile(`^[\.\-_/#A-Za-z0-9]+$`)
 
 // CreateLogGroup creates a new log group.
-func (p *Provider) CreateLogGroup(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) CreateLogGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := paramStr(nr.Params, "logGroupName")
+	if nr.Origin == model.OriginInternal {
+		// Workload log streamers call this for every batch: create-if-absent.
+		if err := p.InternalCreateLogGroup(ctx, name); err != nil {
+			return nil, err
+		}
+		return provider.OK(map[string]any{}), nil
+	}
 	if name == "" {
 		return nil, logsErr("InvalidParameterException", "logGroupName is required", 400)
 	}

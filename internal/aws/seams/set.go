@@ -9,6 +9,7 @@ import (
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	"jaiscloud/internal/aws/provider/notification"
 	"jaiscloud/internal/aws/provider/queue"
+	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -197,4 +198,31 @@ func (e *EventBridge) InternalPutEvents(ctx context.Context, entries []map[strin
 func str(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// ---- CloudWatch Logs ---------------------------------------------------------------
+
+// Logs lets workloads (Lambda, ECS, EMR, Step Functions) and EventBridge log
+// targets write to CloudWatch Logs through the registry. It implements
+// logstream.Ingestor.
+type Logs struct{ s *Set }
+
+var _ logstream.Ingestor = (*Logs)(nil)
+
+func (s *Set) Logs() *Logs { return &Logs{s} }
+
+func (l *Logs) InternalCreateLogGroup(ctx context.Context, group string) error {
+	_, err := l.s.call(ctx, "logs", "CreateLogGroup", group, map[string]any{"logGroupName": group}, queue.SourceContext{})
+	return err
+}
+
+func (l *Logs) InternalPutEvents(ctx context.Context, group, stream string, events []logstream.Event) error {
+	list := make([]any, len(events))
+	for i, e := range events {
+		list[i] = map[string]any{"timestamp": float64(e.Timestamp), "message": e.Message}
+	}
+	_, err := l.s.call(ctx, "logs", "PutLogEvents", group, map[string]any{
+		"logGroupName": group, "logStreamName": stream, "logEvents": list,
+	}, queue.SourceContext{})
+	return err
 }

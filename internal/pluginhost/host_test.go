@@ -268,6 +268,49 @@ func TestReplaceWildcardInheritsAndCoversPluginAddedActions(t *testing.T) {
 	}
 }
 
+// Overriding one action leaves every other action of the service on the
+// built-in, and the plugin can still hand individual calls back with NotHandled.
+func TestReplaceSingleActionLeavesTheRestOnTheBuiltin(t *testing.T) {
+	e := newEnv(t)
+	var seen []string
+	p := muxRoutes("one-action", func(m *sdk.Mux) {
+		m.Replace("aws", "sqs", "SendMessage", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+			seen = append(seen, c.Req.Origin+":"+c.Req.Action)
+			if body, _ := c.Req.Params["MessageBody"].(string); body == "mine" {
+				return sdk.Result{Resp: &sdk.Response{Data: map[string]any{"MessageId": "from-plugin"}}}, nil
+			}
+			return sdk.Result{NotHandled: true}, nil // inherit the built-in for this call
+		})
+	})
+	if _, err := e.load(t, serve(t, p).URL); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := send(e, "mine", nil)
+	if err != nil || resp.Data["MessageId"] != "from-plugin" || len(e.built) != 0 {
+		t.Fatalf("plugin-handled send = %v, %v, built-in ran %v", resp, err, e.built)
+	}
+	if resp, err = send(e, "other", nil); err != nil || resp.Data["MessageId"] != "m-1" || len(e.built) != 1 {
+		t.Fatalf("NotHandled send = %v, %v, built-in ran %v", resp, err, e.built)
+	}
+
+	// An action the plugin did not claim never reaches it.
+	_, err = e.reg.Dispatch(context.Background(), "Queue.Boom", &model.NormalizedRequest{Service: "sqs", Action: "Boom", AccountID: "a", Region: "r"})
+	if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "QueueDoesNotExist" {
+		t.Fatalf("unclaimed action = %v, want the built-in's error", err)
+	}
+
+	// An internal caller (SNS, a poller, ...) reaches the same override.
+	internal := &model.NormalizedRequest{Service: "sqs", Action: "SendMessage", Origin: model.OriginInternal,
+		AccountID: "a", Region: "r", Params: map[string]any{"MessageBody": "mine"}}
+	if resp, err = e.reg.Dispatch(context.Background(), "Queue.SendMessage", internal); err != nil || resp.Data["MessageId"] != "from-plugin" {
+		t.Fatalf("internal send = %v, %v", resp, err)
+	}
+	if got := strings.Join(seen, ","); got != "wire:SendMessage,wire:SendMessage,internal:SendMessage" {
+		t.Fatalf("plugin saw %s; Boom must not appear", got)
+	}
+}
+
 func TestServiceNameIsNormalisedForInternalCallers(t *testing.T) {
 	e := newEnv(t)
 	var svc, rid1, rid2 string
