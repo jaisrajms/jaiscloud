@@ -833,6 +833,7 @@ func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) er
 			return fmt.Errorf("create with %s + nodePools: rejected cluster %q was persisted (%v)", tc.label, tc.cluster.GetName(), err)
 		}
 	}
+
 	return nil
 }
 
@@ -1025,6 +1026,25 @@ func checkContainerGetCluster(ctx context.Context, cfg Config) error {
 	}
 	if got.GetMonitoringService() != "monitoring.googleapis.com/kubernetes" {
 		return fmt.Errorf("GetCluster monitoringService = %q", got.GetMonitoringService())
+	}
+	// DPG46: a create without nodeConfig reads back the defaulted node config,
+	// on the cluster-level echo and on the generated default-pool (capture:
+	// docs/gcp/gke-node-pool-config-defaults.md).
+	if mt := got.GetNodeConfig().GetMachineType(); mt != "e2-medium" {
+		return fmt.Errorf("GetCluster nodeConfig.machineType = %q, want e2-medium", mt)
+	}
+	pools := got.GetNodePools()
+	if len(pools) != 1 {
+		return fmt.Errorf("GetCluster nodePools = %d, want 1", len(pools))
+	}
+	poolCfg := pools[0].GetConfig()
+	if poolCfg.GetImageType() != "COS_CONTAINERD" || poolCfg.GetDiskType() != "pd-balanced" || poolCfg.GetDiskSizeGb() != 100 {
+		return fmt.Errorf("default-pool config = imageType %q diskType %q diskSizeGb %d, want the GKE defaults",
+			poolCfg.GetImageType(), poolCfg.GetDiskType(), poolCfg.GetDiskSizeGb())
+	}
+	if poolCfg.GetServiceAccount() != "default" || len(poolCfg.GetOauthScopes()) != 6 {
+		return fmt.Errorf("default-pool config serviceAccount/scopes = %q/%d, want default/6",
+			poolCfg.GetServiceAccount(), len(poolCfg.GetOauthScopes()))
 	}
 	return nil
 }

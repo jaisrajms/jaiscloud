@@ -24,6 +24,39 @@ const (
 	MonitoringServiceKubernetes = "monitoring.googleapis.com/kubernetes"
 )
 
+// The node-config values real GKE fills into a pool the caller did not shape:
+// a Standard cluster's default-pool read is fully populated (machine type, COS
+// node image, balanced 100 GB boot disk, the default compute service account and
+// the six default OAuth scopes). Captured from a real create without nodeConfig
+// in docs/gcp/gke-node-pool-config-defaults.md.
+const (
+	// DefaultNodeMachineType is NodeConfig.machineType for a pool created without
+	// an explicit one.
+	DefaultNodeMachineType = "e2-medium"
+	// DefaultNodeImageType is NodeConfig.imageType for a Standard cluster.
+	DefaultNodeImageType = "COS_CONTAINERD"
+	// DefaultNodeDiskSizeGb is NodeConfig.diskSizeGb for a pool created without an
+	// explicit boot disk size.
+	DefaultNodeDiskSizeGb int32 = 100
+	// DefaultNodeDiskType is NodeConfig.diskType for a pool created without an
+	// explicit boot disk type.
+	DefaultNodeDiskType = "pd-balanced"
+	// DefaultNodeServiceAccount is NodeConfig.serviceAccount when the caller names
+	// none: the project's Compute Engine default service account.
+	DefaultNodeServiceAccount = "default"
+)
+
+// DefaultNodeOauthScopes are the six OAuth scopes real GKE grants a node created
+// without an explicit list.
+var DefaultNodeOauthScopes = []string{
+	"https://www.googleapis.com/auth/devstorage.read_only",
+	"https://www.googleapis.com/auth/logging.write",
+	"https://www.googleapis.com/auth/monitoring",
+	"https://www.googleapis.com/auth/service.management.readonly",
+	"https://www.googleapis.com/auth/servicecontrol",
+	"https://www.googleapis.com/auth/trace.append",
+}
+
 // NormalizeCluster fills the response messages real GKE always reports and a
 // client may dereference unconditionally, so an omitted field never reaches the
 // wire. It is the single owner of those literals: the create path persists its
@@ -50,20 +83,63 @@ func NormalizeCluster(c containerstore.Cluster) containerstore.Cluster {
 	return c
 }
 
+// NodePoolWithReadDefaults renders a stored node pool the way a real GKE read
+// answers: Discovery describes NodeConfig as the pool's node parameters, and a
+// real Standard cluster returns a fully populated one even when the create named
+// no nodeConfig (captured in docs/gcp/gke-node-pool-config-defaults.md). Fields
+// the caller supplied are kept; only the unset ones are defaulted.
+//
+// It returns a copy: the pool's config pointer is not shared with the record the
+// store handed out, so a read never mutates what was persisted.
+func NodePoolWithReadDefaults(p containerstore.NodePool) containerstore.NodePool {
+	cfg := containerstore.NodeConfig{}
+	if p.Config != nil {
+		cfg = *p.Config
+		cfg.OauthScopes = append([]string(nil), p.Config.OauthScopes...)
+	}
+	if cfg.MachineType == "" {
+		cfg.MachineType = DefaultNodeMachineType
+	}
+	if cfg.ImageType == "" {
+		cfg.ImageType = DefaultNodeImageType
+	}
+	if cfg.DiskSizeGb == 0 {
+		cfg.DiskSizeGb = DefaultNodeDiskSizeGb
+	}
+	if cfg.DiskType == "" {
+		cfg.DiskType = DefaultNodeDiskType
+	}
+	if cfg.ServiceAccount == "" {
+		cfg.ServiceAccount = DefaultNodeServiceAccount
+	}
+	if len(cfg.OauthScopes) == 0 {
+		cfg.OauthScopes = append([]string(nil), DefaultNodeOauthScopes...)
+	}
+	p.Config = &cfg
+	return p
+}
+
 // WithReadDefaults renders a stored cluster the way a real GKE read answers:
 // the NormalizeCluster messages plus the fields the API derives rather than
-// stores. networkConfig is derived separately (NetworkConfigPaths), and
-// masterAuth.clusterCaCertificate stays empty because the mock mints no CA.
+// stores. Every node pool is rendered through NodePoolWithReadDefaults (the
+// generated default-pool's config included), networkConfig is derived separately
+// (NetworkConfigPaths), and masterAuth.clusterCaCertificate stays empty because
+// the mock mints no CA.
 //
 // Applied on read only: it never changes what a caller persisted.
 func WithReadDefaults(c containerstore.Cluster) containerstore.Cluster {
 	c = NormalizeCluster(c)
+	for i := range c.NodePools {
+		c.NodePools[i] = NodePoolWithReadDefaults(c.NodePools[i])
+	}
 	// Discovery on Cluster.nodeConfig: "For responses, this field will be
 	// populated with the node configuration of the first node pool." The create
 	// path applies a request nodeConfig to the generated default-pool, so the
 	// echo is derived from the pool rather than stored twice (a --dsn import or
 	// snapshot written before the field was modelled gets the same rendering).
-	if len(c.NodePools) > 0 && c.NodePools[0].Config != nil {
+	// Every pool now carries its defaulted config, so a cluster with a pool
+	// always echoes one — exactly what a real create without nodeConfig returns.
+	if len(c.NodePools) > 0 {
 		cfg := *c.NodePools[0].Config
 		c.NodeConfig = &cfg
 	}
