@@ -102,3 +102,20 @@ func TestTasksConsoleShowsWhatThePluginServes(t *testing.T) {
 		t.Fatalf("the console must show the plugin's queue, got %+v", q)
 	}
 }
+
+func TestTasksConsoleRunAndPolicyThePluginServes(t *testing.T) {
+	core, builtins := newTasks()
+	p := routeTasks(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{
+		"Tasks.TasksRun": replaceWith(map[string]any{"name": "projects/proj/locations/us-central1/queues/q1/tasks/t9",
+			"httpRequest": map[string]any{"url": "http://x", "httpMethod": "POST"}, "dispatchCount": float64(2)}),
+		"Tasks.QueuesSetIamPolicy": replaceWith(map[string]any{"etag": "e1", "bindings": []any{map[string]any{"role": "roles/viewer", "members": []any{"user:a@b.c"}}}}),
+	}), core)
+	ctx := context.Background()
+	if task, err := p.RunTask(ctx, "proj", "us-central1", "q1", "t9"); err != nil || task.Name != "t9" || task.Queue != "q1" {
+		t.Fatalf("RunTask = %+v, %v", task, err)
+	}
+	pol, err := p.QueueSetIamPolicy(ctx, "proj", "us-central1", "q1", map[string]any{"policy": map[string]any{}})
+	if err != nil || len(pol.Bindings) != 1 {
+		t.Fatalf("QueueSetIamPolicy = %+v, %v", pol, err)
+	}
+}

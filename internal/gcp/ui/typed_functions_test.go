@@ -11,6 +11,7 @@ import (
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -79,5 +80,75 @@ func TestFunctionsConsoleShowsWhatThePluginServes(t *testing.T) {
 	}
 	if f := fns[0]; f.ID != "from-plugin" || f.Location != "europe-west1" || f.Runtime != "go122" || f.AvailableMemoryMB != 512 || f.Timeout != "30s" {
 		t.Fatalf("the console must show the plugin's function, got %+v", f)
+	}
+}
+
+func TestFunctionsConsoleCallsAndPolicyThePluginServes(t *testing.T) {
+	_, direct, builtins := newFunctions()
+	pol := map[string]any{"version": float64(1), "etag": "e1", "bindings": []any{map[string]any{"role": "roles/viewer", "members": []any{"user:a@b.c"}}}}
+	p := routeFunctions(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{
+		"Function.CallFunction":         replaceWith(map[string]any{"executionId": "ex1", "result": "ok", "error": "boom"}),
+		"Function.FunctionGetIamPolicy": replaceWith(pol),
+		"Function.FunctionSetIamPolicy": replaceWith(pol),
+	}), direct)
+	ctx := context.Background()
+	if id, result, errText, err := p.CallFunction(ctx, "proj", "us-central1", "f1", `{"a":1}`); err != nil || id != "ex1" || result != "ok" || errText != "boom" {
+		t.Fatalf("CallFunction = %q %q %q, %v", id, result, errText, err)
+	}
+	for name, call := range map[string]func() (int, error){
+		"GetIamPolicy": func() (int, error) {
+			got, err := p.GetIamPolicy(ctx, "proj", "us-central1", "f1")
+			return len(got.Bindings), err
+		},
+		"SetIamPolicy": func() (int, error) {
+			got, err := p.SetIamPolicy(ctx, "proj", "us-central1", "f1", map[string]any{"policy": pol})
+			return len(got.Bindings), err
+		},
+	} {
+		if n, err := call(); err != nil || n != 1 {
+			t.Fatalf("%s: %d bindings, %v", name, n, err)
+		}
+	}
+}
+
+func TestFunctionsConsoleCreateThroughThePlugin(t *testing.T) {
+	_, direct, builtins := newFunctions()
+	fn := map[string]any{"name": "projects/proj/locations/us-central1/functions/f1", "state": "ACTIVE",
+		"buildConfig": map[string]any{"runtime": "go122", "entryPoint": "Run"}}
+	in := functionsui.CreateInput{ID: "f1", Location: "us-central1", Runtime: "go122", EntryPoint: "Run", SourceBucket: "b", SourceObject: "o.zip"}
+
+	// A finished operation carries the function in "response".
+	p := routeFunctions(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{
+		"Function.CreateFunction": replaceWith(map[string]any{"done": true, "response": fn}),
+	}), direct)
+	if got, err := p.CreateFunction(context.Background(), "proj", "us-central1", in); err != nil || got.ID != "f1" || got.Runtime != "go122" {
+		t.Fatalf("CreateFunction (operation response) = %+v, %v", got, err)
+	}
+
+	// The plugin may also answer with the function itself.
+	p = routeFunctions(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{
+		"Function.CreateFunction": replaceWith(fn),
+	}), direct)
+	if got, err := p.CreateFunction(context.Background(), "proj", "us-central1", in); err != nil || got.ID != "f1" {
+		t.Fatalf("CreateFunction (bare function) = %+v, %v", got, err)
+	}
+
+	// A bucket without an object is refused before the plugin is asked.
+	asked := false
+	p = routeFunctions(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{
+		"Function.CreateFunction": func(next provider.HandlerFunc) provider.HandlerFunc {
+			return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+				asked = true
+				return next(ctx, nr)
+			}
+		},
+	}), direct)
+	bad := in
+	bad.SourceObject = ""
+	if _, err := p.CreateFunction(context.Background(), "proj", "us-central1", bad); err == nil {
+		t.Fatal("a source bucket without an object must be refused")
+	}
+	if asked {
+		t.Fatal("the plugin must not be asked about a request that is refused first")
 	}
 }
