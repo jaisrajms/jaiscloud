@@ -380,3 +380,46 @@ func TestProviderReset(t *testing.T) {
 		t.Fatalf("Reset left clusters: %v", got)
 	}
 }
+
+// TestProviderInvalidNameMessages pins the messages the REST surface answers for
+// a malformed canonical cluster or node-pool name. The codec parses with the
+// core's parsers (the ones the gRPC codec uses), so the message — including the
+// offending value — is identical on both transports; the gRPC service_test.go
+// case pins the same strings from the other side.
+func TestProviderInvalidNameMessages(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+
+	const badCluster = "projects/p/locations/us-central1/clusters/bad-name/extra"
+	_, err := p.CreateCluster(ctx, req(map[string]any{
+		"project": "p", "location": "us-central1", "body": clusterBody(badCluster),
+	}))
+	assertProviderMessage(t, err, "invalid cluster name: "+badCluster)
+
+	if _, err := p.CreateCluster(ctx, req(map[string]any{
+		"project": "p", "location": "us-central1", "body": clusterBody("c1"),
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	const badPool = "projects/p/locations/us-central1/clusters/c1/nodePools/bad/extra"
+	_, err = p.CreateNodePool(ctx, req(map[string]any{
+		"project": "p", "location": "us-central1", "cluster": "c1",
+		"body": map[string]any{"nodePool": map[string]any{"name": badPool, "initialNodeCount": float64(1)}},
+	}))
+	assertProviderMessage(t, err, "invalid node pool name: "+badPool)
+}
+
+func assertProviderMessage(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("want error %q, got nil", want)
+	}
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *model.ProviderError, got %T (%v)", err, err)
+	}
+	if pe.Code != "InvalidArgument" || pe.Message != want {
+		t.Fatalf("error = %q / %q, want InvalidArgument / %q", pe.Code, pe.Message, want)
+	}
+}

@@ -56,27 +56,99 @@ func TestWithReadDefaultsKeepsCallerValues(t *testing.T) {
 }
 
 // TestNetworkConfigPathsDerivesResourceNames pins NetworkConfig.network and
-// .subnetwork as the relative resource names Discovery documents, including the
-// zone→region reduction a zonal cluster needs.
+// .subnetwork as the relative resource names Discovery documents, for every
+// shape a caller can supply: a short name, a project-relative partial resource
+// name, a full Compute path and a full Compute self-link (Terraform's
+// google_container_cluster.network feeds google_compute_network.*.self_link).
+// A link that names another project — a Shared-VPC host project — keeps that
+// project instead of being rewritten into the cluster's own.
 func TestNetworkConfigPathsDerivesResourceNames(t *testing.T) {
 	for _, tc := range []struct {
+		name     string
 		location string
 		network  string
 		subnet   string
 		wantNet  string
 		wantSub  string
 	}{
-		{"us-central1", "default", "default", "projects/p/global/networks/default", "projects/p/regions/us-central1/subnetworks/default"},
-		{"us-central1-a", "vpc-1", "sn-1", "projects/p/global/networks/vpc-1", "projects/p/regions/us-central1/subnetworks/sn-1"},
-		// Already-canonical inputs are passed through, not prefixed twice.
-		{"us-central1", "projects/p/global/networks/vpc-2", "projects/p/regions/us-east1/subnetworks/sn-2",
-			"projects/p/global/networks/vpc-2", "projects/p/regions/us-east1/subnetworks/sn-2"},
+		{
+			name:     "bare names take the cluster project and region",
+			location: "us-central1", network: "default", subnet: "default",
+			wantNet: "projects/p/global/networks/default",
+			wantSub: "projects/p/regions/us-central1/subnetworks/default",
+		},
+		{
+			name:     "zonal cluster reduces to its region",
+			location: "us-central1-a", network: "vpc-1", subnet: "sn-1",
+			wantNet: "projects/p/global/networks/vpc-1",
+			wantSub: "projects/p/regions/us-central1/subnetworks/sn-1",
+		},
+		{
+			name:     "project-relative partial paths pass through",
+			location: "us-central1", network: "projects/p/global/networks/vpc-2", subnet: "projects/p/regions/us-east1/subnetworks/sn-2",
+			wantNet: "projects/p/global/networks/vpc-2",
+			wantSub: "projects/p/regions/us-east1/subnetworks/sn-2",
+		},
+		{
+			name:     "compute self-links are not prefixed twice",
+			location: "us-central1",
+			network:  "https://www.googleapis.com/compute/v1/projects/p/global/networks/vpc-3",
+			subnet:   "https://www.googleapis.com/compute/v1/projects/p/regions/us-east1/subnetworks/sn-3",
+			wantNet:  "projects/p/global/networks/vpc-3",
+			wantSub:  "projects/p/regions/us-east1/subnetworks/sn-3",
+		},
+		{
+			name:     "shared-vpc host project is preserved",
+			location: "us-central1",
+			network:  "https://www.googleapis.com/compute/v1/projects/host-project/global/networks/shared-vpc",
+			subnet:   "https://www.googleapis.com/compute/v1/projects/host-project/regions/europe-west4/subnetworks/shared-sn",
+			wantNet:  "projects/host-project/global/networks/shared-vpc",
+			wantSub:  "projects/host-project/regions/europe-west4/subnetworks/shared-sn",
+		},
 	} {
 		c := containerstore.Cluster{ProjectID: "p", Location: tc.location, Network: tc.network, Subnetwork: tc.subnet}
 		net, sub := NetworkConfigPaths(c)
 		if net != tc.wantNet || sub != tc.wantSub {
-			t.Fatalf("%s: got %q / %q, want %q / %q", tc.location, net, sub, tc.wantNet, tc.wantSub)
+			t.Fatalf("%s: got %q / %q, want %q / %q", tc.name, net, sub, tc.wantNet, tc.wantSub)
 		}
+	}
+}
+
+// TestWithReadDefaultsLegacyRecordMatchesFresh pins the single normaliser: a
+// record written before the response messages were modelled (a snapshot or a
+// --dsn import answers with the zero values) renders exactly like a fresh
+// create, which persists NormalizeCluster's result.
+func TestWithReadDefaultsLegacyRecordMatchesFresh(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{Name: "fresh"}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	fresh, err := s.GetCluster(ctx, "p", "us-central1", "fresh")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+
+	legacy := WithReadDefaults(containerstore.Cluster{ProjectID: "p", Location: "us-central1", Name: "fresh"})
+	if fresh.ShieldedNodes == nil || legacy.ShieldedNodes == nil || *fresh.ShieldedNodes != *legacy.ShieldedNodes {
+		t.Fatalf("shieldedNodes differ: fresh %+v, legacy %+v", fresh.ShieldedNodes, legacy.ShieldedNodes)
+	}
+	if fresh.MaxPodsPerNode != legacy.MaxPodsPerNode {
+		t.Fatalf("maxPodsPerNode differ: fresh %d, legacy %d", fresh.MaxPodsPerNode, legacy.MaxPodsPerNode)
+	}
+	if fresh.LoggingService != legacy.LoggingService || fresh.MonitoringService != legacy.MonitoringService {
+		t.Fatalf("services differ: fresh %q/%q, legacy %q/%q",
+			fresh.LoggingService, fresh.MonitoringService, legacy.LoggingService, legacy.MonitoringService)
+	}
+	if fresh.LegacyAbac == nil || legacy.LegacyAbac == nil || *fresh.LegacyAbac != *legacy.LegacyAbac {
+		t.Fatalf("legacyAbac differ: fresh %+v, legacy %+v", fresh.LegacyAbac, legacy.LegacyAbac)
+	}
+	// NormalizeCluster is idempotent, so applying it twice (create + read) cannot
+	// drift from applying it once.
+	twice := NormalizeCluster(NormalizeCluster(containerstore.Cluster{}))
+	once := NormalizeCluster(containerstore.Cluster{})
+	if twice.MaxPodsPerNode != once.MaxPodsPerNode || twice.LoggingService != once.LoggingService {
+		t.Fatalf("normaliser is not idempotent: once %+v, twice %+v", once, twice)
 	}
 }
 

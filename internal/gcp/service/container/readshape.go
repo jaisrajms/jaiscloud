@@ -24,15 +24,14 @@ const (
 	MonitoringServiceKubernetes = "monitoring.googleapis.com/kubernetes"
 )
 
-// WithReadDefaults fills the response messages real GKE always returns and a
-// client may dereference unconditionally — networkConfig is derived separately
-// (NetworkConfigPaths), and masterAuth.clusterCaCertificate stays empty because
-// the mock mints no CA. Records written before these fields were modelled (a
-// snapshot or a --dsn import) get the same rendering as a fresh cluster, so no
-// migration is needed.
-//
-// Applied on read only: it never changes what a caller persisted.
-func WithReadDefaults(c containerstore.Cluster) containerstore.Cluster {
+// NormalizeCluster fills the response messages real GKE always reports and a
+// client may dereference unconditionally, so an omitted field never reaches the
+// wire. It is the single owner of those literals: the create path persists its
+// result (so a snapshot round-trip carries them) and WithReadDefaults applies it
+// on read (so a record written before the fields were modelled — a snapshot or a
+// --dsn import — answers exactly like a fresh one). Both callers use this
+// function rather than restating the defaults.
+func NormalizeCluster(c containerstore.Cluster) containerstore.Cluster {
 	if c.ShieldedNodes == nil {
 		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: true}
 	}
@@ -48,6 +47,17 @@ func WithReadDefaults(c containerstore.Cluster) containerstore.Cluster {
 	if c.LegacyAbac == nil {
 		c.LegacyAbac = &containerstore.LegacyAbac{}
 	}
+	return c
+}
+
+// WithReadDefaults renders a stored cluster the way a real GKE read answers:
+// the NormalizeCluster messages plus the fields the API derives rather than
+// stores. networkConfig is derived separately (NetworkConfigPaths), and
+// masterAuth.clusterCaCertificate stays empty because the mock mints no CA.
+//
+// Applied on read only: it never changes what a caller persisted.
+func WithReadDefaults(c containerstore.Cluster) containerstore.Cluster {
+	c = NormalizeCluster(c)
 	// Discovery on Cluster.nodeConfig: "For responses, this field will be
 	// populated with the node configuration of the first node pool." The create
 	// path applies a request nodeConfig to the generated default-pool, so the
@@ -64,31 +74,32 @@ func WithReadDefaults(c containerstore.Cluster) containerstore.Cluster {
 // GKE reports: the relative resource names of the cluster's network and
 // subnetwork (Discovery: "projects/my-project/global/networks/my-network" and
 // "projects/my-project/regions/us-central1/subnetworks/my-subnet"). Cluster.
-// network/subnetwork hold the short names, so both are derived from the cluster
-// record rather than stored twice.
+// network/subnetwork hold whatever the caller sent — a short name, a partial
+// resource name or a Compute self-link (Terraform's google_container_cluster.network
+// feeds google_compute_network.*.self_link) — so both are resolved to the
+// relative name from the cluster record rather than stored twice.
 func NetworkConfigPaths(c containerstore.Cluster) (network, subnetwork string) {
 	return networkPath(c.ProjectID, c.Network), subnetworkPath(c.ProjectID, c.Location, c.Subnetwork)
 }
 
 func networkPath(project, network string) string {
 	if network == "" {
-		network = "default"
+		return resource.ComputePath(project, "compute-network", "default")
 	}
-	if strings.HasPrefix(network, "projects/") {
-		return network
-	}
-	return resource.ResourceID(project)("compute-network", network)
+	return resource.ComputePathFor(network, project, "compute-network", resource.LinkTail(network))
 }
 
 func subnetworkPath(project, location, subnetwork string) string {
 	if subnetwork == "" {
-		subnetwork = "default"
+		return resource.ComputePath(project, "compute-subnetwork", regionOf(location)+"/default")
 	}
-	if strings.HasPrefix(subnetwork, "projects/") {
-		return subnetwork
+	// compute-subnetwork takes "region/name" and owns the project prefix; a
+	// subnetwork link names its own region, and a short name uses the cluster's.
+	region := resource.PathSegmentAfter(subnetwork, "regions")
+	if region == "" {
+		region = regionOf(location)
 	}
-	// compute-subnetwork takes "region/name" and owns the project prefix.
-	return resource.ResourceID(project)("compute-subnetwork", regionOf(location)+"/"+subnetwork)
+	return resource.ComputePathFor(subnetwork, project, "compute-subnetwork", region+"/"+resource.LinkTail(subnetwork))
 }
 
 // regionOf maps a cluster location to its region: a location is either a region

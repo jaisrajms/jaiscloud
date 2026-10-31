@@ -349,7 +349,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   cluster is an instantly-`RUNNING` stored record (default master version, `network`/`subnetwork`);
   a create that carries inline `nodePools` materializes those pools in the same call (each with its
   canonical `selfLink`, `RUNNING` status, the cluster's node version and its `initialNodeCount`
-  node count), while one that carries none gets the generated `default-pool` built from the legacy
+  node count) through the same materialiser `nodePools.create` uses, so the two paths cannot assign
+  different fields; a name repeated inside one create request is `400` (`duplicate node pool name:
+  <name>`, nothing stored), while `nodePools.create` with a name already taken on the cluster is the
+  `409` conflict that call answers — a request-scope distinction stated in one place in the core;
+  a create that carries none gets the generated `default-pool` built from the legacy
   `initialNodeCount`/`nodeConfig` pair (Discovery: the config "will be used to create a NodePool
   object with an auto-generated name"), so that pool gets the same `selfLink`/`RUNNING`
   status/version/node count and the caller's `nodeConfig` as its `config`. Combining `nodePools`
@@ -363,8 +367,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   round-trips; the *defaulted* pool config a create leaves unset is still DPG46. The read carries the
   nested response messages real GKE always returns and clients dereference unconditionally:
   `legacyAbac.enabled` (`false` unless `setLegacyAbac` enabled it), `networkConfig.network`/
-  `subnetwork` (relative resource names derived from `network`/`subnetwork`, with a zone reduced to
-  its region), `shieldedNodes.enabled` (GKE's default `true`, honouring a create-time `false`),
+  `subnetwork` (relative resource names derived from `network`/`subnetwork` whatever spelling the
+  caller used — a short name, a project-relative partial resource name or a Compute self-link, which
+  is what Terraform's `google_container_cluster.network` feeds from
+  `google_compute_network.*.self_link` — with a zone reduced to its region and the link's own project
+  kept, so a Shared-VPC host project is not rewritten into the cluster's), `shieldedNodes.enabled` (GKE's default `true`, honouring a create-time `false`),
   `defaultMaxPodsConstraint.maxPodsPerNode` (`"110"`, honouring a create-time value) and the
   `logging.googleapis.com/kubernetes`/`monitoring.googleapis.com/kubernetes` service defaults —
   while `masterAuth.clusterCaCertificate` stays empty because the mock mints no CA. There is **no
@@ -376,7 +383,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `/v1/projects/{p}/locations/{l}/clusters` path with Managed Kafka on the single emulator origin, so
   it is disambiguated by host (the first DNS label is `container`, as in
   `container.googleapis.com`) or by the `/container` path prefix Terraform/gcloud use; Managed
-  Kafka's routing for the default host is unchanged. The `ClusterManager` seam exists so a real
+  Kafka's routing for the default host is unchanged. Both transports parse cluster and node-pool
+  names with the core's parsers, so a malformed canonical name is the same `400` with the same
+  message (`invalid cluster name: <value>` / `invalid node pool name: <value>`) on REST and gRPC.
+  The `ClusterManager` seam exists so a real
   engine could attach later. This control plane is what a Dataproc-on-GKE virtual cluster reconciles
   against: a `nodePoolTarget` is created or verified through the node-pool operations above and read
   back through `NodePools.list`/`get` (see the Dataproc row and §5).

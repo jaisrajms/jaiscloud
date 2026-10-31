@@ -116,9 +116,12 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 		return c, model.NewProviderError("InvalidArgument", "cluster name is required", 400)
 	}
 	if strings.Contains(raw, "/") {
-		_, _, id, ok := ParseClusterPath(raw)
+		// The canonical path is parsed by the core, the same parser the gRPC
+		// codec uses, so both transports accept exactly the same names and
+		// answer the same message for a malformed one.
+		_, _, id, ok := core.ParseClusterName(raw)
 		if !ok {
-			return c, model.NewProviderError("InvalidArgument", "invalid cluster name", 400)
+			return c, model.NewProviderError("InvalidArgument", "invalid cluster name: "+raw, 400)
 		}
 		c.Name = id
 	} else {
@@ -172,26 +175,6 @@ func strMap(v any) map[string]string {
 		}
 	}
 	return out
-}
-
-// ParseClusterPath parses a GKE cluster name that may be either the short id
-// ("my-cluster") or the canonical path.
-func ParseClusterPath(name string) (project, location, cluster string, ok bool) {
-	if !strings.Contains(name, "/") {
-		return "", "", name, true
-	}
-	return parseCanonical(name, "clusters")
-}
-
-func parseCanonical(name, resource string) (project, location, id string, ok bool) {
-	segs := strings.Split(strings.Trim(name, "/"), "/")
-	if len(segs) != 6 {
-		return "", "", "", false
-	}
-	if segs[0] != "projects" || segs[2] != "locations" || segs[4] != resource {
-		return "", "", "", false
-	}
-	return segs[1], segs[3], segs[5], true
 }
 
 // ─── wire encoding ────────────────────────────────────────────────────────────
@@ -457,7 +440,11 @@ func nodePoolFromBody(m map[string]any) containerstore.NodePool {
 		Locations:        strSlice(m["locations"]),
 	}
 	if p.Name != "" && strings.Contains(p.Name, "/") {
-		if _, _, _, id, ok := parseCanonicalNodePool(p.Name); ok {
+		// The core parser is the one the gRPC codec uses, so a canonical pool
+		// name is reduced to its id identically on both transports. An
+		// unparseable name is left as sent and rejected by the core's grammar
+		// check with the same 400.
+		if _, _, _, id, ok := core.ParseNodePoolName(p.Name); ok {
 			p.Name = id
 		}
 	}
@@ -559,17 +546,6 @@ func maintenancePolicyFromMap(m map[string]any) containerstore.MaintenancePolicy
 	}
 	mp.Window = win
 	return mp
-}
-
-func parseCanonicalNodePool(name string) (project, location, cluster, pool string, ok bool) {
-	segs := strings.Split(strings.Trim(name, "/"), "/")
-	if len(segs) != 8 {
-		return "", "", "", "", false
-	}
-	if segs[0] != "projects" || segs[2] != "locations" || segs[4] != "clusters" || segs[6] != "nodePools" {
-		return "", "", "", "", false
-	}
-	return segs[1], segs[3], segs[5], segs[7], true
 }
 
 func strSlice(v any) []string {

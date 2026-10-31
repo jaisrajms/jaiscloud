@@ -347,3 +347,32 @@ func TestCreateClusterNoName(t *testing.T) {
 	}
 	_ = op
 }
+
+// TestInvalidNameMessagesMatchREST pins the messages the gRPC surface answers
+// for a malformed canonical cluster or node-pool name. Both codecs now parse
+// with the core's parsers, so the message — including the offending value — is
+// identical to the REST surface; provider_test.go pins the same strings.
+func TestInvalidNameMessagesMatchREST(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	const badCluster = "projects/p/locations/us-central1/clusters/bad-name/extra"
+	_, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: pbCluster(badCluster)})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "invalid cluster name: "+badCluster {
+		t.Fatalf("create error = %v (%q)", err, status.Convert(err).Message())
+	}
+
+	if _, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: pbCluster("c1")}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	const badPool = "projects/p/locations/us-central1/clusters/c1/nodePools/bad/extra"
+	_, err = svc.CreateNodePool(ctx, &containerpb.CreateNodePoolRequest{
+		Parent:   parent + "/clusters/c1",
+		NodePool: &containerpb.NodePool{Name: badPool, InitialNodeCount: 1},
+	})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "invalid node pool name: "+badPool {
+		t.Fatalf("create node pool error = %v (%q)", err, status.Convert(err).Message())
+	}
+}
