@@ -465,11 +465,11 @@ func startCmd() *cobra.Command {
 			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
 			// Built here (rather than with the other control planes below) because
 			// the Dataproc core reconciles a virtual cluster's node pools through
-			// it — the same reason Metastore is built first. REST only — GKE's
-			// native transport is gRPC, but the emulator deliberately exposes the
-			// REST metadata surface (docs/gcp/wire-contract.md §5). The core sits
-			// behind a ClusterManager seam whose only implementation is the mock:
-			// a cluster is a stored record, not a real Kubernetes control plane.
+			// it — the same reason Metastore is built first. One core serves both
+			// transports: the REST provider below and the gRPC ClusterManager
+			// adapter (docs/gcp/wire-contract.md §5). It sits behind a
+			// ClusterManager seam whose only implementation is the mock: a
+			// cluster is a stored record, not a real Kubernetes control plane.
 			containerCore := containercore.NewService(stores.container)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
@@ -703,12 +703,9 @@ func startCmd() *cobra.Command {
 			// Compute Engine is metadata-only over the shared ResourceStore.
 			computeP := computeprovider.New(stores.resources)
 
-			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
-			// REST only — GKE's native transport is gRPC, but the emulator
-			// deliberately exposes the REST metadata surface (docs/gcp/wire-contract.md §5).
-			// The core sits behind a ClusterManager seam whose only
-			// implementation is the mock: a cluster is a stored record, not a
-			// real Kubernetes control plane.
+			// The GKE REST provider is a thin adapter over the core built above;
+			// the gRPC ClusterManager adapter is registered against the same core,
+			// so both transports read and write one metadata store.
 			containerP := restcontainer.NewProvider(containerCore)
 
 			// Cloud Run Admin v2's behavioural control plane, served over REST and

@@ -62,8 +62,9 @@ branch = one PR. The ledger parses it automatically; a plan without those
 headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
 Plans are independent *families* (default: the filename) and order via
 `SERIES` (e.g. `make gcp-status-next SERIES="java-compat,bigquery-ga"`); the
-Makefile default keeps `ga-fidelity` first (the current priority), then
-`console-ui`. Scaffold a new plan with
+Makefile default keeps `dataproc-gke` first (the current priority), then
+`ga-fidelity`, `functions-docker-executor` and `console-ui` (the full order is
+`SERIES` at the top of the `Makefile`). Scaffold a new plan with
 `make gcp-plan-new SERVICE=<svc>` (pre-fills that service's non-`ga` fidelity
 cells), and `make gcp-status-lint-plans` fails any plan-shaped doc that lacks a
 parseable index/detail.
