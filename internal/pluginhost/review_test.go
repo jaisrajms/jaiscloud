@@ -313,3 +313,87 @@ func TestStoreBoundsAreEnforced(t *testing.T) {
 		t.Fatalf("an unbounded list = %d %q, want 413 telling the plugin to narrow it", w.Code, w.Body.String())
 	}
 }
+
+// A route can say which wire transports its functions understand; a call over any
+// other transport skips the plugin and reaches the built-in.
+func TestRouteTransportsDecideWhoSeesACall(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		transports []string
+		transport  string
+		wantCalled bool
+	}{
+		{"default sees rest", nil, "", true},
+		{"default sees grpc", nil, "grpc", true},
+		{"rest-only sees rest", []string{"rest"}, "", true},
+		{"rest-only skips grpc", []string{"rest"}, "grpc", false},
+		{"grpc-only skips rest", []string{"grpc"}, "", false},
+		{"grpc-only sees grpc", []string{"grpc"}, "grpc", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			var called atomic.Int32
+			p := muxRoutes("p", func(m *sdk.Mux) {
+				m.Transports(tc.transports...)
+				m.Before("aws", "sqs", "SendMessage", func(context.Context, *sdk.Call) (sdk.Result, error) {
+					called.Add(1)
+					return sdk.Result{}, nil
+				})
+			})
+			if _, err := e.load(t, serve(t, p).URL); err != nil {
+				t.Fatal(err)
+			}
+			nr := &model.NormalizedRequest{Service: "sqs", Action: "SendMessage", AccountID: "a", Region: "r",
+				Params: map[string]any{"MessageBody": "b"}, Transport: tc.transport}
+			if _, err := e.reg.Dispatch(context.Background(), "Queue.SendMessage", nr); err != nil {
+				t.Fatal(err)
+			}
+			if got := called.Load() == 1; got != tc.wantCalled {
+				t.Fatalf("plugin called = %v, want %v", got, tc.wantCalled)
+			}
+			if len(e.built) != 1 {
+				t.Fatalf("the built-in must answer exactly once, answered %d times", len(e.built))
+			}
+		})
+	}
+}
+
+// Attach installs the same links on a second registry, which is how the gRPC
+// transport and the console reach the plugins; Covers says which keys they touch.
+func TestAttachInstallsTheSameLinksOnAnotherRegistry(t *testing.T) {
+	e := newEnv(t)
+	var called atomic.Int32
+	p := muxRoutes("p", func(m *sdk.Mux) {
+		m.Before("aws", "sqs", "SendMessage", func(context.Context, *sdk.Call) (sdk.Result, error) {
+			called.Add(1)
+			return sdk.Result{}, nil
+		})
+	})
+	h, err := e.load(t, serve(t, p).URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.Covers("Queue.SendMessage") || h.Covers("Queue.Boom") || h.Covers("Nothing.Here") {
+		t.Fatalf("Covers is wrong: %v", h.CoveredKeys())
+	}
+	if got := h.CoveredKeys(); len(got) != 1 || got[0] != "Queue.SendMessage" {
+		t.Fatalf("CoveredKeys = %v", got)
+	}
+	var nilHost *Host
+	if nilHost.Covers("Queue.SendMessage") || nilHost.CoveredKeys() != nil {
+		t.Fatal("a nil host covers nothing")
+	}
+
+	shadow := provider.NewRegistry()
+	shadow.RegisterAll(map[string]provider.HandlerFunc{
+		"Queue.SendMessage": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return provider.OK(map[string]any{"from": "shadow"}), nil
+		},
+	})
+	h.Attach(shadow)
+	nr := &model.NormalizedRequest{Service: "sqs", Action: "SendMessage", AccountID: "a", Region: "r", Params: map[string]any{}}
+	resp, err := shadow.Dispatch(context.Background(), "Queue.SendMessage", nr)
+	if err != nil || resp.Data["from"] != "shadow" || called.Load() != 1 {
+		t.Fatalf("shadow dispatch = %v, %v (plugin calls %d)", resp, err, called.Load())
+	}
+}

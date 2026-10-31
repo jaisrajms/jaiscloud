@@ -502,3 +502,17 @@ func attemptToJSON(a *tasksstore.Attempt) map[string]any {
 func formatDuration(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
 }
+
+// QueueFromBody, QueueToJSON, TaskFromBody and TaskToJSON expose the wire
+// conversion to callers that translate between the REST shape and the typed model
+// (the console, when a plugin owns the Tasks keys).
+func QueueFromBody(m map[string]any) (tasksstore.Queue, error) { return queueFromBody(m) }
+
+// QueueToJSON encodes a queue as the Discovery-shaped JSON the REST API returns.
+func QueueToJSON(q tasksstore.Queue) map[string]any { return queueToJSON(q) }
+
+// TaskFromBody decodes a task JSON object.
+func TaskFromBody(m map[string]any) (tasksstore.Task, error) { return taskFromBody(m) }
+
+// TaskToJSON encodes a task as the Discovery-shaped JSON the REST API returns.
+func TaskToJSON(t tasksstore.Task) map[string]any { return taskToJSON(t) }

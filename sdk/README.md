@@ -94,6 +94,20 @@ When a plugin overrides a built-in, every caller inside the emulator uses it too
 
 `Req.SourceArn` / `Req.ServicePrincipal` identify the calling service where there is one.
 
+### Transports (GCP gRPC)
+
+On `jaiscloud-gcp` the same key is reached over REST and over gRPC. For a gRPC call
+`Req.Transport` is `"grpc"` and `Params` (and `Resp.Data`, and what a `replace` must return) are the
+protojson form of the RPC messages: camelCase fields, int64 as strings, enums by name, no `body` wrapper.
+Over REST `Req.Transport` is empty and `Params` is the REST shape (path parameters plus `body`).
+A plugin that only understands one shape declares it, and calls over the other transport skip it:
+
+```go
+m := sdk.NewMux("acme", "0.1.0").Transports("rest") // or "grpc"; the default is both
+```
+
+The manifest carries it as `transports` on each route. A `before` patch is shallow in both shapes.
+
 **An internal call to an S3 or CloudWatch Logs key is an ordinary client call.** The emulator
 makes the same calls an agent would, so one key means one thing whoever calls it:
 

@@ -303,3 +303,16 @@ func deepMerge(dst, src map[string]any) map[string]any {
 	}
 	return out
 }
+
+// BuildTriggerConfig, BuildChannelConfig and MergeTriggerConfig expose the console's
+// form-to-wire-body rendering to callers that send the same body through the
+// plugin chain (see internal/gcp/ui/typed_eventarc.go).
+func BuildTriggerConfig(in TriggerInput) (json.RawMessage, error) { return buildTriggerConfig(in) }
+
+// BuildChannelConfig renders a channel form as the wire body.
+func BuildChannelConfig(in ChannelInput) (json.RawMessage, error) { return buildChannelConfig(in) }
+
+// MergeTriggerConfig overlays a form body on the stored one.
+func MergeTriggerConfig(stored, overlay json.RawMessage) json.RawMessage {
+	return mergeTriggerConfig(stored, overlay)
+}

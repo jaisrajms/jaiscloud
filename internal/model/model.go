@@ -92,6 +92,12 @@ type NormalizedRequest struct {
 	// by wire, internal and UI callers alike.
 	Origin Origin
 
+	// Transport names the wire transport when it is not the cloud's default
+	// request/response one. "grpc" (GCP) means Params and the response Data are
+	// the protojson form of the RPC messages, not the REST shape. The zero value
+	// is the codec's own wire format.
+	Transport string
+
 	// AccessKey is the raw SigV4/SigV2 access-key-id extracted from the
 	// Authorization header or presigned URL. Empty for anonymous requests.
 	// Used by STS GetCallerIdentity and session-store lookups (§5.3, §9.3).

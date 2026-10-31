@@ -18,9 +18,13 @@ import (
 
 // replaceLink makes the plugin the core of a key. NotHandled falls through to
 // the handler that was registered before (normally the built-in).
-func (p *plugin) replaceLink(wire string) func(provider.HandlerFunc) provider.HandlerFunc {
+func (p *plugin) replaceLink(ms *modeSet) func(provider.HandlerFunc) provider.HandlerFunc {
+	wire := ms.wire
 	return func(next provider.HandlerFunc) provider.HandlerFunc {
 		return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			if !ms.speaks(nr) {
+				return next(ctx, nr) // the plugin does not handle this transport
+			}
 			res, err := p.call(ctx, wire, sdk.Replace, nr, nil, nil)
 			if err != nil {
 				return nil, err
@@ -38,9 +42,13 @@ func (p *plugin) replaceLink(wire string) func(provider.HandlerFunc) provider.Ha
 }
 
 // aroundLink runs the plugin before and/or after the inner handler.
-func (p *plugin) aroundLink(wire string, before, after bool) func(provider.HandlerFunc) provider.HandlerFunc {
+func (p *plugin) aroundLink(ms *modeSet) func(provider.HandlerFunc) provider.HandlerFunc {
+	wire, before, after := ms.wire, ms.before, ms.after
 	return func(next provider.HandlerFunc) provider.HandlerFunc {
 		return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			if !ms.speaks(nr) {
+				return next(ctx, nr) // the plugin does not handle this transport
+			}
 			if before {
 				res, err := p.call(ctx, wire, sdk.Before, nr, nil, nil)
 				if err != nil {
@@ -107,7 +115,7 @@ func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *mode
 		Req: &sdk.Request{
 			Cloud: p.host.cloud, Service: wire, Action: nr.Action, Params: project(nr.Params),
 			AccountID: nr.AccountID, Region: nr.Region, AccessKey: nr.AccessKey,
-			Origin: originOf(nr), SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
+			Origin: originOf(nr), Transport: nr.Transport, SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
 			RequestID: requestID(ctx, nr), CallID: callID,
 			// Not nr.Clock: that is fixed at config load, while POST
 			// /_jaiscloud/clock replaces the global clock.

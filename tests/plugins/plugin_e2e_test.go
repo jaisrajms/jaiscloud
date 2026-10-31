@@ -81,11 +81,17 @@ type emulator struct {
 
 func command(t *testing.T, args ...string) (*emulator, string) {
 	t.Helper()
+	return commandOf(t, binary(t), args...)
+}
+
+// commandOf prepares (without starting) the given emulator binary on a free port.
+func commandOf(t *testing.T, bin string, args ...string) (*emulator, string) {
+	t.Helper()
 	addr := freeAddr(t)
 	port := addr[strings.LastIndex(addr, ":")+1:]
 	dir := t.TempDir()
 	all := append([]string{"start", "--port", port, "--ephemeral", "--log-level", "warn"}, args...)
-	cmd := exec.Command(binary(t), all...)
+	cmd := exec.Command(bin, all...)
 	cmd.Env = append(os.Environ(), "JAISCLOUD_STATE_DIR="+dir, "JAISCLOUD_DATA_DIR="+dir)
 	out := &bytes.Buffer{}
 	lw := &lockedWriter{w: out} // one writer (one lock) for both streams
@@ -126,6 +132,12 @@ func (e *emulator) logs() string {
 func startEmulator(t *testing.T, args ...string) *emulator {
 	t.Helper()
 	e, _ := command(t, args...)
+	return run(t, e)
+}
+
+// run starts a prepared emulator and waits until it is healthy.
+func run(t *testing.T, e *emulator) *emulator {
+	t.Helper()
 	if err := e.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

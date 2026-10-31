@@ -29,5 +29,6 @@ func (h *Handler) TasksTickHandler(w http.ResponseWriter, r *http.Request) {
 	if tick != nil {
 		tick.TickNow(r.Context())
 	}
+	h.tickPlugins(r.Context(), "tasks")
 	w.WriteHeader(http.StatusNoContent)
 }

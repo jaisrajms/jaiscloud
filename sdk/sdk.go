@@ -56,6 +56,14 @@ type Route struct {
 	Service string   `json:"service"` // wire service name, never a registry prefix
 	Actions []string `json:"actions"` // action names, or ["*"] for the whole service
 	Mode    Mode     `json:"mode"`
+	// Transports lists the wire transports this route's functions understand:
+	// "rest" (the cloud's default wire shape: AWS, and GCP REST) and "grpc" (GCP gRPC,
+	// where Params and responses are protojson of the RPC messages, see
+	// Request.Transport). Empty means all of them. A call that arrives over a
+	// transport a route does not list skips the plugin and reaches the built-in (or
+	// the next plugin), so a plugin written for the REST shape can say so and never
+	// receives protojson it cannot read.
+	Transports []string `json:"transports,omitempty"`
 }
 
 // Request is the projection of one API call a plugin sees.
@@ -82,6 +90,12 @@ type Request struct {
 	// plugin that overrides a key receives all of them; branch on Origin only if
 	// you must treat them differently.
 	Origin string `json:"origin"`
+	// Transport is "" for the cloud's default wire format and "grpc" for a GCP
+	// gRPC call. Under "grpc", Params (and Resp.Data in the after phase, and what
+	// a replace must return) are the protojson form of the RPC request and
+	// response messages (camelCase field names, int64 as strings, enums by name),
+	// not the REST shape. The key (service and action) is the same either way.
+	Transport string `json:"transport,omitempty"`
 	// SourceArn / ServicePrincipal are set when another service in the emulator
 	// made this call (for example SNS delivering to SQS).
 	SourceArn        string `json:"sourceArn,omitempty"`
@@ -131,8 +145,10 @@ type Call struct {
 //	Replace: Resp or Err answers; NotHandled falls through to the built-in.
 //	Before:  Params (when non-nil) is a PATCH over the request's params: every
 //	         key you return is set, every key you omit is left as it was, and a
-//	         key whose value is null is removed. Resp/Err short-circuit and the
-//	         built-in is not run.
+//	         key whose value is null is removed. The patch is shallow: a key you
+//	         return replaces that whole value, so to change one field of a nested
+//	         object (REST's "body", a map of labels) return a copy with the field
+//	         edited. Resp/Err short-circuit and the built-in is not run.
 //	After:   Resp/Err override the core's outcome; all nil passes it through.
 type Result struct {
 	NotHandled bool           `json:"notHandled,omitempty"`

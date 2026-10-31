@@ -107,6 +107,19 @@ func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedR
 			} else {
 				delete(meta, "enableMessageOrdering")
 			}
+		case "topic":
+			// A subscription cannot move to another topic through the public API. The
+			// emulator re-points its own Eventarc transport subscription when a trigger's
+			// topic changes (seams.PubSub.EnsureEventarcSubscription), keeping every other
+			// setting and the queued messages, so only an internal caller may do it.
+			if nr.Origin != model.OriginInternal {
+				return nil, model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+path, 400)
+			}
+			topic, _ := in["topic"].(string)
+			if !p.topicExists(ctx, nr.AccountID, lastSegment(topic)) {
+				return nil, model.NewProviderError("NotFound", "topic not found", 404)
+			}
+			meta["topic"] = nr.ResourceID("pubsub-topic", lastSegment(topic))
 		case "deadletterpolicy":
 			dp, _ := in["deadLetterPolicy"].(map[string]any)
 			if dp == nil {
