@@ -1,6 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import {
   Button,
   Chip,
@@ -17,7 +16,6 @@ import {
 } from '@mui/material'
 import CheckIcon from '@mui/icons-material/Check'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
-import { createProject } from '../../api/gcp/resourcemanager'
 import { useAccount, useAccounts } from '../../context/AccountContext'
 import { useMeta } from '../../hooks/useMeta'
 import { useServices } from '../../hooks/useServices'
@@ -31,6 +29,7 @@ import {
   type ProjectRowInfo,
 } from './navModel'
 import { useProjectDiscovery } from './useProjectDiscovery'
+import { useRegisterProject } from './useRegisterProject'
 
 interface Props {
   open: boolean
@@ -45,7 +44,6 @@ interface Props {
  */
 export function ProjectPickerDialog({ open, onClose }: Props) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const { accountId, setAccountId } = useAccount()
   const { data } = useAccounts()
   const { data: meta } = useMeta()
@@ -53,12 +51,15 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
   const { data: discovery } = useProjectDiscovery()
   const [query, setQuery] = useState('')
   const [recent, setRecent] = useState<string[]>(() => readRecent(RECENT_PROJECTS_KEY))
-  const [registering, setRegistering] = useState<string | null>(null)
-  const [errors, setErrors] = useState<Record<string, string>>({})
+  const { register, registering, errors } = useRegisterProject()
 
   // Only offer the project manager when the server advertises Resource Manager,
   // so the picker never links to a page whose service is disabled.
   const canManage = (servicesData?.services ?? []).some((s) => s.id === 'resourcemanager')
+  const serviceLabel = useMemo(() => {
+    const byId = new Map((servicesData?.services ?? []).map((s) => [s.id, s.label]))
+    return (id: string) => byId.get(id) ?? id
+  }, [servicesData])
 
   const current = accountId || meta?.accountId || ''
   const accounts = useMemo(
@@ -82,23 +83,6 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
     onClose()
   }
 
-  const register = async (id: string) => {
-    setRegistering(id)
-    setErrors((prev) => ({ ...prev, [id]: '' }))
-    try {
-      await createProject({ projectId: id })
-      await queryClient.invalidateQueries({ queryKey: ['gcp', 'project-discovery'] })
-      await queryClient.invalidateQueries({ queryKey: ['meta', 'accounts'] })
-    } catch (error) {
-      setErrors((prev) => ({
-        ...prev,
-        [id]: error instanceof Error ? error.message : String(error),
-      }))
-    } finally {
-      setRegistering(null)
-    }
-  }
-
   const manage = () => {
     onClose()
     navigate('/gcp/resourcemanager/projects')
@@ -106,7 +90,7 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
 
   const row = (project: ProjectRowInfo) => {
     const observed = project.kind === 'observed'
-    const services = projectServiceChips(project.services)
+    const services = projectServiceChips(project.services, serviceLabel)
     const age = relativeProjectAge(project.lastSeen)
     return (
       <Fragment key={project.id}>

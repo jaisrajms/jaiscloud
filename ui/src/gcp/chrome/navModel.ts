@@ -283,9 +283,15 @@ export function groupProjects(
   return { active, recent: recentRows, all }
 }
 
-/** Up to `limit` service ids for a project's chips. */
-export function projectServiceChips(services: string[] | undefined, limit = 3): string[] {
-  return (services ?? []).slice(0, limit)
+/** Up to `limit` service labels for a project's chips. */
+export function projectServiceChips(
+  services: string[] | undefined,
+  labelFor?: (id: string) => string,
+  limit = 3,
+): string[] {
+  return (services ?? [])
+    .slice(0, limit)
+    .map((id) => labelFor?.(id) ?? id)
 }
 
 /** Relative last-activity label ("18s ago"), empty for an absent timestamp. */
