@@ -7,6 +7,8 @@ import (
 
 	eventarccore "jaiscloud/internal/gcp/service/eventarc"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
+	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/store"
 )
 
 // newProvider builds a real UI provider over the Eventarc core with an
@@ -132,5 +134,81 @@ func TestProvider_ChannelRoundTrip(t *testing.T) {
 	}
 	if list, err := p.ListChannelsByProject(ctx, "test-project"); err != nil || len(list) != 0 {
 		t.Fatalf("channel not deleted: %v %+v", err, list)
+	}
+}
+
+// The exported builders are what the console sends through the plugin chain; they must produce
+// exactly what the provider's own create and update use.
+func TestExportedBuildersMatchTheProvidersBodies(t *testing.T) {
+	in := TriggerInput{Name: "t1", DestinationType: "cloudRun", Destination: "svc", DestinationRegion: "us-central1",
+		EventFilters: []EventFilter{{Attribute: "type", Value: "x"}}}
+	want, err := buildTriggerConfig(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := BuildTriggerConfig(in)
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("BuildTriggerConfig = %s, %v; want %s", got, err, want)
+	}
+	if _, err := BuildTriggerConfig(TriggerInput{DestinationType: "nope"}); err == nil {
+		t.Error("an unsupported destination type must be refused")
+	}
+
+	cin := ChannelInput{Name: "ch", Provider: "projects/p/locations/l/providers/x", Labels: map[string]string{"a": "b"}}
+	cwant, err := buildChannelConfig(cin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cgot, err := BuildChannelConfig(cin)
+	if err != nil || string(cgot) != string(cwant) {
+		t.Fatalf("BuildChannelConfig = %s, %v; want %s", cgot, err, cwant)
+	}
+	if _, err := BuildChannelConfig(ChannelInput{Config: json.RawMessage(`[1]`)}); err == nil {
+		t.Error("a config that is not an object must be refused")
+	}
+
+	merged := MergeTriggerConfig(json.RawMessage(`{"labels":{"a":"1"},"serviceAccount":"sa"}`), json.RawMessage(`{"labels":{"b":"2"}}`))
+	var m map[string]any
+	if err := json.Unmarshal(merged, &m); err != nil || m["serviceAccount"] != "sa" || m["labels"] == nil {
+		t.Fatalf("MergeTriggerConfig = %s, %v", merged, err)
+	}
+}
+
+func TestProvider_TriggerAndChannelPoliciesAndDeletes(t *testing.T) {
+	ctx := context.Background()
+	// IAM policies live in the resource store, which newProvider leaves out.
+	p := NewProvider(eventarccore.NewService(eventarcstore.NewMemoryStore(), store.NewMemoryResourceStore(), workflowsstore.NewMemoryStore()))
+	if _, err := p.CreateTrigger(ctx, "proj", "us-central1", TriggerInput{Name: "t1", DestinationType: "cloudRun", Destination: "svc", DestinationRegion: "us-central1",
+		EventFilters: []EventFilter{{Attribute: "type", Value: "google.cloud.pubsub.topic.v1.messagePublished"}}}); err != nil {
+		t.Fatal(err)
+	}
+	policyBody := map[string]any{"policy": map[string]any{"bindings": []any{map[string]any{"role": "roles/viewer", "members": []any{"user:a@b.c"}}}}}
+	if _, err := p.TriggerSetIamPolicy(ctx, "proj", "us-central1", "t1", policyBody); err != nil {
+		t.Fatalf("TriggerSetIamPolicy: %v", err)
+	}
+	if pol, err := p.TriggerGetIamPolicy(ctx, "proj", "us-central1", "t1"); err != nil || len(pol.Bindings) != 1 {
+		t.Fatalf("TriggerGetIamPolicy = %+v, %v", pol, err)
+	}
+	if err := p.DeleteTrigger(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatalf("DeleteTrigger: %v", err)
+	}
+	if _, err := p.GetTrigger(ctx, "proj", "us-central1", "t1"); err == nil {
+		t.Fatal("a deleted trigger must be gone")
+	}
+
+	if _, err := p.CreateChannel(ctx, "proj", "us-central1", ChannelInput{Name: "ch1", Provider: "projects/proj/locations/us-central1/providers/p"}); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := p.GetChannel(ctx, "proj", "us-central1", "ch1"); err != nil || ch.Name != "ch1" {
+		t.Fatalf("GetChannel = %+v, %v", ch, err)
+	}
+	if ch, err := p.UpdateChannel(ctx, "proj", "us-central1", "ch1", ChannelInput{Name: "ch1", Provider: "projects/proj/locations/us-central1/providers/p", Labels: map[string]string{"a": "b"}}); err != nil || ch.Name != "ch1" {
+		t.Fatalf("UpdateChannel = %+v, %v", ch, err)
+	}
+	if _, err := p.ChannelSetIamPolicy(ctx, "proj", "us-central1", "ch1", policyBody); err != nil {
+		t.Fatalf("ChannelSetIamPolicy: %v", err)
+	}
+	if pol, err := p.ChannelGetIamPolicy(ctx, "proj", "us-central1", "ch1"); err != nil || len(pol.Bindings) != 1 {
+		t.Fatalf("ChannelGetIamPolicy = %+v, %v", pol, err)
 	}
 }
