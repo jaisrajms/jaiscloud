@@ -2,12 +2,29 @@ package ui
 
 import (
 	"context"
+	"os"
+	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/pluginchain"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
+
+// microClock is the real clock cut to microseconds, the precision of a timestamp on the
+// REST wire. The passthrough tests compare a model read back through the REST rendering
+// with the stored one; on a clock that ticks in nanoseconds (Linux) the stored value would
+// carry digits the wire never does, and the two would differ for no real reason.
+type microClock struct{}
+
+func (microClock) Now() time.Time { return clock.RealNow().Truncate(time.Microsecond) }
+
+func TestMain(m *testing.M) {
+	clock.SetGlobalClock(microClock{})
+	os.Exit(m.Run())
+}
 
 // fakeHost stands in for the plugin host: it covers the keys in wrap and installs
 // each wrapper on whatever registry the chain attaches it to.
