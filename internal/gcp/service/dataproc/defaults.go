@@ -45,11 +45,6 @@ const (
 	defaultWorkerInstances = 2
 )
 
-// computeBasePath is the public Compute Engine REST root that zoneUri and
-// machineTypeUri are absolute links under (the same link shape the emulated
-// Compute service renders for its own selfLinks).
-const computeBasePath = "https://www.googleapis.com/compute/v1/"
-
 // withGCEDefaults returns config with every documented read-time default filled
 // in and the caller's Compute Engine links canonicalised. It never mutates the
 // stored bytes: it runs on the freshly unmarshalled render copy.
@@ -99,22 +94,22 @@ func canonicaliseGCELinks(gcc map[string]any, c dpstore.Cluster, zone string) {
 	if strings.TrimSpace(bodyString(gcc, "zoneUri")) == "" {
 		// A real get always names a zone, so an unset one is filled with the
 		// region default; an unparseable caller value is left as sent below.
-		gcc["zoneUri"] = computeLink(c.ProjectID, "compute-zone", zone)
+		gcc["zoneUri"] = resource.ComputeLink(c.ProjectID, "compute-zone", zone)
 	} else if z := zoneFromURI(bodyString(gcc, "zoneUri")); z != "" {
-		gcc["zoneUri"] = computeLinkFor(bodyString(gcc, "zoneUri"), c.ProjectID, "compute-zone", z)
+		gcc["zoneUri"] = resource.ComputeLinkFor(bodyString(gcc, "zoneUri"), c.ProjectID, "compute-zone", z)
 	}
 	if raw := bodyString(gcc, "networkUri"); strings.TrimSpace(raw) != "" {
-		if name := linkTail(raw); name != "" {
-			gcc["networkUri"] = computeLinkFor(raw, c.ProjectID, "compute-network", name)
+		if name := resource.LinkTail(raw); name != "" {
+			gcc["networkUri"] = resource.ComputeLinkFor(raw, c.ProjectID, "compute-network", name)
 		}
 	}
 	if raw := bodyString(gcc, "subnetworkUri"); strings.TrimSpace(raw) != "" {
-		if name := linkTail(raw); name != "" {
-			region := pathSegmentAfter(raw, "regions")
+		if name := resource.LinkTail(raw); name != "" {
+			region := resource.PathSegmentAfter(raw, "regions")
 			if region == "" {
 				region = c.Region
 			}
-			gcc["subnetworkUri"] = computeLinkFor(raw, c.ProjectID, "compute-subnetwork", region+"/"+name)
+			gcc["subnetworkUri"] = resource.ComputeLinkFor(raw, c.ProjectID, "compute-subnetwork", region+"/"+name)
 		}
 	}
 }
@@ -127,14 +122,14 @@ func canonicaliseMachineTypeURI(group map[string]any, project, zone string) {
 	if strings.TrimSpace(raw) == "" {
 		return
 	}
-	name := linkTail(raw)
+	name := resource.LinkTail(raw)
 	if name == "" {
 		return
 	}
-	if z := pathSegmentAfter(raw, "zones"); z != "" {
+	if z := resource.PathSegmentAfter(raw, "zones"); z != "" {
 		zone = z
 	}
-	group["machineTypeUri"] = computeLinkFor(raw, project, "compute-machine-type", zone+"/"+name)
+	group["machineTypeUri"] = resource.ComputeLinkFor(raw, project, "compute-machine-type", zone+"/"+name)
 }
 
 // fillInstanceGroup fills an instance group's documented defaults (count,
@@ -146,7 +141,7 @@ func fillInstanceGroup(group map[string]any, numInstances int, project, zone str
 		group["numInstances"] = numInstances
 	}
 	if strings.TrimSpace(bodyString(group, "machineTypeUri")) == "" {
-		group["machineTypeUri"] = computeLink(project, "compute-machine-type", zone+"/"+defaultMachineType)
+		group["machineTypeUri"] = resource.ComputeLink(project, "compute-machine-type", zone+"/"+defaultMachineType)
 	}
 	disk, isMap := group["diskConfig"].(map[string]any)
 	if !isMap {
@@ -188,42 +183,11 @@ func objectField(parent map[string]any, key string) map[string]any {
 // zone, so a malformed URI falls back to the region default instead of leaking a
 // bogus segment into machineTypeUri.
 func zoneFromURI(uri string) string {
-	zone := linkTail(uri)
+	zone := resource.LinkTail(uri)
 	if !plausibleZone(zone) {
 		return ""
 	}
 	return zone
-}
-
-// linkTail returns the last path segment of a Compute Engine resource link: the
-// name of a short form ("n1-standard-4"), a partial resource name
-// ("zones/us-central1-a/machineTypes/n1-standard-4") and a full self-link all
-// name the same resource in their last segment.
-func linkTail(uri string) string {
-	s := strings.TrimRight(strings.TrimSpace(uri), "/")
-	if i := strings.LastIndex(s, "/"); i >= 0 {
-		s = s[i+1:]
-	}
-	return s
-}
-
-// pathSegmentAfter returns the segment following marker in a slash-separated
-// resource link ("regions/us-central1/subnetworks/default" -> "us-central1"),
-// or "" when the link does not carry the marker as a path segment.
-func pathSegmentAfter(uri, marker string) string {
-	parts := strings.Split(strings.Trim(strings.TrimSpace(uri), "/"), "/")
-	for i, p := range parts {
-		if p == marker && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return ""
-}
-
-// projectFromURI returns the project a Compute Engine link names ("projects/
-// {p}/..."), or "" for a short name or a project-relative partial resource name.
-func projectFromURI(uri string) string {
-	return pathSegmentAfter(uri, "projects")
 }
 
 // plausibleZone reports whether s has a GCP zone's shape (us-central1-a): three
@@ -231,23 +195,6 @@ func projectFromURI(uri string) string {
 func plausibleZone(s string) bool {
 	parts := strings.Split(s, "-")
 	return len(parts) == 3 && parts[0] != "" && parts[1] != "" && len(parts[2]) == 1
-}
-
-// computeLink is computeBasePath + the shared resource formatter for rt.
-func computeLink(project, rt, name string) string {
-	return computeBasePath + resource.ResourceID(project)(rt, name)
-}
-
-// computeLinkFor is computeLink for a caller-supplied link: the project the
-// caller named wins (a Shared VPC subnetwork lives in the host project, and a
-// read must never rename it into the cluster's own project), while a short name
-// or a project-relative partial resource name is resolved against the cluster's
-// project.
-func computeLinkFor(uri, project, rt, name string) string {
-	if p := projectFromURI(uri); p != "" {
-		project = p
-	}
-	return computeLink(project, rt, name)
 }
 
 // defaultZone picks the zone the service reports for a cluster that names none:

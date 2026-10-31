@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +230,51 @@ func TestGetCluster_IncludesNamespace(t *testing.T) {
 	}
 	if body.KubernetesNamespace != "team-a" {
 		t.Fatalf("requested kubernetesNamespace = %q, want team-a", body.KubernetesNamespace)
+	}
+}
+
+// TestGetCluster_RendersVirtualClusterLikeTheAPI pins that a console detail read
+// renders virtualClusterConfig through the same core helper as config: the
+// input-only nodePoolConfig that ClusterJSON strips must not be echoed by the
+// console either, and the rendered object must match the API's byte for byte.
+func TestGetCluster_RendersVirtualClusterLikeTheAPI(t *testing.T) {
+	c := cluster("gke-1", "us-central1")
+	c.Config = nil // a GKE virtual cluster carries no GCE ClusterConfig
+	c.VirtualClusterConfig = json.RawMessage(`{"kubernetesClusterConfig":{` +
+		`"kubernetesNamespace":"team-a","gkeClusterConfig":{` +
+		`"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke-1",` +
+		`"nodePoolTarget":[{"nodePool":"projects/p/locations/us-central1/clusters/gke-1/nodePools/pool-a",` +
+		`"roles":["DEFAULT"],"nodePoolConfig":{"config":{"machineType":"e2-medium"}}}]}}}`)
+	mock := &mockProvider{cluster: c}
+
+	w := do(t, mock, http.MethodGet, "/clusters/us-central1/gke-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body Cluster
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strings.Contains(string(body.VirtualClusterConfig), "nodePoolConfig") {
+		t.Fatalf("input-only nodePoolConfig echoed: %s", body.VirtualClusterConfig)
+	}
+	if !strings.Contains(string(body.VirtualClusterConfig), "pool-a") {
+		t.Fatalf("nodePoolTarget lost: %s", body.VirtualClusterConfig)
+	}
+
+	want, err := json.Marshal(dataproccore.ClusterJSON(c)["virtualClusterConfig"])
+	if err != nil {
+		t.Fatalf("marshal core rendering: %v", err)
+	}
+	var gotObj, wantObj any
+	if err := json.Unmarshal(body.VirtualClusterConfig, &gotObj); err != nil {
+		t.Fatalf("decode rendered virtualClusterConfig: %v", err)
+	}
+	if err := json.Unmarshal(want, &wantObj); err != nil {
+		t.Fatalf("decode core rendering: %v", err)
+	}
+	if !reflect.DeepEqual(gotObj, wantObj) {
+		t.Fatalf("console rendering != core rendering:\n got %s\nwant %s", body.VirtualClusterConfig, want)
 	}
 }
 

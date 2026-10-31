@@ -29,6 +29,8 @@ func containerChecks() []Check {
 		{Service: "container", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "CREATE_CLUSTER operation DONE", Run: checkContainerCreateCluster},
 		{Service: "container", RPC: "CreateCluster (nodePools + default-pool fields)", Method: "CreateCluster", KeyField: "InvalidArgument on the default-pool conflict", Run: checkContainerCreateClusterPoolConflict},
 		{Service: "container", RPC: "CreateCluster (nodeConfig default pool)", Method: "CreateCluster", KeyField: "default-pool config + cluster nodeConfig echo", Run: checkContainerCreateClusterNodeConfig},
+		{Service: "container", RPC: "CreateCluster (duplicate inline nodePool names)", Method: "CreateCluster", KeyField: "InvalidArgument on a repeated pool name, nothing persisted", Run: checkContainerCreateClusterDuplicatePoolName},
+		{Service: "container", RPC: "GetCluster (Compute self-link network)", Method: "GetCluster", KeyField: "networkConfig resolved from a self-link, host project kept", Run: checkContainerGetClusterSelfLinkNetwork},
 		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/masterVersion + nested response messages", Run: checkContainerGetCluster},
 		{Service: "container", RPC: "GetCluster (legacy project/zone)", Method: "GetCluster", KeyField: "legacy project_id/zone/cluster_id addressing", Run: checkContainerGetClusterLegacy},
 		{Service: "container", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkContainerListClusters},
@@ -830,6 +832,83 @@ func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) er
 		if _, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, tc.cluster.GetName())}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("create with %s + nodePools: rejected cluster %q was persisted (%v)", tc.label, tc.cluster.GetName(), err)
 		}
+	}
+	return nil
+}
+
+// checkContainerCreateClusterDuplicatePoolName verifies one duplicate-name rule
+// for the inline pool path: the same name twice inside one create request is
+// InvalidArgument (the request is malformed before anything exists) and the
+// cluster is not persisted. The sibling case — a name already taken on the
+// cluster through CreateNodePool — is a 409 AlreadyExists, pinned by the SDK
+// suite (tests/integration/gcp/sdk-container).
+func checkContainerCreateClusterDuplicatePoolName(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	name := cfg.ResourceName("gcpc-grpc-gke-dup-pool")
+	_, err = client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name: name,
+			NodePools: []*containerpb.NodePool{
+				{Name: "pool-a", InitialNodeCount: 1},
+				{Name: "pool-a", InitialNodeCount: 1},
+			},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("duplicate inline pool name: code = %v, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if msg := status.Convert(err).Message(); msg != "duplicate node pool name: pool-a" {
+		return fmt.Errorf("duplicate inline pool name: message = %q", msg)
+	}
+	if _, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, name)}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("rejected cluster %q was persisted (%v)", name, err)
+	}
+	return nil
+}
+
+// checkContainerGetClusterSelfLinkNetwork verifies that a cluster created with
+// Compute self-links as its network/subnetwork — what Terraform's
+// google_container_cluster.network/subnetwork receive from
+// google_compute_network.*.self_link — reads back the relative resource names
+// Discovery documents, keeping the project the link named (a Shared-VPC host
+// project is never rewritten into the cluster's own).
+func checkContainerGetClusterSelfLinkNetwork(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	const host = "shared-vpc-host"
+	const base = "https://www.googleapis.com/compute/v1/projects/" + host
+	name := cfg.ResourceName("gcpc-grpc-gke-selflink")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name:       name,
+			Network:    base + "/global/networks/shared-vpc",
+			Subnetwork: base + "/regions/us-central1/subnetworks/shared-sn",
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	got, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, name)})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	wantNetwork := "projects/" + host + "/global/networks/shared-vpc"
+	if n := got.GetNetworkConfig().GetNetwork(); n != wantNetwork {
+		return fmt.Errorf("networkConfig.network = %q, want %q", n, wantNetwork)
+	}
+	wantSubnetwork := "projects/" + host + "/regions/us-central1/subnetworks/shared-sn"
+	if sn := got.GetNetworkConfig().GetSubnetwork(); sn != wantSubnetwork {
+		return fmt.Errorf("networkConfig.subnetwork = %q, want %q", sn, wantSubnetwork)
 	}
 	return nil
 }
