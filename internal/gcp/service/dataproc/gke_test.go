@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -190,11 +194,40 @@ func TestValidateVirtualClusterConfig_PoolRules(t *testing.T) {
 			}},
 		},
 		{
-			name: "zonal pool name spelling is accepted",
+			// The zonal spelling names a different cluster from a regional
+			// target, so it is still a containment error (DPG50).
+			name: "zonal pool name for another location is rejected",
 			gke: map[string]any{"gkeClusterTarget": gkeClusterPath, "nodePoolTarget": []any{
 				poolTarget("projects/proj/zones/us-central1-a/clusters/gke-1/nodePools/zonal-pool", []string{"DEFAULT"}, nil),
 			}},
 			want: "is not in gkeClusterTarget",
+		},
+		{
+			name: "zonal target and zonal pool name are accepted",
+			gke: map[string]any{
+				"gkeClusterTarget": "projects/proj/zones/us-central1-a/clusters/gke-1",
+				"nodePoolTarget": []any{
+					poolTarget("projects/proj/zones/us-central1-a/clusters/gke-1/nodePools/zonal-pool", []string{"DEFAULT"}, nil),
+				},
+			},
+		},
+
+		{
+			// Pools without gkeClusterTarget state the target themselves; the
+			// reconciliation and placement rules then apply instead of silently
+			// doing nothing (DPG52).
+			name: "pools without a target derive it",
+			gke: map[string]any{"nodePoolTarget": []any{
+				poolTarget("projects/proj/locations/us-central1/clusters/gke-9/nodePools/a", []string{"DEFAULT"}, nil),
+			}},
+		},
+		{
+			name: "pools in two clusters without a target",
+			gke: map[string]any{"nodePoolTarget": []any{
+				poolTarget("projects/proj/locations/us-central1/clusters/gke-9/nodePools/a", []string{"DEFAULT"}, nil),
+				poolTarget("projects/proj/locations/us-central1/clusters/gke-8/nodePools/b", []string{"SPARK_DRIVER"}, nil),
+			}},
+			want: "must all name pools in one GKE cluster",
 		},
 		{
 			name: "pool outside the target cluster",
@@ -236,6 +269,32 @@ func TestValidateVirtualClusterConfig_PoolRules(t *testing.T) {
 				t.Fatalf("placement: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateVirtualClusterConfig_DerivesTargetFromPools(t *testing.T) {
+	raw, err := json.Marshal(vccWith(map[string]any{
+		"nodePoolTarget": []any{
+			poolTarget("projects/proj/locations/us-central1/clusters/gke-9/nodePools/a", []string{"DEFAULT"}, nil),
+		},
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	v, err := validateVirtualClusterConfig(raw, "demo")
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if v.target != "gke-9" || v.targetProject != "proj" || v.targetLocation != "us-central1" {
+		t.Fatalf("target not derived from the pool name: %+v", v)
+	}
+	// The derived target is checkable: a virtual cluster in another project is
+	// rejected even though it named no gkeClusterTarget.
+	if err := validateGKEPlacement(v, "other", "us-central1"); err == nil {
+		t.Fatal("a derived target in another project must be rejected")
+	}
+	if err := validateGKEPlacement(v, "proj", "us-central1"); err != nil {
+		t.Fatalf("placement: %v", err)
 	}
 }
 
@@ -381,6 +440,70 @@ func TestCreateCluster_ReconcilesNodePools(t *testing.T) {
 	}
 	if c.Status.State != "CREATING" {
 		t.Fatalf("cluster should still be creating, got %s", c.Status.State)
+	}
+}
+
+// TestCreateCluster_DuplicateNameHasNoSideEffects pins DPG51: real Dataproc
+// rejects a duplicate cluster name before provisioning anything, so a rejected
+// create must not create or verify node pools through the GKE API. Pools are
+// never deleted, so anything reconciled here would be orphaned.
+func TestCreateCluster_DuplicateNameHasNoSideEffects(t *testing.T) {
+	stub := &fakeGKENodePoolProvisioner{gke: GKECluster{WorkloadIdentityPool: "proj.svc.id.goog"}}
+	p := NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(), WithGKENodePoolProvisioner(stub))
+	ctx := context.Background()
+	raw, err := json.Marshal(vccWith(map[string]any{
+		"gkeClusterTarget": gkeClusterPath,
+		"nodePoolTarget":   []any{poolTarget("default-pool", []string{"DEFAULT"}, nil)},
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "dp-gke", ClusterInput{VirtualClusterConfig: raw}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	stub.specs = nil
+	_, _, err = p.CreateCluster(ctx, "proj", "us-central1", "dp-gke", ClusterInput{VirtualClusterConfig: raw})
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.HTTPStatus != 409 {
+		t.Fatalf("duplicate create: got %v, want 409", err)
+	}
+	if len(stub.specs) != 0 {
+		t.Fatalf("a rejected duplicate create reconciled %d pools", len(stub.specs))
+	}
+}
+
+// TestCreateCluster_ResolutionFailureRollsBackNamespace pins DPG53: a target that
+// cannot be resolved rejects the create after the workload namespace was
+// provisioned, and that namespace must not leak.
+func TestCreateCluster_ResolutionFailureRollsBackNamespace(t *testing.T) {
+	client := k8sfake.NewSimpleClientset()
+	stub := &fakeGKENodePoolProvisioner{resolveErr: model.NewProviderError("NotFound", "cluster not found", 404)}
+	p := NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithK8s(client, "jaiscloud", nil),
+		WithSparkImage("spark:test"),
+		WithGKENodePoolProvisioner(stub))
+	t.Cleanup(func() { p.Shutdown(context.Background()) })
+	ctx := context.Background()
+	raw, err := json.Marshal(map[string]any{
+		"kubernetesClusterConfig": map[string]any{
+			"kubernetesNamespace": "dp-ns-rollback",
+			"gkeClusterConfig": map[string]any{
+				"gkeClusterTarget": "projects/proj/locations/us-central1/clusters/missing",
+				"nodePoolTarget": []any{map[string]any{
+					"nodePool": "projects/proj/locations/us-central1/clusters/missing/nodePools/p",
+					"roles":    []any{"DEFAULT"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "dp-gke-ns", ClusterInput{VirtualClusterConfig: raw}); err == nil {
+		t.Fatal("an unresolvable target must reject the create")
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, "dp-ns-rollback", metav1.GetOptions{}); !k8serrors.IsNotFound(err) {
+		t.Fatalf("a rejected create leaked its namespace: %v", err)
 	}
 }
 

@@ -109,8 +109,11 @@ func nodePoolFromSpec(spec dataproccore.GKENodePoolSpec) containerstore.NodePool
 }
 
 // verifyNodePool compares an existing pool with the caller's requested shape,
-// field by field, and reports the first difference. Fields the request left
-// empty are not compared (the API only verifies the fields that were specified).
+// field by field, and reports the first difference. Strings and lists are
+// compared only when the request set them ("any node pool with the specified
+// name is used" covers the rest); the proto3 scalars localSsdCount/preemptible/
+// spot have no presence, so the caller's zero value is part of the requested
+// shape and is always compared. Autoscaling is compared on enabled + bounds.
 func verifyNodePool(spec dataproccore.GKENodePoolSpec, pool containerstore.NodePool) error {
 	got := containerstore.NodeConfig{}
 	if pool.Config != nil {
@@ -136,13 +139,15 @@ func verifyNodePool(spec dataproccore.GKENodePoolSpec, pool containerstore.NodeP
 	}
 	if spec.Autoscaling != nil {
 		var min, max int32
+		enabled := false
 		if pool.Autoscaling != nil {
+			enabled = pool.Autoscaling.Enabled
 			min, max = pool.Autoscaling.MinNodeCount, pool.Autoscaling.MaxNodeCount
 		}
-		if spec.Autoscaling.MinNodeCount != min || spec.Autoscaling.MaxNodeCount != max || pool.Autoscaling == nil {
+		if !enabled || spec.Autoscaling.MinNodeCount != min || spec.Autoscaling.MaxNodeCount != max {
 			return mismatch(spec, "autoscaling",
-				itoa(spec.Autoscaling.MinNodeCount)+"/"+itoa(spec.Autoscaling.MaxNodeCount),
-				itoa(min)+"/"+itoa(max))
+				"enabled "+itoa(spec.Autoscaling.MinNodeCount)+"/"+itoa(spec.Autoscaling.MaxNodeCount),
+				"enabled="+strconv.FormatBool(enabled)+" "+itoa(min)+"/"+itoa(max))
 		}
 	}
 	if len(spec.Locations) > 0 && strings.Join(spec.Locations, ",") != strings.Join(pool.Locations, ",") {

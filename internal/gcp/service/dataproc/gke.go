@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/resource"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 )
 
@@ -145,6 +146,12 @@ type gkeVirtualCluster struct {
 type gkePoolTarget struct {
 	name  string   // short node pool id
 	roles []string // validated enum values
+	// project/location/cluster are the pool's own resource-name segments. They
+	// equal the target cluster's when gkeClusterTarget was given, and are the
+	// only statement of the target when it was not (the pool names carry it).
+	project  string
+	location string
+	cluster  string
 	// config is nil when the caller sent no nodePoolConfig: the pool is adopted
 	// as-is (or created with defaults) and not verified.
 	config *gkeNodePoolConfig
@@ -231,10 +238,31 @@ func validateVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gke
 		// DEFAULT GkeNodePoolTarget."
 		out.poolTargets = []gkePoolTarget{{name: defaultGKEPoolName, roles: []string{"DEFAULT"}}}
 	}
+	// A virtual cluster that names pools but no gkeClusterTarget still states
+	// its target through the pool resource names, so use them rather than
+	// accepting the placement and then silently reconciling nothing. All pools
+	// must name one cluster, or there is nothing to resolve.
+	if target == "" {
+		out.target = out.poolTargets[0].cluster
+		out.targetProject = out.poolTargets[0].project
+		out.targetLocation = out.poolTargets[0].location
+		for _, p := range out.poolTargets[1:] {
+			if p.project != out.targetProject || p.location != out.targetLocation || p.cluster != out.target {
+				return nil, invalidArgument(fmt.Sprintf(
+					"nodePoolTarget entries must all name pools in one GKE cluster: %s and %s differ",
+					poolResourceName(out.poolTargets[0]), poolResourceName(p)))
+			}
+		}
+	}
 	if err := validateGKEPoolTargets(out.poolTargets); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// poolResourceName renders a pool target's canonical resource name (for errors).
+func poolResourceName(p gkePoolTarget) string {
+	return resource.ResourceID(p.project)("container-node-pool", p.location+"/"+p.cluster+"/"+p.name)
 }
 
 // gkeNodePoolNamePattern is the pattern real GCP quotes when
@@ -273,6 +301,7 @@ func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, 
 		}
 	}
 	pt.name = name
+	pt.project, pt.location, pt.cluster = project, location, cluster
 	rawRoles, _ := m["roles"].([]any)
 	if len(rawRoles) == 0 {
 		return pt, invalidArgument(fmt.Sprintf("nodePoolTarget %s requires roles", name))
@@ -412,10 +441,13 @@ func zoneInRegion(zone, region string) bool {
 	return suffix != "" && !strings.Contains(suffix, "-")
 }
 
-// splitGKEClusterName parses a canonical GKE cluster name.
+// splitGKEClusterName parses a canonical GKE cluster name. The location segment
+// is "locations" today for both regional and zonal clusters; "zones" is the older
+// spelling the real-GCP node-pool pattern still accepts, and accepting it is what
+// lets a zonal target and its pools agree on one spelling.
 func splitGKEClusterName(name string) (project, location, cluster string, ok bool) {
 	segs := strings.Split(strings.Trim(name, "/"), "/")
-	if len(segs) != 6 || segs[0] != "projects" || segs[2] != "locations" || segs[4] != "clusters" {
+	if len(segs) != 6 || segs[0] != "projects" || (segs[2] != "locations" && segs[2] != "zones") || segs[4] != "clusters" {
 		return "", "", "", false
 	}
 	return segs[1], segs[3], segs[5], true
