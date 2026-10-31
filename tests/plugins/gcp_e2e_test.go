@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -60,7 +61,8 @@ func gcpBinary(t *testing.T) string {
 // startGCP starts jaiscloud-gcp on REST only (no gRPC/HMS listeners to collide).
 func startGCP(t *testing.T, args ...string) *emulator {
 	t.Helper()
-	e, _ := commandOf(t, gcpBinary(t), append([]string{"--transports", "rest"}, args...)...)
+	hms := freeAddr(t)
+	e, _ := commandOf(t, gcpBinary(t), append([]string{"--transports", "rest", "--hms-port", hms[strings.LastIndex(hms, ":")+1:]}, args...)...)
 	return run(t, e)
 }
 

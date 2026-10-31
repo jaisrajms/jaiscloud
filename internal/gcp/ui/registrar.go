@@ -9,6 +9,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"jaiscloud/internal/provider"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -94,6 +95,47 @@ type ServiceModes struct {
 // were configured.
 func (r *Registrar) WithServiceModes(modes ServiceModes) *Registrar {
 	r.modes = modes
+	return r
+}
+
+// WithRegistry serves the console of every service whose pages call registry
+// actions through reg (origin "ui"), so a plugin that overrides a service also
+// answers the console. A service the registry does not hold, or a console call
+// that is not a registry action, stays on the built-in. A nil reg changes nothing.
+func (r *Registrar) WithRegistry(reg *provider.Registry) *Registrar {
+	if reg == nil {
+		return r
+	}
+	if r.storage != nil {
+		r.storage = routeStorage(reg, r.storage)
+	}
+	if r.pubsub != nil {
+		r.pubsub = routePubSub(reg, r.pubsub)
+	}
+	if r.firestore != nil {
+		r.firestore = routeFirestore(reg, r.firestore)
+	}
+	if r.bigquery != nil {
+		r.bigquery = routeBigQuery(reg, r.bigquery)
+	}
+	if r.compute != nil {
+		r.compute = routeCompute(reg, r.compute)
+	}
+	if r.iam != nil {
+		r.iam = routeIAM(reg, r.iam)
+	}
+	if r.kms != nil {
+		r.kms = routeKMS(reg, r.kms)
+	}
+	if r.secretmanager != nil {
+		r.secretmanager = routeSecret(reg, r.secretmanager)
+	}
+	if r.logging != nil {
+		r.logging = routeLogging(reg, r.logging)
+	}
+	if r.monitoring != nil {
+		r.monitoring = routeMonitoring(reg, r.monitoring)
+	}
 	return r
 }
 

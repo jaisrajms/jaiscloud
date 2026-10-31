@@ -18,7 +18,7 @@ var directLinks = map[string]string{
 	// Constructors and registration: building a service, not calling one.
 	"New": "constructor", "NewService": "constructor", "NewProvider": "constructor",
 	"NewEvaluator": "constructor", "NewServiceV2": "constructor", "NewConfigService": "constructor",
-	"NewMetricsService": "constructor", "NewRegistrar": "UI registrar (the console routes through the registry in its own path)",
+	"NewMetricsService": "constructor", "NewRegistrar": "console registrar: WithRegistry routes the registry-action console methods of ten services through the registry as origin ui (internal/gcp/ui/routed.go); the typed-core console services (Dataproc, Datastore, Eventarc, Functions, Managed Kafka, Resource Manager, Cloud Run, Scheduler, Tasks, Workflows) still call their cores directly",
 	"NewEngine": "constructor", "NewRunner": "constructor",
 	"WithMetastoreResolver": "takes the Metastore seam; the nested constructor call is checked on its own",
 	"Metastore":             "seam constructor: the core is used only for pure reference parsing and endpoint formatting",
