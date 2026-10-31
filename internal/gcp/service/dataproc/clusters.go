@@ -96,6 +96,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	in.VirtualClusterConfig = normalizedVCC
+	// Reject a duplicate name before any side effect: reconciling node pools and
+	// provisioning the workload namespace both create state that a rejected
+	// create must not leave behind (pools are never deleted), and real Dataproc
+	// answers the duplicate before it provisions anything.
+	if _, err := s.store.GetCluster(ctx, project, region, name); err == nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(dpstore.ErrAlreadyExists)
+	} else if !errors.Is(err, dpstore.ErrNoSuchCluster) {
+		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
 	now := clock.Now().UTC()
 	// Provision the cluster's workload namespace before persisting the record, so
 	// a job submitted immediately after create has a placement. Mock execution
@@ -127,6 +136,9 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	var poolFailure *gkeReconcileFailure
 	if reconcileErr != nil {
 		if !errors.As(reconcileErr, &poolFailure) {
+			// Nothing was created — including the workload namespace provisioned
+			// above, which a rejected request must not leak.
+			s.rollbackNamespace(ctx, ns, nsOwned)
 			return dpstore.Cluster{}, dpstore.Operation{}, reconcileErr
 		}
 		c.Status = gkeErrorState(poolFailure.err, now)

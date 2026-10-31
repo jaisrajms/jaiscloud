@@ -169,6 +169,41 @@ func TestEnsureGKENodePool_VerifiesExistingShape(t *testing.T) {
 	}
 }
 
+// TestEnsureGKENodePool_ComparesScalarsAndAutoscalerEnabled pins the verify
+// contract (DPG54): proto3 scalars have no presence, so a caller's zero value is
+// part of the requested shape and is always compared, and an autoscaled request
+// requires the existing pool's autoscaler to be enabled, not just to carry bounds.
+func TestEnsureGKENodePool_ComparesScalarsAndAutoscalerEnabled(t *testing.T) {
+	a, core := newAdapter(t)
+	createCluster(t, core, containerstore.Cluster{
+		Name: "gke-1",
+		NodePools: []containerstore.NodePool{{
+			Name:        "scalar",
+			Config:      &containerstore.NodeConfig{MachineType: "n1-standard-4", LocalSsdCount: 2, Spot: true},
+			Autoscaling: &containerstore.NodePoolAutoscaling{Enabled: false, MinNodeCount: 1, MaxNodeCount: 5},
+		}},
+	})
+	ctx := context.Background()
+	cluster := dataproccore.GKECluster{Project: "proj", Location: "us-central1", Name: "gke-1"}
+
+	// spot:false (the caller omitted it) is compared against the spot pool.
+	s := spec()
+	s.Name = "scalar"
+	_, err := a.EnsureGKENodePool(ctx, cluster, s)
+	var mismatch *dataproccore.GKENodePoolMismatchError
+	if !errors.As(err, &mismatch) || mismatch.Field != "spot" {
+		t.Fatalf("expected a spot mismatch, got %v", err)
+	}
+
+	// With the scalar shape agreed, a disabled autoscaler is still a mismatch.
+	s.Spot = true
+	s.ServiceAccount = ""
+	_, err = a.EnsureGKENodePool(ctx, cluster, s)
+	if !errors.As(err, &mismatch) || mismatch.Field != "autoscaling" {
+		t.Fatalf("expected an autoscaling mismatch for a disabled autoscaler, got %v", err)
+	}
+}
+
 func TestEnsureGKENodePool_AdoptsWithoutConfig(t *testing.T) {
 	a, core := newAdapter(t)
 	createCluster(t, core, containerstore.Cluster{
