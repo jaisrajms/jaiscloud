@@ -361,10 +361,16 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a
   node pool.", a `nodeConfig` gets the same sentence with cluster.node_config (it wins when both are
   set), and a zero `initialNodeCount` means "no default node pool" and is accepted, all captured
-  against real GKE in [`gke-create-pool-conflict.md`](gke-create-pool-conflict.md). On read, a
+  against real GKE in [`gke-create-pool-conflict.md`](gke-create-pool-conflict.md). A negative
+  cluster-level `initialNodeCount` on a request with no `nodePools` is the 400
+  "Cluster.initial_node_count must be zero or higher."; with pools it is accepted and ignored, as
+  on real GKE. On read, a
   cluster-level `nodeConfig` is rendered from the first node pool's `config` (Discovery: "this field
   will be populated with the node configuration of the first node pool"), so the legacy create shape
-  round-trips; the *defaulted* pool config a create leaves unset is still DPG46. The read carries the
+  round-trips, and every node pool's own `config` is fully populated even when the create named none
+  — `e2-medium`, `COS_CONTAINERD`, a 100 GB `pd-balanced` boot disk, the `default` service account
+  and the six default OAuth scopes, captured in
+  [`gke-node-pool-config-defaults.md`](gke-node-pool-config-defaults.md). The read carries the
   nested response messages real GKE always returns and clients dereference unconditionally:
   `legacyAbac.enabled` (`false` unless `setLegacyAbac` enabled it), `networkConfig.network`/
   `subnetwork` (relative resource names derived from `network`/`subnetwork` whatever spelling the
@@ -471,6 +477,15 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   persisted in `ERROR` with the pool and field in `status.detail`, and the create operation still
   completes with that `ERROR` cluster as its response —
   pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
+  a `virtualClusterConfig` create collects its shape, software-config, staging-bucket, pool-rule and
+  placement failures into one `InvalidArgument` whose message is
+  `Multiple validation errors:\n - …\n - …` (the envelope captured from real GCP in
+  [`dataproc-aggregate-validation-errors.md`](dataproc-aggregate-validation-errors.md); a request
+  with one failure keeps its bare message), while existence/ownership answers (an unknown Metastore
+  service, a namespace already owned on the GKE cluster, a duplicate cluster name) remain their own
+  responses; a `config`-shaped cluster created with neither `networkUri` nor `subnetworkUri` reads
+  back the project's `default` network and no `subnetworkUri`
+  ([`dataproc-gce-network-default.md`](dataproc-gce-network-default.md), DPG47) —
   `kubernetesSoftwareConfig` is optional (a present one must carry a non-empty `componentVersion.SPARK`);
   a virtual cluster is also recreate-only (`clusters.patch` whose `updateMask` applies
   `virtualClusterConfig` or `config` is `InvalidArgument`; an empty mask applies everything supplied,

@@ -89,6 +89,43 @@ func TestClusterJSON_GCEConfigDefaultsMaterialised(t *testing.T) {
 	}
 }
 
+// TestClusterJSON_GCEDefaultNetwork verifies the DPG47 default: when a create
+// names neither networkUri nor subnetworkUri, the read names the project's
+// `default` network, exactly as the real-golden get and a fresh internalIpOnly
+// probe do — and it does not invent a subnetworkUri (docs/gcp/dataproc-gce-network-default.md).
+func TestClusterJSON_GCEDefaultNetwork(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+		want   string
+	}{
+		{name: "neither names a network", config: `{"gceClusterConfig":{"internalIpOnly":true}}`},
+		{name: "external IP cluster", config: `{"gceClusterConfig":{"internalIpOnly":false}}`},
+		{name: "no gceClusterConfig at all", config: `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gcc := child(t, renderedConfig(t, gceCluster(tc.config)), "gceClusterConfig")
+			want := "https://www.googleapis.com/compute/v1/projects/proj/global/networks/default"
+			if gcc["networkUri"] != want {
+				t.Fatalf("networkUri = %v, want %s", gcc["networkUri"], want)
+			}
+			if v, ok := gcc["subnetworkUri"]; ok {
+				t.Fatalf("subnetworkUri must not be materialised, got %v", v)
+			}
+		})
+	}
+
+	// A caller who named a subnetwork keeps exactly that: the default network is
+	// only rendered when the request named neither field.
+	gcc := child(t, renderedConfig(t, gceCluster(`{"gceClusterConfig":{"subnetworkUri":"projects/proj/regions/us-central1/subnetworks/sub0"}}`)), "gceClusterConfig")
+	if _, ok := gcc["networkUri"]; ok {
+		t.Fatalf("networkUri materialised next to a caller's subnetworkUri: %v", gcc)
+	}
+	if want := "https://www.googleapis.com/compute/v1/projects/proj/regions/us-central1/subnetworks/sub0"; gcc["subnetworkUri"] != want {
+		t.Fatalf("subnetworkUri = %v, want %s", gcc["subnetworkUri"], want)
+	}
+}
+
 // TestClusterJSON_GCEConfigKeepsCallerValuesAndCanonicalisesLinks verifies a
 // caller's own values survive — the read defaults only fill what is missing —
 // while the Compute Engine links they did send come back as the absolute

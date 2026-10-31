@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"jaiscloud/internal/gcp/resource"
@@ -201,34 +202,57 @@ type gkeSoftwareConfig struct {
 // properties may only use the spark: or dataproc: prefixes (recorded ambiguity
 // A4: the REST page says spark: only, the GKE guides use dataproc: too).
 func parseKubernetesSoftwareConfig(m map[string]any) (*gkeSoftwareConfig, error) {
+	out, errs := collectKubernetesSoftwareConfig(m)
+	return out, errs.err()
+}
+
+// collectKubernetesSoftwareConfig is parseKubernetesSoftwareConfig with the
+// failures exposed, so an unknown component and a bad property prefix are both
+// reported. Map keys are visited in sorted order so the joined message is
+// deterministic.
+func collectKubernetesSoftwareConfig(m map[string]any) (*gkeSoftwareConfig, validationErrors) {
 	out := &gkeSoftwareConfig{components: map[string]string{}}
+	var errs validationErrors
 	raw, ok := m["componentVersion"].(map[string]any)
 	if !ok || len(raw) == 0 {
-		return nil, invalidArgument("kubernetesSoftwareConfig.componentVersion requires at least one entry")
-	}
-	for key, value := range raw {
-		if key != k8sComponentSpark {
-			return nil, invalidArgument(fmt.Sprintf(
-				"kubernetesSoftwareConfig.componentVersion has an unknown component %q: the only supported component is %s", key, k8sComponentSpark))
+		errs.add(invalidArgument("kubernetesSoftwareConfig.componentVersion requires at least one entry"))
+	} else {
+		keys := make([]string, 0, len(raw))
+		for key := range raw {
+			keys = append(keys, key)
 		}
-		version, _ := value.(string)
-		resolved, err := resolveGKEEngineVersion(version)
-		if err != nil {
-			return nil, err
+		sort.Strings(keys)
+		for _, key := range keys {
+			if key != k8sComponentSpark {
+				errs.add(invalidArgument(fmt.Sprintf(
+					"kubernetesSoftwareConfig.componentVersion has an unknown component %q: the only supported component is %s", key, k8sComponentSpark)))
+				continue
+			}
+			version, _ := raw[key].(string)
+			resolved, err := resolveGKEEngineVersion(version)
+			if err != nil {
+				errs.add(err)
+				continue
+			}
+			out.components[key] = resolved
 		}
-		out.components[key] = resolved
-	}
-	if _, ok := out.components[k8sComponentSpark]; !ok {
-		return nil, invalidArgument("kubernetesSoftwareConfig.componentVersion must contain a " + k8sComponentSpark + " entry")
+		if _, ok := out.components[k8sComponentSpark]; !ok && errs == nil {
+			errs.add(invalidArgument("kubernetesSoftwareConfig.componentVersion must contain a " + k8sComponentSpark + " entry"))
+		}
 	}
 	out.properties = bodyStringMap(m, "properties")
+	propKeys := make([]string, 0, len(out.properties))
 	for key := range out.properties {
+		propKeys = append(propKeys, key)
+	}
+	sort.Strings(propKeys)
+	for _, key := range propKeys {
 		if !strings.HasPrefix(key, "spark:") && !strings.HasPrefix(key, "dataproc:") {
-			return nil, invalidArgument(fmt.Sprintf(
-				"kubernetesSoftwareConfig.properties key %q must use the spark: or dataproc: prefix", key))
+			errs.add(invalidArgument(fmt.Sprintf(
+				"kubernetesSoftwareConfig.properties key %q must use the spark: or dataproc: prefix", key)))
 		}
 	}
-	return out, nil
+	return out, errs
 }
 
 // validateStagingBucketForm enforces that virtualClusterConfig.stagingBucket is a

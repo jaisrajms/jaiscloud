@@ -114,6 +114,70 @@ func TestNetworkConfigPathsDerivesResourceNames(t *testing.T) {
 	}
 }
 
+// TestNodePoolWithReadDefaults pins the node-config defaults real GKE renders for
+// a pool the caller did not shape, captured from a real create without nodeConfig
+// (docs/gcp/gke-node-pool-config-defaults.md, DPG46), and verifies a read never
+// mutates the stored record.
+func TestNodePoolWithReadDefaults(t *testing.T) {
+	stored := &containerstore.NodeConfig{
+		MachineType: "n1-standard-4",
+		OauthScopes: []string{"scope-a"},
+	}
+	p := NodePoolWithReadDefaults(containerstore.NodePool{Name: "default-pool", Config: stored})
+	if p.Config == nil {
+		t.Fatal("defaulted pool has no config")
+	}
+	if p.Config.MachineType != "n1-standard-4" {
+		t.Fatalf("caller machineType overwritten: %q", p.Config.MachineType)
+	}
+	if got := p.Config.OauthScopes; len(got) != 1 || got[0] != "scope-a" {
+		t.Fatalf("caller oauthScopes overwritten: %v", got)
+	}
+	if p.Config.ImageType != DefaultNodeImageType || p.Config.DiskType != DefaultNodeDiskType {
+		t.Fatalf("image/disk defaults = %q/%q", p.Config.ImageType, p.Config.DiskType)
+	}
+	if p.Config.DiskSizeGb != DefaultNodeDiskSizeGb || p.Config.ServiceAccount != DefaultNodeServiceAccount {
+		t.Fatalf("disk size/service account defaults = %d/%q", p.Config.DiskSizeGb, p.Config.ServiceAccount)
+	}
+	// The stored config is untouched (the read copies before filling).
+	if stored.ImageType != "" || stored.DiskSizeGb != 0 || len(stored.OauthScopes) != 1 {
+		t.Fatalf("read mutated the stored config: %+v", stored)
+	}
+
+	// A pool with no config at all gets every default, including the six scopes.
+	empty := NodePoolWithReadDefaults(containerstore.NodePool{Name: "pool-a"})
+	if empty.Config == nil || len(empty.Config.OauthScopes) != len(DefaultNodeOauthScopes) {
+		t.Fatalf("empty pool config = %+v", empty.Config)
+	}
+	if empty.Config.MachineType != DefaultNodeMachineType || empty.Config.DiskSizeGb != DefaultNodeDiskSizeGb {
+		t.Fatalf("empty pool defaults = %+v", empty.Config)
+	}
+}
+
+// TestNodePoolReadsCarryDefaultedConfig verifies both node-pool read paths (get
+// and list) render the defaulted config, not just the cluster read (DPG46).
+func TestNodePoolReadsCarryDefaultedConfig(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{Name: "c1"}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	got, err := s.GetNodePool(ctx, "p", "us-central1", "c1", DefaultNodePoolName)
+	if err != nil {
+		t.Fatalf("GetNodePool: %v", err)
+	}
+	if got.Config == nil || got.Config.MachineType != DefaultNodeMachineType || got.Config.ImageType != DefaultNodeImageType {
+		t.Fatalf("pool read config = %+v", got.Config)
+	}
+	list, err := s.ListNodePools(ctx, "p", "us-central1", "c1")
+	if err != nil {
+		t.Fatalf("ListNodePools: %v", err)
+	}
+	if len(list) != 1 || list[0].Config == nil || list[0].Config.DiskType != DefaultNodeDiskType {
+		t.Fatalf("pool list config = %+v", list)
+	}
+}
+
 // TestWithReadDefaultsLegacyRecordMatchesFresh pins the single normaliser: a
 // record written before the response messages were modelled (a snapshot or a
 // --dsn import answers with the zero values) renders exactly like a fresh

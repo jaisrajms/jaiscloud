@@ -85,7 +85,7 @@ request carries no `nodePools`:
 - `{"cluster":{"name":"dpg41-probe6","initialNodeCount":-1,"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`
   → accepted (`CREATE_CLUSTER`), so the conflict rule is exactly
   `initialNodeCount > 0`, not "field present". The probe cluster was deleted
-  afterwards. The negative-without-pools 400 is **not** modelled yet (DPG49).
+  afterwards. The negative-without-pools 400 is modelled by DPG49.
 
 ## Emulator contract
 
@@ -106,8 +106,9 @@ gets, and the cluster read renders `nodeConfig` from the first pool's `config`
 (Discovery on the response: "this field will be populated with the node
 configuration of the first node pool") — so DPG42's legacy shape round-trips on
 both transports. The defaults GKE fills into an otherwise unset pool config
-(machine type, image type, disk, scopes, service account, ABAC/RBAC booleans) are
-DPG46.
+(machine type, image type, disk, scopes, service account) are rendered on every
+cluster and node-pool read — DPG46, captured in
+[`gke-node-pool-config-defaults.md`](gke-node-pool-config-defaults.md).
 
 Note for those rows: the accepted probe's read echoed a **cluster-level
 `nodeConfig`** (`machineType: e2-medium`, `diskSizeGb: 100`, the six default

@@ -833,6 +833,32 @@ func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) er
 			return fmt.Errorf("create with %s + nodePools: rejected cluster %q was persisted (%v)", tc.label, tc.cluster.GetName(), err)
 		}
 	}
+
+	// DPG49: a negative cluster-level initialNodeCount is the sibling boundary.
+	// Without nodePools it is InvalidArgument; with pools it is accepted and
+	// ignored (captured in docs/gcp/gke-create-pool-conflict.md).
+	negName := cfg.ResourceName("gcpc-gke-neginc")
+	_, err = client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: &containerpb.Cluster{
+		Name:             negName,
+		InitialNodeCount: -1,
+	}})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("create with negative initialNodeCount and no pools: code = %v, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if want := "Cluster.initial_node_count must be zero or higher."; status.Convert(err).Message() != want {
+		return fmt.Errorf("create with negative initialNodeCount and no pools: message = %q, want %q", status.Convert(err).Message(), want)
+	}
+	withPoolsName := cfg.ResourceName("gcpc-gke-neginc-pools")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: &containerpb.Cluster{
+		Name:             withPoolsName,
+		InitialNodeCount: -1,
+		NodePools:        []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	}}); err != nil {
+		return fmt.Errorf("create with negative initialNodeCount and nodePools: %v", err)
+	}
+	if _, err := client.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{Name: containerNameRaw(cfg, withPoolsName)}); err != nil {
+		return fmt.Errorf("delete negative-count cluster: %v", err)
+	}
 	return nil
 }
 
@@ -1025,6 +1051,25 @@ func checkContainerGetCluster(ctx context.Context, cfg Config) error {
 	}
 	if got.GetMonitoringService() != "monitoring.googleapis.com/kubernetes" {
 		return fmt.Errorf("GetCluster monitoringService = %q", got.GetMonitoringService())
+	}
+	// DPG46: a create without nodeConfig reads back the defaulted node config,
+	// on the cluster-level echo and on the generated default-pool (capture:
+	// docs/gcp/gke-node-pool-config-defaults.md).
+	if mt := got.GetNodeConfig().GetMachineType(); mt != "e2-medium" {
+		return fmt.Errorf("GetCluster nodeConfig.machineType = %q, want e2-medium", mt)
+	}
+	pools := got.GetNodePools()
+	if len(pools) != 1 {
+		return fmt.Errorf("GetCluster nodePools = %d, want 1", len(pools))
+	}
+	poolCfg := pools[0].GetConfig()
+	if poolCfg.GetImageType() != "COS_CONTAINERD" || poolCfg.GetDiskType() != "pd-balanced" || poolCfg.GetDiskSizeGb() != 100 {
+		return fmt.Errorf("default-pool config = imageType %q diskType %q diskSizeGb %d, want the GKE defaults",
+			poolCfg.GetImageType(), poolCfg.GetDiskType(), poolCfg.GetDiskSizeGb())
+	}
+	if poolCfg.GetServiceAccount() != "default" || len(poolCfg.GetOauthScopes()) != 6 {
+		return fmt.Errorf("default-pool config serviceAccount/scopes = %q/%d, want default/6",
+			poolCfg.GetServiceAccount(), len(poolCfg.GetOauthScopes()))
 	}
 	return nil
 }

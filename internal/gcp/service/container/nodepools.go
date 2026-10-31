@@ -107,7 +107,9 @@ func (s *Service) GetNodePool(ctx context.Context, project, location, cluster, p
 	}
 	for _, p := range c.NodePools {
 		if p.Name == pool {
-			return p, nil
+			// A pool read carries the same rendered config a cluster read does
+			// (DPG46); the stored record keeps only what was sent.
+			return NodePoolWithReadDefaults(p), nil
 		}
 	}
 	return containerstore.NodePool{}, modelNotFound("node pool not found")
@@ -119,7 +121,11 @@ func (s *Service) ListNodePools(ctx context.Context, project, location, cluster 
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
-	return sortNodePools(c.NodePools), nil
+	pools := sortNodePools(c.NodePools)
+	for i := range pools {
+		pools[i] = NodePoolWithReadDefaults(pools[i])
+	}
+	return pools, nil
 }
 
 // DeleteNodePool removes a node pool and returns the DELETE_NODE_POOL operation.

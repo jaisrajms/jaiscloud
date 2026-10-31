@@ -38,6 +38,10 @@ const DefaultNodePoolName = "default-pool"
 const (
 	nodeConfigPoolConflict       = "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool."
 	initialNodeCountPoolConflict = "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool."
+	// negativeInitialNodeCount is the verbatim real GKE 400 for a negative
+	// cluster-level initialNodeCount on a request that carries no nodePools
+	// (docs/gcp/gke-create-pool-conflict.md).
+	negativeInitialNodeCount = "Cluster.initial_node_count must be zero or higher."
 )
 
 // validClusterName is GKE's cluster-id grammar.
@@ -76,6 +80,12 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	}
 	if !validClusterName.MatchString(c.Name) {
 		return containerstore.Operation{}, invalidArgument("invalid cluster name: " + c.Name)
+	}
+	// Real GKE rejects a negative cluster-level initialNodeCount only when the
+	// request carries no nodePools; with pools the value is ignored (captured in
+	// docs/gcp/gke-create-pool-conflict.md, DPG49).
+	if len(c.NodePools) == 0 && c.InitialNodeCount < 0 {
+		return containerstore.Operation{}, invalidArgument(negativeInitialNodeCount)
 	}
 	// Discovery on Cluster.nodePools: "This field should not be set if
 	// node_config or initial_node_count are specified", and on nodeConfig /

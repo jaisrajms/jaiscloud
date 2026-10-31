@@ -26,7 +26,9 @@ import (
 // `networkUri`, `subnetworkUri` and the instance groups' `machineTypeUri`) are
 // canonicalised to the same absolute self-link form at render time: a real get
 // answers a link even when the create named the resource by short name, and the
-// stored config keeps whatever the caller sent.
+// stored config keeps whatever the caller sent. When the create names neither
+// `networkUri` nor `subnetworkUri`, the read also names the project's `default`
+// network, which is the network real Dataproc uses in that case (DPG47).
 const (
 	// defaultGCEImageVersion is the image the emulator reports when the caller
 	// does not pin softwareConfig.imageVersion. Dataproc moves the "latest
@@ -111,6 +113,15 @@ func canonicaliseGCELinks(gcc map[string]any, c dpstore.Cluster, zone string) {
 			}
 			gcc["subnetworkUri"] = resource.ComputeLinkFor(raw, c.ProjectID, "compute-subnetwork", region+"/"+name)
 		}
+	}
+	// Discovery on GceClusterConfig.networkUri: "If neither network_uri nor
+	// subnetwork_uri is specified, the 'default' network of the project is used."
+	// A real get names that network even when the create named neither, but it
+	// does not materialise a subnetworkUri in the same case: the subnet is
+	// derived from the network, not echoed (captured with both internalIpOnly
+	// values in docs/gcp/dataproc-gce-network-default.md, DPG47).
+	if strings.TrimSpace(bodyString(gcc, "networkUri")) == "" && strings.TrimSpace(bodyString(gcc, "subnetworkUri")) == "" {
+		gcc["networkUri"] = resource.ComputeLink(c.ProjectID, "compute-network", "default")
 	}
 }
 
