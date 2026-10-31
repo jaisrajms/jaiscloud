@@ -2490,12 +2490,14 @@ This section is for people changing the emulator itself.
 | Path | Role |
 |---|---|
 | `sdk/` | Public contract (nested stdlib-only module `github.com/jaisrajms/jaiscloud/sdk`): `Manifest`, `Route`, `Request`, `Result`, `Mux`, the HTTP server and the wire shapes |
-| `internal/pluginhost/` | Loads plugins, turns routes into links on the provider registry, retries and fails closed, projects params to JSON and back, serves the store callbacks |
+| `internal/pluginhost/` | Loads plugins, turns routes into links on the provider registry, retries and fails closed, projects params to JSON and back, serves the store callbacks. `loader_so.go` (cgo, linux/darwin) opens a `.so`; `loader_stub.go` is every other build; `local.go` and `links.go` (`callLocal`) call an in-process plugin; `buildinfo.go` describes the build a plugin must match |
 | `internal/aws/seams/`, `internal/gcp/seams/` | Service-to-service calls made as ordinary registry clients (origin `internal`) |
 | `internal/gcp/grpcplugin/` | GCP gRPC interceptor: maps an RPC to its REST twin's registry key |
 | `internal/gcp/pluginchain/` | The shadow registry shared by the gRPC interceptor and the typed console |
 | `internal/gcp/ui/routed.go`, `ui/typed*.go` | Console calls routed through the registry or the plugin chain |
-| `tests/plugins/` | End-to-end tests against the real binaries (tag `plugin_e2e`) |
+| `sdk/examples/inprocess/` | The in-process example (AWS and GCP), also what `tests/plugins/inprocess_e2e_test.go` builds |
+| `Dockerfile.plugins` | The glibc/cgo image that loads `.so` plugins, with the example plugin built by the same toolchain |
+| `tests/plugins/` | End-to-end tests against the real binaries (tag `plugin_e2e`; the in-process ones also need cgo on linux or darwin) |
 
 ### The rule to keep
 
@@ -2513,11 +2515,37 @@ For GCP, also keep these in step when you add or change a service:
   registry nor listed as an emulator-only helper.
 - A console service on typed structs needs a `ui/typed_<service>.go` forwarder and a passthrough test.
 
+### In-process plugins
+
+Go loads a `.so` only into a binary built by the same toolchain, with the same flags and the same source
+for every shared package. The emulator and the plugins are therefore built from `PLUGIN_FLAGS` in the
+Makefile (`-trimpath`, `CGO_ENABLED=1`): `make build-plugins` and `make plugin` / `make plugin-example`.
+Change the flags in one place only.
+
+How a call reaches a `.so`: `pluginhost.Load` opens it (`openSO`), checks its manifest like any other, and
+adopts it as a `plugin` with `local` set. The links are the same ones an HTTP plugin gets; `plugin.call`
+branches to `callLocal`, which passes the raw `nr.Params` (no JSON projection), a `localStore` and, for a
+`replace`, a `Next` that runs the rest of the chain on the same goroutine. Keep these rules when you touch it:
+
+- The Store goes through `storeOp`, shared with the HTTP callbacks, so both enforce the same limits and
+  the in-flight gate. An in-process plugin has no callback token; `authenticate` skips it.
+- A panic on the request goroutine is recovered in `call`. Calls made outside a request (lifecycle,
+  reset, shutdown) go through `guardLocal`.
+- A plugin that uses `Next` or streams lists `sdk.CapInProcess` in `Requires`; an HTTP plugin is not
+  offered it.
+- Two things a plugin must match are not obvious: it has to be a module of its own that requires the SDK
+  (built inside the SDK module, the SDK package differs), and `-trimpath` must agree. `-tags` need not.
+  `TestInProcessRefusesAPluginBuiltInsideTheSDKModule` and `TestInProcessRefusesAPluginFromAnotherBuild`
+  pin both.
+- The release archives are built without cgo, so `loader_stub.go` answers a `so:` spec with a message
+  that names `make build-plugins`.
+
 ### Running the plugin tests
 
 ```bash
 make test-sdk
-make test-plugins        # builds the binaries; about a minute
+make test-plugins        # builds the binaries; several minutes (includes the cgo builds for in-process)
+go test -tags plugin_e2e -run InProcess ./tests/plugins/    # only the in-process end-to-end tests
 go test -race ./internal/pluginhost/ ./internal/gcp/grpcplugin/ ./internal/gcp/seams/ ./internal/gcp/ui/
 ```
 
@@ -2527,10 +2555,11 @@ microsecond clock (`TestMain` in `typed_test.go`).
 
 ### Known limitations
 
-The same list as [docs/PLUGINS.md#limitations](docs/PLUGINS.md#limitations). In short: out-of-process only,
-JSON only (streams are observable, not replaceable), fail-closed with no fallback to the built-in, startup
-load only, and on GCP no interception of RPCs without a REST twin or of the generic long-running
-operation RPCs. Design record and decisions D1 to D33 are kept with the plugin design notes.
+The same list as [docs/PLUGINS.md#limitations](docs/PLUGINS.md#limitations). In short: out-of-process
+plugins see JSON only (streams are observable, not replaceable) and fail closed with no fallback to the
+built-in; in-process plugins need a cgo build and a matching toolchain and share the process; plugins load
+at startup only; and on GCP there is no interception of RPCs without a REST twin or of the generic
+long-running operation RPCs. Design record and decisions D1 to D33 are kept with the plugin design notes.
 
 ---
 

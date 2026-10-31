@@ -172,6 +172,38 @@ Only plugins with a route for that service are told, and the hook returns after 
 A plugin does not need these events to do background work in production: it is a process, so it
 can run its own timers (read the time from `Req.Now` when you handle a call).
 
+## In-process plugins
+
+The same `Mux` code can be built as a Go plugin (`-buildmode=plugin`) and loaded into the emulator with
+`--plugin so:<path>`. In-process, `c.Next` runs the rest of the chain (so a `Replace` can change a request, call
+the built-in and change its answer), `c.ResourceID` formats an ARN or resource name, `Params` and `Data`
+hold the emulator's own values (`[]byte`, `io.Reader`) instead of JSON, and a plugin may implement
+`sdk.Stateful` to keep state in memory that reset, export/import and snapshots include. A plugin that uses
+these lists the capability, so loading it as an HTTP sidecar fails at startup:
+
+```go
+func New() sdk.Plugin {
+    m := sdk.NewMux("acme-redact", "0.1.0")
+    m.Require(sdk.CapInProcess)
+    m.Replace("aws", "sqs", "SendMessage", func(ctx context.Context, c *sdk.Call) (sdk.Result, error) {
+        // copy c.Req.Params, change it, then:
+        resp, perr := c.Next(ctx, &sdk.Request{Params: changed})
+        if perr != nil {
+            return sdk.Result{Err: perr}, nil
+        }
+        return sdk.Result{Resp: resp}, nil
+    })
+    return m
+}
+
+func main() {}
+```
+
+It needs a plugin-capable emulator (`make build-plugins`, linux or darwin, cgo) and a plugin built to match:
+the same Go release, `-trimpath`, `CGO_ENABLED=1`, and the same SDK source, in a module of its own that
+requires the SDK. See [examples/inprocess](examples/inprocess/main.go) (AWS and GCP) and
+[docs/PLUGINS.md](../docs/PLUGINS.md#in-process-plugins) for the build, the container image and the rules.
+
 ## State
 
 `c.Store` keeps rows per `(kind, id)`; every row has a `Version`. An `id` is at most 1 KiB with no NUL
@@ -223,7 +255,7 @@ sdk.ListenAndServe("0.0.0.0:9100", m, sdk.WithSecret(os.Getenv("PLUGIN_SECRET"))
 jaiscloud-aws start --plugin http://plugin:9100 --plugin-secret "$PLUGIN_SECRET"
 ```
 
-## Limits (out-of-process)
+## Limits (out-of-process; an in-process plugin has no JSON or size limit)
 
 * Everything crosses as JSON. Raw bytes (S3 object bodies, Lambda payloads) arrive as
   `{"$base64": "..."}` inside the params, under keys that start with `_` (the emulator's own channel
@@ -242,6 +274,5 @@ jaiscloud-aws start --plugin http://plugin:9100 --plugin-secret "$PLUGIN_SECRET"
 
 ## Status
 
-Experimental (ABI 1). Out-of-process plugins for `jaiscloud-aws` and `jaiscloud-gcp` (GCP REST and gRPC). New
-services, REST path routes, a raw-response escape hatch and in-process (`.so`) plugins are planned, not
-implemented. See [docs/PLUGINS.md](../docs/PLUGINS.md) for the architecture and the full list of limits.
+Experimental (ABI 1). Out-of-process and in-process (`.so`) plugins for `jaiscloud-aws` and `jaiscloud-gcp` (GCP REST
+and gRPC). New services, REST path routes and a raw-response escape hatch are planned, not implemented. See [docs/PLUGINS.md](../docs/PLUGINS.md) for the architecture and the full list of limits.

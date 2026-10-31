@@ -8,17 +8,24 @@ the emulator. A plugin can:
 - keep its own state in jaiscloud's stores, so `reset`, `export` / `import`, snapshots and the frozen
   clock (`POST /_jaiscloud/clock`) cover it with no plugin code.
 
-A plugin is a small HTTP/JSON server you run next to the emulator. It is written against the Go SDK
-([sdk/README.md](../sdk/README.md)), or in any language that speaks the wire format
-([sdk/wire.go](../sdk/wire.go)).
+A plugin comes in two forms, with the same contract (`Handle`, the same modes, the same state):
+
+- **Out-of-process**: a small HTTP/JSON server you run next to the emulator, written against the Go SDK
+  ([sdk/README.md](../sdk/README.md)) or in any language that speaks the wire format
+  ([sdk/wire.go](../sdk/wire.go)). It works with every release.
+- **In-process**: Go code compiled to a shared library and loaded into the emulator's own process. It
+  can wrap the built-in, answer with streams and keep state in memory. It needs a plugin-capable build
+  of the emulator. See [In-process plugins](#in-process-plugins).
 
 With no plugin configured nothing changes: every plugin code path is dormant, and a run without
 plugins behaves as it did before plugins existed.
 
-- [Quick start](#quick-start)
+- [Quick start](#quick-start-out-of-process)
+- [Choosing a layer](#choosing-a-layer)
 - [How it works](#how-it-works)
 - [Every caller goes through the plugin](#every-caller-goes-through-the-plugin)
 - [GCP: REST, gRPC and the console](#gcp-rest-grpc-and-the-console)
+- [In-process plugins](#in-process-plugins)
 - [Configuration](#configuration)
 - [State](#state)
 - [Seeing what is loaded](#seeing-what-is-loaded)
@@ -28,7 +35,7 @@ plugins behaves as it did before plugins existed.
 
 ---
 
-## Quick start
+## Quick start (out-of-process)
 
 ```bash
 mkdir acme-audit && cd acme-audit
@@ -69,6 +76,18 @@ Complete examples: [sdk/examples/audit](../sdk/examples/audit/main.go) (AWS) and
 
 Until an `sdk/v0.x.y` tag is published, `go get` cannot resolve the module. Use a checkout instead:
 `go mod edit -replace github.com/jaisrajms/jaiscloud/sdk=/path/to/jaiscloud/sdk`.
+
+---
+
+## Choosing a layer
+
+| You want to | Use |
+|---|---|
+| Audit, rewrite or block calls; add behaviour; any language; run it anywhere the emulator runs | **Out-of-process** (`--plugin http://...`) |
+| Wrap the built-in and change its answer; answer an S3 read with a stream; avoid the round trip; keep large state in memory | **In-process** (`--plugin so:<path>`) |
+
+Both can be loaded together and share one precedence order. In-process needs a cgo build of the emulator
+on linux or darwin and a plugin built to match it; out-of-process needs nothing special.
 
 ---
 
@@ -198,13 +217,254 @@ seams still reach its built-in provider, so dependent services keep working.
 
 ---
 
+## In-process plugins
+
+An in-process plugin is Go code compiled to a shared library (`.so`) and loaded **into the emulator's
+own process** with `--plugin so:<path>`. It uses the same SDK and the same `Handle` contract as an
+HTTP plugin, and it can do what a separate process cannot:
+
+| | In-process (`.so`) | Out-of-process (HTTP) |
+|---|---|---|
+| Wrap the built-in | `c.Next(ctx, req)` runs the rest of the chain, so a `replace` can change the request, call the built-in and change its answer | Not available; use `before` / `after` / `NotHandled` |
+| Streams and bytes | Params and responses hold the emulator's own values (`[]byte`, `io.Reader`), so it can read an S3 upload and **replace a `GetObject` answer** | JSON only; a stream can be observed but not replaced |
+| Speed | A function call | An HTTP round trip with JSON encoding |
+| Own state in memory | `sdk.Stateful`: reset, export/import and snapshots include it | Must use `c.Store` |
+| `ResourceID` | `c.ResourceID(type, name)` formats an ARN or resource name like the emulator does | Format your own |
+| Platforms | linux and darwin, **built with cgo** | Everything, any language |
+| Isolation | Shares the emulator's process: a panic in a goroutine the plugin starts, a deadlock or `os.Exit` takes the emulator down | A separate process |
+| Setup | A plugin-capable emulator build and a matching plugin build | `go run .` |
+
+Choose in-process when you need to wrap the built-in, answer with a stream, or avoid the round trip.
+Otherwise an HTTP plugin is simpler and safer.
+
+```mermaid
+flowchart LR
+    subgraph P[jaiscloud process]
+        R{{Registry}} --> L[plugin link]
+        L -->|"Handle(call)"| SO[your plugin .so]
+        SO -->|"c.Next(req)"| BI[built-in]
+        SO -->|"c.Store"| ST[(resource store)]
+        BI --> L
+    end
+    C[client] --> R
+```
+
+### What you need
+
+Go loads a plugin only into a binary that was built by the **same Go toolchain, with the same flags, and
+the same source for every package they share**. The released archives are static builds without cgo, so
+**they cannot load a `.so`**. In-process plugins need two things built to match:
+
+1. **A plugin-capable emulator**: `CGO_ENABLED=1` on linux or darwin, built with `-trimpath`.
+   `make build-plugins` (or `build-plugins-aws` / `build-plugins-gcp`) produces
+   `jaiscloud-aws-plugins` and `jaiscloud-gcp-plugins`, or use the container image (below).
+2. **Your plugin, built to match**: the same Go version, `-trimpath`, `CGO_ENABLED=1`, and the same
+   SDK source, as **a module of its own that requires the SDK**.
+
+`jaiscloud-<cloud> version` prints what the emulator was built with:
+
+```text
+$ ./jaiscloud-aws-plugins version
+jaiscloud-aws dev (commit: none, built: unknown)
+in-process plugins: supported, built with go1.27.1 darwin/amd64, cgo=true, tags=none, trimpath=true, sdk=replaced by ./sdk
+```
+
+`GET /_jaiscloud/doctor` shows the same under `pluginBuild`.
+
+### Quick start: the example plugin
+
+[sdk/examples/inprocess](../sdk/examples/inprocess/main.go) is one plugin that serves both clouds. On
+AWS it redacts a secret from an SQS message and lets SQS store the result (`Next`), answers some S3 reads
+with a stream it makes up, adds an `InProcessCount` action, and keeps its call counts in memory
+(`Stateful`). On GCP it stamps every Pub/Sub message with an attribute, over REST and over gRPC.
+
+From a checkout:
+
+```bash
+make build-plugins-aws                       # the plugin-capable emulator
+make plugin-example OUT=inprocess.so         # the example, built to match
+./jaiscloud-aws-plugins start --plugin so:$PWD/inprocess.so
+```
+
+Try it (the SQS calls use the AWS CLI; any SDK works):
+
+```bash
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1
+EP=http://localhost:4566
+
+Q=$(aws --endpoint-url $EP sqs create-queue --queue-name q1 --query QueueUrl --output text)
+aws --endpoint-url $EP sqs send-message --queue-url $Q --message-body 'login password=hunter2 ok'
+aws --endpoint-url $EP sqs receive-message --queue-url $Q --query 'Messages[0].Body'
+# "login password=*** ok"   <- the plugin redacted it, then the built-in stored it
+
+aws --endpoint-url $EP s3 cp s3://any-bucket/inprocess/a.txt -
+# served by the in-process plugin: inprocess/a.txt   <- a stream the plugin answered with
+
+curl -s -X POST $EP/ -H 'X-Amz-Target: AmazonSQS.InProcessCount' \
+  -H 'Content-Type: application/x-amz-json-1.0' -d '{}'
+# {"SendMessageCalls":1}                             <- state the plugin keeps in memory
+```
+
+The in-memory count follows `reset`, `export` and `import`:
+
+```bash
+aws ... # (as above)
+curl -s $EP/_jaiscloud/export -o snap.tar    # includes the plugin's own state
+curl -s -X POST $EP/_jaiscloud/reset         # the count goes back to 0
+curl -s -X POST --data-binary @snap.tar "$EP/_jaiscloud/import?reset_first=true"   # and back to 1
+```
+
+For GCP, build `make build-plugins-gcp`, start `./jaiscloud-gcp-plugins start --plugin so:$PWD/inprocess.so`
+(add `--transports rest,grpc` for gRPC), publish to a topic over REST or with a gRPC client, and pull:
+each message carries the attribute `via=inprocess-demo`. The same `.so` works for both because each
+emulator applies only the routes for its own cloud.
+
+### Container image
+
+`Dockerfile.plugins` builds the emulator and the example plugin with the same toolchain on glibc
+(`gcr.io/distroless/base-debian12`; the release image is static and cannot load a `.so`):
+
+```bash
+docker build -f Dockerfile.plugins --build-arg CLOUD=aws --build-arg PORT=4566 -t jaiscloud-aws-plugins .
+docker run --rm -p 4566:4566 jaiscloud-aws-plugins start --plugin so:/plugins/inprocess.so
+```
+
+To build **your own** plugin with exactly the image's toolchain, use the builder stage:
+
+```bash
+docker build -f Dockerfile.plugins --target builder -t jaiscloud-plugin-builder .
+docker run --rm -v "$PWD":/plugin -w /plugin jaiscloud-plugin-builder \
+    go build -buildmode=plugin -trimpath -o my-plugin.so .
+docker run --rm -p 4566:4566 -v "$PWD":/plugins jaiscloud-aws-plugins start --plugin so:/plugins/my-plugin.so
+```
+
+The image is built for the machine's own architecture (cgo does not cross-compile without a C toolchain
+for the target).
+
+### Writing an in-process plugin
+
+A plugin is `package main` with an exported `New` and an empty `main`:
+
+```go
+package main
+
+import (
+	"context"
+
+	"github.com/jaisrajms/jaiscloud/sdk"
+)
+
+func New() sdk.Plugin {
+	m := sdk.NewMux("acme-redact", "0.1.0")
+	m.Require(sdk.CapInProcess) // uses Next: refuse to load as an HTTP sidecar
+
+	m.Replace("aws", "sqs", "SendMessage", func(ctx context.Context, c *sdk.Call) (sdk.Result, error) {
+		params := map[string]any{}
+		for k, v := range c.Req.Params { // copy: do not edit the request in place
+			params[k] = v
+		}
+		params["MessageBody"] = redact(params["MessageBody"].(string))
+
+		resp, perr := c.Next(ctx, &sdk.Request{Params: params}) // the built-in, with your params
+		if perr != nil {
+			return sdk.Result{Err: perr}, nil
+		}
+		return sdk.Result{Resp: resp}, nil
+	})
+	return m
+}
+
+func main() {} // required by -buildmode=plugin, never runs
+```
+
+The plugin is **a module of its own** that requires the SDK:
+
+```text
+module example.com/acme-redact
+
+go 1.26.8
+
+require github.com/jaisrajms/jaiscloud/sdk v0.1.0
+```
+
+Build and run it:
+
+```bash
+make plugin SRC=./acme-redact OUT=acme-redact.so     # from a jaiscloud checkout: applies the right flags
+# or, anywhere, with the toolchain `version` printed:
+CGO_ENABLED=1 go build -buildmode=plugin -trimpath -o acme-redact.so .
+
+./jaiscloud-aws-plugins start --plugin so:$PWD/acme-redact.so
+```
+
+What an in-process `Call` gives you:
+
+| Field | Meaning |
+|---|---|
+| `c.Req.Params`, `c.Resp.Data` | The emulator's own values: `[]byte`, `io.Reader` streams, typed maps. A copy of the map, so adding a key is safe; do not mutate nested values in place |
+| `c.Next(ctx, req)` | Replace only. Runs the rest of the chain with `req.Params` (nil keeps the current ones) and returns its outcome. Call it once, on the goroutine `Handle` runs on. An error from the built-in comes back as `*sdk.Error` you can return as is. Do not return `NotHandled` after calling it: that would run the built-in a second time |
+| `c.ResourceID(type, name)` | Formats an ARN or resource name like the emulator does. Replace only |
+| `c.Store` | The same `Get` / `Put` / `PutIf` / `Delete` / `List` as for an HTTP plugin, without the round trip. Usable only while the call is running |
+| A returned `before` patch | Set keys are used as they are (no JSON round trip); a `null` value removes the key |
+| A returned stream or bytes | Used as they are. For S3 `GetObject` return `_stream` (an `io.ReadCloser`), `_passthrough: true`, `_content_type`, `ContentLength`, `ETag` and `LastModified`, as the example does |
+
+**State outside `c.Store`.** A plugin that keeps data in memory implements `sdk.Stateful`
+(`Reset`, `Snapshot`, `Restore`, `IsEmpty`). The emulator then calls `Reset` on
+`POST /_jaiscloud/reset` and includes the plugin's snapshot in export/import and named snapshots, under
+the name `plugin:<plugin name>`. See the example.
+
+**`OnLifecycle`** (`reset` / `restore`) and the test-hook `tick:<service>` events work the same as for
+an HTTP plugin. `Shutdown` is called when the emulator stops, last loaded first, after the workers that
+may still call plugins have stopped.
+
+### What must match, and what happens when it does not
+
+| Must match the emulator | Notes |
+|---|---|
+| Go version | Printed by `version`. The same release, not just the same minor |
+| `-trimpath` | Both with it or both without. The `build-plugins` and `plugin` targets use it |
+| `CGO_ENABLED=1` | A plugin cannot be built without it |
+| SDK source | The same files. A published tag works when its source equals the emulator's. The plugin must **require** the SDK; built inside the SDK module itself the SDK package counts as different and the plugin is refused |
+
+Build tags (`-tags ui`) do not have to match for a plugin that imports only the standard library and
+the SDK.
+
+A plugin that does not match is refused at startup, naming this emulator's build, instead of loading
+and misbehaving:
+
+```text
+Error: plugin "so:/work/acme-redact.so": opening /work/acme-redact.so: plugin.Open("/work/acme-redact"):
+plugin was built with a different version of package internal/goarch
+This emulator is built with go1.27.1 darwin/amd64, cgo=true, tags=none, trimpath=true, sdk=replaced by ./sdk.
+A plugin must be built with the same Go toolchain, -trimpath, CGO_ENABLED=1 and the same SDK source ...
+```
+
+(Go's own text names a package, here `internal/goarch` for a `-trimpath` difference. The second line is the
+cause to look at.) A build without cgo says it cannot load in-process plugins and points at
+`make build-plugins`. A plugin that lists `sdk.CapInProcess` in `Requires` and is given to `--plugin
+http://...` is refused with a message saying to load it as `so:<path>`.
+
+### Behaviour to know
+
+- A panic on the request goroutine, in the plugin or in the built-in it called through `Next`, becomes
+  `500 PluginPanic` naming the plugin, and the emulator keeps serving. A panic in a goroutine the plugin
+  started, `os.Exit` or a deadlock is not recoverable and stops the emulator.
+- There is no timeout: `--plugin-timeout`, `--plugin-wait`, `--plugin-retry`, `--plugin-secret` and
+  `--plugin-callback-url` do not apply, because there is no network. A plugin that never returns blocks
+  its request. Honour `ctx`.
+- The plugin runs on the request's goroutine, so it is called concurrently. Guard shared memory.
+- Plugins cannot be unloaded or reloaded: restart the emulator to change one.
+- `go test -race` does not instrument a `.so` well (a Go limitation).
+
+---
+
 ## Configuration
 
 Flags exist on both binaries. Each has an environment variable.
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--plugin` | `JAISCLOUD_PLUGINS` | — | Plugin to load, `http://host:port`. Repeatable (comma-separated in the env var). Order is precedence order |
+| `--plugin` | `JAISCLOUD_PLUGINS` | — | Plugin to load: `http://host:port` (out-of-process) or `so:<path>` (in-process, needs a plugin-capable build). Repeatable (comma-separated in the env var). Order is precedence order |
 | `--plugin-timeout` | `JAISCLOUD_PLUGIN_TIMEOUT` | `10s` | Timeout of each HTTP attempt to a plugin |
 | `--plugin-wait` | `JAISCLOUD_PLUGIN_WAIT` | `2m` | How long to keep retrying an unreachable plugin at startup before failing |
 | `--plugin-retry` | `JAISCLOUD_PLUGIN_RETRY` | `30s` | How long to retry an unreachable plugin during a request before answering 503 |
@@ -212,7 +472,7 @@ Flags exist on both binaries. Each has an environment variable.
 | `--plugin-callback-url` | `JAISCLOUD_PLUGIN_CALLBACK_URL` | `http://127.0.0.1:<port>` | URL a plugin uses to reach the emulator's store. Set it when the plugin runs in another container |
 
 Nothing loads unless `--plugin` (or the env var) names it. There is no directory scan and no default
-plugin path.
+plugin path. The timeout, wait, retry, secret and callback options apply to out-of-process plugins only.
 
 **Security.** Loading a plugin is trust: there is no sandbox and no signature check. By default the
 SDK server binds loopback only and refuses browser requests (anything with an `Origin` header) and
@@ -256,8 +516,12 @@ sequenceDiagram
 ## Seeing what is loaded
 
 - **Startup log.** One `plugin loaded` line per plugin.
-- **Doctor.** `GET /_jaiscloud/doctor` has a `plugins` section (name, version, transport, URL, ABI,
-  routes). It is absent when no plugin is loaded.
+- **Doctor.** `GET /_jaiscloud/doctor` has a `plugins` section (name, version, transport `http` or
+  `in-process`, URL or file, ABI, routes, whether it keeps state of its own) and a `pluginBuild` section
+  (Go version, cgo, `-trimpath`, SDK) that an in-process plugin must match. Both are absent when no plugin
+  is loaded.
+- **Version.** `jaiscloud-<cloud> version` prints whether this build can load in-process plugins and what
+  it was built with.
 - **Metrics.** With `--metrics`, `jaiscloud_plugin_calls_total{plugin,phase,outcome}` and
   `jaiscloud_plugin_call_seconds{plugin,phase}` appear. They are registered only when a plugin is
   loaded, and no existing metric changes.
@@ -272,10 +536,10 @@ sequenceDiagram
 
 | Limit | Detail |
 |---|---|
-| Out-of-process only | A plugin is an HTTP/JSON process. In-process Go (`.so`) plugins, new services, new REST path routes and a raw-response escape hatch are designed but not implemented. The SDK is experimental (ABI 1) |
-| JSON only | Everything crosses as JSON. Bytes arrive as `{"$base64": "…"}` under `_` keys. A value that cannot be JSON (a stream, such as a built-in `GetObject` body) is never shown to the plugin and is always preserved, so such a response can be **observed** with `after` but not replaced (`501 PluginUnsupportedPayload`). A wire `GetObject` cannot be replaced by an out-of-process plugin |
-| Payload size | A request or response over 32 MiB once encoded is refused with `PluginUnsupportedPayload` before it reaches the plugin; an S3 `PutObject` is therefore limited to about 24 MiB on a route with a plugin |
-| Fail-closed | A plugin that is down for longer than `--plugin-retry` makes the keys it covers fail with `503 PluginUnavailable`. The built-in is never used as a fallback |
+| Not built yet | New services, new REST path routes and a raw-response escape hatch are designed but not implemented. The SDK is experimental (ABI 1) |
+| JSON only (out-of-process) | Everything crosses as JSON. Bytes arrive as `{"$base64": "…"}` under `_` keys. A value that cannot be JSON (a stream, such as a built-in `GetObject` body) is never shown to the plugin and is always preserved, so such a response can be **observed** with `after` but not replaced (`501 PluginUnsupportedPayload`). A wire `GetObject` cannot be replaced by an out-of-process plugin; an [in-process plugin](#in-process-plugins) can |
+| Payload size (out-of-process) | A request or response over 32 MiB once encoded is refused with `PluginUnsupportedPayload` before it reaches the plugin; an S3 `PutObject` is therefore limited to about 24 MiB on a route with a plugin |
+| Fail-closed | An out-of-process plugin that is down for longer than `--plugin-retry` makes the keys it covers fail with `503 PluginUnavailable`. The built-in is never used as a fallback |
 | Startup only | No hot reload or unload; restart the emulator to change plugins |
 | Trust | No sandbox and no signature check. A plugin can see and change every call on its routes |
 | Clock | `POST /_jaiscloud/reset` and `/import` put the clock back to real time |
@@ -284,6 +548,20 @@ sequenceDiagram
 | Emulator-only helpers | Console helpers that are not API actions (for example SQS "peek messages", the GCP "observed projects" list, the Functions delivery log) read the built-in's own state |
 | Flows that do not exist | A flow the emulator does not implement (for example EMR on EC2 log forwarding) is never seen by a plugin |
 | Before patches are shallow | `Result.Params` replaces whole top-level keys. To change one field of a nested object (REST's `body`, a map of labels), return a copy of the object with that field edited |
+
+### In-process plugins
+
+| Limit | Detail |
+|---|---|
+| Needs a special build | Released archives and images are static (no cgo) and cannot load a `.so`. Use `make build-plugins` or `Dockerfile.plugins`. Release archives for this variant are not published yet |
+| linux and darwin only | Go's `plugin` package does not exist on Windows or without cgo |
+| A matching toolchain | The plugin must be built with the same Go release, `-trimpath`, `CGO_ENABLED=1` and SDK source as the emulator; a mismatch is refused at startup. The plugin must be a module of its own that requires the SDK |
+| Shares the process | A panic in a goroutine the plugin starts, `os.Exit` or a deadlock stops the emulator. Only a panic on the request goroutine is contained (`500 PluginPanic`) |
+| No timeout | A call that never returns blocks its request. `--plugin-timeout` and the retry options do not apply |
+| Loaded for good | A `.so` cannot be unloaded or replaced while the emulator runs. Restart to change it |
+| `Next` once | Call `Next` at most once per call, on the goroutine `Handle` runs on |
+| Data race checking | `go test -race` does not instrument a `.so` well |
+| Release distribution | An emulator build with cgo for each platform is needed per release; none is published yet |
 
 ### GCP
 
@@ -305,6 +583,10 @@ sequenceDiagram
 
 | Symptom | Cause and fix |
 |---|---|
+| `plugin was built with a different version of package ...` at startup | An in-process plugin built with another Go release, without `-trimpath`, or against other SDK source. The second line of the error is this emulator's build; rebuild the plugin with `make plugin` or the printed settings |
+| `... The SDK package differs` | The plugin was built inside the SDK module. Make it a module of its own that requires the SDK |
+| `this build cannot load in-process plugins` | The emulator has no cgo (a release archive or image). Use `make build-plugins-<cloud>` or `Dockerfile.plugins` |
+| `plugin requires "in-process"` | The plugin calls `Next` or returns streams, so it was written for `so:<path>`; it was given as `http://...` |
 | Emulator will not start, error names a plugin address | The plugin was not reachable within `--plugin-wait`. Start it first, or raise the wait |
 | `503 PluginUnavailable` / `PluginTimeout` | The plugin is down or slower than `--plugin-timeout` / `--plugin-retry`. The built-in is not used as a fallback |
 | `500 PluginPanic` naming a plugin | A panic in the emulator's plugin seam. A panic inside your own process is yours to recover (the SDK server does and answers 500, reported as `PluginProtocolError`) |
@@ -327,7 +609,12 @@ so messages return after their visibility timeout.
 make test-sdk        # SDK unit tests
 make test-plugins    # SDK tests + end-to-end against the real binaries (tag: plugin_e2e)
 go test -race ./internal/pluginhost/ ./internal/gcp/grpcplugin/ ./internal/gcp/seams/
+go test -tags plugin_e2e -run InProcess ./tests/plugins/   # only the in-process tests (cgo, linux or darwin)
 ```
 
 End-to-end tests are in [tests/plugins](../tests/plugins): AWS before / after / replace, internal flows,
 and for GCP the REST and gRPC shapes under one key, streaming, seams, and a matrix over services.
+The in-process tests (`inprocess_e2e_test.go`) build the plugin-capable emulator and the example
+`.so` in a module of its own, then check AWS (wrap with `Next`, a stream answer, state through
+reset/export/import) and GCP (Pub/Sub publish over REST and gRPC), and that a plugin from another
+build, one built inside the SDK module, and a build without cgo are each refused with a clear message.
