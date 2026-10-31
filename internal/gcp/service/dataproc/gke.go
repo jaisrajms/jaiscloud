@@ -177,26 +177,46 @@ type gkeNodePoolConfig struct {
 // the one-DEFAULT/one-pool-per-role constraints, the single-zone rule, the
 // Spot/preemptible restrictions and the autoscaler bounds. Unknown sub-fields are
 // accepted and preserved verbatim. clusterName supplies the namespace default.
+//
+// Failures are collected and rendered together (see validationErrors), so a
+// request with several problems answers all of them. A single problem keeps its
+// original message byte for byte.
 func validateVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gkeVirtualCluster, error) {
+	v, errs := collectVirtualClusterConfig(raw, clusterName)
+	if err := errs.err(); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// collectVirtualClusterConfig is validateVirtualClusterConfig with the collected
+// failures exposed, so a create can fold them into one response together with
+// the placement and metastore checks.
+func collectVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gkeVirtualCluster, validationErrors) {
+	var errs validationErrors
 	if len(raw) == 0 {
-		return nil, nil
+		return nil, errs
 	}
 	var vcc map[string]any
 	if err := json.Unmarshal(raw, &vcc); err != nil {
-		return nil, invalidArgument("virtualClusterConfig must be an object")
+		errs.add(invalidArgument("virtualClusterConfig must be an object"))
+		return nil, errs
 	}
 	kcc, ok := vcc["kubernetesClusterConfig"].(map[string]any)
 	if !ok {
-		return nil, invalidArgument("virtualClusterConfig requires kubernetesClusterConfig")
+		errs.add(invalidArgument("virtualClusterConfig requires kubernetesClusterConfig"))
+		return nil, errs
 	}
 	gke, ok := kcc["gkeClusterConfig"].(map[string]any)
 	if !ok {
-		return nil, invalidArgument("kubernetesClusterConfig requires gkeClusterConfig")
+		errs.add(invalidArgument("kubernetesClusterConfig requires gkeClusterConfig"))
+		return nil, errs
 	}
 	target, _ := gke["gkeClusterTarget"].(string)
 	pools, _ := gke["nodePoolTarget"].([]any)
 	if target == "" && len(pools) == 0 {
-		return nil, invalidArgument("gkeClusterConfig requires gkeClusterTarget or nodePoolTarget")
+		errs.add(invalidArgument("gkeClusterConfig requires gkeClusterTarget or nodePoolTarget"))
+		return nil, errs
 	}
 	out := &gkeVirtualCluster{namespace: bodyString(kcc, "kubernetesNamespace")}
 	if out.namespace == "" {
@@ -204,36 +224,41 @@ func validateVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gke
 		out.namespace = clusterName
 	}
 	if software, ok := kcc["kubernetesSoftwareConfig"].(map[string]any); ok {
-		parsed, err := parseKubernetesSoftwareConfig(software)
-		if err != nil {
-			return nil, err
-		}
+		parsed, swErrs := collectKubernetesSoftwareConfig(software)
 		out.software = parsed
+		errs.addAll(swErrs)
 	}
-	if err := validateStagingBucketForm(bodyString(vcc, "stagingBucket")); err != nil {
-		return nil, err
-	}
+	errs.add(validateStagingBucketForm(bodyString(vcc, "stagingBucket")))
+	// A malformed target must not turn every pool into a containment error: the
+	// containment check is meaningful only when the target parses.
+	poolTarget := target
 	if target != "" {
 		project, location, id, ok := splitGKEClusterName(target)
 		if !ok {
-			return nil, invalidArgument("gkeClusterTarget must be projects/{project}/locations/{location}/clusters/{cluster}: " + target)
+			errs.add(invalidArgument("gkeClusterTarget must be projects/{project}/locations/{location}/clusters/{cluster}: " + target))
+			poolTarget = ""
+		} else {
+			out.target, out.targetProject, out.targetLocation = id, project, location
 		}
-		out.target = id
-		out.targetProject = project
-		out.targetLocation = location
 	}
+	poolParseFailed := false
 	for i, rawTarget := range pools {
 		m, ok := rawTarget.(map[string]any)
 		if !ok {
-			return nil, invalidArgument(fmt.Sprintf("nodePoolTarget[%d] must be an object", i))
+			errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget[%d] must be an object", i)))
+			poolParseFailed = true
+			continue
 		}
-		pt, err := parseGKEPoolTarget(m, target, i)
-		if err != nil {
-			return nil, err
+		pt, ptErrs := parseGKEPoolTarget(m, poolTarget, i)
+		if len(ptErrs) > 0 {
+			poolParseFailed = true
 		}
-		out.poolTargets = append(out.poolTargets, pt)
+		errs.addAll(ptErrs)
+		if pt.name != "" {
+			out.poolTargets = append(out.poolTargets, pt)
+		}
 	}
-	if len(out.poolTargets) == 0 {
+	if len(pools) == 0 {
 		// "If a GkeNodePoolTarget is not specified, Dataproc constructs a
 		// DEFAULT GkeNodePoolTarget."
 		out.poolTargets = []gkePoolTarget{{name: defaultGKEPoolName, roles: []string{"DEFAULT"}}}
@@ -242,22 +267,27 @@ func validateVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gke
 	// its target through the pool resource names, so use them rather than
 	// accepting the placement and then silently reconciling nothing. All pools
 	// must name one cluster, or there is nothing to resolve.
-	if target == "" {
+	if target == "" && len(out.poolTargets) > 0 {
 		out.target = out.poolTargets[0].cluster
 		out.targetProject = out.poolTargets[0].project
 		out.targetLocation = out.poolTargets[0].location
 		for _, p := range out.poolTargets[1:] {
 			if p.project != out.targetProject || p.location != out.targetLocation || p.cluster != out.target {
-				return nil, invalidArgument(fmt.Sprintf(
+				errs.add(invalidArgument(fmt.Sprintf(
 					"nodePoolTarget entries must all name pools in one GKE cluster: %s and %s differ",
-					poolResourceName(out.poolTargets[0]), poolResourceName(p)))
+					poolResourceName(out.poolTargets[0]), poolResourceName(p))))
+				break
 			}
 		}
 	}
-	if err := validateGKEPoolTargets(out.poolTargets); err != nil {
-		return nil, err
+	// The cross-pool rules are only meaningful when every target parsed: a
+	// target dropped for a malformed name must not make the remaining set look
+	// like it is missing a DEFAULT role, which would add a second, spurious line
+	// to what is really one problem.
+	if !poolParseFailed {
+		errs.addAll(collectGKEPoolTargets(out.poolTargets))
 	}
-	return out, nil
+	return out, errs
 }
 
 // poolResourceName renders a pool target's canonical resource name (for errors).
@@ -278,12 +308,18 @@ func gkeNodePoolNameErr(raw string) error {
 }
 
 // parseGKEPoolTarget normalises one GkeNodePoolTarget and attaches its parsed
-// nodePoolConfig (nil when the caller sent none).
-func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, error) {
+// nodePoolConfig (nil when the caller sent none). A target that cannot be
+// identified (a missing or malformed nodePool name, or a pool outside the named
+// cluster) is reported once and skipped: its roles and config cannot be
+// meaningfully attributed without a name. Otherwise the role and node-config
+// rules are collected onto the same target.
+func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, validationErrors) {
 	var pt gkePoolTarget
+	var errs validationErrors
 	rawName, _ := m["nodePool"].(string)
 	if rawName == "" {
-		return pt, invalidArgument(fmt.Sprintf("nodePoolTarget[%d] requires nodePool", i))
+		errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget[%d] requires nodePool", i)))
+		return pt, errs
 	}
 	// Discovery requires the full resource name ("Format:
 	// 'projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{node_pool}'")
@@ -291,43 +327,47 @@ func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, 
 	// (DPG44).
 	project, location, cluster, name, ok := splitGKENodePoolName(rawName)
 	if !ok {
-		return pt, gkeNodePoolNameErr(rawName)
+		errs.add(gkeNodePoolNameErr(rawName))
+		return pt, errs
 	}
 	// A pool outside the target cluster cannot be provisioned or verified.
 	if target != "" {
 		tp, tl, tc, _ := splitGKEClusterName(target)
 		if project != tp || location != tl || cluster != tc {
-			return pt, invalidArgument(fmt.Sprintf("nodePool %s is not in gkeClusterTarget %s", rawName, target))
+			errs.add(invalidArgument(fmt.Sprintf("nodePool %s is not in gkeClusterTarget %s", rawName, target)))
+			return pt, errs
 		}
 	}
 	pt.name = name
 	pt.project, pt.location, pt.cluster = project, location, cluster
 	rawRoles, _ := m["roles"].([]any)
 	if len(rawRoles) == 0 {
-		return pt, invalidArgument(fmt.Sprintf("nodePoolTarget %s requires roles", name))
+		errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s requires roles", name)))
 	}
 	for _, r := range rawRoles {
 		role, _ := r.(string)
 		if !gkeRoles[role] {
-			return pt, invalidArgument(fmt.Sprintf("nodePoolTarget %s has an invalid role %q", name, role))
+			errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s has an invalid role %q", name, role)))
+			continue
 		}
 		pt.roles = append(pt.roles, role)
 	}
 	if cfg, ok := m["nodePoolConfig"].(map[string]any); ok {
-		parsed, err := parseGKENodePoolConfig(cfg, name)
-		if err != nil {
-			return pt, err
-		}
+		parsed, cfgErrs := parseGKENodePoolConfig(cfg, name)
 		pt.config = parsed
+		errs.addAll(cfgErrs)
 	}
-	return pt, nil
+	return pt, errs
 }
 
 // parseGKENodePoolConfig parses GkeNodePoolConfig and enforces the scalar rules
 // (autoscaler bounds). The accelerators/bootDiskKmsKey/gpuPartitionSize fields
 // are accepted and dropped: the emulated pool has no GPU or CMEK model (DPG25).
-func parseGKENodePoolConfig(m map[string]any, pool string) (*gkeNodePoolConfig, error) {
+// Bounds faults are collected so both a non-positive maximum and a min/max
+// inversion are reported together.
+func parseGKENodePoolConfig(m map[string]any, pool string) (*gkeNodePoolConfig, validationErrors) {
 	cfg := &gkeNodePoolConfig{locations: bodyStringSlice(m, "locations")}
+	var errs validationErrors
 	if inner, ok := m["config"].(map[string]any); ok {
 		cfg.machineType = bodyString(inner, "machineType")
 		cfg.localSsdCount = int32(bodyInt(inner, "localSsdCount"))
@@ -343,31 +383,41 @@ func parseGKENodePoolConfig(m map[string]any, pool string) (*gkeNodePoolConfig, 
 		}
 		// The API documents max > 0 and 0 <= min <= max.
 		if a.MaxNodeCount <= 0 {
-			return nil, invalidArgument(fmt.Sprintf("nodePoolTarget %s: autoscaling.maxNodeCount must be > 0", pool))
+			errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s: autoscaling.maxNodeCount must be > 0", pool)))
 		}
 		if a.MinNodeCount < 0 || a.MinNodeCount > a.MaxNodeCount {
-			return nil, invalidArgument(fmt.Sprintf("nodePoolTarget %s: autoscaling must satisfy 0 <= minNodeCount <= maxNodeCount", pool))
+			errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s: autoscaling must satisfy 0 <= minNodeCount <= maxNodeCount", pool)))
 		}
 		cfg.autoscaling = a
 	}
-	return cfg, nil
+	return cfg, errs
 }
 
 // validateGKEPoolTargets enforces the cross-pool role rules: at least one
 // DEFAULT, each role on at most one pool, and no Spot/preemptible control plane.
 func validateGKEPoolTargets(pools []gkePoolTarget) error {
+	return collectGKEPoolTargets(pools).err()
+}
+
+// collectGKEPoolTargets is validateGKEPoolTargets with the failures exposed.
+func collectGKEPoolTargets(pools []gkePoolTarget) validationErrors {
+	var errs validationErrors
 	roleOwner := map[string]string{}
 	names := map[string]bool{}
 	hasDefault := false
 	hasController := false
 	for _, p := range pools {
 		if names[p.name] {
-			return invalidArgument("duplicate nodePoolTarget " + p.name)
+			// The first occurrence already registered this pool's roles; a
+			// second one is reported once and not re-examined.
+			errs.add(invalidArgument("duplicate nodePoolTarget " + p.name))
+			continue
 		}
 		names[p.name] = true
 		for _, role := range p.roles {
 			if owner, ok := roleOwner[role]; ok {
-				return invalidArgument(fmt.Sprintf("role %s is assigned to both %s and %s: each role can be given to only one nodePoolTarget", role, owner, p.name))
+				errs.add(invalidArgument(fmt.Sprintf("role %s is assigned to both %s and %s: each role can be given to only one nodePoolTarget", role, owner, p.name)))
+				continue
 			}
 			roleOwner[role] = p.name
 			switch role {
@@ -379,7 +429,7 @@ func validateGKEPoolTargets(pools []gkePoolTarget) error {
 		}
 	}
 	if !hasDefault {
-		return invalidArgument("at least one nodePoolTarget must have the DEFAULT role")
+		errs.add(invalidArgument("at least one nodePoolTarget must have the DEFAULT role"))
 	}
 	for _, p := range pools {
 		if p.config == nil || (!p.config.spot && !p.config.preemptible) {
@@ -389,26 +439,33 @@ func validateGKEPoolTargets(pools []gkePoolTarget) error {
 		// CONTROLLER pool, and not on DEFAULT when it assumes CONTROLLER because
 		// no CONTROLLER pool exists.
 		if roleOf(p.roles, "CONTROLLER") || (roleOf(p.roles, "DEFAULT") && !hasController) {
-			return invalidArgument(fmt.Sprintf("nodePoolTarget %s: spot/preemptible nodes cannot be used in a CONTROLLER node pool or in the DEFAULT node pool when no CONTROLLER role is assigned", p.name))
+			errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s: spot/preemptible nodes cannot be used in a CONTROLLER node pool or in the DEFAULT node pool when no CONTROLLER role is assigned", p.name)))
 		}
 	}
-	return nil
+	return errs
 }
 
 // validateGKEPlacement enforces the rules that depend on the virtual cluster's
 // own project and region: the target must live in that project and region, and
 // every specified pool zone must be the same zone inside the region.
 func validateGKEPlacement(v *gkeVirtualCluster, project, region string) error {
+	return collectGKEPlacement(v, project, region).err()
+}
+
+// collectGKEPlacement is validateGKEPlacement with the failures exposed, so a
+// wrong project and a wrong region are reported together.
+func collectGKEPlacement(v *gkeVirtualCluster, project, region string) validationErrors {
+	var errs validationErrors
 	if v == nil || v.target == "" {
-		return nil
+		return errs
 	}
 	if v.targetProject != project {
-		return invalidArgument(fmt.Sprintf("gkeClusterTarget %s is in project %s, but the Dataproc cluster is in %s: they must be in the same project", v.target, v.targetProject, project))
+		errs.add(invalidArgument(fmt.Sprintf("gkeClusterTarget %s is in project %s, but the Dataproc cluster is in %s: they must be in the same project", v.target, v.targetProject, project)))
 	}
 	// The GKE cluster may be regional or zonal, but must be in the Dataproc
 	// cluster's region.
 	if v.targetLocation != region && !zoneInRegion(v.targetLocation, region) {
-		return invalidArgument(fmt.Sprintf("gkeClusterTarget %s is in %s, but the Dataproc cluster is in %s: they must be in the same region", v.target, v.targetLocation, region))
+		errs.add(invalidArgument(fmt.Sprintf("gkeClusterTarget %s is in %s, but the Dataproc cluster is in %s: they must be in the same region", v.target, v.targetLocation, region)))
 	}
 	var zone string
 	for _, p := range v.poolTargets {
@@ -417,18 +474,19 @@ func validateGKEPlacement(v *gkeVirtualCluster, project, region string) error {
 		}
 		for _, z := range p.config.locations {
 			if !zoneInRegion(z, region) {
-				return invalidArgument(fmt.Sprintf("nodePoolTarget %s: location %s is not a zone in region %s", p.name, z, region))
+				errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s: location %s is not a zone in region %s", p.name, z, region)))
+				continue
 			}
 			if zone == "" {
 				zone = z
 				continue
 			}
 			if z != zone {
-				return invalidArgument(fmt.Sprintf("nodePoolTarget %s: all node pools must be located in the same zone, got %s and %s", p.name, zone, z))
+				errs.add(invalidArgument(fmt.Sprintf("nodePoolTarget %s: all node pools must be located in the same zone, got %s and %s", p.name, zone, z)))
 			}
 		}
 	}
-	return nil
+	return errs
 }
 
 // zoneInRegion reports whether zone is a zone of region (us-central1-a →

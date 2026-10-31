@@ -66,14 +66,17 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if (len(in.Config) > 0) == (len(in.VirtualClusterConfig) > 0) {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 	}
-	gkeVCC, err := validateVirtualClusterConfig(in.VirtualClusterConfig, name)
-	if err != nil {
-		return dpstore.Cluster{}, dpstore.Operation{}, err
-	}
-	if err := validateGKEPlacement(gkeVCC, project, region); err != nil {
-		return dpstore.Cluster{}, dpstore.Operation{}, err
-	}
-	if err := validateMetastoreConfigShape(in); err != nil {
+	// Collect the request's InvalidArgument failures so one response lists every
+	// problem, the way real Dataproc answers a create (DPG45). The checks run in
+	// a fixed order — virtualClusterConfig, placement, metastore shape — so the
+	// joined message is deterministic, and a request with one problem keeps its
+	// original message.
+	var errs validationErrors
+	gkeVCC, vccErrs := collectVirtualClusterConfig(in.VirtualClusterConfig, name)
+	errs.addAll(vccErrs)
+	errs.addAll(collectGKEPlacement(gkeVCC, project, region))
+	errs.add(validateMetastoreConfigShape(in))
+	if err := errs.err(); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	if err := s.validateClusterMetastore(ctx, project, region, in); err != nil {
