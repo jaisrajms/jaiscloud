@@ -8,7 +8,6 @@ import {
   CardActionArea,
   CardContent,
   Chip,
-  Divider,
   IconButton,
   Skeleton,
   Stack,
@@ -30,14 +29,12 @@ import { serviceAccent } from './icons/serviceIcons'
 import { ProjectPickerDialog } from './chrome/ProjectPicker'
 import {
   buildNavGroups,
-  projectServiceChips,
   relativeProjectAge,
   type NavEntry,
 } from './chrome/navModel'
 import { rememberRecentService, useRecentServices } from './chrome/recentServices'
 import { useProjectDiscovery } from './chrome/useProjectDiscovery'
-import { useRegisterProject } from './chrome/useRegisterProject'
-import { activeBannerProject, activityRows } from './home/activity'
+import { activeBannerProject } from './home/activity'
 import { resourceCount, summarySourcesFor } from './home/resourceSummary'
 
 const DISMISSED_BANNER_KEY = 'jaiscloud-activity-banner-dismissed'
@@ -116,7 +113,6 @@ export function GcpHome() {
   const recent = useRecentServices()
   const [projectOpen, setProjectOpen] = useState(false)
   const { data: discovery } = useProjectDiscovery(5_000)
-  const { register, registering, errors } = useRegisterProject()
   const [dismissedBanner, setDismissedBanner] = useState<string>(() => {
     try {
       return sessionStorage.getItem(DISMISSED_BANNER_KEY) ?? ''
@@ -128,18 +124,6 @@ export function GcpHome() {
   const currentProject = accountId || meta?.accountId || ''
   const project = currentProject || '—'
   const observedProjects = useMemo(() => discovery?.projects ?? [], [discovery])
-  const activity = useMemo(
-    () => activityRows(observedProjects, currentProject),
-    [observedProjects, currentProject],
-  )
-  const hasObserved = useMemo(
-    () => observedProjects.some((candidate) => candidate.kind === 'observed'),
-    [observedProjects],
-  )
-  const serviceLabel = useMemo(() => {
-    const labels = new Map(services.map((service) => [service.id, service.label]))
-    return (id: string) => labels.get(id) ?? id
-  }, [services])
 
   const groups = useMemo(
     () => buildNavGroups(services, favorites, recent, ''),
@@ -278,80 +262,10 @@ export function GcpHome() {
             </Stack>
           }
         >
-          Workload activity in <strong>{banner.id}</strong> ({relativeProjectAge(banner.lastSeen)}
-          {banner.services?.length
-            ? `: ${projectServiceChips(banner.services, serviceLabel, 2).join(', ')}`
-            : ''}
-          ) — its resources may be there instead of in {currentProject || 'this project'}.
+          Workload activity in <strong>{banner.id}</strong> ({relativeProjectAge(banner.lastSeen)})
+          {' — its resources may be there instead of in '}
+          {currentProject || 'this project'}.
         </Alert>
-      )}
-
-      {hasObserved && (
-        <Card variant="outlined" sx={{ mt: 3 }}>
-          <CardContent>
-            <Stack
-              direction="row"
-              sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
-            >
-              <Typography variant="h6">Projects with activity</Typography>
-              <Button size="small" onClick={() => setProjectOpen(true)}>
-                All projects
-              </Button>
-            </Stack>
-            {activity.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                No traffic in other projects yet. Workloads that write to a different project
-                show up here within a few seconds.
-              </Typography>
-            ) : (
-              <Stack divider={<Divider />} spacing={1}>
-                {activity.map((row) => (
-                  <Box key={row.id}>
-                    <Stack
-                      direction={{ xs: 'column', sm: 'row' }}
-                      spacing={1}
-                      sx={{ alignItems: { sm: 'center' } }}
-                    >
-                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                        <Typography variant="subtitle2" noWrap>
-                          {row.id}
-                        </Typography>
-                        <Stack
-                          direction="row"
-                          spacing={0.5}
-                          sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}
-                        >
-                          <Typography variant="caption" color="text.secondary">
-                            {relativeProjectAge(row.lastSeen)}
-                          </Typography>
-                          {projectServiceChips(row.services, serviceLabel).map((service) => (
-                            <Chip key={service} size="small" label={service} variant="outlined" />
-                          ))}
-                          <Chip size="small" label="not registered" variant="outlined" />
-                        </Stack>
-                      </Box>
-                      <Button size="small" onClick={() => setAccountId(row.id)}>
-                        View
-                      </Button>
-                      <Button
-                        size="small"
-                        disabled={registering === row.id}
-                        onClick={() => void register(row.id)}
-                      >
-                        Register
-                      </Button>
-                    </Stack>
-                    {errors[row.id] && (
-                      <Typography variant="caption" color="error">
-                        {errors[row.id]}
-                      </Typography>
-                    )}
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </CardContent>
-        </Card>
       )}
 
       {pinned.length > 0 && (
