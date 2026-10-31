@@ -665,6 +665,13 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 	}
 	reads := append(s.readSetFor(transaction), implicitReads...)
 	if err := s.store.Commit(ctx, reads, ws); err != nil {
+		if errors.Is(err, firestorestore.ErrAborted) {
+			// A conflict finishes the transaction: real Firestore retries the
+			// caller's function with a NEW transaction id, so the old handle is
+			// dead. Keeping it active let a reused token re-validate and re-abort
+			// (DGT5); drop it so the reuse reports "no longer active".
+			s.clearReadSet(transaction)
+		}
 		return time.Time{}, nil, mapCommitError(err)
 	}
 	s.clearReadSet(transaction)

@@ -49,8 +49,9 @@ builds:
       - -tags=ui
     ldflags:
       - -s -w
-      # cmd/jaiscloud-gcp declares only `version` today (no commit/date vars).
       - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
 
 # ── FUTURE BUILDS (not active) ─────────────────────────────────────────────
 # Uncomment and add the matching archives/nfpms/brews/scoops entries when
@@ -229,6 +230,9 @@ dockers_v2:
     build_args:
       BINARY: jaiscloud-gcp
       PORT: "8080"
+      # The gRPC listener is a fixed second port; EXPOSE documents it so
+      # `docker run -P` publishes it (REL6).
+      EXTRA_PORTS: "8081"
     labels:
       "org.opencontainers.image.title": "jaiscloud-gcp"
       "org.opencontainers.image.version": "{{ .Version }}"

@@ -187,6 +187,13 @@ import (
 
 var version = "dev"
 
+// commit and date are stamped by the linker (-X main.commit/-X main.date) the
+// same way as the AWS binary; a bare `go build` reports the placeholders.
+var (
+	commit = "none"
+	date   = "unknown"
+)
+
 const defaultHost = "http://localhost:8080"
 
 func main() {
@@ -1852,7 +1859,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("jaiscloud-gcp %s\n", version)
+			fmt.Printf("jaiscloud-gcp %s (commit: %s, built: %s)\n", version, commit, date)
 		},
 	}
 }

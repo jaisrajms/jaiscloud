@@ -76,6 +76,14 @@ func TestTransactionMissingReadAbortsOnConcurrentCreate(t *testing.T) {
 	} else {
 		assertProviderError(t, err, 409, "ABORTED")
 	}
+
+	// DGT5: the conflict terminates the transaction, so reusing its id is no
+	// longer an active transaction (real clients retry with a fresh one).
+	if _, err := p.Commit(ctx, commitNR); err == nil {
+		t.Fatal("expected a reused aborted transaction id to be rejected")
+	} else {
+		assertProviderError(t, err, 400, "")
+	}
 }
 
 // TestTransactionExistencePreconditionAbortsBeforeConflict pins the store
