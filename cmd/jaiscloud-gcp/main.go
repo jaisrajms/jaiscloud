@@ -54,6 +54,7 @@ import (
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/gcp/runexec"
+	"jaiscloud/internal/gcp/seams"
 	containercore "jaiscloud/internal/gcp/service/container"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
@@ -316,14 +317,21 @@ func startCmd() *cobra.Command {
 			// adapter below, so both transports mint identical credentials.
 			iamCredentialsCore := iamcredentialscore.New(stores.resources)
 			iamCredentialsP := restiamcredentials.NewProvider(iamCredentialsCore, cfg.ProjectID)
+			// The registry is the only way into a service: calls between services go
+			// through it (internal/gcp/seams), so a plugin that overrides a key is
+			// used by them too. It is filled in below, before anything dispatches.
+			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
+			reg := provider.NewRegistry()
+			gcpSeams := seams.New(reg, cloudAdapter, cfg.Clock, cfg.Port, cfg.Region)
+			pubsubSeam := gcpSeams.PubSub()
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			// GCS object notifications fan out through Pub/Sub; the storage
 			// provider only sees the interface, so it never imports the Pub/Sub
 			// provider (no provider→provider dependency).
-			storageP.SetEventPublisher(pubsubP)
+			storageP.SetEventPublisher(pubsubSeam)
 			// Secret Manager's control-plane event notifications (DC64) ride the
 			// same Pub/Sub publish path, for both transports.
-			secretP.SetEventPublisher(pubsubP)
+			secretP.SetEventPublisher(pubsubSeam)
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			// Cloud Datastore's transport-neutral core is shared by the REST
@@ -438,7 +446,7 @@ func startCmd() *cobra.Command {
 				// Dead-letter resolution/forwarding (FD9) goes through the Pub/Sub
 				// provider; the Eventarc trigger provisioner is wired below once
 				// the Eventarc core exists.
-				functionsCore.SetSubscriptions(pubsubP)
+				functionsCore.SetSubscriptions(pubsubSeam)
 			}
 
 			workflowsEngine := workflowengine.New()
@@ -484,7 +492,7 @@ func startCmd() *cobra.Command {
 					// provider/pubsub). Empty topic (the default) disables
 					// publishing; a cluster may override per-cluster with the
 					// jaiscloud-events-topic label.
-					dataproccore.WithEventPublisher(pubsubP),
+					dataproccore.WithEventPublisher(pubsubSeam),
 					dataproccore.WithEventsTopic(os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")),
 					// Surface job/cluster transitions in the console's live
 					// status stream (shared event bus).
@@ -644,7 +652,7 @@ func startCmd() *cobra.Command {
 				// The platform-provisioned backing Pub/Sub subscription of a
 				// trigger (its dead-letter surface) is created by the Pub/Sub
 				// provider (FD9).
-				eventarcCore.SetSubscriptionProvisioner(pubsubP)
+				eventarcCore.SetSubscriptionProvisioner(pubsubSeam)
 			}
 			// Eventarc validates destination.cloudFunction against the functions
 			// core, and the functions delivery engine consults Eventarc triggers
@@ -791,7 +799,7 @@ func startCmd() *cobra.Command {
 			// httpTarget/pubsubTarget jobs on the emulator clock; pubsubTarget
 			// delivery reuses the Pub/Sub provider's fan-out path.
 			schedulerCore := schedulercore.NewService(stores.scheduler)
-			schedulerEngine := schedulercore.NewEngine(stores.scheduler, schedulercore.NewRunner(schedulerPubSubPublisher{provider: pubsubP}))
+			schedulerEngine := schedulercore.NewEngine(stores.scheduler, schedulercore.NewRunner(schedulerPubSubPublisher{provider: pubsubSeam}))
 			schedulerCore.SetEngine(schedulerEngine)
 			schedulerP := restscheduler.NewProvider(schedulerCore)
 
@@ -845,8 +853,6 @@ func startCmd() *cobra.Command {
 			// Register only services enabled on at least one transport, so a
 			// per-service `none` override removes both its REST and gRPC surface
 			// (an unregistered provider falls through to a 404/unknown-action).
-			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
-			reg := provider.NewRegistry()
 			for _, sp := range []struct {
 				name string
 				p    provider.Provider
@@ -922,7 +928,7 @@ func startCmd() *cobra.Command {
 			firestoreAdminGRPC := grpcfirestoreadmin.NewService(firestoreP.Service, cfg.ProjectID)
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
-			secretGRPC.SetEventPublisher(pubsubP)
+			secretGRPC.SetEventPublisher(pubsubSeam)
 			kmsGRPC := grpckms.NewService(kmsCore, cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			loggingConfigGRPC := grpclogging.NewConfigService(loggingCore, cfg.ProjectID)
@@ -932,7 +938,7 @@ func startCmd() *cobra.Command {
 			// conditions, opens/closes incidents, and publishes notifications to
 			// pubsub notification channels via the emulator's Pub/Sub store.
 			monitoringEval := grpcmonitoring.NewEvaluator(stores.monitoring, pubsubNotificationPublisher{
-				provider: pubsubP,
+				provider: pubsubSeam,
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
@@ -1671,7 +1677,7 @@ func bindFlags(cmd *cobra.Command) {
 // by topics.publish, so every pull subscription, push endpoint, and function
 // trigger on the topic receives a copy (mirrors AWS CloudWatch alarm -> SNS).
 type pubsubNotificationPublisher struct {
-	provider *pubsubprovider.Provider
+	provider *seams.PubSub
 }
 
 // Publish writes the notification payload to the topic named by topic (a full
@@ -1686,7 +1692,7 @@ func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, 
 // the Cloud Scheduler engine's Publisher interface. The topic is the full
 // resource name carried by a pubsubTarget.
 type schedulerPubSubPublisher struct {
-	provider *pubsubprovider.Provider
+	provider *seams.PubSub
 }
 
 // Publish writes a message to topic (projects/{p}/topics/{t}) with the same

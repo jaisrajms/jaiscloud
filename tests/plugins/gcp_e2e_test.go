@@ -321,3 +321,83 @@ func TestGCPGRPCStreamingIsCheckedAtOpen(t *testing.T) {
 		t.Fatalf("plugin saw %v", seen)
 	}
 }
+
+// A Cloud Storage notification reaches Pub/Sub through the registry, so a plugin
+// that overrides Pub/Sub keys sees it: the topic check when the notification
+// config is created, and the publish when an object is written.
+func TestGCPInternalPubSubCallsGoThroughThePlugin(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	replacePublish := true
+	m := sdk.NewMux("gcp-internal", "0.1.0")
+	m.After("gcp", "pubsub", "TopicGet", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		mu.Lock()
+		seen = append(seen, "TopicGet:"+c.Req.Origin)
+		mu.Unlock()
+		return sdk.Result{}, nil
+	})
+	m.Replace("gcp", "pubsub", "TopicPublish", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, "TopicPublish:"+c.Req.Origin)
+		if !replacePublish {
+			return sdk.Result{NotHandled: true}, nil
+		}
+		return sdk.Result{Resp: &sdk.Response{Data: map[string]any{"messageIds": []any{"from-plugin"}}}}, nil
+	})
+	s := gcpSidecar(t, m)
+	e := startGCP(t, "--plugin", s.URL)
+
+	must := func(code int, out map[string]any, what string) {
+		t.Helper()
+		if code != 200 {
+			t.Fatalf("%s: %d %v\n%s", what, code, out, e.logs())
+		}
+	}
+	code, out := e.gcpREST(t, http.MethodPut, "/v1/projects/p1/topics/n1", map[string]any{})
+	must(code, out, "create topic")
+	code, out = e.gcpREST(t, http.MethodPut, "/v1/projects/p1/subscriptions/s1", map[string]any{"topic": "projects/p1/topics/n1"})
+	must(code, out, "create subscription")
+	code, out = e.gcpREST(t, http.MethodPost, "/storage/v1/b?project=p1", map[string]any{"name": "b1"})
+	must(code, out, "create bucket")
+	code, out = e.gcpREST(t, http.MethodPost, "/storage/v1/b/b1/notificationConfigs", map[string]any{
+		"topic": "//pubsub.googleapis.com/projects/p1/topics/n1", "payload_format": "JSON_API_V1", "event_types": []string{"OBJECT_FINALIZE"}})
+	must(code, out, "create notification config")
+
+	upload := func(name string) {
+		t.Helper()
+		resp, err := http.Post(e.base+"/upload/storage/v1/b/b1/o?uploadType=media&name="+name, "text/plain", bytes.NewReader([]byte("hi")))
+		if err != nil {
+			e.fatal(t, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("upload: %d\n%s", resp.StatusCode, e.logs())
+		}
+	}
+	pull := func() int {
+		code, out := e.gcpREST(t, http.MethodPost, "/v1/projects/p1/subscriptions/s1:pull", map[string]any{"maxMessages": 10, "returnImmediately": true})
+		must(code, out, "pull")
+		msgs, _ := out["receivedMessages"].([]any)
+		return len(msgs)
+	}
+
+	upload("o1") // the plugin replaces the publish: the built-in never stores it
+	if n := pull(); n != 0 {
+		t.Fatalf("a replaced internal publish must not reach the subscription, got %d messages", n)
+	}
+	mu.Lock()
+	replacePublish = false
+	mu.Unlock()
+	upload("o2") // the plugin declines: the built-in publishes it
+	if n := pull(); n != 1 {
+		t.Fatalf("a declined internal publish must reach the subscription, got %d messages", n)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := "[TopicGet:internal TopicPublish:internal TopicPublish:internal]"
+	if fmt.Sprint(seen) != want {
+		t.Fatalf("plugin saw %v, want %s", seen, want)
+	}
+}

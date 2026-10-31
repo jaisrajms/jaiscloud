@@ -137,8 +137,10 @@ type Call struct {
 //	Replace: Resp or Err answers; NotHandled falls through to the built-in.
 //	Before:  Params (when non-nil) is a PATCH over the request's params: every
 //	         key you return is set, every key you omit is left as it was, and a
-//	         key whose value is null is removed. Resp/Err short-circuit and the
-//	         built-in is not run.
+//	         key whose value is null is removed. The patch is shallow: a key you
+//	         return replaces that whole value, so to change one field of a nested
+//	         object (REST's "body", a map of labels) return a copy with the field
+//	         edited. Resp/Err short-circuit and the built-in is not run.
 //	After:   Resp/Err override the core's outcome; all nil passes it through.
 type Result struct {
 	NotHandled bool           `json:"notHandled,omitempty"`
