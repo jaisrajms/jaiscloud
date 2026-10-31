@@ -151,6 +151,41 @@ func TestCreateClusterRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
 	}
 }
 
+// TestCreateClusterNegativeInitialNodeCount pins the DPG49 boundary captured
+// against real GKE: a negative cluster-level initialNodeCount is a 400 when the
+// request carries no nodePools, but is accepted (and ignored) alongside them.
+func TestCreateClusterNegativeInitialNodeCount(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	_, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{Name: "c1", InitialNodeCount: -1})
+	providerErr(t, err, "InvalidArgument")
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.Message != negativeInitialNodeCount {
+		t.Fatalf("message = %v, want %q", err, negativeInitialNodeCount)
+	}
+	if _, err := s.GetCluster(ctx, "p", "us-central1", "c1"); err == nil {
+		t.Fatal("rejected create must persist no cluster")
+	}
+
+	// With pools the count is ignored rather than rejected, so the create
+	// succeeds and the named pool is the only one materialized.
+	if _, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{
+		Name:             "c2",
+		InitialNodeCount: -1,
+		NodePools:        []containerstore.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	}); err != nil {
+		t.Fatalf("create with pools and a negative count: %v", err)
+	}
+	c, err := s.GetCluster(ctx, "p", "us-central1", "c2")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if len(c.NodePools) != 1 || c.NodePools[0].Name != "pool-a" {
+		t.Fatalf("nodePools = %+v, want the caller's pool only", c.NodePools)
+	}
+}
+
 // TestCreateClusterAcceptsZeroInitialNodeCountWithNodePools pins the real-GCP
 // boundary: a zero cluster-level initialNodeCount means "no default node pool",
 // so it does not conflict with nodePools (captured against a live project).

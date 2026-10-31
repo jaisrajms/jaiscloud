@@ -523,6 +523,39 @@ func TestSDKContainerClusterCreateRejectsDefaultPoolFieldsWithNodePools(t *testi
 	}
 }
 
+// TestSDKContainerClusterNegativeInitialNodeCount pins the DPG49 boundary
+// captured against real GKE: the official client's negative cluster-level count
+// is rejected with the verbatim message when the request carries no nodePools,
+// and accepted (ignored) when it does.
+func TestSDKContainerClusterNegativeInitialNodeCount(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	neg := unique("cn")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{Cluster: &container.Cluster{
+		Name:             neg,
+		InitialNodeCount: -1,
+	}}).Do()
+	requireAPIError(t, err, 400)
+	var apiErr *googleapi.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, "Cluster.initial_node_count must be zero or higher.", apiErr.Message)
+	_, err = svc.Projects.Locations.Clusters.Get(clusterName(neg)).Do()
+	requireAPIError(t, err, 404)
+
+	withPools := unique("cn")
+	_, err = svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{Cluster: &container.Cluster{
+		Name:             withPools,
+		InitialNodeCount: -1,
+		NodePools:        []*container.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	}}).Do()
+	require.NoError(t, err)
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(withPools)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.NodePools, 1)
+	require.Equal(t, "pool-a", got.NodePools[0].Name)
+}
+
 // TestSDKContainerClusterCreatePoolConflictOnTheWire pins the encoded REST
 // contract the apiary client hides: the google.rpc envelope's status string, and
 // the one case the client cannot express — an explicit `initialNodeCount: 0`,

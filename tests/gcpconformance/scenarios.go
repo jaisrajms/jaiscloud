@@ -938,6 +938,11 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/operations/${gkeOp}:cancel"},
 		Scenario{Service: "container", Method: "DELETE", Path: gkeClusterName},
 		Scenario{Service: "container", Method: "GET", Path: gkeClusterName},
+		// DPG49: a negative cluster-level initialNodeCount is InvalidArgument
+		// only when the request carries no nodePools (captured against real GKE
+		// in docs/gcp/gke-create-pool-conflict.md).
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":-1}}`, gkeCluster+"-neg")},
 	)
 
 	// ─── Cloud Run Admin v2 (run.googleapis.com) ──────────────────────────────

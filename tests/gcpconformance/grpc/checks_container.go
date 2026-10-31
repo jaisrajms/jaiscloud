@@ -834,6 +834,31 @@ func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) er
 		}
 	}
 
+	// DPG49: a negative cluster-level initialNodeCount is the sibling boundary.
+	// Without nodePools it is InvalidArgument; with pools it is accepted and
+	// ignored (captured in docs/gcp/gke-create-pool-conflict.md).
+	negName := cfg.ResourceName("gcpc-gke-neginc")
+	_, err = client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: &containerpb.Cluster{
+		Name:             negName,
+		InitialNodeCount: -1,
+	}})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("create with negative initialNodeCount and no pools: code = %v, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if want := "Cluster.initial_node_count must be zero or higher."; status.Convert(err).Message() != want {
+		return fmt.Errorf("create with negative initialNodeCount and no pools: message = %q, want %q", status.Convert(err).Message(), want)
+	}
+	withPoolsName := cfg.ResourceName("gcpc-gke-neginc-pools")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: &containerpb.Cluster{
+		Name:             withPoolsName,
+		InitialNodeCount: -1,
+		NodePools:        []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	}}); err != nil {
+		return fmt.Errorf("create with negative initialNodeCount and nodePools: %v", err)
+	}
+	if _, err := client.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{Name: containerNameRaw(cfg, withPoolsName)}); err != nil {
+		return fmt.Errorf("delete negative-count cluster: %v", err)
+	}
 	return nil
 }
 
