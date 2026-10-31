@@ -237,6 +237,18 @@ func validateVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gke
 	return out, nil
 }
 
+// gkeNodePoolNamePattern is the pattern real GCP quotes when
+// GkeNodePoolTarget.nodePool is not a full node-pool resource name. The
+// surrounding message is verbatim from a real-GCP capture
+// (docs/gcp/dataproc-gke-version-aliases.md, DPG44).
+const gkeNodePoolNamePattern = "projects/([^/]+)/(?:locations|zones)/([^/]+)/clusters/([^/]+)/nodePools/([^/]+)"
+
+// gkeNodePoolNameErr is the InvalidArgument real GCP returns for a nodePool that
+// is not a full resource name.
+func gkeNodePoolNameErr(raw string) error {
+	return invalidArgument(fmt.Sprintf("GKE Node Pool name '%s', must conform to pattern '%s'", raw, gkeNodePoolNamePattern))
+}
+
 // parseGKEPoolTarget normalises one GkeNodePoolTarget and attaches its parsed
 // nodePoolConfig (nil when the caller sent none).
 func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, error) {
@@ -245,20 +257,20 @@ func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, 
 	if rawName == "" {
 		return pt, invalidArgument(fmt.Sprintf("nodePoolTarget[%d] requires nodePool", i))
 	}
-	name := rawName
-	if strings.Contains(rawName, "/") {
-		project, location, cluster, id, ok := splitGKENodePoolName(rawName)
-		if !ok {
-			return pt, invalidArgument("nodePool must be projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{node_pool}: " + rawName)
+	// Discovery requires the full resource name ("Format:
+	// 'projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{node_pool}'")
+	// and real GCP rejects a bare pool id, so a short name is InvalidArgument
+	// (DPG44).
+	project, location, cluster, name, ok := splitGKENodePoolName(rawName)
+	if !ok {
+		return pt, gkeNodePoolNameErr(rawName)
+	}
+	// A pool outside the target cluster cannot be provisioned or verified.
+	if target != "" {
+		tp, tl, tc, _ := splitGKEClusterName(target)
+		if project != tp || location != tl || cluster != tc {
+			return pt, invalidArgument(fmt.Sprintf("nodePool %s is not in gkeClusterTarget %s", rawName, target))
 		}
-		// A pool outside the target cluster cannot be provisioned or verified.
-		if target != "" {
-			tp, tl, tc, _ := splitGKEClusterName(target)
-			if project != tp || location != tl || cluster != tc {
-				return pt, invalidArgument(fmt.Sprintf("nodePool %s is not in gkeClusterTarget %s", rawName, target))
-			}
-		}
-		name = id
 	}
 	pt.name = name
 	rawRoles, _ := m["roles"].([]any)
@@ -409,10 +421,13 @@ func splitGKEClusterName(name string) (project, location, cluster string, ok boo
 	return segs[1], segs[3], segs[5], true
 }
 
-// splitGKENodePoolName parses a canonical GKE node pool name.
+// splitGKENodePoolName parses a canonical GKE node pool name. The location
+// segment is "locations" for the clusters the emulator models; "zones" is the
+// older spelling the real-GCP pattern still accepts.
 func splitGKENodePoolName(name string) (project, location, cluster, pool string, ok bool) {
 	segs := strings.Split(strings.Trim(name, "/"), "/")
-	if len(segs) != 8 || segs[0] != "projects" || segs[2] != "locations" || segs[4] != "clusters" || segs[6] != "nodePools" {
+	if len(segs) != 8 || segs[0] != "projects" || (segs[2] != "locations" && segs[2] != "zones") ||
+		segs[4] != "clusters" || segs[6] != "nodePools" {
 		return "", "", "", "", false
 	}
 	return segs[1], segs[3], segs[5], segs[7], true

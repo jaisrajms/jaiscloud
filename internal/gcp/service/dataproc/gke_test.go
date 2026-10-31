@@ -27,8 +27,13 @@ func vccWith(gke map[string]any) map[string]any {
 	}
 }
 
-// poolTarget builds one GkeNodePoolTarget.
+// poolTarget builds one GkeNodePoolTarget. A bare pool id is expanded to the
+// full resource name Discovery requires; an already-qualified name is used
+// as-is so the name-shape cases can stay explicit.
 func poolTarget(name string, roles []string, config map[string]any) map[string]any {
+	if !strings.Contains(name, "/") {
+		name = gkeClusterPath + "/nodePools/" + name
+	}
 	t := map[string]any{"nodePool": name, "roles": roles}
 	if config != nil {
 		t["nodePoolConfig"] = config
@@ -174,14 +179,22 @@ func TestValidateVirtualClusterConfig_PoolRules(t *testing.T) {
 			}},
 		},
 		{
-			name: "bare pool name is normalised",
-			gke:  map[string]any{"gkeClusterTarget": gkeClusterPath, "nodePoolTarget": []any{poolTarget("bare-pool", []string{"DEFAULT"}, nil)}},
+			name: "bare pool name is rejected",
+			gke:  map[string]any{"gkeClusterTarget": gkeClusterPath, "nodePoolTarget": []any{map[string]any{"nodePool": "bare-pool", "roles": []any{"DEFAULT"}}}},
+			want: "GKE Node Pool name 'bare-pool', must conform to pattern",
 		},
 		{
-			name: "canonical pool name is normalised",
+			name: "canonical pool name is accepted",
 			gke: map[string]any{"gkeClusterTarget": gkeClusterPath, "nodePoolTarget": []any{
 				poolTarget(gkeClusterPath+"/nodePools/canonical-pool", []string{"DEFAULT"}, nil),
 			}},
+		},
+		{
+			name: "zonal pool name spelling is accepted",
+			gke: map[string]any{"gkeClusterTarget": gkeClusterPath, "nodePoolTarget": []any{
+				poolTarget("projects/proj/zones/us-central1-a/clusters/gke-1/nodePools/zonal-pool", []string{"DEFAULT"}, nil),
+			}},
+			want: "is not in gkeClusterTarget",
 		},
 		{
 			name: "pool outside the target cluster",
@@ -193,7 +206,7 @@ func TestValidateVirtualClusterConfig_PoolRules(t *testing.T) {
 		{
 			name: "malformed pool path",
 			gke:  map[string]any{"gkeClusterTarget": gkeClusterPath, "nodePoolTarget": []any{poolTarget("projects/proj/nodePools/p", []string{"DEFAULT"}, nil)}},
-			want: "nodePool must be",
+			want: "must conform to pattern",
 		},
 	}
 	for _, tc := range cases {

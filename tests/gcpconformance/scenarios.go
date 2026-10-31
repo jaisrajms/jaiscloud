@@ -1232,6 +1232,9 @@ func Scenarios(suffix string) []Scenario {
 			`{"projectId":%q,"clusterName":%q,"virtualClusterConfig":{"stagingBucket":%q,"kubernetesClusterConfig":{"kubernetesNamespace":%q,"gkeClusterConfig":{"gkeClusterTarget":%q,"nodePoolTarget":[%s]},"kubernetesSoftwareConfig":{"componentVersion":{"SPARK":%q}}}}}`,
 			p, name, "dataproc-staging-"+p, namespace, dpGkeTarget, strings.Join(pools, ","), software)
 	}
+	// dpGkePool is the full node-pool resource name a nodePoolTarget must carry
+	// (Discovery's documented format; a bare id is InvalidArgument, DPG44).
+	dpGkePool := func(id string) string { return dpGkeTarget + "/nodePools/" + id }
 	dpGkeA := "conf-dpgke-a-" + suffix
 	dpGkeB := "conf-dpgke-b-" + suffix
 	dpGkeC := "conf-dpgke-c-" + suffix
@@ -1251,7 +1254,7 @@ func Scenarios(suffix string) []Scenario {
 		// Virtual cluster A: one named-only pool, created by the reconciler.
 		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
 			Body: dpGkeVC(dpGkeA, "conf-ns-a-"+suffix,
-				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePoolA)}, "3.5"),
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePool(dpGkePoolA))}, "3.5"),
 			Save: map[string]string{"dpGkeAOp": "name"}},
 		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeAOp}"},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeA},
@@ -1261,9 +1264,9 @@ func Scenarios(suffix string) []Scenario {
 		// a zone, the driver/executor split across two named-only pools.
 		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
 			Body: dpGkeVC(dpGkeB, "conf-ns-b-"+suffix, []string{
-				fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT","CONTROLLER"],"nodePoolConfig":{"config":{"machineType":"n1-standard-4","localSsdCount":1},"autoscaling":{"minNodeCount":1,"maxNodeCount":4},"locations":["us-central1-a"]}}`, dpGkeShaped),
-				fmt.Sprintf(`{"nodePool":%q,"roles":["SPARK_DRIVER"]}`, dpGkeDriver),
-				fmt.Sprintf(`{"nodePool":%q,"roles":["SPARK_EXECUTOR"]}`, dpGkeExecutor),
+				fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT","CONTROLLER"],"nodePoolConfig":{"config":{"machineType":"n1-standard-4","localSsdCount":1},"autoscaling":{"minNodeCount":1,"maxNodeCount":4},"locations":["us-central1-a"]}}`, dpGkePool(dpGkeShaped)),
+				fmt.Sprintf(`{"nodePool":%q,"roles":["SPARK_DRIVER"]}`, dpGkePool(dpGkeDriver)),
+				fmt.Sprintf(`{"nodePool":%q,"roles":["SPARK_EXECUTOR"]}`, dpGkePool(dpGkeExecutor)),
 			}, "latest"),
 			Save: map[string]string{"dpGkeBOp": "name"}},
 		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeBOp}"},
@@ -1276,7 +1279,7 @@ func Scenarios(suffix string) []Scenario {
 			Body: fmt.Sprintf(`{"nodePool":{"name":%q,"initialNodeCount":1,"config":{"machineType":"e2-medium"}}}`, dpGkeTaken)},
 		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
 			Body: dpGkeVC(dpGkeC, "conf-ns-c-"+suffix, []string{
-				fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"],"nodePoolConfig":{"config":{"machineType":"n1-standard-4"}}}`, dpGkeTaken),
+				fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"],"nodePoolConfig":{"config":{"machineType":"n1-standard-4"}}}`, dpGkePool(dpGkeTaken)),
 			}, "3.5"),
 			Save: map[string]string{"dpGkeCOp": "name"}},
 		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeCOp}"},
@@ -1287,17 +1290,22 @@ func Scenarios(suffix string) []Scenario {
 		// (recorded from real GCP, DPG36).
 		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
 			Body: dpGkeVC(dpGkeD, "conf-ns-d-"+suffix,
-				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePoolD)}, "dataproc-2.2"),
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePool(dpGkePoolD))}, "dataproc-2.2"),
 			Save: map[string]string{"dpGkeDOp": "name"}},
 		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeDOp}"},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeD},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpGkeD},
+		// A nodePoolTarget.nodePool must be the full node-pool resource name:
+		// real GCP rejects a bare pool id with the documented pattern (DPG44).
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: dpGkeVC("conf-dpgke-e-"+suffix, "conf-ns-e-"+suffix,
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, "conf-dp-bare-"+suffix)}, "3.5")},
 		// A Dataproc-on-GKE virtual cluster is recreate-only: a patch that would
 		// apply virtualClusterConfig is InvalidArgument.
 		Scenario{Service: "dataproc", Method: "PATCH",
 			Path: dpBase + "/clusters/" + dpGkeA + "?updateMask=virtualClusterConfig",
 			Body: dpGkeVC(dpGkeA, "conf-ns-a-"+suffix,
-				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePoolA)}, "3.5")},
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePool(dpGkePoolA))}, "3.5")},
 		// Deletes: the virtual clusters go, their pools stay (real GCP keeps
 		// them), so the pool read after the delete is the proof.
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpGkeA,

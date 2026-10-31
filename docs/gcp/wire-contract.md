@@ -455,7 +455,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   create (same project/region, standard not Autopilot, Workload Identity enabled) and its
   `nodePoolTarget` pools are created through the GKE API or verified field-by-field against an
   existing one (adopted when the caller sends no `nodePoolConfig`, which is input-only and never
-  read back); a mismatch leaves the cluster in `ERROR` with the pool and field in `status.detail`,
+  read back; a `nodePool` that is not the full
+  `projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{pool}` resource name is
+  `InvalidArgument`, as on real GCP — DPG44); a mismatch leaves the cluster in `ERROR` with the pool and field in `status.detail`,
   pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
   a virtual cluster is also recreate-only (`clusters.patch` touching `virtualClusterConfig` is
   `InvalidArgument`) and a `kubernetesNamespace` already owned on the same GKE cluster is

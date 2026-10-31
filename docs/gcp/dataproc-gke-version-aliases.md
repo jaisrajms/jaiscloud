@@ -59,8 +59,9 @@ name (the emulator already does this) and echoed the resolved release on read.
 * **`nodePoolTarget.nodePool` must be a full resource name.** Real GCP rejects a
   short pool name with
   `GKE Node Pool name '<name>', must conform to pattern 'projects/([^/]+)/(?:locations|zones)/([^/]+)/clusters/([^/]+)/nodePools/([^/]+)'`.
-  The emulator accepts short names and its conformance transcripts use them.
-  Recorded as DPG44.
+  The emulator accepted short names and its conformance transcripts used them;
+  DPG44 made it reject a bare pool id with the same message and moved the
+  transcripts to full names.
 * **Validation errors are aggregated.** Real GCP returns
   `400 INVALID_ARGUMENT` / `"Multiple validation errors:\n - …\n - …"` listing
   every problem in one response; the emulator fails on the first. Recorded as

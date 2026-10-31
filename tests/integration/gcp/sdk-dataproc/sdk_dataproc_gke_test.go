@@ -73,7 +73,7 @@ func TestSDKDataprocOnGKE(t *testing.T) {
 						},
 					},
 					{
-						NodePool: "spark-pool",
+						NodePool: gkeParent + "/nodePools/spark-pool",
 						Roles:    []string{"SPARK_DRIVER", "SPARK_EXECUTOR"},
 					},
 				},
@@ -205,7 +205,7 @@ func TestSDKDataprocOnGKEConflictingPoolShape(t *testing.T) {
 				GkeClusterConfig: &dataproc.GkeClusterConfig{
 					GkeClusterTarget: gkeParent,
 					NodePoolTarget: []*dataproc.GkeNodePoolTarget{{
-						NodePool: "taken-pool",
+						NodePool: gkeParent + "/nodePools/taken-pool",
 						Roles:    []string{"DEFAULT"},
 						NodePoolConfig: &dataproc.GkeNodePoolConfig{
 							Config: &dataproc.GkeNodeConfig{MachineType: "n1-standard-4"},
@@ -244,6 +244,10 @@ func gkePrereq(t *testing.T, gke *container.Service, prefix string) string {
 	require.NoError(t, err)
 	return parent + "/clusters/" + name
 }
+
+// gkePoolName is the full node-pool resource name a nodePoolTarget must carry
+// (Discovery's documented format; a bare id is InvalidArgument, DPG44).
+func gkePoolName(target, id string) string { return target + "/nodePools/" + id }
 
 // gkeVCC builds a VirtualClusterConfig naming target and applies mut to it. The
 // default is one DEFAULT pool with no nodePoolConfig ("any node pool with the
@@ -310,7 +314,7 @@ func TestSDKDataprocOnGKEPoolReuse(t *testing.T) {
 	// assertions are deltas against that baseline.
 	baseline := len(gkePools(t, gke, parent))
 	shaped := &dataproc.GkeNodePoolTarget{
-		NodePool: "reuse-shaped",
+		NodePool: gkePoolName(target, "reuse-shaped"),
 		Roles:    []string{"DEFAULT", "CONTROLLER"},
 		NodePoolConfig: &dataproc.GkeNodePoolConfig{
 			Config:      &dataproc.GkeNodeConfig{MachineType: "n1-standard-4", LocalSsdCount: 1},
@@ -319,7 +323,7 @@ func TestSDKDataprocOnGKEPoolReuse(t *testing.T) {
 		},
 	}
 	named := &dataproc.GkeNodePoolTarget{
-		NodePool: "reuse-named",
+		NodePool: gkePoolName(target, "reuse-named"),
 		Roles:    []string{"SPARK_DRIVER", "SPARK_EXECUTOR"},
 	}
 	first := createVirtualCluster(t, dp, unique("dpgke-reuse-a"), gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
@@ -372,7 +376,7 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 			name: "missing DEFAULT role",
 			mut: func(v *dataproc.VirtualClusterConfig) {
 				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{
-					{NodePool: "only-driver", Roles: []string{"SPARK_DRIVER"}},
+					{NodePool: gkePoolName(target, "only-driver"), Roles: []string{"SPARK_DRIVER"}},
 				}
 			},
 			code: 400, message: "DEFAULT",
@@ -381,8 +385,8 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 			name: "two pools claim one role",
 			mut: func(v *dataproc.VirtualClusterConfig) {
 				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{
-					{NodePool: "role-a", Roles: []string{"DEFAULT"}},
-					{NodePool: "role-b", Roles: []string{"DEFAULT"}},
+					{NodePool: gkePoolName(target, "role-a"), Roles: []string{"DEFAULT"}},
+					{NodePool: gkePoolName(target, "role-b"), Roles: []string{"DEFAULT"}},
 				}
 			},
 			code: 400, message: "only one nodePoolTarget",
@@ -391,7 +395,7 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 			name: "pool outside the region",
 			mut: func(v *dataproc.VirtualClusterConfig) {
 				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{{
-					NodePool: "wrong-zone",
+					NodePool: gkePoolName(target, "wrong-zone"),
 					Roles:    []string{"DEFAULT"},
 					NodePoolConfig: &dataproc.GkeNodePoolConfig{
 						Locations: []string{"us-east1-b"},
@@ -404,7 +408,7 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 			name: "autoscaler bounds",
 			mut: func(v *dataproc.VirtualClusterConfig) {
 				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{{
-					NodePool: "bad-bounds",
+					NodePool: gkePoolName(target, "bad-bounds"),
 					Roles:    []string{"DEFAULT"},
 					NodePoolConfig: &dataproc.GkeNodePoolConfig{
 						Autoscaling: &dataproc.GkeNodePoolAutoscalingConfig{MinNodeCount: 5, MaxNodeCount: 2},
@@ -412,6 +416,16 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 				}}
 			},
 			code: 400, message: "0 <= minNodeCount <= maxNodeCount",
+		},
+		{
+			// A bare pool id is not the resource name the API requires (DPG44).
+			name: "short node pool name",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{
+					{NodePool: "bare-pool", Roles: []string{"DEFAULT"}},
+				}
+			},
+			code: 400, message: "must conform to pattern",
 		},
 		{
 			name: "target in another project",

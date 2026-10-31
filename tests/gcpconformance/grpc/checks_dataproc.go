@@ -228,6 +228,7 @@ func checkDPCreateClusterGKEUnknownTarget(ctx context.Context, cfg Config) error
 	defer client.Close()
 
 	id := cfg.ResourceName("gcpc-grpc-dp-gke-missing")
+	missingTarget := "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gcpc-missing-gke"
 	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
 		ProjectId: cfg.Project,
 		Region:    dataprocRegion,
@@ -239,9 +240,9 @@ func checkDPCreateClusterGKEUnknownTarget(ctx context.Context, cfg Config) error
 					KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
 						Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
 							GkeClusterConfig: &dataprocpb.GkeClusterConfig{
-								GkeClusterTarget: "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gcpc-missing-gke",
+								GkeClusterTarget: missingTarget,
 								NodePoolTarget: []*dataprocpb.GkeNodePoolTarget{{
-									NodePool: "default-pool",
+									NodePool: missingTarget + "/nodePools/default-pool",
 									Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
 								}},
 							},
@@ -977,7 +978,7 @@ func gkePoolTargets(target string) []*dataprocpb.GkeNodePoolTarget {
 			},
 		},
 		{
-			NodePool: "named-pool",
+			NodePool: target + "/nodePools/named-pool",
 			Roles: []dataprocpb.GkeNodePoolTarget_Role{
 				dataprocpb.GkeNodePoolTarget_SPARK_DRIVER,
 				dataprocpb.GkeNodePoolTarget_SPARK_EXECUTOR,
@@ -1197,9 +1198,19 @@ func checkDPGKEVirtualClusterRules(ctx context.Context, cfg Config) error {
 		text  string
 	}{
 		{
+			// A bare pool id is not a resource name: real GCP rejects it with the
+			// documented pattern (DPG44).
+			name: "short node pool name",
+			pools: []*dataprocpb.GkeNodePoolTarget{{
+				NodePool: "bare-pool",
+				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+			}},
+			code: codes.InvalidArgument, text: "must conform to pattern",
+		},
+		{
 			name: "missing DEFAULT role",
 			pools: []*dataprocpb.GkeNodePoolTarget{{
-				NodePool: "driver-only",
+				NodePool: target + "/nodePools/driver-only",
 				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_SPARK_DRIVER},
 			}},
 			code: codes.InvalidArgument, text: "DEFAULT",
@@ -1207,15 +1218,15 @@ func checkDPGKEVirtualClusterRules(ctx context.Context, cfg Config) error {
 		{
 			name: "two pools claim one role",
 			pools: []*dataprocpb.GkeNodePoolTarget{
-				{NodePool: "role-a", Roles: []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT}},
-				{NodePool: "role-b", Roles: []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT}},
+				{NodePool: target + "/nodePools/role-a", Roles: []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT}},
+				{NodePool: target + "/nodePools/role-b", Roles: []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT}},
 			},
 			code: codes.InvalidArgument, text: "only one nodePoolTarget",
 		},
 		{
 			name: "pool outside the region",
 			pools: []*dataprocpb.GkeNodePoolTarget{{
-				NodePool: "wrong-zone",
+				NodePool: target + "/nodePools/wrong-zone",
 				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
 				NodePoolConfig: &dataprocpb.GkeNodePoolConfig{
 					Locations: []string{"us-east1-b"},
