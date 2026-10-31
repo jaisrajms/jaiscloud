@@ -258,3 +258,13 @@ entries:
     match: "tooling (depth-gate honesty)"
     pr: 559
     note: "resolved: W1.1 (DC1) delivered by DC10's depth-gate honesty work (#559)"
+
+  # CR6 — the Cloud Run docker execution mode shipped as D1 (#383):
+  # internal/gcp/runexec/docker.go plus the docker branch in
+  # cmd/jaiscloud-gcp/main.go. The finalized CR3 plan still lists "Docker
+  # execution mode (host Docker instead of a cluster)" as an unscheduled
+  # optional row, so this commits the closure (evidence-gated on #383).
+  - source: "CR3-gcp-cloudrun"
+    match: "Docker execution mode"
+    pr: 383
+    note: "resolved: Cloud Run docker runtime shipped as D1 (#383); stale optional row"
