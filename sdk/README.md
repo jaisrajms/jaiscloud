@@ -242,5 +242,6 @@ jaiscloud-aws start --plugin http://plugin:9100 --plugin-secret "$PLUGIN_SECRET"
 
 ## Status
 
-Experimental (ABI 1). AWS routes only; new services, REST path routes, GCP and in-process
-(`.so`) plugins are planned, not implemented.
+Experimental (ABI 1). Out-of-process plugins for `jaiscloud-aws` and `jaiscloud-gcp` (GCP REST and gRPC). New
+services, REST path routes, a raw-response escape hatch and in-process (`.so`) plugins are planned, not
+implemented. See [docs/PLUGINS.md](../docs/PLUGINS.md) for the architecture and the full list of limits.

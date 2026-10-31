@@ -151,6 +151,7 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 - [Multi-Cloud Spark Transforms](#multi-cloud-spark-transforms)
   - [Azure](#azure-spark-transform)
   - [GCP](#gcp-spark-transform)
+- [Plugins](#plugins)
 - [Platform Setup](#platform-setup)
 
 ---
@@ -2476,6 +2477,60 @@ export JAISCLOUD_PLATFORM_TLS_ENABLED=false   # GCP root CAs already trusted by 
 
 ./jaiscloud-gcp start --dsn "postgres://..."
 ```
+
+---
+
+## Plugins
+
+User-facing guide: [docs/PLUGINS.md](docs/PLUGINS.md). SDK reference: [sdk/README.md](sdk/README.md).
+This section is for people changing the emulator itself.
+
+### Where the code is
+
+| Path | Role |
+|---|---|
+| `sdk/` | Public contract (nested stdlib-only module `github.com/jaisrajms/jaiscloud/sdk`): `Manifest`, `Route`, `Request`, `Result`, `Mux`, the HTTP server and the wire shapes |
+| `internal/pluginhost/` | Loads plugins, turns routes into links on the provider registry, retries and fails closed, projects params to JSON and back, serves the store callbacks |
+| `internal/aws/seams/`, `internal/gcp/seams/` | Service-to-service calls made as ordinary registry clients (origin `internal`) |
+| `internal/gcp/grpcplugin/` | GCP gRPC interceptor: maps an RPC to its REST twin's registry key |
+| `internal/gcp/pluginchain/` | The shadow registry shared by the gRPC interceptor and the typed console |
+| `internal/gcp/ui/routed.go`, `ui/typed*.go` | Console calls routed through the registry or the plugin chain |
+| `tests/plugins/` | End-to-end tests against the real binaries (tag `plugin_e2e`) |
+
+### The rule to keep
+
+The registry is the only way into a service. When you add a call from one service to another, a poller,
+a scheduler or a console method, make it a `Registry.Dispatch` (or a seam) with the right `nr.Origin`.
+A direct call to another provider silently bypasses plugins. Two guards fail the build when that happens:
+`cmd/jaiscloud-aws/architecture_test.go` and `cmd/jaiscloud-gcp/architecture_test.go`. A link that is not
+an API call (an event bus, an executor) goes in the guard's allow-list with a reason.
+
+For GCP, also keep these in step when you add or change a service:
+
+- `internal/gcp/grpcplugin/testdata/coverage.golden` lists, per served service, which RPCs reach a key and
+  which have no REST twin. Regenerate it with the test's update flag and review the diff.
+- `internal/gcp/ui/routed_guard_test.go` fails if a console method is neither forwarded through the
+  registry nor listed as an emulator-only helper.
+- A console service on typed structs needs a `ui/typed_<service>.go` forwarder and a passthrough test.
+
+### Running the plugin tests
+
+```bash
+make test-sdk
+make test-plugins        # builds the binaries; about a minute
+go test -race ./internal/pluginhost/ ./internal/gcp/grpcplugin/ ./internal/gcp/seams/ ./internal/gcp/ui/
+```
+
+Plugin tests that compare a value read back through the REST rendering must not depend on the host's
+clock resolution: REST timestamps carry microseconds, so `internal/gcp/ui` runs its tests on a
+microsecond clock (`TestMain` in `typed_test.go`).
+
+### Known limitations
+
+The same list as [docs/PLUGINS.md#limitations](docs/PLUGINS.md#limitations). In short: out-of-process only,
+JSON only (streams are observable, not replaceable), fail-closed with no fallback to the built-in, startup
+load only, and on GCP no interception of RPCs without a REST twin or of the generic long-running
+operation RPCs. Design record and decisions D1 to D33 are kept with the plugin design notes.
 
 ---
 
