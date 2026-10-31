@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 498,
-  "passed": 498,
+  "total": 499,
+  "passed": 499,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 498,
-    "passed": 498,
+    "checks": 499,
+    "passed": 499,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "dataproc",
-      "total": 33,
-      "passed": 33,
+      "total": 34,
+      "passed": 34,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3060,6 +3060,13 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "GKE placement/pool validation as client-visible errors"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc pool shape)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "done LRO -\u003e ERROR cluster with the pool and field in status.detail"
     },
     {
       "service": "dataproc",

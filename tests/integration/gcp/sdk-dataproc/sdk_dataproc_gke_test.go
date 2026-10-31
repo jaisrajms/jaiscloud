@@ -539,3 +539,53 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 		require.Contains(t, gerr.Message, "already used by Dataproc virtual cluster")
 	})
 }
+
+// TestSDKDataprocOnGKERecreateAfterNamespaceDrop proves the documented
+// recreate-only recipe over REST (README-GCP.md §Dataproc workload placement):
+// a virtual cluster owns the kubernetesNamespace it names, so a second live
+// cluster still naming that namespace is FailedPrecondition; after the owner is
+// deleted, recreating the same name WITHOUT kubernetesNamespace defaults it to
+// the new cluster's name and the create settles RUNNING. It proves the recipe,
+// not the ownership rule itself (validateGKENamespaceOwnership has its own unit
+// tests).
+func TestSDKDataprocOnGKERecreateAfterNamespaceDrop(t *testing.T) {
+	ctx := context.Background()
+	dp, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	gke, err := container.NewService(ctx, gkeOpts()...)
+	require.NoError(t, err)
+
+	target := gkePrereq(t, gke, "gke-ns-recreate")
+	namespace := unique("ns-recreate")
+	name := unique("dpgke-ns-recreate")
+
+	// The owner: an explicit namespace, not the cluster-name default.
+	first := createVirtualCluster(t, dp, name, gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
+		v.KubernetesClusterConfig.KubernetesNamespace = namespace
+	}))
+	require.Equal(t, "RUNNING", first.Status.State, "status detail: %s", first.Status.Detail)
+
+	// The negative half: a recreate that still names the old namespace is
+	// rejected while a live virtual cluster owns it.
+	_, err = dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+		ProjectId:   dpProject,
+		ClusterName: unique("dpgke-ns-claim"),
+		VirtualClusterConfig: gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
+			v.KubernetesClusterConfig.KubernetesNamespace = namespace
+		}),
+	}).Do()
+	requireCode(t, err, 400, "namespace still owned")
+	var gerr *googleapi.Error
+	require.ErrorAs(t, err, &gerr)
+	require.Contains(t, gerr.Message, "already used by Dataproc virtual cluster")
+
+	// Delete the owner, then recreate the same name without a namespace.
+	del, err := dp.Projects.Regions.Clusters.Delete(dpProject, dpRegion, name).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, dp, del.Name).Done)
+
+	recreated := createVirtualCluster(t, dp, name, gkeVCC(target))
+	require.Equal(t, "RUNNING", recreated.Status.State, "status detail: %s", recreated.Status.Detail)
+	require.Equal(t, name, recreated.VirtualClusterConfig.KubernetesClusterConfig.KubernetesNamespace,
+		"a recreate without kubernetesNamespace defaults it to the cluster name")
+}
