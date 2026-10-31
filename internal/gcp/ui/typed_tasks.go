@@ -70,7 +70,7 @@ func (p typedTasks) ListQueuesByProject(ctx context.Context, project string) ([]
 		}
 		return provider.OK(map[string]any{"queues": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Tasks.QueuesList", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Tasks.QueuesList", project, "", map[string]any{"project": project, "location": "-"}, all, "queues")
 	if !covered {
 		return p.ProviderInterface.ListQueuesByProject(ctx, project)
 	}
@@ -78,7 +78,7 @@ func (p typedTasks) ListQueuesByProject(ctx context.Context, project string) ([]
 		return nil, err
 	}
 	var out []tasksstore.Queue
-	for _, m := range items(data, "queues") {
+	for _, m := range rows {
 		q, err := decodeQueue(m)
 		if err != nil {
 			return nil, err
@@ -182,7 +182,7 @@ func (p typedTasks) QueueSetIamPolicy(ctx context.Context, project, location, qu
 }
 
 func (p typedTasks) ListTasks(ctx context.Context, project, location, queue string) ([]tasksstore.Task, error) {
-	data, covered, err := p.c.do(ctx, "Tasks.TasksList", project, location, map[string]any{"project": project, "location": location, "queue": queue}, nil)
+	rows, covered, err := p.c.doList(ctx, "Tasks.TasksList", project, location, map[string]any{"project": project, "location": location, "queue": queue}, nil, "tasks")
 	if !covered {
 		return p.ProviderInterface.ListTasks(ctx, project, location, queue)
 	}
@@ -190,7 +190,7 @@ func (p typedTasks) ListTasks(ctx context.Context, project, location, queue stri
 		return nil, err
 	}
 	var out []tasksstore.Task
-	for _, m := range items(data, "tasks") {
+	for _, m := range rows {
 		t, err := decodeTask(m)
 		if err != nil {
 			return nil, err

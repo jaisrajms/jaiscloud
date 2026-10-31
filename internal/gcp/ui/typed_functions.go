@@ -108,8 +108,8 @@ func (p typedFunctions) ListFunctions(ctx context.Context, project string) ([]fu
 		}
 		return provider.OK(map[string]any{"functions": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Function.ListFunctions", project, "",
-		map[string]any{"project": project, "location": "-", "apiVersion": "v2"}, all)
+	rows, covered, err := p.c.doList(ctx, "Function.ListFunctions", project, "",
+		map[string]any{"project": project, "location": "-", "apiVersion": "v2"}, all, "functions")
 	if !covered {
 		return p.ProviderInterface.ListFunctions(ctx, project)
 	}
@@ -117,7 +117,7 @@ func (p typedFunctions) ListFunctions(ctx context.Context, project string) ([]fu
 		return nil, err
 	}
 	var out []functionsstore.Function
-	for _, m := range items(data, "functions") {
+	for _, m := range rows {
 		out = append(out, decodeFunction(m))
 	}
 	return out, nil
@@ -235,6 +235,10 @@ func (p typedFunctions) CreateFunction(ctx context.Context, project, location st
 	}
 	if r, ok := data["response"].(map[string]any); ok {
 		return decodeFunction(r), nil
+	}
+	// An operation still in flight carries no function yet: read it back.
+	if done, isOp := data["done"].(bool); isOp && !done {
+		return p.GetFunction(ctx, project, location, in.ID)
 	}
 	return decodeFunction(data), nil
 }

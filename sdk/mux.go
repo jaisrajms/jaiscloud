@@ -19,6 +19,7 @@ type Mux struct {
 	routes        map[muxKey]Func
 	order         []muxKey
 	lifecycle     func(ctx context.Context, event string)
+	transports    []string
 }
 
 type muxKey struct {
@@ -49,6 +50,15 @@ func (m *Mux) Before(cloud, service, action string, f Func) { m.add(Before, clou
 // After runs after the core.
 func (m *Mux) After(cloud, service, action string, f Func) { m.add(After, cloud, service, action, f) }
 
+// Transports restricts the plugin to the given wire transports ("rest", "grpc"); the
+// default is all of them. Call it when the functions only understand one shape of
+// Params, for example the REST body of a GCP request: a gRPC call to the same key then
+// skips the plugin instead of handing it protojson.
+func (m *Mux) Transports(transports ...string) *Mux {
+	m.transports = transports
+	return m
+}
+
 func (m *Mux) Manifest() Manifest {
 	type g struct {
 		cloud, service string
@@ -67,7 +77,7 @@ func (m *Mux) Manifest() Manifest {
 	for _, key := range gorder {
 		acts := groups[key]
 		sort.Strings(acts)
-		mf.Routes = append(mf.Routes, Route{Cloud: key.cloud, Service: key.service, Actions: acts, Mode: key.mode})
+		mf.Routes = append(mf.Routes, Route{Cloud: key.cloud, Service: key.service, Actions: acts, Mode: key.mode, Transports: m.transports})
 	}
 	return mf
 }

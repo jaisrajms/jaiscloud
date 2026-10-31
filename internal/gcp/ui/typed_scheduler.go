@@ -50,7 +50,7 @@ func (p typedScheduler) ListJobsByProject(ctx context.Context, project string) (
 		}
 		return provider.OK(map[string]any{"jobs": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Scheduler.JobsList", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Scheduler.JobsList", project, "", map[string]any{"project": project, "location": "-"}, all, "jobs")
 	if !covered {
 		return p.ProviderInterface.ListJobsByProject(ctx, project)
 	}
@@ -58,7 +58,7 @@ func (p typedScheduler) ListJobsByProject(ctx context.Context, project string) (
 		return nil, err
 	}
 	var jobs []schedstore.Job
-	for _, m := range items(data, "jobs") {
+	for _, m := range rows {
 		j, err := decodeJob(m)
 		if err != nil {
 			return nil, err

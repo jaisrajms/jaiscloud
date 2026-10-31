@@ -137,7 +137,7 @@ func (p typedManagedKafka) ListAllClusters(ctx context.Context, project string) 
 		}
 		return provider.OK(map[string]any{"clusters": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "ManagedKafka.ListClusters", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "ManagedKafka.ListClusters", project, "", map[string]any{"project": project, "location": "-"}, all, "clusters")
 	if !covered {
 		return p.ProviderInterface.ListAllClusters(ctx, project)
 	}
@@ -145,7 +145,7 @@ func (p typedManagedKafka) ListAllClusters(ctx context.Context, project string) 
 		return nil, err
 	}
 	var out []mkstore.Cluster
-	for _, m := range items(data, "clusters") {
+	for _, m := range rows {
 		out = append(out, decodeKafkaCluster(m))
 	}
 	return out, nil
@@ -213,7 +213,7 @@ func (p typedManagedKafka) ListAllTopics(ctx context.Context, project string) ([
 		}
 		return provider.OK(map[string]any{"topics": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "ManagedKafka.ListTopics", project, "", p.params(project, "-", "-", nil), all)
+	rows, covered, err := p.c.doList(ctx, "ManagedKafka.ListTopics", project, "", p.params(project, "-", "-", nil), all, "topics")
 	if !covered {
 		return p.ProviderInterface.ListAllTopics(ctx, project)
 	}
@@ -221,14 +221,14 @@ func (p typedManagedKafka) ListAllTopics(ctx context.Context, project string) ([
 		return nil, err
 	}
 	var out []mkstore.Topic
-	for _, m := range items(data, "topics") {
+	for _, m := range rows {
 		out = append(out, decodeKafkaTopic(m))
 	}
 	return out, nil
 }
 
 func (p typedManagedKafka) ListTopics(ctx context.Context, project, location, cluster string) ([]mkstore.Topic, error) {
-	data, covered, err := p.c.do(ctx, "ManagedKafka.ListTopics", project, location, p.params(project, location, cluster, nil), nil)
+	rows, covered, err := p.c.doList(ctx, "ManagedKafka.ListTopics", project, location, p.params(project, location, cluster, nil), nil, "topics")
 	if !covered {
 		return p.ProviderInterface.ListTopics(ctx, project, location, cluster)
 	}
@@ -236,7 +236,7 @@ func (p typedManagedKafka) ListTopics(ctx context.Context, project, location, cl
 		return nil, err
 	}
 	var out []mkstore.Topic
-	for _, m := range items(data, "topics") {
+	for _, m := range rows {
 		out = append(out, decodeKafkaTopic(m))
 	}
 	return out, nil
@@ -300,7 +300,7 @@ func (p typedManagedKafka) DeleteTopic(ctx context.Context, project, location, c
 // ---- ACLs ----------------------------------------------------------------------
 
 func (p typedManagedKafka) ListAcls(ctx context.Context, project, location, cluster string) ([]mkstore.Acl, error) {
-	data, covered, err := p.c.do(ctx, "ManagedKafka.ListAcls", project, location, p.params(project, location, cluster, nil), nil)
+	rows, covered, err := p.c.doList(ctx, "ManagedKafka.ListAcls", project, location, p.params(project, location, cluster, nil), nil, "acls")
 	if !covered {
 		return p.ProviderInterface.ListAcls(ctx, project, location, cluster)
 	}
@@ -308,7 +308,7 @@ func (p typedManagedKafka) ListAcls(ctx context.Context, project, location, clus
 		return nil, err
 	}
 	var out []mkstore.Acl
-	for _, m := range items(data, "acls") {
+	for _, m := range rows {
 		out = append(out, decodeKafkaAcl(m))
 	}
 	return out, nil
@@ -376,7 +376,7 @@ func (p typedManagedKafka) RemoveAclEntry(ctx context.Context, project, location
 // ---- consumer groups ---------------------------------------------------------------
 
 func (p typedManagedKafka) ListConsumerGroups(ctx context.Context, project, location, cluster string) ([]managedkafkacore.ConsumerGroup, error) {
-	data, covered, err := p.c.do(ctx, "ManagedKafka.ListConsumerGroups", project, location, p.params(project, location, cluster, map[string]any{"view": "CONSUMER_GROUP_VIEW_FULL"}), nil)
+	rows, covered, err := p.c.doList(ctx, "ManagedKafka.ListConsumerGroups", project, location, p.params(project, location, cluster, map[string]any{"view": "CONSUMER_GROUP_VIEW_FULL"}), nil, "consumerGroups")
 	if !covered {
 		return p.ProviderInterface.ListConsumerGroups(ctx, project, location, cluster)
 	}
@@ -384,7 +384,7 @@ func (p typedManagedKafka) ListConsumerGroups(ctx context.Context, project, loca
 		return nil, err
 	}
 	var out []managedkafkacore.ConsumerGroup
-	for _, m := range items(data, "consumerGroups") {
+	for _, m := range rows {
 		out = append(out, decodeKafkaGroup(m))
 	}
 	return out, nil

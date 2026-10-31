@@ -9,13 +9,13 @@ package ui
 import (
 	"context"
 	"fmt"
-	"jaiscloud/internal/gcp/pluginchain"
-	"jaiscloud/internal/provider"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/pluginchain"
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
@@ -39,6 +39,7 @@ import (
 	tasksui "jaiscloud/internal/gcp/ui/tasks"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 	coreui "jaiscloud/internal/ui"
 )
 
@@ -283,20 +284,18 @@ func (r *Registrar) Accounts(ctx context.Context) []string {
 		return nil
 	}
 	var out []string
-	token := ""
-	for {
+	// A page loop that cannot end (a plugin repeating its token) returns what it has.
+	_ = paging.Follow(ctx, func(token string) (string, error) {
 		page, next, err := r.rmAPI().ListProjects(ctx, 0, token, false, "")
 		if err != nil {
-			return out
+			return "", err
 		}
 		for _, p := range page {
 			out = append(out, p.ProjectID)
 		}
-		if next == "" {
-			return out
-		}
-		token = next
-	}
+		return next, nil
+	})
+	return out
 }
 
 // Cloud implements coreui.Registrar.

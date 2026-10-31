@@ -100,7 +100,7 @@ func (p typedRun) ListAllServices(ctx context.Context, project string) ([]runsto
 		}
 		return provider.OK(map[string]any{"services": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Run.ListServices", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Run.ListServices", project, "", map[string]any{"project": project, "location": "-"}, all, "services")
 	if !covered {
 		return p.ProviderInterface.ListAllServices(ctx, project)
 	}
@@ -108,7 +108,7 @@ func (p typedRun) ListAllServices(ctx context.Context, project string) ([]runsto
 		return nil, err
 	}
 	var out []runstore.Service
-	for _, m := range items(data, "services") {
+	for _, m := range rows {
 		out = append(out, decodeRunService(m))
 	}
 	return out, nil
@@ -126,7 +126,7 @@ func (p typedRun) GetService(ctx context.Context, project, location, id string) 
 }
 
 func (p typedRun) ListRevisions(ctx context.Context, project, location, service string) ([]runstore.Revision, error) {
-	data, covered, err := p.c.do(ctx, "Run.ListRevisions", project, location, map[string]any{"project": project, "location": location, "service": service}, nil)
+	rows, covered, err := p.c.doList(ctx, "Run.ListRevisions", project, location, map[string]any{"project": project, "location": location, "service": service}, nil, "revisions")
 	if !covered {
 		return p.ProviderInterface.ListRevisions(ctx, project, location, service)
 	}
@@ -134,7 +134,7 @@ func (p typedRun) ListRevisions(ctx context.Context, project, location, service 
 		return nil, err
 	}
 	var out []runstore.Revision
-	for _, m := range items(data, "revisions") {
+	for _, m := range rows {
 		out = append(out, decodeRunRevision(m))
 	}
 	return out, nil

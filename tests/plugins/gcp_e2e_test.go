@@ -402,3 +402,89 @@ func TestGCPInternalPubSubCallsGoThroughThePlugin(t *testing.T) {
 		t.Fatalf("plugin saw %v, want %s", seen, want)
 	}
 }
+
+// A plugin written for the REST shape can say so; gRPC calls to the same key then skip
+// it instead of handing it protojson.
+func TestGCPGRPCSkipsAPluginThatOnlyHandlesREST(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	m := sdk.NewMux("gcp-rest-only", "0.1.0").Transports("rest")
+	m.After("gcp", "pubsub", "TopicCreate", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		mu.Lock()
+		seen = append(seen, "TopicCreate:"+c.Req.Transport)
+		mu.Unlock()
+		return sdk.Result{}, nil
+	})
+	s := gcpSidecar(t, m)
+	e, conn := startGCPBoth(t, "--plugin", s.URL)
+	if _, err := pubsubpb.NewPublisherClient(conn).CreateTopic(context.Background(), &pubsubpb.Topic{Name: "projects/p1/topics/g"}); err != nil {
+		t.Fatalf("gRPC CreateTopic: %v\n%s", err, e.logs())
+	}
+	if code, out := e.gcpREST(t, http.MethodPut, "/v1/projects/p1/topics/r", map[string]any{}); code != 200 {
+		t.Fatalf("REST create: %d %v", code, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(seen) != "[TopicCreate:]" {
+		t.Fatalf("a REST-only plugin must see the REST call and not the gRPC one, saw %v", seen)
+	}
+}
+
+// A streaming RPC cannot be replaced by a plugin; the client is told so, and a
+// plugin that only watches sees the open after the built-in's answer.
+func TestGCPGRPCStreamReplaceIsRefusedAndAfterSeesTheOpen(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	replace := true
+	m := sdk.NewMux("gcp-stream2", "0.1.0")
+	m.Replace("gcp", "firestore", "RunQuery", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !replace {
+			return sdk.Result{NotHandled: true}, nil
+		}
+		return sdk.Result{Resp: &sdk.Response{Data: map[string]any{}}}, nil
+	})
+	m.After("gcp", "firestore", "RunQuery", func(_ context.Context, c *sdk.Call) (sdk.Result, error) {
+		mu.Lock()
+		seen = append(seen, "after:"+c.Req.Transport)
+		mu.Unlock()
+		return sdk.Result{}, nil
+	})
+	s := gcpSidecar(t, m)
+	e, conn := startGCPBoth(t, "--plugin", s.URL)
+	fs := firestorepb.NewFirestoreClient(conn)
+	req := &firestorepb.RunQueryRequest{
+		Parent: "projects/p1/databases/(default)/documents",
+		QueryType: &firestorepb.RunQueryRequest_StructuredQuery{StructuredQuery: &firestorepb.StructuredQuery{
+			From: []*firestorepb.StructuredQuery_CollectionSelector{{CollectionId: "c"}}}},
+	}
+	drain := func() error {
+		st, err := fs.RunQuery(context.Background(), req)
+		if err != nil {
+			return err
+		}
+		for {
+			if _, err := st.Recv(); err != nil {
+				if err.Error() == "EOF" {
+					return nil
+				}
+				return err
+			}
+		}
+	}
+	if err := drain(); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("a replaced stream = %v, want Unimplemented\n%s", err, e.logs())
+	}
+	mu.Lock()
+	replace = false
+	mu.Unlock()
+	if err := drain(); err != nil {
+		t.Fatalf("a stream the plugin declines must run: %v\n%s", err, e.logs())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 || seen[len(seen)-1] != "after:grpc" {
+		t.Fatalf("after must see the stream open, saw %v", seen)
+	}
+}

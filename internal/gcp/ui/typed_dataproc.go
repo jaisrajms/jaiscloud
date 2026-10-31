@@ -141,7 +141,7 @@ func (p typedDataproc) ListAllClusters(ctx context.Context, project string) ([]d
 		}
 		return provider.OK(map[string]any{"clusters": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Dataproc.ListClusters", project, "", map[string]any{"project": project, "region": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Dataproc.ListClusters", project, "", map[string]any{"project": project, "region": "-"}, all, "clusters")
 	if !covered {
 		return p.ProviderInterface.ListAllClusters(ctx, project)
 	}
@@ -149,7 +149,7 @@ func (p typedDataproc) ListAllClusters(ctx context.Context, project string) ([]d
 		return nil, err
 	}
 	var out []dpstore.Cluster
-	for _, m := range items(data, "clusters") {
+	for _, m := range rows {
 		out = append(out, decodeCluster(m, ""))
 	}
 	return out, nil
@@ -234,7 +234,7 @@ func (p typedDataproc) ListAllJobs(ctx context.Context, project string) ([]dpsto
 		}
 		return provider.OK(map[string]any{"jobs": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Dataproc.ListJobs", project, "", map[string]any{"project": project, "region": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Dataproc.ListJobs", project, "", map[string]any{"project": project, "region": "-"}, all, "jobs")
 	if !covered {
 		return p.ProviderInterface.ListAllJobs(ctx, project)
 	}
@@ -242,7 +242,7 @@ func (p typedDataproc) ListAllJobs(ctx context.Context, project string) ([]dpsto
 		return nil, err
 	}
 	var out []dpstore.Job
-	for _, m := range items(data, "jobs") {
+	for _, m := range rows {
 		out = append(out, decodeDataprocJob(m, ""))
 	}
 	return out, nil
@@ -283,7 +283,7 @@ func (p typedDataproc) ListAllWorkflowTemplates(ctx context.Context, project str
 		}
 		return provider.OK(map[string]any{"templates": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Dataproc.ListWorkflowTemplates", project, "", map[string]any{"project": project, "region": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Dataproc.ListWorkflowTemplates", project, "", map[string]any{"project": project, "region": "-"}, all, "templates")
 	if !covered {
 		return p.ProviderInterface.ListAllWorkflowTemplates(ctx, project)
 	}
@@ -291,7 +291,7 @@ func (p typedDataproc) ListAllWorkflowTemplates(ctx context.Context, project str
 		return nil, err
 	}
 	var out []dpstore.WorkflowTemplate
-	for _, m := range items(data, "templates") {
+	for _, m := range rows {
 		out = append(out, decodeTemplate(m, ""))
 	}
 	return out, nil

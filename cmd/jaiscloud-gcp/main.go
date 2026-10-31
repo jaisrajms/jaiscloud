@@ -322,7 +322,9 @@ func startCmd() *cobra.Command {
 			// used by them too. It is filled in below, before anything dispatches.
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 			reg := provider.NewRegistry()
-			gcpSeams := seams.New(reg, cloudAdapter, cfg.Clock, cfg.Port, cfg.Region, cfg.ProjectID)
+			// Every provider, enabled or not: a service switched off keeps serving the services that use it.
+			allProviders := provider.NewRegistry()
+			gcpSeams := seams.New(reg, cloudAdapter, cfg.Clock, cfg.Port, cfg.Region, cfg.ProjectID).WithFallback(allProviders)
 			pubsubSeam := gcpSeams.PubSub()
 			storageSeam := gcpSeams.Storage()
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
@@ -889,6 +891,7 @@ func startCmd() *cobra.Command {
 				{"logging", loggingRestP},
 				{"monitoring", monitoringRestP},
 			} {
+				allProviders.Register(sp.p)
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
 					// The REST built-ins sit under the plugin chain for the console services that
@@ -1555,7 +1558,7 @@ func startCmd() *cobra.Command {
 				// not be boxed into the interface or the catalog would list it).
 				var functionsUI functionsui.ProviderInterface
 				if functionsCore != nil {
-					functionsUI = functionsui.NewProvider(functionsCore, storageP)
+					functionsUI = functionsui.NewProvider(functionsCore, storageSeam)
 				}
 				// Dataproc is advertised only when the service is enabled
 				// (otherwise dataprocCore is nil, and a typed nil must not be

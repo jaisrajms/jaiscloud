@@ -245,9 +245,35 @@ func randomID(n int) string {
 type modeSet struct {
 	replace, before, after bool
 	wire                   string // wire service name the plugin used in its route
+
+	// allTransports is true when some route says nothing about transports (all of
+	// them); otherwise transports is the union of what the routes list.
+	allTransports bool
+	transports    map[string]bool
 }
 
-func (m *modeSet) add(mode sdk.Mode, wire string) {
+// speaks reports whether the plugin understands the transport of nr.
+func (m *modeSet) speaks(nr *model.NormalizedRequest) bool {
+	if m.allTransports {
+		return true
+	}
+	name := nr.Transport
+	if name == "" {
+		name = "rest" // the cloud's default wire shape
+	}
+	return m.transports[name]
+}
+
+func (m *modeSet) add(mode sdk.Mode, wire string, transports []string) {
+	if len(transports) == 0 {
+		m.allTransports = true
+	}
+	for _, t := range transports {
+		if m.transports == nil {
+			m.transports = map[string]bool{}
+		}
+		m.transports[t] = true
+	}
 	switch mode {
 	case sdk.Replace:
 		m.replace = true
@@ -287,7 +313,7 @@ func (h *Host) apply(d Deps) error {
 					continue
 				}
 				key := prefix + "." + a
-				get(keys[i], key).add(r.Mode, r.Service)
+				get(keys[i], key).add(r.Mode, r.Service, r.Transports)
 				if newKeys[prefix] == nil {
 					newKeys[prefix] = map[string]bool{}
 				}
@@ -327,7 +353,7 @@ func (h *Host) apply(d Deps) error {
 				}
 				wildcardOwner[prefix] = p.name
 			}
-			get(fallback[i], prefix).add(r.Mode, r.Service)
+			get(fallback[i], prefix).add(r.Mode, r.Service, r.Transports)
 			expanded := map[string]bool{}
 			for _, k := range d.Registry.Keys(prefix) {
 				expanded[k] = true
@@ -341,7 +367,7 @@ func (h *Host) apply(d Deps) error {
 						continue // a specific replace by another plugin wins
 					}
 				}
-				get(keys[i], key).add(r.Mode, r.Service)
+				get(keys[i], key).add(r.Mode, r.Service, r.Transports)
 			}
 		}
 	}
@@ -365,12 +391,12 @@ func (h *Host) Attach(reg *provider.Registry) {
 	for i, p := range h.plugins {
 		for _, key := range sortedKeys(h.keys[i]) {
 			if ms := h.keys[i][key]; ms.replace {
-				reg.Intercept(key, p.replaceLink(ms.wire))
+				reg.Intercept(key, p.replaceLink(ms))
 			}
 		}
 		for _, prefix := range sortedKeys(h.fallback[i]) {
 			if ms := h.fallback[i][prefix]; ms.replace {
-				reg.InterceptFallback(prefix, p.replaceLink(ms.wire))
+				reg.InterceptFallback(prefix, p.replaceLink(ms))
 			}
 		}
 	}
@@ -378,12 +404,12 @@ func (h *Host) Attach(reg *provider.Registry) {
 		p := h.plugins[i]
 		for _, key := range sortedKeys(h.keys[i]) {
 			if ms := h.keys[i][key]; ms.before || ms.after {
-				reg.Intercept(key, p.aroundLink(ms.wire, ms.before, ms.after))
+				reg.Intercept(key, p.aroundLink(ms))
 			}
 		}
 		for _, prefix := range sortedKeys(h.fallback[i]) {
 			if ms := h.fallback[i][prefix]; ms.before || ms.after {
-				reg.InterceptFallback(prefix, p.aroundLink(ms.wire, ms.before, ms.after))
+				reg.InterceptFallback(prefix, p.aroundLink(ms))
 			}
 		}
 	}

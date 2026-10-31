@@ -269,6 +269,26 @@ func TestListObjects_ReturnsItemsAndPrefixes(t *testing.T) {
 	}
 }
 
+// A plugin that serves the listing answers decoded JSON, where prefixes are []any, not
+// []string: the folders must still show.
+func TestListObjects_ShowsPrefixesAPluginServed(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"items":    []any{map[string]any{"name": "a.txt"}},
+			"prefixes": []any{"dir/", "other/"},
+		},
+	}}
+	w := do(t, mock, http.MethodGet, "/buckets/media/objects?prefix=&delimiter=/", "")
+	var resp ListObjectsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	if len(resp.Prefixes) != 2 || resp.Prefixes[0] != "dir/" || resp.Prefixes[1] != "other/" {
+		t.Fatalf("prefixes = %+v, want both folders", resp.Prefixes)
+	}
+}
+
 func TestListObjects_VersionsSuppressesDelimiter(t *testing.T) {
 	mock := &mockProvider{}
 	w := do(t, mock, http.MethodGet, "/buckets/media/objects?versions=true", "")

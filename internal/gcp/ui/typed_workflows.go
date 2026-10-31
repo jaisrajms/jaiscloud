@@ -98,7 +98,7 @@ func (p typedWorkflows) ListWorkflowsByProject(ctx context.Context, project stri
 		}
 		return provider.OK(map[string]any{"workflows": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Workflow.ListWorkflows", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Workflow.ListWorkflows", project, "", map[string]any{"project": project, "location": "-"}, all, "workflows")
 	if !covered {
 		return p.ProviderInterface.ListWorkflowsByProject(ctx, project)
 	}
@@ -106,7 +106,7 @@ func (p typedWorkflows) ListWorkflowsByProject(ctx context.Context, project stri
 		return nil, err
 	}
 	var out []workflowsstore.Workflow
-	for _, m := range items(data, "workflows") {
+	for _, m := range rows {
 		out = append(out, decodeWorkflow(m))
 	}
 	return out, nil

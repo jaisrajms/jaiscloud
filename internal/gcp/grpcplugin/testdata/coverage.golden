@@ -304,16 +304,16 @@ google.cloud.functions.v2.FunctionService: 8 mapped, 0 without a registry key
   + ListFunctions=Function.ListFunctions
   + ListRuntimes=Function.ListRuntimes
   + UpdateFunction=Function.UpdateFunction
-google.pubsub.v1.Publisher: 9 mapped, 0 without a registry key
+google.pubsub.v1.Publisher: 7 mapped, 2 without a registry key
   + CreateTopic=PubSub.TopicCreate
   + DeleteTopic=PubSub.TopicDelete
   + DetachSubscription=PubSub.SubscriptionDetach
   + GetTopic=PubSub.TopicGet
-  + ListTopicSnapshots=PubSub.TopicGet
-  + ListTopicSubscriptions=PubSub.TopicGet
   + ListTopics=PubSub.TopicList
   + Publish=PubSub.TopicPublish
   + UpdateTopic=PubSub.TopicUpdate
+  - ListTopicSnapshots
+  - ListTopicSubscriptions
 google.pubsub.v1.Subscriber: 10 mapped, 6 without a registry key
   + Acknowledge=PubSub.SubscriptionAcknowledge
   + CreateSubscription=PubSub.SubscriptionCreate
@@ -498,9 +498,9 @@ google.iam.v1.IAMPolicy: 3 mapped, 0 without a registry key
   + GetIamPolicy=(by resource)
   + SetIamPolicy=(by resource)
   + TestIamPermissions=(by resource)
-google.longrunning.Operations: 4 mapped, 1 without a registry key
-  + CancelOperation=Function.GetOperation
-  + DeleteOperation=Function.GetOperation
-  + GetOperation=Function.GetOperation
-  + ListOperations=Function.ListOperations
+google.longrunning.Operations: 0 mapped, 5 without a registry key
+  - CancelOperation
+  - DeleteOperation
+  - GetOperation
+  - ListOperations
   - WaitOperation

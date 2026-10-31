@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 
+	"jaiscloud/internal/gcp/paging"
+	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
@@ -25,11 +27,15 @@ type Storage struct{ s *Set }
 // Storage returns the Cloud Storage seam.
 func (s *Set) Storage() *Storage { return &Storage{s: s} }
 
-func (st *Storage) call(ctx context.Context, action, project string, params map[string]any) (*model.ProviderResponse, error) {
+func (st *Storage) project(project string) string {
 	if project == "" {
-		project = st.s.project
+		return st.s.project
 	}
-	return st.s.dispatch(ctx, "storage", action, project, params, nil)
+	return project
+}
+
+func (st *Storage) call(ctx context.Context, action, project string, params map[string]any) (*model.ProviderResponse, error) {
+	return st.s.dispatch(ctx, "storage", action, st.project(project), params, nil)
 }
 
 func isStatus(err error, code int) bool {
@@ -59,24 +65,29 @@ func (st *Storage) FetchObjectBytes(ctx context.Context, bucket, object string) 
 // yields no names.
 func (st *Storage) ListObjectNames(ctx context.Context, bucket, prefix string) ([]string, error) {
 	var names []string
-	token := ""
-	for {
+	err := paging.Follow(ctx, func(token string) (string, error) {
 		params := map[string]any{"bucket": bucket, "prefix": prefix, "maxResults": "1000"}
 		if token != "" {
 			params["pageToken"] = token
 		}
 		resp, err := st.call(ctx, "ObjectsList", "", params)
 		if err != nil {
-			if isStatus(err, 404) {
-				return nil, nil
-			}
-			return nil, err
+			return "", err
 		}
 		names = append(names, itemNames(resp.Data["items"])...)
-		if token, _ = resp.Data["nextPageToken"].(string); token == "" {
-			return names, nil
-		}
+		next, _ := resp.Data["nextPageToken"].(string)
+		return next, nil
+	})
+	switch {
+	case err == nil:
+		return names, nil
+	case isStatus(err, 404):
+		return nil, nil
+	case errors.Is(err, paging.ErrPageLoop):
+		return nil, model.NewProviderError("PluginProtocolError",
+			"the listing of "+bucket+" never ends: its next page token repeats", 502)
 	}
+	return nil, err
 }
 
 // itemNames reads "name" from a listing's items, whether the built-in produced
@@ -123,7 +134,10 @@ func (st *Storage) EnsureBucket(ctx context.Context, project, bucket, location s
 	return nil
 }
 
-// PutObjectBytes writes (or replaces) an object, creating the bucket when absent.
+// PutObjectBytes writes (or replaces) an object, creating the bucket when absent. It is
+// the emulator staging an object for another service, so the write carries
+// storage.StagedWriteMeta: a bucket's versioning and retention do not apply, as they
+// never did to this helper. A plugin sees it as an ordinary ObjectsInsert (origin internal).
 func (st *Storage) PutObjectBytes(ctx context.Context, project, bucket, object, contentType string, data []byte) error {
 	if bucket == "" || object == "" {
 		return fmt.Errorf("storage: PutObjectBytes requires bucket and object")
@@ -134,9 +148,9 @@ func (st *Storage) PutObjectBytes(ctx context.Context, project, bucket, object, 
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	_, err := st.call(ctx, "ObjectsInsert", project, map[string]any{
+	_, err := st.s.dispatch(ctx, "storage", "ObjectsInsert", st.project(project), map[string]any{
 		"bucket": bucket, "object": object,
 		wire.MediaKey: data, wire.ContentTypeKey: contentType,
-	})
+	}, map[string]string{storageprovider.StagedWriteMeta: "1"})
 	return err
 }

@@ -260,11 +260,60 @@ func TestGCPTestHooksTellPluginsThatOwnTheService(t *testing.T) {
 			t.Fatalf("%s: %d %s", path, code, raw)
 		}
 	}
-	// Only the plugin that owns "scheduler" hears the scheduler tick.
-	time.Sleep(200 * time.Millisecond)
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if fmt.Sprint(st.ticks) != "[tick:scheduler]" {
-		t.Fatalf("ticks = %v, want [tick:scheduler]", st.ticks)
+	// Only the plugin that owns "scheduler" hears the scheduler tick; the notice is
+	// asynchronous, so wait for it instead of sleeping.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st.mu.Lock()
+		got := fmt.Sprint(st.ticks)
+		st.mu.Unlock()
+		if got == "[tick:scheduler]" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ticks = %s, want [tick:scheduler]", got)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// A service switched off with --transport-overrides still serves the services that depend
+// on it: Cloud Functions asks Cloud Storage for its source bucket.
+func TestGCPSeamsKeepWorkingWhenTheTargetServiceIsSwitchedOff(t *testing.T) {
+	e := startGCP(t, "--transport-overrides", "storage=none")
+	code, out := e.gcpREST(t, http.MethodPost, "/v2/projects/p1/locations/us-central1/functions:generateUploadUrl", map[string]any{})
+	if code != 200 || out["storageSource"] == nil {
+		t.Fatalf("generateUploadUrl with storage=none: %d %v\n%s", code, out, e.logs())
+	}
+}
+
+// With no plugin a Cloud Storage notification still reaches Pub/Sub through the seam,
+// exactly as it did when the storage provider called Pub/Sub directly.
+func TestGCPInternalPubSubFlowWithoutAPlugin(t *testing.T) {
+	e := startGCP(t)
+	must := func(code int, out map[string]any, what string) {
+		t.Helper()
+		if code != 200 {
+			t.Fatalf("%s: %d %v\n%s", what, code, out, e.logs())
+		}
+	}
+	code, out := e.gcpREST(t, http.MethodPut, "/v1/projects/p1/topics/n1", map[string]any{})
+	must(code, out, "create topic")
+	code, out = e.gcpREST(t, http.MethodPut, "/v1/projects/p1/subscriptions/s1", map[string]any{"topic": "projects/p1/topics/n1"})
+	must(code, out, "create subscription")
+	code, out = e.gcpREST(t, http.MethodPost, "/storage/v1/b?project=p1", map[string]any{"name": "b1"})
+	must(code, out, "create bucket")
+	code, out = e.gcpREST(t, http.MethodPost, "/storage/v1/b/b1/notificationConfigs", map[string]any{
+		"topic": "//pubsub.googleapis.com/projects/p1/topics/n1", "payload_format": "JSON_API_V1", "event_types": []string{"OBJECT_FINALIZE"}})
+	must(code, out, "create notification config")
+	resp, err := http.Post(e.base+"/upload/storage/v1/b/b1/o?uploadType=media&name=o1", "text/plain", bytes.NewReader([]byte("hi")))
+	if err != nil {
+		e.fatal(t, err)
+	}
+	resp.Body.Close()
+	code, out = e.gcpREST(t, http.MethodPost, "/v1/projects/p1/subscriptions/s1:pull", map[string]any{"maxMessages": 10, "returnImmediately": true})
+	must(code, out, "pull")
+	if msgs, _ := out["receivedMessages"].([]any); len(msgs) != 1 {
+		t.Fatalf("the notification must reach the subscription, got %v", out)
 	}
 }

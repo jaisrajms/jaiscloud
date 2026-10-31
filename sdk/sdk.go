@@ -56,6 +56,14 @@ type Route struct {
 	Service string   `json:"service"` // wire service name, never a registry prefix
 	Actions []string `json:"actions"` // action names, or ["*"] for the whole service
 	Mode    Mode     `json:"mode"`
+	// Transports lists the wire transports this route's functions understand:
+	// "rest" (the cloud's default wire shape: AWS, and GCP REST) and "grpc" (GCP gRPC,
+	// where Params and responses are protojson of the RPC messages, see
+	// Request.Transport). Empty means all of them. A call that arrives over a
+	// transport a route does not list skips the plugin and reaches the built-in (or
+	// the next plugin), so a plugin written for the REST shape can say so and never
+	// receives protojson it cannot read.
+	Transports []string `json:"transports,omitempty"`
 }
 
 // Request is the projection of one API call a plugin sees.

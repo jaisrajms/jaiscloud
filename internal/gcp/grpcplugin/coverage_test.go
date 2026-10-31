@@ -125,3 +125,35 @@ func TestCoverageIsAReviewedFact(t *testing.T) {
 		t.Fatalf("gRPC→registry mapping changed; review it and run `go test ./internal/gcp/grpcplugin -run Coverage -update`\n%s", got)
 	}
 }
+
+// A key is one contract. Two RPCs may share a key only when they are the same
+// operation in two API versions (Cloud Functions v1 and v2) or resolve their key from
+// the resource (the generic IAM RPCs); anything else means the resolver reached a
+// neighbour's key, as ListTopicSubscriptions once did with PubSub.TopicGet.
+func TestNoTwoUnrelatedRPCsShareAKey(t *testing.T) {
+	i := New(Config{Host: noHost{}, Adapter: gcpadapter.NewAdapter("")})
+	inputs := map[string]map[string]bool{}
+	for _, name := range servedServices {
+		d, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sd := d.(protoreflect.ServiceDescriptor)
+		for m := 0; m < sd.Methods().Len(); m++ {
+			md := sd.Methods().Get(m)
+			rt := i.rs.route(fmt.Sprintf("/%s/%s", name, md.Name()))
+			if rt == nil || rt.dynamic {
+				continue
+			}
+			if inputs[rt.key] == nil {
+				inputs[rt.key] = map[string]bool{}
+			}
+			inputs[rt.key][string(md.Input().Name())] = true
+		}
+	}
+	for key, in := range inputs {
+		if len(in) > 1 && !strings.HasPrefix(key, "Function.") {
+			t.Errorf("%s is the key of RPCs with different request messages %v", key, in)
+		}
+	}
+}

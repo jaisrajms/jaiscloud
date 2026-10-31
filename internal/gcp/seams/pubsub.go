@@ -78,9 +78,17 @@ func (p *PubSub) publish(ctx context.Context, account, topic string, data []byte
 	if err != nil {
 		return "", err
 	}
-	if ids, _ := resp.Data["messageIds"].([]any); len(ids) > 0 {
-		id, _ := ids[0].(string)
-		return id, nil
+	// The built-in answers []string, a plugin's decoded JSON []any.
+	switch ids := resp.Data["messageIds"].(type) {
+	case []string:
+		if len(ids) > 0 {
+			return ids[0], nil
+		}
+	case []any:
+		if len(ids) > 0 {
+			id, _ := ids[0].(string)
+			return id, nil
+		}
 	}
 	return "", nil
 }
@@ -137,17 +145,14 @@ func (p *PubSub) DeleteEventarcTopic(ctx context.Context, project, topic string)
 }
 
 // EnsureEventarcSubscription creates the transport subscription of a trigger on
-// topic, or keeps the one that exists. When the trigger now uses another topic
-// the subscription is recreated on it with its dead-letter policy and labels,
-// because a client cannot move a subscription to another topic.
+// topic, or keeps the one that exists. When the trigger now uses another topic the
+// subscription is re-pointed in place, with every other setting and its queued
+// messages kept (an internal-only update the public API does not offer).
 func (p *PubSub) EnsureEventarcSubscription(ctx context.Context, project, location, triggerID, topic string) (string, error) {
 	id := eventing.EventarcSubscriptionID(location, triggerID)
 	topicID := lastSegment(topic)
 	name := "subscriptions/" + id
-	body := map[string]any{
-		"topic":  p.s.ad.ResourceIDFor(p.s.region, project)("pubsub-topic", topicID),
-		"labels": map[string]any{"goog-eventarc-trigger": triggerID},
-	}
+	fullTopic := p.s.ad.ResourceIDFor(p.s.region, project)("pubsub-topic", topicID)
 	if _, err := p.call(ctx, "TopicGet", project, "topics/"+topicID, nil, nil); err != nil {
 		if notFound(err) {
 			return "", model.NewProviderError("NotFound", "dead-letter transport topic not found: "+topic, 404)
@@ -157,19 +162,17 @@ func (p *PubSub) EnsureEventarcSubscription(ctx context.Context, project, locati
 	cur, err := p.call(ctx, "SubscriptionGet", project, name, nil, nil)
 	switch {
 	case err == nil:
-		curTopic, _ := cur.Data["topic"].(string)
-		if lastSegment(curTopic) == topicID {
-			return id, nil
+		if curTopic, _ := cur.Data["topic"].(string); lastSegment(curTopic) != topicID {
+			if _, err := p.call(ctx, "SubscriptionUpdate", project, name,
+				map[string]any{"topic": fullTopic, "updateMask": "topic"}, nil); err != nil {
+				return "", err
+			}
 		}
-		if dlp, ok := cur.Data["deadLetterPolicy"]; ok {
-			body["deadLetterPolicy"] = dlp
-		}
-		if _, err := p.call(ctx, "SubscriptionDelete", project, name, nil, nil); err != nil && !notFound(err) {
-			return "", err
-		}
+		return id, nil
 	case !notFound(err):
 		return "", err
 	}
+	body := map[string]any{"topic": fullTopic, "labels": map[string]any{"goog-eventarc-trigger": triggerID}}
 	if _, err := p.call(ctx, "SubscriptionCreate", project, name, body, nil); err != nil && !alreadyExists(err) {
 		return "", err
 	}

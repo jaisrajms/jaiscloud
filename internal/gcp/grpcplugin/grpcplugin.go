@@ -75,6 +75,9 @@ func New(cfg Config) *Interceptor {
 
 // ServerOptions returns the interceptors to install on the gRPC server.
 func (i *Interceptor) ServerOptions() []grpc.ServerOption {
+	if i.cfg.Host == nil && i.cfg.Chain == nil {
+		return nil // no plugins: nothing to intercept
+	}
 	return []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(i.unary),
 		grpc.ChainStreamInterceptor(i.stream),
@@ -206,7 +209,7 @@ func (i *Interceptor) unary(ctx context.Context, req any, info *grpc.UnaryServer
 			return handler(ctx, req)
 		}
 	}
-	if !i.cfg.Host.Covers(key) {
+	if !i.chain.Covers(key) {
 		return handler(ctx, req)
 	}
 	nr, err := i.request(ctx, rt, msg)
@@ -321,7 +324,7 @@ func statusName(c codes.Code) string {
 // bidirectional streams there is no request message yet, so Params is empty.
 func (i *Interceptor) stream(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	rt := i.rs.route(info.FullMethod)
-	if rt == nil || !i.cfg.Host.Covers(rt.key) {
+	if rt == nil || !i.chain.Covers(rt.key) {
 		return handler(srv, ss)
 	}
 	ctx := ss.Context()

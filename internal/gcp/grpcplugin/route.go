@@ -53,6 +53,12 @@ func (rs *resolver) build(fullMethod string) *route {
 	if !ok {
 		return nil
 	}
+	// google.longrunning.Operations serves the operations of every service; which
+	// service's key an operation belongs to follows its name, which this resolver does
+	// not interpret, so these RPCs are left alone rather than mapped to one service.
+	if md.Parent().FullName() == "google.longrunning.Operations" {
+		return nil
+	}
 	rule, _ := proto.GetExtension(md.Options(), annotations.E_Http).(*annotations.HttpRule)
 	in, err := protoregistry.GlobalTypes.FindMessageByName(md.Input().FullName())
 	if err != nil {
@@ -76,7 +82,7 @@ func (rs *resolver) build(fullMethod string) *route {
 			continue
 		}
 		for _, p := range versions(path) {
-			if key, ok := rs.keyOf(host, verb, p); ok {
+			if key, ok := rs.keyOf(host, verb, p); ok && rs.respectsSuffix(host, verb, tmpl, p, key) {
 				return &route{key: key, method: md, host: host, verb: verb, template: tmpl, in: in, out: out}
 			}
 		}
@@ -100,6 +106,39 @@ func versions(path string) []string {
 		}
 	}
 	return out
+}
+
+// respectsSuffix rejects a key the REST detector reached by ignoring the end of the
+// path. A template that ends in a literal (".../topics/*/subscriptions", ":cancel")
+// names an operation of its own; if the same path without that literal resolves to
+// the very same key, the REST adapter has no route for the operation and the key
+// is a neighbour's (ListTopicSubscriptions would otherwise map to PubSub.TopicGet).
+func (rs *resolver) respectsSuffix(host, verb, tmpl, path, key string) bool {
+	trimmed, ok := trimTrailingLiteral(tmpl)
+	if !ok {
+		return true
+	}
+	short, ok := render(trimmed, nil)
+	if !ok {
+		return true
+	}
+	for _, p := range versions(short) {
+		if other, ok := rs.keyOf(host, verb, p); ok && other == key {
+			return false
+		}
+	}
+	return true
+}
+
+// trimTrailingLiteral removes the literal that follows the last {variable} of a
+// template ("/v1/{name=...}/subscriptions" -> "/v1/{name=...}"; "...}:getIamPolicy"
+// -> "...}"). ok is false when the template does not end in such a literal.
+func trimTrailingLiteral(tmpl string) (string, bool) {
+	end := strings.LastIndex(tmpl, "}")
+	if end < 0 || end == len(tmpl)-1 {
+		return "", false
+	}
+	return tmpl[:end+1], true
 }
 
 // ruleOf returns the verb and path template of a rule's primary binding.

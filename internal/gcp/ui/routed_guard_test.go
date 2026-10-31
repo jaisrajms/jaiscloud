@@ -296,7 +296,7 @@ var typedServices = []struct {
 // so there is no key a plugin could cover.
 var typedStayOnBuiltIn = map[string]string{
 	"functions.ListDeliveries":             "the emulator's own log of event deliveries, not a Cloud Functions action",
-	"functions.PutSourceArchive":           "writes the source archive through the Cloud Storage seam, which is already a registry call",
+	"functions.PutSourceArchive":           "writes the source archive through the Cloud Storage seam (main.go passes the seam), which is a registry call",
 	"resourcemanager.ListObservedProjects": "the registry of projects seen on the wire, console discovery only",
 	"projects.ListObservedProjects":        "the registry of projects seen on the wire, console discovery only",
 }

@@ -32,12 +32,32 @@ type Set struct {
 	port    int
 	region  string
 	project string // config default project, for callers that carry none
+
+	// fallback holds every provider, including those of services switched off with
+	// --transport-overrides X=none. A service that is off has no wire or plugin
+	// surface, but the services that depend on it keep working as they always did.
+	fallback *provider.Registry
 }
 
 // New builds a Set. reg is the registry plugins are installed on; it may still
 // be empty when New is called, because nothing dispatches before startup ends.
 func New(reg *provider.Registry, ad adapter.CloudAdapter, clk clock.Clock, port int, region, project string) *Set {
 	return &Set{reg: reg, ad: ad, clock: clk, port: port, region: region, project: project}
+}
+
+// WithFallback sets the registry that answers a seam call when reg has no handler
+// for the key because the target service is switched off.
+func (s *Set) WithFallback(fallback *provider.Registry) *Set {
+	s.fallback = fallback
+	return s
+}
+
+// send dispatches nr to key on the registry that holds it.
+func (s *Set) send(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if !s.reg.Has(key) && s.fallback != nil && s.fallback.Has(key) {
+		return s.fallback.Dispatch(ctx, key, nr)
+	}
+	return s.reg.Dispatch(ctx, key, nr)
 }
 
 // request builds the NormalizedRequest of an internal client call of project.
@@ -57,7 +77,7 @@ func (s *Set) request(service, action, project string, params map[string]any, me
 // dispatch calls the registry key of service/action as an internal client of
 // project, with REST-shaped params (what the REST decoder produces).
 func (s *Set) dispatch(ctx context.Context, service, action, project string, params map[string]any, meta map[string]string) (*model.ProviderResponse, error) {
-	return s.reg.Dispatch(ctx, s.ad.ServiceToProvider(service)+"."+action, s.request(service, action, project, params, meta))
+	return s.send(ctx, s.ad.ServiceToProvider(service)+"."+action, s.request(service, action, project, params, meta))
 }
 
 func b64(data []byte) string { return base64.StdEncoding.EncodeToString(data) }

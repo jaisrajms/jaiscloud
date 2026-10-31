@@ -88,7 +88,7 @@ func (p typedEventarc) ListTriggersByProject(ctx context.Context, project string
 		}
 		return provider.OK(map[string]any{"triggers": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Eventarc.ListTriggers", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Eventarc.ListTriggers", project, "", map[string]any{"project": project, "location": "-"}, all, "triggers")
 	if !covered {
 		return p.ProviderInterface.ListTriggersByProject(ctx, project)
 	}
@@ -96,7 +96,7 @@ func (p typedEventarc) ListTriggersByProject(ctx context.Context, project string
 		return nil, err
 	}
 	var out []eventarcstore.Trigger
-	for _, m := range items(data, "triggers") {
+	for _, m := range rows {
 		out = append(out, decodeTrigger(m))
 	}
 	return out, nil
@@ -213,7 +213,7 @@ func (p typedEventarc) ListChannelsByProject(ctx context.Context, project string
 		}
 		return provider.OK(map[string]any{"channels": out}), nil
 	}
-	data, covered, err := p.c.do(ctx, "Eventarc.ListChannels", project, "", map[string]any{"project": project, "location": "-"}, all)
+	rows, covered, err := p.c.doList(ctx, "Eventarc.ListChannels", project, "", map[string]any{"project": project, "location": "-"}, all, "channels")
 	if !covered {
 		return p.ProviderInterface.ListChannelsByProject(ctx, project)
 	}
@@ -221,7 +221,7 @@ func (p typedEventarc) ListChannelsByProject(ctx context.Context, project string
 		return nil, err
 	}
 	var out []eventarcstore.Channel
-	for _, m := range items(data, "channels") {
+	for _, m := range rows {
 		out = append(out, decodeChannel(m))
 	}
 	return out, nil

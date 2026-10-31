@@ -3,11 +3,13 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"time"
 
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/pluginchain"
 	"jaiscloud/internal/gcp/ui/uihelper"
 	"jaiscloud/internal/model"
@@ -59,6 +61,33 @@ func (c typedCaller) do(ctx context.Context, key, project, region string, params
 	}
 	data, err = normalize(resp.Data)
 	return data, true, err
+}
+
+// doList is do for a listing: it follows nextPageToken until the list ends, so the
+// console shows every page a plugin serves and not only the first. A repeated token or
+// an endless list stops with a PluginProtocolError. field names the array in the answer.
+func (c typedCaller) doList(ctx context.Context, key, project, region string, params map[string]any, next provider.HandlerFunc, field string) (rows []map[string]any, covered bool, err error) {
+	err = paging.Follow(ctx, func(token string) (string, error) {
+		page := make(map[string]any, len(params)+1)
+		for k, v := range params {
+			page[k] = v
+		}
+		if token != "" {
+			page["pageToken"] = token
+		}
+		data, cov, err := c.do(ctx, key, project, region, page, next)
+		covered = cov
+		if err != nil || !cov {
+			return "", err
+		}
+		rows = append(rows, items(data, field)...)
+		nextToken, _ := data["nextPageToken"].(string)
+		return nextToken, nil
+	})
+	if errors.Is(err, paging.ErrPageLoop) {
+		err = model.NewProviderError("PluginProtocolError", "the listing for "+key+" never ends: its next page token repeats", 502)
+	}
+	return rows, covered, err
 }
 
 // normalize turns a handler's Go-typed answer (or a plugin's decoded JSON) into
