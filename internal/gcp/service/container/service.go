@@ -108,23 +108,10 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 		c.Subnetwork = "default"
 	}
 	// The response messages real GKE always renders are persisted at create so
-	// a snapshot round-trip carries them; WithReadDefaults still covers records
+	// a snapshot round-trip carries them; NormalizeCluster is the one owner of
+	// those literals, and WithReadDefaults applies the same function to records
 	// written before they were modelled.
-	if c.ShieldedNodes == nil {
-		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: true}
-	}
-	if c.MaxPodsPerNode <= 0 {
-		c.MaxPodsPerNode = DefaultMaxPodsPerNode
-	}
-	if c.LoggingService == "" {
-		c.LoggingService = LoggingServiceKubernetes
-	}
-	if c.MonitoringService == "" {
-		c.MonitoringService = MonitoringServiceKubernetes
-	}
-	if c.LegacyAbac == nil {
-		c.LegacyAbac = &containerstore.LegacyAbac{}
-	}
+	c = NormalizeCluster(c)
 	// Workload Identity is required by Dataproc-on-GKE; an empty pool means the
 	// project default, exactly as GKE fills it.
 	if c.WorkloadIdentityConfig != nil && c.WorkloadIdentityConfig.WorkloadPool == "" {

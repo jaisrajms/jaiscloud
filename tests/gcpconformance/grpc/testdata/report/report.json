@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 496,
-  "passed": 496,
+  "total": 498,
+  "passed": 498,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 496,
-    "passed": 496,
+    "checks": 498,
+    "passed": 498,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "container",
-      "total": 32,
-      "passed": 32,
+      "total": 34,
+      "passed": 34,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3165,6 +3165,20 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "default-pool config + cluster nodeConfig echo"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateCluster (duplicate inline nodePool names)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "InvalidArgument on a repeated pool name, nothing persisted"
+    },
+    {
+      "service": "container",
+      "rpc": "GetCluster (Compute self-link network)",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "networkConfig resolved from a self-link, host project kept"
     },
     {
       "service": "container",

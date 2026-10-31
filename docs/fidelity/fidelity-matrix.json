@@ -2018,10 +2018,10 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=CreateCluster,CreateCluster (nodeConfig default pool),CreateCluster (nodePools + default-pool fields)",
+        "grpc-checks=CreateCluster,CreateCluster (duplicate inline nodePool names),CreateCluster (nodeConfig default pool),CreateCluster (nodePools + default-pool fields)",
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=3/3 pass)",
+        "transport=grpc (conformance=4/4 pass)",
         "verified=true (grpc)"
       ]
     },
@@ -2100,9 +2100,9 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=GetCluster,GetCluster (legacy project/zone)",
+        "grpc-checks=GetCluster,GetCluster (Compute self-link network),GetCluster (legacy project/zone)",
         "postgres=yes",
-        "transport=grpc (conformance=2/2 pass)",
+        "transport=grpc (conformance=3/3 pass)",
         "verified=true (grpc)"
       ]
     },

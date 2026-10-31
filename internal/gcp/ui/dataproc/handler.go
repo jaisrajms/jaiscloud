@@ -84,7 +84,7 @@ func renderCluster(project string, c dpstore.Cluster, full bool) Cluster {
 	}
 	if full {
 		out.Config = renderedClusterConfig(c)
-		out.VirtualClusterConfig = c.VirtualClusterConfig
+		out.VirtualClusterConfig = renderedVirtualClusterConfig(c)
 		out.Namespace = c.Namespace
 		out.NamespaceOwned = c.NamespaceOwned
 		out.KubernetesNamespace = dataproccore.KubernetesNamespaceFromVirtualClusterConfig(c.VirtualClusterConfig)
@@ -97,13 +97,32 @@ func renderCluster(project string, c dpstore.Cluster, full bool) Cluster {
 // version, instance groups, zone) — so the console shows the same shape a client
 // receives instead of the bare stored request. A GKE-backed cluster has none.
 func renderedClusterConfig(c dpstore.Cluster) json.RawMessage {
-	cfg, ok := dataproccore.ClusterJSON(c)["config"]
+	return renderedClusterField(c, "config")
+}
+
+// renderedVirtualClusterConfig returns the virtualClusterConfig a REST/gRPC read
+// renders for c, through the same core helper as config: ClusterJSON strips the
+// input-only nodePoolConfig from every nodePoolTarget, and a console detail read
+// must not echo a field the API deliberately withholds (one object, one
+// rendering rule).
+func renderedVirtualClusterConfig(c dpstore.Cluster) json.RawMessage {
+	return renderedClusterField(c, "virtualClusterConfig")
+}
+
+// renderedClusterField marshals one Config/VirtualClusterConfig field of the
+// core's ClusterJSON rendering, falling back to the stored bytes when the core
+// has no rendering for it or cannot marshal one.
+func renderedClusterField(c dpstore.Cluster, field string) json.RawMessage {
+	v, ok := dataproccore.ClusterJSON(c)[field]
 	if !ok {
 		return nil
 	}
-	b, err := json.Marshal(cfg)
+	b, err := json.Marshal(v)
 	if err != nil {
-		return c.Config
+		if field == "config" {
+			return c.Config
+		}
+		return c.VirtualClusterConfig
 	}
 	return b
 }
