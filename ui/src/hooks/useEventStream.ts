@@ -56,6 +56,7 @@ export function useEventStream(): { connected: boolean } {
             keys?: string[]
             id?: string
             state?: string
+            project?: string
           }
           if (event.type === 'reset') {
             qc.invalidateQueries()
@@ -74,6 +75,11 @@ export function useEventStream(): { connected: boolean } {
               : null
           if (key) {
             qc.invalidateQueries({ queryKey: key })
+          }
+          // A GCP write landing in another project should surface on the home
+          // card/banner at once, not on the next discovery poll.
+          if (event.project) {
+            qc.invalidateQueries({ queryKey: ['gcp', 'project-discovery'] })
           }
         } catch {
           // malformed event — ignore
