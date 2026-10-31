@@ -50,6 +50,7 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "CreateCluster (vcc pools)", Method: "CreateCluster", KeyField: "reconciled pools read back through ClusterManager + survive delete", Run: checkDPGKEVirtualClusterPools},
 		{Service: "dataproc", RPC: "CreateCluster (vcc reuse)", Method: "CreateCluster", KeyField: "a second virtual cluster adopts existing pools", Run: checkDPGKEVirtualClusterPoolReuse},
 		{Service: "dataproc", RPC: "CreateCluster (vcc rules)", Method: "CreateCluster", KeyField: "GKE placement/pool validation as client-visible errors", Run: checkDPGKEVirtualClusterRules},
+		{Service: "dataproc", RPC: "CreateCluster (vcc pool shape)", Method: "CreateCluster", KeyField: "done LRO -> ERROR cluster with the pool and field in status.detail", Run: checkDPGKEVirtualClusterPoolShapeConflict},
 		{Service: "dataproc", RPC: "UpdateCluster (vcc)", Method: "UpdateCluster", KeyField: "recreate-only: virtualClusterConfig patch is InvalidArgument", Run: checkDPVirtualClusterRecreateOnly},
 		{Service: "dataproc", RPC: "CreateCluster (vcc image alias)", Method: "CreateCluster", KeyField: "dataproc-2.2 dereferences to the newest engine release", Run: checkDPGKEImageVersionAlias},
 		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
@@ -1295,6 +1296,81 @@ func checkDPGKEVirtualClusterRules(ctx context.Context, cfg Config) error {
 	}
 	if !strings.Contains(status.Convert(err).Message(), "already used by Dataproc virtual cluster") {
 		return fmt.Errorf("duplicate namespace message %q does not name the owning cluster", status.Convert(err).Message())
+	}
+	return nil
+}
+
+// checkDPGKEVirtualClusterPoolShapeConflict is the gRPC half of the ERROR-status
+// path: a nodePoolConfig that disagrees with an existing pool does not reject the
+// request, it fails the provisioned cluster. The create's LRO completes
+// successfully and its response cluster is persisted in ERROR with a
+// status.detail naming the pool and the field that differed, the documented
+// shape (README-GCP.md §Dataproc workload placement, wire-contract §5). The REST
+// half is TestSDKDataprocOnGKEConflictingPoolShape in the sdk-dataproc suite.
+func checkDPGKEVirtualClusterPoolShapeConflict(ctx context.Context, cfg Config) error {
+	target, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-grpc-dp-gkeconflict")
+	if err != nil {
+		return err
+	}
+	dp, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer dp.Close()
+	gke, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new container client: %w", err)
+	}
+	defer gke.Close()
+
+	// An existing pool whose shape the virtual cluster's nodePoolConfig
+	// contradicts. It is created through the GKE API, so the mismatch is a
+	// verification failure rather than a create-time validation error.
+	pool := "taken-pool"
+	if _, err := gke.CreateNodePool(ctx, &containerpb.CreateNodePoolRequest{
+		Parent: target,
+		NodePool: &containerpb.NodePool{
+			Name:             pool,
+			InitialNodeCount: 1,
+			Config:           &containerpb.NodeConfig{MachineType: "e2-medium"},
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateNodePool: %w", err)
+	}
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vccconflict")
+	op, err := dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: id,
+			VirtualClusterConfig: gkePoolVirtualCluster(cfg, target, []*dataprocpb.GkeNodePoolTarget{{
+				NodePool: target + "/nodePools/" + pool,
+				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+				NodePoolConfig: &dataprocpb.GkeNodePoolConfig{
+					Config: &dataprocpb.GkeNodePoolConfig_GkeNodeConfig{MachineType: "n1-standard-4"},
+				},
+			}}),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	// The reconciliation failure lands on the cluster, not on the operation:
+	// Wait must succeed and still return the ERROR cluster.
+	cluster, err := op.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("operation Wait: %w (the pool-shape failure belongs on the cluster, not the LRO)", err)
+	}
+	if got := cluster.GetStatus().GetState(); got != dataprocpb.ClusterStatus_ERROR {
+		return fmt.Errorf("cluster state = %v, want ERROR", got)
+	}
+	detail := cluster.GetStatus().GetDetail()
+	if !strings.Contains(detail, pool) {
+		return fmt.Errorf("status.detail %q does not name the pool %q", detail, pool)
+	}
+	if !strings.Contains(detail, "machineType") {
+		return fmt.Errorf("status.detail %q does not name the differing field machineType", detail)
 	}
 	return nil
 }
