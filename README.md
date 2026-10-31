@@ -479,6 +479,39 @@ jaiscloud-aws snapshot inspect <name>          # show snapshot metadata
 
 ---
 
+## Plugins
+
+Change how a running emulator answers calls without forking it: audit or rewrite requests, replace one
+action or a whole service, and keep plugin state in JaisCloud's own stores so `reset`, `export` / `import`,
+snapshots and the frozen clock cover it. A plugin is a small HTTP/JSON process written with the Go SDK
+([sdk/README.md](sdk/README.md)) or in any language.
+
+```bash
+(cd sdk && go run ./examples/audit) &              # a plugin listening on 127.0.0.1:9100
+jaiscloud-aws start --plugin http://127.0.0.1:9100
+```
+
+If a plugin overrides a key, every caller uses it: client requests, one service calling another
+(SNS to SQS, pollers, executors), Step Functions, CloudFormation, the console and, on GCP, gRPC. With no
+plugin configured nothing changes.
+
+**Limitations.**
+
+- Plugins run out of process and are loaded at startup only (no hot reload). In-process Go plugins, new
+  services and new path routes are not available yet; the SDK is experimental.
+- Everything crosses as JSON, so a plugin can observe but not replace a binary stream (for example a wire
+  S3 `GetObject` body). Requests and responses over 32 MiB are refused.
+- A failing plugin is never bypassed: its keys answer `503 PluginUnavailable` until it is back.
+- A plugin that replaces a service also owns that service's background behaviour (expiry, schedules,
+  alarms); the test-hook endpoints send it a `tick:<service>` event.
+- GCP gRPC: RPCs with no REST twin (Cloud Storage v2, Pub/Sub `StreamingPull`, Firestore `Listen`/`Write`
+  and others) cannot be intercepted, and streaming RPCs are checked once, at stream open.
+- GCP console: with a plugin in the path the console shows the REST rendering of a resource.
+
+Full guide, diagrams and the complete limitation list: [docs/PLUGINS.md](docs/PLUGINS.md).
+
+---
+
 ## Admin API
 
 All endpoints are available at the emulator's base URL (default `http://localhost:4566`; `http://localhost:8080` for the GCP binary).
