@@ -1453,6 +1453,15 @@ func startCmd() *cobra.Command {
 				prevCleanup := cleanup
 				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup() }
 			}
+			// Deferred before cleanup, so it runs after it: plugins stop after the
+			// workers that may still call them.
+			if pluginHost != nil {
+				defer func() {
+					sctx, cancel := context.WithTimeout(context.Background(), pluginhost.ShutdownTimeout)
+					defer cancel()
+					pluginHost.Shutdown(sctx)
+				}()
+			}
 			defer cleanup()
 
 			if pluginHost != nil {
@@ -1461,6 +1470,11 @@ func startCmd() *cobra.Command {
 				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
 				adminHandler.SetPluginTicker(pluginHost)
 				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+				adminHandler.SetDoctorSection("pluginBuild", func() any { return pluginhost.Build() })
+				// State an in-process plugin keeps for itself joins export/import and snapshots.
+				for name, st := range pluginHost.Snapshotters() {
+					adminHandler.RegisterSnapshotter(name, st)
+				}
 			}
 
 			srv := gateway.NewServer(cfg, adminHandler, reg, cloudAdapter, certs, gatewayOpts...)
@@ -1853,6 +1867,7 @@ func versionCmd() *cobra.Command {
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("jaiscloud-gcp %s\n", version)
+			fmt.Println(pluginhost.Build().Line())
 		},
 	}
 }

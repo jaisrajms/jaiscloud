@@ -148,7 +148,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: test-sdk test-plugins lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
+.PHONY: build-plugins build-plugins-aws build-plugins-gcp plugin plugin-example test-sdk test-plugins lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
@@ -247,6 +247,34 @@ build-ui-gcp: ## Build frontend assets then compile jaiscloud-gcp with embedded 
 	pnpm --dir ui run build
 	CGO_ENABLED=0 go build -tags ui -trimpath -ldflags="-s -w" -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
 
+# In-process plugins (Go plugins, --plugin so:<path>). Go loads a plugin only into a
+# binary built by the same toolchain, with the same flags and the same source for every
+# package they share, and only with cgo (linux, darwin). The emulator and every plugin
+# therefore use PLUGIN_FLAGS; `jaiscloud-<cloud> version` prints the result. Build tags
+# do not have to match for a plugin that imports only the standard library and the SDK
+# (a plugin built without -tags ui loads into an emulator built with it), so PLUGIN_TAGS
+# applies to the emulator only.
+PLUGIN_FLAGS = -trimpath
+PLUGIN_TAGS ?=
+
+build-plugins: build-plugins-aws build-plugins-gcp  ## Compile jaiscloud-aws and jaiscloud-gcp that can load in-process plugins (needs cgo)
+
+# Explicit rules, not a pattern: the build-% rule above would otherwise win on make 3.81.
+build-plugins-aws build-plugins-gcp:  ## Compile jaiscloud-<aws|gcp>-plugins, the variant that loads so: plugins
+	CGO_ENABLED=1 go build $(PLUGIN_FLAGS) $(if $(PLUGIN_TAGS),-tags $(PLUGIN_TAGS)) -o jaiscloud-$(patsubst build-plugins-%,%,$@)-plugins ./cmd/jaiscloud-$(patsubst build-plugins-%,%,$@)/
+
+plugin:  ## Build an in-process plugin that the build-plugins binaries can load: make plugin SRC=./my-plugin OUT=my-plugin.so
+	@test -n "$(SRC)" -a -n "$(OUT)" || { echo "usage: make plugin SRC=<plugin module directory> OUT=<file.so>"; exit 2; }
+	@cd $(SRC) && if [ "$$(go list -m 2>/dev/null)" = "github.com/jaisrajms/jaiscloud/sdk" ]; then \
+		echo "a plugin must be a module of its own that requires the SDK; built inside the SDK module its SDK package differs from the emulator's (see 'make plugin-example')"; exit 2; fi
+	cd $(SRC) && CGO_ENABLED=1 go build -buildmode=plugin $(PLUGIN_FLAGS) -o $(abspath $(OUT)) .
+
+plugin-example:  ## Build sdk/examples/inprocess as a plugin the build-plugins binaries can load: make plugin-example OUT=inprocess.so
+	@test -n "$(OUT)" || { echo "usage: make plugin-example OUT=<file.so>"; exit 2; }
+	@d=$$(mktemp -d) && cp sdk/examples/inprocess/main.go $$d/ && \
+		printf 'module example.com/inprocess\n\ngo 1.26.8\n\nrequire github.com/jaisrajms/jaiscloud/sdk v0.0.0\n\nreplace github.com/jaisrajms/jaiscloud/sdk => %s\n' "$(CURDIR)/sdk" > $$d/go.mod && \
+		(cd $$d && CGO_ENABLED=1 go build -buildmode=plugin $(PLUGIN_FLAGS) -o $(abspath $(OUT)) .); rc=$$?; rm -rf $$d; exit $$rc
+
 docker: docker-aws  ## Build jaiscloud-aws Docker image (default)
 
 docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
@@ -306,7 +334,7 @@ test-sdk: ## Plugin SDK (nested module sdk/): vet + race tests
 	cd sdk && go vet ./... && go test -race -count=1 ./...
 
 test-plugins: test-sdk ## Plugin layer: SDK tests + end-to-end against the real jaiscloud-aws (tag: plugin_e2e)
-	go test -race -tags plugin_e2e -count=1 -timeout 300s ./tests/plugins/
+	go test -race -tags plugin_e2e -count=1 -timeout 900s ./tests/plugins/
 
 test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
 	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...

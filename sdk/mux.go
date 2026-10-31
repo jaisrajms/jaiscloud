@@ -20,6 +20,7 @@ type Mux struct {
 	order         []muxKey
 	lifecycle     func(ctx context.Context, event string)
 	transports    []string
+	requires      []string
 }
 
 type muxKey struct {
@@ -59,6 +60,14 @@ func (m *Mux) Transports(transports ...string) *Mux {
 	return m
 }
 
+// Require lists host capabilities the plugin cannot work without (see CapInProcess).
+// A plugin whose functions use Call.Next, or return bytes and streams in Data, should
+// require sdk.CapInProcess so that loading it as an HTTP sidecar fails at startup.
+func (m *Mux) Require(caps ...string) *Mux {
+	m.requires = append(m.requires, caps...)
+	return m
+}
+
 func (m *Mux) Manifest() Manifest {
 	type g struct {
 		cloud, service string
@@ -73,7 +82,7 @@ func (m *Mux) Manifest() Manifest {
 		}
 		groups[key] = append(groups[key], k.action)
 	}
-	mf := Manifest{ABI: ABI, Name: m.name, Version: m.version}
+	mf := Manifest{ABI: ABI, Name: m.name, Version: m.version, Requires: m.requires}
 	for _, key := range gorder {
 		acts := groups[key]
 		sort.Strings(acts)

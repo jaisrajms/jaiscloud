@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -44,11 +45,20 @@ type Manifest struct {
 	Routes  []Route `json:"routes"`
 	// Requires lists host capabilities the plugin cannot work without. A host
 	// that does not provide every one refuses to start and prints the
-	// capabilities it has. This build offers none yet, so any entry is refused;
-	// the field exists so a plugin that needs more than ABI 1 gives can say so
-	// instead of being silently mis-served.
+	// capabilities it has, so a plugin that needs more than an HTTP sidecar gives
+	// (see CapInProcess) fails clearly instead of being silently mis-served.
 	Requires []string `json:"requires,omitempty"`
 }
+
+// Host capabilities a plugin can list in Manifest.Requires.
+const (
+	// CapInProcess is provided only to a plugin the emulator loaded into its own
+	// process (a Go plugin, built with -buildmode=plugin and loaded with
+	// "--plugin so:<path>"). It means: Call.Next and Call.ResourceID are set in a
+	// replace, Params and Data hold the emulator's own values (bytes, streams)
+	// instead of their JSON form, and the plugin may implement Stateful.
+	CapInProcess = "in-process"
+)
 
 // Route claims actions of a WIRE service (e.g. "sqs") for a cloud.
 type Route struct {
@@ -138,6 +148,20 @@ type Call struct {
 	Resp  *Response // After only: the core's success result
 	Err   *Error    // After only: the core's error
 	Store Store     // namespaced, bound to this call's account+region
+
+	// Next and ResourceID are set only for an in-process plugin (see CapInProcess),
+	// and Next only in a replace.
+	//
+	// Next runs the rest of the chain, ending in the built-in, with req.Params as
+	// the call's parameters (nil keeps the current ones), and returns its outcome,
+	// so a replace can change a call and still use the built-in, or change what the
+	// built-in answered. Call it on the goroutine Handle runs on, at most once, and
+	// return the outcome (or a changed one) as the Result; returning NotHandled
+	// after Next would run the built-in a second time.
+	Next func(ctx context.Context, req *Request) (*Response, *Error)
+	// ResourceID formats a resource identifier the way the emulator does for its
+	// own resources (an ARN on AWS, a resource name on GCP).
+	ResourceID func(resourceType, name string) string
 }
 
 // Result is the output of Handle. Resp and Err are mutually exclusive.
@@ -170,6 +194,23 @@ type Plugin interface {
 	Init(ctx context.Context, h Host) error
 	Handle(ctx context.Context, c *Call) (Result, error)
 	Shutdown(ctx context.Context) error
+}
+
+// Stateful is an optional interface for an in-process plugin that keeps state
+// outside Store (high-volume or non-JSON data held in memory, for example message
+// bodies). The emulator then includes that state in POST /_jaiscloud/reset, in
+// export/import and in named snapshots, under the name "plugin:<name>". An
+// out-of-process plugin cannot implement it: its state must go through Store.
+type Stateful interface {
+	// Reset drops all the plugin's state.
+	Reset(ctx context.Context)
+	// Snapshot writes the state as deterministic JSON (sorted keys) to w.
+	Snapshot(ctx context.Context, w io.Writer) error
+	// Restore replaces the state with what Snapshot wrote.
+	Restore(ctx context.Context, r io.Reader) error
+	// IsEmpty reports whether the plugin holds any state. It must not block on
+	// anything the emulator holds while it asks (do not call Store, or Next).
+	IsEmpty(ctx context.Context) (bool, error)
 }
 
 // LifecycleListener is an optional interface. The emulator calls it after

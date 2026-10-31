@@ -74,6 +74,11 @@ type plugin struct {
 	timeout, retry                          time.Duration
 	initReq                                 sdk.InitRequest
 	host                                    *Host
+
+	// An in-process plugin (loaded from a .so, or linked in a test) has no URL,
+	// client or token: it is called directly.
+	local    sdk.Plugin
+	stateful sdk.Stateful // the same plugin, when it keeps state of its own
 }
 
 var nameRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`) })
@@ -100,11 +105,18 @@ func isNotInitialized(err error) bool {
 
 // Load connects to every plugin spec, validates them, and installs their
 // routes. Any failure aborts startup (the caller returns the error).
-// Specs are "http://host:port" or "https://host:port"; precedence follows order.
+// Specs are "http://host:port" or "https://host:port" (an out-of-process plugin) or
+// "so:<path>" (an in-process Go plugin); precedence follows order.
 // An unreachable plugin is retried for d.StartWait before startup fails.
 func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
+	return load(ctx, specs, nil, d)
+}
+
+// load is Load with plugins that are already in the process (tests link one this way;
+// a "so:" spec reaches the same code after the file is opened).
+func load(ctx context.Context, specs []string, linked []sdk.Plugin, d Deps) (*Host, error) {
 	specs = cleanSpecs(specs)
-	if len(specs) == 0 {
+	if len(specs) == 0 && len(linked) == 0 {
 		return nil, nil
 	}
 	if d.Timeout <= 0 {
@@ -130,14 +142,25 @@ func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
 		seen[p.name] = true
 		h.plugins = append(h.plugins, p)
 	}
+	for _, plug := range linked {
+		p, err := h.connectLocal(ctx, plug, "linked", d)
+		if err != nil {
+			return nil, fmt.Errorf("plugin %q: %w", "linked", err)
+		}
+		if seen[p.name] {
+			return nil, fmt.Errorf("plugin %q: duplicate plugin name %q", "linked", p.name)
+		}
+		seen[p.name] = true
+		h.plugins = append(h.plugins, p)
+	}
 	if err := h.apply(d); err != nil {
 		return nil, err
 	}
 	// Only now is the load certain to succeed, so a refused Load leaves no series behind.
 	registerMetrics()
 	for _, p := range h.plugins {
-		slog.Info("plugin loaded", "name", p.name, "version", p.version, "transport", "http",
-			"url", p.shownURL, "abi", p.abi, "routes", len(p.routes))
+		slog.Info("plugin loaded", "name", p.name, "version", p.version, "transport", p.transport(),
+			"where", p.shownURL, "abi", p.abi, "routes", len(p.routes))
 	}
 	return h, nil
 }
@@ -180,9 +203,14 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 	switch {
 	case strings.HasPrefix(spec, "http://"), strings.HasPrefix(spec, "https://"):
 	case strings.HasPrefix(spec, "so:"):
-		return nil, fmt.Errorf("in-process plugins are not supported by this build")
+		path := strings.TrimPrefix(spec, "so:")
+		plug, err := openSO(path)
+		if err != nil {
+			return nil, err
+		}
+		return h.connectLocal(ctx, plug, path, d)
 	default:
-		return nil, fmt.Errorf("unrecognised plugin spec (want http://… or https://…)")
+		return nil, fmt.Errorf("unrecognised plugin spec (want http://…, https://… or so:<path>)")
 	}
 	p := &plugin{baseURL: strings.TrimRight(spec, "/"), shownURL: redact(strings.TrimRight(spec, "/")),
 		client: newHTTPClient(), timeout: d.Timeout, retry: d.CallRetry, secret: d.Secret, host: h}
@@ -191,34 +219,8 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 	if err := p.do(ctx, http.MethodGet, "/manifest", nil, &m, d.StartWait); err != nil {
 		return nil, err
 	}
-	if m.ABI != sdk.ABI {
-		return nil, fmt.Errorf("plugin ABI %d, emulator supports %d", m.ABI, sdk.ABI)
-	}
-	if !nameRe().MatchString(m.Name) {
-		return nil, fmt.Errorf("invalid plugin name %q (want [a-z0-9-]+)", m.Name)
-	}
-	if len(m.Requires) > 0 {
-		return nil, fmt.Errorf("plugin requires host capabilities %q, which this emulator does not provide (it provides: none)", m.Requires)
-	}
-	p.name, p.version, p.abi = m.Name, m.Version, m.ABI
-	for _, r := range m.Routes {
-		if r.Cloud != string(d.Cloud) {
-			continue // a cross-cloud plugin lists other clouds' entries; ignore them
-		}
-		if r.Mode != sdk.Replace && r.Mode != sdk.Before && r.Mode != sdk.After {
-			return nil, fmt.Errorf("route %s/%s: unknown mode %q", r.Cloud, r.Service, r.Mode)
-		}
-		if len(r.Actions) == 0 {
-			return nil, fmt.Errorf("route %s/%s: no actions", r.Cloud, r.Service)
-		}
-		prefix := d.Adapter.ServiceToProvider(r.Service)
-		if len(d.Registry.Keys(prefix)) == 0 {
-			return nil, fmt.Errorf("route %s/%s: no such service (adding new services is not supported yet)", r.Cloud, r.Service)
-		}
-		p.routes = append(p.routes, r)
-	}
-	if len(p.routes) == 0 {
-		slog.Warn("plugin declares no routes for this cloud", "name", p.name, "cloud", d.Cloud)
+	if err := p.adopt(m, d, nil); err != nil {
+		return nil, err
 	}
 
 	p.token = randomID(16)
@@ -229,6 +231,80 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 		return nil, err
 	}
 	return p, nil
+}
+
+// connectLocal adopts a plugin that is already in this process: it checks the
+// manifest like any other and calls Init directly. A panic in the plugin's own
+// startup code is an error, not a crash.
+func (h *Host) connectLocal(ctx context.Context, plug sdk.Plugin, where string, d Deps) (p *plugin, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p, err = nil, fmt.Errorf("the plugin panicked while loading: %v", r)
+		}
+	}()
+	p = &plugin{local: plug, shownURL: where, timeout: d.Timeout, retry: d.CallRetry, host: h,
+		// Never empty, so a store callback that sends no token cannot match it.
+		token: randomID(16)}
+	if err := p.adopt(plug.Manifest(), d, []string{sdk.CapInProcess}); err != nil {
+		return nil, err
+	}
+	if err := plug.Init(ctx, sdk.Host{Cloud: string(d.Cloud), Version: d.Version, Log: slog.Default().With("plugin", p.name)}); err != nil {
+		return nil, fmt.Errorf("init: %w", err)
+	}
+	p.stateful, _ = plug.(sdk.Stateful)
+	return p, nil
+}
+
+// adopt checks a manifest and keeps the routes for this binary's cloud. provides
+// are the host capabilities this plugin's transport offers.
+func (p *plugin) adopt(m sdk.Manifest, d Deps, provides []string) error {
+	if m.ABI != sdk.ABI {
+		return fmt.Errorf("plugin ABI %d, emulator supports %d", m.ABI, sdk.ABI)
+	}
+	if !nameRe().MatchString(m.Name) {
+		return fmt.Errorf("invalid plugin name %q (want [a-z0-9-]+)", m.Name)
+	}
+	for _, need := range m.Requires {
+		if !contains(provides, need) {
+			have := "none"
+			if len(provides) > 0 {
+				have = strings.Join(provides, ", ")
+			}
+			if need == sdk.CapInProcess {
+				return fmt.Errorf("plugin requires %q, which only an in-process plugin gets (load it with --plugin so:<path>; this one was loaded as %s, which provides: %s)", need, p.transport(), have)
+			}
+			return fmt.Errorf("plugin requires host capabilities %q, which this emulator does not provide (it provides: %s)", m.Requires, have)
+		}
+	}
+	p.name, p.version, p.abi = m.Name, m.Version, m.ABI
+	for _, r := range m.Routes {
+		if r.Cloud != string(d.Cloud) {
+			continue // a cross-cloud plugin lists other clouds' entries; ignore them
+		}
+		if r.Mode != sdk.Replace && r.Mode != sdk.Before && r.Mode != sdk.After {
+			return fmt.Errorf("route %s/%s: unknown mode %q", r.Cloud, r.Service, r.Mode)
+		}
+		if len(r.Actions) == 0 {
+			return fmt.Errorf("route %s/%s: no actions", r.Cloud, r.Service)
+		}
+		prefix := d.Adapter.ServiceToProvider(r.Service)
+		if len(d.Registry.Keys(prefix)) == 0 {
+			return fmt.Errorf("route %s/%s: no such service (adding new services is not supported yet)", r.Cloud, r.Service)
+		}
+		p.routes = append(p.routes, r)
+	}
+	if len(p.routes) == 0 {
+		slog.Warn("plugin declares no routes for this cloud", "name", p.name, "cloud", d.Cloud)
+	}
+	return nil
+}
+
+// transport names how the plugin is reached.
+func (p *plugin) transport() string {
+	if p.local != nil {
+		return "in-process"
+	}
+	return "http"
 }
 
 // reinit re-sends /init, used when a plugin restarted and lost its state.
@@ -543,6 +619,10 @@ func (p *plugin) once(ctx context.Context, method, path string, body []byte, out
 			return model.NewProviderError(model.CodePluginUnavailable, fmt.Sprintf("plugin %s call cancelled: %v", p.nameOr(), ctx.Err()), 503)
 		case errors.As(err, &oe) && oe.Op == "dial":
 			return &connError{err: err}
+		case strings.Contains(err.Error(), "server closed idle connection"):
+			// A restarted plugin leaves a stale keep-alive connection. Go does not
+			// replay a POST on it, but nothing was delivered, so a retry is safe.
+			return &connError{err: err}
 		}
 		return model.NewProviderError(model.CodePluginUnavailable, fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), err), 503)
 	}
@@ -609,8 +689,8 @@ func (h *Host) DoctorInfo() any {
 	out := make([]map[string]any, 0, len(h.plugins))
 	for _, p := range h.plugins {
 		out = append(out, map[string]any{
-			"name": p.name, "version": p.version, "transport": "http", "url": p.shownURL,
-			"abi": p.abi, "routes": p.routes,
+			"name": p.name, "version": p.version, "transport": p.transport(), "url": p.shownURL,
+			"abi": p.abi, "routes": p.routes, "stateful": p.stateful != nil,
 		})
 	}
 	return out
@@ -618,7 +698,14 @@ func (h *Host) DoctorInfo() any {
 
 // Reset implements the admin Resetter: after the stores are wiped, tell
 // plugins so they can drop caches.
-func (h *Host) Reset(ctx context.Context) { h.notify(ctx, sdk.EventReset) }
+func (h *Host) Reset(ctx context.Context) {
+	for _, p := range h.plugins {
+		if p.stateful != nil {
+			p.resetLocal(ctx)
+		}
+	}
+	h.notify(ctx, sdk.EventReset)
+}
 
 // RestoreHook returns the admin PostRestoreHook for import and snapshot revert.
 func (h *Host) RestoreHook() RestoreHook { return RestoreHook{h} }
@@ -639,6 +726,10 @@ func (h *Host) notify(ctx context.Context, event string) {
 }
 
 func (p *plugin) notify(ctx context.Context, event string) {
+	if p.local != nil {
+		p.notifyLocal(ctx, event)
+		return
+	}
 	if err := p.do(ctx, http.MethodPost, "/lifecycle", sdk.LifecycleRequest{Event: event}, nil, 5*time.Second); err != nil {
 		slog.Warn("plugin lifecycle notification failed", "plugin", p.name, "event", event, "err", err)
 	}

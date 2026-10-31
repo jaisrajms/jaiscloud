@@ -112,3 +112,8 @@ __pycache__/
 # Optional interop harness (localgcp/floci scratch tooling). Kept on disk,
 # never committed — see AGENTS.md and the header of run-gcp-compat.sh.
 tools/compat/
+
+# In-process plugin variants and plugins (make build-plugins / make plugin)
+jaiscloud-aws-plugins
+jaiscloud-gcp-plugins
+*.so

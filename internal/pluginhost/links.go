@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"runtime/debug"
 
@@ -25,7 +26,7 @@ func (p *plugin) replaceLink(ms *modeSet) func(provider.HandlerFunc) provider.Ha
 			if !ms.speaks(nr) {
 				return next(ctx, nr) // the plugin does not handle this transport
 			}
-			res, err := p.call(ctx, wire, sdk.Replace, nr, nil, nil)
+			res, err := p.call(ctx, wire, sdk.Replace, nr, nil, nil, next)
 			if err != nil {
 				return nil, err
 			}
@@ -36,7 +37,7 @@ func (p *plugin) replaceLink(ms *modeSet) func(provider.HandlerFunc) provider.Ha
 				return nil, model.NewProviderError("PluginProtocolError",
 					"plugin "+p.name+": replace returned neither a response, an error, nor notHandled", 502)
 			}
-			return fromResult(res)
+			return fromResult(res, p.local != nil)
 		}
 	}
 }
@@ -50,7 +51,7 @@ func (p *plugin) aroundLink(ms *modeSet) func(provider.HandlerFunc) provider.Han
 				return next(ctx, nr) // the plugin does not handle this transport
 			}
 			if before {
-				res, err := p.call(ctx, wire, sdk.Before, nr, nil, nil)
+				res, err := p.call(ctx, wire, sdk.Before, nr, nil, nil, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -58,10 +59,14 @@ func (p *plugin) aroundLink(ms *modeSet) func(provider.HandlerFunc) provider.Han
 					// A patch: keys the plugin omits are untouched, and codec
 					// state (e.g. SQS's wire-protocol meta) lives on nr and
 					// reaches the built-in codec untouched.
-					nr.Params = mergeParams(nr.Params, res.Params)
+					if p.local != nil {
+						nr.Params = patchParams(nr.Params, res.Params)
+					} else {
+						nr.Params = mergeParams(nr.Params, res.Params)
+					}
 				}
 				if res.Resp != nil || res.Err != nil {
-					return fromResult(res)
+					return fromResult(res, p.local != nil)
 				}
 			}
 			resp, err := next(ctx, nr)
@@ -74,17 +79,17 @@ func (p *plugin) aroundLink(ms *modeSet) func(provider.HandlerFunc) provider.Han
 					return resp, err // internal failures are not shown to plugins
 				}
 			}
-			res, cerr := p.call(ctx, wire, sdk.After, nr, resp, perr)
+			res, cerr := p.call(ctx, wire, sdk.After, nr, resp, perr, nil)
 			if cerr != nil {
 				return nil, cerr
 			}
 			if res.Resp != nil || res.Err != nil {
-				if res.Resp != nil && resp != nil && hasHidden(resp.Data) {
+				if p.local == nil && res.Resp != nil && resp != nil && hasHidden(resp.Data) {
 					return nil, model.NewProviderError("PluginUnsupportedPayload",
 						fmt.Sprintf("plugin %s cannot replace a response that carries a stream; "+
 							"an out-of-process plugin may observe it but not override it", p.name), 501)
 				}
-				return fromResult(res)
+				return fromResult(res, p.local != nil)
 			}
 			return resp, err
 		}
@@ -93,11 +98,13 @@ func (p *plugin) aroundLink(ms *modeSet) func(provider.HandlerFunc) provider.Han
 
 // call sends one phase to the plugin. The call gets its own unique id, which
 // is the only credential its store callbacks accept, and which is revoked (and
-// drained) when the call returns.
-func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError) (res sdk.Result, err error) {
+// drained) when the call returns. next is the rest of the chain, given to an
+// in-process replace as Call.Next.
+func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError, next provider.HandlerFunc) (res sdk.Result, err error) {
 	// Nothing a plugin does may take the request, or the process, down with it:
 	// a panic becomes a PluginPanic error that names the plugin. An out-of-process
-	// plugin cannot panic into the host, but the same seam serves in-process ones.
+	// plugin cannot panic into the host; an in-process one runs on this goroutine,
+	// so the recover also covers a panic in the built-in reached through Next.
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("plugin panic", "plugin", p.name, "phase", phase, "service", nr.Service,
@@ -110,26 +117,43 @@ func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *mode
 	p.host.begin(callID, p, nr.AccountID, nr.Region)
 	defer p.host.end(callID)
 
-	in := sdk.HandleRequest{
-		Phase: phase,
-		Req: &sdk.Request{
-			Cloud: p.host.cloud, Service: wire, Action: nr.Action, Params: project(nr.Params),
-			AccountID: nr.AccountID, Region: nr.Region, AccessKey: nr.AccessKey,
-			Origin: originOf(nr), Transport: nr.Transport, SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
-			RequestID: requestID(ctx, nr), CallID: callID,
-			// Not nr.Clock: that is fixed at config load, while POST
-			// /_jaiscloud/clock replaces the global clock.
-			Now: clock.Now(),
-		},
+	req := &sdk.Request{
+		Cloud: p.host.cloud, Service: wire, Action: nr.Action,
+		AccountID: nr.AccountID, Region: nr.Region, AccessKey: nr.AccessKey,
+		Origin: originOf(nr), Transport: nr.Transport, SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
+		RequestID: requestID(ctx, nr), CallID: callID,
+		// Not nr.Clock: that is fixed at config load, while POST
+		// /_jaiscloud/clock replaces the global clock.
+		Now: clock.Now(),
 	}
+
+	start := clock.RealNow()
+	if p.local != nil {
+		res, err = p.callLocal(ctx, req, phase, nr, resp, perr, next)
+	} else {
+		res, err = p.callHTTP(ctx, req, phase, nr, resp, perr)
+	}
+	observe(p.name, string(phase), outcome(err, res), clock.RealNow().Sub(start))
+	if err != nil {
+		return sdk.Result{}, err
+	}
+	if verr := p.validate(res); verr != nil {
+		return sdk.Result{}, verr
+	}
+	slog.Debug("plugin call", "plugin", p.name, "phase", phase, "service", nr.Service, "action", nr.Action)
+	return res, nil
+}
+
+// callHTTP sends one phase to an out-of-process plugin as JSON.
+func (p *plugin) callHTTP(ctx context.Context, req *sdk.Request, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError) (res sdk.Result, err error) {
+	req.Params = project(nr.Params)
+	in := sdk.HandleRequest{Phase: phase, Req: req}
 	if resp != nil {
 		in.Resp = &sdk.Response{Status: resp.HTTPStatus, Data: project(resp.Data)}
 	}
 	if perr != nil {
 		in.Err = &sdk.Error{Code: perr.Code, Message: perr.Message, Status: perr.HTTPStatus, Data: perr.Data}
 	}
-
-	start := clock.RealNow()
 	err = p.do(ctx, http.MethodPost, "/handle", in, &res, p.retry)
 	if isNotInitialized(err) {
 		// The plugin restarted and lost the store endpoint: hand it back and retry once.
@@ -141,15 +165,64 @@ func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *mode
 				"plugin "+p.name+" restarted and did not accept /init", 503)
 		}
 	}
-	observe(p.name, string(phase), outcome(err, res), clock.RealNow().Sub(start))
+	return res, err
+}
+
+// callLocal calls an in-process plugin directly. It sees the emulator's own values:
+// Params and Data are not projected to JSON, so bytes and streams reach it as they
+// are, and what it returns is used as it is. The call runs on this goroutine, so
+// there is no timeout to enforce and no connection to retry.
+func (p *plugin) callLocal(ctx context.Context, req *sdk.Request, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError, next provider.HandlerFunc) (sdk.Result, error) {
+	req.Params = maps.Clone(nr.Params)
+	c := &sdk.Call{Phase: phase, Req: req,
+		Store: &localStore{h: p.host, p: p, callID: req.CallID, account: nr.AccountID, region: nr.Region}}
+	if resp != nil {
+		c.Resp = &sdk.Response{Status: resp.HTTPStatus, Data: maps.Clone(resp.Data)}
+	}
+	if perr != nil {
+		c.Err = &sdk.Error{Code: perr.Code, Message: perr.Message, Status: perr.HTTPStatus, Data: perr.Data}
+	}
+	if phase == sdk.Replace && next != nil {
+		c.ResourceID = nr.ResourceID
+		c.Next = func(ctx context.Context, r *sdk.Request) (*sdk.Response, *sdk.Error) {
+			if r != nil && r.Params != nil {
+				nr.Params = r.Params
+			}
+			out, err := next(ctx, nr)
+			if err != nil {
+				var pe *model.ProviderError
+				if errors.As(err, &pe) {
+					return nil, &sdk.Error{Code: pe.Code, Message: pe.Message, Status: pe.HTTPStatus, Data: pe.Data}
+				}
+				return nil, &sdk.Error{Code: "InternalError", Message: err.Error(), Status: http.StatusInternalServerError}
+			}
+			if out == nil {
+				return &sdk.Response{Status: http.StatusOK, Data: map[string]any{}}, nil
+			}
+			return &sdk.Response{Status: out.HTTPStatus, Data: out.Data}, nil
+		}
+	}
+	res, err := p.local.Handle(ctx, c)
 	if err != nil {
-		return sdk.Result{}, err
+		return sdk.Result{}, model.NewProviderError("PluginError", "plugin "+p.name+": "+err.Error(), http.StatusInternalServerError)
 	}
-	if verr := p.validate(res); verr != nil {
-		return sdk.Result{}, verr
-	}
-	slog.Debug("plugin call", "plugin", p.name, "phase", phase, "service", nr.Service, "action", nr.Action)
 	return res, nil
+}
+
+// patchParams applies an in-process plugin's before result as a patch: a key it
+// returns is set, a key it returns as null is removed, the rest is untouched. There
+// is nothing hidden from an in-process plugin, so the values are used as they are.
+func patchParams(orig, patch map[string]any) map[string]any {
+	out := make(map[string]any, len(orig)+len(patch))
+	maps.Copy(out, orig)
+	for k, v := range patch {
+		if v == nil {
+			delete(out, k)
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // requestID returns a stable id for the originating request: the HTTP request
@@ -190,7 +263,14 @@ func (p *plugin) validate(res sdk.Result) error {
 	return nil
 }
 
-func fromResult(res sdk.Result) (*model.ProviderResponse, error) {
+// fromResult turns a plugin's answer into the provider's. An out-of-process answer
+// carries bytes as {"$base64": ...}, which is turned back into bytes; an in-process
+// one already holds the values it means.
+func fromResult(res sdk.Result, local bool) (*model.ProviderResponse, error) {
+	restoreMap := restoreMap
+	if local {
+		restoreMap = func(m map[string]any) map[string]any { return m }
+	}
 	if res.Err != nil {
 		status := res.Err.Status
 		if status == 0 {
