@@ -893,6 +893,13 @@ func Scenarios(suffix string) []Scenario {
 	gkeClusterName := gkeBase + "/clusters/" + gkeCluster
 	gkePoolsBase := gkeClusterName + "/nodePools"
 	gkePoolName := gkePoolsBase + "/" + gkePool
+	gkeInline := "conf-gke-inline-" + suffix
+	gkeInlinePool := "conf-gke-inline-pool-" + suffix
+	gkeInlineName := gkeBase + "/clusters/" + gkeInline
+	gkeLegacy := "conf-gke-nodeconfig-" + suffix
+	gkeLegacyName := gkeBase + "/clusters/" + gkeLegacy
+	gkeConflictInc := "conf-gke-conflict-inc-" + suffix
+	gkeConflictNC := "conf-gke-conflict-nc-" + suffix
 	sc = append(sc,
 		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
 			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1}}`, gkeCluster),
@@ -943,6 +950,36 @@ func Scenarios(suffix string) []Scenario {
 		// in docs/gcp/gke-create-pool-conflict.md).
 		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
 			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":-1}}`, gkeCluster+"-neg")},
+		// Inline nodePools replace the generated default-pool: the create is
+		// accepted and the pools materialise, so the cluster read/list and each
+		// pool read back the caller's shape.
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"nodePools":[{"name":%q,"initialNodeCount":1,"config":{"machineType":"e2-micro"}}]}}`,
+				gkeInline, gkeInlinePool)},
+		Scenario{Service: "container", Method: "GET", Path: gkeInlineName},
+		Scenario{Service: "container", Method: "GET", Path: gkeInlineName + "/nodePools"},
+		Scenario{Service: "container", Method: "GET", Path: gkeInlineName + "/nodePools/" + gkeInlinePool},
+		Scenario{Service: "container", Method: "DELETE", Path: gkeInlineName},
+		// The legacy default-pool shape: initialNodeCount + nodeConfig with no
+		// nodePools generates default-pool carrying the caller's config (DPG42),
+		// and the cluster read echoes nodeConfig from that first pool.
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":2,"nodeConfig":{"machineType":"e2-micro"}}}`,
+				gkeLegacy)},
+		Scenario{Service: "container", Method: "GET", Path: gkeLegacyName},
+		Scenario{Service: "container", Method: "GET", Path: gkeLegacyName + "/nodePools"},
+		Scenario{Service: "container", Method: "GET", Path: gkeLegacyName + "/nodePools/default-pool"},
+		Scenario{Service: "container", Method: "DELETE", Path: gkeLegacyName},
+		// The two default-pool conflicts real GKE 400s, verbatim from
+		// docs/gcp/gke-create-pool-conflict.md: initialNodeCount>0 first, then
+		// nodeConfig (node_config wins when both are set; the gRPC check covers
+		// that precedence). Nothing is created by either.
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1,"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`,
+				gkeConflictInc)},
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"nodeConfig":{"machineType":"e2-micro"},"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`,
+				gkeConflictNC)},
 	)
 
 	// ─── Cloud Run Admin v2 (run.googleapis.com) ──────────────────────────────
