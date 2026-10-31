@@ -287,7 +287,11 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 		if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
 			c.VirtualClusterConfig = in.VirtualClusterConfig
 		}
-		if in.Config != nil {
+		// Only merge a supplied config when the mask applies it: a full resource
+		// sent under a labels-only mask must not install an (empty) config, which
+		// would then trip the "exactly one of config or virtualClusterConfig"
+		// invariant on a GKE-backed cluster.
+		if in.Config != nil && apply("config") {
 			stored := map[string]any{}
 			if len(c.Config) > 0 {
 				_ = json.Unmarshal(c.Config, &stored)

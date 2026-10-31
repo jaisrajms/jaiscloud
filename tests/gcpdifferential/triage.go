@@ -136,22 +136,10 @@ var triageRules = []TriageRule{
 		Reason:   "DNS changes are applied asynchronously; real GCP reports status=pending at submit time while the emulator applies synchronously (done)",
 	},
 	// ── Cloud Dataproc cluster LRO (SDK-tour) ────────────────────────────────
-	// Real GCP materializes the cluster's output-only/defaulted fields on the
-	// operation and cluster responses (materialized config: master/worker
-	// imageUri + minCpuPlatform/preemptibility, networkUri/serviceAccountScopes/
-	// shieldedInstanceConfig/resourceManagerTags, softwareConfig properties,
-	// endpointConfig and the staging/temp bucket names; plus labels, the
-	// response @type and the operation's description/warnings/innerState). The
-	// emulator stores and echoes the requested config verbatim and omits those
-	// defaults. The rule is scoped to missing_field only, so a value regression
-	// in the cluster identity/name or a wrong operation name/done still
-	// surfaces as open.
-	{
-		Service: "dataproc",
-		Kind:    "missing_field",
-		Reason:  "real Dataproc materializes output-only/defaulted cluster fields (materialized config: imageUri/minCpuPlatform/preemptibility, networkUri/serviceAccountScopes/shieldedInstanceConfig/resourceManagerTags, softwareConfig properties, endpointConfig, config/temp buckets; plus labels, @type and the operation description/warnings/innerState); the emulator stores and echoes the requested config verbatim and omits them — the cluster identity/name and a wrong operation name/done remain value-checked",
-	},
-	// The freshly submitted Dataproc create operation reports its metadata
+	// The cluster-read/operation fields real Dataproc materialises and the
+	// emulator still omits are accepted one location at a time (see
+	// dataprocOmittedReadFields); the fields the emulator does render are left
+	// open-checked. The freshly submitted Dataproc create operation reports its metadata
 	// status PENDING on real GCP; the emulator begins provisioning immediately
 	// (RUNNING). The operation name, its done flag and the settled cluster's
 	// identity match; only the transient operation-status label differs.
@@ -564,6 +552,46 @@ var triageRules = []TriageRule{
 	},
 }
 
+// dataprocOmittedReadFields are the Dataproc cluster-read/operation fields real
+// GCP materialises that the emulator still omits, as location suffixes (the diff
+// walker embeds array indices and an operation wrapper, so a suffix matches both
+// the plain get and the "response.response.*" operation response).
+//
+// Real Dataproc materialises output-only/defaulted fields on the operation and
+// cluster responses; the emulator no longer merely echoes the requested config.
+// Since DPG38/DPG40 a read renders the default softwareConfig.imageVersion,
+// gceClusterConfig.zoneUri, the instance-group defaults and machineTypeUri, and
+// canonicalises major Compute Engine links, so those are deliberately NOT in
+// this list: scoping the rules by Location (rather than one blanket
+// dataproc/missing_field rule) means a regression that drops a rendered field
+// surfaces as an open divergence. The remaining Compute links (DPG48) are
+// echoed as sent rather than canonicalised, so a non-canonical value shows up as
+// value_mismatch, which these missing_field rules do not cover either.
+var dataprocOmittedReadFields = []string{
+	"metadata.description",
+	"metadata.warnings",
+	"metadata.status.innerState",
+	"response.@type",
+	"config.configBucket",
+	"config.tempBucket",
+	"config.endpointConfig",
+	"config.gceClusterConfig.internalIpOnly",
+	"config.gceClusterConfig.networkUri", // DPG47: the project's default network
+	"config.gceClusterConfig.resourceManagerTags",
+	"config.gceClusterConfig.serviceAccountScopes",
+	"config.gceClusterConfig.shieldedInstanceConfig",
+	"config.masterConfig.imageUri",
+	"config.masterConfig.instanceNames",
+	"config.masterConfig.minCpuPlatform",
+	"config.masterConfig.preemptibility",
+	"config.workerConfig.imageUri",
+	"config.workerConfig.instanceNames",
+	"config.workerConfig.minCpuPlatform",
+	"config.workerConfig.preemptibility",
+	"config.softwareConfig.properties",
+	"response.labels",
+}
+
 // bigQueryQueryStatFields are the output-only job-statistics/timing members of a
 // jobs.query response that the emulator does not synthesize. jobs.query now
 // evaluates the documented Standard SQL subset, and its executed rows/schema/
@@ -585,6 +613,18 @@ var bigQueryQueryStatFields = []string{
 }
 
 func init() {
+	// Dataproc's still-omitted read fields: output-only/defaulted values real
+	// Dataproc materialises that this emulator does not synthesise. Scoped one
+	// location at a time (see dataprocOmittedReadFields) so the rendered fields
+	// stay open-checked.
+	for _, loc := range dataprocOmittedReadFields {
+		triageRules = append(triageRules, TriageRule{
+			Service:  "dataproc",
+			Kind:     "missing_field",
+			Location: loc,
+			Reason:   "output-only/defaulted field real Dataproc materialises that the emulator still omits (DPG47's default network and the read-only metadata/bucket fields); the fields it does render — the default softwareConfig.imageVersion, gceClusterConfig.zoneUri, the instance groups and machineTypeUri — are deliberately excluded, so a missing one is an open divergence",
+		})
+	}
 	// These job-statistics/timing fields are output-only members of a
 	// jobs.query/getQueryResults response, so the rule is scoped by Location
 	// (not by op) and covers every query op: the curated `query`, the tour

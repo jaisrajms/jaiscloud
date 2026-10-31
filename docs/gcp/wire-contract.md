@@ -467,10 +467,15 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   existing one (adopted when the caller sends no `nodePoolConfig`, which is input-only and never
   read back; a `nodePool` that is not the full
   `projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{pool}` resource name is
-  `InvalidArgument`, as on real GCP — DPG44); a mismatch leaves the cluster in `ERROR` with the pool and field in `status.detail`,
+  `InvalidArgument`, as on real GCP — DPG44); a mismatch does not fail the create — the cluster is
+  persisted in `ERROR` with the pool and field in `status.detail`, and the create operation still
+  completes with that `ERROR` cluster as its response —
   pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
-  a virtual cluster is also recreate-only (`clusters.patch` touching `virtualClusterConfig` is
-  `InvalidArgument`) and a `kubernetesNamespace` already owned on the same GKE cluster is
+  `kubernetesSoftwareConfig` is optional (a present one must carry a non-empty `componentVersion.SPARK`);
+  a virtual cluster is also recreate-only (`clusters.patch` whose `updateMask` applies
+  `virtualClusterConfig` or `config` is `InvalidArgument`; an empty mask applies everything supplied,
+  so a full resource under a `labels`-only mask is applied for labels and leaves the placement alone)
+  and a `kubernetesNamespace` already owned on the same GKE cluster is
   `FailedPrecondition`, while the SPARK engine version is dereferenced at create —
   `latest`/`<major>`/`<major.minor>`/`dataproc-2.2` resolve to a concrete release, and the
   other `dataproc-<major.minor>` image lines stay `InvalidArgument` because real GCP rejects

@@ -51,27 +51,27 @@ var gkeImageVersionAliases = map[string]string{
 // ("SPARK"); it is the one entry componentVersion must carry.
 const k8sComponentSpark = "SPARK"
 
-// gkePatchAllowedMaskFields are the only fields clusters.patch documents as
-// updatable on a Dataproc cluster (REST reference, updateMask). They are named in
-// the recreate-only error so a caller knows what a virtual cluster does allow.
-const gkePatchAllowedMaskFields = "labels, config.workerConfig.numInstances, config.secondaryWorkerConfig.numInstances, config.autoscalingConfig.policyUri"
-
 // rejectGKEVirtualClusterUpdate enforces the recreate-only lifecycle of a
 // Dataproc-on-GKE virtual cluster: real GCP disallows update operations on one
-// (release note 2023-03-28), so a patch that would apply virtualClusterConfig or
-// add a GCE config is InvalidArgument. Labels-only patches stay allowed; GCE
-// clusters are untouched.
+// (release note 2023-03-28), so a patch whose updateMask applies
+// virtualClusterConfig or config is InvalidArgument. The mask decides, exactly
+// as it does for the persisted fields: a full resource sent under a labels-only
+// mask is applied for labels and leaves the placement alone, and an empty mask
+// means "everything supplied applies". Labels are therefore the only field a
+// virtual cluster can update; GCE clusters are untouched.
 func rejectGKEVirtualClusterUpdate(current dpstore.Cluster, in ClusterInput, mask []string) error {
 	if !current.IsGKEBacked() {
 		return nil
 	}
-	touchesVirtualCluster := in.VirtualClusterConfig != nil &&
-		(len(mask) == 0 || containsMaskField(mask, "virtualClusterConfig"))
-	if !touchesVirtualCluster && len(in.Config) == 0 {
+	applies := func(field string, supplied bool) bool {
+		return supplied && (len(mask) == 0 || containsMaskField(mask, field))
+	}
+	if !applies("virtualClusterConfig", in.VirtualClusterConfig != nil) && !applies("config", len(in.Config) > 0) {
 		return nil
 	}
 	return invalidArgument("a Dataproc on GKE virtual cluster is recreate-only: clusters.patch cannot change virtualClusterConfig or config; " +
-		"delete the cluster and create it again. Updatable fields: " + gkePatchAllowedMaskFields)
+		"delete the cluster and create it again. Only labels are updatable on a virtual cluster, so a request whose updateMask selects " +
+		"neither placement field is applied for labels even when its body still carries them.")
 }
 
 // validateGKENamespaceOwnership rejects a create whose effective Kubernetes
