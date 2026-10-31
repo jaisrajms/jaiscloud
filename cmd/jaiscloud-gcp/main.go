@@ -39,6 +39,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	"jaiscloud/internal/gcp/grpcplugin"
 	hms "jaiscloud/internal/gcp/hms"
 	"jaiscloud/internal/gcp/lro"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
@@ -144,6 +145,7 @@ import (
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
 	"jaiscloud/internal/platform"
+	"jaiscloud/internal/pluginhost"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
@@ -178,6 +180,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -842,6 +845,7 @@ func startCmd() *cobra.Command {
 			// Register only services enabled on at least one transport, so a
 			// per-service `none` override removes both its REST and gRPC surface
 			// (an unregistered provider falls through to a 404/unknown-action).
+			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 			reg := provider.NewRegistry()
 			for _, sp := range []struct {
 				name string
@@ -880,6 +884,34 @@ func startCmd() *cobra.Command {
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
 				}
+			}
+
+			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
+			// Load returns (nil, nil) and nothing below changes. The registry is
+			// complete here and no worker has started yet, so a plugin that
+			// overrides a key is used from the first call by every caller; the gRPC
+			// transport reaches the same plugins through grpcplugin below.
+			callbackURL := viper.GetString("plugin_callback_url")
+			if callbackURL == "" {
+				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
+			}
+			pluginHost, err := pluginhost.Load(ctx, viper.GetStringSlice("plugins"), pluginhost.Deps{
+				Cloud: model.CloudGCP, Version: version, Registry: reg, Adapter: cloudAdapter,
+				Resources: stores.resources, CallbackURL: callbackURL,
+				Timeout:   viper.GetDuration("plugin_timeout"),
+				StartWait: viper.GetDuration("plugin_wait"),
+				CallRetry: viper.GetDuration("plugin_retry"),
+				Secret:    viper.GetString("plugin_secret"),
+			})
+			if err != nil {
+				return err
+			}
+			var grpcOpts []grpc.ServerOption
+			if pluginHost != nil && transports.GRPC() {
+				grpcOpts = grpcplugin.New(grpcplugin.Config{
+					Host: pluginHost, Adapter: cloudAdapter, Clock: cfg.Clock, Port: cfg.Port,
+					Region: cfg.Region, Project: cfg.ProjectID,
+				}).ServerOptions()
 			}
 
 			// gRPC transport shares the SAME Firestore provider Service as the
@@ -924,7 +956,7 @@ func startCmd() *cobra.Command {
 			// socket is opened.
 			var gserv *grpcserver.Server
 			if transports.GRPC() {
-				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort), grpcserver.ThrottleServerOptions(throttleInj)...)
+				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort), append(grpcserver.ThrottleServerOptions(throttleInj), grpcOpts...)...)
 				if transports.GRPCFor("firestore") {
 					firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
 				}
@@ -1274,7 +1306,6 @@ func startCmd() *cobra.Command {
 				adminHandler.SetKEKFingerprint(snapversion.FingerprintKEK([]byte(cfg.KMSMasterKey)))
 			}
 
-			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 			// Project discovery: the gateway reports every served (project,
 			// service) pair and the Resource Manager core records projects the
 			// console never registered, so the console can show where a workload
@@ -1402,6 +1433,14 @@ func startCmd() *cobra.Command {
 				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup() }
 			}
 			defer cleanup()
+
+			if pluginHost != nil {
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
+				adminHandler.RegisterResetter(pluginHost)
+				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
+				adminHandler.SetPluginTicker(pluginHost)
+				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+			}
 
 			srv := gateway.NewServer(cfg, adminHandler, reg, cloudAdapter, certs, gatewayOpts...)
 
@@ -1576,6 +1615,18 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
 	cmd.Flags().String("transports", "rest,grpc", "GCP wire transports to expose: rest,grpc,both,none")
 	cmd.Flags().String("transport-overrides", "", "Per-service transport overrides, e.g. storage=grpc,pubsub=rest,memorystore=none")
+	cmd.Flags().StringSlice("plugin", nil, `Out-of-process plugin to load (repeatable): http://host:port.
+	Order is precedence order. Env var: JAISCLOUD_PLUGINS (comma-separated)`)
+	cmd.Flags().Duration("plugin-timeout", 10*time.Second, "Timeout for each HTTP attempt to a plugin. Env var: JAISCLOUD_PLUGIN_TIMEOUT")
+	cmd.Flags().Duration("plugin-wait", 2*time.Minute, `How long to keep retrying an unreachable plugin at startup before failing.
+	Env var: JAISCLOUD_PLUGIN_WAIT`)
+	cmd.Flags().Duration("plugin-retry", 30*time.Second, `How long to keep retrying an unreachable plugin during a request before returning 503.
+	Env var: JAISCLOUD_PLUGIN_RETRY`)
+	cmd.Flags().String("plugin-secret", "", `Shared secret sent to plugins as a bearer token (pair with sdk.WithSecret).
+	Env var: JAISCLOUD_PLUGIN_SECRET`)
+	cmd.Flags().String("plugin-callback-url", "", `Base URL a plugin uses to reach this emulator's store callbacks.
+	Default http://127.0.0.1:<port>; set it when the plugin runs in another container.
+	Env var: JAISCLOUD_PLUGIN_CALLBACK_URL`)
 	cmd.Flags().Bool("ui", false, "Enable the UI Portal listener on --ui-port (default 4567)")
 	cmd.Flags().Int("ui-port", 4567, "Port for the UI Portal HTTP listener")
 	cmd.Flags().Bool("ui-open", false, "Auto-open browser when UI starts (no-op when not a TTY)")
@@ -1588,6 +1639,12 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("port", cmd.Flags().Lookup("port"))
 	viper.BindPFlag("ephemeral", cmd.Flags().Lookup("ephemeral"))
 	viper.BindPFlag("dsn", cmd.Flags().Lookup("dsn"))
+	viper.BindPFlag("plugins", cmd.Flags().Lookup("plugin"))
+	viper.BindPFlag("plugin_timeout", cmd.Flags().Lookup("plugin-timeout"))
+	viper.BindPFlag("plugin_wait", cmd.Flags().Lookup("plugin-wait"))
+	viper.BindPFlag("plugin_retry", cmd.Flags().Lookup("plugin-retry"))
+	viper.BindPFlag("plugin_secret", cmd.Flags().Lookup("plugin-secret"))
+	viper.BindPFlag("plugin_callback_url", cmd.Flags().Lookup("plugin-callback-url"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
 	viper.BindPFlag("fresh_start", cmd.Flags().Lookup("fresh-start"))
 	viper.BindPFlag("log_level", cmd.Flags().Lookup("log-level"))

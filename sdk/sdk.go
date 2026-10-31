@@ -82,6 +82,12 @@ type Request struct {
 	// plugin that overrides a key receives all of them; branch on Origin only if
 	// you must treat them differently.
 	Origin string `json:"origin"`
+	// Transport is "" for the cloud's default wire format and "grpc" for a GCP
+	// gRPC call. Under "grpc", Params (and Resp.Data in the after phase, and what
+	// a replace must return) are the protojson form of the RPC request and
+	// response messages (camelCase field names, int64 as strings, enums by name),
+	// not the REST shape. The key (service and action) is the same either way.
+	Transport string `json:"transport,omitempty"`
 	// SourceArn / ServicePrincipal are set when another service in the emulator
 	// made this call (for example SNS delivering to SQS).
 	SourceArn        string `json:"sourceArn,omitempty"`

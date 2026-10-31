@@ -31,5 +31,6 @@ func (h *Handler) MonitoringTickHandler(w http.ResponseWriter, r *http.Request) 
 	if tick != nil {
 		tick.TickNow(r.Context())
 	}
+	h.tickPlugins(r.Context(), "monitoring")
 	w.WriteHeader(http.StatusNoContent)
 }

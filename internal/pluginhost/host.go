@@ -55,6 +55,12 @@ type Host struct {
 	resource store.ResourceStore
 	registry *provider.Registry
 
+	// The install plan, kept so the same plugins can be attached to another
+	// registry (the gRPC transport's shadow registry, see Attach).
+	keys     []map[string]*modeSet // per plugin: exact registry key -> modes
+	fallback []map[string]*modeSet // per plugin: provider prefix -> modes for unknown actions
+	covered  map[string]bool       // keys some plugin touches
+
 	mu    sync.Mutex
 	calls map[string]*activeCall // call id -> in-flight call
 }
@@ -340,34 +346,60 @@ func (h *Host) apply(d Deps) error {
 		}
 	}
 
-	// 4. Install. Replace links first (innermost, around the built-in), then
-	// before/after links with plugin 1 outermost (so it is applied last).
+	h.keys, h.fallback, h.covered = keys, fallback, map[string]bool{}
+	for _, m := range keys {
+		for k := range m {
+			h.covered[k] = true
+		}
+	}
+	h.Attach(d.Registry)
+	return nil
+}
+
+// Attach installs the plugins' links on reg, which must hold a handler for every
+// key the plugins cover (normally a copy of the main registry's keys). Replace
+// links go first (innermost, around the built-in), then before/after links with
+// plugin 1 outermost (so it is applied last).
+func (h *Host) Attach(reg *provider.Registry) {
+	n := len(h.plugins)
 	for i, p := range h.plugins {
-		for _, key := range sortedKeys(keys[i]) {
-			if ms := keys[i][key]; ms.replace {
-				d.Registry.Intercept(key, p.replaceLink(ms.wire))
+		for _, key := range sortedKeys(h.keys[i]) {
+			if ms := h.keys[i][key]; ms.replace {
+				reg.Intercept(key, p.replaceLink(ms.wire))
 			}
 		}
-		for _, prefix := range sortedKeys(fallback[i]) {
-			if ms := fallback[i][prefix]; ms.replace {
-				d.Registry.InterceptFallback(prefix, p.replaceLink(ms.wire))
+		for _, prefix := range sortedKeys(h.fallback[i]) {
+			if ms := h.fallback[i][prefix]; ms.replace {
+				reg.InterceptFallback(prefix, p.replaceLink(ms.wire))
 			}
 		}
 	}
 	for i := n - 1; i >= 0; i-- {
 		p := h.plugins[i]
-		for _, key := range sortedKeys(keys[i]) {
-			if ms := keys[i][key]; ms.before || ms.after {
-				d.Registry.Intercept(key, p.aroundLink(ms.wire, ms.before, ms.after))
+		for _, key := range sortedKeys(h.keys[i]) {
+			if ms := h.keys[i][key]; ms.before || ms.after {
+				reg.Intercept(key, p.aroundLink(ms.wire, ms.before, ms.after))
 			}
 		}
-		for _, prefix := range sortedKeys(fallback[i]) {
-			if ms := fallback[i][prefix]; ms.before || ms.after {
-				d.Registry.InterceptFallback(prefix, p.aroundLink(ms.wire, ms.before, ms.after))
+		for _, prefix := range sortedKeys(h.fallback[i]) {
+			if ms := h.fallback[i][prefix]; ms.before || ms.after {
+				reg.InterceptFallback(prefix, p.aroundLink(ms.wire, ms.before, ms.after))
 			}
 		}
 	}
-	return nil
+}
+
+// Covers reports whether any plugin replaces, or runs before/after, the exact
+// registry key. A transport that bypasses the registry uses it to leave
+// untouched calls on their normal path.
+func (h *Host) Covers(key string) bool { return h != nil && h.covered[key] }
+
+// CoveredKeys lists the exact registry keys some plugin touches, sorted.
+func (h *Host) CoveredKeys() []string {
+	if h == nil {
+		return nil
+	}
+	return sortedKeys(h.covered)
 }
 
 func contains(ss []string, s string) bool {

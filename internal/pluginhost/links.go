@@ -107,7 +107,7 @@ func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *mode
 		Req: &sdk.Request{
 			Cloud: p.host.cloud, Service: wire, Action: nr.Action, Params: project(nr.Params),
 			AccountID: nr.AccountID, Region: nr.Region, AccessKey: nr.AccessKey,
-			Origin: originOf(nr), SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
+			Origin: originOf(nr), Transport: nr.Transport, SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal,
 			RequestID: requestID(ctx, nr), CallID: callID,
 			// Not nr.Clock: that is fixed at config load, while POST
 			// /_jaiscloud/clock replaces the global clock.

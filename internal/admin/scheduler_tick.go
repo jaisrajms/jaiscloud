@@ -29,5 +29,6 @@ func (h *Handler) SchedulerTickHandler(w http.ResponseWriter, r *http.Request) {
 	if sched != nil {
 		sched.TickNow(r.Context())
 	}
+	h.tickPlugins(r.Context(), "scheduler")
 	w.WriteHeader(http.StatusNoContent)
 }
