@@ -576,7 +576,6 @@ var dataprocOmittedReadFields = []string{
 	"config.tempBucket",
 	"config.endpointConfig",
 	"config.gceClusterConfig.internalIpOnly",
-	"config.gceClusterConfig.networkUri", // DPG47: the project's default network
 	"config.gceClusterConfig.resourceManagerTags",
 	"config.gceClusterConfig.serviceAccountScopes",
 	"config.gceClusterConfig.shieldedInstanceConfig",
