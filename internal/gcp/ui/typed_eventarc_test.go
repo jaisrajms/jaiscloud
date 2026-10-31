@@ -79,3 +79,91 @@ func TestEventarcConsoleShowsWhatThePluginServes(t *testing.T) {
 		t.Fatalf("the console must show the plugin's trigger, got %+v (config %v)", tr, cfg)
 	}
 }
+
+// The trigger calls and the remaining channel calls, run through the chain against the real core.
+func TestEventarcConsoleTriggerLifecycleThroughTheChain(t *testing.T) {
+	direct, builtins := newEventarc()
+	var seen []seenCall
+	wrap := map[string]func(provider.HandlerFunc) provider.HandlerFunc{}
+	for k := range builtins {
+		wrap[k] = passthrough(&seen, k)
+	}
+	p := routeEventarc(typedFixture(builtins, wrap), direct)
+	ctx := context.Background()
+	in := eventarcui.TriggerInput{
+		Name: "t1", DestinationType: "cloudRun", Destination: "svc", DestinationRegion: "us-central1",
+		EventFilters: []eventarcui.EventFilter{{Attribute: "type", Value: "google.cloud.pubsub.topic.v1.messagePublished"}},
+	}
+	created, err := p.CreateTrigger(ctx, "proj", "us-central1", in)
+	if err != nil || created.Name != "t1" {
+		t.Fatalf("CreateTrigger = %+v, %v", created, err)
+	}
+	got, err := p.GetTrigger(ctx, "proj", "us-central1", "t1")
+	want, werr := direct.GetTrigger(ctx, "proj", "us-central1", "t1")
+	if err != nil || werr != nil || got.Name != want.Name || got.UID != want.UID {
+		t.Fatalf("GetTrigger through the chain %+v, direct %+v (%v, %v)", got, want, err, werr)
+	}
+	// An update with no explicit config merges onto the stored trigger.
+	in.Labels = map[string]string{"team": "a"}
+	if upd, err := p.UpdateTrigger(ctx, "proj", "us-central1", "t1", in); err != nil || upd.Name != "t1" {
+		t.Fatalf("UpdateTrigger = %+v, %v", upd, err)
+	}
+	if _, err := p.TriggerSetIamPolicy(ctx, "proj", "us-central1", "t1", map[string]any{"policy": map[string]any{"bindings": []any{}}}); err != nil {
+		t.Fatalf("TriggerSetIamPolicy: %v", err)
+	}
+	if _, err := p.TriggerGetIamPolicy(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatalf("TriggerGetIamPolicy: %v", err)
+	}
+	if err := p.DeleteTrigger(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatalf("DeleteTrigger: %v", err)
+	}
+	if _, err := direct.GetTrigger(ctx, "proj", "us-central1", "t1"); err == nil {
+		t.Fatal("the trigger must be gone from the built-in after DeleteTrigger through the chain")
+	}
+
+	if _, err := p.CreateChannel(ctx, "proj", "us-central1", eventarcui.ChannelInput{Name: "ch1", Provider: "projects/proj/locations/us-central1/providers/p"}); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err := p.UpdateChannel(ctx, "proj", "us-central1", "ch1", eventarcui.ChannelInput{Name: "ch1", Provider: "projects/proj/locations/us-central1/providers/p", Labels: map[string]string{"a": "b"}}); err != nil || ch.Name != "ch1" {
+		t.Fatalf("UpdateChannel = %+v, %v", ch, err)
+	}
+	if _, err := p.ChannelSetIamPolicy(ctx, "proj", "us-central1", "ch1", map[string]any{"policy": map[string]any{"bindings": []any{}}}); err != nil {
+		t.Fatalf("ChannelSetIamPolicy: %v", err)
+	}
+	for _, k := range []string{"Eventarc.CreateTrigger", "Eventarc.UpdateTrigger", "Eventarc.DeleteTrigger", "Eventarc.UpdateChannel", "Eventarc.TriggerSetIamPolicy"} {
+		found := false
+		for _, s := range seen {
+			found = found || s.key == k
+		}
+		if !found {
+			t.Errorf("the plugin never saw %s", k)
+		}
+	}
+}
+
+// With no plugin on the key every trigger call stays on the built-in.
+func TestEventarcConsoleTriggerCallsStayDirectWithoutAPlugin(t *testing.T) {
+	direct, builtins := newEventarc()
+	p := routeEventarc(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{}), direct)
+	ctx := context.Background()
+	in := eventarcui.TriggerInput{Name: "t1", DestinationType: "cloudRun", Destination: "svc", DestinationRegion: "us-central1",
+		EventFilters: []eventarcui.EventFilter{{Attribute: "type", Value: "google.cloud.pubsub.topic.v1.messagePublished"}}}
+	if _, err := p.CreateTrigger(ctx, "proj", "us-central1", in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpdateTrigger(ctx, "proj", "us-central1", "t1", in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetTrigger(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.TriggerSetIamPolicy(ctx, "proj", "us-central1", "t1", map[string]any{"policy": map[string]any{"bindings": []any{}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.TriggerGetIamPolicy(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.DeleteTrigger(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatal(err)
+	}
+}

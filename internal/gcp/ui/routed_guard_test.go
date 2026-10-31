@@ -270,6 +270,38 @@ func TestForwardersDispatchThroughTheRegistryAsUI(t *testing.T) {
 	}
 }
 
+// A forwarder whose key the registry does not hold (the service is switched off, or the unit
+// tests build the console without a registry) must call the built-in, not dispatch. The embedded
+// built-in is nil here, so reaching it panics, which is how the test sees the delegation.
+func TestForwardersFallBackToTheBuiltInWhenTheRegistryLacksTheKey(t *testing.T) {
+	fwd := forwarders(t)
+	checked := 0
+	for _, s := range routedServices {
+		for _, reg := range []*provider.Registry{nil, provider.NewRegistry()} {
+			out := reflect.ValueOf(s.ctor).Call([]reflect.Value{reflect.ValueOf(reg), reflect.Zero(reflect.TypeOf(s.ctor).In(1))})[0]
+			rt := out.Elem().Type()
+			for i := 0; i < rt.NumMethod(); i++ {
+				m := rt.Method(i)
+				if _, ok := fwd[rt.Name()+"."+m.Name]; !ok {
+					continue
+				}
+				func() {
+					defer func() {
+						if recover() == nil {
+							t.Errorf("%s.%s: with no registry key it did not reach the built-in", rt.Name(), m.Name)
+						}
+					}()
+					out.Elem().Method(i).Call([]reflect.Value{reflect.ValueOf(context.Background()), reflect.ValueOf(&model.NormalizedRequest{Params: map[string]any{"name": "projects/p/locations/l/keyRings/kr"}})})
+				}()
+				checked++
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("checked no forwarders")
+	}
+}
+
 // ---- typed console services ---------------------------------------------------------
 
 // typedServices are the console services that work on typed store structs. Each is
