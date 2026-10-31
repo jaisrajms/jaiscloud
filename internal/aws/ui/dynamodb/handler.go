@@ -47,7 +47,7 @@ func (h *Handler) ListTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	names, _ := resp.Data["TableNames"].([]string)
+	names := uihelper.Strings(resp.Data["TableNames"])
 	lastTable, _ := resp.Data["LastEvaluatedTableName"].(string)
 
 	// Describe each table to get status/count (acceptable at dev-tool scale).
@@ -189,12 +189,12 @@ func (h *Handler) ScanTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, _ := resp.Data["Items"].([]map[string]any)
+	items := uihelper.Maps(resp.Data["Items"])
 	if items == nil {
 		items = []map[string]any{}
 	}
-	count, _ := resp.Data["Count"].(int)
-	scanned, _ := resp.Data["ScannedCount"].(int)
+	count := uihelper.Int(resp.Data["Count"])
+	scanned := uihelper.Int(resp.Data["ScannedCount"])
 	lek, _ := resp.Data["LastEvaluatedKey"].(map[string]any)
 
 	uihelper.WriteJSON(w, ScanResponse{

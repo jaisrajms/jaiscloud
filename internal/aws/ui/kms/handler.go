@@ -38,7 +38,7 @@ func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawKeys, _ := resp.Data["Keys"].([]map[string]any)
+	rawKeys := uihelper.Maps(resp.Data["Keys"])
 	nextToken, _ := resp.Data["NextMarker"].(string)
 
 	keys := make([]KMSKey, 0, len(rawKeys))
@@ -223,7 +223,7 @@ func (h *Handler) ListAliases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawAliases, _ := resp.Data["Aliases"].([]map[string]any)
+	rawAliases := uihelper.Maps(resp.Data["Aliases"])
 	nextToken, _ := resp.Data["NextMarker"].(string)
 
 	aliases := make([]KMSAlias, 0, len(rawAliases))

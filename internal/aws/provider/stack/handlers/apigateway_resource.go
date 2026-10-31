@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	apigwprovider "jaiscloud/internal/aws/provider/apigw"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewAPIGatewayResourceHandler returns a ResourceHandler for AWS::ApiGateway::Resource.
-func NewAPIGatewayResourceHandler(apigwP *apigwprovider.GatewayProvider) stackprovider.ResourceHandler {
+func NewAPIGatewayResourceHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			restAPIID := propStr(props, "RestApiId", "")
 			parentID := propStr(props, "ParentId", "")
 			pathPart := propStr(props, "PathPart", logicalID)
-			resp, err := apigwP.CreateResource(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Gateway.CreateResource", child(nr, map[string]any{
 				"restApiId": restAPIID,
 				"parentId":  parentID,
 				"pathPart":  pathPart,
@@ -32,7 +31,7 @@ func NewAPIGatewayResourceHandler(apigwP *apigwprovider.GatewayProvider) stackpr
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			restAPIID := propStr(props, "RestApiId", "")
-			_, err := apigwP.DeleteResource(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Gateway.DeleteResource", &model.NormalizedRequest{
 				Params: map[string]any{"restApiId": restAPIID, "resourceId": physicalID},
 			})
 			return err

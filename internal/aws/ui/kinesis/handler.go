@@ -34,7 +34,7 @@ func (h *Handler) ListStreams(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ListStreams returns StreamSummaries with name/arn/status/mode
-	rawSummaries, _ := resp.Data["StreamSummaries"].([]map[string]any)
+	rawSummaries := uihelper.Maps(resp.Data["StreamSummaries"])
 	items := make([]Stream, 0, len(rawSummaries))
 	for _, s := range rawSummaries {
 		st := Stream{

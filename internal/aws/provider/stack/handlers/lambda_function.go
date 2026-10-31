@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	functionprovider "jaiscloud/internal/aws/provider/lambda"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLambdaFunctionHandler returns a ResourceHandler for AWS::Lambda::Function.
-func NewLambdaFunctionHandler(funcP *functionprovider.FunctionProvider) stackprovider.ResourceHandler {
+func NewLambdaFunctionHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "FunctionName", logicalID)
 			params := copyProps(props)
 			params["FunctionName"] = name
-			resp, err := funcP.CreateFunction(ctx, child(nr, params))
+			resp, err := call(ctx, "Function.CreateFunction", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -33,7 +32,7 @@ func NewLambdaFunctionHandler(funcP *functionprovider.FunctionProvider) stackpro
 					codeParams[k] = v
 				}
 			}
-			if _, err := funcP.UpdateFunctionCode(ctx, child(nr, codeParams)); err != nil {
+			if _, err := call(ctx, "Function.UpdateFunctionCode", child(nr, codeParams)); err != nil {
 				return "", nil, false, err
 			}
 			// Update function configuration
@@ -59,14 +58,14 @@ func NewLambdaFunctionHandler(funcP *functionprovider.FunctionProvider) stackpro
 			if v, ok := newProps["VpcConfig"]; ok {
 				cfgParams["VpcConfig"] = v
 			}
-			if _, err := funcP.UpdateFunctionConfiguration(ctx, child(nr, cfgParams)); err != nil {
+			if _, err := call(ctx, "Function.UpdateFunctionConfiguration", child(nr, cfgParams)); err != nil {
 				return "", nil, false, err
 			}
 			arn := nr.ResourceID("lambda-function", physicalID)
 			return physicalID, map[string]any{"Arn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := funcP.DeleteFunction(ctx, &model.NormalizedRequest{Params: map[string]any{"_function_name": physicalID}})
+			_, err := call(ctx, "Function.DeleteFunction", &model.NormalizedRequest{Params: map[string]any{"_function_name": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"Arn"},

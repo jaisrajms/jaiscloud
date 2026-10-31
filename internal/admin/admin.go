@@ -108,11 +108,13 @@ type Handler struct {
 	barrier          *snapshot.Barrier
 	clockMode        string // "real" | "fixed" | "offset"; "" means real
 	ttlSweeper       TTLSweeper
+	pluginTicker     PluginTicker
 	ebScheduler      EBSchedulerTicker
 	schedulerTicker  SchedulerTicker
 	tasksTicker      TasksTicker
 	monitoringTicker MonitoringTicker
 	throttle         ThrottleController
+	doctorSections   map[string]func() any
 }
 
 func NewHandler() *Handler {
@@ -120,6 +122,17 @@ func NewHandler() *Handler {
 		snapshotters:    make(map[string]Snapshotter),
 		exportSoftLimit: exportSoftLimitDefault,
 	}
+}
+
+// SetDoctorSection adds a named section to the GET /_jaiscloud/doctor response.
+// Nothing is added unless a caller registers a section.
+func (h *Handler) SetDoctorSection(name string, fn func() any) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.doctorSections == nil {
+		h.doctorSections = map[string]func() any{}
+	}
+	h.doctorSections[name] = fn
 }
 
 // RegisterBlobStore wires a blob store into the handler so that
@@ -293,6 +306,16 @@ func (h *Handler) Doctor(w http.ResponseWriter, r *http.Request) {
 		resp["backend"] = backend
 		resp["data_dir"] = dataDir
 		resp["kek_fingerprint"] = kekFP
+	}
+
+	h.mu.Lock()
+	sections := make(map[string]func() any, len(h.doctorSections))
+	for k, v := range h.doctorSections {
+		sections[k] = v
+	}
+	h.mu.Unlock()
+	for name, fn := range sections {
+		resp[name] = fn()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -861,4 +884,29 @@ func snapshotHasKMSMaterial(stores map[string]json.RawMessage) bool {
 		return true // fail-safe: unparseable → treat as having material
 	}
 	return len(raw) > 0
+}
+
+// PluginTicker lets the test hooks reach plugins that own a service: the
+// built-in passes (scheduler, alarm evaluation, TTL sweep, Firehose flush) only
+// cover built-in state.
+type PluginTicker interface {
+	Tick(ctx context.Context, service string)
+}
+
+// SetPluginTicker wires the plugin host into the test hooks.
+func (h *Handler) SetPluginTicker(t PluginTicker) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pluginTicker = t
+}
+
+// tickPlugins tells plugins that own wire service to run their own pass. It
+// runs after the built-in pass and on a context that outlives the request.
+func (h *Handler) tickPlugins(ctx context.Context, service string) {
+	h.mu.Lock()
+	t := h.pluginTicker
+	h.mu.Unlock()
+	if t != nil {
+		t.Tick(context.WithoutCancel(ctx), service)
+	}
 }

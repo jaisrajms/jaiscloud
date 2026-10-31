@@ -34,7 +34,7 @@ func (h *Handler) ListIdentities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawIdentities, _ := resp.Data["Identities"].([]string)
+	rawIdentities := uihelper.Strings(resp.Data["Identities"])
 	items := make([]Identity, 0, len(rawIdentities))
 	for _, id := range rawIdentities {
 		idType := "EmailAddress"

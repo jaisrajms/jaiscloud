@@ -40,7 +40,7 @@ func (h *Handler) ListTopics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawTopics, _ := resp.Data["Topics"].([]map[string]any)
+	rawTopics := uihelper.Maps(resp.Data["Topics"])
 	nextTok, _ := resp.Data["NextToken"].(string)
 
 	topics := make([]Topic, 0, len(rawTopics))
@@ -86,7 +86,7 @@ func (h *Handler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		nr.Params["Tags"] = req.Tags
 	}
 	if req.FIFO {
-		attrs, _ := nr.Params["Attributes"].(map[string]string)
+		attrs := uihelper.StringMap(nr.Params["Attributes"])
 		if attrs == nil {
 			attrs = map[string]string{}
 		}
@@ -158,7 +158,7 @@ func (h *Handler) ListSubscriptionsByTopic(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rawSubs, _ := resp.Data["Subscriptions"].([]map[string]any)
+	rawSubs := uihelper.Maps(resp.Data["Subscriptions"])
 	nextTok, _ := resp.Data["NextToken"].(string)
 
 	subs := parseSubscriptions(rawSubs)
@@ -266,7 +266,7 @@ func (h *Handler) fetchTopicDetail(r *http.Request, topicARN, region, account st
 		return Topic{ARN: topicARN, Name: topicNameFromARN(topicARN)}
 	}
 
-	attrs, _ := resp.Data["Attributes"].(map[string]string)
+	attrs := uihelper.StringMap(resp.Data["Attributes"])
 
 	name := topicNameFromARN(topicARN)
 	topicType := "Standard"

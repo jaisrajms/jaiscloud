@@ -42,7 +42,7 @@ func (h *Handler) ListFunctions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawFuncs, _ := resp.Data["Functions"].([]map[string]any)
+	rawFuncs := uihelper.Maps(resp.Data["Functions"])
 	nextMarker, _ := resp.Data["NextMarker"].(string)
 
 	functions := make([]Function, 0, len(rawFuncs))
@@ -245,4 +245,3 @@ func strVal(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
-

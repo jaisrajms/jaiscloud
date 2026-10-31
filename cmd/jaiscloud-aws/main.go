@@ -38,6 +38,7 @@ import (
 	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
 	sfndispatcher "jaiscloud/internal/aws/provider/stepfunctions/dispatcher"
 	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
+	"jaiscloud/internal/aws/seams"
 	awsstore "jaiscloud/internal/aws/store"
 	ecrstore "jaiscloud/internal/aws/store/ecr"
 	kinesisstore "jaiscloud/internal/aws/store/kinesis"
@@ -86,6 +87,7 @@ import (
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
 	"jaiscloud/internal/platform"
+	"jaiscloud/internal/pluginhost"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
@@ -167,7 +169,10 @@ func startCmd() *cobra.Command {
 			}
 
 			ecrP := buildECRProvider(ctx, cfg, s)
-			app := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
+			// One adapter for the whole process: the seams resolve registry prefixes
+			// through the same instance plugins register services on.
+			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
+			app := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP, cloudAdapter.ServiceToProvider)
 			cleanup := app.Cleanup
 			defer func() { cleanup() }()
 
@@ -183,10 +188,9 @@ func startCmd() *cobra.Command {
 				prevCleanup()
 			}
 
-			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.ESMProvider, app.EventsProvider, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
 			adminHandler.RegisterSnapshotter("cw_logs", app.LogsP)
-			adminHandler.SetLambdaCodeFetcher(app.FuncP)
+			adminHandler.SetLambdaCodeFetcher(app.LambdaCode)
 			adminHandler.SetCWAlarmEvaluator(app.CWP.Evaluator())
 			adminHandler.SetFirehoseFlusher(app.FirehoseP)
 			if app.TableP.TTLWorker() != nil {
@@ -237,7 +241,7 @@ func startCmd() *cobra.Command {
 					awsadapter.RegisterIMDSRoutes(r, imdsCfg)
 				}))
 			}
-			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(app.ObjectP.GetBucketCORSRules))
+			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(app.CORSLookup))
 
 			// ECR persistent mode: register OCI Distribution v2 routes before the wildcard.
 			if ociHandler := ecrP.OCIHandler(); ociHandler != nil {
@@ -306,6 +310,35 @@ func startCmd() *cobra.Command {
 				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
 			}
 
+			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
+			// Load returns (nil, nil) and nothing below runs.
+			callbackURL := viper.GetString("plugin_callback_url")
+			if callbackURL == "" {
+				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
+			}
+			pluginHost, err := pluginhost.Load(ctx, viper.GetStringSlice("plugins"), pluginhost.Deps{
+				Cloud: model.CloudAWS, Version: version, Registry: app.Registry, Adapter: cloudAdapter,
+				Resources: s.resources, CallbackURL: callbackURL,
+				Timeout:   viper.GetDuration("plugin_timeout"),
+				StartWait: viper.GetDuration("plugin_wait"),
+				CallRetry: viper.GetDuration("plugin_retry"),
+				Secret:    viper.GetString("plugin_secret"),
+			})
+			if err != nil {
+				return err
+			}
+			if pluginHost != nil {
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
+				adminHandler.RegisterResetter(pluginHost)
+				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
+				adminHandler.SetPluginTicker(pluginHost)
+				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+			}
+
+			// Everything that calls services on its own starts only now: the registry is
+			// final, so a plugin that overrides a service is used from the first call.
+			app.Start()
+
 			var uiServer *ui.UIServer
 			if cfg.UIEnabled {
 				uiProviders := &ui.AWSProviders{
@@ -337,6 +370,7 @@ func startCmd() *cobra.Command {
 					Firehose:  app.FirehoseP,
 					SES:       app.SESP,
 					ELBv2:     app.ELBv2P,
+					Registry:  app.Registry,
 				}
 				var uiErr error
 				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
@@ -408,6 +442,18 @@ func startCmd() *cobra.Command {
 	Env var: JAISCLOUD_LAMBDA_KEEPALIVE_SECS`)
 	cmd.Flags().String("aws-emulator-endpoint", "", `AWS emulator endpoint for Spark driver pods (e.g. http://host:4566).
 	Env var: JAISCLOUD_AWS_EMULATOR_ENDPOINT`)
+	cmd.Flags().StringSlice("plugin", nil, `Out-of-process plugin to load (repeatable): http://host:port.
+	Order is precedence order. Env var: JAISCLOUD_PLUGINS (comma-separated)`)
+	cmd.Flags().Duration("plugin-timeout", 10*time.Second, "Timeout for each HTTP attempt to a plugin. Env var: JAISCLOUD_PLUGIN_TIMEOUT")
+	cmd.Flags().Duration("plugin-wait", 2*time.Minute, `How long to keep retrying an unreachable plugin at startup before failing.
+	Env var: JAISCLOUD_PLUGIN_WAIT`)
+	cmd.Flags().Duration("plugin-retry", 30*time.Second, `How long to keep retrying an unreachable plugin during a request before returning 503.
+	Env var: JAISCLOUD_PLUGIN_RETRY`)
+	cmd.Flags().String("plugin-secret", "", `Shared secret sent to plugins as a bearer token (pair with sdk.WithSecret).
+	Env var: JAISCLOUD_PLUGIN_SECRET`)
+	cmd.Flags().String("plugin-callback-url", "", `Base URL a plugin uses to reach this emulator's store callbacks.
+	Default http://127.0.0.1:<port>; set it when the plugin runs in another container.
+	Env var: JAISCLOUD_PLUGIN_CALLBACK_URL`)
 	cmd.Flags().Bool("imds-enabled", false, `Enable the AWS instance-metadata emulator endpoints.
 	Env var: JAISCLOUD_IMDS_ENABLED`)
 	cmd.Flags().String("k8s-namespace", "jaiscloud", `Kubernetes namespace for Spark and Lambda workloads.
@@ -433,6 +479,12 @@ func startCmd() *cobra.Command {
 // them up. Must be called at the start of RunE, after flag parsing is complete.
 func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("port", cmd.Flags().Lookup("port"))
+	viper.BindPFlag("plugins", cmd.Flags().Lookup("plugin"))
+	viper.BindPFlag("plugin_timeout", cmd.Flags().Lookup("plugin-timeout"))
+	viper.BindPFlag("plugin_wait", cmd.Flags().Lookup("plugin-wait"))
+	viper.BindPFlag("plugin_retry", cmd.Flags().Lookup("plugin-retry"))
+	viper.BindPFlag("plugin_secret", cmd.Flags().Lookup("plugin-secret"))
+	viper.BindPFlag("plugin_callback_url", cmd.Flags().Lookup("plugin-callback-url"))
 	viper.BindPFlag("ephemeral", cmd.Flags().Lookup("ephemeral"))
 	viper.BindPFlag("dsn", cmd.Flags().Lookup("dsn"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
@@ -478,6 +530,8 @@ type AppContext struct {
 	EventsProvider admin.Resetter
 	Cleanup        func()
 	ObjectP        *objectprovider.ObjectProvider
+	CORSLookup     func(ctx context.Context, bucket string) []map[string]any // gateway CORS rules, via the registry
+	LambdaCode     admin.LambdaCodeFetcher                                   // function/layer packages, via the registry
 	QueueP         *queue.QueueProvider
 	LogsP          *cwlogs.Provider
 	SfnP           *sfnprovider.Provider
@@ -505,6 +559,8 @@ type AppContext struct {
 	DNSP           *dns.DNSProvider
 	StackP         *stackprovider.StackProvider
 	Sched          *ebscheduler.Scheduler
+	// Start launches the background workers; call it once plugins are loaded.
+	Start func()
 }
 
 // appStores holds all store instances that the server depends on.
@@ -640,13 +696,20 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 
 // buildRegistry wires all providers and returns an AppContext holding the
 // populated registry, all provider references, and a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) *AppContext {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider, prefixOf func(string) string) *AppContext {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
+	// The registry exists before the providers so cross-service seams can hold it:
+	// every call from one service to another goes through Registry.Dispatch (see
+	// internal/aws/seams), and a plugin that overrides a key is used by all of them.
+	reg := provider.NewRegistry()
+	seamSet := seams.NewSet(reg, prefixOf,
+		seams.Scope{Account: cfg.AccountID, Region: cfg.Region, Clock: cfg.Clock, Port: cfg.Port})
+
 	sparkMode, _ := config.ExecutorMode("spark", "mock")
 
-	s3Fetcher := blobfs.NewS3BlobFetcher(s.blobs)
+	s3Fetcher := seamSet.S3() // EMR bootstrap scripts are read through the registry too
 	bootstrapPrefixes := []string{"/etc/pki", "/home/hadoop"}
 	if v := os.Getenv("JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES"); v != "" {
 		bootstrapPrefixes = nil
@@ -755,7 +818,9 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		keyStore = keyprovider.NewMemoryKeyStore()
 	}
 	keyProv := keyprovider.New(keyStore, nil, dek)
-	kmsEncryptor := keyProv.AsKeyEncryptor()
+	// Secrets and SSM encrypt through the registry (Key.Encrypt/Decrypt/GenerateDataKey),
+	// so a KMS plugin protects what they store.
+	kmsEncryptor := seamSet.KMS()
 	secretProv := secretprovider.New(s.secrets, kmsEncryptor)
 	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
@@ -804,57 +869,58 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
 	queueP := queue.New(s.resources, s.messages, bus)
+	sqsSeam, lambdaSeam, snsSeam, ebSeam := seamSet.SQS(), seamSet.Lambda(), seamSet.SNS(), seamSet.EventBridge()
+	logsSeam, s3Seam := seamSet.Logs(), seamSet.S3()
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.NewWithOIDC(s.stsSession, cfg.OIDCIssuers)
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
-	notifP.SetLambdaInvoker(funcP)
-	notifP.SetSQSSender(sqsSenderAdapter{q: queueP})
+	notifP.SetLambdaInvoker(lambdaSeam)
+	notifP.SetSQSSender(sqsSenderAdapter{q: sqsSeam})
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus).WithResourceStore(s.resources)
 	stackP := stackprovider.New(s.resources)
 
-	esmProvider := lambdaesm.New(ctx, s.resources, funcP, queueP, streams, slog.Default())
-	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: queueP})
-	esmProvider.RehydratePollers(ctx)
+	esmProvider := lambdaesm.New(ctx, s.resources, lambdaSeam, seamSet.SQSConsumer(), seamSet.Streams(), slog.Default())
+	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: sqsSeam})
 	prevCleanup2 := cleanup
 	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
 
 	// ── Construct providers that need cross-service wiring before registration ──
 	sfnP := sfnprovider.New(s.sfn)
 	glueP := catalog.New(s.resources)
-	glueP.SetObjectProvider(objectP)
+	glueP.SetObjectProvider(s3Seam)
 	// TODO: seedDefaultVPC runs at construction time, before any request arrives,
 	// so there is no NormalizedRequest to supply account/region. Refactor to lazy
 	// seeding (seed on first DescribeVpcs per account+region) to remove this coupling
 	// and support multi-account EC2 correctly.
 	computeP := compute.New(s.resources, cfg.AccountID, cfg.Region)
 	ecsP := containerprovider.New(s.resources)
-	emrP.SetObjectProvider(objectP)
-	emrcP.SetObjectProvider(objectP)
+	emrP.SetObjectProvider(s3Seam)
+	emrcP.SetObjectProvider(s3Seam)
 	eventsP := eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port)
 	apigwP := apigwprovider.New(s.resources)
 	cwP := cloudwatchprovider.New(s.resources, bus)
 	logsProvider := cwlogs.New()
 	sesP := sesprovider.New(s.resources)
-	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(s.s3Meta).WithS3Writer(objectP)
+	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(seamSet.S3()).WithS3Writer(s3Seam)
 
 	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
-		dockerExec.SetCodeLoader(funcP)
-		dockerExec.SetLogsAPI(logsProvider)
+		dockerExec.SetCodeLoader(seamSet.LambdaCode())
+		dockerExec.SetLogsAPI(logsSeam)
 	}
 	if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
-		k8sExec.SetCodeLoader(funcP)
-		k8sExec.SetLogsAPI(logsProvider)
+		k8sExec.SetCodeLoader(seamSet.LambdaCode())
+		k8sExec.SetLogsAPI(logsSeam)
 	}
 	// Wire ECS executor.
 	ecsMode, _ := config.ExecutorMode("ecs", "mock")
 	var ecsExec ecsexec.Executor
 	switch ecsMode {
 	case "docker":
-		ecsExec = ecsexec.New(ecsexec.ModeDocker, logsProvider)
+		ecsExec = ecsexec.New(ecsexec.ModeDocker, logsSeam)
 	case "k8s":
-		ecsExec = ecsexec.New(ecsexec.ModeK8s, logsProvider)
+		ecsExec = ecsexec.New(ecsexec.ModeK8s, logsSeam)
 	default:
 		ecsExec = ecsexec.New(ecsexec.ModeMock, nil)
 	}
@@ -863,12 +929,10 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		ecsP.SetJaisCloudEndpoint(cfg.AWSEmulatorEndpoint)
 	}
 
-	firehoseP.Start()
-
 	// ── Register all providers via the builder chain ──────────────────────────
 	// All providers are fully constructed and wired above; registration is a
 	// single declarative block. Adding a new service requires one Register call.
-	registry := provider.NewRegistry().
+	registry := reg.
 		Register(keyProv).
 		Register(secretProv).
 		Register(paramProv).
@@ -900,29 +964,30 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
-		SQS:          queueP,
-		SNSPublisher: notifP,
-		Lambda:       funcP,
+		SQS:          sqsSeam,
+		SNSPublisher: snsSeam,
+		Lambda:       lambdaSeam,
+		EventBridge:  ebSeam,
 	})
-	cwP.SetSNSPublisher(notifP)
-	cwP.SetLambdaInvoker(funcP)
-	logsProvider.SetSubscriptionDispatcher(funcP)
-	logsProvider.SetMetricDataPutter(&cwMetricAdapter{cwP})
-	emrcP.SetLogsIngestor(logsProvider)
-	sfnP.SetLogsIngestor(logsProvider)
-	secretProv.SetInvoker(funcP)
-	paramProv.SetEventPublisher(eventsP)
-	paramProv.SetSecretGetter(secretProv)
+	cwP.SetSNSPublisher(snsSeam)
+	cwP.SetLambdaInvoker(lambdaSeam)
+	logsProvider.SetSubscriptionDispatcher(lambdaSeam)
+	logsProvider.SetMetricDataPutter(seamSet.Metrics())
+	emrcP.SetLogsIngestor(logsSeam)
+	sfnP.SetLogsIngestor(logsSeam)
+	secretProv.SetInvoker(lambdaSeam)
+	paramProv.SetEventPublisher(ebSeam)
+	paramProv.SetSecretGetter(seamSet.Secrets())
 
 	// Wire EventBridge target dispatcher and scheduler.
-	tgtDisp := targets.New(queueP, funcP, notifP, &logsWriterAdapter{logsProvider}, eventsP)
+	tgtDisp := targets.New(sqsSeam, lambdaSeam, snsSeam, &logsWriterAdapter{logsSeam}, ebSeam)
 	eventsP.SetTargetDispatcher(tgtDisp)
 	sched := ebscheduler.New(tgtDisp)
 	eventsP.SetScheduler(sched)
 
 	// Wire SQS DLQ sender into the async queue.
 	funcP.SetAsyncSQSSend(func(ctx context.Context, arn string, body string) error {
-		return queueP.InternalSend(ctx, arn, body, nil, queue.SourceContext{
+		return sqsSeam.InternalSend(ctx, arn, body, nil, queue.SourceContext{
 			SourceArn:        "lambda.amazonaws.com",
 			ServicePrincipal: "lambda.amazonaws.com",
 		})
@@ -933,12 +998,10 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	workerReg.Add("eventbridge-scheduler", sched)
 	workerReg.Add("cw-alarm-evaluator", cwP.Evaluator())
 	workerReg.Add("lambda-async-queue", funcP.AsyncQueue())
-	workerReg.Start(ctx)
 	prevCleanup3 := cleanup
 	cleanup = func() { workerReg.Stop(); prevCleanup3() }
 
-	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv,
-		logsProvider, cwP, eventsP, ecsP, sfnP, esmProvider, apigwP, computeP)
+	registerCFNHandlers(stackP, seamSet.Invoke)
 
 	return &AppContext{
 		Registry:       registry,
@@ -952,6 +1015,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		EventsProvider: eventsP,
 		Cleanup:        cleanup,
 		ObjectP:        objectP,
+		CORSLookup:     s3Seam.BucketCORSRules,
+		LambdaCode:     seamSet.LambdaCode(),
 		QueueP:         queueP,
 		LogsP:          logsProvider,
 		SfnP:           sfnP,
@@ -979,6 +1044,15 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		DNSP:           dnsP,
 		StackP:         stackP,
 		Sched:          sched,
+		// Start launches everything that dispatches on its own (event-source pollers,
+		// the Firehose flusher, the EventBridge scheduler, the alarm evaluator and the
+		// Lambda async queue). main calls it after plugins are loaded, so no
+		// background work ever runs against a registry that is still being wrapped.
+		Start: func() {
+			esmProvider.RehydratePollers(ctx)
+			firehoseP.Start()
+			workerReg.Start(ctx)
+		},
 	}
 }
 
@@ -1012,19 +1086,6 @@ func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore)
 	return
 }
 
-// cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)
-// to the cwlogs.MetricDataPutter interface (uses logs.MetricDatum). Both types are structurally
-// identical; the adapter copies fields to satisfy the distinct type system.
-type cwMetricAdapter struct{ p *cloudwatchprovider.Provider }
-
-func (a *cwMetricAdapter) InternalPutMetricData(ctx context.Context, namespace string, data []cwlogs.MetricDatum) error {
-	cw := make([]cloudwatchprovider.MetricDatum, len(data))
-	for i, d := range data {
-		cw[i] = cloudwatchprovider.MetricDatum{Name: d.Name, Value: d.Value, Unit: d.Unit}
-	}
-	return a.p.InternalPutMetricData(ctx, namespace, cw)
-}
-
 // buildK8sClient builds the shared Kubernetes client (in-cluster config first,
 // then the JAISCLOUD_K8S_* environment). It delegates so AWS and GCP use one
 // bootstrap.
@@ -1033,74 +1094,55 @@ func buildK8sClient() (kubernetes.Interface, error) {
 }
 
 // registerCFNHandlers wires real resource provisioning for CloudFormation resource types.
-func registerCFNHandlers(
-	stackP *stackprovider.StackProvider,
-	queueP *queue.QueueProvider,
-	notifP *notification.SNSProvider,
-	objectP *objectprovider.ObjectProvider,
-	tableP *table.TableProvider,
-	iamP *iamprovider.IAMProvider,
-	funcP *functionprovider.FunctionProvider,
-	keyP *keyprovider.KeyProvider,
-	secretP *secretprovider.SecretProvider,
-	paramP *paramprovider.ParameterProvider,
-	logsP *cwlogs.Provider,
-	cwP *cloudwatchprovider.Provider,
-	eventsP *eventsprovider.EventBridgeProvider,
-	ecsP *containerprovider.ContainerProvider,
-	sfnP *sfnprovider.Provider,
-	esmP *lambdaesm.Provider,
-	apigwP *apigwprovider.GatewayProvider,
-	computeP *compute.ComputeProvider,
-) {
+func registerCFNHandlers(stackP *stackprovider.StackProvider, call handlers.Invoker) {
 	// Existing 27 resource types — delegated to per-file constructors.
-	stackP.RegisterHandler("AWS::SQS::Queue", handlers.NewSQSQueueHandler(queueP))
-	stackP.RegisterHandler("AWS::SNS::Topic", handlers.NewSNSTopicHandler(notifP))
-	stackP.RegisterHandler("AWS::S3::Bucket", handlers.NewS3BucketHandler(objectP))
-	stackP.RegisterHandler("AWS::DynamoDB::Table", handlers.NewDynamoDBTableHandler(tableP))
-	stackP.RegisterHandler("AWS::IAM::Role", handlers.NewIAMRoleHandler(iamP))
-	stackP.RegisterHandler("AWS::Lambda::Function", handlers.NewLambdaFunctionHandler(funcP))
-	stackP.RegisterHandler("AWS::SSM::Parameter", handlers.NewSSMParameterHandler(paramP))
-	stackP.RegisterHandler("AWS::SecretsManager::Secret", handlers.NewSecretsManagerSecretHandler(secretP))
-	stackP.RegisterHandler("AWS::KMS::Key", handlers.NewKMSKeyHandler(keyP))
-	stackP.RegisterHandler("AWS::KMS::Alias", handlers.NewKMSAliasHandler(keyP))
-	stackP.RegisterHandler("AWS::IAM::Policy", handlers.NewIAMPolicyHandler(iamP))
-	stackP.RegisterHandler("AWS::IAM::ManagedPolicy", handlers.NewIAMManagedPolicyHandler(iamP))
-	stackP.RegisterHandler("AWS::IAM::InstanceProfile", handlers.NewIAMInstanceProfileHandler(iamP))
-	stackP.RegisterHandler("AWS::Lambda::Permission", handlers.NewLambdaPermissionHandler(funcP))
-	stackP.RegisterHandler("AWS::Lambda::Alias", handlers.NewLambdaAliasHandler(funcP))
-	stackP.RegisterHandler("AWS::Lambda::EventSourceMapping", handlers.NewLambdaEventSourceMappingHandler(esmP))
-	stackP.RegisterHandler("AWS::SNS::Subscription", handlers.NewSNSSubscriptionHandler(notifP))
-	stackP.RegisterHandler("AWS::Logs::LogGroup", handlers.NewLogsLogGroupHandler(logsP))
-	stackP.RegisterHandler("AWS::Logs::LogStream", handlers.NewLogsLogStreamHandler(logsP))
-	stackP.RegisterHandler("AWS::CloudWatch::Alarm", handlers.NewCloudWatchAlarmHandler(cwP))
-	stackP.RegisterHandler("AWS::Events::Rule", handlers.NewEventsRuleHandler(eventsP))
-	stackP.RegisterHandler("AWS::Events::EventBus", handlers.NewEventsEventBusHandler(eventsP))
-	stackP.RegisterHandler("AWS::ECS::Cluster", handlers.NewECSClusterHandler(ecsP))
-	stackP.RegisterHandler("AWS::ECS::TaskDefinition", handlers.NewECSTaskDefinitionHandler(ecsP))
-	stackP.RegisterHandler("AWS::ECS::Service", handlers.NewECSServiceHandler(ecsP))
-	stackP.RegisterHandler("AWS::StepFunctions::StateMachine", handlers.NewStepFunctionsStateMachineHandler(sfnP))
-	stackP.RegisterHandler("AWS::ApiGateway::RestApi", handlers.NewAPIGatewayRestApiHandler(apigwP))
-	stackP.RegisterHandler("AWS::CloudFormation::Stack", handlers.NewCFNStackHandler(stackP))
+	stackP.RegisterHandler("AWS::SQS::Queue", handlers.NewSQSQueueHandler(call))
+	stackP.RegisterHandler("AWS::SNS::Topic", handlers.NewSNSTopicHandler(call))
+	stackP.RegisterHandler("AWS::S3::Bucket", handlers.NewS3BucketHandler(call))
+	stackP.RegisterHandler("AWS::DynamoDB::Table", handlers.NewDynamoDBTableHandler(call))
+	stackP.RegisterHandler("AWS::IAM::Role", handlers.NewIAMRoleHandler(call))
+	stackP.RegisterHandler("AWS::Lambda::Function", handlers.NewLambdaFunctionHandler(call))
+	stackP.RegisterHandler("AWS::SSM::Parameter", handlers.NewSSMParameterHandler(call))
+	stackP.RegisterHandler("AWS::SecretsManager::Secret", handlers.NewSecretsManagerSecretHandler(call))
+	stackP.RegisterHandler("AWS::KMS::Key", handlers.NewKMSKeyHandler(call))
+	stackP.RegisterHandler("AWS::KMS::Alias", handlers.NewKMSAliasHandler(call))
+	stackP.RegisterHandler("AWS::IAM::Policy", handlers.NewIAMPolicyHandler(call))
+	stackP.RegisterHandler("AWS::IAM::ManagedPolicy", handlers.NewIAMManagedPolicyHandler(call))
+	stackP.RegisterHandler("AWS::IAM::InstanceProfile", handlers.NewIAMInstanceProfileHandler(call))
+	stackP.RegisterHandler("AWS::Lambda::Permission", handlers.NewLambdaPermissionHandler(call))
+	stackP.RegisterHandler("AWS::Lambda::Alias", handlers.NewLambdaAliasHandler(call))
+	stackP.RegisterHandler("AWS::Lambda::EventSourceMapping", handlers.NewLambdaEventSourceMappingHandler(call))
+	stackP.RegisterHandler("AWS::SNS::Subscription", handlers.NewSNSSubscriptionHandler(call))
+	stackP.RegisterHandler("AWS::Logs::LogGroup", handlers.NewLogsLogGroupHandler(call))
+	stackP.RegisterHandler("AWS::Logs::LogStream", handlers.NewLogsLogStreamHandler(call))
+	stackP.RegisterHandler("AWS::CloudWatch::Alarm", handlers.NewCloudWatchAlarmHandler(call))
+	stackP.RegisterHandler("AWS::Events::Rule", handlers.NewEventsRuleHandler(call))
+	stackP.RegisterHandler("AWS::Events::EventBus", handlers.NewEventsEventBusHandler(call))
+	stackP.RegisterHandler("AWS::ECS::Cluster", handlers.NewECSClusterHandler(call))
+	stackP.RegisterHandler("AWS::ECS::TaskDefinition", handlers.NewECSTaskDefinitionHandler(call))
+	stackP.RegisterHandler("AWS::ECS::Service", handlers.NewECSServiceHandler(call))
+	stackP.RegisterHandler("AWS::StepFunctions::StateMachine", handlers.NewStepFunctionsStateMachineHandler(call))
+	stackP.RegisterHandler("AWS::ApiGateway::RestApi", handlers.NewAPIGatewayRestApiHandler(call))
+	stackP.RegisterHandler("AWS::CloudFormation::Stack", handlers.NewCFNStackHandler(call))
 
 	// 17 new resource types.
-	stackP.RegisterHandler("AWS::EC2::VPC", handlers.NewEC2VPCHandler(computeP))
-	stackP.RegisterHandler("AWS::EC2::Subnet", handlers.NewEC2SubnetHandler(computeP))
-	stackP.RegisterHandler("AWS::EC2::SecurityGroup", handlers.NewEC2SecurityGroupHandler(computeP))
-	stackP.RegisterHandler("AWS::EC2::InternetGateway", handlers.NewEC2InternetGatewayHandler(computeP))
-	stackP.RegisterHandler("AWS::EC2::RouteTable", handlers.NewEC2RouteTableHandler(computeP))
-	stackP.RegisterHandler("AWS::EC2::Route", handlers.NewEC2RouteHandler(computeP))
-	stackP.RegisterHandler("AWS::EC2::SubnetRouteTableAssociation", handlers.NewEC2SubnetRouteTableAssociationHandler(computeP))
-	stackP.RegisterHandler("AWS::S3::BucketPolicy", handlers.NewS3BucketPolicyHandler(objectP))
-	stackP.RegisterHandler("AWS::Lambda::Version", handlers.NewLambdaVersionHandler(funcP))
-	stackP.RegisterHandler("AWS::Lambda::Url", handlers.NewLambdaUrlHandler(funcP))
-	stackP.RegisterHandler("AWS::ApiGateway::Resource", handlers.NewAPIGatewayResourceHandler(apigwP))
-	stackP.RegisterHandler("AWS::ApiGateway::Method", handlers.NewAPIGatewayMethodHandler(apigwP))
-	stackP.RegisterHandler("AWS::ApiGateway::Integration", handlers.NewAPIGatewayIntegrationHandler(apigwP))
-	stackP.RegisterHandler("AWS::ApiGateway::Deployment", handlers.NewAPIGatewayDeploymentHandler(apigwP))
-	stackP.RegisterHandler("AWS::ApiGateway::Stage", handlers.NewAPIGatewayStageHandler(apigwP))
-	stackP.RegisterHandler("AWS::Logs::SubscriptionFilter", handlers.NewLogsSubscriptionFilterHandler(logsP))
-	stackP.RegisterHandler("AWS::DynamoDB::GlobalTable", handlers.NewDynamoDBGlobalTableHandler(tableP))
+	stackP.RegisterHandler("AWS::EC2::VPC", handlers.NewEC2VPCHandler(call))
+	stackP.RegisterHandler("AWS::EC2::Subnet", handlers.NewEC2SubnetHandler(call))
+	stackP.RegisterHandler("AWS::EC2::SecurityGroup", handlers.NewEC2SecurityGroupHandler(call))
+	stackP.RegisterHandler("AWS::EC2::InternetGateway", handlers.NewEC2InternetGatewayHandler(call))
+	stackP.RegisterHandler("AWS::EC2::RouteTable", handlers.NewEC2RouteTableHandler(call))
+	stackP.RegisterHandler("AWS::EC2::Route", handlers.NewEC2RouteHandler(call))
+	stackP.RegisterHandler("AWS::EC2::SubnetRouteTableAssociation", handlers.NewEC2SubnetRouteTableAssociationHandler(call))
+	stackP.RegisterHandler("AWS::S3::BucketPolicy", handlers.NewS3BucketPolicyHandler(call))
+	stackP.RegisterHandler("AWS::Lambda::Version", handlers.NewLambdaVersionHandler(call))
+	stackP.RegisterHandler("AWS::Lambda::Url", handlers.NewLambdaUrlHandler(call))
+	stackP.RegisterHandler("AWS::ApiGateway::Resource", handlers.NewAPIGatewayResourceHandler(call))
+	stackP.RegisterHandler("AWS::ApiGateway::Method", handlers.NewAPIGatewayMethodHandler(call))
+	stackP.RegisterHandler("AWS::ApiGateway::Integration", handlers.NewAPIGatewayIntegrationHandler(call))
+	stackP.RegisterHandler("AWS::ApiGateway::Deployment", handlers.NewAPIGatewayDeploymentHandler(call))
+	stackP.RegisterHandler("AWS::ApiGateway::Stage", handlers.NewAPIGatewayStageHandler(call))
+	stackP.RegisterHandler("AWS::Logs::SubscriptionFilter", handlers.NewLogsSubscriptionFilterHandler(call))
+	stackP.RegisterHandler("AWS::DynamoDB::GlobalTable", handlers.NewDynamoDBGlobalTableHandler(call))
 }
 
 // buildAWSAdapter constructs all AWS service codecs and returns the wired adapter.
@@ -1648,7 +1690,7 @@ func snapshotInspectCmd() *cobra.Command {
 }
 
 // logsWriterAdapter adapts cwlogs.Provider to targets.LogsWriter ([]string events).
-type logsWriterAdapter struct{ p *cwlogs.Provider }
+type logsWriterAdapter struct{ p logstream.Ingestor }
 
 func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupName, logStreamName string, events []string) error {
 	_ = a.p.InternalCreateLogGroup(ctx, logGroupName)
@@ -1660,8 +1702,8 @@ func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupNa
 	return a.p.InternalPutEvents(ctx, logGroupName, logStreamName, lsEvents)
 }
 
-// sqsSenderAdapter adapts *queue.QueueProvider to notification.SQSSender.
-type sqsSenderAdapter struct{ q *queue.QueueProvider }
+// sqsSenderAdapter adapts the SQS seam to notification.SQSSender.
+type sqsSenderAdapter struct{ q queue.InternalSendAPI }
 
 func (a sqsSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]notification.SQSMessageAttribute, src notification.SQSSourceContext) error {
 	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))
@@ -1674,8 +1716,8 @@ func (a sqsSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string
 	})
 }
 
-// esmSQSSenderAdapter adapts *queue.QueueProvider to lambdaesm.SQSSenderAPI.
-type esmSQSSenderAdapter struct{ q *queue.QueueProvider }
+// esmSQSSenderAdapter adapts the SQS seam to lambdaesm.SQSSenderAPI.
+type esmSQSSenderAdapter struct{ q queue.InternalSendAPI }
 
 func (a esmSQSSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]lambdaesm.SQSMessageAttribute, src lambdaesm.SQSSourceContext) error {
 	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))

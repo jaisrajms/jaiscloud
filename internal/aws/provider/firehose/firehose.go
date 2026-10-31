@@ -356,7 +356,7 @@ func (p *Provider) bufferRecord(ctx context.Context, account, region, streamName
 	p.mu.Unlock()
 
 	if shouldFlush {
-		go p.flushStream(ctx, account, region, streamName)
+		go p.flushStream(context.WithoutCancel(ctx), account, region, streamName)
 	}
 }
 

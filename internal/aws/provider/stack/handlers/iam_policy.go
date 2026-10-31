@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	iamprovider "jaiscloud/internal/aws/provider/iam"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewIAMPolicyHandler returns a ResourceHandler for AWS::IAM::Policy.
-func NewIAMPolicyHandler(iamP *iamprovider.IAMProvider) stackprovider.ResourceHandler {
+func NewIAMPolicyHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "PolicyName", logicalID)
 			params := copyProps(props)
 			params["PolicyName"] = name
-			resp, err := iamP.CreatePolicy(ctx, child(nr, params))
+			resp, err := call(ctx, "IAM.CreatePolicy", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -33,7 +32,7 @@ func NewIAMPolicyHandler(iamP *iamprovider.IAMProvider) stackprovider.ResourceHa
 			return "", nil, true, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := iamP.DeletePolicy(ctx, &model.NormalizedRequest{Params: map[string]any{"PolicyArn": physicalID}})
+			_, err := call(ctx, "IAM.DeletePolicy", &model.NormalizedRequest{Params: map[string]any{"PolicyArn": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"Arn"},

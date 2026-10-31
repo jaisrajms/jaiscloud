@@ -3,18 +3,17 @@ package handlers
 import (
 	"context"
 
-	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLogsLogStreamHandler returns a ResourceHandler for AWS::Logs::LogStream.
-func NewLogsLogStreamHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandler {
+func NewLogsLogStreamHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			groupName := propStr(props, "LogGroupName", "")
 			streamName := propStr(props, "LogStreamName", logicalID)
-			if _, err := logsP.CreateLogStream(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "CloudWatchLogs.CreateLogStream", child(nr, map[string]any{
 				"logGroupName":  groupName,
 				"logStreamName": streamName,
 			})); err != nil {
@@ -28,7 +27,7 @@ func NewLogsLogStreamHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandl
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			groupName := propStr(props, "LogGroupName", "")
-			_, err := logsP.DeleteLogStream(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "CloudWatchLogs.DeleteLogStream", &model.NormalizedRequest{
 				Params: map[string]any{"logGroupName": groupName, "logStreamName": physicalID},
 			})
 			return err

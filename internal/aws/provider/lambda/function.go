@@ -139,6 +139,9 @@ func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
 		"Function.DeleteFunctionConcurrency": p.DeleteFunctionConcurrency,
 		// Account
 		"Function.GetAccountSettings": p.GetAccountSettings,
+		// Internal-only: the code package the executors and the admin endpoint mount.
+		"Function.GetFunctionCodeZip": p.getFunctionCodeZipHandler,
+		"Function.GetLayerCodeZip":    p.getLayerCodeZipHandler,
 		// Code signing configs
 		"Function.CreateCodeSigningConfig":          p.CreateCodeSigningConfig,
 		"Function.GetCodeSigningConfig":             p.GetCodeSigningConfig,
@@ -321,6 +324,19 @@ func (p *FunctionProvider) saveConfig(ctx context.Context, account, region strin
 
 func (p *FunctionProvider) loadConfig(ctx context.Context, account, region, name string) (functionConfig, error) {
 	entry, err := p.resources.Get(ctx, account, region, resTypeFunction, name)
+	if errors.Is(err, store.ErrNotFound) && account == "" && region == "" {
+		// Internal callers (the event-source poller, SNS, ...) know only a function
+		// name. Stores match scope exactly, so an unscoped lookup would never find a
+		// function created under an account/region; resolve it with a cross-scope scan.
+		if all, lerr := p.resources.List(ctx, "", "", resTypeFunction, ""); lerr == nil {
+			for _, e := range all {
+				if e.ID == name {
+					entry, err = e, nil
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		return functionConfig{}, err
 	}
@@ -666,6 +682,9 @@ func (p *FunctionProvider) Shutdown(_ context.Context) {
 }
 
 func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.invokeFunctionInternal(ctx, nr)
+	}
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	qualifier := strParam(nr.Params, "Qualifier")
 

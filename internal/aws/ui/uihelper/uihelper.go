@@ -121,3 +121,80 @@ func NR(ctx context.Context, cfg *config.Config, service, action, region, accoun
 		ResourceID: arn.ResourceID(region, accountID),
 	}
 }
+
+// Maps returns v as a list of objects. Built-in providers return
+// []map[string]any; a plugin's JSON decodes to []any of map[string]any. The
+// console must show both, so handlers read lists through this helper instead
+// of asserting one concrete type. Elements that are not objects are skipped.
+func Maps(v any) []map[string]any {
+	switch l := v.(type) {
+	case []map[string]any:
+		return l
+	case []any:
+		out := make([]map[string]any, 0, len(l))
+		for _, e := range l {
+			if m, ok := e.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// IntOK returns v as an int when it is any Go integer type or a JSON number.
+func IntOK(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
+// Int is IntOK without the flag (0 when absent or not a number).
+func Int(v any) int {
+	n, _ := IntOK(v)
+	return n
+}
+
+// Strings returns v as []string: built-ins return []string, a plugin's JSON
+// decodes to []any.
+func Strings(v any) []string {
+	switch l := v.(type) {
+	case []string:
+		return l
+	case []any:
+		out := make([]string, 0, len(l))
+		for _, e := range l {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// StringMap returns v as map[string]string (a plugin's JSON decodes to
+// map[string]any); non-string values are skipped.
+func StringMap(v any) map[string]string {
+	switch m := v.(type) {
+	case map[string]string:
+		return m
+	case map[string]any:
+		out := make(map[string]string, len(m))
+		for k, e := range m {
+			if s, ok := e.(string); ok {
+				out[k] = s
+			}
+		}
+		return out
+	}
+	return nil
+}

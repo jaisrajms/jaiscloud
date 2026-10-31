@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"jaiscloud/internal/clock"
 	awsarn "jaiscloud/internal/aws/arn"
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/model"
 )
 
 // InvokeResult holds the result of an internal Lambda invocation.
@@ -118,4 +119,30 @@ func (p *FunctionProvider) invokeConfig(ctx context.Context, cfg functionConfig,
 		return &InvokeResult{StatusCode: 200, FunctionError: err.Error()}, nil
 	}
 	return &InvokeResult{StatusCode: 200, Payload: raw}, nil
+}
+
+// invokeFunctionInternal serves Function.InvokeFunction for an internal origin
+// (SNS, the event-source poller, CloudWatch, EventBridge targets, S3
+// notifications, secret rotation, ...). The params use the same keys as the
+// wire request: _function_name (name or ARN), _payload ([]byte) and
+// _invocation_type ("RequestResponse" or "Event").
+func (p *FunctionProvider) invokeFunctionInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["_function_name"].(string)
+	payload, _ := nr.Params["_payload"].([]byte)
+	invType, _ := nr.Params["_invocation_type"].(string)
+	if invType == "" {
+		invType = "RequestResponse"
+	}
+	res, err := p.InternalInvoke(ctx, name, payload, invType)
+	if err != nil {
+		return nil, err
+	}
+	data := map[string]any{}
+	if len(res.Payload) > 0 {
+		data["_payload"] = res.Payload
+	}
+	if res.FunctionError != "" {
+		data["_function_error"] = res.FunctionError
+	}
+	return &model.ProviderResponse{HTTPStatus: res.StatusCode, Data: data}, nil
 }

@@ -1,6 +1,16 @@
 package handlers
 
-import "jaiscloud/internal/model"
+import (
+	"context"
+
+	"jaiscloud/internal/model"
+)
+
+// Invoker calls a service through the provider registry ("Queue.CreateQueue").
+// Handlers never hold a provider: whatever is registered under the key (the
+// built-in or a plugin) answers, so a plugin that overrides a service also
+// serves the resources CloudFormation creates in it.
+type Invoker func(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
 // child builds a derived NormalizedRequest with a new params map, inheriting
 // all other fields from the parent request.

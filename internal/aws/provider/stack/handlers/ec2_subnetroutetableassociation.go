@@ -3,18 +3,17 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/compute"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEC2SubnetRouteTableAssociationHandler returns a ResourceHandler for AWS::EC2::SubnetRouteTableAssociation.
-func NewEC2SubnetRouteTableAssociationHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+func NewEC2SubnetRouteTableAssociationHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			subnetID := propStr(props, "SubnetId", "")
 			rtID := propStr(props, "RouteTableId", "")
-			resp, err := computeP.AssociateRouteTable(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Compute.AssociateRouteTable", child(nr, map[string]any{
 				"SubnetId":     subnetID,
 				"RouteTableId": rtID,
 			}))

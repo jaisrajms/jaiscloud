@@ -58,6 +58,13 @@ jobs:
       - name: Run unit tests (AWS + shared packages)
         run: go test -race -count=1 $(go list ./internal/... | grep -v '/internal/gcp/')
 
+      # The SDK is a nested module (sdk/go.mod), so ./... above never covers it.
+      - name: Plugin SDK tests (nested module)
+        run: cd sdk && go vet ./... && go test -race -count=1 ./...
+
+      - name: Plugin end-to-end tests
+        run: go test -race -tags plugin_e2e -count=1 -timeout 300s ./tests/plugins/
+
       - name: Run integration tests
         env:
           AWS_ACCESS_KEY_ID: test

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/model"
 )
 
 func TestStoreAndLoadCode(t *testing.T) {
@@ -34,5 +35,33 @@ func TestStoreAndLoadCode(t *testing.T) {
 	}
 	if string(loaded) != string(original) {
 		t.Errorf("loaded content mismatch: got %q want %q", loaded, original)
+	}
+}
+
+func TestCodeHandlersServeStoredPackagesAsBody(t *testing.T) {
+	p := &FunctionProvider{blobs: blobfs.NewMemoryBlobStore()}
+	ctx := context.Background()
+	if _, _, _, err := p.storeCode(ctx, "000", "foo", "$LATEST", []byte("fn")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := p.storeLayerCode(ctx, "000", "lay", 2, []byte("ly")); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := p.getFunctionCodeZipHandler(ctx, &model.NormalizedRequest{AccountID: "000",
+		Params: map[string]any{"functionName": "foo", "qualifier": "$LATEST"}})
+	if err != nil || string(resp.Data["_body"].([]byte)) != "fn" {
+		t.Fatalf("function code = %v, %v", resp, err)
+	}
+	// A layer version arrives as float64 when a plugin forwarded the request.
+	resp, err = p.getLayerCodeZipHandler(ctx, &model.NormalizedRequest{AccountID: "000",
+		Params: map[string]any{"layerName": "lay", "version": float64(2)}})
+	if err != nil || string(resp.Data["_body"].([]byte)) != "ly" {
+		t.Fatalf("layer code = %v, %v", resp, err)
+	}
+	_, err = p.getFunctionCodeZipHandler(ctx, &model.NormalizedRequest{AccountID: "000",
+		Params: map[string]any{"functionName": "missing", "qualifier": "$LATEST"}})
+	if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 404 {
+		t.Fatalf("missing function error = %v", err)
 	}
 }

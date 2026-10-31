@@ -4,18 +4,17 @@ import (
 	"context"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
-	secretprovider "jaiscloud/internal/aws/secret"
 	"jaiscloud/internal/model"
 )
 
 // NewSecretsManagerSecretHandler returns a ResourceHandler for AWS::SecretsManager::Secret.
-func NewSecretsManagerSecretHandler(secretP *secretprovider.SecretProvider) stackprovider.ResourceHandler {
+func NewSecretsManagerSecretHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "Name", logicalID)
 			params := copyProps(props)
 			params["Name"] = name
-			resp, err := secretP.CreateSecret(ctx, child(nr, params))
+			resp, err := call(ctx, "Secret.CreateSecret", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -37,13 +36,13 @@ func NewSecretsManagerSecretHandler(secretP *secretprovider.SecretProvider) stac
 			if v, ok := newProps["SecretBinary"]; ok {
 				params["SecretBinary"] = v
 			}
-			if _, err := secretP.UpdateSecret(ctx, child(nr, params)); err != nil {
+			if _, err := call(ctx, "Secret.UpdateSecret", child(nr, params)); err != nil {
 				return "", nil, false, err
 			}
 			return physicalID, map[string]any{"Id": propStr(newProps, "Name", logicalID), "Arn": physicalID}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := secretP.DeleteSecret(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Secret.DeleteSecret", &model.NormalizedRequest{
 				ResourceID: func(_, _ string) string { return physicalID },
 				Params:     map[string]any{"SecretId": physicalID, "ForceDeleteWithoutRecovery": true},
 			})

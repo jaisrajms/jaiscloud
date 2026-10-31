@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/queue"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewSQSQueueHandler returns a ResourceHandler for AWS::SQS::Queue.
-func NewSQSQueueHandler(queueP *queue.QueueProvider) stackprovider.ResourceHandler {
+func NewSQSQueueHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "QueueName", logicalID)
-			resp, err := queueP.CreateQueue(ctx, child(nr, map[string]any{"QueueName": name}))
+			resp, err := call(ctx, "Queue.CreateQueue", child(nr, map[string]any{"QueueName": name}))
 			if err != nil {
 				return "", nil, err
 			}
@@ -44,7 +43,7 @@ func NewSQSQueueHandler(queueP *queue.QueueProvider) stackprovider.ResourceHandl
 				attrs["RedrivePolicy"] = propStr(map[string]any{"RedrivePolicy": v}, "RedrivePolicy", "")
 			}
 			if len(attrs) > 0 {
-				if _, err := queueP.SetQueueAttributes(ctx, child(nr, map[string]any{
+				if _, err := call(ctx, "Queue.SetQueueAttributes", child(nr, map[string]any{
 					"QueueUrl":   physicalID,
 					"Attributes": attrs,
 				})); err != nil {
@@ -56,7 +55,7 @@ func NewSQSQueueHandler(queueP *queue.QueueProvider) stackprovider.ResourceHandl
 			return physicalID, map[string]any{"QueueUrl": physicalID, "Arn": arn, "QueueName": name}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := queueP.DeleteQueue(ctx, &model.NormalizedRequest{Params: map[string]any{"QueueUrl": physicalID}})
+			_, err := call(ctx, "Queue.DeleteQueue", &model.NormalizedRequest{Params: map[string]any{"QueueUrl": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"Arn", "QueueName", "QueueUrl"},

@@ -38,7 +38,7 @@ func (h *Handler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawSecrets, _ := resp.Data["SecretList"].([]map[string]any)
+	rawSecrets := uihelper.Maps(resp.Data["SecretList"])
 	nextToken, _ := resp.Data["NextToken"].(string)
 
 	secrets := make([]Secret, 0, len(rawSecrets))
@@ -188,7 +188,7 @@ func (h *Handler) ListSecretVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawVersions, _ := resp.Data["Versions"].([]map[string]any)
+	rawVersions := uihelper.Maps(resp.Data["Versions"])
 	nextToken, _ := resp.Data["NextToken"].(string)
 
 	versions := make([]SecretVersion, 0, len(rawVersions))
@@ -223,7 +223,7 @@ func parseSecret(s map[string]any) Secret {
 		CreatedDate:     strAny(s, "CreatedDate"),
 		DeletedDate:     strAny(s, "DeletedDate"),
 	}
-	if rawTags, ok := s["Tags"].([]map[string]any); ok {
+	if rawTags := uihelper.Maps(s["Tags"]); rawTags != nil {
 		sec.Tags = make(map[string]string, len(rawTags))
 		for _, t := range rawTags {
 			k, _ := t["Key"].(string)

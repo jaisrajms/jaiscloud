@@ -3,16 +3,15 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/compute"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEC2SubnetHandler returns a ResourceHandler for AWS::EC2::Subnet.
-func NewEC2SubnetHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+func NewEC2SubnetHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
-			resp, err := computeP.CreateSubnet(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Compute.CreateSubnet", child(nr, map[string]any{
 				"VpcId":            propStr(props, "VpcId", ""),
 				"CidrBlock":        propStr(props, "CidrBlock", ""),
 				"AvailabilityZone": propStr(props, "AvailabilityZone", ""),
@@ -43,7 +42,7 @@ func NewEC2SubnetHandler(computeP *compute.ComputeProvider) stackprovider.Resour
 			}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := computeP.DeleteSubnet(ctx, &model.NormalizedRequest{Params: map[string]any{"SubnetId": physicalID}})
+			_, err := call(ctx, "Compute.DeleteSubnet", &model.NormalizedRequest{Params: map[string]any{"SubnetId": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"SubnetId", "VpcId", "AvailabilityZone", "CidrBlock"},

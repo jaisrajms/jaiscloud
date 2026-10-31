@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 
-	objectprovider "jaiscloud/internal/aws/provider/object"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewS3BucketPolicyHandler returns a ResourceHandler for AWS::S3::BucketPolicy.
-func NewS3BucketPolicyHandler(objectP *objectprovider.ObjectProvider) stackprovider.ResourceHandler {
+func NewS3BucketPolicyHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			bucket := propStr(props, "Bucket", "")
@@ -22,7 +21,7 @@ func NewS3BucketPolicyHandler(objectP *objectprovider.ObjectProvider) stackprovi
 			default:
 				policyBytes, _ = json.Marshal(p)
 			}
-			if _, err := objectP.PutBucketPolicy(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "Object.PutBucketPolicy", child(nr, map[string]any{
 				"_bucket": bucket,
 				"_body":   policyBytes,
 			})); err != nil {
@@ -43,7 +42,7 @@ func NewS3BucketPolicyHandler(objectP *objectprovider.ObjectProvider) stackprovi
 			default:
 				policyBytes, _ = json.Marshal(p)
 			}
-			if _, err := objectP.PutBucketPolicy(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "Object.PutBucketPolicy", child(nr, map[string]any{
 				"_bucket": bucket,
 				"_body":   policyBytes,
 			})); err != nil {
@@ -53,7 +52,7 @@ func NewS3BucketPolicyHandler(objectP *objectprovider.ObjectProvider) stackprovi
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			bucket := propStr(props, "Bucket", "")
-			_, err := objectP.DeleteBucketPolicy(ctx, &model.NormalizedRequest{Params: map[string]any{"_bucket": bucket}})
+			_, err := call(ctx, "Object.DeleteBucketPolicy", &model.NormalizedRequest{Params: map[string]any{"_bucket": bucket}})
 			return err
 		},
 		GetAttAttrs: []string{},

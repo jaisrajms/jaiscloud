@@ -40,7 +40,7 @@ func (h *Handler) ListRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawRoles, _ := resp.Data["Roles"].([]map[string]any)
+	rawRoles := uihelper.Maps(resp.Data["Roles"])
 	nextMarker, _ := resp.Data["Marker"].(string)
 	roles := make([]IAMRole, 0, len(rawRoles))
 	for _, r := range rawRoles {
@@ -133,7 +133,7 @@ func (h *Handler) ListAttachedRolePolicies(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rawPolicies, _ := resp.Data["AttachedPolicies"].([]map[string]any)
+	rawPolicies := uihelper.Maps(resp.Data["AttachedPolicies"])
 	policies := make([]AttachedPolicy, 0, len(rawPolicies))
 	for _, p := range rawPolicies {
 		policies = append(policies, AttachedPolicy{
@@ -209,7 +209,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawUsers, _ := resp.Data["Users"].([]map[string]any)
+	rawUsers := uihelper.Maps(resp.Data["Users"])
 	nextMarker, _ := resp.Data["Marker"].(string)
 	users := make([]IAMUser, 0, len(rawUsers))
 	for _, u := range rawUsers {
@@ -277,7 +277,7 @@ func (h *Handler) ListAccessKeys(w http.ResponseWriter, r *http.Request) {
 		uihelper.WriteError(w, err)
 		return
 	}
-	rawKeys, _ := resp.Data["AccessKeyMetadata"].([]map[string]any)
+	rawKeys := uihelper.Maps(resp.Data["AccessKeyMetadata"])
 	keys := make([]AccessKey, 0, len(rawKeys))
 	for _, k := range rawKeys {
 		keys = append(keys, AccessKey{
@@ -353,7 +353,7 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawPolicies, _ := resp.Data["Policies"].([]map[string]any)
+	rawPolicies := uihelper.Maps(resp.Data["Policies"])
 	nextMarker, _ := resp.Data["Marker"].(string)
 	policies := make([]IAMPolicy, 0, len(rawPolicies))
 	for _, p := range rawPolicies {
@@ -420,11 +420,11 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 
 func parseRole(m map[string]any) IAMRole {
 	role := IAMRole{
-		RoleName:   strAny(m, "RoleName"),
-		RoleID:     strAny(m, "RoleId"),
-		ARN:        strAny(m, "Arn"),
+		RoleName:    strAny(m, "RoleName"),
+		RoleID:      strAny(m, "RoleId"),
+		ARN:         strAny(m, "Arn"),
 		Description: strAny(m, "Description"),
-		CreateDate: strAny(m, "CreateDate"),
+		CreateDate:  strAny(m, "CreateDate"),
 	}
 	if doc, ok := m["AssumeRolePolicyDocument"].(string); ok {
 		role.AssumeRolePolicyDocument = doc

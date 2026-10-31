@@ -26,7 +26,9 @@ func (h *Handler) EBTickHandler(w http.ResponseWriter, r *http.Request) {
 	sched := h.ebScheduler
 	h.mu.Unlock()
 	if sched != nil {
-		sched.TickNow(r.Context())
+		// Target deliveries run in goroutines that outlive this request.
+		sched.TickNow(context.WithoutCancel(r.Context()))
 	}
+	h.tickPlugins(r.Context(), "events")
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -3,20 +3,19 @@ package handlers
 import (
 	"context"
 
-	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLogsSubscriptionFilterHandler returns a ResourceHandler for AWS::Logs::SubscriptionFilter.
-func NewLogsSubscriptionFilterHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandler {
+func NewLogsSubscriptionFilterHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			logGroupName := propStr(props, "LogGroupName", "")
 			filterName := propStr(props, "FilterName", logicalID)
 			filterPattern := propStr(props, "FilterPattern", "")
 			destinationArn := propStr(props, "DestinationArn", "")
-			if _, err := logsP.PutSubscriptionFilter(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "CloudWatchLogs.PutSubscriptionFilter", child(nr, map[string]any{
 				"logGroupName":   logGroupName,
 				"filterName":     filterName,
 				"filterPattern":  filterPattern,
@@ -34,7 +33,7 @@ func NewLogsSubscriptionFilterHandler(logsP *cwlogs.Provider) stackprovider.Reso
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			logGroupName := propStr(props, "LogGroupName", "")
 			filterName := propStr(props, "FilterName", "")
-			_, err := logsP.DeleteSubscriptionFilter(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "CloudWatchLogs.DeleteSubscriptionFilter", &model.NormalizedRequest{
 				Params: map[string]any{
 					"logGroupName": logGroupName,
 					"filterName":   filterName,

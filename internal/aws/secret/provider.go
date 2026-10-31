@@ -512,7 +512,7 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 
 	// Invoke rotation Lambda asynchronously when wired and rotating now.
 	if rotateNow && e.RotationLambdaARN != "" && p.invoker != nil {
-		go p.runRotationLambda(ctx, e.SecretID, secretARN, pendingVersionID, e.RotationLambdaARN)
+		go p.runRotationLambda(context.WithoutCancel(ctx), e.SecretID, secretARN, pendingVersionID, e.RotationLambdaARN)
 	}
 
 	return provider.OK(map[string]any{
