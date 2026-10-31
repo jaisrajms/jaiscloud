@@ -20,6 +20,8 @@ var directLinks = map[string]string{
 	"NewEvaluator": "constructor", "NewServiceV2": "constructor", "NewConfigService": "constructor",
 	"NewMetricsService": "constructor", "NewRegistrar": "UI registrar (the console routes through the registry in its own path)",
 	"NewEngine": "constructor", "NewRunner": "constructor",
+	"WithMetastoreResolver": "takes the Metastore seam; the nested constructor call is checked on its own",
+	"Metastore":             "seam constructor: the core is used only for pure reference parsing and endpoint formatting",
 
 	// Event delivery to Cloud Functions / Eventarc triggers is the emulator's own
 	// event bus (internal/gcp/eventing), not a call to a service API.
@@ -28,7 +30,7 @@ var directLinks = map[string]string{
 
 	// Functions <-> Eventarc trigger plumbing: one feature implemented by two cores
 	// with a platform-owned protocol (naming, ownership labels, re-pointing); it is
-	// not the Eventarc or Functions client API. Their Pub/Sub dependency IS seamed.
+	// not the Eventarc or Functions client API. Their Pub/Sub dependency, and every Storage, Metastore and Cloud Run call, IS seamed.
 	"SetFunctionExister":       "eventarc validates destination.cloudFunction against the functions core",
 	"SetEventTargets":          "functions delivery engine reads eventarc triggers",
 	"SetTriggerProvisioner":    "function event triggers materialize a backing eventarc trigger",
@@ -46,19 +48,6 @@ var directLinks = map[string]string{
 	"RegisterSchedulerTicker":  "admin test hook",
 	"RegisterTasksTicker":      "admin test hook",
 	"RegisterMonitoringTicker": "admin test hook",
-}
-
-// knownGaps are calls into another service's API that still bypass the registry,
-// so a plugin overriding that service does not see them yet. They are listed so
-// the gap is visible and a new one cannot appear unnoticed; each should become a
-// seam in internal/gcp/seams (docs/PLUGINS.md lists them as limitations).
-var knownGaps = map[string]string{
-	"WithSourceFetcher":     "functions/run fetch deployment source objects from Cloud Storage",
-	"WithSourceBuckets":     "functions/run look up source buckets in Cloud Storage",
-	"WithSourceReader":      "BigQuery loads from Cloud Storage objects",
-	"WithBlobSink":          "Dataproc writes job output to Cloud Storage",
-	"WithMetastoreResolver": "Dataproc resolves a cluster's Metastore attachment",
-	"SetCloudRunInvoker":    "Eventarc invokes Cloud Run through the run core",
 }
 
 // infra are hooks that read provider state for the gateway itself.
@@ -95,7 +84,7 @@ func TestServicesCallEachOtherThroughSeams(t *testing.T) {
 				return true
 			}
 		}
-		for _, m := range []map[string]string{directLinks, knownGaps, infra} {
+		for _, m := range []map[string]string{directLinks, infra} {
 			if _, ok := m[name]; ok {
 				return true
 			}

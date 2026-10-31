@@ -26,22 +26,22 @@ import (
 
 // Set is the registry plus the identity the gateway would inject.
 type Set struct {
-	reg    *provider.Registry
-	ad     adapter.CloudAdapter
-	clock  clock.Clock
-	port   int
-	region string
+	reg     *provider.Registry
+	ad      adapter.CloudAdapter
+	clock   clock.Clock
+	port    int
+	region  string
+	project string // config default project, for callers that carry none
 }
 
 // New builds a Set. reg is the registry plugins are installed on; it may still
 // be empty when New is called, because nothing dispatches before startup ends.
-func New(reg *provider.Registry, ad adapter.CloudAdapter, clk clock.Clock, port int, region string) *Set {
-	return &Set{reg: reg, ad: ad, clock: clk, port: port, region: region}
+func New(reg *provider.Registry, ad adapter.CloudAdapter, clk clock.Clock, port int, region, project string) *Set {
+	return &Set{reg: reg, ad: ad, clock: clk, port: port, region: region, project: project}
 }
 
-// dispatch calls the registry key of service/action as an internal client of
-// project, with REST-shaped params (what the REST decoder produces).
-func (s *Set) dispatch(ctx context.Context, service, action, project string, params map[string]any, meta map[string]string) (*model.ProviderResponse, error) {
+// request builds the NormalizedRequest of an internal client call of project.
+func (s *Set) request(service, action, project string, params map[string]any, meta map[string]string) *model.NormalizedRequest {
 	nr := &model.NormalizedRequest{
 		Service: service, Action: action, Params: params,
 		Clock: s.clock, Region: s.region, AccountID: project, Port: s.port,
@@ -51,7 +51,13 @@ func (s *Set) dispatch(ctx context.Context, service, action, project string, par
 	for k, v := range meta {
 		nr.SetMeta(k, v)
 	}
-	return s.reg.Dispatch(ctx, s.ad.ServiceToProvider(service)+"."+action, nr)
+	return nr
+}
+
+// dispatch calls the registry key of service/action as an internal client of
+// project, with REST-shaped params (what the REST decoder produces).
+func (s *Set) dispatch(ctx context.Context, service, action, project string, params map[string]any, meta map[string]string) (*model.ProviderResponse, error) {
+	return s.reg.Dispatch(ctx, s.ad.ServiceToProvider(service)+"."+action, s.request(service, action, project, params, meta))
 }
 
 func b64(data []byte) string { return base64.StdEncoding.EncodeToString(data) }

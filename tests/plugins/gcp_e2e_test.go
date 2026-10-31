@@ -127,7 +127,6 @@ func TestGCPRESTBeforeAfterReplace(t *testing.T) {
 	}
 }
 
-
 // startGCPBoth starts jaiscloud-gcp with REST and gRPC on free ports and
 // returns the emulator plus a gRPC connection to it.
 func startGCPBoth(t *testing.T, args ...string) (*emulator, *grpc.ClientConn) {

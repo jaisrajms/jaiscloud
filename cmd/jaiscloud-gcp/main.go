@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -322,8 +321,9 @@ func startCmd() *cobra.Command {
 			// used by them too. It is filled in below, before anything dispatches.
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 			reg := provider.NewRegistry()
-			gcpSeams := seams.New(reg, cloudAdapter, cfg.Clock, cfg.Port, cfg.Region)
+			gcpSeams := seams.New(reg, cloudAdapter, cfg.Clock, cfg.Port, cfg.Region, cfg.ProjectID)
 			pubsubSeam := gcpSeams.PubSub()
+			storageSeam := gcpSeams.Storage()
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			// GCS object notifications fan out through Pub/Sub; the storage
 			// provider only sees the interface, so it never imports the Pub/Sub
@@ -404,8 +404,8 @@ func startCmd() *cobra.Command {
 				serviceOpts := []functionscore.Option{
 					functionscore.WithExecutor(funcExec),
 					functionscore.WithBlobs(stores.blobs),
-					functionscore.WithSourceFetcher(storageP),
-					functionscore.WithSourceBuckets(storageP),
+					functionscore.WithSourceFetcher(storageSeam),
+					functionscore.WithSourceBuckets(storageSeam),
 					// Long-running-operation timing (LRO2): opt-in async mode,
 					// default sync, reusing the cross-service mode parsed above.
 					functionscore.WithLROMode(lroMode),
@@ -500,12 +500,12 @@ func startCmd() *cobra.Command {
 					// Stage each job's driver output/control files into the
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
-					dataproccore.WithBlobSink(storageP),
+					dataproccore.WithBlobSink(storageSeam),
 					// Resolve a cluster's metastoreConfig attachment through the
 					// Metastore core (validated at cluster create, formatted at
 					// job submit). The core only sees the interface, so it never
 					// imports service/metastore.
-					dataproccore.WithMetastoreResolver(metastoreCore),
+					dataproccore.WithMetastoreResolver(gcpSeams.Metastore(metastoreCore)),
 					// The synthesized per-service endpoint is not resolvable from
 					// Spark pods; a deployment points this at the reachable HMS.
 					dataproccore.WithHMSEndpointOverride(os.Getenv("JAISCLOUD_DATAPROC_HMS_ENDPOINT")),
@@ -640,7 +640,7 @@ func startCmd() *cobra.Command {
 			// Load jobs read their gs:// source from the emulated GCS through the
 			// SourceReader interface, so the BigQuery provider never imports the
 			// storage provider.
-			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageP))
+			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageSeam))
 
 			// Eventarc's transport-neutral core is shared by the REST provider
 			// and the gRPC adapter below, so both transports run against one
@@ -784,7 +784,7 @@ func startCmd() *cobra.Command {
 			// delivery works in k8s executor mode without DNS. The core is
 			// always built, so the invoker is wired whenever Eventarc exists.
 			if eventarcCore != nil {
-				eventarcCore.SetCloudRunInvoker(cloudRunEventarcInvoker{run: runCore})
+				eventarcCore.SetCloudRunInvoker(gcpSeams.Run())
 			}
 
 			// Service Usage v1's transport-neutral core is shared by the REST
@@ -1700,49 +1700,6 @@ type schedulerPubSubPublisher struct {
 func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, data []byte, attributes map[string]string) error {
 	_, err := p.provider.PublishEvent(ctx, "", topic, data, attributes)
 	return err
-}
-
-// cloudRunEventarcInvoker adapts the Cloud Run core to Eventarc's
-// CloudRunInvoker seam: it resolves the stored service and forwards the
-// CloudEvents POST through the runtime manager, so a destination.cloudRun
-// trigger is delivered without DNS or the generated host.
-type cloudRunEventarcInvoker struct {
-	run *runcore.Service
-}
-
-// Invoke forwards one CloudEvents request to a Cloud Run service's latest ready
-// revision. A missing service maps to 404 and an unavailable runtime to the
-// runtime's own 502/503/504, mirroring the Cloud Run data-plane contract
-// (ErrNoReadyRuntime, e.g. the default mock runtime, -> 503).
-func (i cloudRunEventarcInvoker) Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error) {
-	svc, err := i.run.GetService(ctx, project, region, service)
-	if err != nil {
-		return providerHTTPStatus(err), err
-	}
-	inv, err := i.run.Invoke(ctx, runcore.InvocationRequest{
-		Service: svc,
-		Method:  http.MethodPost,
-		Path:    path,
-		Headers: headers,
-		Body:    body,
-	})
-	if err != nil {
-		if errors.Is(err, runcore.ErrNoReadyRuntime) {
-			return http.StatusServiceUnavailable, err
-		}
-		return providerHTTPStatus(err), err
-	}
-	return inv.Status, nil
-}
-
-// providerHTTPStatus extracts the HTTP status from a *model.ProviderError,
-// defaulting to 502 (Bad Gateway) for an unmapped delivery failure.
-func providerHTTPStatus(err error) int {
-	var pe *model.ProviderError
-	if errors.As(err, &pe) && pe.HTTPStatus > 0 {
-		return pe.HTTPStatus
-	}
-	return http.StatusBadGateway
 }
 
 // stores bundles the per-mode store backends constructed by initStores.
