@@ -1,8 +1,22 @@
+// Package seams turns one AWS service's internal calls into another service's
+// registry requests.
+//
+// Rule: a provider never calls another provider's methods. It calls a seam, and
+// the seam calls Registry.Dispatch with Origin=internal. That is what makes a
+// plugin that overrides a key the implementation for every caller — wire,
+// internal and UI — exactly as if the built-in did not exist. A seam acts like
+// a client of the key it calls, so one key means one thing whoever calls it. The
+// few built-in handlers that still branch on Origin only skip client-side
+// validation for the emulator's own producers (see queue.QueueProvider.SendMessage).
+//
+// Seams are thin on purpose: build the wire-shaped request, dispatch, translate
+// the answer. Nothing here knows about plugins.
 package seams
 
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"jaiscloud/internal/aws/arn"
 	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
@@ -20,10 +35,20 @@ import (
 	"jaiscloud/internal/aws/provider/queue"
 	streamstore "jaiscloud/internal/aws/store/stream"
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
+
+// Scope is the account and region used when a target does not carry its own.
+type Scope struct {
+	Account, Region string
+	// Clock and Port are what the gateway injects into every wire request;
+	// internal callers get the same so a handler cannot tell them apart.
+	Clock clock.Clock
+	Port  int
+}
 
 // Set builds the seams that let one AWS service call another through the
 // registry. serviceToProvider maps a wire service ("sqs") to its registry
@@ -57,7 +82,27 @@ func (s *Set) request(service, action, account, region string, params map[string
 }
 
 // SQS returns the producer seam (SNS, S3, EventBridge, Lambda DLQs → SQS).
-func (s *Set) SQS() *SQS { return NewSQS(s.reg, s.key("sqs", "SendMessage"), s.scope) }
+func (s *Set) SQS() *SQS { return &SQS{s} }
+
+// SQS delivers messages to queues on behalf of SNS, S3 notifications, Lambda
+// DLQs and other producers. It implements queue.InternalSendAPI.
+type SQS struct{ s *Set }
+
+var _ queue.InternalSendAPI = (*SQS)(nil)
+
+// InternalSend sends body to the queue named by an ARN or URL.
+func (q *SQS) InternalSend(ctx context.Context, target, body string, attrs map[string]queue.MessageAttribute, src queue.SourceContext) error {
+	params := map[string]any{"QueueUrl": target, "MessageBody": body}
+	if len(attrs) > 0 {
+		wire := make(map[string]any, len(attrs))
+		for k, v := range attrs {
+			wire[k] = map[string]any{"DataType": v.DataType, "StringValue": v.StringValue}
+		}
+		params["MessageAttributes"] = wire
+	}
+	_, err := q.s.call(ctx, "sqs", "SendMessage", target, params, src)
+	return err
+}
 
 // ---- SQS consumer: the Lambda event-source poller ------------------------------
 
@@ -69,14 +114,28 @@ var _ lambdaesm.QueueInternalAPI = (*SQSConsumer)(nil)
 
 func (s *Set) SQSConsumer() *SQSConsumer { return &SQSConsumer{s} }
 
-func (c *SQSConsumer) InternalReceive(ctx context.Context, queueName string, maxMessages, waitTimeSec int) ([]lambdaesm.InternalMessage, error) {
-	resp, err := c.s.call(ctx, "sqs", "ReceiveMessage", queueName, map[string]any{
-		"QueueName": queueName, "MaxNumberOfMessages": maxMessages, "WaitTimeSeconds": waitTimeSec,
+// queueOf resolves a queue ARN to the account, region and URL a client would use.
+func (c *SQSConsumer) queueOf(queueArn string) (url string) {
+	account, _ := scopeOf(queueArn, c.s.scope)
+	name := queueArn
+	if a, err := arn.Parse(queueArn); err == nil {
+		name = a.Resource
+	}
+	return queue.QueueURL(c.s.scope.Port, account, name)
+}
+
+// InternalReceive is an ordinary ReceiveMessage by QueueUrl, asking for every
+// attribute because the Lambda event carries them.
+func (c *SQSConsumer) InternalReceive(ctx context.Context, queueArn string, maxMessages, waitTimeSec int) ([]lambdaesm.InternalMessage, error) {
+	resp, err := c.s.call(ctx, "sqs", "ReceiveMessage", queueArn, map[string]any{
+		"QueueUrl": c.queueOf(queueArn), "MaxNumberOfMessages": maxMessages, "WaitTimeSeconds": waitTimeSec,
+		"AttributeNames": []any{"All"}, "MessageAttributeNames": []any{"All"},
 	}, queue.SourceContext{})
 	if err != nil {
 		return nil, err
 	}
-	list, _ := resp.Data["Messages"].([]any)
+	// A built-in answers with typed values, a plugin with JSON; read both the same way.
+	list := asList(plain(resp.Data["Messages"]))
 	out := make([]lambdaesm.InternalMessage, 0, len(list))
 	for _, raw := range list {
 		m, ok := raw.(map[string]any)
@@ -101,14 +160,38 @@ func (c *SQSConsumer) InternalReceive(ctx context.Context, queueName string, max
 	return out, nil
 }
 
-func (c *SQSConsumer) InternalDeleteBatch(ctx context.Context, queueName string, receiptHandles []string) error {
-	entries := make([]any, len(receiptHandles))
-	for i, rh := range receiptHandles {
-		entries[i] = map[string]any{"Id": fmt.Sprint(i), "ReceiptHandle": rh}
+// InternalDeleteBatch is an ordinary DeleteMessageBatch by QueueUrl.
+func (c *SQSConsumer) InternalDeleteBatch(ctx context.Context, queueArn string, receiptHandles []string) error {
+	url := c.queueOf(queueArn)
+	for start := 0; start < len(receiptHandles); start += maxDeleteBatch {
+		end := min(start+maxDeleteBatch, len(receiptHandles))
+		entries := make([]any, 0, end-start)
+		for i, rh := range receiptHandles[start:end] {
+			entries = append(entries, map[string]any{"Id": fmt.Sprint(i), "ReceiptHandle": rh})
+		}
+		if _, err := c.s.call(ctx, "sqs", "DeleteMessageBatch", queueArn,
+			map[string]any{"QueueUrl": url, "Entries": entries}, queue.SourceContext{}); err != nil {
+			return err
+		}
 	}
-	_, err := c.s.call(ctx, "sqs", "DeleteMessageBatch", queueName,
-		map[string]any{"QueueName": queueName, "Entries": entries}, queue.SourceContext{})
-	return err
+	return nil
+}
+
+// maxDeleteBatch is the most entries one DeleteMessageBatch takes.
+const maxDeleteBatch = 10
+
+// plain turns typed values (map[string]string, structs) into the generic JSON
+// shape a plugin's answer already has. A value that cannot be encoded is returned as is.
+func plain(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	var out any
+	if json.Unmarshal(b, &out) != nil {
+		return v
+	}
+	return out
 }
 
 // ---- Lambda ----------------------------------------------------------------------
@@ -264,7 +347,7 @@ func (l *Logs) putBatch(ctx context.Context, group, stream string, events []logs
 	for i, e := range events {
 		msg := e.Message
 		if len(msg) > maxLogMessageBytes {
-			msg = msg[:maxLogMessageBytes]
+			msg = cutUTF8(msg, maxLogMessageBytes)
 		}
 		list[i] = map[string]any{"timestamp": float64(e.Timestamp), "message": msg}
 	}
@@ -278,9 +361,7 @@ func (l *Logs) putBatch(ctx context.Context, group, stream string, events []logs
 	if errorCode(err) != "ResourceNotFoundException" {
 		return err
 	}
-	var pe *model.ProviderError
-	errors.As(err, &pe)
-	if strings.Contains(pe.Message, "log group does not exist") {
+	if notFoundResource(err) == cwlogs.ResourceLogGroup {
 		return nil // dropped: the group is gone
 	}
 	if _, cerr := l.s.call(ctx, "logs", "CreateLogStream", group, map[string]any{
@@ -289,6 +370,26 @@ func (l *Logs) putBatch(ctx context.Context, group, stream string, events []logs
 		return cerr
 	}
 	return put()
+}
+
+// cutUTF8 cuts s to at most n bytes without splitting a multi-byte character.
+func cutUTF8(s string, n int) string {
+	for n > 0 && n < len(s) && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// notFoundResource returns what a ResourceNotFoundException says is missing
+// (Data["resource"]: "log-group" or "log-stream"). An answer without it, as a
+// plugin may give, is read as a missing stream, which creating the stream fixes.
+func notFoundResource(err error) string {
+	var pe *model.ProviderError
+	if errors.As(err, &pe) {
+		r, _ := pe.Data["resource"].(string)
+		return r
+	}
+	return ""
 }
 
 // errorCode returns the code of a registry error, or "" for nil or any other error.
@@ -531,16 +632,16 @@ func (st *Streams) call(ctx context.Context, action string, params map[string]an
 	return st.s.call(ctx, "dynamodbstreams", action, "", params, queue.SourceContext{})
 }
 
-func (st *Streams) streamArn(ctx context.Context, table string) (string, bool) {
+func (st *Streams) streamArn(ctx context.Context, table string) (string, bool, error) {
 	st.mu.Lock()
 	arn := st.arns[table]
 	st.mu.Unlock()
 	if arn != "" {
-		return arn, true
+		return arn, true, nil
 	}
 	resp, err := st.call(ctx, "ListStreams", map[string]any{"TableName": table})
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	for _, e := range asList(resp.Data["Streams"]) {
 		if m, ok := e.(map[string]any); ok && str(m["TableName"]) == table {
@@ -548,38 +649,38 @@ func (st *Streams) streamArn(ctx context.Context, table string) (string, bool) {
 			st.mu.Lock()
 			st.arns[table] = arn
 			st.mu.Unlock()
-			return arn, arn != ""
+			return arn, arn != "", nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
-func (st *Streams) GetStreamInfo(table string) (streamstore.StreamInfo, bool) {
-	ctx := context.Background()
-	arn, ok := st.streamArn(ctx, table)
-	if !ok {
-		return streamstore.StreamInfo{}, false
+// GetStreamInfo reports whether table has a stream. The error is non-nil when the
+// answer could not be had (for example the service is unreachable).
+func (st *Streams) GetStreamInfo(ctx context.Context, table string) (streamstore.StreamInfo, bool, error) {
+	arn, ok, err := st.streamArn(ctx, table)
+	if err != nil || !ok {
+		return streamstore.StreamInfo{}, false, err
 	}
 	resp, err := st.call(ctx, "DescribeStream", map[string]any{"StreamArn": arn})
 	if err != nil {
 		st.mu.Lock()
 		delete(st.arns, table) // the stream may have been re-created
 		st.mu.Unlock()
-		return streamstore.StreamInfo{}, false
+		return streamstore.StreamInfo{}, false, err
 	}
 	d, _ := resp.Data["StreamDescription"].(map[string]any)
 	return streamstore.StreamInfo{
 		StreamArn: arn, TableName: table, StreamLabel: str(d["StreamLabel"]),
 		Enabled: str(d["StreamStatus"]) == "ENABLED",
-	}, true
+	}, true, nil
 }
 
 // GetRecords returns the records after sequence number afterSeq (-1: from the start).
-func (st *Streams) GetRecords(table string, afterSeq int) ([]streamstore.Record, int) {
-	ctx := context.Background()
-	arn, ok := st.streamArn(ctx, table)
-	if !ok {
-		return nil, afterSeq
+func (st *Streams) GetRecords(ctx context.Context, table string, afterSeq int) ([]streamstore.Record, int, error) {
+	arn, ok, err := st.streamArn(ctx, table)
+	if err != nil || !ok {
+		return nil, afterSeq, err
 	}
 	it := map[string]any{"StreamArn": arn, "ShardIteratorType": "TRIM_HORIZON"}
 	if afterSeq >= 0 {
@@ -587,11 +688,11 @@ func (st *Streams) GetRecords(table string, afterSeq int) ([]streamstore.Record,
 	}
 	resp, err := st.call(ctx, "GetShardIterator", it)
 	if err != nil {
-		return nil, afterSeq
+		return nil, afterSeq, err
 	}
 	resp, err = st.call(ctx, "GetRecords", map[string]any{"ShardIterator": str(resp.Data["ShardIterator"])})
 	if err != nil {
-		return nil, afterSeq
+		return nil, afterSeq, err
 	}
 	var out []streamstore.Record
 	next := afterSeq + 1
@@ -607,7 +708,7 @@ func (st *Streams) GetRecords(table string, afterSeq int) ([]streamstore.Record,
 		out = append(out, r)
 		next = seq + 1
 	}
-	return out, next
+	return out, next, nil
 }
 
 // asList returns v as a []any, accepting the typed slices built-in handlers
@@ -731,4 +832,21 @@ func (o *S3) GetBucket(ctx context.Context, bucket string) (map[string]any, erro
 		return nil, err
 	}
 	return resp.Data, nil
+}
+
+// scopeOf derives account and region from an ARN. Anything else (a queue URL, a
+// bucket or log-group name, a function name) falls back to the default scope.
+func scopeOf(target string, def Scope) (account, region string) {
+	account, region = def.Account, def.Region
+	if strings.HasPrefix(target, "arn:") {
+		if a, err := arn.Parse(target); err == nil {
+			if a.AccountID != "" {
+				account = a.AccountID
+			}
+			if a.Region != "" {
+				region = a.Region
+			}
+		}
+	}
+	return account, region
 }

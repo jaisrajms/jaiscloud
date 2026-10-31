@@ -19,6 +19,17 @@ import (
 
 const storePath = "/_jaiscloud/plugin-store"
 
+// Bounds on what a plugin can ask of the store, so its own bug cannot become a
+// host-side 500 or a memory spike.
+const (
+	maxIDLen       = 1024
+	maxListRows    = 10000
+	maxListPayload = maxBody // total bytes of one list answer
+)
+
+// validID rejects ids the backends cannot all store (NUL breaks Postgres text).
+func validID(s string) bool { return len(s) <= maxIDLen && !strings.ContainsRune(s, 0) }
+
 var kindRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9_-]+$`) })
 
 // Routes mounts the store callbacks. Pass it to gateway.WithExtraRoutes; extra
@@ -125,6 +136,10 @@ func (h *Host) storeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "accountId, region and a valid kind are required", http.StatusBadRequest)
 		return
 	}
+	if !validID(in.ID) || !validID(in.IDPrefix) {
+		http.Error(w, fmt.Sprintf("id and idPrefix must be at most %d bytes and contain no NUL", maxIDLen), http.StatusBadRequest)
+		return
+	}
 	typ := resourceType(p.name, in.Kind)
 	ctx := r.Context()
 	var out sdk.StoreResponse
@@ -176,6 +191,7 @@ func (h *Host) storeHandler(w http.ResponseWriter, r *http.Request) {
 		var es []store.ResourceEntry
 		if es, err = h.resource.List(ctx, in.AccountID, in.Region, typ, in.IDPrefix); err == nil {
 			out.Entries = make([]sdk.Entry, 0, len(es))
+			payload := 0
 			for _, e := range es {
 				if !strings.HasPrefix(e.ID, in.IDPrefix) {
 					continue
@@ -183,6 +199,11 @@ func (h *Host) storeHandler(w http.ResponseWriter, r *http.Request) {
 				var ent sdk.Entry
 				if ent, err = decodeEntry(e); err != nil {
 					break
+				}
+				if payload += len(ent.Data); len(out.Entries) >= maxListRows || payload > maxListPayload {
+					http.Error(w, fmt.Sprintf("list matches more than %d rows or %d bytes; narrow it with a longer idPrefix",
+						maxListRows, maxListPayload), http.StatusRequestEntityTooLarge)
+					return
 				}
 				out.Entries = append(out.Entries, ent)
 			}

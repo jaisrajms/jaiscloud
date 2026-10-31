@@ -95,7 +95,7 @@ func TestHandleBeforeInitAsksForReinit(t *testing.T) {
 	h := Serve(newMux())
 	body, _ := json.Marshal(HandleRequest{Phase: Replace, Req: &Request{Cloud: "aws", Service: "sqs", Action: "X"}})
 	w := do(h, "POST", "/handle", "application/json", string(body), nil)
-	if w.Code != 503 || !strings.Contains(w.Body.String(), "not initialised") {
+	if w.Code != 409 || !strings.Contains(w.Body.String(), ErrNotInitialized) {
 		t.Fatalf("handle before init = %d %s", w.Code, w.Body)
 	}
 	if w := do(h, "POST", "/init", "application/json", `{"abi":1,"store":{"url":"http://x","token":"t"}}`, nil); w.Code != 204 {
@@ -151,5 +151,42 @@ func TestHTTPStoreMapsConflictAndSendsCredentials(t *testing.T) {
 	_ = json.NewEncoder(&buf).Encode(Result{})
 	if !strings.Contains(buf.String(), `"params":null`) {
 		t.Fatalf("an unset Params must encode as null (unchanged), got %s", buf.String())
+	}
+}
+
+func TestContentTypeIsComparedExactly(t *testing.T) {
+	srv := httptest.NewServer(Serve(NewMux("p", "0")))
+	defer srv.Close()
+	for ct, want := range map[string]int{
+		"application/json":                http.StatusConflict, // reaches the handler (not initialised)
+		"application/json; charset=utf-8": http.StatusConflict,
+		"application/jsonx":               http.StatusUnsupportedMediaType,
+		"text/plain":                      http.StatusUnsupportedMediaType,
+		"":                                http.StatusUnsupportedMediaType,
+	} {
+		resp, err := http.Post(srv.URL+"/handle", ct, strings.NewReader(`{"phase":"before","req":{}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("Content-Type %q = %d, want %d", ct, resp.StatusCode, want)
+		}
+	}
+}
+
+func TestTickService(t *testing.T) {
+	for in, want := range map[string]string{"tick:events": "events", "tick:": "", "reset": "", "tick": ""} {
+		got, ok := TickService(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("TickService(%q) = %q, %v", in, got, ok)
+		}
+	}
+}
+
+func TestManifestRequiresIsOmittedWhenEmpty(t *testing.T) {
+	b, _ := json.Marshal(Manifest{ABI: ABI, Name: "p"})
+	if strings.Contains(string(b), "requires") {
+		t.Fatalf("an empty Requires must not appear on the wire: %s", b)
 	}
 }

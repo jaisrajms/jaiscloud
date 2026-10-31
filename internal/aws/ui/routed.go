@@ -65,6 +65,10 @@ import (
 	"jaiscloud/internal/provider"
 )
 
+// This file is written by hand: one forwarder per console method. routed_guard_test.go
+// fails if a ProviderInterface method has no forwarder here, or a forwarder names a
+// key no provider registers, so the file cannot silently fall behind.
+//
 // The console is a client like any other: when a plugin overrides a service, the
 // console must show and change what the plugin serves, so every console call that
 // is a registry action goes through Registry.Dispatch with origin "ui". Calls that

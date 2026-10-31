@@ -70,12 +70,12 @@ func (p *Provider) PutLogEvents(ctx context.Context, nr *model.NormalizedRequest
 	streams := p.store.streams[groupName]
 	if streams == nil {
 		p.store.mu.Unlock()
-		return nil, logsErr("ResourceNotFoundException", "The specified log stream does not exist: "+streamName, 400)
+		return nil, notFound(ResourceLogStream, "The specified log stream does not exist: "+streamName)
 	}
 	stream, ok := streams[streamName]
 	if !ok {
 		p.store.mu.Unlock()
-		return nil, logsErr("ResourceNotFoundException", "The specified log stream does not exist: "+streamName, 400)
+		return nil, notFound(ResourceLogStream, "The specified log stream does not exist: "+streamName)
 	}
 
 	eventMap := p.store.events[groupName]

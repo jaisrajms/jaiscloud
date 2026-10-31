@@ -90,7 +90,7 @@ func (p *Provider) runSQSPoller(poller *esmPoller, esm EventSourceMapping) {
 		}
 
 		// Receive messages from SQS
-		messages, err := p.queueAPI.InternalReceive(poller.ctx, esm.QueueName, batchSize, sqsPollWaitTimeSec)
+		messages, err := p.queueAPI.InternalReceive(poller.ctx, esm.EventSourceArn, batchSize, sqsPollWaitTimeSec)
 		if err != nil {
 			select {
 			case <-poller.ctx.Done():
@@ -139,7 +139,7 @@ func (p *Provider) runSQSPoller(poller *esmPoller, esm EventSourceMapping) {
 			for _, m := range messages {
 				handles = append(handles, m.ReceiptHandle)
 			}
-			_ = p.queueAPI.InternalDeleteBatch(poller.ctx, esm.QueueName, handles)
+			_ = p.queueAPI.InternalDeleteBatch(poller.ctx, esm.EventSourceArn, handles)
 			continue
 		}
 
@@ -163,7 +163,7 @@ func (p *Provider) runSQSPoller(poller *esmPoller, esm EventSourceMapping) {
 			for _, m := range filtered {
 				handles = append(handles, m.ReceiptHandle)
 			}
-			if delErr := p.queueAPI.InternalDeleteBatch(poller.ctx, esm.QueueName, handles); delErr != nil {
+			if delErr := p.queueAPI.InternalDeleteBatch(poller.ctx, esm.EventSourceArn, handles); delErr != nil {
 				logger.Warn("esm: failed to delete SQS messages after successful invocation", "err", delErr)
 			}
 			current.ConsecutiveErrors = 0
@@ -224,6 +224,17 @@ func (p *Provider) processSQSBatch(ctx context.Context, msgs []InternalMessage, 
 	return false, nil
 }
 
+// streamReadFailed handles an error from reading the stream: an unreachable
+// service backs off (and is not counted against the mapping); anything else waits
+// one poll interval. It returns false when ctx ended.
+func (p *Provider) streamReadFailed(ctx context.Context, logger *slog.Logger, down *outage, err error) bool {
+	if model.IsOutage(err) {
+		return down.wait(ctx, logger, err)
+	}
+	logger.Warn("esm: reading the DynamoDB stream failed", "err", err)
+	return sleepCtx(ctx, sqsEmptyPollDelay)
+}
+
 // runDynamoDBStreamsPoller polls DynamoDB Streams and invokes Lambda with batches of records.
 func (p *Provider) runDynamoDBStreamsPoller(poller *esmPoller, esm EventSourceMapping) {
 	logger := p.logger.With("esm_uuid", esm.UUID, "table", esm.TableName, "function", esm.FunctionName)
@@ -260,7 +271,13 @@ func (p *Provider) runDynamoDBStreamsPoller(poller *esmPoller, esm EventSourceMa
 		}
 
 		// Check if stream is still enabled
-		streamInfo, ok := p.streamStore.GetStreamInfo(esm.TableName)
+		streamInfo, ok, serr := p.streamStore.GetStreamInfo(poller.ctx, esm.TableName)
+		if serr != nil && poller.ctx.Err() == nil {
+			if !p.streamReadFailed(poller.ctx, logger, &down, serr) {
+				return
+			}
+			continue
+		}
 		if !ok || !streamInfo.Enabled {
 			if !sleepCtx(poller.ctx, sqsEmptyPollDelay) {
 				return
@@ -274,7 +291,13 @@ func (p *Provider) runDynamoDBStreamsPoller(poller *esmPoller, esm EventSourceMa
 		}
 
 		// Get records from the stream
-		records, _ := p.streamStore.GetRecords(esm.TableName, cursor)
+		records, _, rerr := p.streamStore.GetRecords(poller.ctx, esm.TableName, cursor)
+		if rerr != nil && poller.ctx.Err() == nil {
+			if !p.streamReadFailed(poller.ctx, logger, &down, rerr) {
+				return
+			}
+			continue
+		}
 		if len(records) == 0 {
 			if !sleepCtx(poller.ctx, sqsEmptyPollDelay) {
 				return

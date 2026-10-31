@@ -166,7 +166,7 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 		}
 	}
 
-	queueURL := fmt.Sprintf("http://localhost:%d/%s/%s", nr.Port, nr.AccountID, name)
+	queueURL := QueueURL(nr.Port, nr.AccountID, name)
 
 	// Idempotency: if queue exists, check for attribute mismatch (Task 1.10).
 	if existing, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL); err == nil {
@@ -302,7 +302,7 @@ func (p *QueueProvider) GetQueueUrl(ctx context.Context, nr *model.NormalizedReq
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueName is required", 400)
 	}
-	queueURL := fmt.Sprintf("http://localhost:%d/%s/%s", nr.Port, nr.AccountID, name)
+	queueURL := QueueURL(nr.Port, nr.AccountID, name)
 	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -368,6 +368,11 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 }
 
 // ─── Data Plane ───────────────────────────────────────────────────────────────
+
+// QueueURL is the URL a queue is created with and addressed by.
+func QueueURL(port int, account, name string) string {
+	return fmt.Sprintf("http://localhost:%d/%s/%s", port, account, name)
+}
 
 func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	if nr.Origin == model.OriginInternal {
@@ -483,9 +488,6 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 }
 
 func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if nr.Origin == model.OriginInternal {
-		return p.receiveMessageInternal(ctx, nr)
-	}
 	queueURL, ok := stringParam(nr.Params, "QueueUrl")
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
@@ -805,9 +807,6 @@ func validBatchEntryID(id string) bool {
 }
 
 func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if nr.Origin == model.OriginInternal {
-		return p.deleteMessageBatchInternal(ctx, nr)
-	}
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entries := batchEntries(nr.Params, "Entries")
 	if len(entries) == 0 {

@@ -13,6 +13,9 @@ go mod init example.com/acme-audit
 go get github.com/jaisrajms/jaiscloud/sdk
 ```
 
+Until a `sdk/v0.x.y` tag is published, `go get` cannot resolve the module. Use a checkout instead:
+`go mod edit -replace github.com/jaisrajms/jaiscloud/sdk=/path/to/jaiscloud/sdk`.
+
 `main.go` — see [examples/audit](examples/audit/main.go) for a complete one:
 
 ```go
@@ -43,7 +46,7 @@ emulator re-sends its `/init` automatically.
 
 | Mode | Meaning |
 |---|---|
-| `m.Before(cloud, service, action, fn)` | runs first; return `Result{Params: …}` to edit the call, or `Resp`/`Err` to stop it |
+| `m.Before(cloud, service, action, fn)` | runs first; return `Result{Params: …}` to patch the call, or `Resp`/`Err` to stop it |
 | `m.After(cloud, service, action, fn)` | sees the result (`c.Resp` or `c.Err`); may replace it |
 | `m.Replace(cloud, service, action, fn)` | you answer instead of the built-in; `Result{NotHandled: true}` inherits it |
 
@@ -65,7 +68,16 @@ m.Replace("aws", "sqs", "SendMessage", func(ctx context.Context, c *sdk.Call) (s
 ```
 
 `Replace` cannot edit the params and then fall through; to tweak a call and still run the
-built-in, use `Before` and return `Result{Params: …}`. Be careful with data the built-in reads
+built-in, use `Before` and return `Result{Params: …}`.
+
+`Result.Params` is a **patch**: return only the keys you change. Keys you leave out stay as the client
+sent them, and a key whose value is `null` is removed:
+
+```go
+return sdk.Result{Params: map[string]any{"MessageBody": "rewritten", "DelaySeconds": nil}}, nil
+// MessageBody is replaced, DelaySeconds is removed, QueueUrl and everything else are untouched.
+```
+A value the emulator cannot show you (a stream) is never touched, even by `null`. Be careful with data the built-in reads
 back: if your `SendMessage` keeps messages in your own store, the built-in `ReceiveMessage`
 will not see them. Either replace the actions that share the data together, or let the built-in
 store the message.
@@ -88,9 +100,11 @@ makes the same calls an agent would, so one key means one thing whoever calls it
 * Writing an object to a bucket that does not exist: `PutObject` answers `NoSuchBucket`, and the
   emulator then calls `CreateBucket` and `PutObject` again.
 * Writing log events to a stream that does not exist: `PutLogEvents` answers
-  `ResourceNotFoundException` ("log stream"), and the emulator calls `CreateLogStream` and
-  `PutLogEvents` again. A batch for a log group that does not exist is dropped. Batches are
-  split at 10 000 events and messages cut at 262 144 bytes.
+  `ResourceNotFoundException`, and the emulator calls `CreateLogStream` and `PutLogEvents` again.
+  Which thing is missing is in the error's `Data["resource"]`: `"log-stream"` (or no field at all) gets
+  the create-and-retry; `"log-group"` drops the batch, because a workload can outlive its group. A
+  plugin that replaces Logs should set the field the same way. Batches are split at 10 000 events and
+  messages cut at 262 144 bytes (on a character boundary).
 * `CreateLogGroup` for a group that exists answers `ResourceAlreadyExistsException`, which the
   emulator treats as success.
 * Because they are real calls, internal writes now trigger bucket notifications and log
@@ -107,6 +121,11 @@ Things to know when you override a service:
   the package they mount. If your plugin owns the function store but leaves `Invoke` to the
   built-in executor, answer them with `_body` bytes. A plugin that replaces the whole service
   needs nothing.
+* Internal and wire calls to the same SQS key differ in one respect: an internal `SendMessage` may name
+  the queue by ARN in `QueueUrl` and skips the validation a client gets (FIFO group ids, size limits),
+  because the emulator's own producers never had it. It answers with `MessageId` and `MD5OfMessageBody`
+  like a wire call. The Lambda poller's `ReceiveMessage` and `DeleteMessageBatch` are ordinary client
+  calls by `QueueUrl` (it asks for all attributes and deletes at most ten handles per call).
 * A few console-only helpers (for example SQS "peek messages") are not API actions; they keep
   reading the built-in's state.
 * A few flows are not implemented in the emulator at all, so no plugin sees them (EMR on EC2 log
@@ -114,7 +133,7 @@ Things to know when you override a service:
 
 ### Event-source mappings and an unreachable plugin
 
-When the plugin that owns `ReceiveMessage` or the Lambda function cannot be reached (down,
+When the plugin that owns `ReceiveMessage`, `GetRecords` (and the other Streams actions) or the Lambda function cannot be reached (down,
 restarting, or past `--plugin-timeout`; the host reports `PluginUnavailable` or `PluginTimeout`),
 the pollers back off from 1 s to 30 s and retry. The failure is not counted against the mapping,
 nothing is sent to the failure destination (DLQ) and nothing is deleted, so the messages come back
@@ -141,7 +160,9 @@ can run its own timers (read the time from `Req.Now` when you handle a call).
 
 ## State
 
-`c.Store` keeps rows per `(kind, id)`; every row has a `Version`.
+`c.Store` keeps rows per `(kind, id)`; every row has a `Version`. An `id` is at most 1 KiB with no NUL
+byte; a `List` that would return more than 10 000 rows or 32 MiB is refused (`413`), so narrow it with
+a longer `idPrefix`.
 
 ```go
 ent, found, _ := c.Store.Get(ctx, "counter", "n")
@@ -168,6 +189,12 @@ m.HandleLifecycle(func(ctx context.Context, event string) { /* "reset" or "resto
 * `c.Req.RequestID` may repeat (clients choose it); use `c.Req.CallID` when you need a unique key.
 * If your plugin is down for longer than the retry window, requests it covers fail with
   `503 PluginUnavailable`; the emulator never silently falls back to the built-in.
+* A panic in the emulator's plugin seam surfaces as `500 PluginPanic` naming your plugin; a panic in
+  your own process is yours to recover (the SDK's server does, and answers 500, which the emulator
+  reports as `PluginProtocolError`).
+* After a restart, a plugin answers `/handle` with `409 {"error":"not_initialized"}` until it gets
+  `/init` again (`sdk.ErrNotInitialized`). The emulator re-sends `/init` and retries the call on that
+  code; the wording is not part of the contract.
 
 ## Security
 
@@ -184,12 +211,20 @@ jaiscloud-aws start --plugin http://plugin:9100 --plugin-secret "$PLUGIN_SECRET"
 
 ## Limits (out-of-process)
 
-* Binary and streaming data does not cross the JSON boundary. Params and response keys that start
-  with `_` (S3 object bodies and streams) are never shown to a plugin and are always preserved; a
-  plugin can observe such a response but cannot replace it (`501 PluginUnsupportedPayload`).
-  Full S3 interception needs the in-process layer (planned).
+* Everything crosses as JSON. Raw bytes (S3 object bodies, Lambda payloads) arrive as
+  `{"$base64": "..."}` inside the params, under keys that start with `_` (the emulator's own channel
+  for such data), and must be returned in the same form; unchanged values keep their original type.
+  A value that cannot be JSON (a stream, such as a built-in `GetObject` answer) is never shown to you
+  and is always preserved: you can observe such a response with `After` but not replace it
+  (`501 PluginUnsupportedPayload`). Full S3 interception needs the in-process layer (planned).
+* A request is at most 32 MiB once encoded (base64 makes bytes a third larger). A bigger one is refused
+  with `501 PluginUnsupportedPayload`, naming the largest param, before it reaches you; so a plugin
+  with a route on `s3` cannot see a `PutObject` of more than about 24 MiB. Responses are bounded the
+  same way.
 * Reset/import: the emulator notifies you (`HandleLifecycle`), and the rows you wrote are wiped or
   restored with everything else.
+* `Manifest.Requires` lists host capabilities you cannot work without. This build provides none, so any
+  entry stops the emulator at startup and the error says what it does provide.
 
 ## Status
 

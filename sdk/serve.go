@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
@@ -53,7 +54,14 @@ func ListenAndServe(addr string, p Plugin, opts ...Option) error {
 			slog.Warn("sdk: plugin listens beyond loopback; use sdk.WithSecret", "addr", addr)
 		}
 	}
-	return http.ListenAndServe(addr, Serve(p, opts...))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           Serve(p, opts...),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
+	return srv.ListenAndServe()
 }
 
 type server struct {
@@ -76,12 +84,18 @@ func (s *server) guard(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if r.Method == http.MethodPost && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		if r.Method == http.MethodPost && !isJSON(r.Header.Get("Content-Type")) {
 			writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isJSON compares the media type exactly, so "application/jsonx" is refused.
+func isJSON(contentType string) bool {
+	mt, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mt == "application/json"
 }
 
 func (s *server) manifest(w http.ResponseWriter, _ *http.Request) {
@@ -137,7 +151,7 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if st == nil {
 		// The emulator re-sends /init when it sees this.
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "not initialised"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": ErrNotInitialized})
 		return
 	}
 	c := &Call{Phase: in.Phase, Req: in.Req, Resp: in.Resp, Err: in.Err,

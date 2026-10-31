@@ -105,6 +105,18 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
+// fatal fails the test with the emulator's output, and says so when the process has
+// died since it became healthy (otherwise the request error alone hides why).
+func (e *emulator) fatal(t *testing.T, err error) {
+	t.Helper()
+	select {
+	case werr := <-e.done:
+		t.Fatalf("emulator exited (%v) after it was healthy; request error: %v\n%s", werr, err, e.logs())
+	default:
+		t.Fatalf("%v\n%s", err, e.logs())
+	}
+}
+
 func (e *emulator) logs() string {
 	e.lw.mu.Lock()
 	defer e.lw.mu.Unlock()
@@ -165,7 +177,7 @@ func (e *emulator) call(t *testing.T, target string, body map[string]any) (int, 
 	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		e.fatal(t, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -186,7 +198,7 @@ func (e *emulator) form(t *testing.T, vals url.Values) (int, string) {
 	t.Helper()
 	resp, err := http.Post(e.base+"/", "application/x-www-form-urlencoded", strings.NewReader(vals.Encode()))
 	if err != nil {
-		t.Fatal(err)
+		e.fatal(t, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -202,7 +214,7 @@ func (e *emulator) formAs(t *testing.T, service string, vals url.Values) (int, s
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20260101/us-east-1/"+service+"/aws4_request, SignedHeaders=host, Signature=00")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		e.fatal(t, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -215,7 +227,7 @@ func (e *emulator) admin(t *testing.T, method, path string, body io.Reader) (int
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		e.fatal(t, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -239,12 +251,8 @@ func auditPlugin() (*sdk.Mux, *cache) {
 		case strings.Contains(body, "BLOCK"):
 			return sdk.Result{Err: &sdk.Error{Code: "InvalidParameterValue", Message: "blocked by acme-audit", Status: 400}}, nil
 		case body == "rewrite-me":
-			np := map[string]any{}
-			for k, v := range call.Req.Params {
-				np[k] = v
-			}
-			np["MessageBody"] = "rewritten"
-			return sdk.Result{Params: np}, nil
+			// A patch: only the field being changed; QueueUrl and the rest stay as sent.
+			return sdk.Result{Params: map[string]any{"MessageBody": "rewritten"}}, nil
 		}
 		return sdk.Result{}, nil
 	})
@@ -380,7 +388,8 @@ func createQueue(t *testing.T, e *emulator, name string) string {
 
 func TestPluginUC1UC2StateAndAdmin(t *testing.T) {
 	s, _ := sidecar(t)
-	e := startEmulator(t, "--plugin", s.URL, "--metrics")
+	// A short retry window: the fail-closed check at the end would otherwise wait the default 30 s.
+	e := startEmulator(t, "--plugin", s.URL, "--metrics", "--plugin-retry", "1s")
 	queueURL := createQueue(t, e, "orders")
 
 	if status, out := e.sqs(t, "SendMessage", map[string]any{"QueueUrl": queueURL, "MessageBody": "hello"}); status != 200 || out["MessageId"] == nil {
@@ -552,7 +561,14 @@ func TestStartupWaitsForALateSidecar(t *testing.T) {
 	addr := freeAddr(t)
 	go func() {
 		time.Sleep(3 * time.Second)
-		l, err := net.Listen("tcp", addr)
+		var l net.Listener
+		var err error
+		for i := 0; i < 50; i++ { // the reserved port may briefly be taken by another process
+			if l, err = net.Listen("tcp", addr); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		if err != nil {
 			return
 		}
@@ -658,7 +674,7 @@ func (e *emulator) s3(t *testing.T, method, path, body string) int {
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20260101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=00")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		e.fatal(t, err)
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
@@ -798,7 +814,7 @@ func (e *emulator) rest(t *testing.T, service, method, path, body string) (int, 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		e.fatal(t, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -1100,5 +1116,160 @@ func TestTestHooksTellPluginsThatOwnTheService(t *testing.T) {
 		if ev == "tick:firehose" {
 			t.Fatalf("no plugin routes firehose, yet the events plugin was ticked for it: %v", got["acme-events"])
 		}
+	}
+}
+
+// ---- review additions (PR 623) -------------------------------------------------
+
+// sqsIn is sqs() signed for another region (the scope comes from the credential scope).
+func (e *emulator) sqsIn(t *testing.T, region, action string, body map[string]any) (int, map[string]any) {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost, e.base+"/", bytes.NewReader(b))
+	req.Header.Set("X-Amz-Target", "AmazonSQS."+action)
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20300102/"+region+"/sqs/aws4_request, SignedHeaders=host, Signature=00")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.fatal(t, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	return resp.StatusCode, m
+}
+
+func (e *emulator) auditsIn(t *testing.T, region string) int {
+	t.Helper()
+	st, out := e.sqsIn(t, region, "AcmeAuditCount", map[string]any{})
+	if st != 200 {
+		t.Fatalf("AcmeAuditCount in %s: %d %v\n%s", region, st, out, e.logs())
+	}
+	n, _ := out["Audits"].(float64)
+	return int(n)
+}
+
+// A reset scoped to an account, or to an account and a region, wipes exactly that
+// part of the plugin's rows.
+func TestScopedResetWipesOnlyThatScopesPluginRows(t *testing.T) {
+	s, _ := sidecar(t)
+	e := startEmulator(t, "--plugin", s.URL)
+	for _, region := range []string{"us-east-1", "eu-west-1"} {
+		st, out := e.sqsIn(t, region, "CreateQueue", map[string]any{"QueueName": "q"})
+		if st != 200 {
+			t.Fatalf("CreateQueue in %s: %d %v", region, st, out)
+		}
+		if st, out = e.sqsIn(t, region, "SendMessage", map[string]any{"QueueUrl": out["QueueUrl"], "MessageBody": "m"}); st != 200 {
+			t.Fatalf("SendMessage in %s: %d %v", region, st, out)
+		}
+	}
+	both := func(wantUS, wantEU int, why string) {
+		t.Helper()
+		if us, eu := e.auditsIn(t, "us-east-1"), e.auditsIn(t, "eu-west-1"); us != wantUS || eu != wantEU {
+			t.Fatalf("%s: audits us-east-1=%d eu-west-1=%d, want %d and %d", why, us, eu, wantUS, wantEU)
+		}
+	}
+	// The count calls themselves are audited too? No: AcmeAuditCount is a Replace, not a SendMessage.
+	both(1, 1, "before any reset")
+	reset := func(query string) {
+		t.Helper()
+		if st, raw := e.admin(t, http.MethodPost, "/_jaiscloud/reset?"+query, nil); st >= 300 {
+			t.Fatalf("reset?%s: %d %s", query, st, raw)
+		}
+	}
+	reset("account=999999999999")
+	both(1, 1, "reset of an unrelated account")
+	reset("account=000000000000&region=eu-west-1")
+	both(1, 0, "reset of one region")
+	reset("account=000000000000")
+	both(0, 0, "reset of the whole account")
+}
+
+// A named snapshot captures the plugin's rows; reverting brings them back.
+func TestNamedSnapshotRevertRestoresPluginRows(t *testing.T) {
+	s, _ := sidecar(t)
+	e := startEmulator(t, "--plugin", s.URL)
+	queueURL := createQueue(t, e, "q")
+	send := func(body string) {
+		t.Helper()
+		if st, out := e.sqs(t, "SendMessage", map[string]any{"QueueUrl": queueURL, "MessageBody": body}); st != 200 {
+			t.Fatalf("SendMessage: %d %v", st, out)
+		}
+	}
+	send("one")
+	send("two")
+	if st, raw := e.admin(t, http.MethodPost, "/_jaiscloud/snapshot", strings.NewReader(`{"name":"before","description":"two audits"}`)); st >= 300 {
+		t.Fatalf("snapshot create: %d %s\n%s", st, raw, e.logs())
+	}
+	send("three")
+	if a, _, _, _ := count(t, e); a != 3 {
+		t.Fatalf("audits after the third message = %d, want 3", a)
+	}
+	if st, raw := e.admin(t, http.MethodPost, "/_jaiscloud/snapshot/before/revert?reset_first=true", nil); st >= 300 {
+		t.Fatalf("snapshot revert: %d %s\n%s", st, raw, e.logs())
+	}
+	if a, sent, _, _ := count(t, e); a != 2 || sent != 2 {
+		t.Fatalf("after revert: audits=%d sent=%d, want the snapshot's 2 and 2", a, sent)
+	}
+}
+
+// Two identical runs under a frozen clock give byte-identical answers.
+func TestFrozenClockGivesIdenticalRuns(t *testing.T) {
+	run := func() string {
+		s, _ := sidecar(t)
+		e := startEmulator(t, "--plugin", s.URL)
+		if st, raw := e.admin(t, http.MethodPost, "/_jaiscloud/clock", strings.NewReader(`{"mode":"fixed","time":"2031-05-06T07:08:09Z"}`)); st != 204 {
+			t.Fatalf("set clock: %d %s", st, raw)
+		}
+		queueURL := createQueue(t, e, "q")
+		for _, body := range []string{"a", "BLOCK", "rewrite-me"} {
+			e.sqs(t, "SendMessage", map[string]any{"QueueUrl": queueURL, "MessageBody": body})
+		}
+		_, out := e.sqs(t, "AcmeAuditCount", map[string]any{})
+		b, _ := json.Marshal(out)
+		_, rows := e.sqs(t, "AcmeCounter", map[string]any{})
+		c, _ := json.Marshal(rows)
+		return string(b) + string(c)
+	}
+	first, second := run(), run()
+	if first != second || !strings.Contains(first, "2031-05-06T07:08:09Z") {
+		t.Fatalf("runs differ or ignore the frozen clock:\n%s\n%s", first, second)
+	}
+}
+
+// A plugin that restarts while the emulator is running is re-initialised and used again.
+func TestPluginRestartWhileTheEmulatorRuns(t *testing.T) {
+	addr := freeAddr(t)
+	serveOn := func() *http.Server {
+		for i := 0; i < 50; i++ {
+			l, err := net.Listen("tcp", addr)
+			if err != nil {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			m, _ := auditPlugin()
+			srv := &http.Server{Handler: sdk.Serve(m)}
+			go func() { _ = srv.Serve(l) }()
+			return srv
+		}
+		t.Fatalf("could not listen on %s", addr)
+		return nil
+	}
+	srv := serveOn()
+	t.Cleanup(func() { srv.Close() })
+	e := startEmulator(t, "--plugin", "http://"+addr, "--plugin-retry", "20s")
+	queueURL := createQueue(t, e, "q")
+	if st, out := e.sqs(t, "SendMessage", map[string]any{"QueueUrl": queueURL, "MessageBody": "before"}); st != 200 {
+		t.Fatalf("SendMessage: %d %v", st, out)
+	}
+	srv.Close() // the plugin process dies and comes back with no memory of /init
+	srv = serveOn()
+	t.Cleanup(func() { srv.Close() })
+	if st, out := e.sqs(t, "SendMessage", map[string]any{"QueueUrl": queueURL, "MessageBody": "after"}); st != 200 {
+		t.Fatalf("a call after the plugin restarted must be re-initialised and served: %d %v\n%s", st, out, e.logs())
+	}
+	if a, _, _, _ := count(t, e); a != 2 {
+		t.Fatalf("audits = %d; the plugin's rows must survive its own restart (they live in the emulator)", a)
 	}
 }

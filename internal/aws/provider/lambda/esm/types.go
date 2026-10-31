@@ -77,10 +77,11 @@ type SQSSourceContext struct {
 	ServicePrincipal string
 }
 
-// QueueInternalAPI is the SQS interface needed by ESM pollers.
+// QueueInternalAPI is the SQS interface needed by ESM pollers. The queue is named
+// by its ARN, so the account and region come with it.
 type QueueInternalAPI interface {
-	InternalReceive(ctx context.Context, queueName string, maxMessages int, waitTimeSec int) ([]InternalMessage, error)
-	InternalDeleteBatch(ctx context.Context, queueName string, receiptHandles []string) error
+	InternalReceive(ctx context.Context, queueArn string, maxMessages int, waitTimeSec int) ([]InternalMessage, error)
+	InternalDeleteBatch(ctx context.Context, queueArn string, receiptHandles []string) error
 }
 
 // InternalMessage is a simplified message for internal ESM use.
@@ -93,8 +94,11 @@ type InternalMessage struct {
 	MD5OfBody         string
 }
 
-// StreamStoreAPI is the DynamoDB Streams interface needed by ESM pollers.
+// StreamStoreAPI is the DynamoDB Streams interface needed by ESM pollers. The
+// context ends a call the poller no longer wants (shutdown, a deleted mapping);
+// an error means the stream could not be read (see model.IsOutage), as opposed to
+// there being nothing to read.
 type StreamStoreAPI interface {
-	GetRecords(tableName string, afterSeq int) ([]stream.Record, int)
-	GetStreamInfo(tableName string) (stream.StreamInfo, bool)
+	GetRecords(ctx context.Context, tableName string, afterSeq int) ([]stream.Record, int, error)
+	GetStreamInfo(ctx context.Context, tableName string) (stream.StreamInfo, bool, error)
 }

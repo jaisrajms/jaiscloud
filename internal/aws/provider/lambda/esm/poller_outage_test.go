@@ -77,9 +77,14 @@ func (d *fakeDLQ) InternalSend(context.Context, string, string, map[string]SQSMe
 
 type noStreams struct{}
 
-func (noStreams) GetRecords(string, int) ([]stream.Record, int)  { return nil, 0 }
-func (noStreams) GetStreamInfo(string) (stream.StreamInfo, bool) { return stream.StreamInfo{}, false }
+func (noStreams) GetRecords(context.Context, string, int) ([]stream.Record, int, error) {
+	return nil, 0, nil
+}
+func (noStreams) GetStreamInfo(context.Context, string) (stream.StreamInfo, bool, error) {
+	return stream.StreamInfo{}, false, nil
+}
 
+// shortBackoff shortens package-level variables, so tests that call it must not use t.Parallel.
 func shortBackoff(t *testing.T) {
 	t.Helper()
 	min, max := outageBackoffMin, outageBackoffMax
@@ -217,14 +222,14 @@ func TestIsOutageOnlyMatchesUnreachableOwners(t *testing.T) {
 
 type oneRecordStream struct{}
 
-func (s *oneRecordStream) GetRecords(_ string, after int) ([]stream.Record, int) {
+func (s *oneRecordStream) GetRecords(_ context.Context, _ string, after int) ([]stream.Record, int, error) {
 	if after >= 1 {
-		return nil, after
+		return nil, after, nil
 	}
-	return []stream.Record{{SequenceNumber: 1, EventID: "e1", EventName: "INSERT"}}, 1
+	return []stream.Record{{SequenceNumber: 1, EventID: "e1", EventName: "INSERT"}}, 1, nil
 }
-func (s *oneRecordStream) GetStreamInfo(string) (stream.StreamInfo, bool) {
-	return stream.StreamInfo{Enabled: true}, true
+func (s *oneRecordStream) GetStreamInfo(context.Context, string) (stream.StreamInfo, bool, error) {
+	return stream.StreamInfo{Enabled: true}, true, nil
 }
 
 // The Streams poller retries the same batch after an outage instead of giving up.
@@ -257,4 +262,57 @@ func TestStreamsPollerRetriesTheSameBatchAfterAnOutage(t *testing.T) {
 		got, err := p.loadESM(context.Background(), m.UUID)
 		return err == nil && got.LastProcessingResult == "OK"
 	})
+}
+
+// flakyStream is unreachable for the first `down` reads, then serves one record.
+type flakyStream struct {
+	oneRecordStream
+	mu    sync.Mutex
+	down  int
+	calls int
+}
+
+func (s *flakyStream) fail() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls <= s.down {
+		return model.NewProviderError(model.CodePluginUnavailable, "plugin down", 503)
+	}
+	return nil
+}
+
+func (s *flakyStream) GetStreamInfo(ctx context.Context, t string) (stream.StreamInfo, bool, error) {
+	if err := s.fail(); err != nil {
+		return stream.StreamInfo{}, false, err
+	}
+	return s.oneRecordStream.GetStreamInfo(ctx, t)
+}
+
+// The stream owner being down is waited out: the mapping is neither disabled nor
+// advanced, and the records are delivered once the owner is back.
+func TestStreamsPollerWaitsOutAnUnreachableStream(t *testing.T) {
+	shortBackoff(t)
+	inv := &fakeInvoker{fn: func(int) error { return nil }}
+	ctx, cancel := context.WithCancel(context.Background())
+	fs := &flakyStream{down: 2 * maxConsecutiveErrors}
+	p := New(ctx, store.NewMemoryResourceStore(), inv, &fakeQueue{recv: func(int) ([]InternalMessage, error) { return nil, nil }},
+		fs, slog.New(slog.NewTextHandler(discard{}, nil)))
+	t.Cleanup(func() { cancel(); p.wg.Wait() })
+
+	m := EventSourceMapping{
+		UUID: "s2", FunctionName: "fn", EventSourceArn: "arn:aws:dynamodb:us-east-1:000000000000:table/t/stream/2024",
+		State: ESMStateEnabled, Enabled: true, SourceType: ESMSourceDynamoDBStreams, TableName: "t",
+		Cloud: "aws", Region: "us-east-1", AccountID: "000000000000",
+	}
+	if err := p.persistESM(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	p.startPollerForMapping(m)
+
+	waitFor(t, "the record to be delivered after the stream came back", func() bool { return inv.count() >= 1 })
+	got, err := p.loadESM(context.Background(), m.UUID)
+	if err != nil || got.State != ESMStateEnabled {
+		t.Fatalf("mapping = %+v, %v; an unreachable stream must not disable it", got, err)
+	}
 }

@@ -2,10 +2,11 @@ package pluginhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
+	"runtime/debug"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gateway/middleware"
@@ -46,9 +47,9 @@ func (p *plugin) aroundLink(wire string, before, after bool) func(provider.Handl
 					return nil, err
 				}
 				if res.Params != nil {
-					// Only the plugin-visible params are replaced: "_"-prefixed
-					// internals survive, and codec state (e.g. SQS's wire-protocol
-					// meta) lives on nr and reaches the built-in codec untouched.
+					// A patch: keys the plugin omits are untouched, and codec
+					// state (e.g. SQS's wire-protocol meta) lives on nr and
+					// reaches the built-in codec untouched.
 					nr.Params = mergeParams(nr.Params, res.Params)
 				}
 				if res.Resp != nil || res.Err != nil {
@@ -61,8 +62,7 @@ func (p *plugin) aroundLink(wire string, before, after bool) func(provider.Handl
 			}
 			var perr *model.ProviderError
 			if err != nil {
-				var ok bool
-				if perr, ok = err.(*model.ProviderError); !ok {
+				if !errors.As(err, &perr) {
 					return resp, err // internal failures are not shown to plugins
 				}
 			}
@@ -86,7 +86,18 @@ func (p *plugin) aroundLink(wire string, before, after bool) func(provider.Handl
 // call sends one phase to the plugin. The call gets its own unique id, which
 // is the only credential its store callbacks accept, and which is revoked (and
 // drained) when the call returns.
-func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError) (sdk.Result, error) {
+func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *model.NormalizedRequest, resp *model.ProviderResponse, perr *model.ProviderError) (res sdk.Result, err error) {
+	// Nothing a plugin does may take the request, or the process, down with it:
+	// a panic becomes a PluginPanic error that names the plugin. An out-of-process
+	// plugin cannot panic into the host, but the same seam serves in-process ones.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("plugin panic", "plugin", p.name, "phase", phase, "service", nr.Service,
+				"action", nr.Action, "panic", r, "stack", string(debug.Stack()))
+			res, err = sdk.Result{}, model.NewProviderError(codePluginPanic,
+				fmt.Sprintf("plugin %s panicked in %s of %s.%s", p.name, phase, nr.Service, nr.Action), 500)
+		}
+	}()
 	callID := randomID(16)
 	p.host.begin(callID, p, nr.AccountID, nr.Region)
 	defer p.host.end(callID)
@@ -111,12 +122,15 @@ func (p *plugin) call(ctx context.Context, wire string, phase sdk.Mode, nr *mode
 	}
 
 	start := clock.RealNow()
-	var res sdk.Result
-	err := p.do(ctx, http.MethodPost, "/handle", in, &res, p.retry)
-	if pe, ok := err.(*model.ProviderError); ok && strings.Contains(pe.Message, "not initialised") {
+	err = p.do(ctx, http.MethodPost, "/handle", in, &res, p.retry)
+	if isNotInitialized(err) {
 		// The plugin restarted and lost the store endpoint: hand it back and retry once.
 		if ierr := p.reinit(ctx); ierr == nil {
 			res, err = sdk.Result{}, p.do(ctx, http.MethodPost, "/handle", in, &res, p.retry)
+		}
+		if isNotInitialized(err) {
+			err = model.NewProviderError(model.CodePluginUnavailable,
+				"plugin "+p.name+" restarted and did not accept /init", 503)
 		}
 	}
 	observe(p.name, string(phase), outcome(err, res), clock.RealNow().Sub(start))

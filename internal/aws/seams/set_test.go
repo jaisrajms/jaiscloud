@@ -3,8 +3,11 @@ package seams_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	keyprovider "jaiscloud/internal/aws/key"
 	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
@@ -21,7 +24,7 @@ import (
 
 var wireToPrefix = map[string]string{
 	"s3": "Object", "monitoring": "CloudWatch", "dynamodbstreams": "Streams",
-	"kms": "Key", "secretsmanager": "Secret", "logs": "CloudWatchLogs", "lambda": "Function",
+	"kms": "Key", "secretsmanager": "Secret", "logs": "CloudWatchLogs", "lambda": "Function", "sqs": "Queue",
 }
 
 func newSet(reg *provider.Registry) *seams.Set {
@@ -145,16 +148,19 @@ func TestStreamsSeamReadsThroughTheWireActions(t *testing.T) {
 	})
 	st := newSet(reg).Streams()
 
-	info, ok := st.GetStreamInfo("t")
-	if !ok || !info.Enabled || info.StreamArn != "arn:s" {
+	info, ok, err := st.GetStreamInfo(context.Background(), "t")
+	if err != nil || !ok || !info.Enabled || info.StreamArn != "arn:s" {
 		t.Fatalf("info = %+v, %v", info, ok)
 	}
-	recs, next := st.GetRecords("t", -1)
+	recs, next, err := st.GetRecords(context.Background(), "t", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(recs) != 1 || recs[0].SequenceNumber != 7 || recs[0].EventName != "INSERT" || recs[0].EventID != "e1" ||
 		recs[0].ApproximateCreationDateTime.Unix() != 1700000000 || recs[0].Keys["id"] == nil || next != 8 {
 		t.Fatalf("records = %+v next=%d", recs, next)
 	}
-	st.GetRecords("t", 7)
+	_, _, _ = st.GetRecords(context.Background(), "t", 7)
 	if iterators[0]["ShardIteratorType"] != "TRIM_HORIZON" {
 		t.Fatalf("cursor -1 must start at the beginning, got %v", iterators[0])
 	}
@@ -432,5 +438,152 @@ func TestLogsSeamPropagatesOtherErrors(t *testing.T) {
 	err := newSet(reg).Logs().InternalPutEvents(context.Background(), "/g", "s", []logstream.Event{{Message: "x"}})
 	if !model.IsOutage(err) {
 		t.Fatalf("an outage must reach the caller, got %v", err)
+	}
+}
+
+// The poller speaks the same contract as a client: QueueUrl (built from the ARN),
+// every attribute requested, deletes in batches of at most ten. A built-in answers
+// with typed values and a plugin with JSON; both are read the same way.
+func TestSQSConsumerIsAnOrdinaryClient(t *testing.T) {
+	const arn = "arn:aws:sqs:us-west-2:222222222222:orders"
+	reg := provider.NewRegistry()
+	var recv, del []*model.NormalizedRequest
+	typed := true
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"Queue.ReceiveMessage": func(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			recv = append(recv, nr)
+			if typed {
+				return provider.OK(map[string]any{"Messages": []map[string]any{{
+					"MessageId": "m1", "ReceiptHandle": "rh1", "Body": "b", "MD5OfBody": "x",
+					"Attributes":        map[string]string{"ApproximateReceiveCount": "2"},
+					"MessageAttributes": map[string]struct{ DataType, StringValue string }{"k": {"String", "v"}},
+				}}}), nil
+			}
+			return provider.OK(map[string]any{"Messages": []any{map[string]any{
+				"MessageId": "m1", "ReceiptHandle": "rh1", "Body": "b", "MD5OfBody": "x",
+				"Attributes":        map[string]any{"ApproximateReceiveCount": "2"},
+				"MessageAttributes": map[string]any{"k": map[string]any{"DataType": "String", "StringValue": "v"}},
+			}}}), nil
+		},
+		"Queue.DeleteMessageBatch": func(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			del = append(del, nr)
+			return provider.OK(map[string]any{}), nil
+		},
+	})
+	c := newSet(reg).SQSConsumer()
+	for _, isTyped := range []bool{true, false} {
+		typed = isTyped
+		msgs, err := c.InternalReceive(context.Background(), arn, 10, 20)
+		if err != nil || len(msgs) != 1 {
+			t.Fatalf("typed=%v: %v, %v", isTyped, msgs, err)
+		}
+		m := msgs[0]
+		if m.MessageID != "m1" || m.Attributes["ApproximateReceiveCount"] != "2" || m.MessageAttributes["k"] == nil {
+			t.Fatalf("typed=%v: message = %+v; attributes were lost", isTyped, m)
+		}
+	}
+	nr := recv[0]
+	if nr.Params["QueueUrl"] != "http://localhost:4566/222222222222/orders" || nr.Params["QueueName"] != nil ||
+		nr.AccountID != "222222222222" || nr.Region != "us-west-2" || nr.Origin != model.OriginInternal {
+		t.Fatalf("ReceiveMessage request = %+v", nr)
+	}
+	if got := nr.Params["AttributeNames"].([]any); got[0] != "All" {
+		t.Fatalf("AttributeNames = %v", got)
+	}
+
+	handles := make([]string, 23)
+	for i := range handles {
+		handles[i] = "rh" + strconv.Itoa(i)
+	}
+	if err := c.InternalDeleteBatch(context.Background(), arn, handles); err != nil {
+		t.Fatal(err)
+	}
+	if len(del) != 3 {
+		t.Fatalf("23 handles must be 3 batches, got %d calls", len(del))
+	}
+	for _, d := range del {
+		if n := len(d.Params["Entries"].([]any)); n > 10 || d.Params["QueueUrl"] != "http://localhost:4566/222222222222/orders" || d.Params["QueueName"] != nil {
+			t.Fatalf("DeleteMessageBatch = %d entries, params %v", n, d.Params)
+		}
+	}
+}
+
+// What is missing is read from the error's resource field, not from its wording.
+func TestLogsSeamReadsTheMissingResourceFromTheError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		data       map[string]any
+		wantStream bool // true: the seam creates the stream and retries
+	}{
+		"group":                {map[string]any{"resource": cwlogs.ResourceLogGroup}, false},
+		"stream":               {map[string]any{"resource": cwlogs.ResourceLogStream}, true},
+		"plugin gave no field": {nil, true},
+	} {
+		reg := provider.NewRegistry()
+		var puts, creates int
+		reg.RegisterAll(map[string]provider.HandlerFunc{
+			"CloudWatchLogs.PutLogEvents": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+				puts++
+				// Deliberately unhelpful wording: the discriminator is the field.
+				return nil, model.NewProviderError("ResourceNotFoundException", "not found", 400).WithData(tc.data)
+			},
+			"CloudWatchLogs.CreateLogStream": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+				creates++
+				return provider.OK(map[string]any{}), nil
+			},
+		})
+		err := newSet(reg).Logs().InternalPutEvents(context.Background(), "/g", "s", []logstream.Event{{Message: "x"}})
+		if tc.wantStream {
+			if puts != 2 || creates != 1 {
+				t.Errorf("%s: puts=%d creates=%d, want the stream created and the put retried", name, puts, creates)
+			}
+		} else if err != nil || puts != 1 || creates != 0 {
+			t.Errorf("%s: err=%v puts=%d creates=%d, want the batch dropped", name, err, puts, creates)
+		}
+	}
+}
+
+func TestLogsSeamCutsLongLinesOnACharacterBoundary(t *testing.T) {
+	reg := provider.NewRegistry()
+	var got string
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"CloudWatchLogs.PutLogEvents": func(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			got = nr.Params["logEvents"].([]any)[0].(map[string]any)["message"].(string)
+			return provider.OK(map[string]any{}), nil
+		},
+	})
+	// "é" is two bytes, so a 262144-byte cut falls inside a character when the line starts with one byte.
+	line := "a" + strings.Repeat("é", 200000)
+	if err := newSet(reg).Logs().InternalPutEvents(context.Background(), "/g", "s", []logstream.Event{{Message: line}}); err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(got) || len(got) > 262144 || len(got) < 262142 {
+		t.Fatalf("cut line: valid=%v len=%d", utf8.ValidString(got), len(got))
+	}
+}
+
+// A stream the poller cannot read is an error it can act on, and a cancelled
+// poller does not keep retrying.
+func TestStreamsSeamReportsErrorsAndHonoursCancellation(t *testing.T) {
+	reg := provider.NewRegistry()
+	down := model.NewProviderError(model.CodePluginUnavailable, "plugin down", 503)
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"Streams.ListStreams": func(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, down
+		},
+	})
+	st := newSet(reg).Streams()
+	if _, _, err := st.GetStreamInfo(context.Background(), "t"); !model.IsOutage(err) {
+		t.Fatalf("GetStreamInfo err = %v, want the outage", err)
+	}
+	if _, _, err := st.GetRecords(context.Background(), "t", -1); !model.IsOutage(err) {
+		t.Fatalf("GetRecords err = %v, want the outage", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := st.GetRecords(ctx, "t", -1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled poller's call must carry its context, got %v", err)
 	}
 }

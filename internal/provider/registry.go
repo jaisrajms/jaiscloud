@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -19,15 +20,15 @@ import (
 // call Dispatch with nr.Origin set. That is what lets a plugin replace a key
 // and be used by every caller, as if the built-in did not exist.
 //
-// Plugins register a wildcard handler via RegisterPlugin("EMR", fn).
-// When Dispatch looks up "EMR.RunJobFlow" and finds no exact match,
-// it falls back to the wildcard handler registered for prefix "EMR".
+// Plugins wrap handlers with Intercept (one key) and InterceptFallback (the
+// actions a service does not have). When Dispatch finds no exact match for
+// "EMR.RunJobFlow" it falls back to the handler for prefix "EMR", if any.
 type Registry struct {
 	// mu guards both maps: background workers dispatch while startup code (plugin
 	// loading) is still wrapping handlers. Handlers run outside the lock.
 	mu       sync.RWMutex
 	handlers map[string]HandlerFunc
-	plugins  map[string]HandlerFunc // prefix → wildcard handler (plugin fallback)
+	plugins  map[string]HandlerFunc // prefix → fallback handler (actions the built-in lacks)
 }
 
 func NewRegistry() *Registry {
@@ -61,27 +62,22 @@ func (r *Registry) Register(p Provider) *Registry {
 	return r.RegisterAll(p.Routes())
 }
 
-// RegisterPlugin registers a plugin as the wildcard handler for a provider prefix.
-// When Dispatch finds no exact key match, it tries the plugin handler for the prefix.
-// A plugin handler takes precedence over the built-in wildcard fallback.
-func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// Override any built-in exact-match handlers whose prefix matches,
-	// so the plugin receives all actions for this service.
-	for key := range r.handlers {
-		p := key
-		for i, c := range key {
-			if c == '.' {
-				p = key[:i]
-				break
-			}
-		}
-		if p == prefix {
-			r.handlers[key] = h
-		}
+// Fingerprint identifies the registry's contents: every key with the code
+// address of its handler, plus the fallback handlers. Two registries built the
+// same way have the same fingerprint; wrapping any handler changes it. Tests use
+// it to prove that an operation (loading no plugins) left the registry as it was.
+func (r *Registry) Fingerprint() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var lines []string
+	for k, h := range r.handlers {
+		lines = append(lines, fmt.Sprintf("%s=%x", k, reflect.ValueOf(h).Pointer()))
 	}
-	r.plugins[prefix] = h
+	for k, h := range r.plugins {
+		lines = append(lines, fmt.Sprintf("%s.*=%x", k, reflect.ValueOf(h).Pointer()))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }
 
 // Has reports whether an exact handler is registered for key.
@@ -148,7 +144,7 @@ func keyPrefix(key string) string {
 // Dispatch routes a request to the matching handler.
 // Lookup order:
 //  1. Exact match in handlers (built-in providers).
-//  2. Plugin wildcard for the provider prefix (full-mode plugins).
+//  2. The fallback handler for the provider prefix (plugin-added actions).
 //  3. ProviderError(UnknownAction).
 func (r *Registry) Dispatch(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	prefix := keyPrefix(key)

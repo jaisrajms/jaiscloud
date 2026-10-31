@@ -16,6 +16,12 @@ import "encoding/json"
 // application/json. When a shared secret is configured the emulator also sends
 // "Authorization: Bearer <secret>" on every call to the plugin.
 
+// ErrNotInitialized is the "error" value of the JSON body (with HTTP 409) that a
+// plugin answers to POST /handle when it has not received /init, for example
+// after it restarted. The emulator then sends /init again and retries the call.
+// The code, not the human text, is the contract.
+const ErrNotInitialized = "not_initialized"
+
 // InitRequest is sent at startup and again if the plugin restarts.
 type InitRequest struct {
 	ABI   int           `json:"abi"`

@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"strings"
 
@@ -34,7 +35,8 @@ type InternalSendAPI interface {
 // The account and region are extracted from the target ARN/URL so that
 // cross-account deliveries land in the correct per-(account,region) store.
 func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
-	return p.deliverInternal(ctx, queueARNorURL, body, attrs, src)
+	_, err := p.deliverInternal(ctx, queueARNorURL, body, attrs, src)
+	return err
 }
 
 // sendMessageInternal serves Queue.SendMessage for an internal origin (SNS, S3
@@ -54,16 +56,19 @@ func (p *QueueProvider) sendMessageInternal(ctx context.Context, nr *model.Norma
 			}
 		}
 	}
-	if err := p.deliverInternal(ctx, target, body, attrs, SourceContext{SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal}); err != nil {
+	id, err := p.deliverInternal(ctx, target, body, attrs, SourceContext{SourceArn: nr.SourceArn, ServicePrincipal: nr.ServicePrincipal})
+	if err != nil {
 		return nil, err
 	}
-	return provider.OK(map[string]any{}), nil
+	// The same fields a wire SendMessage answers with, so an after hook sees one shape.
+	return provider.OK(map[string]any{"MessageId": id, "MD5OfMessageBody": fmt.Sprintf("%x", md5.Sum([]byte(body)))}), nil
 }
 
-func (p *QueueProvider) deliverInternal(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
+// deliverInternal writes a message and returns its id.
+func (p *QueueProvider) deliverInternal(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) (string, error) {
 	queueURL, account, region, err := p.resolveQueueURLWithScope(ctx, queueARNorURL)
 	if err != nil {
-		return err
+		return "", err
 	}
 	msgAttrs := make(map[string]sqsstore.MessageAttribute, len(attrs))
 	for k, v := range attrs {
@@ -79,10 +84,10 @@ func (p *QueueProvider) deliverInternal(ctx context.Context, queueARNorURL strin
 	}
 	_, _, err = p.messages.Send(ctx, account, region, msg)
 	if err != nil {
-		return err
+		return "", err
 	}
 	p.waiters.Notify(queueURL)
-	return nil
+	return msg.MessageID, nil
 }
 
 // resolveQueueURLWithScope returns the queue URL plus the account and region

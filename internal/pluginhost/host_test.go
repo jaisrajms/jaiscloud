@@ -175,7 +175,8 @@ func TestBeforeParamsPatchKeepsInternalKeysAndShortCircuit(t *testing.T) {
 			if _, leaked := c.Req.Params["_reader"]; leaked {
 				t.Error("values that cannot be JSON (streams) must not be visible to plugins")
 			}
-			np := map[string]any{"MessageBody": "patched"} // drops "Extra"
+			// A patch: set MessageBody, remove Extra (null), say nothing about the rest.
+			np := map[string]any{"MessageBody": "patched", "Extra": nil}
 			return sdk.Result{Params: np}, nil
 		})
 	})
@@ -192,7 +193,7 @@ func TestBeforeParamsPatchKeepsInternalKeysAndShortCircuit(t *testing.T) {
 		t.Fatalf("params = %v", nr.Params)
 	}
 	if _, has := nr.Params["Extra"]; has {
-		t.Fatalf("a key the plugin dropped must be removed: %v", nr.Params)
+		t.Fatalf("a key the plugin set to null must be removed: %v", nr.Params)
 	}
 	built := len(e.built)
 	_, err := send(e, "stop", nil)
@@ -438,7 +439,7 @@ func TestStartupRetriesAnUnreachablePluginThenFailsWithDetails(t *testing.T) {
 	ln.Close()
 	go func() {
 		time.Sleep(700 * time.Millisecond)
-		l, err := net.Listen("tcp", addr)
+		l, err := listenRetry(addr)
 		if err != nil {
 			return
 		}
@@ -479,7 +480,13 @@ func TestFailClosedErrorMapping(t *testing.T) {
 		if r.URL.Path == "/handle" {
 			switch current.Load().(string) {
 			case "slow":
-				time.Sleep(600 * time.Millisecond)
+				// Wait until the host gives up and hangs up, not for a fixed time that
+				// a loaded machine could make shorter than the host's timeout.
+				select {
+				case <-r.Context().Done():
+				case <-time.After(10 * time.Second):
+				}
+				return
 			case "garbage":
 				_, _ = w.Write([]byte("not json"))
 				return
@@ -541,7 +548,7 @@ func TestPluginRestartIsReinitialisedAndRetried(t *testing.T) {
 	srv.Close() // plugin process dies
 	go func() {
 		time.Sleep(600 * time.Millisecond) // and comes back later with no memory of /init
-		l, err := net.Listen("tcp", addr)
+		l, err := listenRetry(addr)
 		if err != nil {
 			return
 		}
@@ -629,6 +636,20 @@ func TestStoreVersionsPrefixAndGate(t *testing.T) {
 	if c := call(tok, "live", "a"); c != 403 {
 		t.Fatalf("a finished call must be revoked, got %d", c)
 	}
+}
+
+// listenRetry rebinds an address that was reserved and released; another process
+// may briefly hold it, so try for a few seconds before giving up.
+func listenRetry(addr string) (net.Listener, error) {
+	var err error
+	for i := 0; i < 50; i++ {
+		var l net.Listener
+		if l, err = net.Listen("tcp", addr); err == nil {
+			return l, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, err
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
@@ -735,14 +756,23 @@ func TestProjectionRoundTripsTypes(t *testing.T) {
 		t.Fatalf("bytes must be projected as a $base64 marker, got %v", view["_payload"])
 	}
 
-	// Plugin leaves everything but A alone and drops B.
-	patch := map[string]any{"A": 9, "_payload": view["_payload"], "_meta": view["_meta"], "C": 3}
+	// Plugin changes A, adds C, removes B with null, and returns _payload/_meta unchanged.
+	patch := map[string]any{"A": 9, "B": nil, "_payload": view["_payload"], "_meta": view["_meta"], "C": 3}
 	got := mergeParams(orig, patch)
 	if got["A"] != 9 || got["C"] != 3 {
 		t.Fatalf("changes lost: %v", got)
 	}
 	if _, has := got["B"]; has {
-		t.Fatal("B was dropped by the plugin and must be removed")
+		t.Fatal("B was set to null by the plugin and must be removed")
+	}
+	// A patch that names only one key must not delete the others (H1).
+	only := mergeParams(orig, map[string]any{"A": 5})
+	if only["A"] != 5 || only["B"] != 2 || only["_reader"] != rd {
+		t.Fatalf("keys the plugin did not mention must survive: %v", only)
+	}
+	// The plugin cannot delete a value it never saw.
+	if kept := mergeParams(orig, map[string]any{"_reader": nil}); kept["_reader"] != rd {
+		t.Fatal("a hidden stream must survive even an explicit null")
 	}
 	if _, ok := got["_payload"].([]byte); !ok {
 		t.Fatalf("an unchanged payload must keep its []byte type, got %T", got["_payload"])

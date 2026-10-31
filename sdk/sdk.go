@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -41,6 +42,12 @@ type Manifest struct {
 	Name    string  `json:"name"`    // [a-z0-9-]+ ; state namespace and log label
 	Version string  `json:"version"` // informational
 	Routes  []Route `json:"routes"`
+	// Requires lists host capabilities the plugin cannot work without. A host
+	// that does not provide every one refuses to start and prints the
+	// capabilities it has. This build offers none yet, so any entry is refused;
+	// the field exists so a plugin that needs more than ABI 1 gives can say so
+	// instead of being silently mis-served.
+	Requires []string `json:"requires,omitempty"`
 }
 
 // Route claims actions of a WIRE service (e.g. "sqs") for a cloud.
@@ -53,9 +60,13 @@ type Route struct {
 
 // Request is the projection of one API call a plugin sees.
 //
-// Params holds the decoded wire parameters. Keys beginning with "_" are
-// emulator-internal (streams, raw bytes) and are never shown to out-of-process
-// plugins; the emulator always preserves them.
+// Params holds the decoded wire parameters. Raw bytes (for example S3 object
+// bodies, Lambda payloads) arrive as {"$base64": "..."} and must be returned
+// in the same form. Keys beginning with "_" are the emulator's own channel for
+// such data and are shown like any other key; a value that cannot be expressed
+// in JSON (a stream) is never shown and is always preserved. A call whose
+// request does not fit in 32 MiB once encoded is refused with
+// PluginUnsupportedPayload before it reaches the plugin.
 type Request struct {
 	Cloud     string         `json:"cloud"`
 	Service   string         `json:"service"`
@@ -92,6 +103,11 @@ type Response struct {
 }
 
 // Error is a structured failure, rendered by the built-in codec's error encoder.
+//
+// Data carries extra structured fields. The built-in services set
+// Data["resource"] where one code covers several missing things, for example
+// "log-group" or "log-stream" on CloudWatch Logs ResourceNotFoundException; a
+// plugin that replaces such a service should set it the same way.
 type Error struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
@@ -113,8 +129,10 @@ type Call struct {
 // Result is the output of Handle. Resp and Err are mutually exclusive.
 //
 //	Replace: Resp or Err answers; NotHandled falls through to the built-in.
-//	Before:  Params (when non-nil) replaces the request's visible params;
-//	         Resp/Err short-circuit and the built-in is not run.
+//	Before:  Params (when non-nil) is a PATCH over the request's params: every
+//	         key you return is set, every key you omit is left as it was, and a
+//	         key whose value is null is removed. Resp/Err short-circuit and the
+//	         built-in is not run.
 //	After:   Resp/Err override the core's outcome; all nil passes it through.
 type Result struct {
 	NotHandled bool           `json:"notHandled,omitempty"`
@@ -162,8 +180,8 @@ const EventTickPrefix = "tick:"
 
 // TickService returns the wire service of a tick event.
 func TickService(event string) (service string, ok bool) {
-	if len(event) > len(EventTickPrefix) && event[:len(EventTickPrefix)] == EventTickPrefix {
-		return event[len(EventTickPrefix):], true
+	if service, ok = strings.CutPrefix(event, EventTickPrefix); ok && service != "" {
+		return service, true
 	}
 	return "", false
 }

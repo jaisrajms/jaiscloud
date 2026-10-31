@@ -18,9 +18,9 @@ import (
 //     (Lambda "_payload", S3 object bodies) without losing the type.
 //   - Values that cannot be represented (readers, funcs, channels) are never
 //     shown to the plugin and are always preserved.
-//   - When the plugin returns edited params, every key it left unchanged keeps
-//     its ORIGINAL typed value; only keys it changed or added are taken from
-//     the plugin (markers converted back to []byte). A key it dropped is removed.
+//   - A before hook returns a PATCH: a key it returns is set (a key whose value
+//     is unchanged keeps its ORIGINAL typed value; markers become []byte again),
+//     a key it omits is untouched, and a key it returns as null is removed.
 //
 // "_"-prefixed keys are no longer special: they are the codec's own channel
 // for binary and non-wire data, and a plugin that replaces a service needs them.
@@ -135,29 +135,33 @@ func restoreMap(m map[string]any) map[string]any {
 	return out
 }
 
-// mergeParams applies a plugin's edited view back onto the original params.
+// mergeParams applies a plugin's returned params as a PATCH over the original:
+// a key the plugin returns is set (and keeps its original typed value when it is
+// unchanged), a key it omits is left alone, and a key it returns as null is
+// removed. Values the plugin never saw (streams) are never touched.
 func mergeParams(orig, patch map[string]any) map[string]any {
 	out := make(map[string]any, len(orig)+len(patch))
 	for k, ov := range orig {
-		pv, projectable := projectValue(ov)
-		if !projectable {
-			out[k] = ov // the plugin never saw it: preserve
-			continue
-		}
-		nv, kept := patch[k]
-		if !kept {
-			continue // the plugin dropped it
-		}
-		if jsonEqual(pv, nv) {
-			out[k] = ov // unchanged: keep the original typed value
-		} else {
-			out[k] = restore(nv)
-		}
+		out[k] = ov
 	}
 	for k, nv := range patch {
-		if _, had := orig[k]; !had {
-			out[k] = restore(nv)
+		ov, had := orig[k]
+		if had {
+			pv, projectable := projectValue(ov)
+			if !projectable {
+				continue // the plugin never saw it: preserve
+			}
+			if nv == nil {
+				delete(out, k)
+				continue
+			}
+			if jsonEqual(pv, nv) {
+				continue // unchanged: keep the original typed value
+			}
+		} else if nv == nil {
+			continue
 		}
+		out[k] = restore(nv)
 	}
 	return out
 }

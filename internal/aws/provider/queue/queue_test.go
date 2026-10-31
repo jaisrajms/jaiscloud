@@ -425,3 +425,30 @@ func TestDLQ_RedriveAfterMaxReceiveCount(t *testing.T) {
 	attrs := resp.Data["Attributes"].(map[string]string)
 	_ = attrs // DLQ message count validated via receive in integration tests
 }
+
+// An internal SendMessage answers with the fields a wire one does, so an after hook
+// sees one shape whoever sent the message (and QueueURL builds the same URL as CreateQueue).
+func TestInternalSendMessageAnswersLikeTheWire(t *testing.T) {
+	p, _, _ := setup(t)
+	url := createQueue(t, p, testQueueName)
+	if url != queue.QueueURL(4566, "000000000000", testQueueName) {
+		t.Fatalf("QueueURL = %s, CreateQueue = %s", queue.QueueURL(4566, "000000000000", testQueueName), url)
+	}
+	internal := nr(map[string]any{"QueueUrl": url, "MessageBody": "hello"})
+	internal.Origin = model.OriginInternal
+	resp, err := p.Routes()["Queue.SendMessage"](context.Background(), internal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := resp.Data["MessageId"].(string)
+	if id == "" || resp.Data["MD5OfMessageBody"] != "5d41402abc4b2a76b9719d911017c592" {
+		t.Fatalf("internal SendMessage answered %v; want MessageId and MD5OfMessageBody", resp.Data)
+	}
+	recv, err := p.Routes()["Queue.ReceiveMessage"](context.Background(), nr(map[string]any{"QueueUrl": url}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgs, _ := recv.Data["Messages"].([]map[string]any); len(msgs) != 1 || msgs[0]["MessageId"] != id {
+		t.Fatalf("the message that was received is not the one the sender was told about: %v", recv.Data["Messages"])
+	}
+}

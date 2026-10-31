@@ -61,6 +61,7 @@ type Host struct {
 
 type plugin struct {
 	name, version, baseURL, shownURL, token string
+	abi                                     int
 	secret                                  string
 	routes                                  []sdk.Route // only entries for this binary's cloud
 	client                                  *http.Client
@@ -77,6 +78,19 @@ const (
 	defaultRetry     = 30 * time.Second
 	maxBody          = 32 << 20
 )
+
+// Codes the host raises itself.
+const (
+	codePluginPanic          = "PluginPanic"
+	codePluginNotInitialized = "PluginNotInitialized"
+)
+
+// isNotInitialized reports whether err is the plugin saying it lost its /init
+// (see sdk.ErrNotInitialized).
+func isNotInitialized(err error) bool {
+	var pe *model.ProviderError
+	return errors.As(err, &pe) && pe.Code == codePluginNotInitialized
+}
 
 // Load connects to every plugin spec, validates them, and installs their
 // routes. Any failure aborts startup (the caller returns the error).
@@ -96,7 +110,6 @@ func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
 	if d.CallRetry <= 0 {
 		d.CallRetry = defaultRetry
 	}
-	registerMetrics()
 	h := &Host{cloud: string(d.Cloud), resource: d.Resources, registry: d.Registry,
 		calls: map[string]*activeCall{}}
 	seen := map[string]bool{}
@@ -114,9 +127,11 @@ func Load(ctx context.Context, specs []string, d Deps) (*Host, error) {
 	if err := h.apply(d); err != nil {
 		return nil, err
 	}
+	// Only now is the load certain to succeed, so a refused Load leaves no series behind.
+	registerMetrics()
 	for _, p := range h.plugins {
 		slog.Info("plugin loaded", "name", p.name, "version", p.version, "transport", "http",
-			"url", p.shownURL, "abi", sdk.ABI, "routes", len(p.routes))
+			"url", p.shownURL, "abi", p.abi, "routes", len(p.routes))
 	}
 	return h, nil
 }
@@ -176,7 +191,10 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 	if !nameRe().MatchString(m.Name) {
 		return nil, fmt.Errorf("invalid plugin name %q (want [a-z0-9-]+)", m.Name)
 	}
-	p.name, p.version = m.Name, m.Version
+	if len(m.Requires) > 0 {
+		return nil, fmt.Errorf("plugin requires host capabilities %q, which this emulator does not provide (it provides: none)", m.Requires)
+	}
+	p.name, p.version, p.abi = m.Name, m.Version, m.ABI
 	for _, r := range m.Routes {
 		if r.Cloud != string(d.Cloud) {
 			continue // a cross-cloud plugin lists other clouds' entries; ignore them
@@ -388,6 +406,11 @@ func (p *plugin) do(ctx context.Context, method, path string, in, out any, retry
 		if err != nil {
 			return model.NewProviderError("PluginUnsupportedPayload", "request is not JSON-serialisable: "+err.Error(), 500)
 		}
+		if len(b) > maxBody {
+			return model.NewProviderError("PluginUnsupportedPayload", fmt.Sprintf(
+				"plugin %s: the request is %d bytes once encoded, over the %d-byte limit for out-of-process plugins%s",
+				p.nameOr(), len(b), maxBody, largestParam(in)), 501)
+		}
 		body = b
 	}
 	rctx := ctx
@@ -470,6 +493,14 @@ func (p *plugin) once(ctx context.Context, method, path string, body []byte, out
 	if err != nil || len(raw) > maxBody {
 		return model.NewProviderError("PluginProtocolError", fmt.Sprintf("plugin %s: unreadable or oversize response", p.nameOr()), 502)
 	}
+	if resp.StatusCode == http.StatusConflict {
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &e) == nil && e.Error == sdk.ErrNotInitialized {
+			return model.NewProviderError(codePluginNotInitialized, "plugin "+p.nameOr()+" has not been initialised", 503)
+		}
+	}
 	if resp.StatusCode/100 != 2 {
 		return model.NewProviderError("PluginProtocolError",
 			fmt.Sprintf("plugin %s: HTTP %d: %s", p.nameOr(), resp.StatusCode, truncate(raw)), 502)
@@ -480,6 +511,24 @@ func (p *plugin) once(ctx context.Context, method, path string, body []byte, out
 		}
 	}
 	return nil
+}
+
+// largestParam names the biggest request param, for the oversize error.
+func largestParam(in any) string {
+	hr, ok := in.(sdk.HandleRequest)
+	if !ok || hr.Req == nil {
+		return ""
+	}
+	best, size := "", 0
+	for k, v := range hr.Req.Params {
+		if b, err := json.Marshal(v); err == nil && len(b) > size {
+			best, size = k, len(b)
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (largest param: %q, %d bytes)", best, size)
 }
 
 func (p *plugin) nameOr() string {
@@ -503,7 +552,7 @@ func (h *Host) DoctorInfo() any {
 	for _, p := range h.plugins {
 		out = append(out, map[string]any{
 			"name": p.name, "version": p.version, "transport": "http", "url": p.shownURL,
-			"abi": sdk.ABI, "routes": p.routes,
+			"abi": p.abi, "routes": p.routes,
 		})
 	}
 	return out

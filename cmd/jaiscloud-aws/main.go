@@ -169,7 +169,10 @@ func startCmd() *cobra.Command {
 			}
 
 			ecrP := buildECRProvider(ctx, cfg, s)
-			app := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
+			// One adapter for the whole process: the seams resolve registry prefixes
+			// through the same instance plugins register services on.
+			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
+			app := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP, cloudAdapter.ServiceToProvider)
 			cleanup := app.Cleanup
 			defer func() { cleanup() }()
 
@@ -185,7 +188,6 @@ func startCmd() *cobra.Command {
 				prevCleanup()
 			}
 
-			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.ESMProvider, app.EventsProvider, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
 			adminHandler.RegisterSnapshotter("cw_logs", app.LogsP)
 			adminHandler.SetLambdaCodeFetcher(app.LambdaCode)
@@ -694,7 +696,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 
 // buildRegistry wires all providers and returns an AppContext holding the
 // populated registry, all provider references, and a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) *AppContext {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider, prefixOf func(string) string) *AppContext {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -702,7 +704,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// every call from one service to another goes through Registry.Dispatch (see
 	// internal/aws/seams), and a plugin that overrides a key is used by all of them.
 	reg := provider.NewRegistry()
-	seamSet := seams.NewSet(reg, awsadapter.NewAdapter(nil).ServiceToProvider,
+	seamSet := seams.NewSet(reg, prefixOf,
 		seams.Scope{Account: cfg.AccountID, Region: cfg.Region, Clock: cfg.Clock, Port: cfg.Port})
 
 	sparkMode, _ := config.ExecutorMode("spark", "mock")
