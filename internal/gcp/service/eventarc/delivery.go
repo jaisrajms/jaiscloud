@@ -3,6 +3,7 @@ package eventarc
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,10 +24,11 @@ type httpDoer interface {
 
 // eventarcConnectTimeout bounds the connect phase of an Eventarc delivery, and
 // eventarcDeliveryTimeout bounds the whole request (a sink that accepts and then
-// stalls would otherwise leak a goroutine). Delivery is fire-and-forget (the
-// the emulator contract): the emulator never retries or dead-letters a non-function
-// delivery, so a slow or unreachable sink is logged, never surfaced to the
-// producer.
+// stalls would otherwise leak a goroutine). Delivery is fire-and-forget from the
+// producer's point of view: a failing sink is retried on the trigger's
+// retryPolicy (maxAttempts, maxRetryDuration) and, once the budget is exhausted,
+// logged — Eventarc has no dead-letter destination on a Trigger, and the
+// producer never sees the failure.
 const (
 	eventarcConnectTimeout  = 10 * time.Second
 	eventarcDeliveryTimeout = 30 * time.Second
@@ -52,6 +54,63 @@ func eventarcHTTPClient() httpDoer {
 // dropped — the emulator logs and drops unreachable destinations.
 type CloudRunInvoker interface {
 	Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error)
+}
+
+// retryPolicy is the subset of Eventarc's Trigger.retryPolicy the dispatcher
+// honours: maxAttempts is the total number of delivery attempts (1-5, real GCP
+// validates the same range) and maxRetryDuration bounds the whole retry window.
+// Eventarc has no dead-letter destination on a Trigger — that surface belongs to
+// the backing Pub/Sub subscription — so an exhausted retry is logged, not routed.
+type retryPolicy struct {
+	attempts    int
+	maxDuration time.Duration
+}
+
+const maxEventarcAttempts = 5
+
+// eventarcRetryPolicy decodes a trigger's retryPolicy. An absent policy means a
+// single attempt (the pre-EV5 fire-and-forget behaviour).
+func eventarcRetryPolicy(body map[string]any) retryPolicy {
+	pol := retryPolicy{attempts: 1}
+	rp, _ := body["retryPolicy"].(map[string]any)
+	if rp == nil {
+		return pol
+	}
+	switch n := rp["maxAttempts"].(type) {
+	case float64:
+		pol.attempts = int(n)
+	case int:
+		pol.attempts = n
+	}
+	if pol.attempts < 1 {
+		pol.attempts = 1
+	}
+	if pol.attempts > maxEventarcAttempts {
+		pol.attempts = maxEventarcAttempts
+	}
+	if raw, _ := rp["maxRetryDuration"].(string); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			pol.maxDuration = d
+		}
+	}
+	return pol
+}
+
+// retryDelay is the exponential backoff before attempt n (1-based). Tests lower
+// deliveryRetryBase so a retry sequence does not spend real seconds.
+func (s *Service) retryDelay(attempt int) time.Duration {
+	base := s.deliveryRetryBase
+	if base <= 0 {
+		base = 100 * time.Millisecond
+	}
+	d := base
+	for i := 1; i < attempt && d < 10*time.Second; i++ {
+		d *= 2
+	}
+	if d > 10*time.Second {
+		d = 10 * time.Second
+	}
+	return d
 }
 
 // DispatchEvent is the eventing.Dispatcher entry point. It delivers a produced
@@ -103,11 +162,12 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 			continue
 		}
 		payload, headers := buildCloudEvent(ev.Project, t.Location, t.Name, ev)
+		policy := eventarcRetryPolicy(body)
 		switch {
 		case uri != "":
-			s.deliver(uri, headers, payload)
+			s.deliver(uri, headers, payload, policy)
 		case s.cloudRun != nil:
-			s.deliverCloudRun(ev.Project, runTarget, headers, payload)
+			s.deliverCloudRun(ev.Project, runTarget, headers, payload, policy)
 		default:
 			slog.Warn("eventarc: cloudRun destination but no run service available; dropping event",
 				"trigger", t.Name, "service", runTarget.service, "region", runTarget.region)
@@ -278,7 +338,7 @@ func cloudRunDestination(dest map[string]any) (cloudRunTarget, bool) {
 // deliver's fire-and-forget contract. The invoker maps a missing service to 404
 // and an unreachable runtime to 502/503/504; a failure is logged and never
 // retried or dead-lettered.
-func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers map[string]string, body []byte) {
+func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers map[string]string, body []byte, policy retryPolicy) {
 	invoker := s.cloudRun
 	if invoker == nil {
 		return
@@ -286,17 +346,27 @@ func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers
 	s.deliveryWG.Add(1)
 	go func() {
 		defer s.deliveryWG.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), eventarcDeliveryTimeout)
-		defer cancel()
-		status, err := invoker.Invoke(ctx, project, target.region, target.service, target.path, headers, body)
-		if err != nil {
-			slog.Warn("eventarc: deliver event to cloudRun",
-				"service", target.service, "region", target.region, "status", status, "err", err)
-			return
-		}
-		if status >= 300 {
-			slog.Warn("eventarc: cloudRun delivery non-2xx",
-				"service", target.service, "region", target.region, "status", status)
+		start := time.Now()
+		for attempt := 1; ; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), eventarcDeliveryTimeout)
+			status, err := invoker.Invoke(ctx, project, target.region, target.service, target.path, headers, body)
+			cancel()
+			ok := err == nil && status < 300
+			if ok {
+				return
+			}
+			if err != nil {
+				slog.Warn("eventarc: deliver event to cloudRun",
+					"service", target.service, "region", target.region, "status", status, "err", err, "attempt", attempt)
+			} else {
+				slog.Warn("eventarc: cloudRun delivery non-2xx",
+					"service", target.service, "region", target.region, "status", status, "attempt", attempt)
+			}
+			if attempt >= policy.attempts || !s.waitRetry(start, attempt, policy) {
+				slog.Warn("eventarc: cloudRun delivery abandoned",
+					"service", target.service, "region", target.region, "attempts", attempt)
+				return
+			}
 		}
 	}()
 }
@@ -322,28 +392,63 @@ func buildPubSubCloudEvent(project, location, triggerID string, ev eventing.Even
 
 // deliver POSTs one event on its own goroutine. The waitgroup lets tests await
 // in-flight deliveries; production never waits on them.
-func (s *Service) deliver(uri string, headers map[string]string, body []byte) {
+func (s *Service) deliver(uri string, headers map[string]string, body []byte, policy retryPolicy) {
 	s.deliveryWG.Add(1)
 	go func() {
 		defer s.deliveryWG.Done()
-		req, err := http.NewRequest(http.MethodPost, uri, bytes.NewReader(body))
-		if err != nil {
-			slog.Warn("eventarc: build delivery request", "uri", uri, "err", err)
-			return
-		}
-		for k, v := range headers {
-			req.Header.Set(k, v)
-		}
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			slog.Warn("eventarc: deliver event", "uri", uri, "err", err)
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			slog.Warn("eventarc: delivery non-2xx", "uri", uri, "status", resp.StatusCode)
+		start := time.Now()
+		var lastErr error
+		lastStatus := 0
+		for attempt := 1; ; attempt++ {
+			req, err := http.NewRequest(http.MethodPost, uri, bytes.NewReader(body))
+			if err != nil {
+				slog.Warn("eventarc: build delivery request", "uri", uri, "err", err)
+				return
+			}
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			resp, err := s.httpClient.Do(req)
+			if err == nil {
+				discardAndClose(resp.Body)
+				lastErr, lastStatus = nil, resp.StatusCode
+			} else {
+				lastErr, lastStatus = err, 0
+			}
+			if err == nil && lastStatus < 300 {
+				return
+			}
+			if err != nil {
+				slog.Warn("eventarc: deliver event", "uri", uri, "err", err, "attempt", attempt)
+			} else {
+				slog.Warn("eventarc: delivery non-2xx", "uri", uri, "status", lastStatus, "attempt", attempt)
+			}
+			if attempt >= policy.attempts || !s.waitRetry(start, attempt, policy) {
+				slog.Warn("eventarc: delivery abandoned", "uri", uri, "attempts", attempt,
+					"status", lastStatus, "err", lastErr)
+				return
+			}
 		}
 	}()
+}
+
+// waitRetry sleeps before the next attempt and reports whether the trigger's
+// budget allows one. A maxRetryDuration that the next backoff would exceed ends
+// the retries rather than overshooting the documented window.
+func (s *Service) waitRetry(start time.Time, attempt int, policy retryPolicy) bool {
+	delay := s.retryDelay(attempt)
+	if policy.maxDuration > 0 && time.Since(start)+delay > policy.maxDuration {
+		return false
+	}
+	time.Sleep(delay)
+	return true
+}
+
+// discardAndClose drains and closes a delivery response body so the connection
+// can be reused across retries.
+func discardAndClose(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, body)
+	_ = body.Close()
 }
 
 // waitDeliveries blocks until in-flight deliveries finish. It exists for tests;

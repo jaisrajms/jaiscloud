@@ -30,6 +30,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/eventing"
@@ -73,6 +74,9 @@ type Service struct {
 	subscriptions eventing.SubscriptionProvisioner
 	httpClient    httpDoer       // outbound delivery client; nil disables delivery
 	deliveryWG    sync.WaitGroup // tracks in-flight fire-and-forget deliveries (tests)
+	// deliveryRetryBase is the first backoff step for a retried delivery.
+	// Zero means the 100ms default; tests lower it so a retry sequence is fast.
+	deliveryRetryBase time.Duration
 }
 
 // NewService returns an Eventarc core backed by the given stores. Outbound
