@@ -236,6 +236,9 @@ func (p *Provider) ListDeliveries(ctx context.Context, project, location, id str
 // inlineArchive packages an inline source file into a zip archive for the
 // create path. A blank source yields a nil archive (metadata-only create, an
 // emulator convenience), so callers never persist an empty archive.
+// InlineArchive packages an inline source file into a zip archive (see inlineArchive).
+func InlineArchive(source, filename string) ([]byte, error) { return inlineArchive(source, filename) }
+
 func inlineArchive(source, filename string) ([]byte, error) {
 	if source == "" {
 		return nil, nil

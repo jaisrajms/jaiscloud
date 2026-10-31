@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strings"
 
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
@@ -1024,5 +1025,43 @@ func (p routedMonitoring) DeleteNotificationChannel(ctx context.Context, nr *mod
 func (p routedMonitoring) ListNotificationChannelDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "Monitoring.ListNotificationChannelDescriptors", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		return p.ProviderInterface.ListNotificationChannelDescriptors(ctx, nr)
+	}, nr)
+}
+
+// Update serves the service-account edit form, which is a patch with an update mask.
+func (p routedIAM) Update(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "IAM.ServiceAccountPatch", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.Update(ctx, nr)
+	}, nr)
+}
+
+// kmsIAMKey picks the registry key of a KMS IAM call from the resource it names:
+// a key ring, a crypto key or an import job each have their own key.
+func kmsIAMKey(nr *model.NormalizedRequest, op string) string {
+	name, _ := nr.Params["name"].(string)
+	switch {
+	case strings.Contains(name, "/importJobs/"):
+		return "KMS.ImportJob" + op
+	case strings.Contains(name, "/cryptoKeys/"):
+		return "KMS.CryptoKey" + op
+	}
+	return "KMS.KeyRing" + op
+}
+
+func (p routedKMS) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, kmsIAMKey(nr, "GetIamPolicy"), func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.GetIamPolicy(ctx, nr)
+	}, nr)
+}
+
+func (p routedKMS) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, kmsIAMKey(nr, "SetIamPolicy"), func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.SetIamPolicy(ctx, nr)
+	}, nr)
+}
+
+func (p routedKMS) TestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, kmsIAMKey(nr, "TestIamPermissions"), func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.TestIamPermissions(ctx, nr)
 	}, nr)
 }

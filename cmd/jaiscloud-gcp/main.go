@@ -41,6 +41,7 @@ import (
 	"jaiscloud/internal/gcp/grpcplugin"
 	hms "jaiscloud/internal/gcp/hms"
 	"jaiscloud/internal/gcp/lro"
+	"jaiscloud/internal/gcp/pluginchain"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
 	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
@@ -853,6 +854,7 @@ func startCmd() *cobra.Command {
 			// Register only services enabled on at least one transport, so a
 			// per-service `none` override removes both its REST and gRPC surface
 			// (an unregistered provider falls through to a 404/unknown-action).
+			restBuiltins := map[string]provider.HandlerFunc{}
 			for _, sp := range []struct {
 				name string
 				p    provider.Provider
@@ -889,6 +891,11 @@ func startCmd() *cobra.Command {
 			} {
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
+					// The REST built-ins sit under the plugin chain for the console services that
+					// work on typed structs (internal/gcp/ui/typed.go).
+					for k, h := range sp.p.Routes() {
+						restBuiltins[k] = h
+					}
 				}
 			}
 
@@ -912,10 +919,15 @@ func startCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// One plugin chain serves every caller that bypasses the registry: gRPC and the console.
+			var pluginChain *pluginchain.Chain
+			if pluginHost != nil {
+				pluginChain = pluginchain.New(pluginHost)
+			}
 			var grpcOpts []grpc.ServerOption
 			if pluginHost != nil && transports.GRPC() {
 				grpcOpts = grpcplugin.New(grpcplugin.Config{
-					Host: pluginHost, Adapter: cloudAdapter, Clock: cfg.Clock, Port: cfg.Port,
+					Host: pluginHost, Chain: pluginChain, Adapter: cloudAdapter, Clock: cfg.Clock, Port: cfg.Port,
 					Region: cfg.Region, Project: cfg.ProjectID,
 				}).ServerOptions()
 			}
@@ -1577,7 +1589,7 @@ func startCmd() *cobra.Command {
 					CloudRun:          cloudRunExec,
 					CloudRunSource:    cloudRunSrc,
 				}
-				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithRegistry(reg).WithServiceModes(serviceModes)
+				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithRegistry(reg).WithPluginChain(pluginChain, restBuiltins).WithServiceModes(serviceModes)
 				uiServer, uiErr = coreui.New(gcpRegistrar, adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)

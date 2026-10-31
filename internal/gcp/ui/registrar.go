@@ -9,6 +9,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"jaiscloud/internal/gcp/pluginchain"
 	"jaiscloud/internal/provider"
 	"strings"
 
@@ -67,6 +68,8 @@ type Registrar struct {
 	// enumerates (created + configured projects). It is nil when the service is
 	// disabled, in which case only the configured accounts are reported.
 	resourcemanager *resourcemanagercore.Service
+	// rm is what the consoles call: the core itself, or a wrapper that sends covered calls through the plugin chain.
+	rm resourceManagerAPI
 	// modes reports the configured engine/executor modes so the console status
 	// reflects what is actually running (see ServiceModes).
 	modes ServiceModes
@@ -88,6 +91,12 @@ type ServiceModes struct {
 	SparkSource       string
 	LambdaSource      string
 	CloudRunSource    string
+}
+
+// resourceManagerAPI is what the project consoles and the account picker call.
+type resourceManagerAPI interface {
+	resourcemanagerui.ProviderInterface
+	projectsui.ProviderInterface
 }
 
 // WithServiceModes sets the configured engine modes the catalog reports. It is
@@ -135,6 +144,56 @@ func (r *Registrar) WithRegistry(reg *provider.Registry) *Registrar {
 	}
 	if r.monitoring != nil {
 		r.monitoring = routeMonitoring(reg, r.monitoring)
+	}
+	return r
+}
+
+// rmAPI returns the Resource Manager the consoles call.
+func (r *Registrar) rmAPI() resourceManagerAPI {
+	if r.rm != nil {
+		return r.rm
+	}
+	return r.resourcemanager
+}
+
+// WithPluginChain routes the console of the services that work on typed store
+// structs through the plugin chain whenever a plugin covers the key of the call
+// (see typed.go). builtins are the REST built-in handlers by registry key, which
+// sit under the chain. A nil chain changes nothing.
+func (r *Registrar) WithPluginChain(chain *pluginchain.Chain, builtins map[string]provider.HandlerFunc) *Registrar {
+	if chain == nil {
+		return r
+	}
+	c := typedCaller{chain: chain, builtins: builtins, cfg: r.cfg}
+	if r.scheduler != nil {
+		r.scheduler = routeScheduler(c, r.scheduler)
+	}
+	if r.tasks != nil {
+		r.tasks = routeTasks(c, r.tasks)
+	}
+	if r.workflows != nil {
+		r.workflows = routeWorkflows(c, r.workflows)
+	}
+	if r.run != nil {
+		r.run = routeRun(c, r.run)
+	}
+	if r.managedkafka != nil {
+		r.managedkafka = routeManagedKafka(c, r.managedkafka)
+	}
+	if r.datastore != nil {
+		r.datastore = routeDatastore(c, r.datastore)
+	}
+	if r.dataproc != nil {
+		r.dataproc = routeDataproc(c, r.dataproc)
+	}
+	if r.eventarc != nil {
+		r.eventarc = routeEventarc(c, r.eventarc)
+	}
+	if r.functions != nil {
+		r.functions = routeFunctions(c, r.functions)
+	}
+	if r.resourcemanager != nil {
+		r.rm = routeResourceManager(c, r.resourcemanager)
 	}
 	return r
 }
@@ -226,7 +285,7 @@ func (r *Registrar) Accounts(ctx context.Context) []string {
 	var out []string
 	token := ""
 	for {
-		page, next, err := r.resourcemanager.ListProjects(ctx, 0, token, false, "")
+		page, next, err := r.rmAPI().ListProjects(ctx, 0, token, false, "")
 		if err != nil {
 			return out
 		}
@@ -542,7 +601,7 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	// Manager core contributing the other two kinds when the service is enabled.
 	var projectsProvider projectsui.ProviderInterface
 	if r.resourcemanager != nil {
-		projectsProvider = r.resourcemanager
+		projectsProvider = r.rmAPI()
 	}
 	router.Mount("/api/ui/v1/gcp/projects", projectsui.BuildRouter(projectsProvider, r.cfg))
 
@@ -604,6 +663,6 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 		router.Mount("/api/ui/v1/gcp/monitoring", monitoringui.BuildRouter(r.monitoring, r.cfg))
 	}
 	if r.resourcemanager != nil {
-		router.Mount("/api/ui/v1/gcp/resourcemanager", resourcemanagerui.BuildRouter(r.resourcemanager))
+		router.Mount("/api/ui/v1/gcp/resourcemanager", resourcemanagerui.BuildRouter(r.rmAPI()))
 	}
 }

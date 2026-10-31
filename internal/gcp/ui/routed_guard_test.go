@@ -40,15 +40,10 @@ var routedServices = []struct {
 	{"monitoring", []string{"../transport/rest/monitoring"}, routeMonitoring},
 }
 
-// stayOnBuiltIn are console methods that have a registry-action signature but
-// serve several keys by resource type (or are console-only), so they cannot be
-// forwarded to one key. They keep reading the built-in.
-var stayOnBuiltIn = map[string]string{
-	"iam.Update":             "serves IAM.ServiceAccountUpdate and IAM.ServiceAccountPatch",
-	"kms.GetIamPolicy":       "serves the key ring, crypto key and import job IAM keys by resource type",
-	"kms.SetIamPolicy":       "serves the key ring, crypto key and import job IAM keys by resource type",
-	"kms.TestIamPermissions": "serves the key ring, crypto key and import job IAM keys by resource type",
-}
+// stayOnBuiltIn are console methods that have a registry-action signature but are
+// not an action of the service's API (none today: the methods that serve several keys
+// by resource type pick the key from the resource, see kmsIAMKey).
+var stayOnBuiltIn = map[string]string{}
 
 func parseDir(t *testing.T, dir string) []*ast.File {
 	t.Helper()
@@ -153,6 +148,9 @@ func forwarders(t *testing.T) map[string]string {
 			}
 			return true
 		})
+		if _, resourceKeyed := resourceKeyedMethods[recv.Name+"."+fn.Name.Name]; resourceKeyed {
+			key = "" // the key depends on the resource, see TestKMSIAMKeyFollowsTheResource
+		}
 		out[recv.Name+"."+fn.Name.Name] = key
 	}
 	return out
@@ -185,6 +183,11 @@ func registeredKeys(t *testing.T, dirs []string) map[string]bool {
 	return keys
 }
 
+// resourceKeyedMethods are forwarders whose registry key is chosen from the resource.
+var resourceKeyedMethods = map[string]bool{
+	"routedKMS.GetIamPolicy": true, "routedKMS.SetIamPolicy": true, "routedKMS.TestIamPermissions": true,
+}
+
 func TestEveryRegistryActionConsoleMethodIsForwardedOrListed(t *testing.T) {
 	fwd := forwarders(t)
 	for _, s := range routedServices {
@@ -212,6 +215,9 @@ func TestEveryForwarderNamesAKeyAProviderRegisters(t *testing.T) {
 		}
 	}
 	for name, key := range fwd {
+		if key == "" {
+			continue // resource-keyed; TestKMSIAMKeyFollowsTheResource checks its keys
+		}
 		if !all[key] {
 			t.Errorf("%s dispatches %q, which no provider registers", name, key)
 		}
@@ -225,6 +231,9 @@ func TestForwardersDispatchThroughTheRegistryAsUI(t *testing.T) {
 	type seen struct{ key, origin string }
 	var got []seen
 	for _, key := range fwd {
+		if key == "" {
+			continue
+		}
 		k := key
 		reg.RegisterAll(map[string]provider.HandlerFunc{k: func(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 			got = append(got, seen{k, string(nr.Origin)})
@@ -239,7 +248,7 @@ func TestForwardersDispatchThroughTheRegistryAsUI(t *testing.T) {
 		for i := 0; i < rt.NumMethod(); i++ {
 			m := rt.Method(i)
 			want, ok := fwd[rt.Name()+"."+m.Name]
-			if !ok {
+			if !ok || want == "" {
 				continue
 			}
 			got = nil
@@ -250,7 +259,183 @@ func TestForwardersDispatchThroughTheRegistryAsUI(t *testing.T) {
 			checked++
 		}
 	}
-	if checked != len(fwd) {
-		t.Errorf("checked %d forwarders, routed.go has %d", checked, len(fwd))
+	want := 0
+	for _, k := range fwd {
+		if k != "" {
+			want++
+		}
+	}
+	if checked != want {
+		t.Errorf("checked %d forwarders, routed.go has %d keyed ones", checked, want)
+	}
+}
+
+// ---- typed console services ---------------------------------------------------------
+
+// typedServices are the console services that work on typed store structs. Each is
+// served by a typed<Service> wrapper (typed_*.go) that sends a covered call through
+// the plugin chain.
+var typedServices = []struct {
+	ui       string
+	wrapper  string
+	provider []string
+}{
+	{"scheduler", "typedScheduler", []string{"../transport/rest/scheduler"}},
+	{"tasks", "typedTasks", []string{"../transport/rest/tasks"}},
+	{"workflows", "typedWorkflows", []string{"../transport/rest/workflows", "../transport/rest/workflowexecutions"}},
+	{"run", "typedRun", []string{"../transport/rest/run"}},
+	{"functions", "typedFunctions", []string{"../transport/rest/functions"}},
+	{"eventarc", "typedEventarc", []string{"../transport/rest/eventarc"}},
+	{"dataproc", "typedDataproc", []string{"../transport/rest/dataproc"}},
+	{"managedkafka", "typedManagedKafka", []string{"../transport/rest/managedkafka"}},
+	{"datastore", "typedDatastore", []string{"../transport/rest/datastore"}},
+	{"resourcemanager", "typedResourceManager", []string{"../transport/rest/resourcemanager"}},
+}
+
+// typedStayOnBuiltIn are console methods that are not actions of the service's API,
+// so there is no key a plugin could cover.
+var typedStayOnBuiltIn = map[string]string{
+	"functions.ListDeliveries":             "the emulator's own log of event deliveries, not a Cloud Functions action",
+	"functions.PutSourceArchive":           "writes the source archive through the Cloud Storage seam, which is already a registry call",
+	"resourcemanager.ListObservedProjects": "the registry of projects seen on the wire, console discovery only",
+	"projects.ListObservedProjects":        "the registry of projects seen on the wire, console discovery only",
+}
+
+// allMethods returns every method of a console package's ProviderInterface.
+func allMethods(t *testing.T, pkg string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, f := range parseDir(t, pkg) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != "ProviderInterface" {
+				return true
+			}
+			if it, ok := ts.Type.(*ast.InterfaceType); ok {
+				for _, m := range it.Methods.List {
+					if _, ok := m.Type.(*ast.FuncType); ok && len(m.Names) == 1 {
+						out[m.Names[0].Name] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// typedMethods maps wrapper type -> methods it declares, and collects the keys its
+// methods hand to the plugin chain.
+func typedMethods(t *testing.T) (methods map[string]map[string]bool, keys map[string]bool) {
+	t.Helper()
+	methods, keys = map[string]map[string]bool{}, map[string]bool{}
+	ents, _ := os.ReadDir(".")
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), "typed_") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), e.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 {
+				continue
+			}
+			if id, ok := fn.Recv.List[0].Type.(*ast.Ident); ok && strings.HasPrefix(id.Name, "typed") {
+				if methods[id.Name] == nil {
+					methods[id.Name] = map[string]bool{}
+				}
+				methods[id.Name][fn.Name.Name] = true
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "do" {
+				return true
+			}
+			// do(ctx, key, ...) and do(ctx, key literal, ...)
+			if bl, ok := call.Args[1].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+				k, _ := strconv.Unquote(bl.Value)
+				keys[k] = true
+			}
+			return true
+		})
+		// Keys passed to a helper such as p.queue(ctx, "Tasks.QueuesGet", ...).
+		ast.Inspect(f, func(n ast.Node) bool {
+			bl, ok := n.(*ast.BasicLit)
+			if ok && bl.Kind == token.STRING {
+				k, _ := strconv.Unquote(bl.Value)
+				if i := strings.IndexByte(k, '.'); i > 0 && !strings.ContainsAny(k, " /:") && k[0] >= 'A' && k[0] <= 'Z' && !strings.HasPrefix(k, "google.") {
+					keys[k] = true
+				}
+			}
+			return true
+		})
+	}
+	return methods, keys
+}
+
+func TestEveryTypedConsoleMethodIsRoutedOrListed(t *testing.T) {
+	methods, _ := typedMethods(t)
+	for _, s := range typedServices {
+		for m := range allMethods(t, s.ui) {
+			_, routed := methods[s.wrapper][m]
+			_, listed := typedStayOnBuiltIn[s.ui+"."+m]
+			if routed == listed {
+				t.Errorf("%s.%s: routed=%v listed-as-built-in=%v; a console method must be exactly one of the two", s.ui, m, routed, listed)
+			}
+		}
+	}
+	// The project picker's interface is served by the same Resource Manager wrapper.
+	for m := range allMethods(t, "projects") {
+		_, routed := methods["typedResourceManager"][m]
+		_, listed := typedStayOnBuiltIn["projects."+m]
+		if routed == listed {
+			t.Errorf("projects.%s: routed=%v listed-as-built-in=%v", m, routed, listed)
+		}
+	}
+}
+
+func TestEveryTypedKeyIsRegisteredByAProvider(t *testing.T) {
+	_, keys := typedMethods(t)
+	all := map[string]bool{}
+	for _, s := range typedServices {
+		for k := range registeredKeys(t, s.provider) {
+			all[k] = true
+		}
+	}
+	for k := range keys {
+		if !all[k] {
+			t.Errorf("a typed console wrapper names the key %q, which no REST provider registers", k)
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatal("found no keys in the typed wrappers")
+	}
+}
+
+// The KMS IAM calls serve three resource types; each has its own key, and the forwarder
+// picks it from the resource the console names.
+func TestKMSIAMKeyFollowsTheResource(t *testing.T) {
+	keys := registeredKeys(t, []string{"../transport/rest/kms"})
+	cases := map[string]string{
+		"projects/p/locations/l/keyRings/kr":               "KeyRing",
+		"projects/p/locations/l/keyRings/kr/cryptoKeys/ck": "CryptoKey",
+		"projects/p/locations/l/keyRings/kr/importJobs/ij": "ImportJob",
+	}
+	for name, typ := range cases {
+		for _, op := range []string{"GetIamPolicy", "SetIamPolicy", "TestIamPermissions"} {
+			nr := &model.NormalizedRequest{Params: map[string]any{"name": name}}
+			got := kmsIAMKey(nr, op)
+			if got != "KMS."+typ+op || !keys[got] {
+				t.Errorf("%s %s: key %q (registered: %v), want KMS.%s%s", op, name, got, keys[got], typ, op)
+			}
+		}
 	}
 }

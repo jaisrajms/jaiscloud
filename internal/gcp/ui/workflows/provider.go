@@ -13,6 +13,9 @@ import (
 // round-trips every one of these (it loads the workflow first), so a
 // description-only edit leaves sourceContents unchanged and does not bump the
 // revision.
+// WorkflowManagedMask is the exported form of workflowManagedMask.
+const WorkflowManagedMask = workflowManagedMask
+
 const workflowManagedMask = "description,sourceContents,serviceAccount,callLogLevel,labels,userEnvVars"
 
 // ProviderInterface is the subset of the Workflows management and Workflow

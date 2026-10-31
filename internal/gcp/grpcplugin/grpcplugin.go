@@ -36,20 +36,18 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/gcperr"
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/pluginchain"
 	"jaiscloud/internal/model"
-	"jaiscloud/internal/provider"
 )
 
 // Host is the part of the plugin host this package needs.
-type Host interface {
-	Covers(key string) bool
-	CoveredKeys() []string
-	Attach(reg *provider.Registry)
-}
+type Host = pluginchain.Host
 
 // Config wires the interceptor to the running emulator.
 type Config struct {
-	Host    Host
+	Host Host
+	// Chain, when set, is shared with other callers (the console); otherwise one is built from Host.
+	Chain   *pluginchain.Chain
 	Adapter adapter.CloudAdapter // the same GCP adapter the REST gateway uses
 	Clock   clock.Clock
 	Port    int
@@ -59,22 +57,19 @@ type Config struct {
 
 // Interceptor routes covered gRPC calls through the plugin chain.
 type Interceptor struct {
-	cfg    Config
-	rs     *resolver
-	shadow *provider.Registry
+	cfg   Config
+	rs    *resolver
+	chain *pluginchain.Chain
 }
 
 // New builds the interceptor and its shadow registry. Call it after the plugin
 // host has loaded; host may be nil, in which case ServerOptions is empty.
 func New(cfg Config) *Interceptor {
-	i := &Interceptor{cfg: cfg, shadow: provider.NewRegistry()}
-	i.rs = &resolver{keyOf: i.keyOf}
-	routes := map[string]provider.HandlerFunc{}
-	for _, k := range cfg.Host.CoveredKeys() {
-		routes[k] = delegate
+	i := &Interceptor{cfg: cfg, chain: cfg.Chain}
+	if i.chain == nil {
+		i.chain = pluginchain.New(cfg.Host)
 	}
-	i.shadow.RegisterAll(routes)
-	cfg.Host.Attach(i.shadow)
+	i.rs = &resolver{keyOf: i.keyOf}
 	return i
 }
 
@@ -124,14 +119,6 @@ func (i *Interceptor) decode(ctx context.Context, host, verb, path string, body 
 		return nil, nil, err
 	}
 	return nr, r, nil
-}
-
-// nextFn is the real gRPC handler, carried in the context to the shadow
-// registry's innermost handler.
-type nextKey struct{}
-
-func delegate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return ctx.Value(nextKey{}).(provider.HandlerFunc)(ctx, nr)
 }
 
 // request builds the NormalizedRequest a plugin chain sees for msg.
@@ -253,7 +240,7 @@ func (i *Interceptor) unary(ctx context.Context, req any, info *grpc.UnaryServer
 		return &model.ProviderResponse{HTTPStatus: http.StatusOK, Data: data}, nil
 	}
 
-	pr, err := i.shadow.Dispatch(context.WithValue(ctx, nextKey{}, provider.HandlerFunc(next)), key, nr)
+	pr, err := i.chain.Run(ctx, key, nr, next)
 	if err != nil {
 		var he *handlerError
 		if errors.As(err, &he) {
@@ -359,7 +346,7 @@ func (i *Interceptor) stream(srv any, ss grpc.ServerStream, info *grpc.StreamSer
 	opened := &model.ProviderResponse{HTTPStatus: http.StatusOK, Data: map[string]any{}}
 	next := func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) { return opened, nil }
 
-	pr, err := i.shadow.Dispatch(context.WithValue(ctx, nextKey{}, provider.HandlerFunc(next)), rt.key, nr)
+	pr, err := i.chain.Run(ctx, rt.key, nr, next)
 	if err != nil {
 		return grpcutil.GRPCStatus(err)
 	}
