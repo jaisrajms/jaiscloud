@@ -350,9 +350,15 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 					} `xml:"S3Key"`
 				} `xml:"Filter"`
 			} `xml:"CloudFunctionConfiguration"`
+			// <EventBridgeConfiguration/> is an empty marker element: presence alone
+			// turns EventBridge delivery on for the bucket.
+			EventBridge *struct{} `xml:"EventBridgeConfiguration"`
 		}
 		if xml.Unmarshal(body, &notifReq) == nil {
 			cfg := map[string]any{}
+			if notifReq.EventBridge != nil {
+				cfg["EventBridgeConfiguration"] = map[string]any{}
+			}
 			// Queue configs
 			qcs := make([]any, 0, len(notifReq.QueueConfigurations))
 			for _, q := range notifReq.QueueConfigurations {

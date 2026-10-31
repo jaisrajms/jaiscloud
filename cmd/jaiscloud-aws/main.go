@@ -188,7 +188,7 @@ func startCmd() *cobra.Command {
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.ESMProvider, app.EventsProvider, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
 			adminHandler.RegisterSnapshotter("cw_logs", app.LogsP)
-			adminHandler.SetLambdaCodeFetcher(app.FuncP)
+			adminHandler.SetLambdaCodeFetcher(app.LambdaCode)
 			adminHandler.SetCWAlarmEvaluator(app.CWP.Evaluator())
 			adminHandler.SetFirehoseFlusher(app.FirehoseP)
 			if app.TableP.TTLWorker() != nil {
@@ -239,7 +239,7 @@ func startCmd() *cobra.Command {
 					awsadapter.RegisterIMDSRoutes(r, imdsCfg)
 				}))
 			}
-			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(app.ObjectP.GetBucketCORSRules))
+			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(app.CORSLookup))
 
 			// ECR persistent mode: register OCI Distribution v2 routes before the wildcard.
 			if ociHandler := ecrP.OCIHandler(); ociHandler != nil {
@@ -329,6 +329,7 @@ func startCmd() *cobra.Command {
 				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
 				adminHandler.RegisterResetter(pluginHost)
 				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
+				adminHandler.SetPluginTicker(pluginHost)
 				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
 			}
 
@@ -527,6 +528,8 @@ type AppContext struct {
 	EventsProvider admin.Resetter
 	Cleanup        func()
 	ObjectP        *objectprovider.ObjectProvider
+	CORSLookup     func(ctx context.Context, bucket string) []map[string]any // gateway CORS rules, via the registry
+	LambdaCode     admin.LambdaCodeFetcher                                   // function/layer packages, via the registry
 	QueueP         *queue.QueueProvider
 	LogsP          *cwlogs.Provider
 	SfnP           *sfnprovider.Provider
@@ -901,11 +904,11 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
-		dockerExec.SetCodeLoader(funcP)
+		dockerExec.SetCodeLoader(seamSet.LambdaCode())
 		dockerExec.SetLogsAPI(logsSeam)
 	}
 	if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
-		k8sExec.SetCodeLoader(funcP)
+		k8sExec.SetCodeLoader(seamSet.LambdaCode())
 		k8sExec.SetLogsAPI(logsSeam)
 	}
 	// Wire ECS executor.
@@ -962,6 +965,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		SQS:          sqsSeam,
 		SNSPublisher: snsSeam,
 		Lambda:       lambdaSeam,
+		EventBridge:  ebSeam,
 	})
 	cwP.SetSNSPublisher(snsSeam)
 	cwP.SetLambdaInvoker(lambdaSeam)
@@ -1009,6 +1013,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		EventsProvider: eventsP,
 		Cleanup:        cleanup,
 		ObjectP:        objectP,
+		CORSLookup:     s3Seam.BucketCORSRules,
+		LambdaCode:     seamSet.LambdaCode(),
 		QueueP:         queueP,
 		LogsP:          logsProvider,
 		SfnP:           sfnP,

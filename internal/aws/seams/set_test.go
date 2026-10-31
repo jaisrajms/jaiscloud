@@ -8,16 +8,20 @@ import (
 
 	keyprovider "jaiscloud/internal/aws/key"
 	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
+	objectprovider "jaiscloud/internal/aws/provider/object"
 	"jaiscloud/internal/aws/seams"
+	s3impl "jaiscloud/internal/aws/store/s3"
 	streamstore "jaiscloud/internal/aws/store/stream"
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
 
 var wireToPrefix = map[string]string{
 	"s3": "Object", "monitoring": "CloudWatch", "dynamodbstreams": "Streams",
-	"kms": "Key", "secretsmanager": "Secret", "logs": "CloudWatchLogs",
+	"kms": "Key", "secretsmanager": "Secret", "logs": "CloudWatchLogs", "lambda": "Function",
 }
 
 func newSet(reg *provider.Registry) *seams.Set {
@@ -201,5 +205,232 @@ func TestKMSSeamIsInterchangeableWithTheDirectPath(t *testing.T) {
 	}
 	if got, err := kp.Decrypt2(ctx, keyID, ct, nil); err != nil || !bytes.Equal(got, pt) {
 		t.Fatalf("data key must decrypt to its plaintext: %v", err)
+	}
+}
+
+func TestBucketCORSRulesReadThroughTheRegistry(t *testing.T) {
+	reg := provider.NewRegistry()
+	var seen []*model.NormalizedRequest
+	// A plugin answers with JSON-shaped data: []any, not []map[string]any.
+	recorder(reg, "Object.GetBucketCors", map[string]any{"CORSRules": []any{
+		map[string]any{"AllowedOrigins": []any{"https://app"}, "AllowedMethods": []any{"GET"}, "MaxAgeSeconds": float64(60)},
+	}}, &seen)
+	rules := newSet(reg).S3().BucketCORSRules(context.Background(), "b")
+	if len(rules) != 1 || len(seen) != 1 || seen[0].Params["_bucket"] != "b" {
+		t.Fatalf("rules=%v seen=%v", rules, seen)
+	}
+	if got := rules[0]["AllowedOrigins"].([]any); got[0] != "https://app" {
+		t.Fatalf("rule = %v", rules[0])
+	}
+}
+
+func TestBucketCORSRulesFailSoft(t *testing.T) {
+	reg := provider.NewRegistry()
+	reg.RegisterAll(map[string]provider.HandlerFunc{"Object.GetBucketCors": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return nil, model.NewProviderError("PluginUnavailable", "down", 502)
+	}})
+	set := newSet(reg)
+	if rules := set.S3().BucketCORSRules(context.Background(), "b"); rules != nil {
+		t.Fatalf("an unreachable owner must yield no rules, got %v", rules)
+	}
+	// No bucket name means the request is not an S3 bucket request: do not dispatch at all.
+	var seen []*model.NormalizedRequest
+	reg2 := provider.NewRegistry()
+	recorder(reg2, "Object.GetBucketCors", map[string]any{}, &seen)
+	if rules := newSet(reg2).S3().BucketCORSRules(context.Background(), ""); rules != nil || len(seen) != 0 {
+		t.Fatalf("empty bucket dispatched: rules=%v calls=%d", rules, len(seen))
+	}
+}
+
+func TestLambdaCodeReadsPackagesThroughTheRegistry(t *testing.T) {
+	reg := provider.NewRegistry()
+	var fn, layer []*model.NormalizedRequest
+	recorder(reg, "Function.GetFunctionCodeZip", map[string]any{"_body": []byte("fn-zip")}, &fn)
+	recorder(reg, "Function.GetLayerCodeZip", map[string]any{"_body": []byte("layer-zip")}, &layer)
+	code := newSet(reg).LambdaCode()
+
+	got, err := code.LoadCode(context.Background(), "222222222222", "f", "$LATEST")
+	if err != nil || string(got) != "fn-zip" {
+		t.Fatalf("LoadCode = %q, %v", got, err)
+	}
+	if nr := fn[0]; nr.AccountID != "222222222222" || nr.Origin != model.OriginInternal ||
+		nr.Params["functionName"] != "f" || nr.Params["qualifier"] != "$LATEST" {
+		t.Fatalf("function request = %+v", nr)
+	}
+	got, err = code.GetLayerCodeZip(context.Background(), "222222222222", "l", 3)
+	if err != nil || string(got) != "layer-zip" || layer[0].Params["layerName"] != "l" || layer[0].Params["version"] != int64(3) {
+		t.Fatalf("GetLayerCodeZip = %q, %v, %v", got, err, layer)
+	}
+}
+
+func TestLambdaCodeRejectsAnswerWithoutBytes(t *testing.T) {
+	reg := provider.NewRegistry()
+	var seen []*model.NormalizedRequest
+	recorder(reg, "Function.GetFunctionCodeZip", map[string]any{"_body": "not-bytes"}, &seen)
+	if _, err := newSet(reg).LambdaCode().GetFunctionCodeZip(context.Background(), "1", "f", "$LATEST"); err == nil {
+		t.Fatal("a plugin answer without _body bytes must be an error, not an empty package")
+	}
+}
+
+// ---- the seams against the real providers ----------------------------------------
+
+func realObject(t *testing.T) (*seams.S3, *provider.Registry) {
+	t.Helper()
+	reg := provider.NewRegistry()
+	reg.Register(objectprovider.New(s3impl.NewMemoryS3ObjectMetaStore(), blobfs.NewMemoryBlobStore()))
+	return newSet(reg).S3(), reg
+}
+
+// An internal write behaves like a client: it creates the bucket when it is
+// missing, then reads it back through the same key a client uses.
+func TestS3SeamCreatesTheBucketOnDemandAndReadsBack(t *testing.T) {
+	s3, _ := realObject(t)
+	ctx := context.Background()
+	if _, err := s3.InternalGetObject(ctx, "fresh", "k"); err == nil {
+		t.Fatal("reading from a bucket that does not exist must fail")
+	}
+	if err := s3.InternalPutObject(ctx, "fresh", "dir/k", "text/plain", []byte("hello")); err != nil {
+		t.Fatalf("write to a new bucket: %v", err)
+	}
+	if err := s3.InternalPutObject(ctx, "fresh", "dir/k2", "text/plain", []byte("again")); err != nil {
+		t.Fatalf("write to an existing bucket: %v", err)
+	}
+	got, err := s3.InternalGetObject(ctx, "fresh", "dir/k")
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("GetObject = %q, %v", got, err)
+	}
+	if _, err := s3.InternalGetObject(ctx, "fresh", "missing"); err == nil {
+		t.Fatal("a missing key must be an error")
+	}
+	keys, err := s3.InternalListObjects(ctx, "fresh", "dir/")
+	if err != nil || len(keys) != 2 {
+		t.Fatalf("keys = %v, %v", keys, err)
+	}
+}
+
+func TestS3SeamCreatesBucketOnlyOnFirstWrite(t *testing.T) {
+	reg := provider.NewRegistry()
+	calls := map[string]int{}
+	exists := false
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"Object.PutObject": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			calls["put"]++
+			if !exists {
+				return nil, model.NewProviderError("NoSuchBucket", "no", 404)
+			}
+			return provider.OK(map[string]any{}), nil
+		},
+		"Object.CreateBucket": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			calls["create"]++
+			exists = true
+			return provider.OK(map[string]any{}), nil
+		},
+	})
+	s3 := newSet(reg).S3()
+	for i := 0; i < 3; i++ {
+		if err := s3.InternalPutObject(context.Background(), "b", "k", "", []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls["create"] != 1 || calls["put"] != 4 {
+		t.Fatalf("calls = %v; want 1 CreateBucket and 4 PutObject (the first write is tried twice, the next two once)", calls)
+	}
+}
+
+func TestS3SeamStopsOnOtherErrors(t *testing.T) {
+	reg := provider.NewRegistry()
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"Object.PutObject": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return nil, model.NewProviderError("AccessDenied", "no", 403)
+		},
+	})
+	if err := newSet(reg).S3().InternalPutObject(context.Background(), "b", "k", "", nil); errorCode(err) != "AccessDenied" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func errorCode(err error) string {
+	if pe, ok := err.(*model.ProviderError); ok {
+		return pe.Code
+	}
+	return ""
+}
+
+func realLogs(t *testing.T) (*seams.Logs, *cwlogs.Provider) {
+	t.Helper()
+	reg := provider.NewRegistry()
+	p := cwlogs.New()
+	reg.Register(p)
+	return newSet(reg).Logs(), p
+}
+
+// The streamers' contract, now met by acting like a client: groups are created
+// if absent (repeatedly), a stream appears on first write, and a batch for a
+// group that is gone is dropped.
+func TestLogsSeamGivesStreamersTheirCreateOnDemandSemantics(t *testing.T) {
+	logs, p := realLogs(t)
+	ctx := context.Background()
+	ev := []logstream.Event{{Timestamp: 1700000000000, Message: "hello"}}
+
+	if err := logs.InternalPutEvents(ctx, "/g", "s", ev); err != nil {
+		t.Fatalf("a batch for a missing group must be dropped, got %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := logs.InternalCreateLogGroup(ctx, "/g"); err != nil {
+			t.Fatalf("create-if-absent #%d: %v", i, err)
+		}
+	}
+	if err := logs.InternalPutEvents(ctx, "/g", "s", ev); err != nil {
+		t.Fatalf("first write must create the stream: %v", err)
+	}
+	if err := logs.InternalPutEvents(ctx, "/g", "s", ev); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.GetLogEvents(ctx, &model.NormalizedRequest{Service: "logs", Action: "GetLogEvents",
+		Params: map[string]any{"logGroupName": "/g", "logStreamName": "s"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := resp.Data["events"].([]any); len(got) != 2 {
+		t.Fatalf("events = %v, want the 2 ingested lines (the first, dropped batch must not appear)", resp.Data["events"])
+	}
+}
+
+func TestLogsSeamSplitsAndTrimsToTheCallLimits(t *testing.T) {
+	reg := provider.NewRegistry()
+	var sizes []int
+	var longest int
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"CloudWatchLogs.PutLogEvents": func(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			list := nr.Params["logEvents"].([]any)
+			sizes = append(sizes, len(list))
+			for _, e := range list {
+				if n := len(e.(map[string]any)["message"].(string)); n > longest {
+					longest = n
+				}
+			}
+			return provider.OK(map[string]any{}), nil
+		},
+	})
+	events := make([]logstream.Event, 10001)
+	events[0].Message = string(bytes.Repeat([]byte("x"), 300000))
+	if err := newSet(reg).Logs().InternalPutEvents(context.Background(), "/g", "s", events); err != nil {
+		t.Fatal(err)
+	}
+	if len(sizes) != 2 || sizes[0] != 10000 || sizes[1] != 1 || longest != 262144 {
+		t.Fatalf("calls = %v, longest = %d; want [10000 1] and a 262144-byte cap", sizes, longest)
+	}
+}
+
+func TestLogsSeamPropagatesOtherErrors(t *testing.T) {
+	reg := provider.NewRegistry()
+	reg.RegisterAll(map[string]provider.HandlerFunc{
+		"CloudWatchLogs.PutLogEvents": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return nil, model.NewProviderError(model.CodePluginUnavailable, "down", 503)
+		},
+	})
+	err := newSet(reg).Logs().InternalPutEvents(context.Background(), "/g", "s", []logstream.Event{{Message: "x"}})
+	if !model.IsOutage(err) {
+		t.Fatalf("an outage must reach the caller, got %v", err)
 	}
 }

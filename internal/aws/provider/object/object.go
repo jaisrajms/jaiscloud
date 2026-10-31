@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
@@ -573,81 +572,3 @@ func (p *ObjectProvider) updateBucketConfig(ctx context.Context, bucket string, 
 }
 
 // ─── Internal helpers (cross-provider) ───────────────────────────────────────
-
-// InternalPutObject stores body into bucket/key directly, bypassing the HTTP
-// codec.  Used by other providers (EMR log upload, etc.) to write to S3 without
-// going through the full request pipeline.  Creates the bucket if it does not
-// already exist (idempotent).
-func (p *ObjectProvider) InternalPutObject(ctx context.Context, bucket, key, contentType string, body []byte) error {
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	// Ensure the bucket exists — create it silently if absent.
-	if _, err := p.meta.GetBucket(ctx, bucket); err != nil {
-		if createErr := p.meta.CreateBucket(ctx, bucket, map[string]any{"name": bucket}); createErr != nil {
-			// Ignore "already exists" race; any other error is fatal.
-			if _, checkErr := p.meta.GetBucket(ctx, bucket); checkErr != nil {
-				return fmt.Errorf("InternalPutObject: create bucket %s: %w", bucket, createErr)
-			}
-		}
-	}
-	if err := p.blobs.Put(ctx, bucket, key, body); err != nil {
-		return fmt.Errorf("InternalPutObject: put blob %s/%s: %w", bucket, key, err)
-	}
-	etagVal := etag(body)
-	crc32Val := crc32Base64(body)
-	meta := objectstore.ObjectMeta{
-		Key:          key,
-		ETag:         etagVal,
-		CRC32:        crc32Val,
-		Size:         int64(len(body)),
-		ContentType:  contentType,
-		LastModified: clock.Now(),
-		StorageClass: "STANDARD",
-	}
-	return p.meta.PutObjectMeta(ctx, bucket, key, meta)
-}
-
-// InternalListObjects returns all object keys in bucket with the given prefix.
-// Used by Glue crawlers for schema inference.
-func (p *ObjectProvider) InternalListObjects(ctx context.Context, bucket, prefix string) ([]string, error) {
-	objs, _, _, _, err := p.meta.ListObjectMeta(ctx, bucket, prefix, "", "", 10000)
-	if err != nil {
-		return nil, err
-	}
-	keys := make([]string, 0, len(objs))
-	for _, o := range objs {
-		keys = append(keys, o.Key)
-	}
-	return keys, nil
-}
-
-// InternalGetObject fetches the body of an object.
-// Used by Glue crawlers for schema inference.
-func (p *ObjectProvider) InternalGetObject(ctx context.Context, bucket, key string) ([]byte, error) {
-	return p.blobs.Get(ctx, bucket, key)
-}
-
-// putObjectInternal serves PutObject for origin=internal callers (EMR and EMR on
-// EKS log upload, Firehose delivery): the bucket is created on demand and no
-// bucket notification fires, exactly like InternalPutObject. The body is
-// "_body" ([]byte), the same key a wire PutObject uses.
-func (p *ObjectProvider) putObjectInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	body, _ := nr.Params["_body"].([]byte)
-	if err := p.InternalPutObject(ctx, strParam(nr.Params, "_bucket"), strParam(nr.Params, "_key"),
-		strParam(nr.Params, "_content_type"), body); err != nil {
-		return nil, err
-	}
-	return provider.OK(map[string]any{}), nil
-}
-
-// getObjectInternal serves GetObject for origin=internal callers (Glue crawlers).
-// Unlike the wire response, which streams, the body comes back whole as "_body"
-// ([]byte) so a plugin can read or replace it.
-func (p *ObjectProvider) getObjectInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	body, err := p.InternalGetObject(ctx, strParam(nr.Params, "_bucket"), strParam(nr.Params, "_key"))
-	if err != nil {
-		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
-	}
-	return provider.OK(map[string]any{"_body": body}), nil
-}

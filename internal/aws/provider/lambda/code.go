@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 )
 
 func blobKeyFor(account, funcName, versionID string) string {
@@ -64,4 +67,37 @@ func (p *FunctionProvider) GetFunctionCodeZip(ctx context.Context, account, func
 // GetLayerCodeZip implements admin.LambdaCodeFetcher.
 func (p *FunctionProvider) GetLayerCodeZip(ctx context.Context, account, layerName string, version int64) ([]byte, error) {
 	return p.loadLayerCode(ctx, account, layerName, version)
+}
+
+// getFunctionCodeZipHandler serves Function.GetFunctionCodeZip. It is not an AWS
+// API action: it is how the container executors and the admin code endpoint ask
+// the Function service for the package they mount, so that a plugin that owns
+// the function store can answer it. The zip comes back whole as "_body".
+func (p *FunctionProvider) getFunctionCodeZipHandler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["functionName"].(string)
+	qualifier, _ := nr.Params["qualifier"].(string)
+	data, err := p.GetFunctionCodeZip(ctx, nr.AccountID, name, qualifier)
+	if err != nil {
+		return nil, model.NewProviderError("ResourceNotFoundException", "Function code not found: "+name, 404)
+	}
+	return provider.OK(map[string]any{"_body": data}), nil
+}
+
+// getLayerCodeZipHandler serves Function.GetLayerCodeZip (see above).
+func (p *FunctionProvider) getLayerCodeZipHandler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["layerName"].(string)
+	var version int64
+	switch v := nr.Params["version"].(type) {
+	case int64:
+		version = v
+	case int:
+		version = int64(v)
+	case float64:
+		version = int64(v)
+	}
+	data, err := p.GetLayerCodeZip(ctx, nr.AccountID, name, version)
+	if err != nil {
+		return nil, model.NewProviderError("ResourceNotFoundException", "Layer code not found: "+name, 404)
+	}
+	return provider.OK(map[string]any{"_body": data}), nil
 }

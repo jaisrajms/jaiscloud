@@ -976,6 +976,29 @@ var internalSeams = []struct {
 	{"eventbridge-to-cloudwatch-logs", []string{"logs:CreateLogGroup", "logs:PutLogEvents"}, func(t *testing.T, e *emulator) {
 		ebTarget(t, e, "to-logs", "acme.logs", "arn:aws:logs:us-east-1:000000000000:log-group:/seam/eb")
 	}},
+	{"s3-notification-to-eventbridge", []string{"events:PutEvents"}, func(t *testing.T, e *emulator) {
+		e.s3(t, http.MethodPut, "/seam-eb-bucket", "")
+		cfg := `<NotificationConfiguration><EventBridgeConfiguration/></NotificationConfiguration>`
+		if st := e.s3(t, http.MethodPut, "/seam-eb-bucket?notification", cfg); st != 200 {
+			t.Fatalf("PutBucketNotificationConfiguration: %d", st)
+		}
+		e.s3(t, http.MethodPut, "/seam-eb-bucket/k", "x")
+	}},
+	{"gateway-cors-preflight", []string{"s3:GetBucketCors"}, func(t *testing.T, e *emulator) {
+		e.s3(t, http.MethodPut, "/seam-cors-bucket", "")
+		req, _ := http.NewRequest(http.MethodOptions, e.base+"/seam-cors-bucket/k", nil)
+		req.Header.Set("Origin", "https://app.example")
+		req.Header.Set("Access-Control-Request-Method", "GET")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}},
+	{"lambda-code-for-executors", []string{"lambda:GetFunctionCodeZip"}, func(t *testing.T, e *emulator) {
+		fn := createFunction(t, e, "code-fn")
+		e.admin(t, http.MethodGet, "/_jaiscloud/lambda/code/000000000000/"+fn+"/$LATEST", nil)
+	}},
 }
 
 func TestEveryInternalSeamGoesThroughThePlugin(t *testing.T) {
@@ -1024,5 +1047,58 @@ func TestInternalCallerUsesThePluginsAnswer(t *testing.T) {
 	}
 	if v, _ := out["Parameter"].(map[string]any)["Value"].(string); v != "from-plugin" {
 		t.Fatalf("SSM must return the plugin's secret, got %v", out)
+	}
+}
+
+// A test hook such as eb-tick runs the built-in pass over built-in state only, so
+// it also tells the plugins that have a route for that service; a plugin that
+// owns the schedule runs its own pass then. A plugin for another service is left
+// alone.
+func TestTestHooksTellPluginsThatOwnTheService(t *testing.T) {
+	var mu sync.Mutex
+	got := map[string][]string{}
+	plugin := func(name, service string) *httptest.Server {
+		m := sdk.NewMux(name, "0.1.0")
+		m.Before("aws", service, "*", func(context.Context, *sdk.Call) (sdk.Result, error) { return sdk.Result{}, nil })
+		m.HandleLifecycle(func(_ context.Context, ev string) {
+			mu.Lock()
+			defer mu.Unlock()
+			got[name] = append(got[name], ev)
+		})
+		return httptest.NewServer(sdk.Serve(m))
+	}
+	events, queues := plugin("acme-events", "events"), plugin("acme-queues", "sqs")
+	defer events.Close()
+	defer queues.Close()
+	e := startEmulator(t, "--plugin", events.URL, "--plugin", queues.URL)
+
+	for path, want := range map[string]string{
+		"/_jaiscloud/eb-tick":        "tick:events",
+		"/_jaiscloud/firehose/flush": "", // no plugin routes Firehose
+	} {
+		if st, out := e.admin(t, http.MethodPost, path, nil); st >= 300 {
+			t.Fatalf("%s: %d %s", path, st, out)
+		}
+		if want == "" {
+			continue
+		}
+		mu.Lock()
+		seen := append([]string(nil), got["acme-events"]...)
+		mu.Unlock()
+		if len(seen) == 0 || seen[len(seen)-1] != want {
+			t.Fatalf("after %s the events plugin saw %v, want %q last", path, seen, want)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, ev := range got["acme-queues"] {
+		if strings.HasPrefix(ev, sdk.EventTickPrefix) {
+			t.Fatalf("a plugin that does not own the service was ticked: %v", got["acme-queues"])
+		}
+	}
+	for _, ev := range got["acme-events"] {
+		if ev == "tick:firehose" {
+			t.Fatalf("no plugin routes firehose, yet the events plugin was ticked for it: %v", got["acme-events"])
+		}
 	}
 }

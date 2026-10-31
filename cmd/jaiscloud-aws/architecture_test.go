@@ -14,9 +14,19 @@ import (
 // can be called directly, bypassing the registry and therefore any plugin that
 // overrides it. The few exceptions below are not API calls between services.
 var wiringExceptions = map[string]string{
-	"SetCodeLoader": "fetches a function's code package for the executor, not a service call",
-	"SetExecutor":   "container executor, not a service",
-	"SetEngine":     "state-machine engine, not a service",
+	"SetExecutor": "container executor, not a service",
+	"SetEngine":   "state-machine engine, not a service",
+}
+
+// Calls identified as receiver.Method for the exceptions that only hold on one
+// receiver.
+var receiverExceptions = map[string]string{
+	"workerReg.Add": "hands a background worker's lifecycle (start/stop) to the worker registry, not a service call",
+}
+
+// Identifiers that match providerIdent by spelling but are not providers.
+var notProviders = map[string]bool{
+	"ServiceToProvider": true, // adapter method that maps a wire service to its registry prefix
 }
 
 var providerIdent = regexp.MustCompile(`(P|Prov|Provider)$`)
@@ -45,6 +55,11 @@ func TestBuildRegistryWiresServicesThroughSeams(t *testing.T) {
 		switch fun := call.Fun.(type) {
 		case *ast.SelectorExpr:
 			name = fun.Sel.Name
+			if recv, ok := fun.X.(*ast.Ident); ok {
+				if _, ok := receiverExceptions[recv.Name+"."+name]; ok {
+					return true
+				}
+			}
 		case *ast.Ident:
 			name = fun.Name
 		}
@@ -57,12 +72,18 @@ func TestBuildRegistryWiresServicesThroughSeams(t *testing.T) {
 		if _, ok := wiringExceptions[name]; ok {
 			return true
 		}
+		// A provider can be handed over directly (New(p)), through a method or a
+		// field of it (New(p.AsKeyEncryptor()), New(p.Handle)), or by address
+		// (New(&p)); look anywhere inside the argument, not only at its top level.
 		for _, arg := range call.Args {
-			if id, ok := arg.(*ast.Ident); ok && providerIdent.MatchString(id.Name) {
-				t.Errorf("%s: %s(%s) hands a concrete provider to another service; "+
-					"pass a seam from internal/aws/seams so the call goes through the registry",
-					fset.Position(call.Pos()), name, id.Name)
-			}
+			ast.Inspect(arg, func(m ast.Node) bool {
+				if id, ok := m.(*ast.Ident); ok && providerIdent.MatchString(id.Name) && !notProviders[id.Name] {
+					t.Errorf("%s: %s(...%s...) hands a concrete provider to another service; "+
+						"pass a seam from internal/aws/seams so the call goes through the registry",
+						fset.Position(id.Pos()), name, id.Name)
+				}
+				return true
+			})
 		}
 		return true
 	})

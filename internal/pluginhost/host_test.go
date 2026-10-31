@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -679,6 +680,45 @@ func TestLifecycleNotificationReachesPlugins(t *testing.T) {
 	info, _ := json.Marshal(h.DoctorInfo())
 	if !strings.Contains(string(info), `"name":"lc"`) {
 		t.Fatalf("doctor info = %s", info)
+	}
+}
+
+// A test hook (eb-tick, ...) reaches only the plugins that have a route for that
+// wire service; the plugin runs its own pass when it sees the event.
+func TestTickReachesOnlyPluginsThatOwnTheService(t *testing.T) {
+	e := newEnv(t)
+	e.reg.RegisterAll(map[string]provider.HandlerFunc{"events.PutEvents": func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return provider.OK(map[string]any{}), nil
+	}})
+	var mu sync.Mutex
+	got := map[string][]string{}
+	record := func(name string) func(*sdk.Mux) {
+		return func(m *sdk.Mux) {
+			m.HandleLifecycle(func(_ context.Context, ev string) {
+				mu.Lock()
+				defer mu.Unlock()
+				got[name] = append(got[name], ev)
+			})
+		}
+	}
+	events := muxRoutes("ev", func(m *sdk.Mux) { m.Replace("aws", "events", "*", noop); record("ev")(m) })
+	queue := muxRoutes("q", func(m *sdk.Mux) { m.Before("aws", "sqs", "SendMessage", noop); record("q")(m) })
+	h, err := e.load(t, serve(t, events).URL, serve(t, queue).URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Tick(context.Background(), "events")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(got["ev"], ",") != "tick:events" || len(got["q"]) != 0 {
+		t.Fatalf("events = %v; only the plugin routing 'events' may be ticked", got)
+	}
+	if svc, ok := sdk.TickService(got["ev"][0]); !ok || svc != "events" {
+		t.Fatalf("TickService(%q) = %q, %v", got["ev"][0], svc, ok)
+	}
+	if _, ok := sdk.TickService("reset"); ok {
+		t.Fatal("reset is not a tick")
 	}
 }
 

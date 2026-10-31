@@ -76,23 +76,68 @@ When a plugin overrides a built-in, every caller inside the emulator uses it too
 
 | Origin | Callers |
 |---|---|
-| `internal` | SNS, S3 notifications, EventBridge targets, CloudWatch alarms, Lambda DLQ and rotation delivering to SQS/SNS/Lambda; the Lambda event-source pollers (SQS and DynamoDB Streams); log writes from the Lambda (docker/k8s), ECS, EMR on EKS and Step Functions executors; log metric filters publishing metrics; EMR and Firehose writing to S3; Glue crawlers reading S3; SSM reading Secrets Manager references; Secrets Manager and SSM encrypting through KMS; EMR bootstrap scripts and the Firehose bucket check reading S3 |
+| `internal` | SNS, S3 notifications (to SQS, SNS, Lambda and EventBridge), EventBridge targets, CloudWatch alarms, Lambda DLQ and rotation delivering to SQS/SNS/Lambda; the Lambda event-source pollers (SQS and DynamoDB Streams); log writes from the Lambda (docker/k8s), ECS, EMR on EKS and Step Functions executors; log metric filters publishing metrics; EMR and Firehose writing to S3; Glue crawlers reading S3; SSM reading Secrets Manager references; Secrets Manager and SSM encrypting through KMS; EMR bootstrap scripts and the Firehose bucket check reading S3; the gateway's S3 CORS preflight reading bucket rules; the Lambda executors and `/_jaiscloud/lambda/code` reading function and layer packages |
 | `service` | Step Functions task states and CloudFormation resource handlers, with the parameters a client would send |
 | `ui` | the console |
 
-`Req.SourceArn` / `Req.ServicePrincipal` identify the calling service where there is one. Two
-things to know when you override a service:
+`Req.SourceArn` / `Req.ServicePrincipal` identify the calling service where there is one.
 
-* Internal S3 reads and writes carry the whole body as `_body` (bytes; base64 for an out-of-process
-  plugin). A wire `GetObject` streams and cannot be replaced by an out-of-process plugin.
+**An internal call to an S3 or CloudWatch Logs key is an ordinary client call.** The emulator
+makes the same calls an agent would, so one key means one thing whoever calls it:
+
+* Writing an object to a bucket that does not exist: `PutObject` answers `NoSuchBucket`, and the
+  emulator then calls `CreateBucket` and `PutObject` again.
+* Writing log events to a stream that does not exist: `PutLogEvents` answers
+  `ResourceNotFoundException` ("log stream"), and the emulator calls `CreateLogStream` and
+  `PutLogEvents` again. A batch for a log group that does not exist is dropped. Batches are
+  split at 10 000 events and messages cut at 262 144 bytes.
+* `CreateLogGroup` for a group that exists answers `ResourceAlreadyExistsException`, which the
+  emulator treats as success.
+* Because they are real calls, internal writes now trigger bucket notifications and log
+  subscription and metric filters, as they do on AWS.
+
+Things to know when you override a service:
+
+* A built-in `GetObject` answers with a stream; a plugin answers with `_body` (bytes;
+  `{"$base64": "..."}` over JSON). The emulator reads either for its own callers, but an
+  out-of-process plugin cannot answer a *client's* `GetObject` this way, so a wire `GetObject`
+  cannot be replaced by an out-of-process plugin.
+* `Function.GetFunctionCodeZip` and `Function.GetLayerCodeZip` are internal-only actions (they
+  are not AWS API actions): the container executors and the admin code endpoint use them to read
+  the package they mount. If your plugin owns the function store but leaves `Invoke` to the
+  built-in executor, answer them with `_body` bytes. A plugin that replaces the whole service
+  needs nothing.
 * A few console-only helpers (for example SQS "peek messages") are not API actions; they keep
   reading the built-in's state.
-* Not routed through the registry yet: the gateway's S3 CORS preflight lookup, the admin test
-  hooks (`/_jaiscloud/*-tick`, Firehose flush, Lambda code fetch), and a few flows the emulator does
-  not implement at all (S3 to EventBridge notifications, EMR on EC2 log forwarding).
-* If your plugin fails or times out on `ReceiveMessage`, the Lambda event-source mapping counts the
-  errors like any other and disables itself after repeated failures, exactly as it would for a
-  failing built-in.
+* A few flows are not implemented in the emulator at all, so no plugin sees them (EMR on EC2 log
+  forwarding).
+
+### Event-source mappings and an unreachable plugin
+
+When the plugin that owns `ReceiveMessage` or the Lambda function cannot be reached (down,
+restarting, or past `--plugin-timeout`; the host reports `PluginUnavailable` or `PluginTimeout`),
+the pollers back off from 1 s to 30 s and retry. The failure is not counted against the mapping,
+nothing is sent to the failure destination (DLQ) and nothing is deleted, so the messages come back
+after their visibility timeout. Any other failure is handled exactly as it is for a built-in.
+
+### Test hooks and plugin-owned services
+
+`POST /_jaiscloud/eb-tick`, `cw-evaluate`, `ttl-sweep` and `firehose/flush` run a pass over the
+built-in's own state. If your plugin owns the schedule, alarms, TTL or buffers, it gets a
+lifecycle event after the built-in pass, `tick:<service>` (`tick:events`, `tick:monitoring`,
+`tick:dynamodb`, `tick:firehose`), and runs its own pass:
+
+```go
+m.HandleLifecycle(func(ctx context.Context, event string) {
+    if svc, ok := sdk.TickService(event); ok && svc == "events" {
+        runDueRules(ctx)
+    }
+})
+```
+
+Only plugins with a route for that service are told, and the hook returns after your handler does.
+A plugin does not need these events to do background work in production: it is a process, so it
+can run its own timers (read the time from `Req.Now` when you handle a call).
 
 ## State
 

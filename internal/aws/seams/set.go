@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,20 +228,76 @@ var _ logstream.Ingestor = (*Logs)(nil)
 
 func (s *Set) Logs() *Logs { return &Logs{s} }
 
+// InternalCreateLogGroup creates the group if it is not there yet: CreateLogGroup,
+// treating "already exists" as success (the log streamers call it for every batch).
 func (l *Logs) InternalCreateLogGroup(ctx context.Context, group string) error {
 	_, err := l.s.call(ctx, "logs", "CreateLogGroup", group, map[string]any{"logGroupName": group}, queue.SourceContext{})
+	if errorCode(err) == "ResourceAlreadyExistsException" {
+		return nil
+	}
 	return err
 }
 
+// Limits of one PutLogEvents call.
+const (
+	maxLogEventsPerCall = 10000
+	maxLogMessageBytes  = 262144
+)
+
+// InternalPutEvents writes a batch the way an agent would: PutLogEvents, and if
+// the stream is missing, CreateLogStream and PutLogEvents again. A batch for a
+// group that does not exist is dropped (a workload can outlive its group), and
+// batches are split and long lines cut to the limits a real call has.
 func (l *Logs) InternalPutEvents(ctx context.Context, group, stream string, events []logstream.Event) error {
+	for len(events) > 0 {
+		n := min(len(events), maxLogEventsPerCall)
+		if err := l.putBatch(ctx, group, stream, events[:n]); err != nil {
+			return err
+		}
+		events = events[n:]
+	}
+	return nil
+}
+
+func (l *Logs) putBatch(ctx context.Context, group, stream string, events []logstream.Event) error {
 	list := make([]any, len(events))
 	for i, e := range events {
-		list[i] = map[string]any{"timestamp": float64(e.Timestamp), "message": e.Message}
+		msg := e.Message
+		if len(msg) > maxLogMessageBytes {
+			msg = msg[:maxLogMessageBytes]
+		}
+		list[i] = map[string]any{"timestamp": float64(e.Timestamp), "message": msg}
 	}
-	_, err := l.s.call(ctx, "logs", "PutLogEvents", group, map[string]any{
-		"logGroupName": group, "logStreamName": stream, "logEvents": list,
-	}, queue.SourceContext{})
-	return err
+	put := func() error {
+		_, err := l.s.call(ctx, "logs", "PutLogEvents", group, map[string]any{
+			"logGroupName": group, "logStreamName": stream, "logEvents": list,
+		}, queue.SourceContext{})
+		return err
+	}
+	err := put()
+	if errorCode(err) != "ResourceNotFoundException" {
+		return err
+	}
+	var pe *model.ProviderError
+	errors.As(err, &pe)
+	if strings.Contains(pe.Message, "log group does not exist") {
+		return nil // dropped: the group is gone
+	}
+	if _, cerr := l.s.call(ctx, "logs", "CreateLogStream", group, map[string]any{
+		"logGroupName": group, "logStreamName": stream,
+	}, queue.SourceContext{}); cerr != nil && errorCode(cerr) != "ResourceAlreadyExistsException" {
+		return cerr
+	}
+	return put()
+}
+
+// errorCode returns the code of a registry error, or "" for nil or any other error.
+func errorCode(err error) string {
+	var pe *model.ProviderError
+	if errors.As(err, &pe) {
+		return pe.Code
+	}
+	return ""
 }
 
 // ---- Service-to-service calls with wire-shaped params -------------------------------
@@ -284,25 +342,42 @@ type S3 struct{ s *Set }
 
 func (s *Set) S3() *S3 { return &S3{s} }
 
-// InternalPutObject creates the bucket if needed and writes the object.
+// InternalPutObject writes the object the way a client would: PutObject, and if
+// the bucket does not exist yet, CreateBucket and PutObject again. Callers such
+// as the Firehose delivery and the EMR log upload rely on the bucket appearing.
 func (o *S3) InternalPutObject(ctx context.Context, bucket, key, contentType string, body []byte) error {
-	_, err := o.s.call(ctx, "s3", "PutObject", "", map[string]any{
-		"_bucket": bucket, "_key": key, "_content_type": contentType, "_body": body,
-	}, queue.SourceContext{})
-	return err
+	put := func() error {
+		_, err := o.s.call(ctx, "s3", "PutObject", "", map[string]any{
+			"_bucket": bucket, "_key": key, "_content_type": contentType, "_body": body,
+		}, queue.SourceContext{})
+		return err
+	}
+	err := put()
+	if errorCode(err) != "NoSuchBucket" {
+		return err
+	}
+	if _, cerr := o.s.call(ctx, "s3", "CreateBucket", "", map[string]any{"_bucket": bucket}, queue.SourceContext{}); cerr != nil &&
+		errorCode(cerr) != "BucketAlreadyOwnedByYou" {
+		return cerr
+	}
+	return put()
 }
 
-// InternalGetObject returns the whole object body.
+// InternalGetObject returns the whole object body. The built-in answers with a
+// stream ("_stream"); a plugin answers with "_body" bytes ({"$base64": "..."}
+// over JSON). Anything else is an error rather than an empty file.
 func (o *S3) InternalGetObject(ctx context.Context, bucket, key string) ([]byte, error) {
 	resp, err := o.s.call(ctx, "s3", "GetObject", "", map[string]any{"_bucket": bucket, "_key": key}, queue.SourceContext{})
 	if err != nil {
 		return nil, err
 	}
+	if rc, ok := resp.Data["_stream"].(io.ReadCloser); ok {
+		defer rc.Close()
+		return io.ReadAll(rc)
+	}
 	body, ok := resp.Data["_body"].([]byte)
 	if !ok {
-		// A plugin that replaces GetObject must answer internal calls with "_body"
-		// bytes ({"$base64": "..."} over JSON); an empty file would hide the mistake.
-		return nil, fmt.Errorf("s3 GetObject %s/%s: response has no _body bytes (got %T)", bucket, key, resp.Data["_body"])
+		return nil, fmt.Errorf("s3 GetObject %s/%s: response has neither _stream nor _body bytes (got %T)", bucket, key, resp.Data["_body"])
 	}
 	return body, nil
 }
@@ -322,6 +397,69 @@ func (o *S3) InternalListObjects(ctx context.Context, bucket, prefix string) ([]
 		}
 	}
 	return keys, nil
+}
+
+// BucketCORSRules returns a bucket's CORS rules for the gateway's preflight
+// handling. A bucket with no rules (or no bucket) yields nil, which the gateway
+// treats as "CORS not configured". If the registry cannot answer (for example a
+// plugin that owns the key is down) the rules are also nil, so the browser sees
+// no CORS headers rather than a 5xx; the failure is logged.
+func (o *S3) BucketCORSRules(ctx context.Context, bucket string) []map[string]any {
+	if bucket == "" {
+		return nil
+	}
+	resp, err := o.s.call(ctx, "s3", "GetBucketCors", "", map[string]any{"_bucket": bucket}, queue.SourceContext{})
+	if err != nil {
+		// No rules for the bucket is the normal case; a client that went away is not news.
+		if code := errorCode(err); code != "NoSuchCORSConfiguration" && code != "NoSuchBucket" && ctx.Err() == nil {
+			slog.Warn("cors: could not read bucket CORS rules", "bucket", bucket, "err", err)
+		}
+		return nil
+	}
+	var rules []map[string]any
+	for _, r := range asList(resp.Data["CORSRules"]) {
+		if m := asMap(r); m != nil {
+			rules = append(rules, m)
+		}
+	}
+	return rules
+}
+
+// ---- Lambda code ----------------------------------------------------------------------
+
+// LambdaCode fetches function and layer packages through the registry for the
+// container executors (container.CodeLoader) and the admin code endpoint
+// (admin.LambdaCodeFetcher). Function.GetFunctionCodeZip and
+// Function.GetLayerCodeZip are internal-only actions: a plugin that owns the
+// function store answers them with "_body" bytes ({"$base64": "..."} over JSON).
+type LambdaCode struct{ s *Set }
+
+func (s *Set) LambdaCode() *LambdaCode { return &LambdaCode{s} }
+
+func (c *LambdaCode) fetch(ctx context.Context, account, action string, params map[string]any) ([]byte, error) {
+	resp, err := c.s.reg.Dispatch(ctx, c.s.key("lambda", action),
+		c.s.request("lambda", action, account, c.s.scope.Region, params, queue.SourceContext{}))
+	if err != nil {
+		return nil, err
+	}
+	body, ok := resp.Data["_body"].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("lambda %s: response has no _body bytes (got %T)", action, resp.Data["_body"])
+	}
+	return body, nil
+}
+
+func (c *LambdaCode) GetFunctionCodeZip(ctx context.Context, account, functionName, qualifier string) ([]byte, error) {
+	return c.fetch(ctx, account, "GetFunctionCodeZip", map[string]any{"functionName": functionName, "qualifier": qualifier})
+}
+
+func (c *LambdaCode) GetLayerCodeZip(ctx context.Context, account, layerName string, version int64) ([]byte, error) {
+	return c.fetch(ctx, account, "GetLayerCodeZip", map[string]any{"layerName": layerName, "version": version})
+}
+
+// LoadCode implements container.CodeLoader.
+func (c *LambdaCode) LoadCode(ctx context.Context, account, funcName, version string) ([]byte, error) {
+	return c.GetFunctionCodeZip(ctx, account, funcName, version)
 }
 
 // ---- Secrets Manager ----------------------------------------------------------------

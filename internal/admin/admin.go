@@ -108,6 +108,7 @@ type Handler struct {
 	barrier          *snapshot.Barrier
 	clockMode        string // "real" | "fixed" | "offset"; "" means real
 	ttlSweeper       TTLSweeper
+	pluginTicker     PluginTicker
 	ebScheduler      EBSchedulerTicker
 	schedulerTicker  SchedulerTicker
 	tasksTicker      TasksTicker
@@ -883,4 +884,29 @@ func snapshotHasKMSMaterial(stores map[string]json.RawMessage) bool {
 		return true // fail-safe: unparseable → treat as having material
 	}
 	return len(raw) > 0
+}
+
+// PluginTicker lets the test hooks reach plugins that own a service: the
+// built-in passes (scheduler, alarm evaluation, TTL sweep, Firehose flush) only
+// cover built-in state.
+type PluginTicker interface {
+	Tick(ctx context.Context, service string)
+}
+
+// SetPluginTicker wires the plugin host into the test hooks.
+func (h *Handler) SetPluginTicker(t PluginTicker) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pluginTicker = t
+}
+
+// tickPlugins tells plugins that own wire service to run their own pass. It
+// runs after the built-in pass and on a context that outlives the request.
+func (h *Handler) tickPlugins(ctx context.Context, service string) {
+	h.mu.Lock()
+	t := h.pluginTicker
+	h.mu.Unlock()
+	if t != nil {
+		t.Tick(context.WithoutCancel(ctx), service)
+	}
 }

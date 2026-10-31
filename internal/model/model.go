@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -188,4 +189,21 @@ func (e *ProviderError) WithData(data map[string]any) *ProviderError {
 
 func NewProviderError(code, message string, httpStatus int) *ProviderError {
 	return &ProviderError{Code: code, Message: message, HTTPStatus: httpStatus}
+}
+
+// Codes of the errors raised when the party that owns a call (a plugin) cannot
+// answer it. They say nothing about the request itself.
+const (
+	CodePluginUnavailable = "PluginUnavailable"
+	CodePluginTimeout     = "PluginTimeout"
+)
+
+// IsOutage reports whether err means the service that should have answered
+// could not be reached in time (a plugin is down, restarting or too slow), as
+// opposed to the service answering with a failure. Background workers use it to
+// back off and retry instead of counting the failure against the thing they are
+// working on.
+func IsOutage(err error) bool {
+	var pe *ProviderError
+	return errors.As(err, &pe) && (pe.Code == CodePluginUnavailable || pe.Code == CodePluginTimeout)
 }

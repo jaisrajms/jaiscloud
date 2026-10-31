@@ -17,9 +17,6 @@ import (
 
 // PutLogEvents ingests a batch of log events into a stream.
 func (p *Provider) PutLogEvents(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if nr.Origin == model.OriginInternal {
-		return p.putLogEventsInternal(ctx, nr)
-	}
 	groupName := paramStr(nr.Params, "logGroupName")
 	streamName := paramStr(nr.Params, "logStreamName")
 

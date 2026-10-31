@@ -151,6 +151,23 @@ const (
 	EventRestore = "restore"
 )
 
+// EventTickPrefix starts the event delivered when a test hook of the emulator
+// (POST /_jaiscloud/eb-tick, cw-evaluate, ttl-sweep or firehose/flush) is called
+// for a service your plugin has a route for; the rest of the event is the wire
+// service, for example "tick:events". The built-in runs its pass only over its
+// own state, so a plugin that owns the schedule, alarms, TTL or buffers of that
+// service must run its own pass when it sees this event. The hook returns after
+// your OnLifecycle does, so tests can assert on the result.
+const EventTickPrefix = "tick:"
+
+// TickService returns the wire service of a tick event.
+func TickService(event string) (service string, ok bool) {
+	if len(event) > len(EventTickPrefix) && event[:len(EventTickPrefix)] == EventTickPrefix {
+		return event[len(EventTickPrefix):], true
+	}
+	return "", false
+}
+
 // Store is the plugin's state. Rows live in the emulator's own ResourceStore
 // under the type "plugin:<name>:<kind>", so reset, export/import and named
 // snapshots cover them without any plugin code.

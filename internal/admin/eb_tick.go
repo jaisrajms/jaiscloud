@@ -29,5 +29,6 @@ func (h *Handler) EBTickHandler(w http.ResponseWriter, r *http.Request) {
 		// Target deliveries run in goroutines that outlive this request.
 		sched.TickNow(context.WithoutCancel(r.Context()))
 	}
+	h.tickPlugins(r.Context(), "events")
 	w.WriteHeader(http.StatusNoContent)
 }

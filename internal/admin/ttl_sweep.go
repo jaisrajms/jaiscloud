@@ -27,5 +27,6 @@ func (h *Handler) TTLSweepHandler(w http.ResponseWriter, r *http.Request) {
 	if sw != nil {
 		sw.SweepNow(r.Context())
 	}
+	h.tickPlugins(r.Context(), "dynamodb")
 	w.WriteHeader(http.StatusNoContent)
 }

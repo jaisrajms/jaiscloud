@@ -404,7 +404,7 @@ func (p *plugin) do(ctx context.Context, method, path string, in, out any, retry
 			return toProviderError(err)
 		}
 		if retry <= 0 {
-			return model.NewProviderError("PluginUnavailable", fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), ce.err), 503)
+			return model.NewProviderError(model.CodePluginUnavailable, fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), ce.err), 503)
 		}
 		if !logged {
 			slog.Warn("plugin unreachable, retrying", "plugin", p.nameOr(), "retry_for", retry.String(), "err", ce.err)
@@ -412,7 +412,7 @@ func (p *plugin) do(ctx context.Context, method, path string, in, out any, retry
 		}
 		select {
 		case <-rctx.Done():
-			return model.NewProviderError("PluginUnavailable",
+			return model.NewProviderError(model.CodePluginUnavailable,
 				fmt.Sprintf("plugin %s unavailable after retrying for %s: %v", p.nameOr(), retry, ce.err), 503)
 		case <-time.After(backoff):
 		}
@@ -430,7 +430,7 @@ func toProviderError(err error) error {
 	if errors.As(err, &pe) {
 		return pe
 	}
-	return model.NewProviderError("PluginUnavailable", err.Error(), 503)
+	return model.NewProviderError(model.CodePluginUnavailable, err.Error(), 503)
 }
 
 func (p *plugin) once(ctx context.Context, method, path string, body []byte, out any) error {
@@ -457,13 +457,13 @@ func (p *plugin) once(ctx context.Context, method, path string, body []byte, out
 		var oe *net.OpError
 		switch {
 		case errors.Is(actx.Err(), context.DeadlineExceeded):
-			return model.NewProviderError("PluginTimeout", fmt.Sprintf("plugin %s timed out after %s", p.nameOr(), p.timeout), 504)
+			return model.NewProviderError(model.CodePluginTimeout, fmt.Sprintf("plugin %s timed out after %s", p.nameOr(), p.timeout), 504)
 		case ctx.Err() != nil:
-			return model.NewProviderError("PluginUnavailable", fmt.Sprintf("plugin %s call cancelled: %v", p.nameOr(), ctx.Err()), 503)
+			return model.NewProviderError(model.CodePluginUnavailable, fmt.Sprintf("plugin %s call cancelled: %v", p.nameOr(), ctx.Err()), 503)
 		case errors.As(err, &oe) && oe.Op == "dial":
 			return &connError{err: err}
 		}
-		return model.NewProviderError("PluginUnavailable", fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), err), 503)
+		return model.NewProviderError(model.CodePluginUnavailable, fmt.Sprintf("plugin %s unavailable: %v", p.nameOr(), err), 503)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
@@ -527,8 +527,26 @@ func (r RestoreHook) OnRestore(ctx context.Context) error {
 
 func (h *Host) notify(ctx context.Context, event string) {
 	for _, p := range h.plugins {
-		if err := p.do(ctx, http.MethodPost, "/lifecycle", sdk.LifecycleRequest{Event: event}, nil, 5*time.Second); err != nil {
-			slog.Warn("plugin lifecycle notification failed", "plugin", p.name, "event", event, "err", err)
+		p.notify(ctx, event)
+	}
+}
+
+func (p *plugin) notify(ctx context.Context, event string) {
+	if err := p.do(ctx, http.MethodPost, "/lifecycle", sdk.LifecycleRequest{Event: event}, nil, 5*time.Second); err != nil {
+		slog.Warn("plugin lifecycle notification failed", "plugin", p.name, "event", event, "err", err)
+	}
+}
+
+// Tick tells the plugins that have a route for the wire service that a test hook
+// (eb-tick, cw-evaluate, ttl-sweep, firehose flush) was called, so they can run
+// the pass the built-in would have run over state they own. See sdk.EventTickPrefix.
+func (h *Host) Tick(ctx context.Context, service string) {
+	for _, p := range h.plugins {
+		for _, r := range p.routes {
+			if r.Cloud == string(h.cloud) && r.Service == service {
+				p.notify(ctx, sdk.EventTickPrefix+service)
+				break
+			}
 		}
 	}
 }

@@ -139,6 +139,9 @@ func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
 		"Function.DeleteFunctionConcurrency": p.DeleteFunctionConcurrency,
 		// Account
 		"Function.GetAccountSettings": p.GetAccountSettings,
+		// Internal-only: the code package the executors and the admin endpoint mount.
+		"Function.GetFunctionCodeZip": p.getFunctionCodeZipHandler,
+		"Function.GetLayerCodeZip":    p.getLayerCodeZipHandler,
 		// Code signing configs
 		"Function.CreateCodeSigningConfig":          p.CreateCodeSigningConfig,
 		"Function.GetCodeSigningConfig":             p.GetCodeSigningConfig,
