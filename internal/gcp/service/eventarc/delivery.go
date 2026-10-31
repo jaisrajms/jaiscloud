@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/resource"
 
@@ -346,7 +347,7 @@ func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers
 	s.deliveryWG.Add(1)
 	go func() {
 		defer s.deliveryWG.Done()
-		start := time.Now()
+		start := clock.RealNow()
 		for attempt := 1; ; attempt++ {
 			ctx, cancel := context.WithTimeout(context.Background(), eventarcDeliveryTimeout)
 			status, err := invoker.Invoke(ctx, project, target.region, target.service, target.path, headers, body)
@@ -396,7 +397,7 @@ func (s *Service) deliver(uri string, headers map[string]string, body []byte, po
 	s.deliveryWG.Add(1)
 	go func() {
 		defer s.deliveryWG.Done()
-		start := time.Now()
+		start := clock.RealNow()
 		var lastErr error
 		lastStatus := 0
 		for attempt := 1; ; attempt++ {
@@ -437,7 +438,7 @@ func (s *Service) deliver(uri string, headers map[string]string, body []byte, po
 // the retries rather than overshooting the documented window.
 func (s *Service) waitRetry(start time.Time, attempt int, policy retryPolicy) bool {
 	delay := s.retryDelay(attempt)
-	if policy.maxDuration > 0 && time.Since(start)+delay > policy.maxDuration {
+	if policy.maxDuration > 0 && clock.RealNow().Sub(start)+delay > policy.maxDuration {
 		return false
 	}
 	time.Sleep(delay)
