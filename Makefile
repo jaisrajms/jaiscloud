@@ -363,13 +363,13 @@ security-scan-python: ## pip-audit against tests/clients/python/requirements.txt
 security-tool-trivy: ## Install the pinned trivy release into bin/ (sha256-verified)
 	@mkdir -p bin
 	@set -e; \
-	ver=$(TRIVY_VERSION); tmp=$$(mktemp -d); \
-	url="https://github.com/aquasecurity/trivy/releases/download/v$$ver/trivy_$${ver}_Linux-64bit.tar.gz"; \
-	curl -sSfL -o "$$tmp/trivy.tgz" "$$url"; \
-	curl -sSfL -o "$$tmp/checksums.txt" "https://github.com/aquasecurity/trivy/releases/download/v$$ver/trivy_$${ver}_checksums.txt"; \
-	(cd "$$tmp" && grep ' trivy_'$${ver}'_Linux-64bit.tar.gz$$' checksums.txt | sha256sum -c -); \
-	tar xzf "$$tmp/trivy.tgz" -C bin trivy; \
-	rm -rf "$$tmp"; \
+	ver=$(TRIVY_VERSION); tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	asset="trivy_$${ver}_Linux-64bit.tar.gz"; \
+	base="https://github.com/aquasecurity/trivy/releases/download/v$$ver"; \
+	curl -sSfL -o "$$tmp/$$asset" "$$base/$$asset"; \
+	curl -sSfL -o "$$tmp/trivy_$${ver}_checksums.txt" "$$base/trivy_$${ver}_checksums.txt"; \
+	(cd "$$tmp" && grep " $$asset$$" "trivy_$${ver}_checksums.txt" | sha256sum -c -); \
+	tar xzf "$$tmp/$$asset" -C bin trivy; \
 	./bin/trivy --version | head -1
 
 security-scan-images: ## trivy scan of the built jaiscloud-gcp/jaiscloud-aws runtime images
