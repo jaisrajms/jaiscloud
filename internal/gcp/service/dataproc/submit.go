@@ -64,13 +64,13 @@ var waitTerminalFn = sparkhelpers.WaitTerminalWith
 // synchronously before runJobWithCtx blocks (or, when called from submitJob,
 // before the executor goroutine is launched), so a CancelJob racing job
 // submission always finds the cancel func.
-func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string) {
+func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string, phsConfs []string) {
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	key := cancelKey(project, region, j.JobID)
 	s.registerCancel(key, runCancel)
 	defer s.unregisterCancel(key)
-	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, namespace)
+	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, namespace, phsConfs)
 }
 
 // registerCancel records a running job's cancel func so a racing CancelJob
@@ -94,7 +94,8 @@ func (s *Service) unregisterCancel(key string) {
 // Hive Metastore thrift endpoint ("" when the cluster has no attachment); it is
 // injected as a spark-submit conf so driver and executor pods share the
 // attachment. namespace is the cluster's effective workload namespace ("" falls
-// back to the process-wide one).
+// back to the process-wide one). phsConfs are the Spark History Server event-log
+// confs for a PHS-attached cluster (nil when the cluster has no attachment).
 //
 // The caller owns ctx's cancel func and its registration in s.cancels. submitJob
 // registers before launching the goroutine so a CancelJob landing in the
@@ -104,7 +105,7 @@ func (s *Service) unregisterCancel(key string) {
 // restarts the driver within maxFailuresPerHour/maxFailuresTotal and the
 // documented thrash rule (>4 non-zero exits in a 10-minute window). Success is
 // strictly driver exit 0. Only k8s mode runs here; mock mode has no executor.
-func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string) {
+func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string, phsConfs []string) {
 	jobID := j.JobID
 	runCtx := ctx
 
@@ -171,6 +172,10 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 
 	sparkConfs := sparkgcp.DriverSparkConfsFromEnv(jobEmulator, driverEnv)
 	sparkConfs = append(sparkConfs, metastoreSparkConfs(metastoreEndpoint)...)
+	// A PHS-attached cluster's event-log confs follow the metastore confs and
+	// precede the caller's SparkSubmitArgs, so a job property with the same key
+	// still wins (Spark's last-value-wins).
+	sparkConfs = append(sparkConfs, phsConfs...)
 
 	clientJob := sparkhelpers.ClientModeJob{
 		JobID:              jobID,

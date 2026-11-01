@@ -1222,6 +1222,7 @@ func Scenarios(suffix string) []Scenario {
 	dpCluster := "conf-dp-" + suffix
 	dpJob := "conf-dpjob-" + suffix
 	dpTemplate := "conf-dpwt-" + suffix
+	dpPHS := "conf-dp-phs-" + suffix
 	dpTemplateBody := fmt.Sprintf(
 		`{"id":%q,"placement":{"managedCluster":{"clusterName":%q}},"jobs":[{"stepId":"extract","pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract.py"}}]}`,
 		dpTemplate, dpCluster, suffix)
@@ -1274,6 +1275,13 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "dataproc", Method: "POST",
 			Path: dpBase + "/workflowTemplates/" + dpTemplate + "-absent:getIamPolicy", Body: `{}`},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/workflowTemplates/" + dpTemplate},
+		// A GKE virtual cluster naming a Spark History Server cluster that does
+		// not exist is NotFound: the field promises the referenced cluster
+		// exists in the same project and region.
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: fmt.Sprintf(
+				`{"projectId":%q,"clusterName":%q,"virtualClusterConfig":{"stagingBucket":"conf-phs-%s","kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/%s/locations/us-central1/clusters/gke-1"}},"auxiliaryServicesConfig":{"sparkHistoryServerConfig":{"dataprocCluster":"projects/%s/regions/us-central1/clusters/missing-%s"}}}}`,
+				p, dpPHS, suffix, p, p, suffix)},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpCluster},
 	)
 

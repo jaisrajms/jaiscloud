@@ -100,6 +100,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if err := s.validateClusterMetastore(ctx, project, region, in); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
+	// Validate the Spark History Server attachment (if any) and add the
+	// documented workload event-log properties to the virtual cluster config.
+	if in.VirtualClusterConfig != nil {
+		prepared, err := s.preparePHSClusterConfig(ctx, project, region, name, in.VirtualClusterConfig)
+		if err != nil {
+			return dpstore.Cluster{}, dpstore.Operation{}, err
+		}
+		in.VirtualClusterConfig = prepared
+	}
 	now := clock.Now().UTC()
 	// Provision the cluster's workload namespace before persisting the record, so
 	// a job submitted immediately after create has a placement. Mock execution
@@ -243,6 +252,15 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	// (the effective merged config under the mask), not the raw request body.
 	if err := s.validateClusterMetastoreUpdate(ctx, project, region, current, in, mask); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	// Validate and prepare the Spark History Server attachment of the
+	// virtualClusterConfig this update applies (the vcc is replaced whole).
+	if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
+		prepared, err := s.preparePHSClusterConfig(ctx, project, region, name, in.VirtualClusterConfig)
+		if err != nil {
+			return dpstore.Cluster{}, dpstore.Operation{}, err
+		}
+		in.VirtualClusterConfig = prepared
 	}
 	var transitioned bool
 	var prev dpstore.ClusterStatus

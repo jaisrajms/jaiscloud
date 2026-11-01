@@ -1044,3 +1044,77 @@ func TestListNonIntegerPageSize(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateCluster_PHSHistoryServer verifies the REST create path parses
+// sparkHistoryServerConfig.dataprocCluster, validates it against the referenced
+// Dataproc cluster, and returns the documented spark.eventLog.* properties.
+func TestCreateCluster_PHSHistoryServer(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":   "proj",
+			"clusterName": "phs",
+			"config":      map[string]any{"softwareConfig": map[string]any{"imageVersion": "2.2.0"}},
+		},
+	})); err != nil {
+		t.Fatalf("create PHS source: %v", err)
+	}
+
+	ref := "projects/proj/regions/us-central1/clusters/phs"
+	vcc := map[string]any{
+		"stagingBucket": "dataproc-staging-proj",
+		"kubernetesClusterConfig": map[string]any{
+			"gkeClusterConfig": map[string]any{
+				"gkeClusterTarget": "projects/proj/locations/us-central1/clusters/gke-1",
+			},
+		},
+		"auxiliaryServicesConfig": map[string]any{
+			"sparkHistoryServerConfig": map[string]any{"dataprocCluster": ref},
+		},
+	}
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-phs",
+			"virtualClusterConfig": vcc,
+		},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "gke-phs"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	gotVCC, _ := c.Data["virtualClusterConfig"].(map[string]any)
+	kcc, _ := gotVCC["kubernetesClusterConfig"].(map[string]any)
+	software, _ := kcc["kubernetesSoftwareConfig"].(map[string]any)
+	props, _ := software["properties"].(map[string]any)
+	if props["spark:spark.eventLog.enabled"] != "true" {
+		t.Fatalf("spark.eventLog.enabled = %v", props["spark:spark.eventLog.enabled"])
+	}
+	if props["spark:spark.eventLog.dir"] != "gs://dataproc-staging-proj/gke-phs/spark-job-history" {
+		t.Fatalf("spark.eventLog.dir = %v", props["spark:spark.eventLog.dir"])
+	}
+
+	// A missing PHS cluster is a 404 through the REST error mapping.
+	vcc["auxiliaryServicesConfig"] = map[string]any{
+		"sparkHistoryServerConfig": map[string]any{
+			"dataprocCluster": "projects/proj/regions/us-central1/clusters/missing",
+		},
+	}
+	_, err = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-missing-phs",
+			"virtualClusterConfig": vcc,
+		},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 404 || pe.Code != "NotFound" {
+		t.Fatalf("missing PHS cluster: expected 404 NotFound, got %v", err)
+	}
+}
