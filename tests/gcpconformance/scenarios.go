@@ -1468,6 +1468,18 @@ func Scenarios(suffix string) []Scenario {
 				fsDoc)},
 		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/documents:runQuery",
 			Body: `{"structuredQuery":{"from":[{"collectionId":"conf-orders"}]}}`},
+		// listCollectionIds/partitionQuery are custom methods on the documents
+		// marker and need seeded documents: the first returns the collection ids
+		// under the documents root, the second partitions an ordered result set
+		// (two documents make count=2 produce one partition point).
+		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/documents:listCollectionIds",
+			Body: `{}`},
+		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/documents:commit",
+			Body: fmt.Sprintf(
+				`{"writes":[{"update":{"name":%q,"fields":{"status":{"stringValue":"closed"},"total":{"integerValue":"7"}}}}]}`,
+				strings.Replace(fsDoc, "order-1", "order-2", 1))},
+		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/documents:partitionQuery",
+			Body: `{"structuredQuery":{"from":[{"collectionId":"conf-orders"}]},"partitionCount":"2"}`},
 		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/backupSchedules",
 			Body: `{"retention":"86400s","dailyRecurrence":{}}`},
 		// A daily schedule's first occurrence is one interval after its create
