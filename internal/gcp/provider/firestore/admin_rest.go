@@ -16,6 +16,7 @@ package firestore
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -323,8 +324,65 @@ func databaseMap(d databaseDef) map[string]any {
 	return m
 }
 
+// databaseEnumFields maps the Database fields whose proto type is an enum to
+// the enum names the Discovery document declares. proto3 JSON accepts only a
+// declared name (or the numeric value, which this REST shim does not model), so
+// any other string is rejected rather than stored and echoed verbatim.
+var databaseEnumFields = map[string]map[string]bool{
+	"type": {
+		"DATABASE_TYPE_UNSPECIFIED": true,
+		"FIRESTORE_NATIVE":          true,
+		"DATASTORE_MODE":            true,
+	},
+	"concurrencyMode": {
+		"CONCURRENCY_MODE_UNSPECIFIED":  true,
+		"OPTIMISTIC":                    true,
+		"PESSIMISTIC":                   true,
+		"OPTIMISTIC_WITH_ENTITY_GROUPS": true,
+	},
+	"appEngineIntegrationMode": {
+		"APP_ENGINE_INTEGRATION_MODE_UNSPECIFIED": true,
+		"ENABLED":  true,
+		"DISABLED": true,
+	},
+	"pointInTimeRecoveryEnablement": {
+		"POINT_IN_TIME_RECOVERY_ENABLEMENT_UNSPECIFIED": true,
+		"POINT_IN_TIME_RECOVERY_ENABLED":                true,
+		"POINT_IN_TIME_RECOVERY_DISABLED":               true,
+	},
+	"deleteProtectionState": {
+		"DELETE_PROTECTION_STATE_UNSPECIFIED": true,
+		"DELETE_PROTECTION_DISABLED":          true,
+		"DELETE_PROTECTION_ENABLED":           true,
+	},
+	"databaseEdition": {
+		"DATABASE_EDITION_UNSPECIFIED": true,
+		"STANDARD":                     true,
+		"ENTERPRISE":                   true,
+	},
+}
+
+// validateDatabaseEnumFields applies proto3 JSON's enum-name rule to every
+// enum-typed Database field present in a REST request body.
+func validateDatabaseEnumFields(body map[string]any) error {
+	for field, allowed := range databaseEnumFields {
+		raw, ok := body[field]
+		if !ok || raw == nil {
+			continue
+		}
+		value, ok := raw.(string)
+		if !ok || !allowed[value] {
+			return gcpInvalidArgument(fmt.Sprintf("invalid Database.%s value %q", field, raw))
+		}
+	}
+	return nil
+}
+
 // databaseFromREST reads the mutable Database fields from a request body.
-func databaseFromREST(body map[string]any) databaseDef {
+func databaseFromREST(body map[string]any) (databaseDef, error) {
+	if err := validateDatabaseEnumFields(body); err != nil {
+		return databaseDef{}, err
+	}
 	d := databaseDef{}
 	if s, _ := body["locationId"].(string); s != "" {
 		d.LocationID = s
@@ -356,7 +414,7 @@ func databaseFromREST(body map[string]any) databaseDef {
 	if s, _ := body["versionRetentionPeriod"].(string); s != "" {
 		d.VersionRetentionPeriod = parseRestDuration(s)
 	}
-	return d
+	return d, nil
 }
 
 // ─── Database handlers ────────────────────────────────────────────────────────
@@ -367,7 +425,11 @@ func (p *Provider) CreateDatabase(ctx context.Context, nr *model.NormalizedReque
 	if !ok || !isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid database parent path", 400)
 	}
-	db, opName, err := p.Service.CreateDatabaseDef(ctx, nr.AccountID, strParam(nr, "databaseId"), databaseFromREST(bodyMap(nr)))
+	patch, err := databaseFromREST(bodyMap(nr))
+	if err != nil {
+		return nil, err
+	}
+	db, opName, err := p.Service.CreateDatabaseDef(ctx, nr.AccountID, strParam(nr, "databaseId"), patch)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +472,10 @@ func (p *Provider) UpdateDatabase(ctx context.Context, nr *model.NormalizedReque
 	if !ok || isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid database resource name", 400)
 	}
-	patch := databaseFromREST(bodyMap(nr))
+	patch, err := databaseFromREST(bodyMap(nr))
+	if err != nil {
+		return nil, err
+	}
 	mask, maskPresent := adminMask(nr)
 	rec, opName, err := p.Service.UpdateDatabaseDef(ctx, nr.AccountID, db, patch, mask, maskPresent, patch.Etag)
 	if err != nil {
@@ -425,10 +490,14 @@ func (p *Provider) DeleteDatabase(ctx context.Context, nr *model.NormalizedReque
 	if !ok || isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid database resource name", 400)
 	}
+	// DeleteDatabaseRequest.etag is a query parameter in the Discovery HTTP
+	// binding; the request has no body mapping, so a body etag is not a
+	// precondition. Fail loud instead of silently ignoring a non-compliant
+	// client's etag.
 	etag := strParam(nr, "etag")
 	if etag == "" {
-		if s, _ := bodyMap(nr)["etag"].(string); s != "" {
-			etag = s
+		if _, ok := bodyMap(nr)["etag"]; ok {
+			return nil, model.NewProviderError("InvalidArgument", "etag must be provided as a query parameter", 400)
 		}
 	}
 	deleted, opName, err := p.Service.DeleteDatabaseDef(ctx, nr.AccountID, db, etag)

@@ -103,12 +103,18 @@ func (s *Service) collectionPath(ctx context.Context, parent, collectionID strin
 
 // ─── unary handlers ───────────────────────────────────────────────────────────
 
-func (s *Service) GetDocument(ctx context.Context, req *firestorepb.GetDocumentRequest) (*firestorepb.Document, error) {
-	var mask []string
-	if req.GetMask() != nil {
-		mask = req.GetMask().GetFieldPaths()
+// responseMask preserves DocumentMask message presence: nil means the mask was
+// unset (return every field), while a set mask with no paths is an explicit
+// request for no fields.
+func responseMask(m *firestorepb.DocumentMask) *firestoreprovider.ResponseMask {
+	if m == nil {
+		return nil
 	}
-	doc, err := s.svc.GetDocument(ctx, req.GetName(), req.GetTransaction(), mask)
+	return &firestoreprovider.ResponseMask{Paths: m.GetFieldPaths()}
+}
+
+func (s *Service) GetDocument(ctx context.Context, req *firestorepb.GetDocumentRequest) (*firestorepb.Document, error) {
+	doc, err := s.svc.GetDocument(ctx, req.GetName(), req.GetTransaction(), responseMask(req.GetMask()))
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -159,7 +165,7 @@ func (s *Service) UpdateDocument(ctx context.Context, req *firestorepb.UpdateDoc
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return encodeDocument(firestoreprovider.ProjectDocument(out, req.GetMask().GetFieldPaths())), nil
+	return encodeDocument(firestoreprovider.ProjectDocument(out, responseMask(req.GetMask()))), nil
 }
 
 func (s *Service) DeleteDocument(ctx context.Context, req *firestorepb.DeleteDocumentRequest) (*emptypb.Empty, error) {
@@ -190,12 +196,8 @@ func (s *Service) ListDocuments(ctx context.Context, req *firestorepb.ListDocume
 			path = path + "/" + id
 		}
 	}
-	var mask []string
-	if req.GetMask() != nil {
-		mask = req.GetMask().GetFieldPaths()
-	}
 	page := firestoreprovider.NewPageParams(int(req.GetPageSize()), req.GetPageToken())
-	docs, nextToken, err := s.svc.ListDocuments(ctx, project, database, path, req.GetTransaction(), mask, req.GetShowMissing(), page)
+	docs, nextToken, err := s.svc.ListDocuments(ctx, project, database, path, req.GetTransaction(), responseMask(req.GetMask()), req.GetShowMissing(), page)
 	if err != nil {
 		return nil, mapError(err)
 	}
