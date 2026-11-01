@@ -1,6 +1,8 @@
 package firestore
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -17,23 +19,124 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
-// EncodeResumeToken encodes a monotonic sequence number into an 8-byte resume
-// token (big-endian uint64).
+// Resume-token format.
+//
+// A per-target TargetChange_CURRENT token is a versioned, target-bound token:
+//
+//	"FTK1" | sequence (8 bytes, big-endian) | scope fingerprint (8 bytes)
+//
+// The fingerprint identifies the target's query scope (parent + structured
+// query, or its sorted document list), so a token minted for one query cannot
+// be replayed against a different one: the target is reset and resnapshotted
+// instead. The token stays opaque to clients.
+//
+// The legacy 8-byte bare sequence is still accepted (and is still what the
+// stream-wide, empty-target_ids NO_CHANGE frame carries): that token covers
+// every target on a stream, so it has no single target identity it could bind
+// to. Resuming from it replays against whatever target the client adds, with
+// the query itself re-filtering the replay.
+const (
+	// resumeScopeLen is the length of the opaque scope fingerprint in a bound
+	// resume token.
+	resumeScopeLen = 8
+	// boundResumeTokenLen is magic + sequence + fingerprint.
+	boundResumeTokenLen = len(resumeTokenMagic) + 8 + resumeScopeLen
+)
+
+// resumeTokenMagic tags the versioned, scope-bound resume-token format. A token
+// of any other length than 8 or boundResumeTokenLen is invalid, so the magic
+// only disambiguates the versioned layout.
+var resumeTokenMagic = [4]byte{'F', 'T', 'K', '1'}
+
+// resumeToken is a decoded Listen resume token. A bound token carries the
+// fingerprint of the target scope it was minted for; a legacy (unbound) token
+// carries only a feed position.
+type resumeToken struct {
+	seq   uint64
+	scope [resumeScopeLen]byte
+	bound bool
+}
+
+// EncodeResumeToken encodes a monotonic sequence number into the legacy
+// unbound 8-byte resume token (big-endian uint64). It is used for the
+// stream-wide NO_CHANGE token and for WriteResponse.stream_token, neither of
+// which names a single Listen target.
 func EncodeResumeToken(seq uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, seq)
 	return b
 }
 
-// DecodeResumeToken decodes an 8-byte resume token back into a sequence number.
-// ok is false for any token that is not exactly 8 bytes.
+// encodeBoundResumeToken encodes a per-target resume token bound to the target's
+// scope fingerprint.
+func encodeBoundResumeToken(seq uint64, scope [resumeScopeLen]byte) []byte {
+	b := make([]byte, boundResumeTokenLen)
+	copy(b, resumeTokenMagic[:])
+	binary.BigEndian.PutUint64(b[len(resumeTokenMagic):], seq)
+	copy(b[len(resumeTokenMagic)+8:], scope[:])
+	return b
+}
+
+// DecodeResumeToken decodes a resume token back into its sequence number. It
+// accepts both the versioned, scope-bound format and the legacy 8-byte bare
+// sequence. ok is false for a malformed token.
 func DecodeResumeToken(b []byte) (uint64, bool) {
-	if len(b) != 8 {
-		return 0, false
+	tok, ok := parseResumeToken(b)
+	return tok.seq, ok
+}
+
+// parseResumeToken decodes either resume-token format.
+func parseResumeToken(b []byte) (resumeToken, bool) {
+	if len(b) == 8 {
+		return resumeToken{seq: binary.BigEndian.Uint64(b)}, true
 	}
-	return binary.BigEndian.Uint64(b), true
+	if len(b) != boundResumeTokenLen || !bytes.Equal(b[:len(resumeTokenMagic)], resumeTokenMagic[:]) {
+		return resumeToken{}, false
+	}
+	tok := resumeToken{
+		seq:   binary.BigEndian.Uint64(b[len(resumeTokenMagic):]),
+		bound: true,
+	}
+	copy(tok.scope[:], b[len(resumeTokenMagic)+8:])
+	return tok, true
+}
+
+// targetScopeFingerprint derives the opaque fingerprint identifying a target's
+// query scope: the query parent plus structured query, or the target's sorted
+// document list. target_id, once, expected_count, and the resume_token are not
+// part of the scope, so a target re-added with a token for the same query keeps
+// the same fingerprint. ok is false only for a target that names neither a
+// query nor documents.
+func targetScopeFingerprint(t *firestorepb.Target) ([resumeScopeLen]byte, bool) {
+	var fp [resumeScopeLen]byte
+	scope := proto.Clone(t).(*firestorepb.Target)
+	scope.TargetId = 0
+	scope.Once = false
+	scope.ExpectedCount = nil
+	scope.ResumeType = nil
+	switch tt := scope.GetTargetType().(type) {
+	case *firestorepb.Target_Query:
+		// The structured query (and its parent) are already part of the cloned
+		// scope proto; resolveTarget rejects a nil query with the precise error.
+	case *firestorepb.Target_Documents:
+		if tt.Documents != nil {
+			docs := append([]string(nil), tt.Documents.GetDocuments()...)
+			sort.Strings(docs)
+			tt.Documents.Documents = docs
+		}
+	default:
+		return fp, false
+	}
+	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(scope)
+	if err != nil {
+		return fp, false
+	}
+	sum := sha256.Sum256(b)
+	copy(fp[:], sum[:resumeScopeLen])
+	return fp, true
 }
 
 // listenTarget is a resolved watch target on a single Listen stream. Exactly
@@ -42,6 +145,13 @@ type listenTarget struct {
 	query     *firestoreprovider.StructuredQuery
 	parent    string
 	documents []string
+
+	// scope is the opaque fingerprint of this target's query scope (parent plus
+	// structured query, or the document list), as bound into its resume tokens.
+	// A token whose fingerprint does not match a re-added target's scope cannot
+	// describe that target's result set, so the target is reset instead of
+	// replayed.
+	scope [resumeScopeLen]byte
 
 	// seq is this target's own delivered sequence position: the highest
 	// change-feed sequence it has been brought up to (by snapshot, incremental
@@ -227,27 +337,48 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 	// the start of time (not a resumable position) because the change log
 	// records only writes, not a document history, so replaying from zero
 	// cannot reconstruct documents that predate the log.
+	//
+	// A scope-bound token whose fingerprint no longer matches this target's
+	// scope is treated the same way: the token describes a different query's
+	// result set, so replaying it would hand the client deltas for documents its
+	// new query does not select. RESET tells it to discard its view before the
+	// fresh snapshot arrives. An unbound (legacy / stream-wide) token carries no
+	// target identity and is replayed against the target as added.
 	incremental := false
 	if rt, ok := t.GetResumeType().(*firestorepb.Target_ResumeToken); ok {
-		if seq, valid := DecodeResumeToken(rt.ResumeToken); valid && seq > 0 && ls.srv.svc.ReplayableFrom(seq) {
-			incremental = true
-			for _, ev := range ls.srv.svc.ChangesSince(seq) {
-				if ls.targetMatches(*lt, ev) {
-					if err := ls.sendChange(id, ev); err != nil {
-						return err
-					}
-					if ev.Seq > lt.seq {
-						lt.seq = ev.Seq
-					}
-				}
-			}
-			// Seed the view from current state so the first live delta diffs
-			// against the resumed result set instead of re-emitting all of it.
-			if err := ls.seedView(lt); err != nil {
+		tok, valid := parseResumeToken(rt.ResumeToken)
+		scopeChanged := valid && tok.bound && tok.scope != lt.scope
+		if !valid || tok.seq == 0 || scopeChanged || !ls.srv.svc.ReplayableFrom(tok.seq) {
+			if err := ls.sendReset(id); err != nil {
 				return err
 			}
-		} else if err := ls.sendReset(id); err != nil {
-			return err
+		} else {
+			incremental = true
+			if lt.isQuery() {
+				// Replay through the target's query: only the documents the query
+				// selects now are sent, and documents that left it are removed or
+				// deleted, so where/order_by/limit/offset apply to catch-up exactly
+				// as they do to live deltas.
+				if err := ls.replayQuery(id, lt, tok.seq); err != nil {
+					return err
+				}
+			} else {
+				for _, ev := range ls.srv.svc.ChangesSince(tok.seq) {
+					if ls.targetMatches(*lt, ev) {
+						if err := ls.sendChange(id, ev); err != nil {
+							return err
+						}
+						if ev.Seq > lt.seq {
+							lt.seq = ev.Seq
+						}
+					}
+				}
+				// Seed the view from current state so the first live delta diffs
+				// against the resumed result set instead of re-emitting all of it.
+				if err := ls.seedView(lt); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if !incremental {
@@ -267,7 +398,7 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 		TargetChange: &firestorepb.TargetChange{
 			TargetChangeType: firestorepb.TargetChange_CURRENT,
 			TargetIds:        []int32{id},
-			ResumeToken:      EncodeResumeToken(lt.seq),
+			ResumeToken:      encodeBoundResumeToken(lt.seq, lt.scope),
 			ReadTime:         timestamp.Proto(ls.nextReadTime()),
 		},
 	}}); err != nil {
@@ -505,15 +636,19 @@ func (ls *listenSession) assignTargetID() int32 {
 }
 
 func resolveTarget(t *firestorepb.Target) (listenTarget, error) {
+	scope, ok := targetScopeFingerprint(t)
+	if !ok {
+		return listenTarget{}, status.Error(codes.InvalidArgument, "target must specify a query or documents")
+	}
 	switch tt := t.GetTargetType().(type) {
 	case *firestorepb.Target_Query:
 		q, err := decodeStructuredQuery(tt.Query.GetStructuredQuery())
 		if err != nil {
 			return listenTarget{}, mapError(model.NewProviderError("InvalidArgument", err.Error(), 400))
 		}
-		return listenTarget{query: q, parent: tt.Query.GetParent()}, nil
+		return listenTarget{query: q, parent: tt.Query.GetParent(), scope: scope}, nil
 	case *firestorepb.Target_Documents:
-		return listenTarget{documents: tt.Documents.GetDocuments()}, nil
+		return listenTarget{documents: tt.Documents.GetDocuments(), scope: scope}, nil
 	default:
 		return listenTarget{}, status.Error(codes.InvalidArgument, "target must specify a query or documents")
 	}
@@ -566,8 +701,9 @@ func (ls *listenSession) queryDocs(t *listenTarget) ([]firestorestore.Document, 
 }
 
 // seedView populates a target's view from current state without emitting a
-// snapshot. It is used after an incremental replay so subsequent live deltas
-// diff against the resumed result set rather than re-emitting all of it.
+// snapshot. It is used after an incremental replay of a document target so
+// subsequent live deltas diff against the resumed result set rather than
+// re-emitting all of it.
 func (ls *listenSession) seedView(t *listenTarget) error {
 	if t.isQuery() {
 		docs, err := ls.queryDocs(t)
@@ -591,6 +727,125 @@ func (ls *listenSession) seedView(t *listenTarget) error {
 		t.view[doc.Name] = struct{}{}
 	}
 	return nil
+}
+
+// replayQuery reconciles a query target's result set from the resume position
+// `from` up to now, in terms of the target's own query.
+//
+// Live deltas diff the query's result set against the target's per-target view
+// (computeChange). Catch-up has no such view — the target is new to this stream,
+// and the emulator keeps no document history, only the write feed — so the
+// replay is a net reconciliation over the documents the feed touched:
+//
+//   - A touched document the query selects now is sent as a DocumentChange
+//     (whether it just entered the query, moved inside a limit, or only changed
+//     content).
+//   - A touched document the query no longer selects leaves the target's result
+//     set: a DocumentDelete when the last change was a deletion, and a
+//     DocumentRemove when an update moved it out of the where predicate, order,
+//     limit, or offset. It is only sent when the retained feed shows the
+//     document was in the result set at the resume position.
+//   - A document the feed does not mention keeps its state and is not
+//     re-streamed. Its membership can still shift when a touched document enters
+//     or leaves a limit/offset window; the emulator has no historical result set
+//     to diff, so that shift is not replayed (see the package's Listen fidelity
+//     note).
+//
+// Membership always comes from re-running the target query (queryDocs), never
+// from a local comparator, so order_by/limit/offset behave exactly as they do
+// for live deltas.
+func (ls *listenSession) replayQuery(id int32, lt *listenTarget, from uint64) error {
+	docs, err := ls.queryDocs(lt)
+	if err != nil {
+		return mapError(err)
+	}
+	final := make(map[string]firestorestore.Document, len(docs))
+	for _, d := range docs {
+		final[d.Name] = d
+	}
+
+	// One pass over the retained feed: each document's state at the resume
+	// position (nil when the feed shows it was deleted then), and its latest
+	// state among the events this target must replay.
+	priorState := make(map[string]*firestorestore.Document)
+	lastState := make(map[string]*firestorestore.Document)
+	for _, ev := range ls.srv.svc.ChangesSince(0) {
+		if ev.Seq <= from {
+			priorState[ev.Name] = ev.Doc
+			continue
+		}
+		if ls.targetMatches(*lt, ev) {
+			lastState[ev.Name] = ev.Doc
+		}
+	}
+
+	names := make([]string, 0, len(lastState))
+	for name := range lastState {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// Removals first, mirroring computeChange's diff: documents that the query
+	// no longer selects leave the target's view before new ones are added.
+	for _, name := range names {
+		if _, ok := final[name]; ok {
+			continue
+		}
+		visible, err := ls.replayPriorMatches(lt, priorState, name)
+		if err != nil {
+			return err
+		}
+		if !visible {
+			continue
+		}
+		if lastState[name] == nil {
+			if err := ls.sendDocumentDelete([]int32{id}, name); err != nil {
+				return err
+			}
+		} else if err := ls.sendDocumentRemove([]int32{id}, name); err != nil {
+			return err
+		}
+	}
+	for _, name := range names {
+		d, ok := final[name]
+		if !ok {
+			continue
+		}
+		if err := ls.sendDocumentChange([]int32{id}, nil, d); err != nil {
+			return err
+		}
+	}
+
+	lt.view = make(map[string]struct{}, len(final))
+	for name := range final {
+		lt.view[name] = struct{}{}
+	}
+	return nil
+}
+
+// replayPriorMatches reports whether the retained feed shows a document in the
+// target's result set at the resume position. priorState holds each document's
+// last retained state at or before that position (nil when deleted then); a
+// document absent from it predates the retained window, so its earlier
+// membership cannot be established and no removal is invented for it. The
+// query itself decides membership, so a document that never matched is never
+// replayed. (The single-document probe cannot apply a limit/offset cut, so it
+// may report a where/scope match for a document that sat outside the limit;
+// the resulting DocumentRemove is then redundant but harmless.)
+func (ls *listenSession) replayPriorMatches(lt *listenTarget, priorState map[string]*firestorestore.Document, name string) (bool, error) {
+	prior, known := priorState[name]
+	if !known || prior == nil {
+		return false, nil
+	}
+	// Change-feed bodies are published before the store stamps derived ancestry,
+	// so derive it here before the query resolves the document's collection.
+	doc := *prior
+	firestorestore.DeriveAncestry(&doc)
+	docs, err := firestoreprovider.ExecuteQuery([]*firestorestore.Document{&doc}, lt.query, lt.parent)
+	if err != nil {
+		return false, mapError(err)
+	}
+	return len(docs) > 0, nil
 }
 
 func (ls *listenSession) sendReset(id int32) error {

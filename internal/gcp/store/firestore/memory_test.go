@@ -230,3 +230,29 @@ func TestNormalizeDocumentDefaultsTimestamp(t *testing.T) {
 		t.Errorf("expected non-nil Fields after normalize")
 	}
 }
+
+// TestDeriveAncestry asserts DeriveAncestry fills the collection scope fields
+// from the document name without touching timestamps or fields, so a document
+// that did not pass through the store (a change-feed event body) can still be
+// matched against a query's collection selector.
+func TestDeriveAncestry(t *testing.T) {
+	doc := &Document{Name: "projects/p/databases/db/documents/chatrooms/r1/messages/m1"}
+	DeriveAncestry(doc)
+	if doc.CollectionID != "messages" {
+		t.Errorf("CollectionID = %q, want messages", doc.CollectionID)
+	}
+	want := "projects/p/databases/db/documents/chatrooms/r1/messages"
+	if doc.ParentPath != want {
+		t.Errorf("ParentPath = %q, want %q", doc.ParentPath, want)
+	}
+	if !doc.CreateTime.IsZero() || doc.Fields != nil {
+		t.Errorf("DeriveAncestry must not touch timestamps or fields: %+v", doc)
+	}
+
+	// A malformed name or a top-level collection is left alone.
+	bad := &Document{Name: "not/a/document/name"}
+	DeriveAncestry(bad)
+	if bad.CollectionID != "" || bad.ParentPath != "" {
+		t.Errorf("malformed name derived %q/%q", bad.CollectionID, bad.ParentPath)
+	}
+}

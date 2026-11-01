@@ -4,9 +4,12 @@
 // # Listen fidelity
 //
 // Listen delta replay uses the shared change-feed's monotonic sequence as the
-// resume token (an opaque 8-byte encoding of the sequence; see
-// EncodeResumeToken). Three deliberate approximations of real Firestore are
-// documented here:
+// resume position. A per-target TargetChange_CURRENT token is a versioned,
+// scope-bound token: "FTK1" + sequence + an opaque fingerprint of the target's
+// query scope (parent plus structured query, or its document list). The legacy
+// 8-byte bare sequence is still accepted and is still what the stream-wide
+// empty-target_ids NO_CHANGE frame carries. Deliberate approximations of real
+// Firestore are documented here:
 //
 //   - Bounded history. The change-feed retains the most recent
 //     changeLogRetention events and drops older ones, advancing a floor. A resume
@@ -15,6 +18,13 @@
 //     fresh snapshot, matching real Firestore's behavior for an un-honorable
 //     resume token. A token of 0 is likewise not a resumable position, because the
 //     log records writes rather than a full document history.
+//   - Scope-bound tokens. A per-target token identifies the target scope it was
+//     minted for. Replaying it against a different query would deliver deltas for
+//     documents the new query does not select, so that target is reset before its
+//     fresh snapshot instead. The stream-wide NO_CHANGE token cannot name one
+//     target's identity (it covers every target on the stream), so it stays
+//     unbound: resuming from it replays against the added target with that
+//     target's query filtering the catch-up, but cannot trigger a scope reset.
 //   - Per-target cursors. Each target tracks the last sequence delivered to it.
 //     Its TargetChange_CURRENT frame carries that target's own sequence. The
 //     empty-target_ids NO_CHANGE frame's token must cover all targets at once; it
@@ -31,6 +41,15 @@
 //     only and does not re-stream the pre-existing result set, so a client must
 //     already hold the snapshot it is resuming from. Snapshots are computed from
 //     current document state rather than a consistent read-time index.
+//   - Replay membership. A query target's catch-up is a net reconciliation:
+//     documents the feed touched and the query now selects are sent as
+//     DocumentChange, and touched documents it no longer selects are removed or
+//     deleted. Membership comes from re-running the query, so where/order_by/
+//     limit/offset apply exactly as they do to live deltas. Whether a removed
+//     document was in the view at the resume position is read from its retained
+//     pre-resume change-log body; when that body has already been evicted (the
+//     feed's history window is bounded), no removal is invented for it and no
+//     order/limit shift caused solely by an untouched document is replayed.
 package firestore
 
 import (

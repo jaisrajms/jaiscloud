@@ -138,6 +138,14 @@ func normalizeDocument(doc *Document) {
 	if doc.UpdateTime.IsZero() {
 		doc.UpdateTime = doc.CreateTime
 	}
+	DeriveAncestry(doc)
+}
+
+// DeriveAncestry fills CollectionID and ParentPath from Name, so a document
+// that did not pass through normalizeDocument (for example a change-feed event
+// body, which the write path publishes before the store derives them) still
+// resolves its collection scope for query matching.
+func DeriveAncestry(doc *Document) {
 	project, database, path, ok := ParseDocumentName(doc.Name)
 	if !ok {
 		return
