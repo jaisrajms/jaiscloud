@@ -227,6 +227,6 @@ func (s *Service) settle(op mkstore.Operation) mkstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
-	s.tracker.EmitOperation("managedkafka", op.ID, op.ID, op.Verb)
+	s.tracker.EmitOperation("managedkafka", op.ID, op.ID, op.Verb, op.ProjectID)
 	return op
 }

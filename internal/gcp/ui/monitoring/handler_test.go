@@ -67,6 +67,36 @@ func (m *mockProvider) DeleteNotificationChannel(_ context.Context, nr *model.No
 func (m *mockProvider) ListNotificationChannelDescriptors(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) ListServices(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) GetService(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) CreateService(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) UpdateService(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) DeleteService(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) ListServiceLevelObjectives(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) GetServiceLevelObjective(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) CreateServiceLevelObjective(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) UpdateServiceLevelObjective(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) DeleteServiceLevelObjective(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 
 func testCfg() *config.Config {
 	return &config.Config{
@@ -180,6 +210,192 @@ func TestNotificationChannel_CRUD(t *testing.T) {
 func TestGetAlertPolicy_PropagatesProviderError(t *testing.T) {
 	mock := &mockProvider{err: model.NewProviderError("NotFound", "policy not found", http.StatusNotFound)}
 	w := do(t, mock, http.MethodGet, "/alertPolicies/missing", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["code"] != "NotFound" {
+		t.Fatalf("code = %q, want NotFound", body["code"])
+	}
+}
+
+func TestListServices_ForwardsProjectFilterAndPaging(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/services?filter=display_name%3D%22checkout%22&pageSize=25&pageToken=abc", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.ListServices" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+	if mock.lastNR.Params["project"] != "test-project" {
+		t.Fatalf("project = %v", mock.lastNR.Params["project"])
+	}
+	if mock.lastNR.Params["filter"] != `display_name="checkout"` {
+		t.Fatalf("filter = %v", mock.lastNR.Params["filter"])
+	}
+	if mock.lastNR.Params["pageSize"] != "25" || mock.lastNR.Params["pageToken"] != "abc" {
+		t.Fatalf("paging = %v", mock.lastNR.Params)
+	}
+}
+
+func TestGetService_ResourceName(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/services/checkout", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.GetService" || mock.lastNR.Params["name"] != "projects/test-project/services/checkout" {
+		t.Fatalf("action/name = %q/%v", mock.lastNR.Action, mock.lastNR.Params["name"])
+	}
+}
+
+func TestCreateService_SetsIDAndBody(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPost, "/services?serviceId=checkout",
+		`{"displayName":"Checkout","custom":{"displayName":"Checkout"},"userLabels":{"team":"payments"}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Params["project"] != "test-project" || mock.lastNR.Params["serviceId"] != "checkout" {
+		t.Fatalf("project/serviceId = %v/%v", mock.lastNR.Params["project"], mock.lastNR.Params["serviceId"])
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["displayName"] != "Checkout" {
+		t.Fatalf("body = %+v", body)
+	}
+	if _, ok := body["custom"]; !ok {
+		t.Fatalf("custom identifier missing from body: %+v", body)
+	}
+}
+
+func TestUpdateService_ResourceNameBodyAndMask(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPatch, "/services/checkout?updateMask=displayName",
+		`{"displayName":"Checkout v2"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.UpdateService" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+	if mock.lastNR.Params["name"] != "projects/test-project/services/checkout" {
+		t.Fatalf("name = %v", mock.lastNR.Params["name"])
+	}
+	if mock.lastNR.Params["updateMask"] != "displayName" {
+		t.Fatalf("updateMask = %v", mock.lastNR.Params["updateMask"])
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["displayName"] != "Checkout v2" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestDeleteService_ResourceName(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodDelete, "/services/checkout", "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Params["name"] != "projects/test-project/services/checkout" {
+		t.Fatalf("name = %v", mock.lastNR.Params["name"])
+	}
+}
+
+func TestListServiceLevelObjectives_ForwardsServiceFilterAndPaging(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/services/checkout/serviceLevelObjectives?filter=display_name%3D%22availability%22&pageSize=10&pageToken=x", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.ListServiceLevelObjectives" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+	if mock.lastNR.Params["project"] != "test-project" || mock.lastNR.Params["service"] != "checkout" {
+		t.Fatalf("project/service = %v/%v", mock.lastNR.Params["project"], mock.lastNR.Params["service"])
+	}
+	if mock.lastNR.Params["filter"] != `display_name="availability"` {
+		t.Fatalf("filter = %v", mock.lastNR.Params["filter"])
+	}
+	if mock.lastNR.Params["pageSize"] != "10" || mock.lastNR.Params["pageToken"] != "x" {
+		t.Fatalf("paging = %v", mock.lastNR.Params)
+	}
+}
+
+func TestGetServiceLevelObjective_ResourceName(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/services/checkout/serviceLevelObjectives/availability", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	want := "projects/test-project/services/checkout/serviceLevelObjectives/availability"
+	if mock.lastNR.Action != "Monitoring.GetServiceLevelObjective" || mock.lastNR.Params["name"] != want {
+		t.Fatalf("action/name = %q/%v", mock.lastNR.Action, mock.lastNR.Params["name"])
+	}
+}
+
+func TestCreateServiceLevelObjective_SetsIDAndBody(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPost, "/services/checkout/serviceLevelObjectives?serviceLevelObjectiveId=availability",
+		`{"displayName":"99.9% availability","goal":0.999,"rollingPeriod":"86400s","serviceLevelIndicator":{"basicSli":{"availability":{}}}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.CreateServiceLevelObjective" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+	if mock.lastNR.Params["project"] != "test-project" || mock.lastNR.Params["service"] != "checkout" {
+		t.Fatalf("project/service = %v/%v", mock.lastNR.Params["project"], mock.lastNR.Params["service"])
+	}
+	if mock.lastNR.Params["serviceLevelObjectiveId"] != "availability" {
+		t.Fatalf("serviceLevelObjectiveId = %v", mock.lastNR.Params["serviceLevelObjectiveId"])
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["goal"] != 0.999 || body["rollingPeriod"] != "86400s" {
+		t.Fatalf("body = %+v", body)
+	}
+	if _, ok := body["serviceLevelIndicator"].(map[string]any); !ok {
+		t.Fatalf("serviceLevelIndicator missing from body: %+v", body)
+	}
+}
+
+func TestUpdateServiceLevelObjective_ResourceNameBodyAndMask(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPatch, "/services/checkout/serviceLevelObjectives/availability?updateMask=goal",
+		`{"goal":0.995,"serviceLevelIndicator":{"basicSli":{"availability":{}}}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.UpdateServiceLevelObjective" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+	want := "projects/test-project/services/checkout/serviceLevelObjectives/availability"
+	if mock.lastNR.Params["name"] != want {
+		t.Fatalf("name = %v", mock.lastNR.Params["name"])
+	}
+	if mock.lastNR.Params["updateMask"] != "goal" {
+		t.Fatalf("updateMask = %v", mock.lastNR.Params["updateMask"])
+	}
+}
+
+func TestDeleteServiceLevelObjective_ResourceName(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodDelete, "/services/checkout/serviceLevelObjectives/availability", "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	want := "projects/test-project/services/checkout/serviceLevelObjectives/availability"
+	if mock.lastNR.Params["name"] != want {
+		t.Fatalf("name = %v", mock.lastNR.Params["name"])
+	}
+}
+
+func TestServiceLevelObjective_PropagatesProviderError(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("NotFound", "slo not found", http.StatusNotFound)}
+	w := do(t, mock, http.MethodGet, "/services/checkout/serviceLevelObjectives/missing", "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", w.Code, w.Body.String())
 	}

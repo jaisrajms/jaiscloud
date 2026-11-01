@@ -86,11 +86,11 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 1137 | 985 | 106 | 14 | 32 | 87% |
-| **gRPC** (official clients) | 463 | 442 | 1 | 0 | 20 | 95% |
-| **REST** (Discovery-backed) | 674 | 543 | 105 | 14 | 12 | 81% |
+| **Overall** | 1166 | 987 | 123 | 14 | 42 | 85% |
+| **gRPC** (official clients) | 491 | 443 | 18 | 0 | 30 | 90% |
+| **REST** (Discovery-backed) | 675 | 544 | 105 | 14 | 12 | 81% |
 
-Recorded evidence: **630/674** REST cells and **442/463** gRPC cells are
+Recorded evidence: **631/675** REST cells and **443/491** gRPC cells are
 `verified`; every Discovery-mapped `ga` REST cell now has a validated transcript
 response (the remaining unverified REST cells are `limited`/`preview`/
 `unsupported`, or `ga` operations with no Discovery method — the shared
@@ -100,8 +100,8 @@ function/Cloud Run data-plane URLs).
 - gRPC-only wire services (no REST descriptor of their own): **Firestore Admin,
   Operations (long-running)**. Firestore Admin's REST control plane is served
   under the `firestore` service descriptor (see the `firestore` row).
-- gRPC split = 442 `ga` + 1 `limited` + 20 `unsupported` = 463. REST split = 543 + 105 + 14 + 12 = 674.
-  Overall = 463 + 674 = 1137.
+- gRPC split = 443 `ga` + 18 `limited` + 30 `unsupported` = 491. REST split = 544 + 105 + 14 + 12 = 675.
+  Overall = 491 + 675 = 1166.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
@@ -127,7 +127,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
 | `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; `condition_threshold` + `condition_absent` are evaluated. |
 | `logging` | grpc, rest | 10/11 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
-| `iam` | grpc, rest | 16/16 | 🟢 | Shape only | Shape only | Service accounts + policy: authz is **not enforced**. |
+| `iam` | grpc, rest | 24/52 | 🟢 | Shape only | Shape only | REST service accounts + keys + policy, mirrored over gRPC by the IAM Admin service (`google.iam.admin.v1.IAM`: service-account CRUD, all seven key RPCs including `keys.upload`, deprecated `signBlob`/`signJwt`, service-account IAM policy); the role/permission catalog RPCs are `unsupported` stubs and authz is **not enforced**. |
 | `eventarc` | grpc, rest | 30/57 | 🟢 | Shape only | Shape only | Trigger/channel/provider CRUD over one core (gRPC + REST); a Pub/Sub-sourced trigger whose `destination.cloudFunction` names an existing function delivers matching events to it and provisions a backing Pub/Sub subscription (`transport.pubsub.subscription`, output-only) as its dead-letter surface (the other destinations are metadata only). The other 27 Eventarc RPCs are `unsupported` stubs. |
 | `managedkafka` | grpc, rest | 34/44 | 🟢 | Shape only | Shape only | Metadata-only by default; an opt-in `JAISCLOUD_KAFKA_BROKER_MODE=docker\|k8s\|native` (or a global `JAISCLOUD_EXECUTOR_MODE`) starts a real Redpanda broker, so topic CRUD, consumer groups/offsets, and ACLs hit the Kafka wire and `bootstrapAddress` becomes live. `docker` runs the Redpanda image as a container on the local daemon (needs only the Docker daemon — no cluster, no host `rpk` toolchain); `k8s` runs a Pod + Service; `native` runs an `rpk` subprocess. With no broker (the default) consumer-group `list` returns an empty set and `get`/`update`/`delete` report `NOT_FOUND`. The real-Kafka paths are proven by the k3d gate `make test-managedkafka-broker-k8s` and the local-daemon gate `make test-managedkafka-broker-docker`. |
 | `metastore` | grpc, rest | 26/38 | 🟢 | Shape only | Shape only | Control plane only; the Hive Thrift serving plane (:9083) is a separate surface (a single global catalog shared by all Services, not per-service — matching the AWS Glue Data Catalog's one-catalog-per-account+region model) that serves databases/tables/partitions/locks, the client-connect identity RPC (`set_ugi`), and the request-struct table reads (`get_table_req`/`get_table_objects_by_name_req`) Hive 2.3+/3.x clients use. An off-the-shelf Go HMS client drives it end-to-end (with Postgres restart) in `tests/persistent_mode/gcp/hms/`. The 5 deferred RPCs (export/restore/query/move/alter) are `unsupported` stubs by decision (admin/DR operations off the Spark job path, with no AWS Glue analogue); the shared `operations.get`/`list` path is disambiguated from Cloud Workflows by the service's own host token (`metastore.localhost` / `metastore.googleapis.com`). |

@@ -301,6 +301,9 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"GET", loc + "/workloadIdentityPools/pool/allowedLocations", "GetAllowedLocations"},
 		{"POST", p + "/serviceAccounts/sa@x.com/keys/kid1:disable", "ServiceAccountKeyDisable"},
 		{"POST", p + "/serviceAccounts/sa@x.com/keys/kid1:enable", "ServiceAccountKeyEnable"},
+		// keys:upload is a custom verb on the keys *collection* (the name is the
+		// service account), so it must not fall through to ServiceAccountKeyCreate.
+		{"POST", p + "/serviceAccounts/sa@x.com/keys:upload", "ServiceAccountKeyUpload"},
 		// Firestore data-plane custom methods on the `documents` marker.
 		{"POST", fst + "/documents:commit", "Commit"},
 		{"POST", fst + "/documents:partitionQuery", "PartitionQuery"},

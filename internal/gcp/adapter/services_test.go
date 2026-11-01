@@ -145,6 +145,35 @@ func TestDetectServiceMonitoringV3(t *testing.T) {
 	}
 }
 
+// TestDetectServiceMonitoringV1Dashboards locks the REST-only v1 dashboards
+// path to Cloud Monitoring while every other /v1 path keeps its existing owner
+// (or stays unresolved).
+func TestDetectServiceMonitoringV1Dashboards(t *testing.T) {
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/v1/projects/p/dashboards"},
+		{http.MethodPost, "/v1/projects/p/dashboards"},
+		{http.MethodGet, "/v1/projects/p/dashboards/d1"},
+		{http.MethodPatch, "/v1/projects/p/dashboards/d1"},
+		{http.MethodDelete, "/v1/projects/p/dashboards/d1"},
+	} {
+		r, _ := http.NewRequest(tc.method, tc.path, nil)
+		if svc, _ := DetectService(r); svc != "monitoring" {
+			t.Errorf("%s %s detected as %q, want monitoring", tc.method, tc.path, svc)
+		}
+	}
+	// Non-dashboards /v1 paths keep their own owners.
+	for _, tc := range []struct{ path, want string }{
+		{"/v1/projects/p/topics", "pubsub"},
+		{"/v1/projects/p/secrets", "secretmanager"},
+		{"/v1/projects/p/services", "serviceusage"},
+	} {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if svc, _ := DetectService(r); svc != tc.want {
+			t.Errorf("GET %s detected as %q, want %q", tc.path, svc, tc.want)
+		}
+	}
+}
+
 // TestKnownServiceNamesIncludesGRPConly guards the transport-selection set: the
 // gRPC-only services must be present, otherwise a default "grpc" selection
 // would silently disable their gRPC surface.

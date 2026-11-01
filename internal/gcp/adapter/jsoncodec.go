@@ -608,6 +608,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "ServiceAccountKeyDisable"
 			case "enable":
 				return "ServiceAccountKeyEnable"
+			case "upload":
+				return "ServiceAccountKeyUpload"
 			}
 		case "documents":
 			// Custom methods POSTed to the "documents" collection marker:

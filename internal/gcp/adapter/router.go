@@ -307,6 +307,13 @@ func detectV1Service(path string) string {
 	if detectMemorystoreResourceType(rest) != "" {
 		return "redis"
 	}
+	// Cloud Monitoring's REST-only v1 dashboards API
+	// (/v1/projects/{project}/dashboards[/{id}]) is the only v1 surface the
+	// Monitoring service owns. Claim it before the generic resource-type switch,
+	// which has no dashboards arm (and before the GCS raw-media fallback).
+	if len(rest) > 0 && rest[0] == "dashboards" {
+		return "monitoring"
+	}
 	switch detectResourceType(rest) {
 	case "topics", "subscriptions":
 		return "pubsub"

@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 1137,
+    "total": 1174,
     "by_state": {
-      "ga": 985,
-      "limited": 106,
+      "ga": 995,
+      "limited": 123,
       "preview": 14,
-      "unsupported": 32
+      "unsupported": 42
     },
     "by_transport": {
       "grpc": {
-        "ga": 442,
-        "limited": 1,
-        "unsupported": 20
+        "ga": 443,
+        "limited": 18,
+        "unsupported": 30
       },
       "rest": {
-        "ga": 543,
+        "ga": 552,
         "limited": 105,
         "preview": 14,
         "unsupported": 12
@@ -43,7 +43,7 @@
         "unsupported": 8
       },
       "dataproc": {
-        "ga": 43,
+        "ga": 46,
         "unsupported": 2
       },
       "datastore": {
@@ -63,7 +63,9 @@
         "ga": 39
       },
       "iam": {
-        "ga": 23
+        "ga": 25,
+        "limited": 17,
+        "unsupported": 10
       },
       "iamcredentials": {
         "ga": 7
@@ -90,7 +92,7 @@
         "unsupported": 10
       },
       "monitoring": {
-        "ga": 68
+        "ga": 73
       },
       "operations": {
         "ga": 5
@@ -128,11 +130,11 @@
     },
     "evidence": {
       "verified": {
-        "grpc": 442,
-        "rest": 630
+        "grpc": 443,
+        "rest": 639
       },
       "unverified": {
-        "grpc": 21,
+        "grpc": 48,
         "rest": 44
       }
     },
@@ -147,7 +149,7 @@
       "operation": "BigQuery.CancelJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.cancel",
       "verified": false,
       "evidence": [
@@ -162,7 +164,7 @@
       "operation": "BigQuery.CreateDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.datasets.insert",
       "verified": true,
       "evidence": [
@@ -177,7 +179,7 @@
       "operation": "BigQuery.CreateTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tables.insert",
       "verified": true,
       "evidence": [
@@ -192,7 +194,7 @@
       "operation": "BigQuery.DeleteDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.datasets.delete",
       "verified": true,
       "evidence": [
@@ -207,7 +209,7 @@
       "operation": "BigQuery.DeleteJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.delete",
       "verified": false,
       "evidence": [
@@ -222,7 +224,7 @@
       "operation": "BigQuery.DeleteTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tables.delete",
       "verified": true,
       "evidence": [
@@ -237,7 +239,7 @@
       "operation": "BigQuery.GetDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.datasets.get",
       "verified": true,
       "evidence": [
@@ -251,7 +253,7 @@
       "operation": "BigQuery.GetJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.get",
       "verified": true,
       "evidence": [
@@ -265,7 +267,7 @@
       "operation": "BigQuery.GetQueryResults",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.getQueryResults",
       "verified": true,
       "evidence": [
@@ -279,7 +281,7 @@
       "operation": "BigQuery.GetServiceAccount",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.projects.getServiceAccount",
       "verified": true,
       "evidence": [
@@ -293,7 +295,7 @@
       "operation": "BigQuery.GetTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tables.get",
       "verified": true,
       "evidence": [
@@ -307,7 +309,7 @@
       "operation": "BigQuery.InsertAll",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tabledata.insertAll",
       "verified": true,
       "evidence": [
@@ -322,7 +324,7 @@
       "operation": "BigQuery.InsertJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.insert",
       "verified": true,
       "evidence": [
@@ -337,7 +339,7 @@
       "operation": "BigQuery.InsertJobResumable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.insert",
       "verified": true,
       "evidence": [
@@ -352,7 +354,7 @@
       "operation": "BigQuery.InsertJobResumableStart",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.insert",
       "verified": true,
       "evidence": [
@@ -367,7 +369,7 @@
       "operation": "BigQuery.ListDatasets",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.datasets.list",
       "verified": true,
       "evidence": [
@@ -381,7 +383,7 @@
       "operation": "BigQuery.ListJobs",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.list",
       "verified": true,
       "evidence": [
@@ -395,7 +397,7 @@
       "operation": "BigQuery.ListRows",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tabledata.list",
       "verified": true,
       "evidence": [
@@ -409,7 +411,7 @@
       "operation": "BigQuery.ListTables",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tables.list",
       "verified": true,
       "evidence": [
@@ -435,7 +437,7 @@
       "operation": "BigQuery.Query",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.jobs.query",
       "verified": true,
       "evidence": [
@@ -473,7 +475,7 @@
       "operation": "BigQuery.UpdateDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.datasets.update",
       "verified": false,
       "evidence": [
@@ -488,7 +490,7 @@
       "operation": "BigQuery.UpdateTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)",
       "discovery": "bigquery.tables.update",
       "verified": false,
       "evidence": [
@@ -2528,7 +2530,7 @@
         "discovery=dataproc.projects.regions.workflowTemplates.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 6 transcript entries)"
+        "verified=true (rest, 9 transcript entries)"
       ]
     },
     {
@@ -2801,6 +2803,46 @@
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.WorkflowTemplateGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.workflowTemplates.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.WorkflowTemplateSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.workflowTemplates.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.WorkflowTemplateTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.workflowTemplates.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -6441,15 +6483,194 @@
     },
     {
       "service": "iam",
+      "operation": "CreateRole",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "CreateServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "CreateServiceAccountKey",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "DeleteRole",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "DeleteServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "DeleteServiceAccountKey",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "DisableServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "DisableServiceAccountKey",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "EnableServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "EnableServiceAccountKey",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
       "operation": "GetIamPolicy",
       "transport": "grpc",
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=GetIamPolicy,GetIamPolicy (Eventarc message bus),GetIamPolicy (Eventarc trigger),GetIamPolicy (metastore)",
+        "grpc-checks=GetIamPolicy,GetIamPolicy (Eventarc message bus),GetIamPolicy (Eventarc trigger),GetIamPolicy (dataproc),GetIamPolicy (metastore)",
         "postgres=yes",
-        "transport=grpc (conformance=4/4 pass)",
+        "transport=grpc (conformance=5/5 pass)",
         "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "GetRole",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "GetServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "GetServiceAccountKey",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
       ]
     },
     {
@@ -6463,7 +6684,7 @@
         "discovery=iam.projects.serviceAccounts.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 22 transcript entries)"
+        "verified=true (rest, 24 transcript entries)"
       ]
     },
     {
@@ -6477,7 +6698,7 @@
         "discovery=iam.projects.serviceAccounts.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -6559,7 +6780,7 @@
         "discovery=iam.projects.serviceAccounts.keys.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -6573,7 +6794,7 @@
         "discovery=iam.projects.serviceAccounts.keys.disable",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -6587,7 +6808,7 @@
         "discovery=iam.projects.serviceAccounts.keys.enable",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -6600,7 +6821,7 @@
       "evidence": [
         "discovery=iam.projects.serviceAccounts.keys.get",
         "postgres=yes",
-        "verified=true (rest, 3 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -6612,6 +6833,19 @@
       "verified": true,
       "evidence": [
         "discovery=iam.projects.serviceAccounts.keys.list",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "IAM.ServiceAccountKeyUpload",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "iam.projects.serviceAccounts.keys.upload",
+      "verified": true,
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.keys.upload",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
       ]
@@ -6725,16 +6959,147 @@
     },
     {
       "service": "iam",
+      "operation": "LintPolicy",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "policy linting is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "ListRoles",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "ListServiceAccountKeys",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "ListServiceAccounts",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "PatchServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "QueryAuditableServices",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "auditable-service catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "QueryGrantableRoles",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "QueryTestablePermissions",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "permission catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
       "operation": "SetIamPolicy",
       "transport": "grpc",
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=SetIamPolicy,SetIamPolicy (Eventarc message bus),SetIamPolicy (Eventarc trigger),SetIamPolicy (metastore)",
+        "grpc-checks=SetIamPolicy,SetIamPolicy (Eventarc message bus),SetIamPolicy (Eventarc trigger),SetIamPolicy (dataproc),SetIamPolicy (metastore)",
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=4/4 pass)",
+        "transport=grpc (conformance=5/5 pass)",
         "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "SignBlob",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "SignJwt",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
       ]
     },
     {
@@ -6744,9 +7109,76 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=TestIamPermissions,TestIamPermissions (Eventarc message bus),TestIamPermissions (Eventarc trigger),TestIamPermissions (metastore)",
+        "grpc-checks=TestIamPermissions,TestIamPermissions (Eventarc message bus),TestIamPermissions (Eventarc trigger),TestIamPermissions (dataproc),TestIamPermissions (metastore)",
         "postgres=yes",
-        "transport=grpc (conformance=4/4 pass)",
+        "transport=grpc (conformance=5/5 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "UndeleteRole",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "UndeleteServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "UpdateRole",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "role catalog is not modelled; explicit Unimplemented stub",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "UpdateServiceAccount",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "verified": false,
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "UploadServiceAccountKey",
+      "transport": "grpc",
+      "state": "ga",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=UploadServiceAccountKey",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
         "verified=true (grpc)"
       ]
     },
@@ -11302,6 +11734,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.CreateDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.create",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 5 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.CreateMetricDescriptor",
       "transport": "rest",
       "state": "ga",
@@ -11400,6 +11846,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.DeleteDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.DeleteMetricDescriptor",
       "transport": "rest",
       "state": "ga",
@@ -11465,6 +11925,19 @@
         "discovery=monitoring.projects.alertPolicies.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.get",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.get",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -11567,6 +12040,19 @@
       "verified": true,
       "evidence": [
         "discovery=monitoring.projects.alertPolicies.list",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListDashboards",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.list",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.list",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
       ]
@@ -11687,6 +12173,20 @@
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.UpdateDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {

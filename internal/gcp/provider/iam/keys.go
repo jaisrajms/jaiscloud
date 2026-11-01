@@ -161,9 +161,9 @@ func matchesKeyType(keyType string, filter []string) bool {
 	return false
 }
 
-// createKey generates an RSA-2048 key pair and persists it.
-func (p *Provider) createKey(ctx context.Context, account, email string) (*serviceAccountKeyMeta, error) {
-	return serviceaccount.CreateKey(ctx, p.resources, account, email)
+// createKey generates a key pair of the requested algorithm and persists it.
+func (p *Provider) createKey(ctx context.Context, account, email, algorithm string) (*serviceAccountKeyMeta, error) {
+	return serviceaccount.CreateKeyWithAlgorithm(ctx, p.resources, account, email, algorithm)
 }
 
 // ensureKey returns an existing key for the SA, or creates a system-managed one.
@@ -208,11 +208,18 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 	if err != nil {
 		return nil, err
 	}
-	m, err := p.createKey(ctx, ref.Account, ref.Email)
+	// keyAlgorithm is the only input the create request carries that changes the
+	// result; Discovery documents the default as a 2K RSA key.
+	body, _ := nr.Params["body"].(map[string]any)
+	algorithm, _ := body["keyAlgorithm"].(string)
+	m, err := p.createKey(ctx, ref.Account, ref.Email, algorithm)
 	if err != nil {
 		return nil, err
 	}
-	privDER, _ := m.PrivDER()
+	privDER, err := m.PrivDER()
+	if err != nil {
+		return nil, model.NewProviderError("Internal", "generated key is missing its private key material", 500)
+	}
 	privPEM, _ := kmsstore.PrivateKeyPEM(privDER)
 	// client_id is the account's oauth2ClientId: the official client libraries
 	// read it out of the credentials file to build the OAuth2 client, so a
@@ -231,6 +238,44 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 	})
 	resp := keyCreateMap(nr, ref.Account, *m, base64.StdEncoding.EncodeToString(creds))
 	return provider.OK(resp), nil
+}
+
+// ServiceAccountKeyUpload serves iam.projects.serviceAccounts.keys.upload
+// (DC27): it stores the caller's public key as a USER_MANAGED, USER_PROVIDED
+// key. Uploaded keys carry no private half, so the response is the base
+// ServiceAccountKey map — Discovery scopes publicKeyData to keys.get and
+// privateKeyData/privateKeyType to keys.create, so neither belongs here.
+//
+// The path name addresses the service account, not a key (it ends in the keys
+// collection), which is why parseKeyParent normalises it. A miss through the
+// "projects/-" wildcard keeps the documented 403 while a concrete project
+// answers 404 (saLookupError), so the account is required to exist.
+func (p *Provider) ServiceAccountKeyUpload(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := p.resolveSA(ctx, nr, parseKeyParent(name))
+	if err != nil {
+		return nil, err
+	}
+	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	encoded, _ := body["publicKeyData"].(string)
+	if encoded == "" {
+		return nil, model.NewProviderError("InvalidArgument", "publicKeyData is required", 400)
+	}
+	publicKeyData, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidArgument", "publicKeyData must be base64-encoded", 400)
+	}
+	m, err := serviceaccount.UploadKey(ctx, p.resources, ref.Account, ref.Email, publicKeyData)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(keyBaseMap(nr, ref.Account, *m)), nil
 }
 
 func (p *Provider) ServiceAccountKeyList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -413,7 +458,13 @@ func (p *Provider) ServiceAccountSignBlob(ctx context.Context, nr *model.Normali
 	if err := serviceaccount.ValidateBlobPayload(raw); err != nil {
 		return nil, err
 	}
-	priv, _ := m.PrivDER()
+	priv, err := m.PrivDER()
+	if err != nil {
+		// signBlob always signs with the system-managed key, so this is an
+		// invariant violation (an uploaded key never reaches here); fail loud
+		// instead of signing with empty material.
+		return nil, model.NewProviderError("Internal", "sign failed: signing key has no private key material", 500)
+	}
 	sig, err := serviceaccount.SignBlob(priv, raw)
 	if err != nil {
 		return nil, model.NewProviderError("Internal", "sign failed", 500)
@@ -458,7 +509,10 @@ func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.Normaliz
 	if err != nil {
 		return nil, err
 	}
-	priv, _ := m.PrivDER()
+	priv, err := m.PrivDER()
+	if err != nil {
+		return nil, model.NewProviderError("Internal", "sign failed: signing key has no private key material", 500)
+	}
 	signed, err := serviceaccount.SignJWT(priv, m.KeyID, payloadStr)
 	if err != nil {
 		return nil, model.NewProviderError("Internal", "sign failed", 500)

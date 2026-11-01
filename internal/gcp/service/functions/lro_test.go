@@ -301,6 +301,7 @@ func TestFunctionsLROAsyncSettleEmitsStatusEvent(t *testing.T) {
 		ID:       op.ID,
 		State:    "DONE",
 		Detail:   "create",
+		Project:  "proj",
 	}
 	if !reflect.DeepEqual(ev, want) {
 		t.Fatalf("settle event = %+v, want %+v", ev, want)

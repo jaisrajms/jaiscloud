@@ -1028,6 +1028,66 @@ func (p routedMonitoring) ListNotificationChannelDescriptors(ctx context.Context
 	}, nr)
 }
 
+func (p routedMonitoring) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.ListServices", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ListServices(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) GetService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.GetService", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.GetService(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) CreateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.CreateService", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.CreateService(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) UpdateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.UpdateService", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.UpdateService(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) DeleteService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.DeleteService", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.DeleteService(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) ListServiceLevelObjectives(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.ListServiceLevelObjectives", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ListServiceLevelObjectives(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) GetServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.GetServiceLevelObjective", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.GetServiceLevelObjective(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) CreateServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.CreateServiceLevelObjective", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.CreateServiceLevelObjective(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) UpdateServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.UpdateServiceLevelObjective", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.UpdateServiceLevelObjective(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) DeleteServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.DeleteServiceLevelObjective", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.DeleteServiceLevelObjective(ctx, nr)
+	}, nr)
+}
+
 // Update serves the service-account edit form, which is a patch with an update mask.
 func (p routedIAM) Update(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "IAM.ServiceAccountPatch", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

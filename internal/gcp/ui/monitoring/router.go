@@ -30,5 +30,19 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Delete("/notificationChannels/{id}", h.DeleteNotificationChannel)
 	r.Get("/notificationChannelDescriptors", h.ListNotificationChannelDescriptors)
 
+	// Service Monitoring: services.
+	r.Get("/services", h.ListServices)
+	r.Post("/services", h.CreateService)
+	r.Get("/services/{service}", h.GetService)
+	r.Patch("/services/{service}", h.UpdateService)
+	r.Delete("/services/{service}", h.DeleteService)
+
+	// Service Monitoring: service level objectives.
+	r.Get("/services/{service}/serviceLevelObjectives", h.ListServiceLevelObjectives)
+	r.Post("/services/{service}/serviceLevelObjectives", h.CreateServiceLevelObjective)
+	r.Get("/services/{service}/serviceLevelObjectives/{slo}", h.GetServiceLevelObjective)
+	r.Patch("/services/{service}/serviceLevelObjectives/{slo}", h.UpdateServiceLevelObjective)
+	r.Delete("/services/{service}/serviceLevelObjectives/{slo}", h.DeleteServiceLevelObjective)
+
 	return r
 }

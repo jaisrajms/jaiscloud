@@ -1507,6 +1507,13 @@ func applyResolved(items []*Item, entries []resolvedEntry, prs []ghPR) {
 			switch it.State {
 			case "todo", "done?", "deferred":
 				it.State = "done"
+			case "branch", "closed":
+				// A declared branch is weaker evidence than the overlay's merged
+				// PR: a close-out session's own branch (declared in the wave plan)
+				// is not the implementing branch, so it must not keep a merged fix
+				// open. Same for a closed PR superseded by the merged one.
+				it.State = "merged"
+				it.PR = e.PR
 			}
 			if e.Note != "" {
 				it.Note = e.Note

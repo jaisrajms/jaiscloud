@@ -428,6 +428,11 @@ func Scenarios(suffix string) []Scenario {
 	// ─── IAM ──────────────────────────────────────────────────────────────────
 
 	saBase := "/v1/projects/" + p + "/serviceAccounts"
+	// keys.upload (DC27) gets a throwaway service account of its own, so the
+	// key the emulator stores from the caller's public key never interferes
+	// with the generated keypair the main chain exercises.
+	saUpload := "conf-sau-" + suffix
+	saUploadEmail := saUpload + "@" + p + ".iam.gserviceaccount.com"
 	sc = append(sc,
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + sa,
 			Body: `{"serviceAccount":{"displayName":"Conformance SA"}}`},
@@ -446,6 +451,22 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "iam", Method: "GET", Path: "/v1/${keyName}"},
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "/" + saEmail + ":signBlob",
 			Body: `{"bytesToSign":"aGVsbG8="}`},
+		// keys.upload: publicKeyData is the base64 form of the documented
+		// certificate-wrapped RSA public key. The response is a USER_MANAGED /
+		// USER_PROVIDED key whose get carries publicKeyData and whose
+		// disable/enable lifecycle matches a generated key's.
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + saUpload,
+			Body: `{"serviceAccount":{"displayName":"Conformance SA key upload"}}`},
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "/" + saUploadEmail + "/keys:upload",
+			Body: fmt.Sprintf(`{"publicKeyData":%q}`, iamUploadPublicKeyData()),
+			Save: map[string]string{"uploadedKeyName": "name"}},
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${uploadedKeyName}"},
+		Scenario{Service: "iam", Method: "GET", Path: saBase + "/" + saUploadEmail + "/keys"},
+		Scenario{Service: "iam", Method: "POST", Path: "/v1/${uploadedKeyName}:disable"},
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${uploadedKeyName}"},
+		Scenario{Service: "iam", Method: "POST", Path: "/v1/${uploadedKeyName}:enable"},
+		Scenario{Service: "iam", Method: "DELETE", Path: "/v1/${uploadedKeyName}"},
+		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saUploadEmail},
 		Scenario{Service: "iam", Method: "GET", Path: saBase + "/missing-" + suffix + "@" + p + ".iam.gserviceaccount.com"},
 		Scenario{Service: "iam", Method: "DELETE", Path: "/v1/${keyName}"},
 		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saEmail},
@@ -879,6 +900,32 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "monitoring", Method: "DELETE", Path: monBase + "/metricDescriptors/" + mType},
 	)
 
+	// ─── Cloud Monitoring v1 dashboards (REST-only) ───────────────────────────
+	// The v1 Discovery document (a secondary version of the monitoring snapshot,
+	// merged under the same service key) declares projects.dashboards. A
+	// dashboard is an opaque document stored verbatim, with etag-based optimistic
+	// concurrency. This flow creates one with an explicit name, reads it, lists
+	// the collection, fully replaces it with a patch (first carrying the body
+	// name, then the Terraform-style name-less body with the stored etag), then
+	// deletes it and proves the NotFound envelope with a post-delete read.
+	dashName := "projects/" + p + "/dashboards/conf-dash-" + suffix
+	sc = append(sc,
+		Scenario{Service: "monitoring", Method: "POST", Path: "/v1/projects/" + p + "/dashboards",
+			Body: fmt.Sprintf(`{"name":%q,"displayName":"Conf Dashboard %s","gridLayout":{"columns":"2","widgets":[{"title":"Requests","xyChart":{"dataSets":[{"timeSeriesQuery":{"prometheusQuery":"rate(requests_total[5m])"}}]}}]},"dashboardFilters":[{"filterType":"VALUE_ONLY","labelKey":"env"}],"labels":{"team":"conf"}}`, dashName, suffix)},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v1/" + dashName},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v1/projects/" + p + "/dashboards"},
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v1/" + dashName,
+			Body: fmt.Sprintf(`{"name":%q,"displayName":"Conf Dashboard %s updated","mosaicLayout":{"columns":12,"tiles":[{"xPos":0,"yPos":0,"width":6,"height":4,"widget":{"title":"Latency"}}]}}`, dashName, suffix),
+			Save: map[string]string{"dashEtag": "etag"}},
+		// The Terraform google_monitoring_dashboard update shape: the dashboard
+		// JSON plus the etag from the most recent read, with no name field (the
+		// name is the path-bound resource name).
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v1/" + dashName,
+			Body: fmt.Sprintf(`{"etag":"${dashEtag}","displayName":"Conf Dashboard %s patched again"}`, suffix)},
+		Scenario{Service: "monitoring", Method: "DELETE", Path: "/v1/" + dashName},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v1/" + dashName},
+	)
+
 	// ─── Google Kubernetes Engine (GKE) v1 ────────────────────────────────────
 	// GKE shares the canonical /v1/projects/{p}/locations/{l}/clusters path with
 	// Managed Kafka on one origin, so the recorder reaches it through the
@@ -1206,6 +1253,27 @@ func Scenarios(suffix string) []Scenario {
 				`{"id":%q,"version":1,"labels":{"conformance":"true"},"placement":{"managedCluster":{"clusterName":%q}},"jobs":[{"stepId":"extract","pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract-v2.py"}}]}`,
 				dpTemplate, dpCluster, suffix)},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/workflowTemplates/" + dpTemplate},
+		// The workflowTemplates IAM mixin is served on the resource itself and,
+		// unlike Metastore/KMS, every verb is a POST (Dataproc's Discovery
+		// methods). A conditional binding must be stored at version 3 (AIP-149);
+		// the stale-etag write proves the policy plane's etag OCC, and the
+		// missing-template read proves the existence check runs first.
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/dataproc.worker","members":["user:conformance@example.com"],` +
+				`"condition":{"title":"conformance","description":"time bounded","expression":"request.time < timestamp(\"2027-01-01T00:00:00Z\")"}}]}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":testIamPermissions",
+			Body: `{"permissions":["dataproc.workflowTemplates.get","dataproc.workflowTemplates.update"]}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:stale@example.com"]}],"etag":"stale"}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + "-absent:getIamPolicy", Body: `{}`},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/workflowTemplates/" + dpTemplate},
 		// A GKE virtual cluster naming a Spark History Server cluster that does
 		// not exist is NotFound: the field promises the referenced cluster

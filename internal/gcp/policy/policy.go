@@ -8,6 +8,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -79,12 +80,14 @@ func Set(ctx context.Context, s store.ResourceStore, account, resourceType, id s
 	}
 	reqEtag, _ := policyBody["etag"].(string)
 
-	pol := Policy{Version: 1, Etag: EtagFor(bindings), Bindings: bindings}
-	if v, ok := policyBody["version"].(float64); ok {
-		pol.Version = int(v)
+	version, err := resolveVersion(policyBody["version"], hasCondition(bindings))
+	if err != nil {
+		return Policy{}, err
 	}
 
-	_, err := s.UpsertAtomic(ctx, account, store.GlobalRegion, resourceType, id, func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+	pol := Policy{Version: version, Etag: EtagFor(bindings), Bindings: bindings}
+
+	_, err = s.UpsertAtomic(ctx, account, store.GlobalRegion, resourceType, id, func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
 		existing := Policy{Version: 1, Etag: DefaultEtag, Bindings: []any{}}
 		if exists {
 			json.Unmarshal(current.Data, &existing)
@@ -102,6 +105,97 @@ func Set(ctx context.Context, s store.ResourceStore, account, resourceType, id s
 		return Policy{}, err
 	}
 	return pol, nil
+}
+
+// resolveVersion decides the stored policy version and enforces the AIP-149
+// version rules. IAM documents versions 0 (unspecified), 1 and 3; 3 is mandatory
+// for any policy carrying IAM Conditions.
+//
+//   - absent/0 with no condition -> 1 (the unconditional default)
+//   - absent/0 with a condition -> 3 (Terraform sends no version at all, so
+//     rejecting it would make a conditional binding impossible to apply)
+//   - explicit 1 -> 1, explicit 1 with a condition -> INVALID_ARGUMENT
+//   - explicit 3 -> 3, with or without a condition
+//   - anything else (2, negative, non-integral, non-numeric) -> INVALID_ARGUMENT
+//
+// An unconditional policy is never upgraded to 3 implicitly.
+func resolveVersion(raw any, conditional bool) (int, error) {
+	version, present, err := parseVersion(raw)
+	if err != nil {
+		return 0, err
+	}
+	if present {
+		switch version {
+		case 0:
+			present = false
+		case 1, 3:
+		default:
+			return 0, invalidVersion()
+		}
+	}
+	if conditional {
+		if present && version == 1 {
+			return 0, model.NewProviderError("InvalidArgument",
+				"conditional role bindings require IAM policy version 3", 400)
+		}
+		return 3, nil
+	}
+	if !present {
+		return 1, nil
+	}
+	return version, nil
+}
+
+// parseVersion decodes a Policy.version from a decoded JSON body or a
+// proto-converted map. present is false only for an absent/null field; an
+// explicit 0 is returned as present and normalised to "unspecified" by
+// resolveVersion.
+func parseVersion(raw any) (version int, present bool, err error) {
+	switch v := raw.(type) {
+	case nil:
+		return 0, false, nil
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
+			return 0, false, invalidVersion()
+		}
+		return int(v), true, nil
+	case int:
+		return v, true, nil
+	case int32:
+		return int(v), true, nil
+	case int64:
+		return int(v), true, nil
+	case json.Number:
+		n, convErr := v.Int64()
+		if convErr != nil {
+			return 0, false, invalidVersion()
+		}
+		return int(n), true, nil
+	default:
+		return 0, false, invalidVersion()
+	}
+}
+
+// invalidVersion is the canonical InvalidArgument for an unsupported policy
+// version. IAM (AIP-149) accepts only 0, 1 and 3.
+func invalidVersion() error {
+	return model.NewProviderError("InvalidArgument",
+		"unsupported IAM policy version: valid values are 0, 1, and 3", 400)
+}
+
+// hasCondition reports whether any binding carries a non-empty condition
+// object. Bindings are otherwise opaque and are stored/rendered verbatim.
+func hasCondition(bindings []any) bool {
+	for _, b := range bindings {
+		m, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		if c, ok := m["condition"].(map[string]any); ok && len(c) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ToMap renders a Policy as a response map. An absent binding list is rendered
