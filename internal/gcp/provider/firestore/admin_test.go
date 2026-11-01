@@ -355,13 +355,16 @@ func TestDatabaseServerOwnedFields(t *testing.T) {
 	}
 
 	// An explicit `*` patch that carries the unchanged immutable edition plus
-	// changed OUTPUT_ONLY fields applies only the mutable ones; the retention
-	// window follows the effective PITR toggle (unchanged here), not the body.
+	// changed OUTPUT_ONLY fields applies the mutable ones; because `*` is a full
+	// replacement the patch must restate the mutable fields it wants to keep, so
+	// PITR is carried explicitly and the OUTPUT_ONLY retention in the body is
+	// still ignored in favour of the derived window.
 	starred, _, err := p.UpdateDatabaseDef(ctx, "proj", "server-owned", databaseDef{
-		ConcurrencyMode:        "PESSIMISTIC",
-		DatabaseEdition:        "ENTERPRISE",
-		KeyPrefix:              "client-supplied",
-		VersionRetentionPeriod: 30 * time.Minute,
+		ConcurrencyMode:               "PESSIMISTIC",
+		PointInTimeRecoveryEnablement: pitrEnabled,
+		DatabaseEdition:               "ENTERPRISE",
+		KeyPrefix:                     "client-supplied",
+		VersionRetentionPeriod:        30 * time.Minute,
 	}, []string{"*"}, true, created.Etag)
 	if err != nil {
 		t.Fatalf("UpdateDatabaseDef(*): %v", err)

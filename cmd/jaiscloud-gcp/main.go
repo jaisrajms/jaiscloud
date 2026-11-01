@@ -140,6 +140,7 @@ import (
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
+	projectsui "jaiscloud/internal/gcp/ui/projects"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/k8shelpers"
@@ -189,6 +190,13 @@ import (
 
 var version = "dev"
 
+// commit and date are stamped by the linker (-X main.commit/-X main.date) the
+// same way as the AWS binary; a bare `go build` reports the placeholders.
+var (
+	commit = "none"
+	date   = "unknown"
+)
+
 const defaultHost = "http://localhost:8080"
 
 func main() {
@@ -204,6 +212,7 @@ func main() {
 	root.AddCommand(exportCmd())
 	root.AddCommand(importCmd())
 	root.AddCommand(snapshotCmd())
+	root.AddCommand(projectsCmd())
 	root.AddCommand(kafkaProbeCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -353,8 +362,9 @@ func startCmd() *cobra.Command {
 
 			// Cloud Monitoring's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter (and the background evaluator)
-			// below, so every surface reads and writes one store.
-			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
+			// below, so every surface reads and writes one store. The shared
+			// ResourceStore backs the REST-only v1 dashboards API.
+			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID, monitoringcore.WithResources(stores.resources))
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
 			// Cloud Functions runs on the shared, cloud-neutral container
@@ -1072,18 +1082,23 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub, KMS, Eventarc and Dataproc Metastore share the single
-				// IAMPolicy service, so their IAM surfaces are dispatched through
-				// one router. Eventarc and Metastore only join the router when
-				// their gRPC transport is selected, so a trigger/channel or
-				// metastore IAM name cannot reach a nil core.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") {
+				// Pub/Sub, KMS, Eventarc, Dataproc Metastore and Dataproc each
+				// own IAM resources served through the single IAMPolicy service,
+				// so their IAM surfaces are dispatched through one router.
+				// Eventarc, Metastore and Dataproc only join the router when
+				// their gRPC transport is selected, so a trigger/channel,
+				// metastore or workflow-template IAM name cannot reach a nil
+				// core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") || transports.GRPCFor("dataproc") {
 					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
 					if transports.GRPCFor("eventarc") {
 						iamHandlers = append(iamHandlers, eventarcGRPC)
 					}
 					if transports.GRPCFor("metastore") {
 						iamHandlers = append(iamHandlers, metastoreGRPC)
+					}
+					if transports.GRPCFor("dataproc") && dataprocCore != nil {
+						iamHandlers = append(iamHandlers, dataprocGRPC)
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
@@ -1196,6 +1211,16 @@ func startCmd() *cobra.Command {
 			}
 
 			adminHandler := admin.NewHandler()
+			// Project discovery on the admin plane: the same configured ∪
+			// registered ∪ observed snapshot the console reads, so a shell or CI
+			// job can ask which project a workload actually used.
+			var projectProvider projectsui.ProviderInterface
+			if resourceManagerCore != nil {
+				projectProvider = resourceManagerCore
+			}
+			adminHandler.RegisterProjectLister(projectLister{
+				handler: projectsui.NewHandler(projectProvider, cfg),
+			})
 			// Cloud Functions source archives are served to the K8s code-mount
 			// init container through the shared /lambda/code admin route (the
 			// executor's codeKey is path-safe: "location.id").
@@ -1862,7 +1887,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("jaiscloud-gcp %s\n", version)
+			fmt.Printf("jaiscloud-gcp %s (commit: %s, built: %s)\n", version, commit, date)
 		},
 	}
 }

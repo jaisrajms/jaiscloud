@@ -6,6 +6,10 @@
 // notification-channel registry, and the Service Monitoring services +
 // service-level objectives registry.
 //
+// It also owns the separate REST-only Cloud Monitoring v1 dashboards surface
+// (projects.dashboards) over the shared ResourceStore: the dashboard document
+// is stored and returned opaquely, with etag-based optimistic concurrency.
+//
 // It deliberately has no dependency on protobuf or on NormalizedRequest: the
 // gRPC transport (internal/gcp/transport/grpc/monitoring) and the REST
 // transport (internal/gcp/transport/rest/monitoring) both transcode their wire
@@ -40,6 +44,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/store"
 
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 
@@ -51,13 +56,29 @@ import (
 // it from the resource name, request project, or routing metadata).
 type Service struct {
 	store       monitoringstore.Store
+	resources   store.ResourceStore
 	defaultProj string
+}
+
+// Option configures the Monitoring core.
+type Option func(*Service)
+
+// WithResources supplies the shared store.ResourceStore that backs the
+// dashboards v1 surface (projects.dashboards.{list,get,create,patch,delete}).
+// Without it the v3 planes work unchanged and every dashboards call answers 501
+// rather than pretending the resource was written.
+func WithResources(s store.ResourceStore) Option {
+	return func(svc *Service) { svc.resources = s }
 }
 
 // NewService returns a Monitoring core backed by the shared store. defaultProj
 // is the config-default project.
-func NewService(store monitoringstore.Store, defaultProj string) *Service {
-	return &Service{store: store, defaultProj: defaultProj}
+func NewService(store monitoringstore.Store, defaultProj string, opts ...Option) *Service {
+	svc := &Service{store: store, defaultProj: defaultProj}
+	for _, o := range opts {
+		o(svc)
+	}
+	return svc
 }
 
 // ─── MetricService: metric descriptors ────────────────────────────────────────

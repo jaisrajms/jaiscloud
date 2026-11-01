@@ -97,8 +97,14 @@ var actionOverrides = map[string]string{
 	"Dataproc.DeleteWorkflowTemplate":            "dataproc.projects.regions.workflowTemplates.delete",
 	"Dataproc.InstantiateWorkflowTemplate":       "dataproc.projects.regions.workflowTemplates.instantiate",
 	"Dataproc.InstantiateInlineWorkflowTemplate": "dataproc.projects.regions.workflowTemplates.instantiateInline",
-	"Metastore.AlterMetadataResourceLocation":    "metastore.projects.locations.services.alterLocation",
-	"Workflow.ListWorkflowRevisions":             "workflows.projects.locations.workflows.listRevisions",
+	// Dataproc workflow templates expose the IAM mixin on the flat
+	// projects/regions/workflowTemplates resource (the emulator dispatches
+	// "WorkflowTemplate<Verb>IamPolicy"; Discovery nests it under the region).
+	"Dataproc.WorkflowTemplateGetIamPolicy":       "dataproc.projects.regions.workflowTemplates.getIamPolicy",
+	"Dataproc.WorkflowTemplateSetIamPolicy":       "dataproc.projects.regions.workflowTemplates.setIamPolicy",
+	"Dataproc.WorkflowTemplateTestIamPermissions": "dataproc.projects.regions.workflowTemplates.testIamPermissions",
+	"Metastore.AlterMetadataResourceLocation":     "metastore.projects.locations.services.alterLocation",
+	"Workflow.ListWorkflowRevisions":              "workflows.projects.locations.workflows.listRevisions",
 
 	// Firestore Admin user-creds resetPassword is a Discovery custom method
 	// ("userCreds.resetPassword") the flat registry action name cannot derive.

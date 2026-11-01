@@ -3,6 +3,7 @@ package functions
 import (
 	"context"
 
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
@@ -55,7 +56,7 @@ func (s *Service) settle(op Operation) Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
-	s.tracker.EmitOperation("functions", op.ID, op.ID, op.Verb)
+	s.tracker.EmitOperation("functions", op.ID, op.ID, op.Verb, lro.ProjectFromName(op.Target))
 	return op
 }
 
