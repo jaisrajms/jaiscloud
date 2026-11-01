@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1140,
+    "total": 1145,
     "by_state": {
-      "ga": 988,
+      "ga": 993,
       "limited": 106,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 546,
+        "ga": 551,
         "limited": 105,
         "preview": 14,
         "unsupported": 12
@@ -90,7 +90,7 @@
         "unsupported": 10
       },
       "monitoring": {
-        "ga": 68
+        "ga": 73
       },
       "operations": {
         "ga": 5
@@ -129,7 +129,7 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 633
+        "rest": 638
       },
       "unverified": {
         "grpc": 21,
@@ -11342,6 +11342,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.CreateDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.create",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 5 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.CreateMetricDescriptor",
       "transport": "rest",
       "state": "ga",
@@ -11440,6 +11454,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.DeleteDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.DeleteMetricDescriptor",
       "transport": "rest",
       "state": "ga",
@@ -11505,6 +11533,19 @@
         "discovery=monitoring.projects.alertPolicies.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.get",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.get",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -11607,6 +11648,19 @@
       "verified": true,
       "evidence": [
         "discovery=monitoring.projects.alertPolicies.list",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListDashboards",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.list",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.list",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
       ]
@@ -11727,6 +11781,20 @@
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.UpdateDashboard",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "monitoring.projects.dashboards.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.dashboards.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {

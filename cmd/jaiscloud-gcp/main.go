@@ -360,8 +360,9 @@ func startCmd() *cobra.Command {
 
 			// Cloud Monitoring's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter (and the background evaluator)
-			// below, so every surface reads and writes one store.
-			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
+			// below, so every surface reads and writes one store. The shared
+			// ResourceStore backs the REST-only v1 dashboards API.
+			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID, monitoringcore.WithResources(stores.resources))
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
 			// Cloud Functions runs on the shared, cloud-neutral container

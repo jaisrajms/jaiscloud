@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1140**
+Cells: **1145**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 988 |
+| ga | 993 |
 | limited | 106 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1140**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 546 | 105 | 14 | 12 |
+| rest | 551 | 105 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 633 | 44 |
+| rest | 638 | 44 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -965,7 +965,7 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 
 ## monitoring
 
-_68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
+_73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -998,6 +998,7 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | ListServices | grpc | ga | yes | — |
 | ListTimeSeries | grpc | ga | yes | — |
 | Monitoring.CreateAlertPolicy | rest | ga | yes | — |
+| Monitoring.CreateDashboard | rest | ga | yes | — |
 | Monitoring.CreateMetricDescriptor | rest | ga | yes | — |
 | Monitoring.CreateNotificationChannel | rest | ga | yes | — |
 | Monitoring.CreateService | rest | ga | yes | — |
@@ -1005,11 +1006,13 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | Monitoring.CreateServiceTimeSeries | rest | ga | yes | — |
 | Monitoring.CreateTimeSeries | rest | ga | yes | — |
 | Monitoring.DeleteAlertPolicy | rest | ga | yes | — |
+| Monitoring.DeleteDashboard | rest | ga | yes | — |
 | Monitoring.DeleteMetricDescriptor | rest | ga | yes | — |
 | Monitoring.DeleteNotificationChannel | rest | ga | yes | — |
 | Monitoring.DeleteService | rest | ga | yes | — |
 | Monitoring.DeleteServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.GetAlertPolicy | rest | ga | yes | — |
+| Monitoring.GetDashboard | rest | ga | yes | — |
 | Monitoring.GetMetricDescriptor | rest | ga | yes | — |
 | Monitoring.GetMonitoredResourceDescriptor | rest | ga | yes | — |
 | Monitoring.GetNotificationChannel | rest | ga | yes | — |
@@ -1018,6 +1021,7 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | Monitoring.GetService | rest | ga | yes | — |
 | Monitoring.GetServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.ListAlertPolicies | rest | ga | yes | — |
+| Monitoring.ListDashboards | rest | ga | yes | — |
 | Monitoring.ListMetricDescriptors | rest | ga | yes | — |
 | Monitoring.ListMonitoredResourceDescriptors | rest | ga | yes | — |
 | Monitoring.ListNotificationChannelDescriptors | rest | ga | yes | — |
@@ -1027,6 +1031,7 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | Monitoring.ListTimeSeries | rest | ga | yes | — |
 | Monitoring.SendNotificationChannelVerificationCode | rest | ga | yes | — |
 | Monitoring.UpdateAlertPolicy | rest | ga | yes | — |
+| Monitoring.UpdateDashboard | rest | ga | yes | — |
 | Monitoring.UpdateNotificationChannel | rest | ga | yes | — |
 | Monitoring.UpdateService | rest | ga | yes | — |
 | Monitoring.UpdateServiceLevelObjective | rest | ga | yes | — |

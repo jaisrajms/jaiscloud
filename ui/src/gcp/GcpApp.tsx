@@ -95,6 +95,8 @@ import { ExclusionsPage } from './logging/ExclusionsPage'
 import { MetricsExplorer } from './monitoring/MetricsExplorer'
 import { AlertingPage } from './monitoring/AlertingPage'
 import { ChannelsPage } from './monitoring/ChannelsPage'
+import { SLOPage } from './monitoring/SLOPage'
+import { SLODetailPage } from './monitoring/SLODetailPage'
 import { ProjectsPage as ResourceManagerProjectsPage } from './resourcemanager/ProjectsPage'
 import { AccountProvider, useAccount } from '../context/AccountContext'
 import { useEventStream } from '../hooks/useEventStream'
@@ -383,6 +385,8 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           <Route path="/gcp/monitoring/metrics" element={<MetricsExplorer />} />
           <Route path="/gcp/monitoring/alerting" element={<AlertingPage />} />
           <Route path="/gcp/monitoring/channels" element={<ChannelsPage />} />
+          <Route path="/gcp/monitoring/slo" element={<SLOPage />} />
+          <Route path="/gcp/monitoring/slo/:service/:slo" element={<SLODetailPage />} />
           <Route path="/gcp/resourcemanager/projects" element={<ResourceManagerProjectsPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
