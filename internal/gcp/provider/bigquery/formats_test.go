@@ -1394,3 +1394,133 @@ func TestLoadParquetInt96(t *testing.T) {
 		t.Fatalf("INT96 timestamp = %v", cells[0][0])
 	}
 }
+
+// pqExoticRow exercises the remaining Parquet leaf annotations in the load
+// type table: unsigned integers, the UUID logical type, a local (non-UTC)
+// timestamp (DATETIME) and a plain BYTE_ARRAY (BYTES).
+type pqExoticRow struct {
+	U32 uint32   `parquet:"u32,uint(32)"`
+	U64 uint64   `parquet:"u64,uint(64)"`
+	UID [16]byte `parquet:"uid,uuid"`
+	LTS int64    `parquet:"lts,timestamp(millisecond:local)"`
+	Raw []byte   `parquet:"raw"`
+}
+
+func TestLoadParquetExoticLogicalTypes(t *testing.T) {
+	ctx := context.Background()
+	var uid [16]byte
+	for i := range uid {
+		uid[i] = byte(i)
+	}
+	data := encodeParquet(t, []pqExoticRow{{7, 9, uid, 1000, []byte("hi")}})
+	p := providerWithObjects(map[string][]byte{"bucket/data": data})
+	seedLoadTable(t, p, "ds", "t", []any{
+		map[string]any{"name": "u32", "type": "INTEGER"},
+		map[string]any{"name": "u64", "type": "INTEGER"},
+		map[string]any{"name": "uid", "type": "STRING"},
+		map[string]any{"name": "lts", "type": "DATETIME"},
+		map[string]any{"name": "raw", "type": "BYTES"},
+	})
+	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{
+		"sourceFormat": "PARQUET",
+	})))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if er := jobErrorResult(resp); er != nil {
+		t.Fatalf("unexpected job error: %v", er)
+	}
+	cells := loadRowCells(t, p, "ds", "t")[0]
+	want := []string{"7", "9", "00010203-0405-0607-0809-0a0b0c0d0e0f", "1970-01-01T00:00:01", "aGk="}
+	for i, w := range want {
+		if cells[i] != w {
+			t.Fatalf("cell %d = %v, want %s", i, cells[i], w)
+		}
+	}
+}
+
+// TestLoadParquetDecimalWidestListed pins the documented "if none of the listed
+// types supports the precision and scale, pick the type supporting the widest
+// range in the specified list" arm: (40,9) fits BIGNUMERIC but not NUMERIC.
+func TestLoadParquetDecimalWidestListed(t *testing.T) {
+	ctx := context.Background()
+	type row struct {
+		Cost [17]byte `parquet:"cost,decimal(9:40)"`
+	}
+	unscaled, _ := new(big.Int).SetString("1234567890123456789012345678901", 10)
+	var fixed [17]byte
+	unscaled.FillBytes(fixed[:])
+	data := encodeParquet(t, []row{{fixed}})
+	p := providerWithObjects(map[string][]byte{"bucket/data": data})
+	seedLoadTable(t, p, "ds", "t", []any{
+		map[string]any{"name": "cost", "type": "BIGNUMERIC"},
+	})
+	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{
+		"sourceFormat":       "PARQUET",
+		"decimalTargetTypes": []any{"NUMERIC", "BIGNUMERIC"},
+	})))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if er := jobErrorResult(resp); er != nil {
+		t.Fatalf("unexpected job error: %v", er)
+	}
+	if got := loadRowCells(t, p, "ds", "t")[0][0]; got != "1234567890123456789012.345678901" {
+		t.Fatalf("decimal = %v", got)
+	}
+}
+
+// TestLoadParquetUnsignedOverflow: UINT_64 values above MaxInt64 are rejected
+// per the Parquet load table ("an error will be returned if the unsigned value
+// exceeds the maximum INTEGER value").
+func TestLoadParquetUnsignedOverflow(t *testing.T) {
+	ctx := context.Background()
+	type row struct {
+		U uint64 `parquet:"u,uint(64)"`
+	}
+	data := encodeParquet(t, []row{{^uint64(0)}})
+	p := providerWithObjects(map[string][]byte{"bucket/data": data})
+	seedLoadTable(t, p, "ds", "t", []any{
+		map[string]any{"name": "u", "type": "INTEGER"},
+	})
+	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{
+		"sourceFormat": "PARQUET",
+	})))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	er := jobErrorResult(resp)
+	if er == nil {
+		t.Fatal("expected an invalid job result for a UINT_64 overflow")
+	}
+	if er["reason"] != "invalid" || !strings.Contains(er["message"].(string), "exceeds the maximum INTEGER value") {
+		t.Fatalf("job error = %v", er)
+	}
+}
+
+// TestLoadAvroFixed: an Avro fixed field (not the 12-byte duration logical
+// type) loads as BYTES.
+func TestLoadAvroFixed(t *testing.T) {
+	ctx := context.Background()
+	fixedSchema := `{"type":"record","name":"r","fields":[
+		{"name":"id","type":"long"},
+		{"name":"f","type":{"type":"fixed","name":"F","size":4}}]}`
+	data := encodeAvro(t, fixedSchema, []any{map[string]any{"id": int64(1), "f": [4]byte{1, 2, 3, 4}}})
+	p := providerWithObjects(map[string][]byte{"bucket/data": data})
+	seedLoadTable(t, p, "ds", "t", []any{
+		map[string]any{"name": "id", "type": "INTEGER"},
+		map[string]any{"name": "f", "type": "BYTES"},
+	})
+	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{
+		"sourceFormat": "AVRO",
+	})))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if er := jobErrorResult(resp); er != nil {
+		t.Fatalf("unexpected job error: %v", er)
+	}
+	if got := loadRowCells(t, p, "ds", "t")[0][1]; got != "AQIDBA==" {
+		t.Fatalf("fixed = %v", got)
+	}
+}
