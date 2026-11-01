@@ -571,6 +571,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 				{Label: "Metrics explorer", Path: "/gcp/monitoring/metrics"},
 				{Label: "Alerting", Path: "/gcp/monitoring/alerting"},
 				{Label: "Notification channels", Path: "/gcp/monitoring/channels"},
+				{Label: "SLOs", Path: "/gcp/monitoring/slo"},
 			},
 		})
 	}
