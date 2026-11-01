@@ -173,8 +173,9 @@ func EnumerateGRPC() []GRPCService {
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})
-	// Pub/Sub, KMS and Eventarc share one google.iam.v1.IAMPolicy registration.
-	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}, &grpcmetastore.Service{}))
+	// Pub/Sub, KMS, Eventarc, Metastore and Dataproc share one
+	// google.iam.v1.IAMPolicy registration.
+	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}, &grpcmetastore.Service{}, &grpcdataproc.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())
 
 	info := reg.GetServiceInfo()

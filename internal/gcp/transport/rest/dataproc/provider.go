@@ -3,6 +3,7 @@ package dataproc
 import (
 	"context"
 
+	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -51,6 +52,10 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 
 		"Dataproc.InstantiateWorkflowTemplate":       p.InstantiateWorkflowTemplate,
 		"Dataproc.InstantiateInlineWorkflowTemplate": p.InstantiateInlineWorkflowTemplate,
+
+		"Dataproc.WorkflowTemplateGetIamPolicy":       p.WorkflowTemplateGetIamPolicy,
+		"Dataproc.WorkflowTemplateSetIamPolicy":       p.WorkflowTemplateSetIamPolicy,
+		"Dataproc.WorkflowTemplateTestIamPermissions": p.WorkflowTemplateTestIamPermissions,
 	}
 }
 
@@ -346,4 +351,34 @@ func (p *Provider) InstantiateInlineWorkflowTemplate(ctx context.Context, nr *mo
 		return nil, err
 	}
 	return provider.OK(core.OperationJSON(op)), nil
+}
+
+// --- Workflow template IAM ---
+
+// The three IAM verbs are keyed by the full google.iam.v1.IAMPolicy resource
+// name (projects/{p}/regions/{r}/workflowTemplates/{id}), which the codec builds
+// after stripping the custom suffix; the core resolves the project/region/id
+// from it and checks the template exists before touching the policy plane.
+func (p *Provider) WorkflowTemplateGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pol, err := p.core.GetIamPolicy(ctx, strParam(nr, "iamName"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+func (p *Provider) WorkflowTemplateSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pol, err := p.core.SetIamPolicy(ctx, strParam(nr, "iamName"), bodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+func (p *Provider) WorkflowTemplateTestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	perms, err := p.core.TestIamPermissions(ctx, strParam(nr, "iamName"), policy.Permissions(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"permissions": perms}), nil
 }

@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1142,
+    "total": 1145,
     "by_state": {
-      "ga": 990,
+      "ga": 993,
       "limited": 106,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 548,
+        "ga": 551,
         "limited": 105,
         "preview": 14,
         "unsupported": 12
@@ -43,7 +43,7 @@
         "unsupported": 8
       },
       "dataproc": {
-        "ga": 43,
+        "ga": 46,
         "unsupported": 2
       },
       "datastore": {
@@ -129,7 +129,7 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 635
+        "rest": 638
       },
       "unverified": {
         "grpc": 21,
@@ -2528,7 +2528,7 @@
         "discovery=dataproc.projects.regions.workflowTemplates.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 6 transcript entries)"
+        "verified=true (rest, 9 transcript entries)"
       ]
     },
     {
@@ -2801,6 +2801,46 @@
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.WorkflowTemplateGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.workflowTemplates.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.WorkflowTemplateSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.workflowTemplates.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.WorkflowTemplateTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.workflowTemplates.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -6446,9 +6486,9 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=GetIamPolicy,GetIamPolicy (Eventarc message bus),GetIamPolicy (Eventarc trigger),GetIamPolicy (metastore)",
+        "grpc-checks=GetIamPolicy,GetIamPolicy (Eventarc message bus),GetIamPolicy (Eventarc trigger),GetIamPolicy (dataproc),GetIamPolicy (metastore)",
         "postgres=yes",
-        "transport=grpc (conformance=4/4 pass)",
+        "transport=grpc (conformance=5/5 pass)",
         "verified=true (grpc)"
       ]
     },
@@ -6730,10 +6770,10 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=SetIamPolicy,SetIamPolicy (Eventarc message bus),SetIamPolicy (Eventarc trigger),SetIamPolicy (metastore)",
+        "grpc-checks=SetIamPolicy,SetIamPolicy (Eventarc message bus),SetIamPolicy (Eventarc trigger),SetIamPolicy (dataproc),SetIamPolicy (metastore)",
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=4/4 pass)",
+        "transport=grpc (conformance=5/5 pass)",
         "verified=true (grpc)"
       ]
     },
@@ -6744,9 +6784,9 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=TestIamPermissions,TestIamPermissions (Eventarc message bus),TestIamPermissions (Eventarc trigger),TestIamPermissions (metastore)",
+        "grpc-checks=TestIamPermissions,TestIamPermissions (Eventarc message bus),TestIamPermissions (Eventarc trigger),TestIamPermissions (dataproc),TestIamPermissions (metastore)",
         "postgres=yes",
-        "transport=grpc (conformance=4/4 pass)",
+        "transport=grpc (conformance=5/5 pass)",
         "verified=true (grpc)"
       ]
     },
