@@ -333,6 +333,19 @@ func startCmd() *cobra.Command {
 				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
 				adminHandler.SetPluginTicker(pluginHost)
 				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+				adminHandler.SetDoctorSection("pluginBuild", func() any { return pluginhost.Build() })
+				// State an in-process plugin keeps for itself joins export/import and snapshots.
+				for name, st := range pluginHost.Snapshotters() {
+					adminHandler.RegisterSnapshotter(name, st)
+				}
+				// Plugins stop after the workers that may still call them.
+				prevCleanupPlugins := cleanup
+				cleanup = func() {
+					prevCleanupPlugins()
+					sctx, cancel := context.WithTimeout(context.Background(), pluginhost.ShutdownTimeout)
+					defer cancel()
+					pluginHost.Shutdown(sctx)
+				}
 			}
 
 			// Everything that calls services on its own starts only now: the registry is
@@ -1319,6 +1332,7 @@ func versionCmd() *cobra.Command {
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("jaiscloud-aws %s (commit: %s, built: %s)\n", version, commit, date)
+			fmt.Println(pluginhost.Build().Line())
 		},
 	}
 }

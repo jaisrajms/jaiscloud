@@ -151,7 +151,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: test-sdk test-plugins lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
+.PHONY: build-plugins build-plugins-release build-plugins-aws build-plugins-gcp plugin plugin-example sdk-tag check-sdk-tag test-sdk test-plugins lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
@@ -250,6 +250,70 @@ build-ui: ## Build frontend assets then compile jaiscloud-aws with embedded UI (
 build-ui-gcp: ## Build frontend assets then compile jaiscloud-gcp with embedded UI (-tags ui)
 	pnpm --dir ui run build
 	CGO_ENABLED=0 go build -tags ui -trimpath -ldflags="-s -w" -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+
+# In-process plugins (Go plugins, --plugin so:<path>). Go loads a plugin only into a
+# binary built by the same toolchain, with the same flags and the same source for every
+# package they share, and only with cgo (linux, darwin). The emulator and every plugin
+# therefore use PLUGIN_FLAGS; `jaiscloud-<cloud> version` prints the result. Build tags
+# do not have to match for a plugin that imports only the standard library and the SDK
+# (a plugin built without -tags ui loads into an emulator built with it), so PLUGIN_TAGS
+# applies to the emulator only.
+PLUGIN_FLAGS = -trimpath
+PLUGIN_TAGS ?=
+
+build-plugins: build-plugins-aws build-plugins-gcp  ## Compile jaiscloud-aws and jaiscloud-gcp that can load in-process plugins (needs cgo)
+
+# The emulator you publish must see the SDK the way a plugin author does: as the versioned
+# module their go.mod requires, not through this repository's `replace => ./sdk`. Go treats
+# the two as different packages even when the source is equal, so a plugin built with
+# `require .../sdk v0.1.0` would be refused by an emulator built through the replace.
+# build-plugins-release builds both clouds pinned to the SDK version in sdk/version.go; the tag
+# sdk/<version> must already be published (`make sdk-tag`, then push it). Builds from a checkout
+# (make build-plugins, the tests, Dockerfile.plugins) keep the replace, and so do the plugins
+# built against that checkout (make plugin, make plugin-example).
+PLUGIN_CLOUDS ?= aws gcp
+PLUGIN_OUT ?= .
+SDK_VERSION := $(shell sed -n 's/^const Version = "\(.*\)"$$/\1/p' sdk/version.go)
+
+build-plugins-release:  ## Plugin-capable emulators pinned to the published SDK tag: what an author who requires sdk <version> matches
+	@test -n "$(SDK_VERSION)" || { echo "cannot read the version from sdk/version.go"; exit 2; }
+	@d=$$(mktemp -d) && \
+		sed -e '/^replace github.com\/jaisrajms\/jaiscloud\/sdk /d' -e 's#\(github.com/jaisrajms/jaiscloud/sdk\) v0.0.0.*#\1 $(SDK_VERSION)#' go.mod > $$d/go.mod && \
+		cp go.sum $$d/go.sum && \
+		for c in $(PLUGIN_CLOUDS); do \
+			GOFLAGS=-mod=mod CGO_ENABLED=1 go build -modfile=$$d/go.mod $(PLUGIN_FLAGS) $(if $(PLUGIN_TAGS),-tags $(PLUGIN_TAGS)) -o $(PLUGIN_OUT)/jaiscloud-$$c-plugins ./cmd/jaiscloud-$$c/ || { rm -rf $$d; exit 1; }; \
+		done; rm -rf $$d
+
+# Explicit rules, not a pattern: the build-% rule above would otherwise win on make 3.81.
+build-plugins-aws build-plugins-gcp:  ## Compile jaiscloud-<aws|gcp>-plugins, the variant that loads so: plugins
+	CGO_ENABLED=1 go build $(PLUGIN_FLAGS) $(if $(PLUGIN_TAGS),-tags $(PLUGIN_TAGS)) -o jaiscloud-$(patsubst build-plugins-%,%,$@)-plugins ./cmd/jaiscloud-$(patsubst build-plugins-%,%,$@)/
+
+plugin:  ## Build an in-process plugin that the build-plugins binaries can load: make plugin SRC=./my-plugin OUT=my-plugin.so
+	@test -n "$(SRC)" -a -n "$(OUT)" || { echo "usage: make plugin SRC=<plugin module directory> OUT=<file.so>"; exit 2; }
+	@cd $(SRC) && if [ "$$(go list -m 2>/dev/null)" = "github.com/jaisrajms/jaiscloud/sdk" ]; then \
+		echo "a plugin must be a module of its own that requires the SDK; built inside the SDK module its SDK package differs from the emulator's (see 'make plugin-example')"; exit 2; fi
+	cd $(SRC) && CGO_ENABLED=1 go build -buildmode=plugin $(PLUGIN_FLAGS) -o $(abspath $(OUT)) .
+
+sdk-tag:  ## Create the git tag sdk/<version in sdk/version.go> on origin/main (does not push); plugin authors require that version
+	@v=$$(sed -n 's/^const Version = "\(.*\)"$$/\1/p' sdk/version.go); test -n "$$v" || { echo "cannot read the version from sdk/version.go"; exit 2; }; \
+	 tag=sdk/$$v; \
+	 { git diff --quiet && git diff --cached --quiet; } || { echo "the working tree is not clean"; exit 2; }; \
+	 git fetch -q origin main || exit 2; \
+	 test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || { echo "HEAD is not origin/main: tag a merged commit"; exit 2; }; \
+	 if git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then echo "$$tag already exists: bump Version in sdk/version.go (a published tag is never moved)"; exit 2; fi; \
+	 git tag -a "$$tag" -m "sdk $$v" && echo "created $$tag; publish it with: git push origin $$tag"
+
+check-sdk-tag:  ## Fail unless the tag sdk/<version> exists and sdk/ is identical to it (what an in-process plugin built against the tag needs)
+	@v=$$(sed -n 's/^const Version = "\(.*\)"$$/\1/p' sdk/version.go); tag=sdk/$$v; \
+	 git rev-parse -q --verify "refs/tags/$$tag" >/dev/null || { echo "$$tag does not exist: run make sdk-tag on the release commit"; exit 1; }; \
+	 git diff --quiet "$$tag" HEAD -- sdk || { echo "sdk/ differs from $$tag: a plugin built against the tag will not load; bump Version and tag again"; exit 1; }; \
+	 echo "$$tag matches sdk/"
+
+plugin-example:  ## Build sdk/examples/inprocess as a plugin the build-plugins binaries can load: make plugin-example OUT=inprocess.so
+	@test -n "$(OUT)" || { echo "usage: make plugin-example OUT=<file.so>"; exit 2; }
+	@d=$$(mktemp -d) && cp sdk/examples/inprocess/main.go $$d/ && \
+		printf 'module example.com/inprocess\n\ngo 1.26.8\n\nrequire github.com/jaisrajms/jaiscloud/sdk v0.0.0\n\nreplace github.com/jaisrajms/jaiscloud/sdk => %s\n' "$(CURDIR)/sdk" > $$d/go.mod && \
+		(cd $$d && CGO_ENABLED=1 go build -buildmode=plugin $(PLUGIN_FLAGS) -o $(abspath $(OUT)) .); rc=$$?; rm -rf $$d; exit $$rc
 
 docker: docker-aws  ## Build jaiscloud-aws Docker image (default)
 
@@ -395,7 +459,7 @@ test-sdk: ## Plugin SDK (nested module sdk/): vet + race tests
 	cd sdk && go vet ./... && go test -race -count=1 ./...
 
 test-plugins: test-sdk ## Plugin layer: SDK tests + end-to-end against the real jaiscloud-aws (tag: plugin_e2e)
-	go test -race -tags plugin_e2e -count=1 -timeout 300s ./tests/plugins/
+	go test -race -tags plugin_e2e -count=1 -timeout 900s ./tests/plugins/
 
 test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
 	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...

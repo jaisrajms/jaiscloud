@@ -1,0 +1,70 @@
+# jaiscloud with in-process (Go .so) plugin support.
+#
+# Go loads a plugin only into a binary built by the same toolchain, with the same flags
+# and the same SDK source, and only with cgo. So this image is not the static one in
+# Dockerfile: it builds with CGO_ENABLED=1 on glibc and runs on a glibc base. The release
+# images stay static and load out-of-process (http://) plugins only.
+#
+#   docker build -f Dockerfile.plugins --build-arg CLOUD=aws --build-arg PORT=4566 -t jaiscloud-aws-plugins .
+#   docker run --rm -p 4566:4566 jaiscloud-aws-plugins start --plugin so:/plugins/inprocess.so
+#
+# To build your own plugin with exactly this toolchain, use the builder stage:
+#
+#   docker build -f Dockerfile.plugins --target builder -t jaiscloud-plugin-builder .
+#   docker run --rm -v "$PWD":/plugin -w /plugin jaiscloud-plugin-builder \
+#       go build -buildmode=plugin -trimpath -o my-plugin.so .
+#
+# The platform is the build machine's: cgo does not cross-compile without a C toolchain
+# for the target. Build it on linux/amd64 or linux/arm64 for that architecture.
+
+# ─── Stage 1: frontend bundle ────────────────────────────────────────────────
+FROM node:22-alpine AS ui
+
+RUN npm install -g pnpm@9.15.9
+
+WORKDIR /src/ui
+
+COPY ui/package.json ui/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY ui/ ./
+RUN mkdir -p /src/internal/ui && pnpm run build
+
+# ─── Stage 2: build ──────────────────────────────────────────────────────────
+FROM golang:1.26-bookworm AS builder
+
+ARG CLOUD=aws
+ARG VERSION=dev
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+# go.mod replaces the nested SDK module with ./sdk, so its go.mod must exist
+# before `go mod download` can resolve the module graph.
+COPY sdk/go.mod ./sdk/go.mod
+RUN go mod download
+
+COPY . .
+COPY --from=ui /src/internal/ui/dist /src/internal/ui/dist
+
+# Same flags the Makefile's build-plugins and plugin targets use. -tags ui keeps the
+# console; a plugin does not need to match it.
+RUN CGO_ENABLED=1 go build -tags ui -trimpath -ldflags="-X main.version=${VERSION}" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
+# The example plugin, built by the same toolchain in the same stage. Like any plugin it
+# is a module of its own that requires the SDK; built inside the SDK module its SDK
+# package would differ from the emulator's and Go would refuse to load it.
+RUN mkdir /plugin-src && cp sdk/examples/inprocess/main.go /plugin-src/ \
+ && printf 'module example.com/inprocess\n\ngo 1.26.8\n\nrequire github.com/jaisrajms/jaiscloud/sdk v0.0.0\n\nreplace github.com/jaisrajms/jaiscloud/sdk => /src/sdk\n' > /plugin-src/go.mod \
+ && cd /plugin-src && CGO_ENABLED=1 go build -buildmode=plugin -trimpath -o /inprocess.so .
+
+# ─── Stage 3: runtime ────────────────────────────────────────────────────────
+FROM gcr.io/distroless/base-debian12:nonroot
+
+COPY --from=builder /jaiscloud /jaiscloud
+COPY --from=builder /inprocess.so /plugins/inprocess.so
+
+ARG PORT=4566
+EXPOSE ${PORT}
+
+ENTRYPOINT ["/jaiscloud"]
+CMD ["start"]

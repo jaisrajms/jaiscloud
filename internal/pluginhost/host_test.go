@@ -426,7 +426,8 @@ func TestStartupRejectsBadManifests(t *testing.T) {
 	if _, err := e.load(t, "ftp://x"); err == nil {
 		t.Fatal("unknown scheme must fail")
 	}
-	if _, err := e.load(t, "so:/tmp/x.so"); err == nil || !strings.Contains(err.Error(), "not supported") {
+	// A file that is not there fails with its name, whether or not this build can load plugins.
+	if _, err := e.load(t, "so:/tmp/does-not-exist.so"); err == nil || !strings.Contains(err.Error(), "does-not-exist.so") {
 		t.Fatalf("so: spec: %v", err)
 	}
 }
@@ -792,7 +793,7 @@ func TestProjectionRoundTripsTypes(t *testing.T) {
 }
 
 func TestResponseMarkersBecomeBytes(t *testing.T) {
-	res, err := fromResult(sdk.Result{Resp: &sdk.Response{Data: map[string]any{"_payload": map[string]any{"$base64": "aGk="}}}})
+	res, err := fromResult(sdk.Result{Resp: &sdk.Response{Data: map[string]any{"_payload": map[string]any{"$base64": "aGk="}}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
