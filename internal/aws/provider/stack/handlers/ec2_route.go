@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/compute"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewEC2RouteHandler returns a ResourceHandler for AWS::EC2::Route.
-func NewEC2RouteHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+func NewEC2RouteHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			rtID := propStr(props, "RouteTableId", "")
 			dest := propStr(props, "DestinationCidrBlock", "")
 			gwID := propStr(props, "GatewayId", "")
-			if _, err := computeP.CreateRoute(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "Compute.CreateRoute", child(nr, map[string]any{
 				"RouteTableId":         rtID,
 				"DestinationCidrBlock": dest,
 				"GatewayId":            gwID,
@@ -33,7 +32,7 @@ func NewEC2RouteHandler(computeP *compute.ComputeProvider) stackprovider.Resourc
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			rtID := propStr(props, "RouteTableId", "")
 			dest := propStr(props, "DestinationCidrBlock", "")
-			_, err := computeP.DeleteRoute(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Compute.DeleteRoute", &model.NormalizedRequest{
 				Params: map[string]any{
 					"RouteTableId":         rtID,
 					"DestinationCidrBlock": dest,

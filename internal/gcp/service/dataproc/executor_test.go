@@ -109,7 +109,7 @@ func TestRunJobWithExecutorDrivesStateAndStagesOutput(t *testing.T) {
 	}
 	require.NoError(t, p.store.CreateJob(context.Background(), "proj", "us-central1", j))
 
-	p.runJob(context.Background(), "proj", "us-central1", j, "", "")
+	p.runJob(context.Background(), "proj", "us-central1", j, "", "", nil)
 
 	got, err := p.store.GetJob(context.Background(), "proj", "us-central1", "j1")
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestRunJobWithExecutorReapsOnRestart(t *testing.T) {
 	}
 	require.NoError(t, p.store.CreateJob(context.Background(), "proj", "us-central1", j))
 
-	p.runJob(context.Background(), "proj", "us-central1", j, "", "")
+	p.runJob(context.Background(), "proj", "us-central1", j, "", "", nil)
 
 	got, err := p.store.GetJob(context.Background(), "proj", "us-central1", "j2")
 	require.NoError(t, err)

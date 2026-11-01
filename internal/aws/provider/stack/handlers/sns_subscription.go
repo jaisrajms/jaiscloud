@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	"jaiscloud/internal/aws/provider/notification"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewSNSSubscriptionHandler returns a ResourceHandler for AWS::SNS::Subscription.
-func NewSNSSubscriptionHandler(notifP *notification.SNSProvider) stackprovider.ResourceHandler {
+func NewSNSSubscriptionHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			params := copyProps(props)
-			resp, err := notifP.Subscribe(ctx, child(nr, params))
+			resp, err := call(ctx, "Notification.Subscribe", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -25,7 +24,7 @@ func NewSNSSubscriptionHandler(notifP *notification.SNSProvider) stackprovider.R
 			return "", nil, true, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := notifP.Unsubscribe(ctx, &model.NormalizedRequest{Params: map[string]any{"SubscriptionArn": physicalID}})
+			_, err := call(ctx, "Notification.Unsubscribe", &model.NormalizedRequest{Params: map[string]any{"SubscriptionArn": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{},

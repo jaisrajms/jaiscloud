@@ -177,7 +177,7 @@ func (s *Service) settle(op workflowsstore.Operation) workflowsstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
-	s.tracker.EmitOperation("workflows", op.ID, op.ID, op.Verb)
+	s.tracker.EmitOperation("workflows", op.ID, op.ID, op.Verb, op.ProjectID)
 	return op
 }
 

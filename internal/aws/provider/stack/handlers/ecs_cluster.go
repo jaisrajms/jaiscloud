@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	containerprovider "jaiscloud/internal/aws/provider/container"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewECSClusterHandler returns a ResourceHandler for AWS::ECS::Cluster.
-func NewECSClusterHandler(ecsP *containerprovider.ContainerProvider) stackprovider.ResourceHandler {
+func NewECSClusterHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "ClusterName", logicalID)
-			resp, err := ecsP.CreateCluster(ctx, child(nr, map[string]any{"clusterName": name}))
+			resp, err := call(ctx, "ECS.CreateCluster", child(nr, map[string]any{"clusterName": name}))
 			if err != nil {
 				return "", nil, err
 			}
@@ -31,7 +30,7 @@ func NewECSClusterHandler(ecsP *containerprovider.ContainerProvider) stackprovid
 			return physicalID, map[string]any{"Arn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := ecsP.DeleteCluster(ctx, &model.NormalizedRequest{Params: map[string]any{"cluster": physicalID}})
+			_, err := call(ctx, "ECS.DeleteCluster", &model.NormalizedRequest{Params: map[string]any{"cluster": physicalID}})
 			return err
 		},
 		GetAttAttrs: []string{"Arn"},

@@ -14,7 +14,7 @@
 defaults:
   bigquery:
     state: limited
-    reason: "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)"
+    reason: "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)"
   cloudsql:
     state: limited
     reason: "metadata-only over ResourceStore (no control plane)"
@@ -297,3 +297,50 @@ operations:
     state: unsupported
     reason: "usable-subnetwork discovery requires a Compute subnet catalog; explicit Unimplemented stub"
 
+
+  # IAM Admin API (google.iam.admin.v1.IAM, enumerated as the "iam" service).
+  # The emulator serves the service-account lifecycle, its keys (including
+  # projects.serviceAccounts.keys.upload, DC27), the deprecated sign verbs and
+  # service-account IAM policies through the shared IAM provider. The role
+  # catalog below is not modelled on any transport (the REST IAM surface has no
+  # roles methods at all), so those RPCs stay explicit Unimplemented stubs.
+  - service: iam
+    operation: QueryGrantableRoles
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: ListRoles
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: GetRole
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: CreateRole
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: UpdateRole
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: DeleteRole
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: UndeleteRole
+    state: unsupported
+    reason: "role catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: QueryTestablePermissions
+    state: unsupported
+    reason: "permission catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: QueryAuditableServices
+    state: unsupported
+    reason: "auditable-service catalog is not modelled; explicit Unimplemented stub"
+  - service: iam
+    operation: LintPolicy
+    state: unsupported
+    reason: "policy linting is not modelled; explicit Unimplemented stub"

@@ -14,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/pluginchain"
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
@@ -37,6 +39,7 @@ import (
 	tasksui "jaiscloud/internal/gcp/ui/tasks"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
 	coreui "jaiscloud/internal/ui"
 )
 
@@ -66,6 +69,8 @@ type Registrar struct {
 	// enumerates (created + configured projects). It is nil when the service is
 	// disabled, in which case only the configured accounts are reported.
 	resourcemanager *resourcemanagercore.Service
+	// rm is what the consoles call: the core itself, or a wrapper that sends covered calls through the plugin chain.
+	rm resourceManagerAPI
 	// modes reports the configured engine/executor modes so the console status
 	// reflects what is actually running (see ServiceModes).
 	modes ServiceModes
@@ -89,11 +94,108 @@ type ServiceModes struct {
 	CloudRunSource    string
 }
 
+// resourceManagerAPI is what the project consoles and the account picker call.
+type resourceManagerAPI interface {
+	resourcemanagerui.ProviderInterface
+	projectsui.ProviderInterface
+}
+
 // WithServiceModes sets the configured engine modes the catalog reports. It is
 // optional; the zero value reports every engine-capable service as if no engine
 // were configured.
 func (r *Registrar) WithServiceModes(modes ServiceModes) *Registrar {
 	r.modes = modes
+	return r
+}
+
+// WithRegistry serves the console of every service whose pages call registry
+// actions through reg (origin "ui"), so a plugin that overrides a service also
+// answers the console. A service the registry does not hold, or a console call
+// that is not a registry action, stays on the built-in. A nil reg changes nothing.
+func (r *Registrar) WithRegistry(reg *provider.Registry) *Registrar {
+	if reg == nil {
+		return r
+	}
+	if r.storage != nil {
+		r.storage = routeStorage(reg, r.storage)
+	}
+	if r.pubsub != nil {
+		r.pubsub = routePubSub(reg, r.pubsub)
+	}
+	if r.firestore != nil {
+		r.firestore = routeFirestore(reg, r.firestore)
+	}
+	if r.bigquery != nil {
+		r.bigquery = routeBigQuery(reg, r.bigquery)
+	}
+	if r.compute != nil {
+		r.compute = routeCompute(reg, r.compute)
+	}
+	if r.iam != nil {
+		r.iam = routeIAM(reg, r.iam)
+	}
+	if r.kms != nil {
+		r.kms = routeKMS(reg, r.kms)
+	}
+	if r.secretmanager != nil {
+		r.secretmanager = routeSecret(reg, r.secretmanager)
+	}
+	if r.logging != nil {
+		r.logging = routeLogging(reg, r.logging)
+	}
+	if r.monitoring != nil {
+		r.monitoring = routeMonitoring(reg, r.monitoring)
+	}
+	return r
+}
+
+// rmAPI returns the Resource Manager the consoles call.
+func (r *Registrar) rmAPI() resourceManagerAPI {
+	if r.rm != nil {
+		return r.rm
+	}
+	return r.resourcemanager
+}
+
+// WithPluginChain routes the console of the services that work on typed store
+// structs through the plugin chain whenever a plugin covers the key of the call
+// (see typed.go). builtins are the REST built-in handlers by registry key, which
+// sit under the chain. A nil chain changes nothing.
+func (r *Registrar) WithPluginChain(chain *pluginchain.Chain, builtins map[string]provider.HandlerFunc) *Registrar {
+	if chain == nil {
+		return r
+	}
+	c := typedCaller{chain: chain, builtins: builtins, cfg: r.cfg}
+	if r.scheduler != nil {
+		r.scheduler = routeScheduler(c, r.scheduler)
+	}
+	if r.tasks != nil {
+		r.tasks = routeTasks(c, r.tasks)
+	}
+	if r.workflows != nil {
+		r.workflows = routeWorkflows(c, r.workflows)
+	}
+	if r.run != nil {
+		r.run = routeRun(c, r.run)
+	}
+	if r.managedkafka != nil {
+		r.managedkafka = routeManagedKafka(c, r.managedkafka)
+	}
+	if r.datastore != nil {
+		r.datastore = routeDatastore(c, r.datastore)
+	}
+	if r.dataproc != nil {
+		r.dataproc = routeDataproc(c, r.dataproc)
+	}
+	if r.eventarc != nil {
+		r.eventarc = routeEventarc(c, r.eventarc)
+	}
+	if r.functions != nil {
+		r.functions = routeFunctions(c, r.functions)
+	}
+	if r.resourcemanager != nil {
+		r.rm = routeResourceManager(c, r.resourcemanager)
+	}
 	return r
 }
 
@@ -182,20 +284,18 @@ func (r *Registrar) Accounts(ctx context.Context) []string {
 		return nil
 	}
 	var out []string
-	token := ""
-	for {
-		page, next, err := r.resourcemanager.ListProjects(ctx, 0, token, false, "")
+	// A page loop that cannot end (a plugin repeating its token) returns what it has.
+	_ = paging.Follow(ctx, func(token string) (string, error) {
+		page, next, err := r.rmAPI().ListProjects(ctx, 0, token, false, "")
 		if err != nil {
-			return out
+			return "", err
 		}
 		for _, p := range page {
 			out = append(out, p.ProjectID)
 		}
-		if next == "" {
-			return out
-		}
-		token = next
-	}
+		return next, nil
+	})
+	return out
 }
 
 // Cloud implements coreui.Registrar.
@@ -471,6 +571,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 				{Label: "Metrics explorer", Path: "/gcp/monitoring/metrics"},
 				{Label: "Alerting", Path: "/gcp/monitoring/alerting"},
 				{Label: "Notification channels", Path: "/gcp/monitoring/channels"},
+				{Label: "SLOs", Path: "/gcp/monitoring/slo"},
 			},
 		})
 	}
@@ -500,7 +601,7 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	// Manager core contributing the other two kinds when the service is enabled.
 	var projectsProvider projectsui.ProviderInterface
 	if r.resourcemanager != nil {
-		projectsProvider = r.resourcemanager
+		projectsProvider = r.rmAPI()
 	}
 	router.Mount("/api/ui/v1/gcp/projects", projectsui.BuildRouter(projectsProvider, r.cfg))
 
@@ -562,6 +663,6 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 		router.Mount("/api/ui/v1/gcp/monitoring", monitoringui.BuildRouter(r.monitoring, r.cfg))
 	}
 	if r.resourcemanager != nil {
-		router.Mount("/api/ui/v1/gcp/resourcemanager", resourcemanagerui.BuildRouter(r.resourcemanager))
+		router.Mount("/api/ui/v1/gcp/resourcemanager", resourcemanagerui.BuildRouter(r.rmAPI()))
 	}
 }

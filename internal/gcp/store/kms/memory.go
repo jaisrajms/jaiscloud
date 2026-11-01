@@ -94,10 +94,10 @@ func (s *MemoryStore) ListKeyRings(_ context.Context, projectID, location string
 }
 
 func (s *MemoryStore) CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error {
-	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, true)
+	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, Version{}, true)
 }
 
-func (s *MemoryStore) CreateCryptoKeyWithVersion(_ context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error {
+func (s *MemoryStore) CreateCryptoKeyWithVersion(_ context.Context, projectID, location, keyringID, id string, ck CryptoKey, initial Version, withInitialVersion bool) error {
 	dek, err := s.dek()
 	if err != nil {
 		return err
@@ -134,8 +134,13 @@ func (s *MemoryStore) CreateCryptoKeyWithVersion(_ context.Context, projectID, l
 	v.Version = "1"
 	v.State = "ENABLED"
 	v.CreateTime = ck.CreateTime
-	v.ProtectionLevel = ck.ProtectionLevel
-	v.HsmTrusted = ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"
+	if initial.ProtectionLevel != "" {
+		v.ProtectionLevel = initial.ProtectionLevel
+	} else {
+		v.ProtectionLevel = ck.ProtectionLevel
+	}
+	v.TrustedWrappingEnabled = initial.TrustedWrappingEnabled
+	v.HsmTrusted = initial.HsmTrusted || ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"
 	s.versions[vk] = map[string]Version{"1": v}
 	return nil
 }

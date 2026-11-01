@@ -39,6 +39,9 @@ type bucketNotificationConfig struct {
 	QueueConfigurations  []s3QueueNotification
 	TopicConfigurations  []s3TopicNotification
 	LambdaConfigurations []s3LambdaNotification
+	// EventBridge is true when the bucket was configured with
+	// <EventBridgeConfiguration/>; S3 sends events to EventBridge only then.
+	EventBridge bool
 }
 
 // extractNotificationConfig builds a bucketNotificationConfig from parsed params.
@@ -100,6 +103,9 @@ func extractNotificationConfig(params map[string]any) bucketNotificationConfig {
 			}
 			result.LambdaConfigurations = append(result.LambdaConfigurations, n)
 		}
+	}
+	if _, ok := cfg["EventBridgeConfiguration"]; ok {
+		result.EventBridge = true
 	}
 	return result
 }
@@ -188,11 +194,15 @@ func (p *ObjectProvider) GetBucketNotificationConfiguration(_ context.Context, n
 	}
 	var cfg bucketNotificationConfig
 	json.Unmarshal([]byte(raw.(string)), &cfg)
-	return provider.OK(map[string]any{
+	out := map[string]any{
 		"QueueConfigurations":  cfg.QueueConfigurations,
 		"TopicConfigurations":  cfg.TopicConfigurations,
 		"LambdaConfigurations": cfg.LambdaConfigurations,
-	}), nil
+	}
+	if cfg.EventBridge {
+		out["EventBridgeConfiguration"] = map[string]any{}
+	}
+	return provider.OK(out), nil
 }
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────

@@ -42,7 +42,7 @@ func (h *Handler) ListQueues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	urls, _ := resp.Data["QueueUrls"].([]string)
+	urls := uihelper.Strings(resp.Data["QueueUrls"])
 	nextTok, _ := resp.Data["NextToken"].(string)
 
 	queues := make([]Queue, 0, len(urls))
@@ -83,7 +83,7 @@ func (h *Handler) CreateQueue(w http.ResponseWriter, r *http.Request) {
 		nr.Params["Attributes"] = map[string]string{"VisibilityTimeout": strconv.Itoa(*req.VisibilityTimeout)}
 	}
 	if req.RetentionPeriod != nil {
-		attrs, _ := nr.Params["Attributes"].(map[string]string)
+		attrs := uihelper.StringMap(nr.Params["Attributes"])
 		if attrs == nil {
 			attrs = map[string]string{}
 		}
@@ -91,7 +91,7 @@ func (h *Handler) CreateQueue(w http.ResponseWriter, r *http.Request) {
 		nr.Params["Attributes"] = attrs
 	}
 	if req.Type == "FIFO" {
-		attrs, _ := nr.Params["Attributes"].(map[string]string)
+		attrs := uihelper.StringMap(nr.Params["Attributes"])
 		if attrs == nil {
 			attrs = map[string]string{}
 		}
@@ -247,7 +247,7 @@ func (h *Handler) ReceiveMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawMsgs, _ := resp.Data["Messages"].([]map[string]any)
+	rawMsgs := uihelper.Maps(resp.Data["Messages"])
 	messages := make([]Message, 0, len(rawMsgs))
 	for _, m := range rawMsgs {
 		msg := Message{
@@ -309,7 +309,7 @@ func (h *Handler) ListDLQSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	urls, _ := resp.Data["queueUrls"].([]string)
+	urls := uihelper.Strings(resp.Data["queueUrls"])
 	queues := make([]Queue, 0, len(urls))
 	for _, u := range urls {
 		q := h.fetchQueueDetail(r, u, region, account)
@@ -351,7 +351,7 @@ func (h *Handler) PeekMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawMsgs, _ := resp.Data["messages"].([]map[string]any)
+	rawMsgs := uihelper.Maps(resp.Data["messages"])
 	msgs := make([]PeekedMessage, 0, len(rawMsgs))
 	for _, m := range rawMsgs {
 		pm := PeekedMessage{
@@ -360,13 +360,13 @@ func (h *Handler) PeekMessages(w http.ResponseWriter, r *http.Request) {
 			Status:    strVal(m, "status"),
 			GroupId:   strVal(m, "groupId"),
 		}
-		if rc, ok := m["receiveCount"].(int); ok {
+		if rc, ok := uihelper.IntOK(m["receiveCount"]); ok {
 			pm.ReceiveCount = rc
 		}
 		pm.SentAt = fmt.Sprintf("%v", m["sentAt"])
 		msgs = append(msgs, pm)
 	}
-	total, _ := resp.Data["total"].(int)
+	total := uihelper.Int(resp.Data["total"])
 	uihelper.WriteJSON(w, PeekMessagesResponse{Messages: msgs, Total: total, Offset: offset, Limit: limit})
 }
 
@@ -461,7 +461,7 @@ func (h *Handler) fetchQueueDetail(r *http.Request, queueURL, region, account st
 		return Queue{URL: queueURL}
 	}
 
-	attrs, _ := resp.Data["Attributes"].(map[string]string)
+	attrs := uihelper.StringMap(resp.Data["Attributes"])
 
 	queueType := "Standard"
 	if attrs["FifoQueue"] == "true" {

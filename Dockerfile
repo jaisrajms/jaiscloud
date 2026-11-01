@@ -27,6 +27,11 @@ ARG CLOUD=aws
 # Passed by CI (docker-publish.yml) and `make docker-%`; the default keeps a
 # bare `docker build` reporting "dev" instead of an empty string.
 ARG VERSION=dev
+# Build identity stamped alongside the version (REL5): a released image must be
+# able to report the commit and build date. Defaults mirror the Go declarations
+# so a bare `docker build` stays honest.
+ARG COMMIT=none
+ARG DATE=unknown
 
 # ca-certificates needed for TLS to external registries during `go mod download`
 RUN apk add --no-cache ca-certificates git
@@ -35,13 +40,16 @@ WORKDIR /src
 
 # Download dependencies first (cached layer)
 COPY go.mod go.sum ./
+# go.mod replaces the nested SDK module with ./sdk, so its go.mod must exist
+# before `go mod download` can resolve the module graph.
+COPY sdk/go.mod ./sdk/go.mod
 RUN go mod download
 
 # Copy source and build a fully static binary with the UI embedded
 COPY . .
 COPY --from=ui /src/internal/ui/dist /src/internal/ui/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -tags ui -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
+    go build -tags ui -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
 
 # ─── Stage 3: runtime ────────────────────────────────────────────────────────
 FROM gcr.io/distroless/static:nonroot

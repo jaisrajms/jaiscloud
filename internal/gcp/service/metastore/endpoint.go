@@ -19,13 +19,7 @@ import (
 // in a different region than defaultLocation, is InvalidArgument; an unknown
 // service is NotFound.
 func (s *Service) ValidateMetastoreService(ctx context.Context, ref, defaultProject, defaultLocation string) error {
-	// Real Dataproc requires the cluster and its Metastore service to be in the
-	// same region (the reference is still region-scoped even when the project
-	// is implied), so an explicit mismatching location is rejected.
-	if loc := ParseName(strings.TrimSpace(ref)).Location; loc != "" && defaultLocation != "" && loc != defaultLocation {
-		return invalidArgument("metastore service must be in the cluster region " + defaultLocation + ", got " + loc)
-	}
-	project, location, service, err := parseServiceRef(ref, defaultProject, defaultLocation)
+	project, location, service, err := ResolveServiceRef(ref, defaultProject, defaultLocation)
 	if err != nil {
 		return err
 	}
@@ -33,6 +27,20 @@ func (s *Service) ValidateMetastoreService(ctx context.Context, ref, defaultProj
 		return mapErr(err)
 	}
 	return nil
+}
+
+// ResolveServiceRef is the part of ValidateMetastoreService that needs no store:
+// it rejects a malformed reference or one in another region than
+// defaultLocation, and returns the project, location and service it names. A
+// caller that looks the service up itself (internal/gcp/seams) shares it.
+func ResolveServiceRef(ref, defaultProject, defaultLocation string) (project, location, service string, err error) {
+	// Real Dataproc requires the cluster and its Metastore service to be in the
+	// same region (the reference is still region-scoped even when the project
+	// is implied), so an explicit mismatching location is rejected.
+	if loc := ParseName(strings.TrimSpace(ref)).Location; loc != "" && defaultLocation != "" && loc != defaultLocation {
+		return "", "", "", invalidArgument("metastore service must be in the cluster region " + defaultLocation + ", got " + loc)
+	}
+	return parseServiceRef(ref, defaultProject, defaultLocation)
 }
 
 // MetastoreEndpoint formats the thrift endpoint for ref without touching the

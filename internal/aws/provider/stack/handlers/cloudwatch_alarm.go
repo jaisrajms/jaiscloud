@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	cloudwatchprovider "jaiscloud/internal/aws/provider/cloudwatch"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewCloudWatchAlarmHandler returns a ResourceHandler for AWS::CloudWatch::Alarm.
-func NewCloudWatchAlarmHandler(cwP *cloudwatchprovider.Provider) stackprovider.ResourceHandler {
+func NewCloudWatchAlarmHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "AlarmName", logicalID)
 			params := copyProps(props)
 			params["AlarmName"] = name
-			if _, err := cwP.PutMetricAlarm(ctx, child(nr, params)); err != nil {
+			if _, err := call(ctx, "CloudWatch.PutMetricAlarm", child(nr, params)); err != nil {
 				return "", nil, err
 			}
 			arn := nr.ResourceID("cloudwatch-alarm", name)
@@ -25,14 +24,14 @@ func NewCloudWatchAlarmHandler(cwP *cloudwatchprovider.Provider) stackprovider.R
 		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
 			params := copyProps(newProps)
 			params["AlarmName"] = physicalID
-			if _, err := cwP.PutMetricAlarm(ctx, child(nr, params)); err != nil {
+			if _, err := call(ctx, "CloudWatch.PutMetricAlarm", child(nr, params)); err != nil {
 				return "", nil, false, err
 			}
 			arn := nr.ResourceID("cloudwatch-alarm", physicalID)
 			return physicalID, map[string]any{"Arn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := cwP.DeleteAlarms(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "CloudWatch.DeleteAlarms", &model.NormalizedRequest{
 				Params: map[string]any{"AlarmNames": []any{physicalID}},
 			})
 			return err

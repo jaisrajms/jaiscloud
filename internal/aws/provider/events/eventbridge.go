@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/events/pattern"
-	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/provider/events/scheduler"
 	"jaiscloud/internal/aws/provider/events/targets"
 	"jaiscloud/internal/aws/provider/events/transform"
 	sqsstore "jaiscloud/internal/aws/store/sqs"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
@@ -558,6 +558,9 @@ func (p *EventBridgeProvider) ListTargetsByRule(ctx context.Context, nr *model.N
 // PutEvents pushes custom events directly into the rule-matching pipeline.
 // Each entry is matched against all ENABLED rules; matching targets receive the event.
 func (p *EventBridgeProvider) PutEvents(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.putEventsInternal(ctx, nr)
+	}
 	entries, _ := nr.Params["Entries"].([]any)
 	results := make([]map[string]any, 0, len(entries))
 	failed := 0
@@ -1684,4 +1687,21 @@ func (p *EventBridgeProvider) ListApiDestinations(ctx context.Context, nr *model
 		})
 	}
 	return provider.OK(map[string]any{"ApiDestinations": out}), nil
+}
+
+// putEventsInternal serves EventBridge.PutEvents for an internal origin (S3
+// notifications, Parameter Store changes, Step Functions, executors, ...).
+func (p *EventBridgeProvider) putEventsInternal(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var entries []map[string]any
+	if list, ok := nr.Params["Entries"].([]any); ok {
+		for _, raw := range list {
+			if m, ok := raw.(map[string]any); ok {
+				entries = append(entries, m)
+			}
+		}
+	}
+	if err := p.InternalPutEvents(ctx, entries); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"FailedEntryCount": 0, "Entries": []any{}}), nil
 }

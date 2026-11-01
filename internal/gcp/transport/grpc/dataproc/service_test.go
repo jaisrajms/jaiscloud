@@ -753,3 +753,54 @@ func TestJobScalarsToProto_IncludesScheduling(t *testing.T) {
 		t.Fatalf("scalar fallback scheduling = %+v", out.GetScheduling())
 	}
 }
+
+// TestCreateCluster_PHSHistoryServer verifies the gRPC transcode carries
+// sparkHistoryServerConfig, validates the referenced Dataproc cluster, and
+// returns the documented spark.eventLog.* properties.
+func TestCreateCluster_PHSHistoryServer(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: "proj",
+		Region:    "us-central1",
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: "phs",
+			Config: &dataprocpb.ClusterConfig{
+				SoftwareConfig: &dataprocpb.SoftwareConfig{ImageVersion: "2.2.0"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create PHS source: %v", err)
+	}
+
+	ref := "projects/proj/regions/us-central1/clusters/phs"
+	req := gkeClusterReq("gke-phs")
+	req.Cluster.VirtualClusterConfig.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		SparkHistoryServerConfig: &dataprocpb.SparkHistoryServerConfig{DataprocCluster: ref},
+	}
+	if _, err := s.CreateCluster(ctx, req); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "gke-phs"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	props := cl.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetKubernetesSoftwareConfig().GetProperties()
+	if props["spark:spark.eventLog.enabled"] != "true" {
+		t.Fatalf("spark.eventLog.enabled = %v", props["spark:spark.eventLog.enabled"])
+	}
+	if props["spark:spark.eventLog.dir"] != "gs://dataproc-staging-proj/gke-phs/spark-job-history" {
+		t.Fatalf("spark.eventLog.dir = %v", props["spark:spark.eventLog.dir"])
+	}
+
+	// A missing PHS cluster is NotFound over gRPC.
+	missing := gkeClusterReq("gke-missing-phs")
+	missing.Cluster.VirtualClusterConfig.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		SparkHistoryServerConfig: &dataprocpb.SparkHistoryServerConfig{
+			DataprocCluster: "projects/proj/regions/us-central1/clusters/missing",
+		},
+	}
+	if _, err := s.CreateCluster(ctx, missing); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing PHS cluster: got %v, want NotFound", err)
+	}
+}

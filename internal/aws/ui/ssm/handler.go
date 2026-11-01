@@ -47,7 +47,7 @@ func (h *Handler) ListParameters(w http.ResponseWriter, r *http.Request) {
 			uihelper.WriteError(w, pErr)
 			return
 		}
-		rawParams, _ := pResp.Data["Parameters"].([]map[string]any)
+		rawParams := uihelper.Maps(pResp.Data["Parameters"])
 		nextToken, _ := pResp.Data["NextToken"].(string)
 		params := make([]Parameter, 0, len(rawParams))
 		for _, p := range rawParams {
@@ -70,7 +70,7 @@ func (h *Handler) ListParameters(w http.ResponseWriter, r *http.Request) {
 	_ = resp
 	_ = err
 
-	rawParams, _ := pResp.Data["Parameters"].([]map[string]any)
+	rawParams := uihelper.Maps(pResp.Data["Parameters"])
 	nextToken, _ := pResp.Data["NextToken"].(string)
 	params := make([]Parameter, 0, len(rawParams))
 	for _, p := range rawParams {
@@ -202,7 +202,7 @@ func (h *Handler) GetParameterHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawHistory, _ := resp.Data["Parameters"].([]map[string]any)
+	rawHistory := uihelper.Maps(resp.Data["Parameters"])
 	nextToken, _ := resp.Data["NextToken"].(string)
 
 	items := make([]ParameterHistoryEntry, 0, len(rawHistory))

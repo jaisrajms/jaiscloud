@@ -406,3 +406,22 @@ func TestS3Encode_CRC32_NotEmittedFromStore_OnRangeRead(t *testing.T) {
 	assert.Equal(t, s3ChecksumCRC32(body), h.Get("x-amz-checksum-crc32"),
 		"CRC32 must be computed from the partial body for range reads")
 }
+
+func TestS3Decode_NotificationEventBridgeMarker(t *testing.T) {
+	c := &S3Codec{}
+	body := []byte(`<NotificationConfiguration><EventBridgeConfiguration/></NotificationConfiguration>`)
+	req := newS3Req(http.MethodPut, "http://localhost:4566/b?notification", "localhost:4566")
+
+	nr, err := c.Decode(req, body)
+	require.NoError(t, err)
+	require.Equal(t, "PutBucketNotificationConfiguration", nr.Action)
+	cfg, _ := nr.Params["_notification_config"].(map[string]any)
+	_, has := cfg["EventBridgeConfiguration"]
+	assert.True(t, has, "an empty <EventBridgeConfiguration/> element must enable EventBridge delivery")
+
+	nr, err = c.Decode(req, []byte(`<NotificationConfiguration></NotificationConfiguration>`))
+	require.NoError(t, err)
+	cfg, _ = nr.Params["_notification_config"].(map[string]any)
+	_, has = cfg["EventBridgeConfiguration"]
+	assert.False(t, has, "absent element must not enable it")
+}

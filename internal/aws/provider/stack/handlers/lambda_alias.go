@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	functionprovider "jaiscloud/internal/aws/provider/lambda"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLambdaAliasHandler returns a ResourceHandler for AWS::Lambda::Alias.
-func NewLambdaAliasHandler(funcP *functionprovider.FunctionProvider) stackprovider.ResourceHandler {
+func NewLambdaAliasHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			funcName := propStr(props, "FunctionName", "")
 			aliasName := propStr(props, "Name", logicalID)
 			funcVersion := propStr(props, "FunctionVersion", "$LATEST")
-			resp, err := funcP.CreateAlias(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Function.CreateAlias", child(nr, map[string]any{
 				"_function_name":  funcName,
 				"Name":            aliasName,
 				"FunctionVersion": funcVersion,
@@ -37,7 +36,7 @@ func NewLambdaAliasHandler(funcP *functionprovider.FunctionProvider) stackprovid
 			// In-place: update alias function version
 			funcName := propStr(newProps, "FunctionName", "")
 			aliasName := propStr(newProps, "Name", logicalID)
-			resp, err := funcP.UpdateAlias(ctx, child(nr, map[string]any{
+			resp, err := call(ctx, "Function.UpdateAlias", child(nr, map[string]any{
 				"_function_name":  funcName,
 				"_alias_name":     aliasName,
 				"FunctionVersion": propStr(newProps, "FunctionVersion", "$LATEST"),
@@ -52,7 +51,7 @@ func NewLambdaAliasHandler(funcP *functionprovider.FunctionProvider) stackprovid
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			funcName := propStr(props, "FunctionName", "")
 			aliasName := propStr(props, "Name", "")
-			_, err := funcP.DeleteAlias(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Function.DeleteAlias", &model.NormalizedRequest{
 				Params: map[string]any{"_function_name": funcName, "_alias_name": aliasName},
 			})
 			return err

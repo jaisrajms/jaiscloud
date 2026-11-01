@@ -198,6 +198,9 @@ func (s *Service) ImportCryptoKeyVersion(ctx context.Context, project, location,
 	if in.Algorithm == "" {
 		return kmsstore.Version{}, invalidArgument("algorithm is required")
 	}
+	if in.CryptoKeyVersion != "" {
+		return kmsstore.Version{}, reimportUnsupported()
+	}
 	jp, jloc, jkr, jid, ok := SplitImportJobName(in.ImportJob)
 	if !ok || jp != project || jloc != location || jkr != kr {
 		return kmsstore.Version{}, invalidArgument("import_job must name a job in the target key ring")
@@ -226,20 +229,19 @@ func (s *Service) ImportCryptoKeyVersion(ctx context.Context, project, location,
 
 // ImportTrustedKeyWrappedCryptoKeyVersion unwraps key material protected with
 // AES-256-KWP by an HSM importing key and creates a trusted-wrapping version.
+// The importing key may be named as a CryptoKeyVersion or as a CryptoKey (its
+// primary version), and must be an HSM_SINGLE_TENANT AES_WRAPPING key with the
+// AES_256_KWP algorithm.
 func (s *Service) ImportTrustedKeyWrappedCryptoKeyVersion(ctx context.Context, project, location, kr, key string, in ImportVersionRequest) (kmsstore.Version, error) {
 	if in.Algorithm == "" {
 		return kmsstore.Version{}, invalidArgument("algorithm is required")
 	}
-	p, l, kkr, kkey, ver, ok := SplitVersionName(in.ImportingKey)
-	if !ok || p != project || l != location || kkr != kr {
-		return kmsstore.Version{}, invalidArgument("importing_key must name a version in the target key ring")
+	if in.CryptoKeyVersion != "" {
+		return kmsstore.Version{}, reimportUnsupported()
 	}
-	if err := s.requireVersionEnabled(ctx, project, location, kr, kkey, ver); err != nil {
-		return kmsstore.Version{}, err
-	}
-	kwk, err := s.keys.KeyMaterial(ctx, project, location, kr, kkey, ver)
+	kwk, err := s.resolveTrustedWrappingKey(ctx, project, location, kr, in.ImportingKey, "importing_key", true)
 	if err != nil {
-		return kmsstore.Version{}, versionErr(err)
+		return kmsstore.Version{}, err
 	}
 	material, err := kmsstore.AESKeyUnwrapWithPadding(kwk, in.WrappedKey)
 	if err != nil {
@@ -262,23 +264,9 @@ func (s *Service) ExportTrustedKeyWrappedCryptoKeyVersion(ctx context.Context, p
 	if !v.TrustedWrappingEnabled {
 		return nil, failedPrecondition("CryptoKeyVersion does not have trusted wrapping enabled")
 	}
-	p, l, kkr, kkey, kver, ok := SplitVersionName(wrappingKey)
-	if !ok || p != project || l != location || kkr != kr {
-		return nil, invalidArgument("wrapping_key must name a version in the target key ring")
-	}
-	wv, err := s.GetVersion(ctx, project, location, kr, kkey, kver)
+	kwk, err := s.resolveTrustedWrappingKey(ctx, project, location, kr, wrappingKey, "wrapping_key", false)
 	if err != nil {
 		return nil, err
-	}
-	if wv.State != "ENABLED" {
-		return nil, versionNotEnabledErr(kver, wv.State)
-	}
-	if !wv.HsmTrusted {
-		return nil, failedPrecondition("wrapping_key is not HSM-trusted")
-	}
-	kwk, err := s.keys.KeyMaterial(ctx, project, location, kr, kkey, kver)
-	if err != nil {
-		return nil, versionErr(err)
 	}
 	material, err := s.versionMaterial(ctx, project, location, kr, key, version, v)
 	if err != nil {
@@ -322,6 +310,14 @@ func (s *Service) createImportedVersion(ctx context.Context, project, location, 
 	}
 	if protectionLevel == "" {
 		protectionLevel = ck.ProtectionLevel
+	}
+	if isExternalProtectionLevel(protectionLevel) {
+		return kmsstore.Version{}, externalVersionUnsupported()
+	}
+	if in.TrustedWrappingEnabled {
+		if err := validateTrustedWrappingTarget(ck.Purpose, ck.ProtectionLevel); err != nil {
+			return kmsstore.Version{}, err
+		}
 	}
 	keyMat, privDER, pubDER, err := splitImportedMaterial(in.Algorithm, material)
 	if err != nil {

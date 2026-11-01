@@ -2,13 +2,25 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
+
+// providerError returns the canonical ProviderError behind err (nil when err is
+// not one).
+func providerError(err error) *model.ProviderError {
+	var pe *model.ProviderError
+	if errors.As(err, &pe) {
+		return pe
+	}
+	return nil
+}
 
 func TestSetIamPolicyEtagOCC(t *testing.T) {
 	ctx := context.Background()
@@ -98,6 +110,171 @@ func TestSetIamPolicyConcurrentSameEtagOnlyOneWins(t *testing.T) {
 		if err == nil && final.Etag != results[i].Etag {
 			t.Fatalf("stored etag %q does not match the reported winner's etag %q", final.Etag, results[i].Etag)
 		}
+	}
+}
+
+// TestSetConditionalBindingInfersVersion3 covers Terraform's shape: a binding
+// carrying a condition and no version field at all. IAM (AIP-149) mandates
+// version 3 for conditions, so the stored policy must be version 3 and the
+// condition object must round-trip verbatim.
+func TestSetConditionalBindingInfersVersion3(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewMemoryResourceStore()
+	condition := map[string]any{
+		"title":       "expires-soon",
+		"description": "temporary access",
+		"expression":  `request.time < timestamp("2027-01-01T00:00:00Z")`,
+	}
+	binding := map[string]any{
+		"role":      "roles/viewer",
+		"members":   []any{"user:a@example.com"},
+		"condition": condition,
+	}
+
+	got, err := Set(ctx, s, "proj", "gcp_project_policy", "proj", map[string]any{
+		"policy": map[string]any{"bindings": []any{binding}},
+	})
+	if err != nil {
+		t.Fatalf("set conditional policy: %v", err)
+	}
+	if got.Version != 3 {
+		t.Fatalf("stored version = %d, want 3", got.Version)
+	}
+
+	stored := Load(ctx, s, "proj", "gcp_project_policy", "proj")
+	if stored.Version != 3 {
+		t.Fatalf("loaded version = %d, want 3", stored.Version)
+	}
+	if len(stored.Bindings) != 1 {
+		t.Fatalf("loaded %d bindings, want 1", len(stored.Bindings))
+	}
+	bm, _ := stored.Bindings[0].(map[string]any)
+	cm, _ := bm["condition"].(map[string]any)
+	if cm["title"] != condition["title"] || cm["expression"] != condition["expression"] || cm["description"] != condition["description"] {
+		t.Fatalf("condition did not round-trip verbatim: %v", cm)
+	}
+
+	rendered := ToMap(stored)
+	if rendered["version"] != 3 {
+		t.Fatalf("rendered version = %v, want 3", rendered["version"])
+	}
+	rb := rendered["bindings"].([]any)[0].(map[string]any)
+	if _, ok := rb["condition"].(map[string]any); !ok {
+		t.Fatalf("rendered binding lost its condition: %v", rb)
+	}
+}
+
+// TestSetUnconditionalVersionDefaultsTo1 covers the unconditional cases:
+// absent/0 stays 1, an explicit 3 is preserved, an explicit 1 stays 1, and no
+// unconditional policy is silently upgraded.
+func TestSetUnconditionalVersionDefaultsTo1(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"absent", map[string]any{"policy": map[string]any{"bindings": []any{}}}, 1},
+		{"zero", map[string]any{"policy": map[string]any{"version": float64(0), "bindings": []any{}}}, 1},
+		{"one", map[string]any{"policy": map[string]any{"version": float64(1), "bindings": []any{}}}, 1},
+		{"three", map[string]any{"policy": map[string]any{"version": float64(3), "bindings": []any{}}}, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := store.NewMemoryResourceStore()
+			got, err := Set(ctx, s, "proj", "gcp_topic_policy", "t1", tc.body)
+			if err != nil {
+				t.Fatalf("set: %v", err)
+			}
+			if got.Version != tc.want {
+				t.Fatalf("version = %d, want %d", got.Version, tc.want)
+			}
+			if loaded := Load(ctx, s, "proj", "gcp_topic_policy", "t1"); loaded.Version != tc.want {
+				t.Fatalf("loaded version = %d, want %d", loaded.Version, tc.want)
+			}
+		})
+	}
+}
+
+// TestSetConditionWithVersion1Rejected covers AIP-149: a request that touches
+// conditional role bindings must specify version 3, so an explicit version 1 is
+// INVALID_ARGUMENT (HTTP 400).
+func TestSetConditionWithVersion1Rejected(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewMemoryResourceStore()
+	_, err := Set(ctx, s, "proj", "gcp_topic_policy", "t1", map[string]any{
+		"policy": map[string]any{
+			"version": float64(1),
+			"bindings": []any{map[string]any{
+				"role":      "roles/viewer",
+				"members":   []any{"user:a@example.com"},
+				"condition": map[string]any{"title": "t", "expression": "true"},
+			}},
+		},
+	})
+	pe := providerError(err)
+	if pe == nil || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+		t.Fatalf("condition+version 1 = %v, want InvalidArgument/400", err)
+	}
+	// No policy row may be created by a rejected write.
+	if pol := Load(ctx, s, "proj", "gcp_topic_policy", "t1"); len(pol.Bindings) != 0 {
+		t.Fatalf("rejected write left bindings behind: %v", pol.Bindings)
+	}
+}
+
+// TestSetInvalidVersionRejected covers versions IAM does not define (2,
+// negative, non-integral, non-numeric).
+func TestSetInvalidVersionRejected(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name    string
+		version any
+	}{
+		{"two", float64(2)},
+		{"negative", float64(-1)},
+		{"fractional", 1.5},
+		{"string", "3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := store.NewMemoryResourceStore()
+			_, err := Set(ctx, s, "proj", "gcp_topic_policy", "t1", map[string]any{
+				"policy": map[string]any{"version": tc.version, "bindings": []any{}},
+			})
+			pe := providerError(err)
+			if pe == nil || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+				t.Fatalf("version %v = %v, want InvalidArgument/400", tc.version, err)
+			}
+		})
+	}
+}
+
+// TestSetStaleEtagAborted pins the etag OCC contract: a stale etag is ABORTED
+// (HTTP 409) regardless of the version/condition rules.
+func TestSetStaleEtagAborted(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewMemoryResourceStore()
+	first, err := Set(ctx, s, "proj", "gcp_topic_policy", "t1", map[string]any{
+		"policy": map[string]any{"bindings": []any{map[string]any{
+			"role": "roles/viewer", "members": []any{"user:a@example.com"},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("initial set: %v", err)
+	}
+	_, err = Set(ctx, s, "proj", "gcp_topic_policy", "t1", map[string]any{
+		"policy": map[string]any{
+			"etag":     "stale",
+			"version":  float64(3),
+			"bindings": []any{map[string]any{"role": "roles/editor", "members": []any{"user:b@example.com"}}},
+		},
+	})
+	pe := providerError(err)
+	if pe == nil || pe.Status != "ABORTED" || pe.HTTPStatus != 409 {
+		t.Fatalf("stale etag = %v, want ABORTED/409", err)
+	}
+	if Load(ctx, s, "proj", "gcp_topic_policy", "t1").Etag != first.Etag {
+		t.Fatal("rejected write changed the stored policy")
 	}
 }
 

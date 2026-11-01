@@ -58,6 +58,10 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	if err != nil {
 		return dpstore.Job{}, err
 	}
+	// The PHS event-log confs are fixed by the cluster's stored
+	// virtualClusterConfig, so a job inherits them the same way it inherits the
+	// metastore attachment.
+	phsConfs := phsSparkConfs(cluster)
 
 	// Fail-loud on unsupported job types — never silently succeed.
 	if unsupportedJobTypes[j.Type] {
@@ -112,7 +116,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		defer s.wg.Done()
 		defer runCancel()
 		defer s.unregisterCancel(key)
-		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, cluster.Namespace)
+		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, cluster.Namespace, phsConfs)
 	}()
 	return j, nil
 }

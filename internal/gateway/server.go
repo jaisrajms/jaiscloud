@@ -45,7 +45,7 @@ type Server struct {
 	extraRoutes  []func(chi.Router)
 	// corsLookup returns the stored CORS rules for a given S3 bucket name.
 	// If nil, CORS preflight handling is disabled.
-	corsLookup func(bucket string) []map[string]any
+	corsLookup func(ctx context.Context, bucket string) []map[string]any
 	// gcsCorsLookup returns the stored CORS rules for a given GCS bucket name.
 	// If nil, GCS CORS preflight handling is disabled. Only the GCP binary
 	// wires this, so S3/AWS behavior is unaffected.
@@ -89,7 +89,7 @@ func WithCloudRoutesDisabled() func(*Server) {
 // WithCORSLookup wires in a function that returns stored S3 CORS rules for a
 // bucket. When set, the server intercepts OPTIONS preflight requests and adds
 // Access-Control-* headers to regular S3 responses that carry an Origin header.
-func WithCORSLookup(fn func(bucket string) []map[string]any) func(*Server) {
+func WithCORSLookup(fn func(ctx context.Context, bucket string) []map[string]any) func(*Server) {
 	return func(s *Server) {
 		s.corsLookup = fn
 	}
@@ -134,6 +134,9 @@ func (s *Server) buildRouter() {
 	r.Route("/_jaiscloud", func(r chi.Router) {
 		r.Get("/health", s.adminHandler.Health)
 		r.Get("/doctor", s.adminHandler.Doctor)
+		// GCP project discovery (configured ∪ registered ∪ observed). Registered
+		// by the GCP binary; 501 on a binary that does not wire it.
+		r.Get("/projects", s.adminHandler.Projects)
 		r.Post("/reset", s.adminHandler.Reset)
 		r.Get("/export", s.adminHandler.Export)
 		r.Post("/import", s.adminHandler.Import)
@@ -255,7 +258,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		if origin != "" && r.Method == http.MethodOptions {
 			reqMethod := r.Header.Get("Access-Control-Request-Method")
 			bucket := corsExtractBucket(r)
-			rules := s.corsLookup(bucket)
+			rules := s.corsLookup(r.Context(), bucket)
 			rule, ok := corsMatchRule(rules, origin, reqMethod)
 			if !ok {
 				http.Error(w, "CORS request not allowed", http.StatusForbidden)
@@ -341,7 +344,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	if s.corsLookup != nil {
 		if origin := r.Header.Get("Origin"); origin != "" {
 			bucket := corsExtractBucket(r)
-			rules := s.corsLookup(bucket)
+			rules := s.corsLookup(r.Context(), bucket)
 			CORSAddResponseHeaders(headers, rules, origin)
 		}
 	}

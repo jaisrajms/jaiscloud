@@ -111,12 +111,25 @@ func logsErr(code, msg string, status int) error {
 	return model.NewProviderError(code, msg, status)
 }
 
+// Values of ProviderError.Data["resource"] on ResourceNotFoundException, so a
+// caller can tell a missing group from a missing stream without reading prose.
+const (
+	ResourceLogGroup  = "log-group"
+	ResourceLogStream = "log-stream"
+)
+
+// notFound is a ResourceNotFoundException that names the kind of thing missing.
+func notFound(resource, msg string) error {
+	return model.NewProviderError("ResourceNotFoundException", msg, 400).
+		WithData(map[string]any{"resource": resource})
+}
+
 // verifyGroupExists returns the group or a ResourceNotFoundException.
 // Caller must hold at least a read lock.
 func (p *Provider) verifyGroupExists(name string) (*LogGroup, error) {
 	g, ok := p.store.groups[name]
 	if !ok {
-		return nil, logsErr("ResourceNotFoundException", "The specified log group does not exist: "+name, 400)
+		return nil, notFound(ResourceLogGroup, "The specified log group does not exist: "+name)
 	}
 	return g, nil
 }

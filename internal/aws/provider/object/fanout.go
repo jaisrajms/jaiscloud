@@ -142,8 +142,8 @@ func (p *ObjectProvider) dispatchS3Notification(_ context.Context, bucket, key, 
 		}(l.LambdaFuncArn, payload)
 	}
 
-	// EventBridge configuration.
-	if p.fanout.EventBridge != nil {
+	// EventBridge delivery is opt-in per bucket (<EventBridgeConfiguration/>).
+	if cfg.EventBridge && p.fanout.EventBridge != nil {
 		ebPayload := buildEBS3Event(bucket, key, eventName, etag, size, region, accountID, now)
 		go func(payload map[string]any) {
 			_ = p.fanout.EventBridge.InternalPutEvents(bgCtx, []map[string]any{payload})
@@ -162,12 +162,22 @@ func buildEBEventName(eventName string) string {
 }
 
 func buildEBS3Event(bucket, key, eventName, etag string, size int64, region, accountID string, now time.Time) map[string]any {
+	detail, _ := json.Marshal(map[string]any{
+		"version":           "0",
+		"bucket":            map[string]any{"name": bucket},
+		"object":            map[string]any{"key": key, "size": size, "etag": etag},
+		"request-id":        "",
+		"requester":         accountID,
+		"source-ip-address": "127.0.0.1",
+		"reason":            eventName,
+		"deletion-type":     "Permanently Deleted",
+	})
 	return map[string]any{
 		"Source":       "aws.s3",
 		"DetailType":   buildEBEventName(eventName),
 		"EventBusName": "default",
-		"Detail": fmt.Sprintf(`{"version":"0","bucket":{"name":%q},"object":{"key":%q,"size":%d,"etag":%q},"source-ip-address":"127.0.0.1","reason":"%s","deletion-type":"Permanently Deleted","request-id":"","requester":"%s","source-ip-address":"127.0.0.1"}`,
-			bucket, key, size, etag, eventName, accountID),
-		"Time": now.UTC().Format(time.RFC3339),
+		"Detail":       string(detail),
+		"Resources":    []any{"arn:aws:s3:::" + bucket}, //nolint:hardcoded-arn S3 bucket ARNs have no account/region by AWS spec
+		"Time":         now.UTC().Format(time.RFC3339),
 	}
 }

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -53,6 +54,25 @@ const (
 	CloudGCP   Cloud = "gcp"
 )
 
+// Origin says where a request entered the registry. The zero value is a wire
+// request, so existing codecs and tests are unaffected.
+type Origin string
+
+const (
+	// OriginWire: a client call decoded by a codec (the default).
+	OriginWire Origin = ""
+	// OriginInternal: another part of the emulator calling a service (SNS
+	// delivering to SQS, a poller, a scheduler, ...). Built-in handlers serve it
+	// with their internal behaviour; plugins see it like any other call.
+	OriginInternal Origin = "internal"
+	// OriginService: an emulator service acting like a client of another one with
+	// wire-shaped parameters (Step Functions task states, CloudFormation resource
+	// handlers). Built-in handlers treat it exactly like OriginWire.
+	OriginService Origin = "service"
+	// OriginUI: the console UI.
+	OriginUI Origin = "ui"
+)
+
 // NormalizedRequest is the cloud-agnostic representation of an API call.
 // Each cloud adapter decodes the wire-format request into this struct.
 type NormalizedRequest struct {
@@ -66,6 +86,17 @@ type NormalizedRequest struct {
 	AccountID string
 	Port      int
 	Cloud     Cloud // which cloud adapter handled this request (aws, azure, gcp)
+
+	// Origin is where the call came from; see Origin. Every caller reaches a
+	// service through Registry.Dispatch, so a plugin that overrides a key is used
+	// by wire, internal and UI callers alike.
+	Origin Origin
+
+	// Transport names the wire transport when it is not the cloud's default
+	// request/response one. "grpc" (GCP) means Params and the response Data are
+	// the protojson form of the RPC messages, not the REST shape. The zero value
+	// is the codec's own wire format.
+	Transport string
 
 	// AccessKey is the raw SigV4/SigV2 access-key-id extracted from the
 	// Authorization header or presigned URL. Empty for anonymous requests.
@@ -164,4 +195,21 @@ func (e *ProviderError) WithData(data map[string]any) *ProviderError {
 
 func NewProviderError(code, message string, httpStatus int) *ProviderError {
 	return &ProviderError{Code: code, Message: message, HTTPStatus: httpStatus}
+}
+
+// Codes of the errors raised when the party that owns a call (a plugin) cannot
+// answer it. They say nothing about the request itself.
+const (
+	CodePluginUnavailable = "PluginUnavailable"
+	CodePluginTimeout     = "PluginTimeout"
+)
+
+// IsOutage reports whether err means the service that should have answered
+// could not be reached in time (a plugin is down, restarting or too slow), as
+// opposed to the service answering with a failure. Background workers use it to
+// back off and retry instead of counting the failure against the thing they are
+// working on.
+func IsOutage(err error) bool {
+	var pe *ProviderError
+	return errors.As(err, &pe) && (pe.Code == CodePluginUnavailable || pe.Code == CodePluginTimeout)
 }

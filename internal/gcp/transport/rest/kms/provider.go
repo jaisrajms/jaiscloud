@@ -206,6 +206,9 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 	if strField(nr.Params, "skipInitialVersionCreation") == "true" {
 		in.SkipInitialVersion = true
 	}
+	if strField(nr.Params, "trustedWrappingEnabled") == "true" {
+		in.TrustedWrappingEnabled = true
+	}
 	ck, err := p.core.CreateCryptoKey(ctx, nr.AccountID, loc, kr, key, in)
 	if err != nil {
 		return nil, err
@@ -468,7 +471,16 @@ func (p *Provider) CryptoKeyVersionCreate(ctx context.Context, nr *model.Normali
 	if loc == "" || kr == "" || key == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing cryptoKey parent", 400)
 	}
-	v, err := p.core.CreateVersion(ctx, nr.AccountID, loc, kr, key)
+	body, _ := nr.Params["body"].(map[string]any)
+	in := kmscore.CreateVersionInput{
+		TrustedWrappingEnabled: boolField(body, "trustedWrappingEnabled"),
+	}
+	// Discovery: ExternalProtectionLevelOptions is a group of fields for
+	// EXTERNAL / EXTERNAL_VPC versions; an empty object is the same as omitted.
+	if ext, ok := body["externalProtectionLevelOptions"].(map[string]any); ok && len(ext) > 0 {
+		in.ExternalProtectionLevelOptions = true
+	}
+	v, err := p.core.CreateVersion(ctx, nr.AccountID, loc, kr, key, in)
 	if err != nil {
 		return nil, err
 	}

@@ -29,6 +29,7 @@ import (
 	"jaiscloud/internal/aws/provider/stepfunctions"
 	"jaiscloud/internal/aws/provider/table"
 	"jaiscloud/internal/aws/secret"
+	"jaiscloud/internal/provider"
 )
 
 // AWSProviders holds all provider pointers injected from main.go.
@@ -62,4 +63,9 @@ type AWSProviders struct {
 	Firehose  *firehose.Provider
 	SES       *ses.Provider
 	ELBv2     *elbv2.ELBv2Provider
+
+	// Registry routes console calls through the same entry point as every other
+	// caller, so a plugin that overrides a service also serves the console.
+	// Nil calls the providers directly (unit tests).
+	Registry *provider.Registry
 }

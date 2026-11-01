@@ -1683,6 +1683,10 @@ func objectNameInOffsetRange(name, startOffset, endOffset string) bool {
 	return true
 }
 
+// StagedWriteMeta, set on an ObjectsInsert request by an internal caller, writes the
+// object as the emulator's own staging helper did: no bucket versioning or retention.
+const StagedWriteMeta = "storage.staged_write"
+
 func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	if signed, _ := nr.Params[wire.SignedURLKey].(bool); signed {
 		if perr := p.validateSignedURL(nr); perr != nil {
@@ -1739,6 +1743,13 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	var versioned bool
 	var retention *objectRetention
 	bmeta, _ := p.objects.GetBucket(ctx, bucket)
+	// An object the emulator stages for another service (Dataproc driver output)
+	// is written the way it always was: replacing the live object, without the
+	// bucket's versioning or retention, so a user bucket that has them does not
+	// reject the second staged write (see seams.Storage.PutObjectBytes).
+	if nr.GetMeta(StagedWriteMeta) != "" {
+		bmeta = nil
+	}
 	if v, ok := bmeta["versioning"].(map[string]any); ok {
 		if en, _ := v["enabled"].(bool); en {
 			versioned = true

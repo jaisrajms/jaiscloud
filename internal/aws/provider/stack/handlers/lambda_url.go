@@ -3,13 +3,12 @@ package handlers
 import (
 	"context"
 
-	functionprovider "jaiscloud/internal/aws/provider/lambda"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLambdaUrlHandler returns a ResourceHandler for AWS::Lambda::Url.
-func NewLambdaUrlHandler(funcP *functionprovider.FunctionProvider) stackprovider.ResourceHandler {
+func NewLambdaUrlHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			targetFunc := propStr(props, "TargetFunctionArn", "")
@@ -21,7 +20,7 @@ func NewLambdaUrlHandler(funcP *functionprovider.FunctionProvider) stackprovider
 			if cors, ok := props["Cors"]; ok {
 				params["Cors"] = cors
 			}
-			resp, err := funcP.CreateFunctionUrlConfig(ctx, child(nr, params))
+			resp, err := call(ctx, "Function.CreateFunctionUrlConfig", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -38,7 +37,7 @@ func NewLambdaUrlHandler(funcP *functionprovider.FunctionProvider) stackprovider
 			if cors, ok := newProps["Cors"]; ok {
 				params["Cors"] = cors
 			}
-			resp, err := funcP.UpdateFunctionUrlConfig(ctx, child(nr, params))
+			resp, err := call(ctx, "Function.UpdateFunctionUrlConfig", child(nr, params))
 			if err != nil {
 				return "", nil, false, err
 			}
@@ -48,7 +47,7 @@ func NewLambdaUrlHandler(funcP *functionprovider.FunctionProvider) stackprovider
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			targetFunc := propStr(props, "TargetFunctionArn", "")
-			_, err := funcP.DeleteFunctionUrlConfig(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Function.DeleteFunctionUrlConfig", &model.NormalizedRequest{
 				Params: map[string]any{"_function_name": targetFunc},
 			})
 			return err

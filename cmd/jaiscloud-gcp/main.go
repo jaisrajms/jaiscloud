@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,8 +39,10 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	"jaiscloud/internal/gcp/grpcplugin"
 	hms "jaiscloud/internal/gcp/hms"
 	"jaiscloud/internal/gcp/lro"
+	"jaiscloud/internal/gcp/pluginchain"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
 	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
@@ -54,6 +55,7 @@ import (
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/gcp/runexec"
+	"jaiscloud/internal/gcp/seams"
 	containercore "jaiscloud/internal/gcp/service/container"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
@@ -101,6 +103,7 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
+	grpciam "jaiscloud/internal/gcp/transport/grpc/iam"
 	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
 	grpckms "jaiscloud/internal/gcp/transport/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
@@ -138,6 +141,7 @@ import (
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
+	projectsui "jaiscloud/internal/gcp/ui/projects"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/k8shelpers"
@@ -145,6 +149,7 @@ import (
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
 	"jaiscloud/internal/platform"
+	"jaiscloud/internal/pluginhost"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
@@ -159,6 +164,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
+	iamadminpb "cloud.google.com/go/iam/admin/apiv1/adminpb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	credentialspb "cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -179,10 +185,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 )
 
 var version = "dev"
+
+// commit and date are stamped by the linker (-X main.commit/-X main.date) the
+// same way as the AWS binary; a bare `go build` reports the placeholders.
+var (
+	commit = "none"
+	date   = "unknown"
+)
 
 const defaultHost = "http://localhost:8080"
 
@@ -199,6 +213,7 @@ func main() {
 	root.AddCommand(exportCmd())
 	root.AddCommand(importCmd())
 	root.AddCommand(snapshotCmd())
+	root.AddCommand(projectsCmd())
 	root.AddCommand(kafkaProbeCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -314,14 +329,24 @@ func startCmd() *cobra.Command {
 			// adapter below, so both transports mint identical credentials.
 			iamCredentialsCore := iamcredentialscore.New(stores.resources)
 			iamCredentialsP := restiamcredentials.NewProvider(iamCredentialsCore, cfg.ProjectID)
+			// The registry is the only way into a service: calls between services go
+			// through it (internal/gcp/seams), so a plugin that overrides a key is
+			// used by them too. It is filled in below, before anything dispatches.
+			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
+			reg := provider.NewRegistry()
+			// Every provider, enabled or not: a service switched off keeps serving the services that use it.
+			allProviders := provider.NewRegistry()
+			gcpSeams := seams.New(reg, cloudAdapter, cfg.Clock, cfg.Port, cfg.Region, cfg.ProjectID).WithFallback(allProviders)
+			pubsubSeam := gcpSeams.PubSub()
+			storageSeam := gcpSeams.Storage()
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			// GCS object notifications fan out through Pub/Sub; the storage
 			// provider only sees the interface, so it never imports the Pub/Sub
 			// provider (no provider→provider dependency).
-			storageP.SetEventPublisher(pubsubP)
+			storageP.SetEventPublisher(pubsubSeam)
 			// Secret Manager's control-plane event notifications (DC64) ride the
 			// same Pub/Sub publish path, for both transports.
-			secretP.SetEventPublisher(pubsubP)
+			secretP.SetEventPublisher(pubsubSeam)
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			// Cloud Datastore's transport-neutral core is shared by the REST
@@ -338,8 +363,9 @@ func startCmd() *cobra.Command {
 
 			// Cloud Monitoring's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter (and the background evaluator)
-			// below, so every surface reads and writes one store.
-			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
+			// below, so every surface reads and writes one store. The shared
+			// ResourceStore backs the REST-only v1 dashboards API.
+			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID, monitoringcore.WithResources(stores.resources))
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
 			// Cloud Functions runs on the shared, cloud-neutral container
@@ -394,8 +420,8 @@ func startCmd() *cobra.Command {
 				serviceOpts := []functionscore.Option{
 					functionscore.WithExecutor(funcExec),
 					functionscore.WithBlobs(stores.blobs),
-					functionscore.WithSourceFetcher(storageP),
-					functionscore.WithSourceBuckets(storageP),
+					functionscore.WithSourceFetcher(storageSeam),
+					functionscore.WithSourceBuckets(storageSeam),
 					// Long-running-operation timing (LRO2): opt-in async mode,
 					// default sync, reusing the cross-service mode parsed above.
 					functionscore.WithLROMode(lroMode),
@@ -436,7 +462,7 @@ func startCmd() *cobra.Command {
 				// Dead-letter resolution/forwarding (FD9) goes through the Pub/Sub
 				// provider; the Eventarc trigger provisioner is wired below once
 				// the Eventarc core exists.
-				functionsCore.SetSubscriptions(pubsubP)
+				functionsCore.SetSubscriptions(pubsubSeam)
 			}
 
 			workflowsEngine := workflowengine.New()
@@ -492,7 +518,7 @@ func startCmd() *cobra.Command {
 					// provider/pubsub). Empty topic (the default) disables
 					// publishing; a cluster may override per-cluster with the
 					// jaiscloud-events-topic label.
-					dataproccore.WithEventPublisher(pubsubP),
+					dataproccore.WithEventPublisher(pubsubSeam),
 					dataproccore.WithEventsTopic(os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")),
 					// Surface job/cluster transitions in the console's live
 					// status stream (shared event bus).
@@ -500,7 +526,7 @@ func startCmd() *cobra.Command {
 					// Stage each job's driver output/control files into the
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
-					dataproccore.WithBlobSink(storageP),
+					dataproccore.WithBlobSink(storageSeam),
 					// Reconcile a Dataproc-on-GKE virtual cluster's target and node
 					// pools through the GKE core (resolved at create, verified or
 					// created through the container API). The core only sees the
@@ -510,7 +536,7 @@ func startCmd() *cobra.Command {
 					// Metastore core (validated at cluster create, formatted at
 					// job submit). The core only sees the interface, so it never
 					// imports service/metastore.
-					dataproccore.WithMetastoreResolver(metastoreCore),
+					dataproccore.WithMetastoreResolver(gcpSeams.Metastore(metastoreCore)),
 					// The synthesized per-service endpoint is not resolvable from
 					// Spark pods; a deployment points this at the reachable HMS.
 					dataproccore.WithHMSEndpointOverride(os.Getenv("JAISCLOUD_DATAPROC_HMS_ENDPOINT")),
@@ -645,7 +671,7 @@ func startCmd() *cobra.Command {
 			// Load jobs read their gs:// source from the emulated GCS through the
 			// SourceReader interface, so the BigQuery provider never imports the
 			// storage provider.
-			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageP))
+			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageSeam))
 
 			// Eventarc's transport-neutral core is shared by the REST provider
 			// and the gRPC adapter below, so both transports run against one
@@ -657,7 +683,7 @@ func startCmd() *cobra.Command {
 				// The platform-provisioned backing Pub/Sub subscription of a
 				// trigger (its dead-letter surface) is created by the Pub/Sub
 				// provider (FD9).
-				eventarcCore.SetSubscriptionProvisioner(pubsubP)
+				eventarcCore.SetSubscriptionProvisioner(pubsubSeam)
 			}
 			// Eventarc validates destination.cloudFunction against the functions
 			// core, and the functions delivery engine consults Eventarc triggers
@@ -785,7 +811,7 @@ func startCmd() *cobra.Command {
 			// delivery works in k8s executor mode without DNS. The core is
 			// always built, so the invoker is wired whenever Eventarc exists.
 			if eventarcCore != nil {
-				eventarcCore.SetCloudRunInvoker(cloudRunEventarcInvoker{run: runCore})
+				eventarcCore.SetCloudRunInvoker(gcpSeams.Run())
 			}
 
 			// Service Usage v1's transport-neutral core is shared by the REST
@@ -800,7 +826,7 @@ func startCmd() *cobra.Command {
 			// httpTarget/pubsubTarget jobs on the emulator clock; pubsubTarget
 			// delivery reuses the Pub/Sub provider's fan-out path.
 			schedulerCore := schedulercore.NewService(stores.scheduler)
-			schedulerEngine := schedulercore.NewEngine(stores.scheduler, schedulercore.NewRunner(schedulerPubSubPublisher{provider: pubsubP}))
+			schedulerEngine := schedulercore.NewEngine(stores.scheduler, schedulercore.NewRunner(schedulerPubSubPublisher{provider: pubsubSeam}))
 			schedulerCore.SetEngine(schedulerEngine)
 			schedulerP := restscheduler.NewProvider(schedulerCore)
 
@@ -854,7 +880,7 @@ func startCmd() *cobra.Command {
 			// Register only services enabled on at least one transport, so a
 			// per-service `none` override removes both its REST and gRPC surface
 			// (an unregistered provider falls through to a 404/unknown-action).
-			reg := provider.NewRegistry()
+			restBuiltins := map[string]provider.HandlerFunc{}
 			for _, sp := range []struct {
 				name string
 				p    provider.Provider
@@ -889,9 +915,48 @@ func startCmd() *cobra.Command {
 				{"logging", loggingRestP},
 				{"monitoring", monitoringRestP},
 			} {
+				allProviders.Register(sp.p)
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
+					// The REST built-ins sit under the plugin chain for the console services that
+					// work on typed structs (internal/gcp/ui/typed.go).
+					for k, h := range sp.p.Routes() {
+						restBuiltins[k] = h
+					}
 				}
+			}
+
+			// Out-of-process plugins (opt-in). With no --plugin/JAISCLOUD_PLUGINS,
+			// Load returns (nil, nil) and nothing below changes. The registry is
+			// complete here and no worker has started yet, so a plugin that
+			// overrides a key is used from the first call by every caller; the gRPC
+			// transport reaches the same plugins through grpcplugin below.
+			callbackURL := viper.GetString("plugin_callback_url")
+			if callbackURL == "" {
+				callbackURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
+			}
+			pluginHost, err := pluginhost.Load(ctx, viper.GetStringSlice("plugins"), pluginhost.Deps{
+				Cloud: model.CloudGCP, Version: version, Registry: reg, Adapter: cloudAdapter,
+				Resources: stores.resources, CallbackURL: callbackURL,
+				Timeout:   viper.GetDuration("plugin_timeout"),
+				StartWait: viper.GetDuration("plugin_wait"),
+				CallRetry: viper.GetDuration("plugin_retry"),
+				Secret:    viper.GetString("plugin_secret"),
+			})
+			if err != nil {
+				return err
+			}
+			// One plugin chain serves every caller that bypasses the registry: gRPC and the console.
+			var pluginChain *pluginchain.Chain
+			if pluginHost != nil {
+				pluginChain = pluginchain.New(pluginHost)
+			}
+			var grpcOpts []grpc.ServerOption
+			if pluginHost != nil && transports.GRPC() {
+				grpcOpts = grpcplugin.New(grpcplugin.Config{
+					Host: pluginHost, Chain: pluginChain, Adapter: cloudAdapter, Clock: cfg.Clock, Port: cfg.Port,
+					Region: cfg.Region, Project: cfg.ProjectID,
+				}).ServerOptions()
 			}
 
 			// gRPC transport shares the SAME Firestore provider Service as the
@@ -902,7 +967,7 @@ func startCmd() *cobra.Command {
 			firestoreAdminGRPC := grpcfirestoreadmin.NewService(firestoreP.Service, cfg.ProjectID)
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
-			secretGRPC.SetEventPublisher(pubsubP)
+			secretGRPC.SetEventPublisher(pubsubSeam)
 			kmsGRPC := grpckms.NewService(kmsCore, cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			loggingConfigGRPC := grpclogging.NewConfigService(loggingCore, cfg.ProjectID)
@@ -912,7 +977,7 @@ func startCmd() *cobra.Command {
 			// conditions, opens/closes incidents, and publishes notifications to
 			// pubsub notification channels via the emulator's Pub/Sub store.
 			monitoringEval := grpcmonitoring.NewEvaluator(stores.monitoring, pubsubNotificationPublisher{
-				provider: pubsubP,
+				provider: pubsubSeam,
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
@@ -925,6 +990,7 @@ func startCmd() *cobra.Command {
 			tasksGRPC := grpctasks.NewService(tasksCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			iamCredentialsGRPC := grpciamcredentials.NewService(iamCredentialsCore, cfg.ProjectID)
+			iamGRPC := grpciam.NewService(iamP)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
@@ -936,7 +1002,7 @@ func startCmd() *cobra.Command {
 			// socket is opened.
 			var gserv *grpcserver.Server
 			if transports.GRPC() {
-				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort), grpcserver.ThrottleServerOptions(throttleInj)...)
+				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort), append(grpcserver.ThrottleServerOptions(throttleInj), grpcOpts...)...)
 				if transports.GRPCFor("firestore") {
 					firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
 				}
@@ -976,6 +1042,13 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("iamcredentials") {
 					credentialspb.RegisterIAMCredentialsServer(gserv.GRPC(), iamCredentialsGRPC)
+				}
+				// The IAM Admin API (google.iam.admin.v1.IAM) owns the
+				// service-account surface: CRUD, keys (including
+				// keys.upload), the deprecated sign verbs and the
+				// service-account IAM policy.
+				if transports.GRPCFor("iam") {
+					iamadminpb.RegisterIAMServer(gserv.GRPC(), iamGRPC)
 				}
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
@@ -1021,18 +1094,23 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub, KMS, Eventarc and Dataproc Metastore share the single
-				// IAMPolicy service, so their IAM surfaces are dispatched through
-				// one router. Eventarc and Metastore only join the router when
-				// their gRPC transport is selected, so a trigger/channel or
-				// metastore IAM name cannot reach a nil core.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") {
+				// Pub/Sub, KMS, Eventarc, Dataproc Metastore and Dataproc each
+				// own IAM resources served through the single IAMPolicy service,
+				// so their IAM surfaces are dispatched through one router.
+				// Eventarc, Metastore and Dataproc only join the router when
+				// their gRPC transport is selected, so a trigger/channel,
+				// metastore or workflow-template IAM name cannot reach a nil
+				// core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") || transports.GRPCFor("dataproc") {
 					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
 					if transports.GRPCFor("eventarc") {
 						iamHandlers = append(iamHandlers, eventarcGRPC)
 					}
 					if transports.GRPCFor("metastore") {
 						iamHandlers = append(iamHandlers, metastoreGRPC)
+					}
+					if transports.GRPCFor("dataproc") && dataprocCore != nil {
+						iamHandlers = append(iamHandlers, dataprocGRPC)
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
@@ -1145,6 +1223,16 @@ func startCmd() *cobra.Command {
 			}
 
 			adminHandler := admin.NewHandler()
+			// Project discovery on the admin plane: the same configured ∪
+			// registered ∪ observed snapshot the console reads, so a shell or CI
+			// job can ask which project a workload actually used.
+			var projectProvider projectsui.ProviderInterface
+			if resourceManagerCore != nil {
+				projectProvider = resourceManagerCore
+			}
+			adminHandler.RegisterProjectLister(projectLister{
+				handler: projectsui.NewHandler(projectProvider, cfg),
+			})
 			// Cloud Functions source archives are served to the K8s code-mount
 			// init container through the shared /lambda/code admin route (the
 			// executor's codeKey is path-safe: "location.id").
@@ -1286,7 +1374,6 @@ func startCmd() *cobra.Command {
 				adminHandler.SetKEKFingerprint(snapversion.FingerprintKEK([]byte(cfg.KMSMasterKey)))
 			}
 
-			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 			// Project discovery: the gateway reports every served (project,
 			// service) pair and the Resource Manager core records projects the
 			// console never registered, so the console can show where a workload
@@ -1415,6 +1502,14 @@ func startCmd() *cobra.Command {
 			}
 			defer cleanup()
 
+			if pluginHost != nil {
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(pluginHost.Routes))
+				adminHandler.RegisterResetter(pluginHost)
+				adminHandler.RegisterPostRestoreHook(pluginHost.RestoreHook())
+				adminHandler.SetPluginTicker(pluginHost)
+				adminHandler.SetDoctorSection("plugins", pluginHost.DoctorInfo)
+			}
+
 			srv := gateway.NewServer(cfg, adminHandler, reg, cloudAdapter, certs, gatewayOpts...)
 
 			// Background Cloud Monitoring alert-policy evaluator (30s ticker,
@@ -1510,7 +1605,7 @@ func startCmd() *cobra.Command {
 				// not be boxed into the interface or the catalog would list it).
 				var functionsUI functionsui.ProviderInterface
 				if functionsCore != nil {
-					functionsUI = functionsui.NewProvider(functionsCore, storageP)
+					functionsUI = functionsui.NewProvider(functionsCore, storageSeam)
 				}
 				// Dataproc is advertised only when the service is enabled
 				// (otherwise dataprocCore is nil, and a typed nil must not be
@@ -1544,7 +1639,7 @@ func startCmd() *cobra.Command {
 					CloudRun:          cloudRunExec,
 					CloudRunSource:    cloudRunSrc,
 				}
-				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithServiceModes(serviceModes)
+				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithRegistry(reg).WithPluginChain(pluginChain, restBuiltins).WithServiceModes(serviceModes)
 				uiServer, uiErr = coreui.New(gcpRegistrar, adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
@@ -1588,6 +1683,18 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
 	cmd.Flags().String("transports", "rest,grpc", "GCP wire transports to expose: rest,grpc,both,none")
 	cmd.Flags().String("transport-overrides", "", "Per-service transport overrides, e.g. storage=grpc,pubsub=rest,memorystore=none")
+	cmd.Flags().StringSlice("plugin", nil, `Out-of-process plugin to load (repeatable): http://host:port.
+	Order is precedence order. Env var: JAISCLOUD_PLUGINS (comma-separated)`)
+	cmd.Flags().Duration("plugin-timeout", 10*time.Second, "Timeout for each HTTP attempt to a plugin. Env var: JAISCLOUD_PLUGIN_TIMEOUT")
+	cmd.Flags().Duration("plugin-wait", 2*time.Minute, `How long to keep retrying an unreachable plugin at startup before failing.
+	Env var: JAISCLOUD_PLUGIN_WAIT`)
+	cmd.Flags().Duration("plugin-retry", 30*time.Second, `How long to keep retrying an unreachable plugin during a request before returning 503.
+	Env var: JAISCLOUD_PLUGIN_RETRY`)
+	cmd.Flags().String("plugin-secret", "", `Shared secret sent to plugins as a bearer token (pair with sdk.WithSecret).
+	Env var: JAISCLOUD_PLUGIN_SECRET`)
+	cmd.Flags().String("plugin-callback-url", "", `Base URL a plugin uses to reach this emulator's store callbacks.
+	Default http://127.0.0.1:<port>; set it when the plugin runs in another container.
+	Env var: JAISCLOUD_PLUGIN_CALLBACK_URL`)
 	cmd.Flags().Bool("ui", false, "Enable the UI Portal listener on --ui-port (default 4567)")
 	cmd.Flags().Int("ui-port", 4567, "Port for the UI Portal HTTP listener")
 	cmd.Flags().Bool("ui-open", false, "Auto-open browser when UI starts (no-op when not a TTY)")
@@ -1600,6 +1707,12 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("port", cmd.Flags().Lookup("port"))
 	viper.BindPFlag("ephemeral", cmd.Flags().Lookup("ephemeral"))
 	viper.BindPFlag("dsn", cmd.Flags().Lookup("dsn"))
+	viper.BindPFlag("plugins", cmd.Flags().Lookup("plugin"))
+	viper.BindPFlag("plugin_timeout", cmd.Flags().Lookup("plugin-timeout"))
+	viper.BindPFlag("plugin_wait", cmd.Flags().Lookup("plugin-wait"))
+	viper.BindPFlag("plugin_retry", cmd.Flags().Lookup("plugin-retry"))
+	viper.BindPFlag("plugin_secret", cmd.Flags().Lookup("plugin-secret"))
+	viper.BindPFlag("plugin_callback_url", cmd.Flags().Lookup("plugin-callback-url"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
 	viper.BindPFlag("fresh_start", cmd.Flags().Lookup("fresh-start"))
 	viper.BindPFlag("log_level", cmd.Flags().Lookup("log-level"))
@@ -1626,7 +1739,7 @@ func bindFlags(cmd *cobra.Command) {
 // by topics.publish, so every pull subscription, push endpoint, and function
 // trigger on the topic receives a copy (mirrors AWS CloudWatch alarm -> SNS).
 type pubsubNotificationPublisher struct {
-	provider *pubsubprovider.Provider
+	provider *seams.PubSub
 }
 
 // Publish writes the notification payload to the topic named by topic (a full
@@ -1641,7 +1754,7 @@ func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, 
 // the Cloud Scheduler engine's Publisher interface. The topic is the full
 // resource name carried by a pubsubTarget.
 type schedulerPubSubPublisher struct {
-	provider *pubsubprovider.Provider
+	provider *seams.PubSub
 }
 
 // Publish writes a message to topic (projects/{p}/topics/{t}) with the same
@@ -1649,49 +1762,6 @@ type schedulerPubSubPublisher struct {
 func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, data []byte, attributes map[string]string) error {
 	_, err := p.provider.PublishEvent(ctx, "", topic, data, attributes)
 	return err
-}
-
-// cloudRunEventarcInvoker adapts the Cloud Run core to Eventarc's
-// CloudRunInvoker seam: it resolves the stored service and forwards the
-// CloudEvents POST through the runtime manager, so a destination.cloudRun
-// trigger is delivered without DNS or the generated host.
-type cloudRunEventarcInvoker struct {
-	run *runcore.Service
-}
-
-// Invoke forwards one CloudEvents request to a Cloud Run service's latest ready
-// revision. A missing service maps to 404 and an unavailable runtime to the
-// runtime's own 502/503/504, mirroring the Cloud Run data-plane contract
-// (ErrNoReadyRuntime, e.g. the default mock runtime, -> 503).
-func (i cloudRunEventarcInvoker) Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error) {
-	svc, err := i.run.GetService(ctx, project, region, service)
-	if err != nil {
-		return providerHTTPStatus(err), err
-	}
-	inv, err := i.run.Invoke(ctx, runcore.InvocationRequest{
-		Service: svc,
-		Method:  http.MethodPost,
-		Path:    path,
-		Headers: headers,
-		Body:    body,
-	})
-	if err != nil {
-		if errors.Is(err, runcore.ErrNoReadyRuntime) {
-			return http.StatusServiceUnavailable, err
-		}
-		return providerHTTPStatus(err), err
-	}
-	return inv.Status, nil
-}
-
-// providerHTTPStatus extracts the HTTP status from a *model.ProviderError,
-// defaulting to 502 (Bad Gateway) for an unmapped delivery failure.
-func providerHTTPStatus(err error) int {
-	var pe *model.ProviderError
-	if errors.As(err, &pe) && pe.HTTPStatus > 0 {
-		return pe.HTTPStatus
-	}
-	return http.StatusBadGateway
 }
 
 // stores bundles the per-mode store backends constructed by initStores.
@@ -1829,7 +1899,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("jaiscloud-gcp %s\n", version)
+			fmt.Printf("jaiscloud-gcp %s (commit: %s, built: %s)\n", version, commit, date)
 		},
 	}
 }

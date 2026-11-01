@@ -31,7 +31,7 @@ func TestRegistry_Dispatch_ExactMatch(t *testing.T) {
 
 func TestRegistry_Dispatch_PluginFallback(t *testing.T) {
 	r := provider.NewRegistry()
-	r.RegisterPlugin("EMR", makeHandler("plugin"))
+	replaceService(r, "EMR", makeHandler("plugin"))
 
 	resp, err := r.Dispatch(context.Background(), "EMR.DescribeCluster", &model.NormalizedRequest{})
 	if err != nil {
@@ -47,9 +47,9 @@ func TestRegistry_Dispatch_PluginOverridesBuiltin(t *testing.T) {
 	r.RegisterAll(map[string]provider.HandlerFunc{
 		"EMR.RunJobFlow": makeHandler("builtin"),
 	})
-	// RegisterPlugin overrides ALL built-in handlers for the same prefix so
-	// that the plugin is the single source of truth for the entire service.
-	r.RegisterPlugin("EMR", makeHandler("plugin"))
+	// Intercepting every key plus the fallback makes the plugin the single
+	// source of truth for the entire service.
+	replaceService(r, "EMR", makeHandler("plugin"))
 
 	// Plugin wins for actions that had a built-in handler.
 	resp, err := r.Dispatch(context.Background(), "EMR.RunJobFlow", &model.NormalizedRequest{})
@@ -131,8 +131,8 @@ func TestRegistry_Register_DelegatesRoutes(t *testing.T) {
 
 func TestRegistry_Dispatch_MultiplePlugins(t *testing.T) {
 	r := provider.NewRegistry()
-	r.RegisterPlugin("EMR", makeHandler("emr-plugin"))
-	r.RegisterPlugin("EMRContainers", makeHandler("emrc-plugin"))
+	replaceService(r, "EMR", makeHandler("emr-plugin"))
+	replaceService(r, "EMRContainers", makeHandler("emrc-plugin"))
 
 	for _, tc := range []struct {
 		key  string
@@ -150,4 +150,13 @@ func TestRegistry_Dispatch_MultiplePlugins(t *testing.T) {
 			t.Errorf("%s: expected %s, got %v", tc.key, tc.want, resp.Data["handler"])
 		}
 	}
+}
+
+// replaceService is what a whole-service Replace does through the interceptors:
+// the handler answers every existing key and every action the built-in lacks.
+func replaceService(r *provider.Registry, prefix string, h provider.HandlerFunc) {
+	for _, key := range r.Keys(prefix) {
+		r.Intercept(key, func(provider.HandlerFunc) provider.HandlerFunc { return h })
+	}
+	r.InterceptFallback(prefix, func(provider.HandlerFunc) provider.HandlerFunc { return h })
 }

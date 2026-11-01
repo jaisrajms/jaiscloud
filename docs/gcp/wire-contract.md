@@ -114,7 +114,7 @@ schema by `TestTranscriptsConform`.
   `google.cloud.dataproc.v1.ClusterController`, `google.cloud.dataproc.v1.JobController`,
   `google.cloud.dataproc.v1.WorkflowTemplateService`,
   `google.cloud.functions.v1.CloudFunctionsService`, `google.cloud.functions.v2.FunctionService`,
-  `google.iam.v1.IAMPolicy`, `google.iam.credentials.v1.IAMCredentials`,
+  `google.iam.v1.IAMPolicy`, `google.iam.admin.v1.IAM`, `google.iam.credentials.v1.IAMCredentials`,
   `google.longrunning.Operations`.
 - **No breaking wire change to a `ga` cell without a release bump.** The fidelity matrix
   and the CI conformance gates are part of that promise.
@@ -149,12 +149,14 @@ commit.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **475/475 checks pass** (Dataproc 26,
-  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 9, IAM Credentials 4, KMS 35, Logging 21,
+- **gRPC** — official `cloud.google.com/go` clients: **488/488 checks pass** (Dataproc 26,
+  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 13, IAM Credentials 4, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 18, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger/message-bus IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
-  `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS.
+  `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS, and the IAM Admin service's
+  `UploadServiceAccountKey` (the `google.iam.admin.v1.IAM` surface, which also serves the service-account
+  CRUD/key/policy RPCs over the same provider).
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 586.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §5).

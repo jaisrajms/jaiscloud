@@ -488,6 +488,10 @@ var formatters = map[string]func(project, name string) string{
 		svc, id := svcSLO(n)
 		return fmt.Sprintf("projects/%s/services/%s/serviceLevelObjectives/%s", p, svc, id)
 	},
+	// Cloud Monitoring v1 dashboards (REST-only). Callers pass the dashboard id.
+	"monitoring-dashboard": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/dashboards/%s", p, n)
+	},
 	// Firestore Admin control plane (google.firestore.admin.v1).
 	// A database name is "projects/{p}/databases/{db}" (callers pass the
 	// database id).

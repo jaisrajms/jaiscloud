@@ -36,12 +36,16 @@ func TestBrokerMapsGCPStatusEvent(t *testing.T) {
 			ID:       "svc",
 			State:    "READY",
 			Detail:   "create",
+			Project:  "acme-e2e",
 		},
 	})
 
 	got := <-ch
 	if got.Type != "status" || got.Resource != "gcp-run-service" || got.ID != "svc" || got.State != "READY" {
 		t.Fatalf("mapped status event = %+v", got)
+	}
+	if got.Project != "acme-e2e" {
+		t.Fatalf("mapped project = %q, want acme-e2e", got.Project)
 	}
 	if len(got.Keys) != 2 || got.Keys[0] != "gcp" || got.Keys[1] != "run" {
 		t.Fatalf("mapped keys = %v, want [gcp run]", got.Keys)

@@ -671,6 +671,9 @@ func (p *KeyProvider) ListGrants(ctx context.Context, nr *model.NormalizedReques
 // ─── Crypto operations ────────────────────────────────────────────────────────
 
 func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.encryptInternal(ctx, nr)
+	}
 	keyID, err := p.resolveKeyID(ctx, nr)
 	if err != nil {
 		return nil, err
@@ -758,6 +761,9 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.decryptInternal(ctx, nr)
+	}
 	ctB64, _ := nr.Params["CiphertextBlob"].(string)
 	blob, err := base64.StdEncoding.DecodeString(ctB64)
 	if err != nil {
@@ -844,6 +850,9 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if nr.Origin == model.OriginInternal {
+		return p.generateDataKeyInternal(ctx, nr)
+	}
 	keyID, err := p.resolveKeyID(ctx, nr)
 	if err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/resource"
+	core "jaiscloud/internal/gcp/service/monitoring"
 	"jaiscloud/internal/gcp/ui/uihelper"
 )
 
@@ -294,4 +295,246 @@ func (h *Handler) ListNotificationChannelDescriptors(w http.ResponseWriter, r *h
 		return
 	}
 	uihelper.WriteJSON(w, resp.Data)
+}
+
+// ─── service monitoring: services ─────────────────────────────────────────────
+
+// serviceName builds "projects/{p}/services/{id}" from the {service} path
+// parameter, rejecting an id that decoded to more than one path segment.
+func (h *Handler) serviceName(r *http.Request) (string, bool) {
+	id, ok := uihelper.Segment(r, "service")
+	if !ok {
+		return "", false
+	}
+	return core.ServiceName(h.account(r), id), true
+}
+
+// sloName builds
+// "projects/{p}/services/{service}/serviceLevelObjectives/{slo}" from the path
+// parameters.
+func (h *Handler) sloName(r *http.Request) (string, bool) {
+	service, ok := uihelper.Segment(r, "service")
+	if !ok {
+		return "", false
+	}
+	id, ok := uihelper.Segment(r, "slo")
+	if !ok {
+		return "", false
+	}
+	return core.ServiceLevelObjectiveName(h.account(r), service, id), true
+}
+
+// GET /services lists Service Monitoring services for the project.
+func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.ListServices", "global", h.account(r))
+	nr.Params["project"] = h.account(r)
+	uihelper.PageParams(r, nr.Params)
+	if f := r.URL.Query().Get("filter"); f != "" {
+		nr.Params["filter"] = f
+	}
+
+	resp, err := h.provider.ListServices(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// GET /services/{service} returns one service.
+func (h *Handler) GetService(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.serviceName(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service name", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.GetService", "global", h.account(r))
+	nr.Params["name"] = name
+
+	resp, err := h.provider.GetService(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// POST /services creates a service. ?serviceId= supplies the id; the core
+// generates one when it is omitted.
+func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
+	var req ServiceRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.CreateService", "global", h.account(r))
+	nr.Params["project"] = h.account(r)
+	if id := r.URL.Query().Get("serviceId"); id != "" {
+		nr.Params["serviceId"] = id
+	}
+	nr.Params["body"] = req.body()
+
+	resp, err := h.provider.CreateService(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, resp.Data)
+}
+
+// PATCH /services/{service} updates a service.
+func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.serviceName(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service name", http.StatusBadRequest)
+		return
+	}
+	var req ServiceRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.UpdateService", "global", h.account(r))
+	nr.Params["name"] = name
+	nr.Params["body"] = req.body()
+	if mask := r.URL.Query().Get("updateMask"); mask != "" {
+		nr.Params["updateMask"] = mask
+	}
+
+	resp, err := h.provider.UpdateService(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// DELETE /services/{service} deletes a service and the SLOs it owns.
+func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.serviceName(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service name", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.DeleteService", "global", h.account(r))
+	nr.Params["name"] = name
+
+	if _, err := h.provider.DeleteService(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── service monitoring: service level objectives ─────────────────────────────
+
+// GET /services/{service}/serviceLevelObjectives lists a service's SLOs.
+func (h *Handler) ListServiceLevelObjectives(w http.ResponseWriter, r *http.Request) {
+	service, ok := uihelper.Segment(r, "service")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service name", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.ListServiceLevelObjectives", "global", h.account(r))
+	nr.Params["project"] = h.account(r)
+	nr.Params["service"] = service
+	uihelper.PageParams(r, nr.Params)
+	if f := r.URL.Query().Get("filter"); f != "" {
+		nr.Params["filter"] = f
+	}
+
+	resp, err := h.provider.ListServiceLevelObjectives(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// GET /services/{service}/serviceLevelObjectives/{slo} returns one SLO.
+func (h *Handler) GetServiceLevelObjective(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.sloName(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service level objective name", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.GetServiceLevelObjective", "global", h.account(r))
+	nr.Params["name"] = name
+
+	resp, err := h.provider.GetServiceLevelObjective(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// POST /services/{service}/serviceLevelObjectives creates an SLO.
+// ?serviceLevelObjectiveId= supplies the id; the core generates one when it is
+// omitted.
+func (h *Handler) CreateServiceLevelObjective(w http.ResponseWriter, r *http.Request) {
+	service, ok := uihelper.Segment(r, "service")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service name", http.StatusBadRequest)
+		return
+	}
+	var req ServiceLevelObjectiveRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.CreateServiceLevelObjective", "global", h.account(r))
+	nr.Params["project"] = h.account(r)
+	nr.Params["service"] = service
+	if id := r.URL.Query().Get("serviceLevelObjectiveId"); id != "" {
+		nr.Params["serviceLevelObjectiveId"] = id
+	}
+	nr.Params["body"] = req.body()
+
+	resp, err := h.provider.CreateServiceLevelObjective(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, resp.Data)
+}
+
+// PATCH /services/{service}/serviceLevelObjectives/{slo} updates an SLO.
+func (h *Handler) UpdateServiceLevelObjective(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.sloName(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service level objective name", http.StatusBadRequest)
+		return
+	}
+	var req ServiceLevelObjectiveRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.UpdateServiceLevelObjective", "global", h.account(r))
+	nr.Params["name"] = name
+	nr.Params["body"] = req.body()
+	if mask := r.URL.Query().Get("updateMask"); mask != "" {
+		nr.Params["updateMask"] = mask
+	}
+
+	resp, err := h.provider.UpdateServiceLevelObjective(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// DELETE /services/{service}/serviceLevelObjectives/{slo} deletes an SLO.
+func (h *Handler) DeleteServiceLevelObjective(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.sloName(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid service level objective name", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.DeleteServiceLevelObjective", "global", h.account(r))
+	nr.Params["name"] = name
+
+	if _, err := h.provider.DeleteServiceLevelObjective(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

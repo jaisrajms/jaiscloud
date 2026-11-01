@@ -3,6 +3,8 @@ package dataproc
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +48,103 @@ func gceBody(clusterName string, labels map[string]any) map[string]any {
 		body["labels"] = labels
 	}
 	return body
+}
+
+// decodeIAM builds the NormalizedRequest the adapter would hand the provider for
+// a workflowTemplates IAM POST.
+func decodeIAM(t *testing.T, verb, resourceID, body string) *model.NormalizedRequest {
+	t.Helper()
+	path := "/v1/projects/proj/regions/us-central1/workflowTemplates/" + resourceID + ":" + verb
+	nr, err := NewCodec().Decode(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)), []byte(body))
+	if err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return nr
+}
+
+func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.core.CreateWorkflowTemplate(ctx, "proj", "us-central1", core.WorkflowTemplateInput{
+		ID: "t1",
+		Definition: map[string]any{
+			"id":        "t1",
+			"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "c"}},
+			"jobs": []any{
+				map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateWorkflowTemplate: %v", err)
+	}
+
+	// An unset policy is the empty default.
+	resp, err := p.WorkflowTemplateGetIamPolicy(ctx, decodeIAM(t, "getIamPolicy", "t1", "{}"))
+	if err != nil {
+		t.Fatalf("getIamPolicy: %v", err)
+	}
+	if resp.Data["version"] != 1 {
+		t.Fatalf("default version = %v, want 1", resp.Data["version"])
+	}
+
+	body := `{"policy":{"bindings":[{"role":"roles/dataproc.worker","members":["user:a@example.com"],` +
+		`"condition":{"title":"expires-soon","expression":"request.time < timestamp(\"2027-01-01T00:00:00Z\")"}}]}}`
+	set, err := p.WorkflowTemplateSetIamPolicy(ctx, decodeIAM(t, "setIamPolicy", "t1", body))
+	if err != nil {
+		t.Fatalf("setIamPolicy: %v", err)
+	}
+	if set.Data["version"] != 3 {
+		t.Fatalf("set version = %v, want 3", set.Data["version"])
+	}
+
+	got, err := p.WorkflowTemplateGetIamPolicy(ctx, decodeIAM(t, "getIamPolicy", "t1", "{}"))
+	if err != nil {
+		t.Fatalf("getIamPolicy: %v", err)
+	}
+	if got.Data["version"] != 3 {
+		t.Fatalf("read-back version = %v, want 3", got.Data["version"])
+	}
+	bindings, _ := got.Data["bindings"].([]any)
+	if len(bindings) != 1 {
+		t.Fatalf("bindings = %v", got.Data["bindings"])
+	}
+	bm := bindings[0].(map[string]any)
+	cm, _ := bm["condition"].(map[string]any)
+	if cm["title"] != "expires-soon" {
+		t.Fatalf("condition did not round-trip: %v", bm)
+	}
+
+	perms, err := p.WorkflowTemplateTestIamPermissions(ctx, decodeIAM(t, "testIamPermissions", "t1",
+		`{"permissions":["dataproc.workflowTemplates.get","dataproc.workflowTemplates.update"]}`))
+	if err != nil {
+		t.Fatalf("testIamPermissions: %v", err)
+	}
+	gotPerms, _ := perms.Data["permissions"].([]string)
+	if len(gotPerms) != 2 {
+		t.Fatalf("permissions = %v", perms.Data["permissions"])
+	}
+
+	// A missing template is NotFound for every verb.
+	for _, verb := range []string{"getIamPolicy", "setIamPolicy", "testIamPermissions"} {
+		body := "{}"
+		if verb == "testIamPermissions" {
+			body = `{"permissions":["dataproc.workflowTemplates.get"]}`
+		}
+		nr := decodeIAM(t, verb, "absent", body)
+		var err error
+		switch verb {
+		case "getIamPolicy":
+			_, err = p.WorkflowTemplateGetIamPolicy(ctx, nr)
+		case "setIamPolicy":
+			_, err = p.WorkflowTemplateSetIamPolicy(ctx, nr)
+		default:
+			_, err = p.WorkflowTemplateTestIamPermissions(ctx, nr)
+		}
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 404 {
+			t.Fatalf("%s(absent) = %v, want 404", verb, err)
+		}
+	}
 }
 
 func TestCreateCluster_LRO(t *testing.T) {
@@ -1046,5 +1145,79 @@ func TestListNonIntegerPageSize(t *testing.T) {
 		if _, err := call(testNR(map[string]any{"region": "us-central1", "pageSize": "5"})); err != nil {
 			t.Errorf("%s pageSize=5: %v", name, err)
 		}
+	}
+}
+
+// TestCreateCluster_PHSHistoryServer verifies the REST create path parses
+// sparkHistoryServerConfig.dataprocCluster, validates it against the referenced
+// Dataproc cluster, and returns the documented spark.eventLog.* properties.
+func TestCreateCluster_PHSHistoryServer(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":   "proj",
+			"clusterName": "phs",
+			"config":      map[string]any{"softwareConfig": map[string]any{"imageVersion": "2.2.0"}},
+		},
+	})); err != nil {
+		t.Fatalf("create PHS source: %v", err)
+	}
+
+	ref := "projects/proj/regions/us-central1/clusters/phs"
+	vcc := map[string]any{
+		"stagingBucket": "dataproc-staging-proj",
+		"kubernetesClusterConfig": map[string]any{
+			"gkeClusterConfig": map[string]any{
+				"gkeClusterTarget": "projects/proj/locations/us-central1/clusters/gke-1",
+			},
+		},
+		"auxiliaryServicesConfig": map[string]any{
+			"sparkHistoryServerConfig": map[string]any{"dataprocCluster": ref},
+		},
+	}
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-phs",
+			"virtualClusterConfig": vcc,
+		},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "gke-phs"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	gotVCC, _ := c.Data["virtualClusterConfig"].(map[string]any)
+	kcc, _ := gotVCC["kubernetesClusterConfig"].(map[string]any)
+	software, _ := kcc["kubernetesSoftwareConfig"].(map[string]any)
+	props, _ := software["properties"].(map[string]any)
+	if props["spark:spark.eventLog.enabled"] != "true" {
+		t.Fatalf("spark.eventLog.enabled = %v", props["spark:spark.eventLog.enabled"])
+	}
+	if props["spark:spark.eventLog.dir"] != "gs://dataproc-staging-proj/gke-phs/spark-job-history" {
+		t.Fatalf("spark.eventLog.dir = %v", props["spark:spark.eventLog.dir"])
+	}
+
+	// A missing PHS cluster is a 404 through the REST error mapping.
+	vcc["auxiliaryServicesConfig"] = map[string]any{
+		"sparkHistoryServerConfig": map[string]any{
+			"dataprocCluster": "projects/proj/regions/us-central1/clusters/missing",
+		},
+	}
+	_, err = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-missing-phs",
+			"virtualClusterConfig": vcc,
+		},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 404 || pe.Code != "NotFound" {
+		t.Fatalf("missing PHS cluster: expected 404 NotFound, got %v", err)
 	}
 }

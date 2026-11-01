@@ -340,7 +340,13 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 			objects = append(objects, objectFromMap(m))
 		}
 	}
-	prefixes, _ := resp.Data["prefixes"].([]string)
+	// The built-in answers []string, a plugin's decoded JSON []any; accept both.
+	var prefixes []string
+	for _, p := range uihelper.AsSlice(resp.Data["prefixes"]) {
+		if s, ok := p.(string); ok {
+			prefixes = append(prefixes, s)
+		}
+	}
 	next, _ := resp.Data["nextPageToken"].(string)
 	uihelper.WriteJSON(w, ListObjectsResponse{Items: objects, Prefixes: prefixes, NextPageToken: next})
 }

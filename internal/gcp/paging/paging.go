@@ -20,8 +20,10 @@
 package paging
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -452,4 +454,41 @@ func decodeCursor(token string) string {
 		return ""
 	}
 	return string(b)
+}
+
+// MaxPages bounds Follow. A real listing is far shorter; the bound exists for a
+// plugin that answers every page with another page token.
+const MaxPages = 10000
+
+// ErrPageLoop is returned by Follow when a list never ends: the next token repeats
+// or MaxPages pages were read.
+var ErrPageLoop = errors.New("paging: the listing never ends (its next page token repeats)")
+
+// Follow reads a listing page by page. fetch returns the token of the next page
+// ("" when it was the last). It stops with ctx's error when the context ends, and
+// with ErrPageLoop when a token repeats or MaxPages pages have been read, so a
+// source that cannot be trusted (a plugin) cannot keep the caller busy forever.
+func Follow(ctx context.Context, fetch func(pageToken string) (next string, err error)) error {
+	seen := map[string]bool{}
+	token := ""
+	for page := 0; ; page++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if page >= MaxPages {
+			return ErrPageLoop
+		}
+		next, err := fetch(token)
+		if err != nil {
+			return err
+		}
+		if next == "" {
+			return nil
+		}
+		if seen[next] {
+			return ErrPageLoop
+		}
+		seen[next] = true
+		token = next
+	}
 }

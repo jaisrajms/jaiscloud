@@ -33,7 +33,7 @@ func (h *Handler) ListDeliveryStreams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawNames, _ := resp.Data["DeliveryStreamNames"].([]string)
+	rawNames := uihelper.Strings(resp.Data["DeliveryStreamNames"])
 	items := make([]DeliveryStream, 0, len(rawNames))
 	for _, name := range rawNames {
 		items = append(items, DeliveryStream{Name: name})

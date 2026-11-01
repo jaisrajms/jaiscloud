@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	iamprovider "jaiscloud/internal/aws/provider/iam"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewIAMRoleHandler returns a ResourceHandler for AWS::IAM::Role.
-func NewIAMRoleHandler(iamP *iamprovider.IAMProvider) stackprovider.ResourceHandler {
+func NewIAMRoleHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "RoleName", logicalID)
 			params := copyProps(props)
 			params["RoleName"] = name
-			resp, err := iamP.CreateRole(ctx, child(nr, params))
+			resp, err := call(ctx, "IAM.CreateRole", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -34,7 +33,7 @@ func NewIAMRoleHandler(iamP *iamprovider.IAMProvider) stackprovider.ResourceHand
 			}
 			// Update assume role policy if changed
 			if propStr(oldProps, "AssumeRolePolicyDocument", "") != propStr(newProps, "AssumeRolePolicyDocument", "") {
-				if _, err := iamP.UpdateAssumeRolePolicy(ctx, child(nr, map[string]any{
+				if _, err := call(ctx, "IAM.UpdateAssumeRolePolicy", child(nr, map[string]any{
 					"RoleName":       physicalID,
 					"PolicyDocument": propStr(newProps, "AssumeRolePolicyDocument", ""),
 				})); err != nil {
@@ -45,7 +44,7 @@ func NewIAMRoleHandler(iamP *iamprovider.IAMProvider) stackprovider.ResourceHand
 			return physicalID, map[string]any{"Arn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := iamP.DeleteRole(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "IAM.DeleteRole", &model.NormalizedRequest{
 				AccountID: "000000000000",
 				Params:    map[string]any{"RoleName": physicalID},
 			})

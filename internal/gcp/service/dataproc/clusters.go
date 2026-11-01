@@ -108,6 +108,17 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	} else if !errors.Is(err, dpstore.ErrNoSuchCluster) {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
+	// Validate the Spark History Server attachment (if any) and add the
+	// documented workload event-log properties to the cluster's effective
+	// virtualClusterConfig (after the GKE defaults, so the injected log directory
+	// sees the effective staging bucket).
+	if in.VirtualClusterConfig != nil {
+		prepared, err := s.preparePHSClusterConfig(ctx, project, region, name, in.VirtualClusterConfig)
+		if err != nil {
+			return dpstore.Cluster{}, dpstore.Operation{}, err
+		}
+		in.VirtualClusterConfig = prepared
+	}
 	now := clock.Now().UTC()
 	// Provision the cluster's workload namespace before persisting the record, so
 	// a job submitted immediately after create has a placement. Mock execution
@@ -281,6 +292,9 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	if err := s.validateClusterMetastoreUpdate(ctx, project, region, current, in, mask); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
+	// A virtualClusterConfig update is rejected above (recreate-only), so a PHS
+	// attachment is validated at create time only; there is no update path that
+	// could introduce or change one.
 	var transitioned bool
 	var prev dpstore.ClusterStatus
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
@@ -585,6 +599,16 @@ func applyConfigMask(stored, incoming map[string]any, mask []string) {
 		return
 	}
 	for _, field := range mask {
+		if camelKey(field) == "config" {
+			// A bare `config` mask names the whole field. Treat it like an
+			// omitted mask (merge every supplied top-level key) rather than
+			// matching no path at all: silently discarding the caller's config
+			// while answering 200 is the one behaviour no client can detect.
+			for k, v := range incoming {
+				stored[k] = v
+			}
+			continue
+		}
 		if !strings.HasPrefix(field, "config.") {
 			continue
 		}

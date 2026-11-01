@@ -34,6 +34,7 @@ func StreamLogs(ctx context.Context, logsAPI logstream.Ingestor, cfg LogConfig, 
 		}
 	}
 	if len(batch) > 0 {
-		_ = logsAPI.InternalPutEvents(ctx, group, streamName, batch)
+		// The last lines are the ones worth keeping after a stop; ctx may be done.
+		_ = logsAPI.InternalPutEvents(context.WithoutCancel(ctx), group, streamName, batch)
 	}
 }

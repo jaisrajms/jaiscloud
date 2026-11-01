@@ -45,6 +45,8 @@ packages:
     min_percent: 74.06
   - package: internal/gcp/grpc/storage
     min_percent: 80.8
+  - package: internal/gcp/grpcplugin
+    min_percent: 32.07
   - package: internal/gcp/hms
     min_percent: 75.74
   - package: internal/gcp/httptarget
@@ -55,6 +57,8 @@ packages:
     min_percent: 100
   - package: internal/gcp/paging
     min_percent: 88.37
+  - package: internal/gcp/pluginchain
+    min_percent: 100
   - package: internal/gcp/policy
     min_percent: 76.36
   - package: internal/gcp/provider/bigquery
@@ -89,6 +93,8 @@ packages:
     min_percent: 30.99
   - package: internal/gcp/runexec
     min_percent: 83.94
+  - package: internal/gcp/seams
+    min_percent: 60.82
   - package: internal/gcp/service/container
     min_percent: 69.35
   - package: internal/gcp/service/dataproc
@@ -191,6 +197,8 @@ packages:
     min_percent: 54.59
   - package: internal/gcp/transport/grpc/functions
     min_percent: 72.76
+  - package: internal/gcp/transport/grpc/iam
+    min_percent: 62.27
   - package: internal/gcp/transport/grpc/iamcredentials
     min_percent: 83.33
   - package: internal/gcp/transport/grpc/kms

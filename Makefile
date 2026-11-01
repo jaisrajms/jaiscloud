@@ -151,7 +151,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
+.PHONY: test-sdk test-plugins lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
@@ -257,6 +257,8 @@ docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
 docker-%:  ## Build jaiscloud-<cloud> Docker image
 	docker build \
 		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo none) \
+		--build-arg DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
 		--build-arg CLOUD=$* \
 		--build-arg PORT=$(or $(DOCKER_PORT_$*),4566) \
 		--tag jaiscloud-$*:$(VERSION) \
@@ -304,6 +306,12 @@ test: ## Run all unit tests with the race detector  (no server needed)
 
 test-aws: ## Run AWS + shared unit tests (excludes internal/gcp — mirrors CI test-aws)
 	go test -race $$(go list ./internal/... | grep -v '/internal/gcp/')
+
+test-sdk: ## Plugin SDK (nested module sdk/): vet + race tests
+	cd sdk && go vet ./... && go test -race -count=1 ./...
+
+test-plugins: test-sdk ## Plugin layer: SDK tests + end-to-end against the real jaiscloud-aws (tag: plugin_e2e)
+	go test -race -tags plugin_e2e -count=1 -timeout 300s ./tests/plugins/
 
 test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
 	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...

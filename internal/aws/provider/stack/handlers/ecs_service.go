@@ -3,19 +3,18 @@ package handlers
 import (
 	"context"
 
-	containerprovider "jaiscloud/internal/aws/provider/container"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewECSServiceHandler returns a ResourceHandler for AWS::ECS::Service.
-func NewECSServiceHandler(ecsP *containerprovider.ContainerProvider) stackprovider.ResourceHandler {
+func NewECSServiceHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			name := propStr(props, "ServiceName", logicalID)
 			params := copyProps(props)
 			params["serviceName"] = name
-			resp, err := ecsP.CreateService(ctx, child(nr, params))
+			resp, err := call(ctx, "ECS.CreateService", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -37,7 +36,7 @@ func NewECSServiceHandler(ecsP *containerprovider.ContainerProvider) stackprovid
 			if v, ok := newProps["DesiredCount"]; ok {
 				updateParams["desiredCount"] = v
 			}
-			resp, err := ecsP.UpdateService(ctx, child(nr, updateParams))
+			resp, err := call(ctx, "ECS.UpdateService", child(nr, updateParams))
 			if err != nil {
 				return "", nil, false, err
 			}
@@ -49,7 +48,7 @@ func NewECSServiceHandler(ecsP *containerprovider.ContainerProvider) stackprovid
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			clusterName := propStr(props, "Cluster", "default")
-			_, err := ecsP.DeleteService(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "ECS.DeleteService", &model.NormalizedRequest{
 				Params: map[string]any{"cluster": clusterName, "service": physicalID},
 			})
 			return err

@@ -377,3 +377,11 @@ func retryToJSON(rc *schedstore.RetryConfig) map[string]any {
 func formatDuration(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
 }
+
+// JobFromBody and JobToJSON expose the wire conversion to callers that translate
+// between the REST shape and the typed model (the console, when a plugin owns
+// the Scheduler keys).
+func JobFromBody(m map[string]any) (schedstore.Job, error) { return jobFromBody(m) }
+
+// JobToJSON encodes a job as the Discovery-shaped JSON the REST API returns.
+func JobToJSON(j schedstore.Job) map[string]any { return jobToJSON(j) }

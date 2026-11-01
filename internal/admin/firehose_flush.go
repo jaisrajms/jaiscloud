@@ -26,6 +26,7 @@ func (h *Handler) FirehoseFlushHandler(w http.ResponseWriter, r *http.Request) {
 	if f != nil {
 		f.FlushAll(r.Context())
 	}
+	h.tickPlugins(r.Context(), "firehose")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "flushed"}) //nolint:errcheck
 }

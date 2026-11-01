@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewLambdaEventSourceMappingHandler returns a ResourceHandler for AWS::Lambda::EventSourceMapping.
-func NewLambdaEventSourceMappingHandler(esmP *lambdaesm.Provider) stackprovider.ResourceHandler {
+func NewLambdaEventSourceMappingHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			params := copyProps(props)
-			resp, err := esmP.CreateEventSourceMapping(ctx, child(nr, params))
+			resp, err := call(ctx, "Function.CreateEventSourceMapping", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -32,7 +31,7 @@ func NewLambdaEventSourceMappingHandler(esmP *lambdaesm.Provider) stackprovider.
 			if v, ok := newProps["FilterCriteria"]; ok {
 				updateParams["FilterCriteria"] = v
 			}
-			if _, err := esmP.CreateEventSourceMapping(ctx, child(nr, map[string]any{
+			if _, err := call(ctx, "Function.CreateEventSourceMapping", child(nr, map[string]any{
 				"_esm_uuid": physicalID,
 				"BatchSize": newProps["BatchSize"],
 				"Enabled":   newProps["Enabled"],
@@ -43,7 +42,7 @@ func NewLambdaEventSourceMappingHandler(esmP *lambdaesm.Provider) stackprovider.
 			return physicalID, map[string]any{"UUID": physicalID}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := esmP.DeleteEventSourceMapping(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Function.DeleteEventSourceMapping", &model.NormalizedRequest{
 				Params: map[string]any{"_esm_uuid": physicalID},
 			})
 			return err

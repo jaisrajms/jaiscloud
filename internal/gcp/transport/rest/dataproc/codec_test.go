@@ -53,3 +53,45 @@ func TestCodecDeriveAction(t *testing.T) {
 		t.Fatalf("params = %v", nr.Params)
 	}
 }
+
+// TestCodecWorkflowTemplateIAM covers the three workflowTemplates IAM custom
+// verbs: they are POSTs (Dataproc's Discovery surface, unlike metastore's GET
+// getIamPolicy), map onto the WorkflowTemplate* actions, and produce a canonical
+// iamName with the custom suffix stripped.
+func TestCodecWorkflowTemplateIAM(t *testing.T) {
+	c := NewCodec()
+	cases := []struct {
+		verb string
+		want string
+	}{
+		{"getIamPolicy", "WorkflowTemplateGetIamPolicy"},
+		{"setIamPolicy", "WorkflowTemplateSetIamPolicy"},
+		{"testIamPermissions", "WorkflowTemplateTestIamPermissions"},
+	}
+	for _, tc := range cases {
+		path := "/v1/projects/proj/regions/us-central1/workflowTemplates/t1:" + tc.verb
+		nr, err := c.Decode(httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")), []byte("{}"))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		if nr.Action != tc.want {
+			t.Fatalf("POST %s: action = %q, want %q", path, nr.Action, tc.want)
+		}
+		if nr.Params["workflowTemplateId"] != "t1" {
+			t.Fatalf("POST %s: workflowTemplateId = %v", path, nr.Params["workflowTemplateId"])
+		}
+		iamName, _ := nr.Params["iamName"].(string)
+		if want := "projects/proj/regions/us-central1/workflowTemplates/t1"; iamName != want {
+			t.Fatalf("POST %s: iamName = %q, want %q", path, iamName, want)
+		}
+		if strings.Contains(iamName, ":") {
+			t.Fatalf("POST %s: iamName retained a custom suffix: %q", path, iamName)
+		}
+	}
+
+	// A GET is not the dataproc IAM shape, and an unknown custom verb must not
+	// fall through to the get/patch method switch.
+	if _, err := c.Decode(httptest.NewRequest(http.MethodPost, "/v1/projects/proj/regions/us-central1/workflowTemplates/t1:frobnicate", nil), nil); err == nil {
+		t.Fatal("unknown custom verb decoded successfully")
+	}
+}

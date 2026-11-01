@@ -3,17 +3,16 @@ package handlers
 import (
 	"context"
 
-	keyprovider "jaiscloud/internal/aws/key"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 
 // NewKMSKeyHandler returns a ResourceHandler for AWS::KMS::Key.
-func NewKMSKeyHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHandler {
+func NewKMSKeyHandler(call Invoker) stackprovider.ResourceHandler {
 	return stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
 			params := copyProps(props)
-			resp, err := keyP.CreateKey(ctx, child(nr, params))
+			resp, err := call(ctx, "Key.CreateKey", child(nr, params))
 			if err != nil {
 				return "", nil, err
 			}
@@ -27,7 +26,7 @@ func NewKMSKeyHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHandl
 		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
 			// Update description if changed
 			if propStr(oldProps, "Description", "") != propStr(newProps, "Description", "") {
-				if _, err := keyP.UpdateKeyDescription(ctx, child(nr, map[string]any{
+				if _, err := call(ctx, "Key.UpdateKeyDescription", child(nr, map[string]any{
 					"KeyId":       physicalID,
 					"Description": propStr(newProps, "Description", ""),
 				})); err != nil {
@@ -36,7 +35,7 @@ func NewKMSKeyHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHandl
 			}
 			// Update key policy if changed
 			if propStr(oldProps, "KeyPolicy", "") != propStr(newProps, "KeyPolicy", "") {
-				if _, err := keyP.PutKeyPolicy(ctx, child(nr, map[string]any{
+				if _, err := call(ctx, "Key.PutKeyPolicy", child(nr, map[string]any{
 					"KeyId":      physicalID,
 					"PolicyName": "default",
 					"Policy":     propStr(newProps, "KeyPolicy", ""),
@@ -48,7 +47,7 @@ func NewKMSKeyHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHandl
 			return physicalID, map[string]any{"Arn": arn, "KeyId": physicalID}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
-			_, err := keyP.ScheduleKeyDeletion(ctx, &model.NormalizedRequest{
+			_, err := call(ctx, "Key.ScheduleKeyDeletion", &model.NormalizedRequest{
 				Params: map[string]any{"KeyId": physicalID, "PendingWindowInDays": float64(7)},
 			})
 			return err

@@ -262,6 +262,10 @@ func (p *Provider) TopicList(ctx context.Context, nr *model.NormalizedRequest) (
 	return provider.OK(resp), nil
 }
 
+// NoDispatchMeta, set on a TopicPublish request by an internal caller, keeps the
+// message out of the Cloud Functions event-delivery engine.
+const NoDispatchMeta = "pubsub.no_dispatch"
+
 func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -359,7 +363,12 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 	for i, msg := range stored {
 		p.deliverPush(ctx, nr.AccountID, topicFull, msg, plainData[i])
 	}
-	p.dispatchTopicEvents(ctx, nr.AccountID, topicFull, stored, plainBytes)
+	// A dead-letter forward (seams.PubSub.PublishDeadLetter) sets NoDispatchMeta so
+	// it cannot re-enter the delivery engine: a function subscribed to its own
+	// dead-letter topic would otherwise recurse.
+	if nr.GetMeta(NoDispatchMeta) == "" {
+		p.dispatchTopicEvents(ctx, nr.AccountID, topicFull, stored, plainBytes)
+	}
 	return provider.OK(map[string]any{"messageIds": ids}), nil
 }
 

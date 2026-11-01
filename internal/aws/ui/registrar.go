@@ -61,107 +61,108 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 func (r *Registrar) MountRoutes(router chi.Router) {
 	providers := r.providers
 	cfg := r.cfg
+	caller := uiCaller{reg: providers.Registry}
 
 	// The cloud-neutral admin panel (/api/ui/v1/admin) is mounted by the shared
 	// UI core, not here — every cloud exposes the same admin surface.
 
 	// Phase 0 service routes
 	if providers.Queue != nil {
-		router.Mount("/api/ui/v1/sqs", sqsui.BuildRouter(providers.Queue, cfg))
+		router.Mount("/api/ui/v1/sqs", sqsui.BuildRouter(routeQueue(providers.Queue, caller), cfg))
 	}
 	if providers.Function != nil {
-		router.Mount("/api/ui/v1/lambda", lambdaui.BuildRouter(providers.Function, cfg))
+		router.Mount("/api/ui/v1/lambda", lambdaui.BuildRouter(routeFunction(providers.Function, caller), cfg))
 	}
 	if providers.Logs != nil {
-		router.Mount("/api/ui/v1/logs", logsui.BuildRouter(providers.Logs, cfg))
+		router.Mount("/api/ui/v1/logs", logsui.BuildRouter(routeLogs(providers.Logs, caller), cfg))
 	}
 
 	// Phase 1a service routes
 	if providers.Object != nil {
-		router.Mount("/api/ui/v1/s3", s3ui.BuildRouter(providers.Object, cfg))
+		router.Mount("/api/ui/v1/s3", s3ui.BuildRouter(routeObject(providers.Object, caller), cfg))
 	}
 	if providers.Table != nil {
-		router.Mount("/api/ui/v1/dynamodb", dynamodbui.BuildRouter(providers.Table, cfg))
+		router.Mount("/api/ui/v1/dynamodb", dynamodbui.BuildRouter(routeTable(providers.Table, caller), cfg))
 	}
 	if providers.Notif != nil {
-		router.Mount("/api/ui/v1/sns", snsui.BuildRouter(providers.Notif, cfg))
+		router.Mount("/api/ui/v1/sns", snsui.BuildRouter(routeNotif(providers.Notif, caller), cfg))
 	}
 
 	// Phase 3 service routes
 	if providers.CW != nil {
-		router.Mount("/api/ui/v1/cloudwatch", cloudwatchui.BuildRouter(providers.CW, cfg))
+		router.Mount("/api/ui/v1/cloudwatch", cloudwatchui.BuildRouter(routeCW(providers.CW, caller), cfg))
 	}
 
 	// Phase 5 service routes
 	if providers.Events != nil {
-		router.Mount("/api/ui/v1/eventbridge", eventbridgeui.BuildRouter(providers.Events, cfg))
+		router.Mount("/api/ui/v1/eventbridge", eventbridgeui.BuildRouter(routeEvents(providers.Events, caller), cfg))
 	}
 	if providers.APIGW != nil {
-		router.Mount("/api/ui/v1/apigateway", apigwui.BuildRouter(providers.APIGW, cfg))
+		router.Mount("/api/ui/v1/apigateway", apigwui.BuildRouter(routeAPIGW(providers.APIGW, caller), cfg))
 	}
 	if providers.Sfn != nil {
-		router.Mount("/api/ui/v1/sfn", sfnui.BuildRouter(providers.Sfn, cfg))
+		router.Mount("/api/ui/v1/sfn", sfnui.BuildRouter(routeSfn(providers.Sfn, caller), cfg))
 	}
 
 	// Phase 4 service routes
 	if providers.EMR != nil {
-		router.Mount("/api/ui/v1/emr", emrui.BuildRouter(providers.EMR, cfg))
+		router.Mount("/api/ui/v1/emr", emrui.BuildRouter(routeEMR(providers.EMR, caller), cfg))
 	}
 	if providers.EMRC != nil {
-		router.Mount("/api/ui/v1/emr-containers", emroneksui.BuildRouter(providers.EMRC, cfg))
+		router.Mount("/api/ui/v1/emr-containers", emroneksui.BuildRouter(routeEMRC(providers.EMRC, caller), cfg))
 	}
 	if providers.Catalog != nil {
-		router.Mount("/api/ui/v1/glue", glueui.BuildRouter(providers.Catalog, cfg))
+		router.Mount("/api/ui/v1/glue", glueui.BuildRouter(routeCatalog(providers.Catalog, caller), cfg))
 	}
 
 	// Phase 1b service routes
 	if providers.IAM != nil {
-		router.Mount("/api/ui/v1/iam", iamui.BuildRouter(providers.IAM, cfg))
+		router.Mount("/api/ui/v1/iam", iamui.BuildRouter(routeIAM(providers.IAM, caller), cfg))
 	}
 	if providers.Key != nil {
-		router.Mount("/api/ui/v1/kms", kmsui.BuildRouter(providers.Key, cfg))
+		router.Mount("/api/ui/v1/kms", kmsui.BuildRouter(routeKey(providers.Key, caller), cfg))
 	}
 	if providers.Secret != nil {
-		router.Mount("/api/ui/v1/secretsmanager", secretsmanagerui.BuildRouter(providers.Secret, cfg))
+		router.Mount("/api/ui/v1/secretsmanager", secretsmanagerui.BuildRouter(routeSecret(providers.Secret, caller), cfg))
 	}
 	if providers.Param != nil {
-		router.Mount("/api/ui/v1/ssm", ssmui.BuildRouter(providers.Param, cfg))
+		router.Mount("/api/ui/v1/ssm", ssmui.BuildRouter(routeParam(providers.Param, caller), cfg))
 	}
 
 	// Phase 6 service routes
 	if providers.Compute != nil {
-		router.Mount("/api/ui/v1/ec2", ec2ui.BuildRouter(providers.Compute, cfg))
+		router.Mount("/api/ui/v1/ec2", ec2ui.BuildRouter(routeCompute(providers.Compute, caller), cfg))
 	}
 	if providers.Container != nil {
-		router.Mount("/api/ui/v1/ecs", ecsui.BuildRouter(providers.Container, cfg))
+		router.Mount("/api/ui/v1/ecs", ecsui.BuildRouter(routeContainer(providers.Container, caller), cfg))
 	}
 	if providers.EKS != nil {
-		router.Mount("/api/ui/v1/eks", eksui.BuildRouter(providers.EKS, cfg))
+		router.Mount("/api/ui/v1/eks", eksui.BuildRouter(routeEKS(providers.EKS, caller), cfg))
 	}
 	if providers.RDS != nil {
-		router.Mount("/api/ui/v1/rds", rdsui.BuildRouter(providers.RDS, cfg))
+		router.Mount("/api/ui/v1/rds", rdsui.BuildRouter(routeRDS(providers.RDS, caller), cfg))
 	}
 	if providers.Cache != nil {
-		router.Mount("/api/ui/v1/elasticache", elasticacheui.BuildRouter(providers.Cache, cfg))
+		router.Mount("/api/ui/v1/elasticache", elasticacheui.BuildRouter(routeCache(providers.Cache, caller), cfg))
 	}
 	if providers.DNS != nil {
-		router.Mount("/api/ui/v1/route53", route53ui.BuildRouter(providers.DNS, cfg))
+		router.Mount("/api/ui/v1/route53", route53ui.BuildRouter(routeDNS(providers.DNS, caller), cfg))
 	}
 	if providers.Stack != nil {
-		router.Mount("/api/ui/v1/cloudformation", cfnui.BuildRouter(providers.Stack, cfg))
+		router.Mount("/api/ui/v1/cloudformation", cfnui.BuildRouter(routeStack(providers.Stack, caller), cfg))
 	}
 
 	// Phase 7 service routes
 	if providers.Kinesis != nil {
-		router.Mount("/api/ui/v1/kinesis", kinesisui.BuildRouter(providers.Kinesis, cfg))
+		router.Mount("/api/ui/v1/kinesis", kinesisui.BuildRouter(routeKinesis(providers.Kinesis, caller), cfg))
 	}
 	if providers.Firehose != nil {
-		router.Mount("/api/ui/v1/firehose", firehoseui.BuildRouter(providers.Firehose, cfg))
+		router.Mount("/api/ui/v1/firehose", firehoseui.BuildRouter(routeFirehose(providers.Firehose, caller), cfg))
 	}
 	if providers.SES != nil {
-		router.Mount("/api/ui/v1/ses", sesui.BuildRouter(providers.SES, cfg))
+		router.Mount("/api/ui/v1/ses", sesui.BuildRouter(routeSES(providers.SES, caller), cfg))
 	}
 	if providers.ELBv2 != nil {
-		router.Mount("/api/ui/v1/elbv2", elbv2ui.BuildRouter(providers.ELBv2, cfg))
+		router.Mount("/api/ui/v1/elbv2", elbv2ui.BuildRouter(routeELBv2(providers.ELBv2, caller), cfg))
 	}
 }
