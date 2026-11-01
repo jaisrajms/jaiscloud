@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
@@ -132,5 +133,50 @@ func TestEventarcSubscriptionIsRepointedInPlace(t *testing.T) {
 	}
 	if got["enableMessageOrdering"] != true {
 		t.Fatalf("enableMessageOrdering = %v, must survive the re-point", got["enableMessageOrdering"])
+	}
+}
+
+// TestSubscriptionRetryPolicySeam covers the Eventarc/Functions seam's read of
+// a subscription retryPolicy: the patched minimum/maximum/maxDoublings are
+// returned, and a missing subscription or absent policy reports ok=false.
+func TestSubscriptionRetryPolicySeam(t *testing.T) {
+	res := store.NewMemoryResourceStore()
+	p := pubsubprovider.New(res, pubsubstore.NewMemoryMessages(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+	reg := provider.NewRegistry().Register(p)
+	ps := seams.New(reg, gcpadapter.NewAdapter(""), clock.RealClock{}, 0, "us-central1", "proj").PubSub()
+	ctx := context.Background()
+
+	call := func(action, name string, body map[string]any) {
+		t.Helper()
+		nr := &model.NormalizedRequest{Service: "pubsub", Action: action, AccountID: "proj", Cloud: model.CloudGCP,
+			Params:     map[string]any{"project": "proj", "name": name, "body": body},
+			ResourceID: func(a, b string) string { return "projects/proj/" + a[len("pubsub-"):] + "s/" + b }}
+		if _, err := reg.Dispatch(ctx, "PubSub."+action, nr); err != nil {
+			t.Fatalf("%s %s: %v", action, name, err)
+		}
+	}
+
+	call("TopicCreate", "topics/a", nil)
+	call("SubscriptionCreate", "subscriptions/retry", map[string]any{
+		"topic": "projects/proj/topics/a",
+		"retryPolicy": map[string]any{
+			"minimumBackoff": "10s",
+			"maximumBackoff": "120s",
+			"maxDoublings":   2,
+		},
+	})
+	min, max, md, ok, err := ps.SubscriptionRetryPolicy(ctx, "proj", "retry")
+	if err != nil || !ok || min != 10*time.Second || max != 120*time.Second || md != 2 {
+		t.Fatalf("retry policy = %v..%v md=%d ok=%v err=%v", min, max, md, ok, err)
+	}
+
+	// A missing subscription and an explicitly cleared policy both report no
+	// policy rather than an error.
+	if _, _, _, ok, err := ps.SubscriptionRetryPolicy(ctx, "proj", "missing"); err != nil || ok {
+		t.Fatalf("missing subscription = ok=%v err=%v, want ok=false", ok, err)
+	}
+	call("SubscriptionUpdate", "subscriptions/retry", map[string]any{"updateMask": "retry_policy", "retryPolicy": nil})
+	if _, _, _, ok, err := ps.SubscriptionRetryPolicy(ctx, "proj", "retry"); err != nil || ok {
+		t.Fatalf("cleared policy = ok=%v err=%v, want ok=false", ok, err)
 	}
 }
