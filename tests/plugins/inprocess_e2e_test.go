@@ -3,6 +3,7 @@
 package plugins
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/jaisrajms/jaiscloud/sdk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -350,5 +352,147 @@ func TestInProcessRefusesAPluginBuiltInsideTheSDKModule(t *testing.T) {
 	}
 	if !strings.Contains(e.logs(), "Build the plugin as a module of its own") {
 		t.Fatalf("the error must name the cause:\n%s", e.logs())
+	}
+}
+
+// publishedModuleProxy serves this checkout's SDK as sdk.Version from a file:// module
+// proxy, so a build can require it the way it would require a pushed tag.
+func publishedModuleProxy(t *testing.T) string {
+	t.Helper()
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyRoot := filepath.Join(t.TempDir(), "proxy")
+	base := filepath.Join(proxyRoot, "github.com", "jaisrajms", "jaiscloud", "sdk", "@v")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var zbuf bytes.Buffer
+	zw := zip.NewWriter(&zbuf)
+	root := filepath.Join(repo, "sdk")
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		w, err := zw.Create("github.com/jaisrajms/jaiscloud/sdk@" + sdk.Version + "/" + filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gomod, _ := os.ReadFile(filepath.Join(root, "go.mod"))
+	for name, data := range map[string][]byte{
+		sdk.Version + ".zip":  zbuf.Bytes(),
+		sdk.Version + ".mod":  gomod,
+		sdk.Version + ".info": []byte(fmt.Sprintf(`{"Version":%q,"Time":"2026-11-01T00:00:00Z"}`, sdk.Version)),
+		"list":                []byte(sdk.Version + "\n"),
+	} {
+		if err := os.WriteFile(filepath.Join(base, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return proxyRoot
+}
+
+// The topology a user with only a binary has: a plugin repo that requires the SDK version the
+// emulator prints, with no replace, against an emulator built the way a release is (pinned to
+// that version). An emulator built through this repository's `replace => ./sdk` holds the same
+// source as a different package, and refuses the same plugin.
+func TestInProcessPluginRequiringThePublishedSDKVersion(t *testing.T) {
+	proxy := publishedModuleProxy(t)
+	realCache, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	modcache, err := os.MkdirTemp("", "jaiscloud-modcache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// Go's module cache is read-only; `go clean -modcache` is how it is removed.
+		clean := exec.Command("go", "clean", "-modcache")
+		clean.Env = append(os.Environ(), "GOMODCACHE="+modcache)
+		_ = clean.Run()
+		_ = os.RemoveAll(modcache)
+	})
+	env := append(os.Environ(),
+		"GOMODCACHE="+modcache,
+		// The proxy serves the SDK; the existing download cache serves every other dependency.
+		"GOPROXY=file://"+proxy+",file://"+filepath.Join(strings.TrimSpace(string(realCache)), "cache", "download"),
+		"GOSUMDB=off", "GOFLAGS=-mod=mod", "CGO_ENABLED=1",
+	)
+
+	// The emulator, pinned to the published SDK, by the Makefile target a release uses.
+	out := t.TempDir()
+	repo, _ := filepath.Abs("../..")
+	mk := exec.Command("make", "-C", repo, "build-plugins-release", "PLUGIN_CLOUDS=aws", "PLUGIN_OUT="+out)
+	mk.Env = env
+	if b, err := mk.CombinedOutput(); err != nil {
+		t.Fatalf("make build-plugins-release: %v\n%s", err, b)
+	}
+	pinned := filepath.Join(out, "jaiscloud-aws-plugins")
+	if v, _ := exec.Command(pinned, "version").CombinedOutput(); !strings.Contains(string(v), "require github.com/jaisrajms/jaiscloud/sdk "+sdk.Version) {
+		t.Fatalf("version must name the SDK to require:\n%s", v)
+	}
+
+	// The plugin: a repo of its own that requires that version and nothing else.
+	src, err := os.ReadFile(filepath.Join(repo, "sdk", "examples", "inprocess", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	gomod := fmt.Sprintf("module example.com/userplugin\n\ngo 1.26.8\n\nrequire github.com/jaisrajms/jaiscloud/sdk %s\n", sdk.Version)
+	for name, data := range map[string]string{"go.mod": gomod, "main.go": string(src)} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	so := filepath.Join(dir, "userplugin.so")
+	build := exec.Command("go", "build", "-buildmode=plugin", "-trimpath", "-o", so, ".")
+	build.Dir, build.Env = dir, env
+	if b, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the plugin: %v\n%s", err, b)
+	}
+
+	// Loads into the pinned emulator and serves.
+	e, _ := commandOf(t, pinned, "--plugin", "so:"+so)
+	run(t, e)
+	if code, _, doctor := e.rawGET(t, "/_jaiscloud/doctor", nil); code != 200 || !strings.Contains(doctor, `"transport":"in-process"`) {
+		t.Fatalf("doctor: %d %s\n%s", code, doctor, e.logs())
+	}
+	if code, _, body := e.rawGET(t, "/b/inprocess/x.txt", map[string]string{"Authorization": s3Auth}); code != 200 || !strings.Contains(body, "served by the in-process plugin") {
+		t.Fatalf("plugin-served object: %d %q\n%s", code, body, e.logs())
+	}
+
+	// The emulator built from a checkout (replace) refuses it, and says why.
+	r, _ := commandOf(t, variant(t, "aws"), "--plugin", "so:"+so)
+	if err := r.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { r.done <- r.cmd.Wait() }()
+	select {
+	case err := <-r.done:
+		if err == nil {
+			t.Fatalf("an emulator built through the replace must refuse a plugin built against the published SDK:\n%s", r.logs())
+		}
+	case <-time.After(60 * time.Second):
+		_ = r.cmd.Process.Kill()
+		t.Fatalf("emulator did not exit:\n%s", r.logs())
+	}
+	if !strings.Contains(r.logs(), "SDK package differs") {
+		t.Fatalf("the refusal must name the SDK:\n%s", r.logs())
 	}
 }

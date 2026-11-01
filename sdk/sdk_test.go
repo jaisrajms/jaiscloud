@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -188,5 +189,12 @@ func TestManifestRequiresIsOmittedWhenEmpty(t *testing.T) {
 	b, _ := json.Marshal(Manifest{ABI: ABI, Name: "p"})
 	if strings.Contains(string(b), "requires") {
 		t.Fatalf("an empty Requires must not appear on the wire: %s", b)
+	}
+}
+
+// Version is what a plugin's go.mod requires, and the tag sdk/<Version> is cut from it.
+func TestVersionIsAReleaseVersion(t *testing.T) {
+	if !regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(Version) {
+		t.Fatalf("Version = %q, want vMAJOR.MINOR.PATCH (it becomes the git tag sdk/%s)", Version, Version)
 	}
 }

@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
-	"strings"
+
+	"github.com/jaisrajms/jaiscloud/sdk"
 )
 
 // BuildInfo is what an in-process plugin must match: Go refuses to load a plugin
@@ -22,7 +23,7 @@ type BuildInfo struct {
 
 // Build describes how this binary was built.
 func Build() BuildInfo {
-	b := BuildInfo{Go: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH, InProcess: InProcessSupported()}
+	b := BuildInfo{Go: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH, SDK: sdk.Version, InProcess: InProcessSupported()}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return b
@@ -37,14 +38,6 @@ func Build() BuildInfo {
 			b.Trimpath = s.Value == "true"
 		}
 	}
-	for _, d := range info.Deps {
-		if d.Path == "github.com/jaisrajms/jaiscloud/sdk" {
-			b.SDK = d.Version
-			if d.Replace != nil {
-				b.SDK = "replaced by " + d.Replace.Path
-			}
-		}
-	}
 	return b
 }
 
@@ -53,12 +46,8 @@ func (b BuildInfo) String() string {
 	if tags == "" {
 		tags = "none"
 	}
-	sdk := b.SDK
-	if sdk == "" {
-		sdk = "the SDK in this repository"
-	}
-	return fmt.Sprintf("built with %s %s/%s, cgo=%t, tags=%s, trimpath=%t, sdk=%s",
-		b.Go, b.OS, b.Arch, b.CGO, tags, b.Trimpath, strings.TrimSpace(sdk))
+	return fmt.Sprintf("built with %s %s/%s, cgo=%t, tags=%s, trimpath=%t, sdk=%s (require github.com/jaisrajms/jaiscloud/sdk %s)",
+		b.Go, b.OS, b.Arch, b.CGO, tags, b.Trimpath, b.SDK, b.SDK)
 }
 
 // Line is the one-line summary the version command prints.

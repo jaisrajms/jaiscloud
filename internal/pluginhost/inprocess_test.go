@@ -390,4 +390,8 @@ func TestBuildInfoDescribesThisBuild(t *testing.T) {
 	if !strings.Contains(b.Line(), "in-process plugins:") || !strings.Contains(b.String(), "built with go") {
 		t.Errorf("line = %q, string = %q", b.Line(), b.String())
 	}
+	// An author with only a binary learns the SDK version to require from this.
+	if b.SDK != sdk.Version || !strings.Contains(b.String(), "require github.com/jaisrajms/jaiscloud/sdk "+sdk.Version) {
+		t.Errorf("the build must name the SDK version to require, got sdk=%q, %q", b.SDK, b.String())
+	}
 }
