@@ -254,6 +254,8 @@ docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
 docker-%:  ## Build jaiscloud-<cloud> Docker image
 	docker build \
 		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo none) \
+		--build-arg DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
 		--build-arg CLOUD=$* \
 		--build-arg PORT=$(or $(DOCKER_PORT_$*),4566) \
 		--tag jaiscloud-$*:$(VERSION) \
