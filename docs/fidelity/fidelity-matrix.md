@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1145**
+Cells: **1174**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 993 |
-| limited | 106 |
+| ga | 995 |
+| limited | 123 |
 | preview | 14 |
-| unsupported | 32 |
+| unsupported | 42 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 551 | 105 | 14 | 12 |
-| grpc | 442 | 1 | 0 | 20 |
+| rest | 552 | 105 | 14 | 12 |
+| grpc | 443 | 18 | 0 | 30 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -32,8 +32,8 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 638 | 44 |
-| grpc | 442 | 21 |
+| rest | 639 | 44 |
+| grpc | 443 | 48 |
 
 ## bigquery
 
@@ -578,11 +578,24 @@ _39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 
 ## iam
 
-_23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
+_52 cell(s): ga=25 limited=17 preview=0 unsupported=10_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
+| CreateRole | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| CreateServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateServiceAccountKey | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DeleteRole | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| DeleteServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DeleteServiceAccountKey | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DisableServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DisableServiceAccountKey | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| EnableServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| EnableServiceAccountKey | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetIamPolicy | grpc | ga | yes | — |
+| GetRole | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| GetServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetServiceAccountKey | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
 | IAM.ServiceAccountCreate | rest | ga | yes | — |
 | IAM.ServiceAccountDelete | rest | ga | yes | — |
 | IAM.ServiceAccountDisable | rest | ga | yes | — |
@@ -595,6 +608,7 @@ _23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountKeyEnable | rest | ga | yes | — |
 | IAM.ServiceAccountKeyGet | rest | ga | yes | — |
 | IAM.ServiceAccountKeyList | rest | ga | yes | — |
+| IAM.ServiceAccountKeyUpload | rest | ga | yes | — |
 | IAM.ServiceAccountList | rest | ga | yes | — |
 | IAM.ServiceAccountPatch | rest | ga | yes | — |
 | IAM.ServiceAccountSetIamPolicy | rest | ga | yes | — |
@@ -603,8 +617,23 @@ _23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountTestIamPermissions | rest | ga | yes | — |
 | IAM.ServiceAccountUndelete | rest | ga | yes | — |
 | IAM.ServiceAccountUpdate | rest | ga | yes | — |
+| LintPolicy | grpc | unsupported | no | policy linting is not modelled; explicit Unimplemented stub |
+| ListRoles | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| ListServiceAccountKeys | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListServiceAccounts | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| PatchServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| QueryAuditableServices | grpc | unsupported | no | auditable-service catalog is not modelled; explicit Unimplemented stub |
+| QueryGrantableRoles | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| QueryTestablePermissions | grpc | unsupported | no | permission catalog is not modelled; explicit Unimplemented stub |
 | SetIamPolicy | grpc | ga | yes | — |
+| SignBlob | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| SignJwt | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
 | TestIamPermissions | grpc | ga | yes | — |
+| UndeleteRole | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| UndeleteServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| UpdateRole | grpc | unsupported | no | role catalog is not modelled; explicit Unimplemented stub |
+| UpdateServiceAccount | grpc | limited | no | gRPC verified against proto descriptors only (pending proto-conformance) |
+| UploadServiceAccountKey | grpc | ga | yes | — |
 
 ## iamcredentials
 

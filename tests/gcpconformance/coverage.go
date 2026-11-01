@@ -47,6 +47,8 @@ var actionOverrides = map[string]string{
 	// keys.disable / keys.enable (J45) also nest under serviceAccounts.
 	"IAM.ServiceAccountKeyDisable": "iam.projects.serviceAccounts.keys.disable",
 	"IAM.ServiceAccountKeyEnable":  "iam.projects.serviceAccounts.keys.enable",
+	// keys.upload (DC27) takes the service-account name, not a key name.
+	"IAM.ServiceAccountKeyUpload": "iam.projects.serviceAccounts.keys.upload",
 	// GetAllowedLocations is served for both serviceAccounts and
 	// workloadIdentityPools (J65); pin the cell to the serviceAccounts method
 	// (the heuristic otherwise picks workforcePools alphabetically).

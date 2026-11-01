@@ -13,8 +13,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"strconv"
 
 	"jaiscloud/internal/clock"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
@@ -49,6 +51,12 @@ type Key struct {
 	// the user-managed pair those records were created as.
 	KeyOrigin string `json:"keyOrigin,omitempty"`
 	KeyType   string `json:"keyType,omitempty"`
+	// PublicDER is the base64 PKIX DER public key of a key created through
+	// projects.serviceAccounts.keys.upload (DC27). Such a key has no private
+	// half: the caller keeps it, so the emulator stores only the public
+	// material. It is empty on a keypair the emulator generated itself, whose
+	// public half is derived from PrivateDER.
+	PublicDER string `json:"publicDer,omitempty"`
 	// Disabled marks a key turned off through
 	// projects.serviceAccounts.keys.disable; DisableTime is when it was
 	// disabled (empty while enabled). A disabled key still exists and is
@@ -75,29 +83,51 @@ func (k *Key) Type() string {
 	return k.KeyType
 }
 
-// PrivDER decodes the stored private key DER.
+// ErrNoPrivateKey reports that a key stores no private half. It is the state of
+// a key created through projects.serviceAccounts.keys.upload, which retains
+// only the caller's public key: signing with it is impossible and must fail
+// loudly rather than reaching the signer with empty bytes.
+var ErrNoPrivateKey = errors.New("service account key has no private key material")
+
+// PrivDER decodes the stored private key DER. An uploaded key (which has only
+// public material) and a malformed record both fail here, loudly.
 func (k *Key) PrivDER() ([]byte, error) {
+	if k.PrivateDER == "" {
+		return nil, ErrNoPrivateKey
+	}
 	return base64.StdEncoding.DecodeString(k.PrivateDER)
 }
 
-// PublicKeyData derives the base64 PKIX public-key PEM from the stored PKCS8
-// private key DER. validBeforeTime stays omitted for non-expiring keys.
+// PublicKeyData renders the key's public half as the base64 PKIX public-key PEM
+// the API returns in a keys.get response. A generated keypair derives it from
+// the stored PKCS8 private key DER; an uploaded key returns the public key the
+// caller supplied.
 func (k *Key) PublicKeyData() (string, bool) {
-	privDER, err := k.PrivDER()
-	if err != nil {
-		return "", false
-	}
-	priv, err := x509.ParsePKCS8PrivateKey(privDER)
-	if err != nil {
-		return "", false
-	}
-	signer, ok := priv.(crypto.Signer)
-	if !ok {
-		return "", false
-	}
-	pubDER, err := x509.MarshalPKIXPublicKey(signer.Public())
-	if err != nil {
-		return "", false
+	var pubDER []byte
+	if k.PrivateDER == "" {
+		// Uploaded key: the public material is all there is.
+		der, err := base64.StdEncoding.DecodeString(k.PublicDER)
+		if err != nil || len(der) == 0 {
+			return "", false
+		}
+		pubDER = der
+	} else {
+		privDER, err := k.PrivDER()
+		if err != nil {
+			return "", false
+		}
+		priv, err := x509.ParsePKCS8PrivateKey(privDER)
+		if err != nil {
+			return "", false
+		}
+		signer, ok := priv.(crypto.Signer)
+		if !ok {
+			return "", false
+		}
+		pubDER, err = x509.MarshalPKIXPublicKey(signer.Public())
+		if err != nil {
+			return "", false
+		}
 	}
 	pemStr, err := kmsstore.PublicKeyPEM(pubDER)
 	if err != nil {
@@ -116,20 +146,47 @@ func GenerateKeyID() string {
 // CreateKey generates a user-managed RSA-2048 key pair for email and persists
 // it under account (the projects.serviceAccounts.keys.create shape).
 func CreateKey(ctx context.Context, resources store.ResourceStore, account, email string) (*Key, error) {
-	return createKey(ctx, resources, account, email, KeyType, KeyOrigin)
+	return CreateKeyWithAlgorithm(ctx, resources, account, email, "")
 }
 
-// createKey generates an RSA-2048 key pair classified by keyType/keyOrigin and
-// persists it under account.
-func createKey(ctx context.Context, resources store.ResourceStore, account, email, keyType, keyOrigin string) (*Key, error) {
-	priv, _, err := kmsstore.GenerateRSAKeyPair(2048)
+// CreateKeyWithAlgorithm is CreateKey honouring the documented keyAlgorithm
+// field of projects.serviceAccounts.keys.create. The ServiceAccountKey enum has
+// exactly two concrete members — KEY_ALG_RSA_1024 and KEY_ALG_RSA_2048 — so any
+// other value (including the 4096-bit size users sometimes expect) is
+// INVALID_ARGUMENT. An empty or unspecified algorithm selects the documented
+// default, RSA-2048.
+func CreateKeyWithAlgorithm(ctx context.Context, resources store.ResourceStore, account, email, algorithm string) (*Key, error) {
+	bits, canonical, err := keyAlgorithmBits(algorithm)
+	if err != nil {
+		return nil, err
+	}
+	return createKey(ctx, resources, account, email, bits, canonical, KeyType, KeyOrigin)
+}
+
+// keyAlgorithmBits maps a ServiceAccountKey.keyAlgorithm enum value to the RSA
+// modulus size it denotes and its canonical enum spelling.
+func keyAlgorithmBits(algorithm string) (bits int, canonical string, err error) {
+	switch algorithm {
+	case "", "KEY_ALG_UNSPECIFIED", "KEY_ALG_RSA_2048":
+		return 2048, "KEY_ALG_RSA_2048", nil
+	case "KEY_ALG_RSA_1024":
+		return 1024, "KEY_ALG_RSA_1024", nil
+	}
+	return 0, "", Invalid("unsupported keyAlgorithm " + strconv.Quote(algorithm) +
+		": ServiceAccountKey.keyAlgorithm supports only KEY_ALG_RSA_1024 and KEY_ALG_RSA_2048")
+}
+
+// createKey generates an RSA key pair of bits bits classified by keyType/
+// keyOrigin and persists it under account.
+func createKey(ctx context.Context, resources store.ResourceStore, account, email string, bits int, algorithm, keyType, keyOrigin string) (*Key, error) {
+	priv, _, err := kmsstore.GenerateRSAKeyPair(bits)
 	if err != nil {
 		return nil, err
 	}
 	k := Key{
 		Email:      email,
 		KeyID:      GenerateKeyID(),
-		Algorithm:  "KEY_ALG_RSA_2048",
+		Algorithm:  algorithm,
 		PrivateDER: base64.StdEncoding.EncodeToString(priv),
 		ValidAfter: timestamp.Canonical(clock.Now()),
 		KeyType:    keyType,
@@ -161,7 +218,7 @@ func EnsureKey(ctx context.Context, resources store.ResourceStore, account, emai
 			return &k, nil
 		}
 	}
-	return createKey(ctx, resources, account, email, KeyTypeSystemManaged, KeyOriginGoogleProvided)
+	return createKey(ctx, resources, account, email, 2048, "KEY_ALG_RSA_2048", KeyTypeSystemManaged, KeyOriginGoogleProvided)
 }
 
 // LoadKey loads a key by ID, verifying it belongs to the given service account.

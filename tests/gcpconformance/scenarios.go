@@ -428,6 +428,11 @@ func Scenarios(suffix string) []Scenario {
 	// ─── IAM ──────────────────────────────────────────────────────────────────
 
 	saBase := "/v1/projects/" + p + "/serviceAccounts"
+	// keys.upload (DC27) gets a throwaway service account of its own, so the
+	// key the emulator stores from the caller's public key never interferes
+	// with the generated keypair the main chain exercises.
+	saUpload := "conf-sau-" + suffix
+	saUploadEmail := saUpload + "@" + p + ".iam.gserviceaccount.com"
 	sc = append(sc,
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + sa,
 			Body: `{"serviceAccount":{"displayName":"Conformance SA"}}`},
@@ -446,6 +451,22 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "iam", Method: "GET", Path: "/v1/${keyName}"},
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "/" + saEmail + ":signBlob",
 			Body: `{"bytesToSign":"aGVsbG8="}`},
+		// keys.upload: publicKeyData is the base64 form of the documented
+		// certificate-wrapped RSA public key. The response is a USER_MANAGED /
+		// USER_PROVIDED key whose get carries publicKeyData and whose
+		// disable/enable lifecycle matches a generated key's.
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + saUpload,
+			Body: `{"serviceAccount":{"displayName":"Conformance SA key upload"}}`},
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "/" + saUploadEmail + "/keys:upload",
+			Body: fmt.Sprintf(`{"publicKeyData":%q}`, iamUploadPublicKeyData()),
+			Save: map[string]string{"uploadedKeyName": "name"}},
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${uploadedKeyName}"},
+		Scenario{Service: "iam", Method: "GET", Path: saBase + "/" + saUploadEmail + "/keys"},
+		Scenario{Service: "iam", Method: "POST", Path: "/v1/${uploadedKeyName}:disable"},
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${uploadedKeyName}"},
+		Scenario{Service: "iam", Method: "POST", Path: "/v1/${uploadedKeyName}:enable"},
+		Scenario{Service: "iam", Method: "DELETE", Path: "/v1/${uploadedKeyName}"},
+		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saUploadEmail},
 		Scenario{Service: "iam", Method: "GET", Path: saBase + "/missing-" + suffix + "@" + p + ".iam.gserviceaccount.com"},
 		Scenario{Service: "iam", Method: "DELETE", Path: "/v1/${keyName}"},
 		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saEmail},

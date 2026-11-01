@@ -17,7 +17,7 @@
 | Cloud Pub/Sub | REST + gRPC | Topics, subscriptions, snapshots, seek, push/pull delivery, ordering keys, DLQ, exactly-once delivery (pull) |
 | Secret Manager | REST + gRPC | Secrets, versions, rotation, CMEK envelope encryption |
 | Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation, key import + HSM/EKM trusted wrapping + KEM decapsulation; crypto ops honor a default-permissive cryptoKey IAM policy |
-| Cloud IAM | REST + gRPC | Service accounts, service account keys; gRPC `IAMPolicy` for project/resource policies (authz not enforced) |
+| Cloud IAM | REST + gRPC | Service accounts and keys (create, list, get, **upload** a caller-provided public key, disable/enable, delete), `signBlob`/`signJwt`; the gRPC `google.iam.admin.v1.IAM` surface mirrors the service-account/keys/policy RPCs, and gRPC `IAMPolicy` covers project/resource policies — the role catalog is not modelled and authz is not enforced |
 | Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`/`batchGet`), `filter=state:ENABLED` |
 | Cloud Resource Manager | REST + gRPC | Project lifecycle (create/get/list/delete/undelete), admin (`update`/`move the parent reference`/`search`) + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`); unknown ids still synthesize as `ACTIVE`, project numbers are deterministic, the org/folder hierarchy itself is not modelled, and a project etag rotates on update/move — authz not enforced |
 | Cloud Scheduler | REST + gRPC | Cron jobs (`jobs` CRUD + `pause`/`resume`/`run`); a real cron engine fires `httpTarget`/`pubsubTarget` jobs on the emulator clock — see [Known Limitations](#known-limitations) |
