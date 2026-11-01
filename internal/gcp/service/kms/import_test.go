@@ -9,7 +9,9 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/store"
 )
@@ -142,7 +144,11 @@ func TestCoreTrustedWrappingRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := core.CreateCryptoKey(ctx, "proj", "global", "kr", "sym", CryptoKeyInput{}); err != nil {
+	// Discovery: trusted wrapping is only valid for HSM_SINGLE_TENANT keys and
+	// never for ENCRYPT_DECRYPT, so the target is a single-tenant raw AES key.
+	if _, err := core.CreateCryptoKey(ctx, "proj", "global", "kr", "sym", CryptoKeyInput{
+		Purpose: "RAW_ENCRYPT_DECRYPT", Algorithm: "AES_256_GCM", ProtectionLevel: "HSM_SINGLE_TENANT",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	wk, err := keys.KeyMaterial(ctx, "proj", "global", "kr", "wrap", "1")
@@ -243,5 +249,41 @@ func TestCoreImportOnlyKeyStartsWithoutVersion(t *testing.T) {
 	}
 	if v.Version != "1" {
 		t.Fatalf("first imported version = %q, want 1", v.Version)
+	}
+}
+
+// TestCoreImportRejectsExpiredJob pins the import-job state machine: a job is
+// ACTIVE for 72h (computed lazily on read), and ImportCryptoKeyVersion rejects
+// an EXPIRED job with FAILED_PRECONDITION instead of using stale key material.
+func TestCoreImportRejectsExpiredJob(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	ctx := context.Background()
+	core, _ := newCore()
+	if _, err := core.CreateKeyRing(ctx, "proj", "global", "kr"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.CreateCryptoKey(ctx, "proj", "global", "kr", "imp", CryptoKeyInput{ImportOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	job, wrapped := rsaWrappedImport(t, core, "kr")
+	if job.State != "ACTIVE" || !job.ExpireTime.Equal(t0.Add(72*time.Hour)) {
+		t.Fatalf("job state=%q expireTime=%v, want ACTIVE at t0+72h", job.State, job.ExpireTime)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(73 * time.Hour)})
+	if got, err := core.GetImportJob(ctx, "proj", "global", "kr", "job"); err != nil {
+		t.Fatalf("GetImportJob: %v", err)
+	} else if got.State != "EXPIRED" {
+		t.Fatalf("job state after 73h = %q, want EXPIRED", got.State)
+	}
+	_, err := core.ImportCryptoKeyVersion(ctx, "proj", "global", "kr", "imp", ImportVersionRequest{
+		ImportJob: job.Name, Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION", WrappedKey: wrapped,
+	})
+	code, status := providerErr(t, err)
+	if code != "FailedPrecondition" || status != 400 {
+		t.Fatalf("import of an EXPIRED job error = %s (%d), want FailedPrecondition (400)", code, status)
 	}
 }

@@ -175,6 +175,7 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 		in.ImportOnly = ck.GetImportOnly()
 	}
 	in.SkipInitialVersion = req.GetSkipInitialVersionCreation()
+	in.TrustedWrappingEnabled = req.GetTrustedWrappingEnabled()
 	in.Purpose = purpose
 	in.Algorithm = algorithm
 	ck, err := s.core.CreateCryptoKey(ctx, project, loc, kr, key, in)
@@ -252,7 +253,11 @@ func (s *Service) CreateCryptoKeyVersion(ctx context.Context, req *kmspb.CreateC
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
 	}
-	v, err := s.core.CreateVersion(ctx, project, loc, kr, key)
+	in := kmscore.CreateVersionInput{
+		TrustedWrappingEnabled:         req.GetCryptoKeyVersion().GetTrustedWrappingEnabled(),
+		ExternalProtectionLevelOptions: req.GetCryptoKeyVersion().GetExternalProtectionLevelOptions() != nil,
+	}
+	v, err := s.core.CreateVersion(ctx, project, loc, kr, key, in)
 	if err != nil {
 		return nil, mapError(err)
 	}
