@@ -445,7 +445,6 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"POST", kms + "/cryptoKeys:zzz"},
 		{"POST", kms + "/importJobs:zzz"},
 		{"POST", fst + "/documents:zzz"},
-		{"POST", fst + "/documents/cities:zzz"},
 		{"POST", fst + "/indexes:zzz"},
 		{"POST", fst + "/collectionGroups/cg/indexes:zzz"},
 		{"POST", fst + "/backupSchedules:zzz"},

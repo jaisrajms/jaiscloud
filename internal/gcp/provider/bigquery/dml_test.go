@@ -274,3 +274,33 @@ func TestQueryCreateDuplicateIsConflict(t *testing.T) {
 		t.Fatalf("create if not exists: %v", err)
 	}
 }
+
+// TestQueryCoercionErrors pins BQ10 at the provider boundary: division by zero
+// and cross-type operators surface as the documented 400 invalidQuery error,
+// not as NULL/successful SQLite results.
+func TestQueryCoercionErrors(t *testing.T) {
+	ctx := context.Background()
+	p := seedDMLProvider(t)
+	queryOK(t, p, "INSERT INTO `proj.sales.orders` (id, amount) VALUES (1, 10.5)")
+
+	for _, q := range []string{
+		"SELECT 1/0",
+		"SELECT id/0 FROM `proj.sales.orders`",
+		"SELECT id FROM `proj.sales.orders` WHERE id = '1'",
+		"SELECT id FROM `proj.sales.orders` WHERE amount = '1'",
+		"SELECT id + '1' FROM `proj.sales.orders`",
+	} {
+		_, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": q}}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidQuery" || perr.HTTPStatus != 400 {
+			t.Errorf("query %q: expected InvalidQuery/400, got %v", q, err)
+		}
+	}
+
+	// Numeric-family comparisons remain valid.
+	if _, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "SELECT id FROM `proj.sales.orders` WHERE id = 1.0",
+	}})); err != nil {
+		t.Errorf("numeric comparison rejected: %v", err)
+	}
+}
