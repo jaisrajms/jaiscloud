@@ -31,13 +31,21 @@ func phsVCC(t *testing.T, ref string) map[string]any {
 }
 
 // createPHSSource creates the Dataproc cluster that acts as the history server.
-// imageVersion may be empty to model a cluster without a Dataproc image.
+// imageVersion may be empty to model a cluster without a Dataproc image. The
+// cluster always carries a GCE placement, which a create requires.
 func createPHSSource(t *testing.T, p *Service, project, region, name, imageVersion string) {
 	t.Helper()
-	in := ClusterInput{}
-	if imageVersion != "" {
-		in.Config = []byte(fmt.Sprintf(`{"softwareConfig":{"imageVersion":%q}}`, imageVersion))
+	cfg := map[string]any{
+		"gceClusterConfig": map[string]any{"zoneUri": region + "-a"},
 	}
+	if imageVersion != "" {
+		cfg["softwareConfig"] = map[string]any{"imageVersion": imageVersion}
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal PHS source config: %v", err)
+	}
+	in := ClusterInput{Config: raw}
 	if _, _, err := p.CreateCluster(context.Background(), project, region, name, in); err != nil {
 		t.Fatalf("create PHS source cluster %s: %v", name, err)
 	}
@@ -191,10 +199,11 @@ func TestCreateCluster_PHSClientPropertiesWin(t *testing.T) {
 	require.Equal(t, "gs://custom/logs", props[phsEventLogDirKey])
 }
 
-// TestUpdateCluster_PHSMaskedVCC covers validation and injection on a masked
-// virtualClusterConfig update, plus the mask rule: an update that does not
-// apply the vcc neither validates nor injects it.
-func TestUpdateCluster_PHSMaskedVCC(t *testing.T) {
+// TestUpdateCluster_PHSRecreateOnly: a Dataproc-on-GKE virtual cluster is
+// recreate-only, so a masked virtualClusterConfig update (including one that
+// would attach a PHS) is rejected. PHS validation therefore runs on create only;
+// a labels-only update does not validate a stray PHS reference in the body.
+func TestUpdateCluster_PHSRecreateOnly(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	createPHSSource(t, p, "proj", "us-central1", "phs", "2.2.0")
@@ -203,24 +212,15 @@ func TestUpdateCluster_PHSMaskedVCC(t *testing.T) {
 		gkeInput(t, phsVCC(t, ""))); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
-	// A masked vcc update attaches the PHS and injects the properties.
-	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-up",
-		gkeInput(t, phsVCC(t, "projects/proj/regions/us-central1/clusters/phs")),
-		[]string{"virtualClusterConfig"}); err != nil {
-		t.Fatalf("UpdateCluster: %v", err)
-	}
-	props := phsProperties(t, p, "proj", "us-central1", "gke-up")
-	require.Equal(t, "true", props[phsEventLogEnabledKey])
-	require.Equal(t, "gs://dataproc-staging-proj/gke-up/spark-job-history", props[phsEventLogDirKey])
-
-	// A cross-region reference on a masked vcc update is rejected and the
-	// stored vcc is left unchanged.
 	_, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-up",
-		gkeInput(t, phsVCC(t, "projects/proj/regions/us-east1/clusters/phs")),
+		gkeInput(t, phsVCC(t, "projects/proj/regions/us-central1/clusters/phs")),
 		[]string{"virtualClusterConfig"})
 	require.Error(t, err)
 	require.True(t, isCode(err, "InvalidArgument"))
-	require.Contains(t, err.Error(), "must be in the cluster region us-central1, got us-east1")
+	require.Contains(t, err.Error(), "recreate-only")
+	if props := phsProperties(t, p, "proj", "us-central1", "gke-up"); len(props) != 0 {
+		t.Fatalf("rejected update must not attach PHS: %v", props)
+	}
 
 	// A reference that is not applied by the mask is not validated: the update
 	// only changes labels, so a bad PHS ref in the body must not fail it.

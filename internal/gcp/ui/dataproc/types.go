@@ -45,9 +45,10 @@ type Cluster struct {
 	// NamespaceOwned is true when the emulator created the namespace and may
 	// delete it on cluster delete; a pre-existing adopted namespace is false.
 	NamespaceOwned bool `json:"namespaceOwned,omitempty"`
-	// KubernetesNamespace is the caller-requested namespace from a GKE
-	// VirtualClusterConfig ("" for a GCE-backed cluster); populated on the
-	// detail read only.
+	// KubernetesNamespace is the effective namespace recorded on a GKE
+	// VirtualClusterConfig: the caller's value, or the cluster name when the
+	// request omitted it ("" for a GCE-backed cluster); populated on the detail
+	// read only.
 	KubernetesNamespace  string          `json:"kubernetesNamespace,omitempty"`
 	Config               json.RawMessage `json:"config,omitempty"`
 	VirtualClusterConfig json.RawMessage `json:"virtualClusterConfig,omitempty"`

@@ -269,6 +269,147 @@ func pollJob(t *testing.T, svc *dataproc.Service, project, region, jobID string)
 	}
 }
 
+// TestSDKDataprocGCEConfigDefaults verifies that a Compute-Engine cluster
+// created with an empty cluster_config reads back the defaults a real Dataproc
+// cluster always reports (dataproc.v1.SoftwareConfig.imageVersion, the 1-master
+// / 2-worker instance groups, and a zone in the region). The hashicorp/google
+// provider dereferences config.softwareConfig without a nil check when it
+// refreshes a google_dataproc_cluster with a plain cluster_config, so an absent
+// softwareConfig is not just a parity gap — it panics the provider (DPG38).
+func TestSDKDataprocGCEConfigDefaults(t *testing.T) {
+	ctx := context.Background()
+	svc, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	const project = "proj"
+	const region = "us-central1"
+	clusterName := unique("c-def")
+
+	op, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
+		ProjectId:   project,
+		ClusterName: clusterName,
+		Config:      &dataproc.ClusterConfig{},
+	}).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, svc, op.Name).Done)
+
+	cluster, err := svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Config, "a GCE cluster read must always carry config")
+	require.NotNil(t, cluster.Config.SoftwareConfig, "config.softwareConfig must be present")
+	require.Equal(t, "2.3.3-debian12", cluster.Config.SoftwareConfig.ImageVersion)
+	require.NotNil(t, cluster.Config.MasterConfig)
+	require.Equal(t, int64(1), cluster.Config.MasterConfig.NumInstances)
+	require.NotNil(t, cluster.Config.WorkerConfig)
+	require.Equal(t, int64(2), cluster.Config.WorkerConfig.NumInstances)
+	require.NotNil(t, cluster.Config.GceClusterConfig)
+	require.Equal(t, "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-a",
+		cluster.Config.GceClusterConfig.ZoneUri,
+		"a get answers the absolute Compute self-link, never a short zone name")
+
+	// A caller-pinned image version is reported verbatim, not replaced by the
+	// default.
+	pinnedName := unique("c-pin")
+	pinnedOp, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
+		ProjectId:   project,
+		ClusterName: pinnedName,
+		Config: &dataproc.ClusterConfig{
+			SoftwareConfig: &dataproc.SoftwareConfig{ImageVersion: "2.2-debian12"},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, svc, pinnedOp.Name).Done)
+	pinned, err := svc.Projects.Regions.Clusters.Get(project, region, pinnedName).Do()
+	require.NoError(t, err)
+	require.Equal(t, "2.2-debian12", pinned.Config.SoftwareConfig.ImageVersion)
+
+	for _, name := range []string{clusterName, pinnedName} {
+		del, err := svc.Projects.Regions.Clusters.Delete(project, region, name).Do()
+		require.NoError(t, err)
+		require.True(t, pollOperation(t, svc, del.Name).Done)
+	}
+}
+
+// TestSDKDataprocGCEConfigCanonicalisesLinks verifies the other half of the
+// read shape: whatever spelling a caller used for a Compute Engine link (a short
+// name, a partial resource name, a full self-link), a real Dataproc get answers
+// the absolute self-link. The emulator must not echo the short form back
+// (DPG40) — a client that parses the link would see a different resource name
+// than real GCP.
+func TestSDKDataprocGCEConfigCanonicalisesLinks(t *testing.T) {
+	ctx := context.Background()
+	svc, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	const project = "proj"
+	const region = "us-central1"
+
+	// networkUri and subnetworkUri cannot be set together (Discovery: "Cannot be
+	// specified with subnetwork_uri"), so each link kind gets its own cluster.
+	for _, tc := range []struct {
+		name      string
+		network   string
+		subnet    string
+		machine   string
+		zone      string
+		checkFunc func(t *testing.T, cluster *dataproc.Cluster)
+	}{
+		{
+			name:    "network",
+			network: "default",
+			checkFunc: func(t *testing.T, cluster *dataproc.Cluster) {
+				require.Equal(t, "https://www.googleapis.com/compute/v1/projects/proj/global/networks/default",
+					cluster.Config.GceClusterConfig.NetworkUri)
+			},
+		},
+		{
+			name:    "subnetwork and machine type",
+			subnet:  "my-subnet",
+			machine: "n2-standard-8",
+			zone:    "us-central1-b",
+			checkFunc: func(t *testing.T, cluster *dataproc.Cluster) {
+				require.Equal(t, "https://www.googleapis.com/compute/v1/projects/proj/regions/us-central1/subnetworks/my-subnet",
+					cluster.Config.GceClusterConfig.SubnetworkUri)
+				require.Equal(t, "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-b/machineTypes/n2-standard-8",
+					cluster.Config.MasterConfig.MachineTypeUri)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clusterName := unique("c-links")
+			zone := tc.zone
+			if zone == "" {
+				zone = "us-central1-a"
+			}
+			cfg := &dataproc.ClusterConfig{
+				GceClusterConfig: &dataproc.GceClusterConfig{ZoneUri: zone, NetworkUri: tc.network, SubnetworkUri: tc.subnet},
+			}
+			if tc.machine != "" {
+				cfg.MasterConfig = &dataproc.InstanceGroupConfig{MachineTypeUri: tc.machine}
+			}
+			op, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
+				ProjectId:   project,
+				ClusterName: clusterName,
+				Config:      cfg,
+			}).Do()
+			require.NoError(t, err)
+			require.True(t, pollOperation(t, svc, op.Name).Done)
+
+			cluster, err := svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
+			require.NoError(t, err)
+			require.NotNil(t, cluster.Config.GceClusterConfig)
+			require.Equal(t, "https://www.googleapis.com/compute/v1/projects/proj/zones/"+zone,
+				cluster.Config.GceClusterConfig.ZoneUri,
+				"a get answers the absolute Compute self-link, never a short zone name")
+			tc.checkFunc(t, cluster)
+
+			del, err := svc.Projects.Regions.Clusters.Delete(project, region, clusterName).Do()
+			require.NoError(t, err)
+			require.True(t, pollOperation(t, svc, del.Name).Done)
+		})
+	}
+}
+
 // pollOperation polls operations.get until the named operation reports done.
 func pollOperation(t *testing.T, svc *dataproc.Service, name string) *dataproc.Operation {
 	t.Helper()

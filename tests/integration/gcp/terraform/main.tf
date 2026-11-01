@@ -227,6 +227,108 @@ resource "google_dataproc_metastore_database_iam_member" "compat" {
   member      = "serviceAccount:${google_service_account.compat.email}"
 }
 
+# ── GKE: the Dataproc-on-GKE prerequisite ─────────────────────────────────────
+# google_container_cluster is the resource DPG37 was about: its read
+# (resourceContainerClusterRead) dereferences legacyAbac.enabled,
+# networkConfig.network, shieldedNodes.enabled and
+# defaultMaxPodsConstraint.maxPodsPerNode unconditionally, so the emulator's
+# cluster read has to render them (as real GKE always does) or the provider
+# SIGSEGVs. A clean apply + a no-diff second plan is the assertion.
+#
+# It is separate from the Dataproc resource below because the emulator routes
+# GKE by host: the provider keeps only the scheme+host of a custom endpoint, so
+# it cannot send the /container path prefix the emulator also accepts, and the
+# bare /v1/.../clusters path belongs to Managed Kafka. run.sh therefore derives
+# container.<host> (container.localhost for the default endpoint) and passes it
+# as container_endpoint.
+resource "google_container_cluster" "gke" {
+  name                = var.gke_cluster
+  location            = var.region
+  initial_node_count  = 1
+  deletion_protection = false
+
+  workload_identity_config {
+    workload_pool = "${var.project}.svc.id.goog"
+  }
+}
+
+# ── Dataproc on GKE (virtual cluster) ─────────────────────────────────────────
+# google_dataproc_cluster with virtual_cluster_config is the provider path the
+# emulator's NodePool reconciler has to satisfy: the create is accepted, the
+# pools it names are materialised in the GKE API, and the read-back carries no
+# nodePoolConfig (it is input-only in the real API).
+#
+# SPARK is pinned to a fully-qualified release on purpose: aliases are
+# dereferenced at cluster creation (real GCP behaviour), so a config carrying
+# "3.5" would show a permanent diff against the stored "3.5-dataproc-28".
+resource "google_dataproc_cluster" "gke" {
+  name   = "jaiscloud-tf-dataproc-gke"
+  region = var.region
+  labels = { env = "compat-test" }
+
+  depends_on = [google_container_cluster.gke]
+
+  virtual_cluster_config {
+    staging_bucket = "jaiscloud-tf-dataproc-staging"
+
+    kubernetes_cluster_config {
+      kubernetes_namespace = "jaiscloud-tf-dataproc"
+
+      gke_cluster_config {
+        gke_cluster_target = "projects/${var.project}/locations/${var.region}/clusters/${var.gke_cluster}"
+
+        node_pool_target {
+          node_pool = "jaiscloud-tf-dataproc-pool"
+          roles     = ["DEFAULT", "CONTROLLER"]
+
+          node_pool_config {
+            config {
+              machine_type    = "n1-standard-4"
+              local_ssd_count = 1
+            }
+
+            autoscaling {
+              min_node_count = 1
+              max_node_count = 3
+            }
+
+            locations = ["${var.region}-a"]
+          }
+        }
+
+        node_pool_target {
+          node_pool = "jaiscloud-tf-dataproc-spark"
+          roles     = ["SPARK_DRIVER", "SPARK_EXECUTOR"]
+        }
+      }
+
+      kubernetes_software_config {
+        component_version = {
+          SPARK = "3.5-dataproc-28"
+        }
+      }
+    }
+  }
+}
+
+# ── Dataproc on Compute Engine (config) ───────────────────────────────────────
+# The plain cluster_config shape is the one that used to panic the provider: its
+# read-back flattens config.software_config without a nil check, so the emulator
+# must report the service defaults a real cluster always carries (image version,
+# instance groups, zone) instead of omitting config.softwareConfig (DPG38). A
+# clean apply + refresh with no diff is the assertion.
+resource "google_dataproc_cluster" "gce" {
+  name   = "jaiscloud-tf-dataproc-gce"
+  region = var.region
+  labels = { env = "compat-test" }
+
+  cluster_config {
+    worker_config {
+      num_instances = 2
+    }
+  }
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -278,4 +380,12 @@ output "enabled_service" {
 
 output "metastore_federation_name" {
   value = google_dataproc_metastore_federation.compat.name
+}
+
+output "dataproc_gke_cluster_name" {
+  value = google_dataproc_cluster.gke.name
+}
+
+output "dataproc_gce_cluster_name" {
+  value = google_dataproc_cluster.gce.name
 }

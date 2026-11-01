@@ -165,7 +165,7 @@ func TestMaterializeDriverOutputOnSuccess(t *testing.T) {
 	p := newProviderWithSink(t, sink)
 	ctx := context.Background()
 
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	require.NoError(t, err)
 	_, err = p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
 		"reference":  map[string]any{"jobId": "j-done"},
@@ -201,7 +201,7 @@ func TestMaterializeDriverOutputOnError(t *testing.T) {
 	p := newProviderWithSink(t, sink)
 	ctx := context.Background()
 
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	require.NoError(t, err)
 
 	// A pysparkJob with no mainPythonFileUri is malformed → stored ERROR.

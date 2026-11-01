@@ -397,12 +397,30 @@ func createMetastoreService(t *testing.T, base string) string {
 	return fmt.Sprintf("projects/%s/locations/%s/services/%s", testProject, testRegion, hmsServiceID)
 }
 
+// ensureGKECluster creates the prerequisite GKE cluster a GKE-backed Dataproc
+// cluster reconciles against: the emulated GKE control plane is real metadata,
+// so gkeClusterTarget must name an existing standard, Workload-Identity-enabled
+// cluster at create. An existing cluster (409) is success.
+func ensureGKECluster(t *testing.T, base, name string) {
+	t.Helper()
+	code, body := api(t, http.MethodPost,
+		base+fmt.Sprintf("/container/v1/projects/%s/locations/%s/clusters", testProject, testRegion),
+		map[string]any{"cluster": map[string]any{
+			"name":                   name,
+			"workloadIdentityConfig": map[string]any{"workloadPool": testProject + ".svc.id.goog"},
+		}})
+	if code >= 300 && code != http.StatusConflict {
+		t.Fatalf("create GKE cluster %s: HTTP %d: %v", name, code, body)
+	}
+}
+
 // createGkeCluster recreates the cluster as a GKE-backed Dataproc-on-GKE
 // cluster (virtualClusterConfig) attached to the Metastore service and polls
 // the async create operation to RUNNING. Both placements run the same
-// client-mode Spark pods; the GKE config is metadata only.
+// client-mode Spark pods; the node pools are reconciled through the GKE API.
 func createGkeCluster(t *testing.T, base, name, msRef string) {
 	t.Helper()
+	ensureGKECluster(t, base, "iceberg-gke")
 	code, body := api(t, http.MethodDelete, base+clusterPath(name), nil)
 	if code == http.StatusOK {
 		if done, _ := body["done"].(bool); !done {

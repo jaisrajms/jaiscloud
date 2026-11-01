@@ -104,6 +104,7 @@ func cloneCluster(c Cluster) Cluster {
 		c.NodePools = pools
 	}
 	c.ResourceLabels = cloneStringMap(c.ResourceLabels)
+	c.NodeConfig = cloneNodeConfig(c.NodeConfig)
 	if c.Locations != nil {
 		c.Locations = append([]string(nil), c.Locations...)
 	}
@@ -126,6 +127,18 @@ func cloneCluster(c Cluster) Cluster {
 	if c.LegacyAbac != nil {
 		v := *c.LegacyAbac
 		c.LegacyAbac = &v
+	}
+	if c.Autopilot != nil {
+		v := *c.Autopilot
+		c.Autopilot = &v
+	}
+	if c.WorkloadIdentityConfig != nil {
+		v := *c.WorkloadIdentityConfig
+		c.WorkloadIdentityConfig = &v
+	}
+	if c.ShieldedNodes != nil {
+		v := *c.ShieldedNodes
+		c.ShieldedNodes = &v
 	}
 	if c.NetworkPolicy != nil {
 		v := *c.NetworkPolicy
@@ -159,19 +172,7 @@ func cloneNodePool(p NodePool) NodePool {
 	if p.Locations != nil {
 		p.Locations = append([]string(nil), p.Locations...)
 	}
-	if p.Config != nil {
-		n := *p.Config
-		if p.Config.OauthScopes != nil {
-			n.OauthScopes = append([]string(nil), p.Config.OauthScopes...)
-		}
-		if p.Config.Tags != nil {
-			n.Tags = append([]string(nil), p.Config.Tags...)
-		}
-		n.Metadata = cloneStringMap(p.Config.Metadata)
-		n.Labels = cloneStringMap(p.Config.Labels)
-		n.ResourceLabels = cloneStringMap(p.Config.ResourceLabels)
-		p.Config = &n
-	}
+	p.Config = cloneNodeConfig(p.Config)
 	if p.Autoscaling != nil {
 		v := *p.Autoscaling
 		p.Autoscaling = &v
@@ -196,6 +197,23 @@ func cloneStringMap(m map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func cloneNodeConfig(c *NodeConfig) *NodeConfig {
+	if c == nil {
+		return nil
+	}
+	n := *c
+	if c.OauthScopes != nil {
+		n.OauthScopes = append([]string(nil), c.OauthScopes...)
+	}
+	if c.Tags != nil {
+		n.Tags = append([]string(nil), c.Tags...)
+	}
+	n.Metadata = cloneStringMap(c.Metadata)
+	n.Labels = cloneStringMap(c.Labels)
+	n.ResourceLabels = cloneStringMap(c.ResourceLabels)
+	return &n
 }
 
 func cloneTimeWindowMap(m map[string]*TimeWindow) map[string]*TimeWindow {

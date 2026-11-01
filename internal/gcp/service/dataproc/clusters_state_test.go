@@ -44,7 +44,7 @@ func TestClusterCreateLazyTransition(t *testing.T) {
 	p := newStateProvider(t, 30*time.Second)
 	ctx := context.Background()
 
-	c, op, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	c, op, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestClusterDeleteLazyTransition(t *testing.T) {
 	p := newStateProvider(t, 30*time.Second)
 	ctx := context.Background()
 
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(31 * time.Second)})
@@ -152,7 +152,7 @@ func TestClusterUpdateStartStopLazyTransitions(t *testing.T) {
 	p := newStateProvider(t, 30*time.Second)
 	ctx := context.Background()
 
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	advance := func(step int) time.Time {
@@ -230,7 +230,7 @@ func TestClusterForcedError(t *testing.T) {
 	p := newStateProvider(t, 30*time.Second, WithClusterErrorHook(func(string, string, string) bool { return true }))
 	ctx := context.Background()
 
-	_, op, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, op, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
@@ -255,10 +255,10 @@ func TestClusterForcedError(t *testing.T) {
 func TestCreateClusterDuplicateAlreadyExists(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	pe, ok := err.(*model.ProviderError)
 	if !ok || pe.HTTPStatus != 409 {
 		t.Fatalf("expected 409 AlreadyExists, got %v", err)

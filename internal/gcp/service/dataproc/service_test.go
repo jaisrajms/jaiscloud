@@ -50,7 +50,7 @@ func TestJobSubstateRunning(t *testing.T) {
 func TestUpdateJob_Labels(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	if _, err := p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
@@ -130,7 +130,7 @@ func TestUpdateCluster_NestedConfigMask(t *testing.T) {
 func TestSubmitJob_PlacementClusterUUID(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
-	c, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	c, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}

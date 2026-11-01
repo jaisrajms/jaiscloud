@@ -261,7 +261,7 @@ func (s *Service) resolveWorkflowCluster(ctx context.Context, project, region st
 			return "", false, err
 		}
 		now := clock.Now().UTC()
-		ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, ClusterInput{})
+		ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, "")
 		c := dpstore.Cluster{
 			ProjectID:      project,
 			Region:         region,

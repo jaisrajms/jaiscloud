@@ -80,8 +80,17 @@ func dataprocScenario() Scenario {
 		return dataproc.NewJobControllerClient(ctx, e.GRPCClientOptions()...)
 	}
 
+	// A create must carry exactly one of config or virtualClusterConfig
+	// ("Exactly one of ClusterConfig or VirtualClusterConfig must be
+	// specified"), so the parity fixture sends the Compute-Engine shape.
 	clusterProto := func(name string, labels map[string]string) *dataprocpb.Cluster {
-		return &dataprocpb.Cluster{ClusterName: name, Labels: labels}
+		return &dataprocpb.Cluster{
+			ClusterName: name,
+			Config: &dataprocpb.ClusterConfig{
+				GceClusterConfig: &dataprocpb.GceClusterConfig{ZoneUri: "us-central1-a"},
+			},
+			Labels: labels,
+		}
 	}
 	jobProto := func(name, cluster string, labels map[string]string) *dataprocpb.Job {
 		return &dataprocpb.Job{
@@ -99,7 +108,8 @@ func dataprocScenario() Scenario {
 			`},"pysparkJob":{"mainPythonFileUri":"gs://bucket/main.py"}}}`
 	}
 	clusterBody := func(e *Env, labels string) string {
-		return `{"clusterName":"` + clusterName(e) + `","labels":{` + labels + `}}`
+		return `{"clusterName":"` + clusterName(e) +
+			`","config":{"gceClusterConfig":{"zoneUri":"us-central1-a"}},"labels":{` + labels + `}}`
 	}
 
 	// restOperationSettle drives a REST long-running operation to completion.

@@ -220,9 +220,9 @@ func TestJobStateEvents_ClusterLabelOverride(t *testing.T) {
 		WithEventsTopic("projects/proj/topics/default"))
 
 	ctx := context.Background()
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{
-		Labels: map[string]string{"jaiscloud-events-topic": "projects/proj/topics/override"},
-	})
+	in := gceInput()
+	in.Labels = map[string]string{"jaiscloud-events-topic": "projects/proj/topics/override"}
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", in)
 	require.NoError(t, err)
 
 	submitJobOn(t, p, "c1", "j1")
@@ -290,7 +290,7 @@ func TestClusterStateEvents(t *testing.T) {
 		WithEventsTopic("projects/proj/topics/events"))
 	ctx := context.Background()
 
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	require.NoError(t, err)
 
 	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(31 * time.Second)})
@@ -356,7 +356,7 @@ func TestClusterStateEvents_NoEmitOnFailedWrite(t *testing.T) {
 		WithClusterReadyDelay(0), WithEventPublisher(pub), WithEventsTopic("t"))
 	ctx := context.Background()
 
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	require.NoError(t, err)
 
 	_, err = p.GetCluster(ctx, "proj", "us-central1", "c1")

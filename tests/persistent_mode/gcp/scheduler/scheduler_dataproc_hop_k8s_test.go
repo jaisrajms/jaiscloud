@@ -436,9 +436,27 @@ func gkeVirtualBody(name string) map[string]any {
 	}
 }
 
+// ensureGKECluster creates the prerequisite GKE cluster a GKE-backed Dataproc
+// cluster reconciles against: Dataproc on GKE resolves gkeClusterTarget through
+// the emulated GKE control plane, so the target must exist. An existing cluster
+// (409) is success.
+func ensureGKECluster(t *testing.T, base string) {
+	t.Helper()
+	code, body, _ := api(t, http.MethodPost,
+		base+"/container/v1/projects/"+testProject+"/locations/"+testRegion+"/clusters",
+		map[string]any{"cluster": map[string]any{
+			"name":                   "gke-target",
+			"workloadIdentityConfig": map[string]any{"workloadPool": testProject + ".svc.id.goog"},
+		}})
+	if code != http.StatusOK && code != http.StatusConflict {
+		t.Fatalf("create GKE cluster: HTTP %d: %v", code, body)
+	}
+}
+
 // createCluster submits a cluster create and waits until it reports RUNNING.
 func createCluster(t *testing.T, base, name string) {
 	t.Helper()
+	ensureGKECluster(t, base)
 	code, prior, _ := api(t, http.MethodDelete, base+clusterPath(name), nil)
 	if code == http.StatusOK {
 		pollOperation(t, base, prior)

@@ -22,6 +22,121 @@ func pbCluster(name string) *containerpb.Cluster {
 	return &containerpb.Cluster{Name: name, InitialNodeCount: 1}
 }
 
+// TestCreateClusterRejectsDefaultPoolFieldsWithNodePools proves the gRPC path
+// enforces the same conflict the REST path does: Discovery's nodePools "should
+// not be set if node_config or initial_node_count are specified".
+func TestCreateClusterRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	cases := []struct {
+		name    string
+		cluster *containerpb.Cluster
+		want    string
+	}{
+		{
+			name:    "initialNodeCount",
+			cluster: &containerpb.Cluster{Name: "c1", InitialNodeCount: 1, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.",
+		},
+		{
+			name:    "nodeConfig",
+			cluster: &containerpb.Cluster{Name: "c1", NodeConfig: &containerpb.NodeConfig{MachineType: "e2-micro"}, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: tc.cluster})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+			}
+			if msg := status.Convert(err).Message(); msg != tc.want {
+				t.Fatalf("message = %q, want %q", msg, tc.want)
+			}
+			if _, err := svc.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/c1"}); status.Code(err) != codes.NotFound {
+				t.Fatalf("rejected create persisted a cluster: %v", err)
+			}
+		})
+	}
+}
+
+// TestCreateClusterInlineNodePools proves the gRPC create materializes the
+// caller's node_pools the way REST does, instead of substituting a default-pool.
+func TestCreateClusterInlineNodePools(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	cluster := &containerpb.Cluster{
+		Name: "c1",
+		NodePools: []*containerpb.NodePool{
+			{Name: "pool-a", InitialNodeCount: 2, Config: &containerpb.NodeConfig{MachineType: "e2-medium"}},
+			{Name: "pool-b", InitialNodeCount: 1},
+		},
+	}
+	if _, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: cluster}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := svc.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/c1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	pools := c.GetNodePools()
+	if len(pools) != 2 || pools[0].GetName() != "pool-a" || pools[1].GetName() != "pool-b" {
+		t.Fatalf("nodePools = %v", pools)
+	}
+	if pools[0].GetStatus() != containerpb.NodePool_RUNNING {
+		t.Fatalf("pool-a status = %v, want RUNNING", pools[0].GetStatus())
+	}
+	if pools[0].GetVersion() != c.GetCurrentMasterVersion() {
+		t.Fatalf("pool-a version = %q, want %q", pools[0].GetVersion(), c.GetCurrentMasterVersion())
+	}
+	if pools[0].GetConfig().GetMachineType() != "e2-medium" {
+		t.Fatalf("pool-a machineType = %q", pools[0].GetConfig().GetMachineType())
+	}
+}
+
+// TestCreateClusterAppliesNodeConfigToDefaultPool proves the gRPC path applies
+// a legacy cluster-level node_config to the generated default-pool and echoes it
+// on read, matching REST (Discovery: on read the field holds the first pool's
+// node configuration).
+func TestCreateClusterAppliesNodeConfigToDefaultPool(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	cluster := &containerpb.Cluster{
+		Name:             "c1",
+		InitialNodeCount: 2,
+		NodeConfig:       &containerpb.NodeConfig{MachineType: "e2-micro", DiskSizeGb: 50},
+	}
+	if _, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: cluster}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := svc.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/c1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if c.GetNodeConfig().GetMachineType() != "e2-micro" || c.GetNodeConfig().GetDiskSizeGb() != 50 {
+		t.Fatalf("cluster nodeConfig = %v", c.GetNodeConfig())
+	}
+	pools := c.GetNodePools()
+	if len(pools) != 1 || pools[0].GetName() != core.DefaultNodePoolName {
+		t.Fatalf("nodePools = %v", pools)
+	}
+	if pools[0].GetSelfLink() != parent+"/clusters/c1/nodePools/"+core.DefaultNodePoolName {
+		t.Fatalf("default-pool selfLink = %q", pools[0].GetSelfLink())
+	}
+	if pools[0].GetVersion() != core.DefaultMasterVersion {
+		t.Fatalf("default-pool version = %q", pools[0].GetVersion())
+	}
+	if pools[0].GetConfig().GetMachineType() != "e2-micro" || pools[0].GetConfig().GetDiskSizeGb() != 50 {
+		t.Fatalf("default-pool config = %v", pools[0].GetConfig())
+	}
+}
+
 // TestCanonicalCRUD exercises the canonical name/parent form the newer clients
 // and the Java suite use.
 func TestCanonicalCRUD(t *testing.T) {
@@ -231,4 +346,33 @@ func TestCreateClusterNoName(t *testing.T) {
 		t.Fatalf("GetCluster after canonical name create: %v", err)
 	}
 	_ = op
+}
+
+// TestInvalidNameMessagesMatchREST pins the messages the gRPC surface answers
+// for a malformed canonical cluster or node-pool name. Both codecs now parse
+// with the core's parsers, so the message — including the offending value — is
+// identical to the REST surface; provider_test.go pins the same strings.
+func TestInvalidNameMessagesMatchREST(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	const badCluster = "projects/p/locations/us-central1/clusters/bad-name/extra"
+	_, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: pbCluster(badCluster)})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "invalid cluster name: "+badCluster {
+		t.Fatalf("create error = %v (%q)", err, status.Convert(err).Message())
+	}
+
+	if _, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: pbCluster("c1")}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	const badPool = "projects/p/locations/us-central1/clusters/c1/nodePools/bad/extra"
+	_, err = svc.CreateNodePool(ctx, &containerpb.CreateNodePoolRequest{
+		Parent:   parent + "/clusters/c1",
+		NodePool: &containerpb.NodePool{Name: badPool, InitialNodeCount: 1},
+	})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "invalid node pool name: "+badPool {
+		t.Fatalf("create node pool error = %v (%q)", err, status.Convert(err).Message())
+	}
 }

@@ -59,6 +59,14 @@ func dpService(t *testing.T) *dataproc.Service {
 	return svc
 }
 
+// gceConfig is the minimal Compute-Engine placement a create needs: exactly one
+// of config or virtualClusterConfig is required.
+func gceConfig() *dataproc.ClusterConfig {
+	return &dataproc.ClusterConfig{
+		GceClusterConfig: &dataproc.GceClusterConfig{ZoneUri: "us-central1-a"},
+	}
+}
+
 // newCluster creates a cluster and waits for its create LRO to complete (which
 // settles the cluster to RUNNING).
 func newCluster(t *testing.T, svc *dataproc.Service) string {
@@ -327,14 +335,23 @@ func TestSDKDataprocErrors(t *testing.T) {
 		}).Do()
 		requireCode(t, err, 400, "both config and virtualClusterConfig")
 
+		// a create carrying neither placement is 400 too ("Exactly one of
+		// ClusterConfig or VirtualClusterConfig must be specified"), and it
+		// persists nothing: the same name is free afterwards.
+		neither := unique("neither")
+		_, err = svc.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+			ProjectId: dpProject, ClusterName: neither,
+		}).Do()
+		requireCode(t, err, 400, "neither config nor virtualClusterConfig")
+
 		// a duplicate cluster name is 409.
 		name := unique("dupc")
 		_, err = svc.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
-			ProjectId: dpProject, ClusterName: name,
+			ProjectId: dpProject, ClusterName: name, Config: gceConfig(),
 		}).Do()
 		require.NoError(t, err)
 		_, err = svc.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
-			ProjectId: dpProject, ClusterName: name,
+			ProjectId: dpProject, ClusterName: name, Config: gceConfig(),
 		}).Do()
 		requireCode(t, err, 409, "duplicate cluster name")
 	})
@@ -522,7 +539,7 @@ func TestSDKDataprocListingPaging(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			name := fmt.Sprintf("%s-%02d", unique("lc"), i)
 			_, err := svc.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
-				ProjectId: dpProject, ClusterName: name,
+				ProjectId: dpProject, ClusterName: name, Config: gceConfig(),
 				Labels: map[string]string{"group": cgroup},
 			}).Do()
 			require.NoError(t, err)

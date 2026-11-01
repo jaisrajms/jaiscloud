@@ -75,7 +75,7 @@ func TestSubmitJobAsOperation_K8sDoneFalseThenCompletes(t *testing.T) {
 	t.Cleanup(func() { p.Shutdown(context.Background()) })
 
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("create cluster: %v", err)
 	}
 

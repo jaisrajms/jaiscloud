@@ -27,6 +27,23 @@ import (
 // caller supplies no initialClusterVersion. It mirrors the emulator's mock.
 const DefaultMasterVersion = "1.30.5-gke.1014001"
 
+// DefaultNodePoolName is the name GKE gives the node pool it generates from a
+// create's cluster-level initialNodeCount/nodeConfig (Discovery on
+// Cluster.nodeConfig: "this configuration (along with the initial_node_count)
+// will be used to create a NodePool object with an auto-generated name").
+const DefaultNodePoolName = "default-pool"
+
+// The cluster-create conflict messages are verbatim real GKE 400s, captured
+// against a live project (see docs/gcp/gke-create-pool-conflict.md).
+const (
+	nodeConfigPoolConflict       = "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool."
+	initialNodeCountPoolConflict = "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool."
+	// negativeInitialNodeCount is the verbatim real GKE 400 for a negative
+	// cluster-level initialNodeCount on a request that carries no nodePools
+	// (docs/gcp/gke-create-pool-conflict.md).
+	negativeInitialNodeCount = "Cluster.initial_node_count must be zero or higher."
+)
+
 // validClusterName is GKE's cluster-id grammar.
 var validClusterName = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
 
@@ -64,6 +81,28 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	if !validClusterName.MatchString(c.Name) {
 		return containerstore.Operation{}, invalidArgument("invalid cluster name: " + c.Name)
 	}
+	// Real GKE rejects a negative cluster-level initialNodeCount only when the
+	// request carries no nodePools; with pools the value is ignored (captured in
+	// docs/gcp/gke-create-pool-conflict.md, DPG49).
+	if len(c.NodePools) == 0 && c.InitialNodeCount < 0 {
+		return containerstore.Operation{}, invalidArgument(negativeInitialNodeCount)
+	}
+	// Discovery on Cluster.nodePools: "This field should not be set if
+	// node_config or initial_node_count are specified", and on nodeConfig /
+	// initialNodeCount: "Do not use this and a node_pool at the same time". Real
+	// GKE answers such a create with a 400 naming the conflicting field (the
+	// node_config message wins when both are set); the emulator accepted it and
+	// ignored the default-pool fields.
+	if len(c.NodePools) > 0 {
+		if c.NodeConfig != nil {
+			return containerstore.Operation{}, invalidArgument(nodeConfigPoolConflict)
+		}
+		// A zero initialNodeCount means "no default node pool", which real GKE
+		// accepts alongside nodePools, so only a positive count conflicts.
+		if c.InitialNodeCount > 0 {
+			return containerstore.Operation{}, invalidArgument(initialNodeCountPoolConflict)
+		}
+	}
 
 	now := clock.Now()
 	c.Location = location
@@ -78,12 +117,34 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	if c.Subnetwork == "" {
 		c.Subnetwork = "default"
 	}
+	// The response messages real GKE always renders are persisted at create so
+	// a snapshot round-trip carries them; NormalizeCluster is the one owner of
+	// those literals, and WithReadDefaults applies the same function to records
+	// written before they were modelled.
+	c = NormalizeCluster(c)
+	// Workload Identity is required by Dataproc-on-GKE; an empty pool means the
+	// project default, exactly as GKE fills it.
+	if c.WorkloadIdentityConfig != nil && c.WorkloadIdentityConfig.WorkloadPool == "" {
+		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{WorkloadPool: project + ".svc.id.goog"}
+	}
 	if len(c.NodePools) == 0 {
+		// Discovery on Cluster.nodeConfig: "For requests, this field should only
+		// be used in lieu of a node_pool object, since this configuration (along
+		// with the initial_node_count) will be used to create a NodePool object
+		// with an auto-generated name" — so the generated default-pool carries
+		// the caller's nodeConfig, and the shared materialization gives it the
+		// same selfLink/version/node count a caller-supplied pool gets.
 		c.NodePools = []containerstore.NodePool{{
-			Name:             "default-pool",
-			Status:           containerstore.StatusRunning,
+			Name:             DefaultNodePoolName,
 			InitialNodeCount: c.InitialNodeCount,
+			Config:           c.NodeConfig,
 		}}
+	}
+	if err := materializeNodePools(project, location, &c); err != nil {
+		// A create request may carry its pools inline (Discovery: Cluster.nodePools);
+		// real GKE materializes them in the same call, so they are stored as
+		// provisioned pools rather than replaced by a default-pool.
+		return containerstore.Operation{}, err
 	}
 	c.CaCertificate = ""
 	c.CreateTime = now
@@ -110,20 +171,25 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	return op, nil
 }
 
-// GetCluster returns a cluster by short name.
+// GetCluster returns a cluster by short name, with the response messages real
+// GKE always renders filled in.
 func (s *Service) GetCluster(ctx context.Context, project, location, name string) (containerstore.Cluster, error) {
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
 		return containerstore.Cluster{}, mapStoreErr(err)
 	}
-	return c, nil
+	return WithReadDefaults(c), nil
 }
 
-// ListClusters lists clusters under a location, sorted by short name.
+// ListClusters lists clusters under a location, sorted by short name, with the
+// response messages real GKE always renders filled in.
 func (s *Service) ListClusters(ctx context.Context, project, location string) ([]containerstore.Cluster, error) {
 	clusters, err := s.store.ListClusters(ctx, project, location)
 	if err != nil {
 		return nil, mapStoreErr(err)
+	}
+	for i := range clusters {
+		clusters[i] = WithReadDefaults(clusters[i])
 	}
 	return clusters, nil
 }

@@ -172,9 +172,10 @@ func TourScenarios(project, suffix string) []Scenario {
 	// operations.get until done; a clusters.get then reads the settled cluster
 	// back. Mirrors tests/integration/gcp/sdk-dataproc (create -> operation poll
 	// -> get). The machine type and disks are pinned (pd-standard, 100 GiB) to
-	// stay inside the parity project's Dataproc disk quota and to let the
-	// emulator echo them verbatim; the zone is given as a full resource URL so
-	// real GCP's canonicalized zoneUri matches.
+	// stay inside the parity project's Dataproc disk quota, and every Compute
+	// link is sent in full self-link form so the golden's request and real GCP's
+	// canonical response agree byte for byte (both real GCP and the emulator
+	// canonicalise a short name to the same link — DPG40).
 	dpBase := "/v1/projects/" + project + "/regions/us-central1"
 	dpMachine := "https://www.googleapis.com/compute/v1/projects/" + project +
 		"/zones/us-central1-a/machineTypes/n1-standard-4"

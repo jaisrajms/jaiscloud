@@ -18,7 +18,7 @@ func TestListAllClusters_AcrossRegionsSorted(t *testing.T) {
 		{"proj", "europe-west1", "a"},
 		{"other", "us-central1", "c"},
 	} {
-		if _, _, err := p.CreateCluster(ctx, c.project, c.region, c.name, ClusterInput{}); err != nil {
+		if _, _, err := p.CreateCluster(ctx, c.project, c.region, c.name, gceInput()); err != nil {
 			t.Fatalf("CreateCluster %s/%s/%s: %v", c.project, c.region, c.name, err)
 		}
 	}
@@ -48,7 +48,7 @@ func TestListAllClusters_SettlesTransitional(t *testing.T) {
 	p := newStateProvider(t, 30*time.Second)
 	ctx := context.Background()
 
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	clusters, err := p.ListAllClusters(ctx, "proj")

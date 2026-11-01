@@ -6,18 +6,21 @@
 PYTHON ?= python3
 
 # Plan families in priority order for `make gcp-status-next` (comma-separated);
-# other families sort after these, alphabetically. ga-fidelity (the GA-fidelity
-# wave plan: closing the tractable fidelity-matrix gaps) is the current priority,
-# then functions-docker-executor (FDF1/FDF2: the GCP Functions docker-executor
-# consistency fixes), then console-ui (the GCP console UI effort), then
+# other families sort after these, alphabetically. dataproc-gke (the
+# Dataproc-on-GKE completion work: W5.2/W5.3 plus DPG35) is the current priority
+# and runs ahead of everything else, then ga-fidelity (the GA-fidelity wave plan:
+# closing the tractable fidelity-matrix gaps), then functions-docker-executor
+# (FDF1/FDF2: the GCP Functions docker-executor consistency fixes), then the GCP
+# console UI effort — both families: console-ui (the UI wave plan) and
+# console-project-discovery (UI80–UI83, the only UI rows still open) — then
 # ledger-integrity (it repairs merge-link accuracy so the planned list can be
-# trusted), then dataproc-gke (the Dataproc-on-GKE completion work), then the
-# Java-compat effort owns waves W1–W3. The AWS-parity families run next; the
-# BigQuery engine decision (bigquery-ga) is deliberately deprioritized behind them.
-# The audit family (gcp-audit-wave-plan.md: evidence coverage, cross-transport
-# parity, convention invariants) runs after the service families and immediately
-# before demo-spikes, so the emulator is verified before the demo is de-risked.
-SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,test-coverage,test-depth,demo-spikes
+# trusted), then the Java-compat effort owns waves W1–W3. The AWS-parity families
+# run next; the BigQuery engine decision (bigquery-ga) is deliberately
+# deprioritized behind them. The audit family (gcp-audit-wave-plan.md: evidence
+# coverage, cross-transport parity, convention invariants) runs after the service
+# families and immediately before demo-spikes, so the emulator is verified before
+# the demo is de-risked.
+SERIES ?= dataproc-gke,ga-fidelity,functions-docker-executor,console-ui,console-project-discovery,ledger-integrity,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,test-coverage,test-depth,demo-spikes
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
@@ -198,7 +201,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
+        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -1161,7 +1164,7 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
 
-gcp-session-start: ## Guard the checkout, fast-forward the gcp base from upstream, rebuild the ledger (used by /gcp:new)
+gcp-session-start: ## Guard the checkout, fast-forward the session base from upstream (create it if new), rebuild the ledger (used by /gcp/new; GCP_SESSION_BASE=<branch> for a series)
 	@bash tools/gcp-session-start.sh
 	@$(MAKE) --no-print-directory gcp-status
 
@@ -1232,6 +1235,48 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 	  $(MAKE) --no-print-directory gcp-status gcp-status-lint-plans gcp-status-coverage; \
 	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/main; fi; \
 	fi
+
+# Pre-push mirror of the gates the `test-gcp-unit` and `test-gcp-conformance` CI
+# jobs run offline (no Docker, no booted emulator; the client/conformance jobs
+# are `ga-check`). Run it before `git push` on a GCP session — a stale
+# `docs/fidelity` (any change to a conformance check or an operation's evidence)
+# is the most common red-CI cause and `check-gcp-fidelity-matrix` catches it
+# locally, after regenerating the matrix to be committed.
+gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
+	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
+	$(MAKE) --no-print-directory test-gcp-coverage
+	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
+	$(MAKE) --no-print-directory check-gcp-fidelity-matrix
+
+# Block until a PR's checks settle; on a red check, print the failing jobs and
+# their `--log-failed` tail (minus the runner's cache-restore tar noise) so the
+# next fix is obvious. A session is not finished while this exits non-zero.
+gcp-ci-wait: ## Wait for PR=<n>'s checks; on failure print the failing logs and exit 1
+	@test -n "$(PR)" || { echo 'usage: make gcp-ci-wait PR=<number>  (repo: GCP_REPO=<owner>/<repo>)'; exit 2; }
+	@set -e; repo="$${GCP_REPO:-jaisrajms/jaiscloud}"; \
+	echo "gcp-ci-wait: waiting for checks on PR $(PR) (new PRs report none for ~30s)"; \
+	for i in $$(seq 1 20); do \
+	  n=$$(gh pr checks "$(PR)" --repo "$$repo" --json name --jq 'length' 2>/dev/null || echo 0); \
+	  [ "$${n:-0}" -gt 0 ] && break; \
+	  [ "$$i" -eq 20 ] && { echo "gcp-ci-wait: no checks reported on PR $(PR)"; exit 1; }; \
+	  sleep 15; \
+	done; \
+	if gh pr checks "$(PR)" --repo "$$repo" --watch --fail-fast --interval 20; then \
+	  echo "gcp-ci-wait: all checks passed on PR $(PR)"; exit 0; \
+	fi; \
+	echo; echo "gcp-ci-wait: failing checks on PR $(PR):"; \
+	gh pr checks "$(PR)" --repo "$$repo" --json name,state,link \
+	  --jq '.[] | select(.state=="FAILURE" or .state=="CANCELLED" or .state=="TIMED_OUT") | "  \(.name)  \(.link)"'; \
+	for run in $$(gh pr checks "$(PR)" --repo "$$repo" --json link \
+	    --jq '.[] | select(.state=="FAILURE") | .link' | grep -oE '/runs/[0-9]+' | cut -d/ -f3 | sort -u); do \
+	  echo; echo "--- run $$run (failing steps) ---"; \
+	  gh run view "$$run" --repo "$$repo" --log-failed 2>/dev/null \
+	    | grep -vE 'Cannot open: File exists|^##\[group\]|^##\[endgroup\]' | tail -40 || true; \
+	done; \
+	echo; echo "gcp-ci-wait: fix the failures, push, and run this again"; \
+	exit 1
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/gcp/wire-contract.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;

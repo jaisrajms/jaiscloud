@@ -49,6 +49,10 @@ data:
     # Run-unique Dataproc Metastore service the cluster attaches through its
     # virtualClusterConfig.auxiliaryServicesConfig (validated same-region).
     HMS = os.environ.get("HMS_SERVICE", "lakehouse-hms")
+    # The GKE cluster the Dataproc-on-GKE virtual cluster targets. Dataproc
+    # resolves it through the emulated GKE control plane at create, so the
+    # cluster must exist (standard, Workload Identity enabled).
+    GKE_TARGET = os.environ.get("GKE_TARGET", "lakehouse-gke")
     JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "600"))
     # Unique per run so a re-run never collides with an existing Dataproc job
     # id in the emulator's store (SubmitJob rejects a duplicate jobId with 409).
@@ -190,12 +194,33 @@ data:
         if body.get("name"):
             poll_operation(body["name"], f"delete cluster {CLUSTER}")
 
+    def ensure_gke_cluster():
+        """Ensure the GKE cluster the virtual cluster targets exists: the
+        emulator's GKE control plane is real metadata, so Dataproc on GKE
+        resolves gkeClusterTarget at create and requires a standard,
+        Workload-Identity-enabled cluster. 409 is idempotent."""
+        status, body = _req(
+            "POST",
+            f"/container/v1/projects/{PROJECT}/locations/{REGION}/clusters",
+            {
+                "cluster": {
+                    "name": GKE_TARGET,
+                    "workloadIdentityConfig": {
+                        "workloadPool": f"{PROJECT}.svc.id.goog"
+                    },
+                }
+            },
+        )
+        if status >= 300 and status != 409:
+            raise RuntimeError(f"create GKE cluster {GKE_TARGET}: HTTP {status} {body}")
+
     def ensure_cluster():
         """Recreate the cluster as a GKE-backed Dataproc-on-GKE cluster
         (virtualClusterConfig) attached to a Metastore service, and poll the
         asynchronous create operation to RUNNING. Both placements run the same
-        client-mode Spark pods; the GKE config is metadata only."""
+        client-mode Spark pods; node pools are reconciled through the GKE API."""
         ms_ref = create_metastore_service()
+        ensure_gke_cluster()
         delete_cluster()
         status, body = _req(
             "POST",
@@ -205,7 +230,7 @@ data:
                 "virtualClusterConfig": {
                     "kubernetesClusterConfig": {
                         "gkeClusterConfig": {
-                            "gkeClusterTarget": f"projects/{PROJECT}/locations/{REGION}/clusters/lakehouse-gke"
+                            "gkeClusterTarget": f"projects/{PROJECT}/locations/{REGION}/clusters/{GKE_TARGET}"
                         }
                     },
                     "auxiliaryServicesConfig": {

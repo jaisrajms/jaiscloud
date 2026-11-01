@@ -38,8 +38,12 @@ func timestampToString(ts *timestamppb.Timestamp) string {
 
 // clusterToProto renders a stored cluster as the proto Cluster. Name is the
 // short cluster id, matching the REST wire shape (the core stores the short
-// name; the canonical path is derived by the caller).
+// name; the canonical path is derived by the caller). The response messages real
+// GKE always returns (networkConfig, shieldedNodes, defaultMaxPodsConstraint)
+// are filled from the core's read defaults so the two transports cannot differ.
 func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
+	c = core.WithReadDefaults(c)
+	network, subnetwork := core.NetworkConfigPaths(c)
 	out := &containerpb.Cluster{
 		Name:                  c.Name,
 		Location:              c.Location,
@@ -57,12 +61,32 @@ func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
 		LoggingService:        c.LoggingService,
 		MonitoringService:     c.MonitoringService,
 		MasterAuth:            &containerpb.MasterAuth{Username: c.AdminUsername, ClusterCaCertificate: c.CaCertificate},
+		NetworkConfig: &containerpb.NetworkConfig{
+			Network:    network,
+			Subnetwork: subnetwork,
+		},
+		ShieldedNodes: &containerpb.ShieldedNodes{Enabled: c.ShieldedNodes != nil && c.ShieldedNodes.Enabled},
+		DefaultMaxPodsConstraint: &containerpb.MaxPodsConstraint{
+			MaxPodsPerNode: c.MaxPodsPerNode,
+		},
 	}
 	if c.AddonsConfig != nil {
 		out.AddonsConfig = addonsConfigToProto(c.AddonsConfig)
 	}
 	if c.LegacyAbac != nil {
 		out.LegacyAbac = &containerpb.LegacyAbac{Enabled: c.LegacyAbac.Enabled}
+	}
+	if c.Autopilot != nil {
+		out.Autopilot = &containerpb.Autopilot{Enabled: c.Autopilot.Enabled}
+	}
+	// Discovery: on read Cluster.nodeConfig is "populated with the node
+	// configuration of the first node pool" (core.WithReadDefaults derives it),
+	// matching the REST wire shape.
+	if c.NodeConfig != nil {
+		out.NodeConfig = nodeConfigToProto(c.NodeConfig)
+	}
+	if c.WorkloadIdentityConfig != nil {
+		out.WorkloadIdentityConfig = &containerpb.WorkloadIdentityConfig{WorkloadPool: c.WorkloadIdentityConfig.WorkloadPool}
 	}
 	if c.NetworkPolicy != nil {
 		out.NetworkPolicy = &containerpb.NetworkPolicy{
@@ -239,6 +263,32 @@ func nodePoolToProto(p containerstore.NodePool) *containerpb.NodePool {
 	return out
 }
 
+// nodeConfigFromProto builds the core's NodeConfig subset from a request
+// NodeConfig (nil in, nil out). The cluster-level nodeConfig is decoded so a
+// create that combines it with nodePools is rejected, and so a create that sends
+// it alone materializes the generated default-pool from it.
+func nodeConfigFromProto(c *containerpb.NodeConfig) *containerstore.NodeConfig {
+	if c == nil {
+		return nil
+	}
+	return &containerstore.NodeConfig{
+		MachineType:    c.GetMachineType(),
+		DiskSizeGb:     c.GetDiskSizeGb(),
+		DiskType:       c.GetDiskType(),
+		ImageType:      c.GetImageType(),
+		OauthScopes:    c.GetOauthScopes(),
+		ServiceAccount: c.GetServiceAccount(),
+		Metadata:       c.GetMetadata(),
+		Labels:         c.GetLabels(),
+		ResourceLabels: c.GetResourceLabels(),
+		Tags:           c.GetTags(),
+		MinCpuPlatform: c.GetMinCpuPlatform(),
+		LocalSsdCount:  c.GetLocalSsdCount(),
+		Preemptible:    c.GetPreemptible(),
+		Spot:           c.GetSpot(),
+	}
+}
+
 // nodePoolAutoscalingFromProto builds the core's autoscaling subset.
 func nodePoolAutoscalingFromProto(a *containerpb.NodePoolAutoscaling) *containerstore.NodePoolAutoscaling {
 	return &containerstore.NodePoolAutoscaling{
@@ -289,23 +339,8 @@ func nodePoolFromProto(pb *containerpb.NodePool) containerstore.NodePool {
 			p.Name = id
 		}
 	}
-	if c := pb.GetConfig(); c != nil {
-		p.Config = &containerstore.NodeConfig{
-			MachineType:    c.GetMachineType(),
-			DiskSizeGb:     c.GetDiskSizeGb(),
-			DiskType:       c.GetDiskType(),
-			ImageType:      c.GetImageType(),
-			OauthScopes:    c.GetOauthScopes(),
-			ServiceAccount: c.GetServiceAccount(),
-			Metadata:       c.GetMetadata(),
-			Labels:         c.GetLabels(),
-			ResourceLabels: c.GetResourceLabels(),
-			Tags:           c.GetTags(),
-			MinCpuPlatform: c.GetMinCpuPlatform(),
-			LocalSsdCount:  c.GetLocalSsdCount(),
-			Preemptible:    c.GetPreemptible(),
-			Spot:           c.GetSpot(),
-		}
+	if c := nodeConfigFromProto(pb.GetConfig()); c != nil {
+		p.Config = c
 	}
 	if a := pb.GetAutoscaling(); a != nil {
 		p.Autoscaling = nodePoolAutoscalingFromProto(a)
@@ -367,6 +402,24 @@ func clusterFromProto(pb *containerpb.Cluster) containerstore.Cluster {
 		if _, _, id, ok := core.ParseClusterName(c.Name); ok {
 			c.Name = id
 		}
+	}
+	if pb.GetShieldedNodes() != nil {
+		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: pb.GetShieldedNodes().GetEnabled()}
+	}
+	if n := pb.GetDefaultMaxPodsConstraint().GetMaxPodsPerNode(); n > 0 {
+		c.MaxPodsPerNode = n
+	}
+	c.NodeConfig = nodeConfigFromProto(pb.GetNodeConfig())
+	if pb.GetAutopilot() != nil {
+		c.Autopilot = &containerstore.Autopilot{Enabled: pb.GetAutopilot().GetEnabled()}
+	}
+	if pb.GetWorkloadIdentityConfig() != nil {
+		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{
+			WorkloadPool: pb.GetWorkloadIdentityConfig().GetWorkloadPool(),
+		}
+	}
+	for _, p := range pb.GetNodePools() {
+		c.NodePools = append(c.NodePools, nodePoolFromProto(p))
 	}
 	return c
 }

@@ -35,6 +35,18 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "gke_cluster" {
+  type        = string
+  description = "Name of the GKE cluster the fixture creates as the Dataproc-on-GKE prerequisite."
+  default     = "jaiscloud-tf-gke"
+}
+
+variable "container_endpoint" {
+  type        = string
+  description = "Endpoint for container.googleapis.com with a container.-prefixed host (the emulator routes GKE by host; see provider.tf)."
+  default     = "http://container.localhost:8080/container/"
+}
+
 provider "google" {
   project = var.project
   region  = var.region
@@ -59,4 +71,17 @@ provider "google" {
   # federation resource (google_dataproc_metastore_federation) and the
   # database IAM member go through the same v1 custom endpoint.
   dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
+
+  # Dataproc (clusters incl. the Dataproc-on-GKE virtual cluster). The provider
+  # keeps only the scheme+host of a custom endpoint, so the plain v1 root is
+  # right for dataproc: it carries no path-prefix requirement.
+  dataproc_custom_endpoint = "${var.endpoint}/"
+
+  # GKE. The emulator serves container.v1 either under a "/container/" path
+  # prefix or under a host whose first DNS label is "container" (real
+  # container.googleapis.com), because the bare /v1/.../clusters path collides
+  # with Managed Kafka. The provider keeps only scheme+host here too, so the
+  # container.* host that run.sh derives is the only way to reach GKE through
+  # it.
+  container_custom_endpoint = var.container_endpoint
 }

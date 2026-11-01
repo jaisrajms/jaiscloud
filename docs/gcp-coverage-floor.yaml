@@ -15,6 +15,8 @@
 packages:
   - package: internal/gcp/adapter
     min_percent: 79.09
+  - package: internal/gcp/adapter/dataprocgke
+    min_percent: 85.48
   - package: internal/gcp/aip160
     min_percent: 96.18
   - package: internal/gcp/auth

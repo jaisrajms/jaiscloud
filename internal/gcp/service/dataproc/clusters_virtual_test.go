@@ -3,6 +3,7 @@ package dataproc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"jaiscloud/internal/model"
@@ -12,6 +13,13 @@ import (
 // every sub-object this session parses (kubernetesClusterConfig with a GKE
 // target, node pools and software config, plus an auxiliary metastore).
 const gkeVirtualClusterConfig = `{"stagingBucket":"dataproc-staging-proj","kubernetesClusterConfig":{"kubernetesNamespace":"dataproc","gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-1","nodePoolTarget":[{"nodePool":"projects/proj/locations/us-central1/clusters/gke-1/nodePools/default","roles":["DEFAULT"]}]},"kubernetesSoftwareConfig":{"componentVersion":{"SPARK":"3.5"}}},"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"projects/proj/locations/us-central1/services/hms"}}}`
+
+// gceInput builds a minimal Compute-Engine ClusterInput. A create must carry
+// exactly one of config or virtualClusterConfig, so a test that is not about
+// the placement sends the GCE shape rather than an empty request.
+func gceInput() ClusterInput {
+	return ClusterInput{Config: []byte(`{"gceClusterConfig":{"zoneUri":"us-central1-a"}}`)}
+}
 
 // gkeInput builds a ClusterInput from a GKE virtualClusterConfig map.
 func gkeInput(t *testing.T, vcc map[string]any) ClusterInput {
@@ -130,34 +138,81 @@ func TestCreateCluster_GKEAgainstNodePools(t *testing.T) {
 	}
 }
 
-// TestUpdateCluster_VirtualClusterConfig verifies an update can replace the
-// virtualClusterConfig (when the mask applies) and that malformed input is
-// rejected before any write.
-func TestUpdateCluster_VirtualClusterConfig(t *testing.T) {
+// TestUpdateCluster_VirtualClusterConfigRejected verifies the recreate-only
+// lifecycle: real GCP disallows update operations on a Dataproc-on-GKE virtual
+// cluster, so a patch whose mask applies virtualClusterConfig or config is
+// InvalidArgument, while a labels-only mask is honoured even when the body
+// carries a full resource. The stored placement survives every rejected patch.
+func TestUpdateCluster_VirtualClusterConfigRejected(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "gke-1", gkeInput(t, mustJSONMap([]byte(gkeVirtualClusterConfig)))); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
+	full := ClusterInput{
+		Labels:               map[string]string{"patched": "true"},
+		VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-2"}}}`),
+		Config:               []byte(`{"gceClusterConfig":{"zoneUri":"z"}}`),
+	}
 
-	// A malformed update must not clobber the stored value.
+	rejected := map[string]struct {
+		in   ClusterInput
+		mask []string
+	}{
+		// The mask applies the placement: rejected, whichever field it names.
+		"virtualClusterConfig mask": {ClusterInput{VirtualClusterConfig: full.VirtualClusterConfig}, []string{"virtualClusterConfig"}},
+		"config mask":               {ClusterInput{Config: full.Config}, []string{"config"}},
+		"snake_case mask":           {ClusterInput{VirtualClusterConfig: full.VirtualClusterConfig}, []string{"virtual_cluster_config"}},
+		// An empty mask means "everything supplied applies".
+		"unmasked virtualClusterConfig": {ClusterInput{VirtualClusterConfig: full.VirtualClusterConfig}, nil},
+		"unmasked gce config swap":      {ClusterInput{Config: full.Config}, nil},
+	}
+	for name, tc := range rejected {
+		_, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", tc.in, tc.mask)
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+			t.Fatalf("%s: expected 400 InvalidArgument, got %v", name, err)
+		}
+		if !strings.Contains(pe.Message, "recreate-only") || !strings.Contains(pe.Message, "Only labels are updatable") {
+			t.Fatalf("%s: error must explain the recreate-only rule and the labels-only allowance, got %q", name, pe.Message)
+		}
+		if strings.Contains(pe.Message, "config.workerConfig.numInstances") {
+			t.Fatalf("%s: error must not offer GCE config subfields as updatable on a virtual cluster, got %q", name, pe.Message)
+		}
+	}
+	// A malformed virtualClusterConfig is a shape error, reported as such.
 	bad := ClusterInput{VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{"gkeClusterConfig":{}}}`)}
 	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", bad, []string{"virtualClusterConfig"}); err == nil {
 		t.Fatal("expected malformed virtualClusterConfig update to fail")
 	}
-	c, _ := p.GetCluster(ctx, "proj", "us-central1", "gke-1")
+	c, err := p.GetCluster(ctx, "proj", "us-central1", "gke-1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
 	if gkeOf(t, c.VirtualClusterConfig)["gkeClusterTarget"] == "" {
-		t.Fatalf("stored virtualClusterConfig clobbered by failed update: %s", c.VirtualClusterConfig)
+		t.Fatalf("stored virtualClusterConfig clobbered by rejected patches: %s", c.VirtualClusterConfig)
+	}
+	if len(c.Config) != 0 {
+		t.Fatalf("rejected patch stored a GCE config: %s", c.Config)
 	}
 
-	// A valid update replaces it.
-	updated := ClusterInput{VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-2"}}}`)}
-	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", updated, []string{"virtualClusterConfig"}); err != nil {
-		t.Fatalf("UpdateCluster: %v", err)
+	// A labels-only mask is honoured when the body still carries the full
+	// resource: the label lands, the placement is left alone.
+	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", full, []string{"labels"}); err != nil {
+		t.Fatalf("labels-only mask with a full body must be applied, got %v", err)
 	}
-	c, _ = p.GetCluster(ctx, "proj", "us-central1", "gke-1")
-	if got := gkeOf(t, c.VirtualClusterConfig)["gkeClusterTarget"]; got != "projects/proj/locations/us-central1/clusters/gke-2" {
-		t.Fatalf("gkeClusterTarget not updated: %v", got)
+	c, err = p.GetCluster(ctx, "proj", "us-central1", "gke-1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if c.Labels["patched"] != "true" {
+		t.Fatalf("labels-only patch did not apply the label: %v", c.Labels)
+	}
+	if got, _ := gkeOf(t, c.VirtualClusterConfig)["gkeClusterTarget"].(string); strings.Contains(got, "gke-2") {
+		t.Fatalf("labels-only patch applied the masked-out virtualClusterConfig: %s", c.VirtualClusterConfig)
+	}
+	if len(c.Config) != 0 {
+		t.Fatalf("labels-only patch applied the masked-out config: %s", c.Config)
 	}
 }
 
@@ -172,6 +227,22 @@ func TestCreateCluster_BothConfigAndVirtualClusterConfigRejected(t *testing.T) {
 	pe, ok := err.(*model.ProviderError)
 	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
 		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+}
+
+// TestCreateCluster_NeitherConfigRejected verifies the same "exactly one" rule
+// rejects a create that carries neither: real Dataproc cannot place such a
+// cluster, and accepting it would make every read invent a GCE config.
+func TestCreateCluster_NeitherConfigRejected(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "neither", ClusterInput{})
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+	if _, err := p.GetCluster(ctx, "proj", "us-central1", "neither"); err == nil {
+		t.Fatal("a rejected create must not persist a cluster")
 	}
 }
 

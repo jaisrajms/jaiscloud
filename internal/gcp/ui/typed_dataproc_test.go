@@ -10,6 +10,7 @@ import (
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -29,7 +30,7 @@ func canonicalJSON(raw json.RawMessage) string {
 }
 
 func TestDataprocConsolePassthroughMatchesDirect(t *testing.T) {
-	core, direct, builtins := newDataproc()
+	_, direct, builtins := newDataproc()
 	var seen []seenCall
 	wrap := map[string]func(provider.HandlerFunc) provider.HandlerFunc{}
 	for k := range builtins {
@@ -43,10 +44,21 @@ func TestDataprocConsolePassthroughMatchesDirect(t *testing.T) {
 	if err != nil || c.Name != "c1" || c.Region != "us-central1" {
 		t.Fatalf("CreateCluster = %+v, %v", c, err)
 	}
-	want, err := core.GetCluster(ctx, "proj", "us-central1", "c1")
+	// The console chain must return exactly what the built-in REST handler
+	// returns. On the Dataproc-on-GKE series the REST renderer applies the
+	// documented Compute-Engine read defaults (network/zone/machine-type/image
+	// and worker defaults), so the core's stored config is deliberately not the
+	// API response; compare against the direct handler instead.
+	directResp, err := builtins["Dataproc.GetCluster"](ctx, &model.NormalizedRequest{
+		Service:   "dataproc",
+		AccountID: "proj",
+		Region:    "us-central1",
+		Params:    map[string]any{"project": "proj", "region": "us-central1", "clusterName": "c1"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := decodeCluster(directResp.Data, "us-central1")
 	got, err := p.GetCluster(ctx, "proj", "us-central1", "c1")
 	if err != nil || got.Name != want.Name || got.Region != want.Region || got.ClusterUUID != want.ClusterUUID ||
 		got.Status.State != want.Status.State || !reflect.DeepEqual(got.Labels, want.Labels) ||

@@ -19,6 +19,7 @@ type ClusterUpdate struct {
 	DesiredMonitoringService   string
 	DesiredNodePoolID          string
 	DesiredNodePoolAutoscaling *containerstore.NodePoolAutoscaling
+	DesiredShieldedNodes       *containerstore.ShieldedNodes
 }
 
 // SetAddonsConfig records the cluster's addons config.
@@ -119,6 +120,10 @@ func (s *Service) UpdateCluster(ctx context.Context, project, location, cluster 
 		}
 		if u.DesiredMonitoringService != "" {
 			c.MonitoringService = u.DesiredMonitoringService
+		}
+		if u.DesiredShieldedNodes != nil {
+			sn := *u.DesiredShieldedNodes
+			c.ShieldedNodes = &sn
 		}
 		// Real GKE targets the node pool named by desiredNodePoolId (there is no
 		// "all pools" form), so an empty ID applies nothing.

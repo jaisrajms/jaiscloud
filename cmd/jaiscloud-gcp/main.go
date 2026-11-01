@@ -26,6 +26,7 @@ import (
 	"jaiscloud/internal/executor/gcf"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
+	"jaiscloud/internal/gcp/adapter/dataprocgke"
 	gcauth "jaiscloud/internal/gcp/auth"
 	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 	"jaiscloud/internal/gcp/crypto"
@@ -487,6 +488,16 @@ func startCmd() *cobra.Command {
 			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus), metastorecore.WithResources(stores.resources))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
+			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
+			// Built here (rather than with the other control planes below) because
+			// the Dataproc core reconciles a virtual cluster's node pools through
+			// it — the same reason Metastore is built first. One core serves both
+			// transports: the REST provider below and the gRPC ClusterManager
+			// adapter (docs/gcp/wire-contract.md §5). It sits behind a
+			// ClusterManager seam whose only implementation is the mock: a
+			// cluster is a stored record, not a real Kubernetes control plane.
+			containerCore := containercore.NewService(stores.container)
+
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE, or Docker on the
 			// local daemon. The core (and its K8s client) is only built when
@@ -516,6 +527,11 @@ func startCmd() *cobra.Command {
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
 					dataproccore.WithBlobSink(storageSeam),
+					// Reconcile a Dataproc-on-GKE virtual cluster's target and node
+					// pools through the GKE core (resolved at create, verified or
+					// created through the container API). The core only sees the
+					// interface, so it never imports service/container.
+					dataproccore.WithGKENodePoolProvisioner(dataprocgke.New(containerCore)),
 					// Resolve a cluster's metastoreConfig attachment through the
 					// Metastore core (validated at cluster create, formatted at
 					// job submit). The core only sees the interface, so it never
@@ -713,13 +729,9 @@ func startCmd() *cobra.Command {
 			// Compute Engine is metadata-only over the shared ResourceStore.
 			computeP := computeprovider.New(stores.resources)
 
-			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
-			// REST only — GKE's native transport is gRPC, but the emulator
-			// deliberately exposes the REST metadata surface (docs/gcp/wire-contract.md §5).
-			// The core sits behind a ClusterManager seam whose only
-			// implementation is the mock: a cluster is a stored record, not a
-			// real Kubernetes control plane.
-			containerCore := containercore.NewService(stores.container)
+			// The GKE REST provider is a thin adapter over the core built above;
+			// the gRPC ClusterManager adapter is registered against the same core,
+			// so both transports read and write one metadata store.
 			containerP := restcontainer.NewProvider(containerCore)
 
 			// Cloud Run Admin v2's behavioural control plane, served over REST and

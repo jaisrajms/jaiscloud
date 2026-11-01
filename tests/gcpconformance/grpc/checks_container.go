@@ -27,7 +27,11 @@ const containerLocation = "us-central1"
 func containerChecks() []Check {
 	return []Check{
 		{Service: "container", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "CREATE_CLUSTER operation DONE", Run: checkContainerCreateCluster},
-		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/currentMasterVersion round-trip", Run: checkContainerGetCluster},
+		{Service: "container", RPC: "CreateCluster (nodePools + default-pool fields)", Method: "CreateCluster", KeyField: "InvalidArgument on the default-pool conflict", Run: checkContainerCreateClusterPoolConflict},
+		{Service: "container", RPC: "CreateCluster (nodeConfig default pool)", Method: "CreateCluster", KeyField: "default-pool config + cluster nodeConfig echo", Run: checkContainerCreateClusterNodeConfig},
+		{Service: "container", RPC: "CreateCluster (duplicate inline nodePool names)", Method: "CreateCluster", KeyField: "InvalidArgument on a repeated pool name, nothing persisted", Run: checkContainerCreateClusterDuplicatePoolName},
+		{Service: "container", RPC: "GetCluster (Compute self-link network)", Method: "GetCluster", KeyField: "networkConfig resolved from a self-link, host project kept", Run: checkContainerGetClusterSelfLinkNetwork},
+		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/masterVersion + nested response messages", Run: checkContainerGetCluster},
 		{Service: "container", RPC: "GetCluster (legacy project/zone)", Method: "GetCluster", KeyField: "legacy project_id/zone/cluster_id addressing", Run: checkContainerGetClusterLegacy},
 		{Service: "container", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkContainerListClusters},
 		{Service: "container", RPC: "GetOperation", Method: "GetOperation", KeyField: "operation name/type round-trip", Run: checkContainerGetOperation},
@@ -60,7 +64,7 @@ func containerNodePoolChecks() []Check {
 		{Service: "container", RPC: "SetMaintenancePolicy", Method: "SetMaintenancePolicy", KeyField: "operation DONE", Run: checkSetMaintenancePolicy},
 		{Service: "container", RPC: "SetMasterAuth", Method: "SetMasterAuth", KeyField: "operation DONE", Run: checkSetMasterAuth},
 		{Service: "container", RPC: "SetLabels", Method: "SetLabels", KeyField: "operation DONE + labels applied", Run: checkSetLabels},
-		{Service: "container", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "UPDATE_CLUSTER DONE + field applied", Run: checkUpdateCluster},
+		{Service: "container", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "UPDATE_CLUSTER DONE + fields applied (monitoring, shieldedNodes)", Run: checkUpdateCluster},
 		{Service: "container", RPC: "UpdateMaster", Method: "UpdateMaster", KeyField: "UPGRADE_MASTER DONE + version applied", Run: checkUpdateMaster},
 		{Service: "container", RPC: "StartIPRotation", Method: "StartIPRotation", KeyField: "operation DONE", Run: checkStartIPRotation},
 		{Service: "container", RPC: "CompleteIPRotation", Method: "CompleteIPRotation", KeyField: "operation DONE", Run: checkCompleteIPRotation},
@@ -599,6 +603,7 @@ func checkUpdateCluster(ctx context.Context, cfg Config) error {
 		Name: containerNameRaw(cfg, cluster),
 		Update: &containerpb.ClusterUpdate{
 			DesiredMonitoringService: "monitoring.googleapis.com/kubernetes",
+			DesiredShieldedNodes:     &containerpb.ShieldedNodes{Enabled: false},
 		},
 	})
 	if err != nil {
@@ -613,6 +618,9 @@ func checkUpdateCluster(ctx context.Context, cfg Config) error {
 	}
 	if got.GetMonitoringService() != "monitoring.googleapis.com/kubernetes" {
 		return fmt.Errorf("monitoringService = %q", got.GetMonitoringService())
+	}
+	if got.GetShieldedNodes() == nil || got.GetShieldedNodes().GetEnabled() {
+		return fmt.Errorf("shieldedNodes = %v, want disabled after desiredShieldedNodes", got.GetShieldedNodes())
 	}
 	return nil
 }
@@ -775,7 +783,222 @@ func checkContainerCreateCluster(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 2: GetCluster returns the short name, RUNNING status and a master version.
+// checkContainerCreateClusterPoolConflict verifies the create-time conflict real
+// GKE 400s on (Discovery on Cluster.nodePools: "This field should not be set if
+// node_config or initial_node_count are specified"): inline nodePools combined
+// with either legacy default-pool field is InvalidArgument with the server's
+// message (node_config wins when both are set, as captured in
+// docs/gcp/gke-create-pool-conflict.md), and nothing is persisted.
+func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	const (
+		incConflict = "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool."
+		ncConflict  = "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool."
+	)
+	cases := []struct {
+		label   string
+		cluster *containerpb.Cluster
+		want    string
+	}{
+		{
+			label:   "initial_node_count",
+			cluster: &containerpb.Cluster{Name: cfg.ResourceName("gcpc-grpc-gke-conflict-inc"), InitialNodeCount: 1, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    incConflict,
+		},
+		{
+			label:   "node_config",
+			cluster: &containerpb.Cluster{Name: cfg.ResourceName("gcpc-grpc-gke-conflict-nc"), NodeConfig: &containerpb.NodeConfig{MachineType: "e2-micro"}, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    ncConflict,
+		},
+		{
+			label:   "both (node_config precedence)",
+			cluster: &containerpb.Cluster{Name: cfg.ResourceName("gcpc-grpc-gke-conflict-both"), InitialNodeCount: 1, NodeConfig: &containerpb.NodeConfig{MachineType: "e2-micro"}, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    ncConflict,
+		},
+	}
+	for _, tc := range cases {
+		_, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: tc.cluster})
+		if status.Code(err) != codes.InvalidArgument {
+			return fmt.Errorf("create with %s + nodePools: code = %v, want InvalidArgument (%v)", tc.label, status.Code(err), err)
+		}
+		if msg := status.Convert(err).Message(); msg != tc.want {
+			return fmt.Errorf("create with %s + nodePools: message = %q, want %q", tc.label, msg, tc.want)
+		}
+		if _, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, tc.cluster.GetName())}); status.Code(err) != codes.NotFound {
+			return fmt.Errorf("create with %s + nodePools: rejected cluster %q was persisted (%v)", tc.label, tc.cluster.GetName(), err)
+		}
+	}
+
+	// DPG49: a negative cluster-level initialNodeCount is the sibling boundary.
+	// Without nodePools it is InvalidArgument; with pools it is accepted and
+	// ignored (captured in docs/gcp/gke-create-pool-conflict.md).
+	negName := cfg.ResourceName("gcpc-gke-neginc")
+	_, err = client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: &containerpb.Cluster{
+		Name:             negName,
+		InitialNodeCount: -1,
+	}})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("create with negative initialNodeCount and no pools: code = %v, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if want := "Cluster.initial_node_count must be zero or higher."; status.Convert(err).Message() != want {
+		return fmt.Errorf("create with negative initialNodeCount and no pools: message = %q, want %q", status.Convert(err).Message(), want)
+	}
+	withPoolsName := cfg.ResourceName("gcpc-gke-neginc-pools")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: &containerpb.Cluster{
+		Name:             withPoolsName,
+		InitialNodeCount: -1,
+		NodePools:        []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	}}); err != nil {
+		return fmt.Errorf("create with negative initialNodeCount and nodePools: %v", err)
+	}
+	if _, err := client.DeleteCluster(ctx, &containerpb.DeleteClusterRequest{Name: containerNameRaw(cfg, withPoolsName)}); err != nil {
+		return fmt.Errorf("delete negative-count cluster: %v", err)
+	}
+	return nil
+}
+
+// checkContainerCreateClusterDuplicatePoolName verifies one duplicate-name rule
+// for the inline pool path: the same name twice inside one create request is
+// InvalidArgument (the request is malformed before anything exists) and the
+// cluster is not persisted. The sibling case — a name already taken on the
+// cluster through CreateNodePool — is a 409 AlreadyExists, pinned by the SDK
+// suite (tests/integration/gcp/sdk-container).
+func checkContainerCreateClusterDuplicatePoolName(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	name := cfg.ResourceName("gcpc-grpc-gke-dup-pool")
+	_, err = client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name: name,
+			NodePools: []*containerpb.NodePool{
+				{Name: "pool-a", InitialNodeCount: 1},
+				{Name: "pool-a", InitialNodeCount: 1},
+			},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("duplicate inline pool name: code = %v, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if msg := status.Convert(err).Message(); msg != "duplicate node pool name: pool-a" {
+		return fmt.Errorf("duplicate inline pool name: message = %q", msg)
+	}
+	if _, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, name)}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("rejected cluster %q was persisted (%v)", name, err)
+	}
+	return nil
+}
+
+// checkContainerGetClusterSelfLinkNetwork verifies that a cluster created with
+// Compute self-links as its network/subnetwork — what Terraform's
+// google_container_cluster.network/subnetwork receive from
+// google_compute_network.*.self_link — reads back the relative resource names
+// Discovery documents, keeping the project the link named (a Shared-VPC host
+// project is never rewritten into the cluster's own).
+func checkContainerGetClusterSelfLinkNetwork(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	const host = "shared-vpc-host"
+	const base = "https://www.googleapis.com/compute/v1/projects/" + host
+	name := cfg.ResourceName("gcpc-grpc-gke-selflink")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name:       name,
+			Network:    base + "/global/networks/shared-vpc",
+			Subnetwork: base + "/regions/us-central1/subnetworks/shared-sn",
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	got, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, name)})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	wantNetwork := "projects/" + host + "/global/networks/shared-vpc"
+	if n := got.GetNetworkConfig().GetNetwork(); n != wantNetwork {
+		return fmt.Errorf("networkConfig.network = %q, want %q", n, wantNetwork)
+	}
+	wantSubnetwork := "projects/" + host + "/regions/us-central1/subnetworks/shared-sn"
+	if sn := got.GetNetworkConfig().GetSubnetwork(); sn != wantSubnetwork {
+		return fmt.Errorf("networkConfig.subnetwork = %q, want %q", sn, wantSubnetwork)
+	}
+	return nil
+}
+
+// checkContainerCreateClusterNodeConfig verifies that a create sending only the
+// legacy cluster-level node_config + initial_node_count shape applies the config
+// to the generated default-pool, the way real GKE does (Discovery on
+// Cluster.nodeConfig: that configuration "will be used to create a NodePool
+// object with an auto-generated name"), and that the read echoes it: Discovery
+// says the response's Cluster.nodeConfig is "populated with the node
+// configuration of the first node pool" (capture: docs/gcp/gke-create-pool-conflict.md).
+func checkContainerCreateClusterNodeConfig(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	name := cfg.ResourceName("gcpc-grpc-gke-nodeconfig")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name:             name,
+			InitialNodeCount: 1,
+			NodeConfig:       &containerpb.NodeConfig{MachineType: "e2-micro", DiskSizeGb: 50},
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	c, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, name)})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if got := c.GetNodeConfig().GetMachineType(); got != "e2-micro" {
+		return fmt.Errorf("cluster nodeConfig.machineType = %q, want e2-micro", got)
+	}
+	if got := c.GetNodeConfig().GetDiskSizeGb(); got != 50 {
+		return fmt.Errorf("cluster nodeConfig.diskSizeGb = %d, want 50", got)
+	}
+	pools := c.GetNodePools()
+	if len(pools) != 1 || pools[0].GetName() != "default-pool" {
+		return fmt.Errorf("nodePools = %v, want the generated default-pool", pools)
+	}
+	pool := pools[0]
+	if pool.GetStatus() != containerpb.NodePool_RUNNING {
+		return fmt.Errorf("default-pool status = %v, want RUNNING", pool.GetStatus())
+	}
+	if pool.GetSelfLink() != containerNameRaw(cfg, name)+"/nodePools/default-pool" {
+		return fmt.Errorf("default-pool selfLink = %q", pool.GetSelfLink())
+	}
+	if pool.GetVersion() == "" {
+		return fmt.Errorf("default-pool version is empty, want the cluster's node version")
+	}
+	if got := pool.GetConfig().GetMachineType(); got != "e2-micro" {
+		return fmt.Errorf("default-pool config.machineType = %q, want e2-micro", got)
+	}
+	if got := pool.GetConfig().GetDiskSizeGb(); got != 50 {
+		return fmt.Errorf("default-pool config.diskSizeGb = %d, want 50", got)
+	}
+	return nil
+}
+
+// Check 2: GetCluster returns the short name, RUNNING status, a master version
+// and the nested response messages real GKE always renders.
 func checkContainerGetCluster(ctx context.Context, cfg Config) error {
 	client, err := newContainerClient(ctx, cfg)
 	if err != nil {
@@ -802,6 +1025,51 @@ func checkContainerGetCluster(ctx context.Context, cfg Config) error {
 	}
 	if got.GetCurrentMasterVersion() == "" {
 		return fmt.Errorf("GetCluster currentMasterVersion is empty")
+	}
+	// DPG37: real GKE always renders these nested messages, and clients
+	// (hashicorp/google among them) dereference them unconditionally, so they
+	// must not be lost on the gRPC transport either.
+	if got.GetLegacyAbac() == nil || got.GetLegacyAbac().GetEnabled() {
+		return fmt.Errorf("GetCluster legacyAbac = %v, want present and disabled", got.GetLegacyAbac())
+	}
+	wantNetwork := "projects/" + cfg.Project + "/global/networks/default"
+	if n := got.GetNetworkConfig().GetNetwork(); n != wantNetwork {
+		return fmt.Errorf("GetCluster networkConfig.network = %q, want %q", n, wantNetwork)
+	}
+	wantSubnetwork := "projects/" + cfg.Project + "/regions/" + containerLocation + "/subnetworks/default"
+	if s := got.GetNetworkConfig().GetSubnetwork(); s != wantSubnetwork {
+		return fmt.Errorf("GetCluster networkConfig.subnetwork = %q, want %q", s, wantSubnetwork)
+	}
+	if got.GetShieldedNodes() == nil || !got.GetShieldedNodes().GetEnabled() {
+		return fmt.Errorf("GetCluster shieldedNodes = %v, want enabled", got.GetShieldedNodes())
+	}
+	if n := got.GetDefaultMaxPodsConstraint().GetMaxPodsPerNode(); n != 110 {
+		return fmt.Errorf("GetCluster defaultMaxPodsConstraint.maxPodsPerNode = %d, want 110", n)
+	}
+	if got.GetLoggingService() != "logging.googleapis.com/kubernetes" {
+		return fmt.Errorf("GetCluster loggingService = %q", got.GetLoggingService())
+	}
+	if got.GetMonitoringService() != "monitoring.googleapis.com/kubernetes" {
+		return fmt.Errorf("GetCluster monitoringService = %q", got.GetMonitoringService())
+	}
+	// DPG46: a create without nodeConfig reads back the defaulted node config,
+	// on the cluster-level echo and on the generated default-pool (capture:
+	// docs/gcp/gke-node-pool-config-defaults.md).
+	if mt := got.GetNodeConfig().GetMachineType(); mt != "e2-medium" {
+		return fmt.Errorf("GetCluster nodeConfig.machineType = %q, want e2-medium", mt)
+	}
+	pools := got.GetNodePools()
+	if len(pools) != 1 {
+		return fmt.Errorf("GetCluster nodePools = %d, want 1", len(pools))
+	}
+	poolCfg := pools[0].GetConfig()
+	if poolCfg.GetImageType() != "COS_CONTAINERD" || poolCfg.GetDiskType() != "pd-balanced" || poolCfg.GetDiskSizeGb() != 100 {
+		return fmt.Errorf("default-pool config = imageType %q diskType %q diskSizeGb %d, want the GKE defaults",
+			poolCfg.GetImageType(), poolCfg.GetDiskType(), poolCfg.GetDiskSizeGb())
+	}
+	if poolCfg.GetServiceAccount() != "default" || len(poolCfg.GetOauthScopes()) != 6 {
+		return fmt.Errorf("default-pool config serviceAccount/scopes = %q/%d, want default/6",
+			poolCfg.GetServiceAccount(), len(poolCfg.GetOauthScopes()))
 	}
 	return nil
 }

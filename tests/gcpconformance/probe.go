@@ -180,6 +180,13 @@ var bodyOverrides = map[string]map[string]any{
 		"sourceContents": "main:\n  steps:\n    - r:\n        return: 1\n",
 	},
 
+	// Discovery does not mark either placement required, but a create must
+	// carry exactly one of config or virtualClusterConfig ("Exactly one of
+	// ClusterConfig or VirtualClusterConfig must be specified"), so the
+	// synthesised probe sends the Compute-Engine shape.
+	"dataproc.projects.regions.clusters.create": {
+		"config": map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+	},
 	"dataproc.projects.regions.workflowTemplates.create": {
 		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "probe"}},
 		"jobs":      []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},

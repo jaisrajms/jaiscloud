@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -123,5 +124,34 @@ func TestRetrySerializableErr_SurfacesPersistent(t *testing.T) {
 	}
 	if attempts != SerializableMaxAttempts {
 		t.Fatalf("attempts=%d, want %d", attempts, SerializableMaxAttempts)
+	}
+}
+
+func TestSleepCtx_AlreadyCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sleepCtx = %v, want context.Canceled without waiting", err)
+	}
+}
+
+func TestSleepCtx_CancelledWhileWaiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelled := make(chan struct{})
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+		close(cancelled)
+	}()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sleepCtx = %v, want context.Canceled", err)
+	}
+	<-cancelled
+}
+
+func TestSleepCtx_Elapsed(t *testing.T) {
+	if err := sleepCtx(context.Background(), time.Microsecond); err != nil {
+		t.Fatalf("sleepCtx = %v, want nil after the timer fires", err)
 	}
 }

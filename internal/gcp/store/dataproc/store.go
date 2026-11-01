@@ -37,8 +37,10 @@ type ClusterStatus struct {
 //
 // VirtualClusterConfig is the dataproc.v1.VirtualClusterConfig wire object
 // (kubernetesClusterConfig, auxiliaryServicesConfig, stagingBucket, ...) for a
-// Dataproc-on-GKE cluster, also stored verbatim. It is mutually exclusive with
-// Config in the API: a GKE-backed cluster has a VirtualClusterConfig and no
+// Dataproc-on-GKE cluster, stored as the object the cluster actually runs with:
+// kubernetesNamespace defaulted to the cluster name and every software-config
+// version alias dereferenced to a concrete release. It is mutually exclusive
+// with Config in the API: a GKE-backed cluster has a VirtualClusterConfig and no
 // GCE ClusterConfig.
 type Cluster struct {
 	ProjectID            string            `json:"projectId"`

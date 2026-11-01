@@ -564,7 +564,7 @@ func TestSubmitJob_RegistersCancelBeforeReturn(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	p := newK8sProvider(t, client)
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	// A watcher that never emits keeps the executor in its terminal wait, so

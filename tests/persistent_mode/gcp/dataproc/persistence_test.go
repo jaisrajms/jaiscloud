@@ -104,6 +104,21 @@ func waitForHealth(t *testing.T, host string) {
 	t.Fatalf("jaiscloud-gcp at %s did not become healthy within 30s", host)
 }
 
+// ensureGKECluster creates the prerequisite GKE cluster a GKE-backed Dataproc
+// cluster reconciles against. Dataproc on GKE resolves gkeClusterTarget through
+// the emulated GKE control plane, so the target must exist; the cluster is
+// standard and Workload-Identity-enabled, which is what the create requires. A
+// 409 means an earlier run already created it.
+func ensureGKECluster(t *testing.T, host, project, region, name string) {
+	t.Helper()
+	body := []byte(fmt.Sprintf(`{"cluster":{"name":%q,"workloadIdentityConfig":{"workloadPool":%q}}}`,
+		name, project+".svc.id.goog"))
+	path := "/container/v1/projects/" + project + "/locations/" + region + "/clusters"
+	if code, resp := doRequest(t, host, "POST", path, body, "application/json"); code != http.StatusOK && code != http.StatusConflict {
+		t.Fatalf("create GKE cluster: got HTTP %d body %s", code, resp)
+	}
+}
+
 // doRequest performs an HTTP request and returns the status code and raw body
 // bytes (binary-safe, unlike a string reader).
 func doRequest(t *testing.T, host, method, path string, body []byte, contentType string) (int, []byte) {
@@ -277,9 +292,18 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("create metastore service: got HTTP %d body %s", code, body)
 	}
 
+	// The GKE target must exist: Dataproc on GKE resolves it through the
+	// emulated GKE control plane at create.
+	const gkeTarget = "exp-gke-target"
+	ensureGKECluster(t, host, project, region, gkeTarget)
+	gkeTargetRef := "projects/" + project + "/locations/" + region + "/clusters/" + gkeTarget
+
 	const gkeClusterName = "exp-gke"
+	// No kubernetesNamespace and an alias componentVersion: both are resolved at
+	// create and must survive a restart as the resolved values.
 	vccBody := `{"projectId":"` + project + `","clusterName":"` + gkeClusterName + `",` +
-		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-1"}},` +
+		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"` + gkeTargetRef + `"},` +
+		`"kubernetesSoftwareConfig":{"componentVersion":{"SPARK":"3.5"}}},` +
 		`"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"` + msName + `"}}}}`
 	code, body = doRequest(t, host, "POST", base+"/clusters", []byte(vccBody), "application/json")
 	if code != http.StatusOK {
@@ -387,8 +411,16 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	if gkeVCC == nil {
 		t.Fatalf("virtualClusterConfig lost after import: body %s", body)
 	}
-	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != "projects/proj/locations/us-central1/clusters/gke-1" {
+	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != gkeTargetRef {
 		t.Fatalf("gkeClusterTarget lost after import: got %q body %s", target, body)
+	}
+	// The namespace default and the dereferenced engine release are resolved at
+	// create, so a restart must not re-resolve them to something else.
+	if ns := strField(gkeVCC, "kubernetesClusterConfig", "kubernetesNamespace"); ns != gkeClusterName {
+		t.Fatalf("kubernetesNamespace after import = %q, want the cluster name %q (body %s)", ns, gkeClusterName, body)
+	}
+	if v := strField(gkeVCC, "kubernetesClusterConfig", "kubernetesSoftwareConfig", "componentVersion", "SPARK"); v != "3.5-dataproc-28" {
+		t.Fatalf("componentVersion[SPARK] after import = %q, want the resolved release 3.5-dataproc-28 (body %s)", v, body)
 	}
 	// The Metastore attachment round-trips too.
 	msRef := strField(gkeVCC, "auxiliaryServicesConfig", "metastoreConfig", "dataprocMetastoreService")
