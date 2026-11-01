@@ -1,6 +1,8 @@
 package datastore
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	dsstore "jaiscloud/internal/gcp/store/datastore"
@@ -226,24 +228,92 @@ func (q *Query) ResultType() ResultType {
 	return ResultKeysOnly
 }
 
+// validateProjection rejects a syntactically invalid projection path before
+// the store is scanned, so an empty result set cannot hide it. The dotted
+// property-path grammar has no empty segments.
+func validateProjection(p *Projection) error {
+	if p == nil {
+		return nil
+	}
+	for _, name := range p.Properties {
+		if name == "__key__" {
+			continue
+		}
+		if name == "" || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+			return invalidArgument(fmt.Sprintf("invalid projection property path %q", name))
+		}
+	}
+	return nil
+}
+
 // projectEntity returns a copy of e carrying only the projected properties
 // (plus its key and metadata). named may include "__key__", which is a no-op.
-func projectEntity(e dsstore.Entity, named []string) dsstore.Entity {
+// A dotted name (a.b) projects the nested leaf and keeps the enclosing embedded
+// entities as structural parents, matching real Datastore; traversing a
+// repeated or non-entity value is an InvalidArgument.
+func projectEntity(e dsstore.Entity, named []string) (dsstore.Entity, error) {
 	if len(named) == 0 {
 		e.Properties = map[string]dsstore.Value{}
-		return e
+		return e, nil
 	}
 	keep := make(map[string]dsstore.Value, len(named))
 	for _, name := range named {
 		if name == "__key__" {
 			continue
 		}
-		if v, ok := e.Properties[name]; ok {
-			keep[name] = v
+		path := strings.Split(name, ".")
+		for _, part := range path {
+			if part == "" {
+				return e, invalidArgument(fmt.Sprintf("invalid projection property path %q", name))
+			}
+		}
+		if err := projectProperty(e.Properties, keep, path); err != nil {
+			return e, err
 		}
 	}
 	e.Properties = keep
-	return e
+	return e, nil
+}
+
+// projectProperty resolves one dotted projection path against props and merges
+// the projected leaf into dst. Only the named leaf is kept: an enclosing
+// embedded entity is retained as a structural parent (with an empty property
+// map when the leaf itself is absent), and its other properties are dropped.
+func projectProperty(props, dst map[string]dsstore.Value, path []string) error {
+	name := path[0]
+	src, ok := props[name]
+	if !ok {
+		return nil
+	}
+	if len(path) == 1 {
+		dst[name] = src
+		return nil
+	}
+	if src.ArrayValue != nil {
+		return invalidArgument(fmt.Sprintf("projection path %q traverses repeated property %q", strings.Join(path, "."), name))
+	}
+	if src.EntityValue == nil {
+		return invalidArgument(fmt.Sprintf("projection path %q traverses non-entity property %q", strings.Join(path, "."), name))
+	}
+	var parent dsstore.Entity
+	if existing, ok := dst[name]; ok && existing.EntityValue != nil {
+		// Merge with a leaf projected by an earlier path, cloning the map so
+		// the stored entity's properties are never mutated.
+		parent = *existing.EntityValue
+		cloned := make(map[string]dsstore.Value, len(parent.Properties))
+		for k, v := range parent.Properties {
+			cloned[k] = v
+		}
+		parent.Properties = cloned
+	} else {
+		parent = *src.EntityValue
+		parent.Properties = map[string]dsstore.Value{}
+	}
+	if err := projectProperty(src.EntityValue.Properties, parent.Properties, path[1:]); err != nil {
+		return err
+	}
+	dst[name] = dsstore.Value{EntityValue: &parent}
+	return nil
 }
 
 // QueryResult is the transport-neutral result of RunQuery.
