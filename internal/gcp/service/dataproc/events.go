@@ -270,6 +270,7 @@ func (s *Service) publishStatus(resource, eventType string, attrs map[string]str
 			ID:       id,
 			State:    attrs["state"],
 			Detail:   strings.TrimPrefix(resource, "projects/"),
+			Project:  attrs["projectId"],
 		},
 	})
 }

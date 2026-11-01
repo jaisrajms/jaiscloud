@@ -102,6 +102,10 @@ type StatusEvent struct {
 	ID       string
 	State    string
 	Detail   string
+	// Project is the GCP project the mutation landed in, when the core knows it.
+	// The console uses it to refresh project discovery immediately, so a write
+	// to another project surfaces without waiting for the next poll.
+	Project string
 }
 
 // Handler is a function that handles an event.

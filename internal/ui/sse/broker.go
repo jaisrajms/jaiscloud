@@ -22,6 +22,9 @@ type Event struct {
 	ID       string   `json:"id,omitempty"`
 	State    string   `json:"state,omitempty"`
 	Detail   string   `json:"detail,omitempty"`
+	// Project is the GCP project a mutation landed in (empty for clouds without
+	// projects). The console refreshes project discovery on receipt.
+	Project string `json:"project,omitempty"`
 }
 
 // Broker manages SSE subscriptions and publishes events to browser clients.
@@ -76,7 +79,15 @@ func mapEvent(e events.Event) Event {
 	case events.DLQEvent:
 		return Event{Type: "status", Resource: "sqs-dlq", ID: p.MessageID, Detail: p.DLQQueueURL}
 	case events.StatusEvent:
-		return Event{Type: "status", Resource: p.Resource, Keys: p.Keys, ID: p.ID, State: p.State, Detail: p.Detail}
+		return Event{
+			Type:     "status",
+			Resource: p.Resource,
+			Keys:     p.Keys,
+			ID:       p.ID,
+			State:    p.State,
+			Detail:   p.Detail,
+			Project:  p.Project,
+		}
 	default:
 		return Event{Type: "status"}
 	}

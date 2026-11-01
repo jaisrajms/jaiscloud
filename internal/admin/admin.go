@@ -115,6 +115,7 @@ type Handler struct {
 	monitoringTicker MonitoringTicker
 	throttle         ThrottleController
 	doctorSections   map[string]func() any
+	projectLister    ProjectLister
 }
 
 func NewHandler() *Handler {
