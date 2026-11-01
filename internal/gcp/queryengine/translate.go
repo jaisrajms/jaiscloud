@@ -379,6 +379,10 @@ func translateTokens(toks []token, resolve resolveFunc, dml bool) (string, error
 	if err := validate(toks, dml); err != nil {
 		return "", err
 	}
+	// Wrap every division denominator in a runtime zero guard. This runs after
+	// the user-function allow-list check so the internal guard name cannot be
+	// invoked directly from BigQuery SQL.
+	toks = guardDivisionDenominators(toks)
 
 	// CTE names look like table references in the main query but are not
 	// catalog tables; resolve() must leave them alone.
