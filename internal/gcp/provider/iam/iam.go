@@ -61,6 +61,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"IAM.ServiceAccountSetIamPolicy":       p.SetIamPolicy,
 		"IAM.ServiceAccountTestIamPermissions": p.TestIamPermissions,
 		"IAM.ServiceAccountKeyCreate":          p.ServiceAccountKeyCreate,
+		"IAM.ServiceAccountKeyUpload":          p.ServiceAccountKeyUpload,
 		"IAM.ServiceAccountKeyList":            p.ServiceAccountKeyList,
 		"IAM.ServiceAccountKeyGet":             p.ServiceAccountKeyGet,
 		"IAM.ServiceAccountKeyDelete":          p.ServiceAccountKeyDelete,

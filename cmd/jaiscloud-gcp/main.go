@@ -102,6 +102,7 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
+	grpciam "jaiscloud/internal/gcp/transport/grpc/iam"
 	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
 	grpckms "jaiscloud/internal/gcp/transport/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
@@ -161,6 +162,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
+	iamadminpb "cloud.google.com/go/iam/admin/apiv1/adminpb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	credentialspb "cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -966,6 +968,7 @@ func startCmd() *cobra.Command {
 			tasksGRPC := grpctasks.NewService(tasksCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			iamCredentialsGRPC := grpciamcredentials.NewService(iamCredentialsCore, cfg.ProjectID)
+			iamGRPC := grpciam.NewService(iamP)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
@@ -1017,6 +1020,13 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("iamcredentials") {
 					credentialspb.RegisterIAMCredentialsServer(gserv.GRPC(), iamCredentialsGRPC)
+				}
+				// The IAM Admin API (google.iam.admin.v1.IAM) owns the
+				// service-account surface: CRUD, keys (including
+				// keys.upload), the deprecated sign verbs and the
+				// service-account IAM policy.
+				if transports.GRPCFor("iam") {
+					iamadminpb.RegisterIAMServer(gserv.GRPC(), iamGRPC)
 				}
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)

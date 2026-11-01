@@ -460,7 +460,20 @@ functions,ListRuntimes,grpc,ga,true,
 functions,SetIamPolicy,grpc,ga,true,
 functions,TestIamPermissions,grpc,ga,true,
 functions,UpdateFunction,grpc,ga,true,
+iam,CreateRole,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,CreateServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,CreateServiceAccountKey,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,DeleteRole,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,DeleteServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,DeleteServiceAccountKey,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,DisableServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,DisableServiceAccountKey,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,EnableServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,EnableServiceAccountKey,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
 iam,GetIamPolicy,grpc,ga,true,
+iam,GetRole,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,GetServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,GetServiceAccountKey,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
 iam,IAM.ServiceAccountCreate,rest,ga,true,
 iam,IAM.ServiceAccountDelete,rest,ga,true,
 iam,IAM.ServiceAccountDisable,rest,ga,true,
@@ -473,6 +486,7 @@ iam,IAM.ServiceAccountKeyDisable,rest,ga,true,
 iam,IAM.ServiceAccountKeyEnable,rest,ga,true,
 iam,IAM.ServiceAccountKeyGet,rest,ga,true,
 iam,IAM.ServiceAccountKeyList,rest,ga,true,
+iam,IAM.ServiceAccountKeyUpload,rest,ga,true,
 iam,IAM.ServiceAccountList,rest,ga,true,
 iam,IAM.ServiceAccountPatch,rest,ga,true,
 iam,IAM.ServiceAccountSetIamPolicy,rest,ga,true,
@@ -481,8 +495,23 @@ iam,IAM.ServiceAccountSignJwt,rest,ga,true,
 iam,IAM.ServiceAccountTestIamPermissions,rest,ga,true,
 iam,IAM.ServiceAccountUndelete,rest,ga,true,
 iam,IAM.ServiceAccountUpdate,rest,ga,true,
+iam,LintPolicy,grpc,unsupported,false,policy linting is not modelled; explicit Unimplemented stub
+iam,ListRoles,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,ListServiceAccountKeys,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,ListServiceAccounts,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,PatchServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,QueryAuditableServices,grpc,unsupported,false,auditable-service catalog is not modelled; explicit Unimplemented stub
+iam,QueryGrantableRoles,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,QueryTestablePermissions,grpc,unsupported,false,permission catalog is not modelled; explicit Unimplemented stub
 iam,SetIamPolicy,grpc,ga,true,
+iam,SignBlob,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,SignJwt,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
 iam,TestIamPermissions,grpc,ga,true,
+iam,UndeleteRole,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,UndeleteServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,UpdateRole,grpc,unsupported,false,role catalog is not modelled; explicit Unimplemented stub
+iam,UpdateServiceAccount,grpc,limited,false,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,UploadServiceAccountKey,grpc,ga,true,
 iamcredentials,GenerateAccessToken,grpc,ga,true,
 iamcredentials,GenerateIdToken,grpc,ga,true,
 iamcredentials,IAMCredentials.GenerateAccessToken,rest,ga,true,

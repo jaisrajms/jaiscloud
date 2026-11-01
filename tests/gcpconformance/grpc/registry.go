@@ -94,6 +94,7 @@ func Registry() []Check {
 	checks = append(checks, runChecks()...)
 	checks = append(checks, functionsChecks()...)
 	checks = append(checks, iamChecks()...)
+	checks = append(checks, iamKeyChecks()...)
 	checks = append(checks, iamCredentialsChecks()...)
 	return checks
 }

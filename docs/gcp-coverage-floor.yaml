@@ -195,6 +195,8 @@ packages:
     min_percent: 54.59
   - package: internal/gcp/transport/grpc/functions
     min_percent: 72.76
+  - package: internal/gcp/transport/grpc/iam
+    min_percent: 62.27
   - package: internal/gcp/transport/grpc/iamcredentials
     min_percent: 83.33
   - package: internal/gcp/transport/grpc/kms

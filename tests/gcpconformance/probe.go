@@ -89,6 +89,10 @@ var bodyOverrides = map[string]map[string]any{
 	},
 
 	"iam.projects.serviceAccounts.create": {"accountId": "$ID"},
+	// keys.upload requires publicKeyData (the emulator answers
+	// INVALID_ARGUMENT without it); the value is a certificate-wrapped RSA
+	// public key, the documented form.
+	"iam.projects.serviceAccounts.keys.upload": {"publicKeyData": iamUploadPublicKeyData()},
 
 	"cloudscheduler.projects.locations.jobs.create": {
 		"name":     "projects/" + defaultProject + "/locations/us-central1/jobs/$ID",
