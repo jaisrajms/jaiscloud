@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/gcp/eventing"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
@@ -215,4 +216,46 @@ func (p *PubSub) SubscriptionDeadLetter(ctx context.Context, project, subscripti
 		attempts = v
 	}
 	return lastSegment(topic), attempts, true, nil
+}
+
+// SubscriptionRetryPolicy reads the subscription's retryPolicy. A missing
+// subscription or policy is "no policy", not an error.
+func (p *PubSub) SubscriptionRetryPolicy(ctx context.Context, project, subscription string) (time.Duration, time.Duration, int, bool, error) {
+	if subscription == "" {
+		return 0, 0, 0, false, nil
+	}
+	resp, err := p.call(ctx, "SubscriptionGet", project, "subscriptions/"+lastSegment(subscription), nil, nil)
+	if err != nil {
+		if notFound(err) {
+			return 0, 0, 0, false, nil
+		}
+		return 0, 0, 0, false, err
+	}
+	rp, ok := resp.Data["retryPolicy"].(map[string]any)
+	if !ok {
+		return 0, 0, 0, false, nil
+	}
+	var minimum, maximum time.Duration
+	if s, _ := rp["minimumBackoff"].(string); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		minimum = d
+	}
+	if s, _ := rp["maximumBackoff"].(string); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		maximum = d
+	}
+	maxDoublings := 0
+	switch v := rp["maxDoublings"].(type) {
+	case float64:
+		maxDoublings = int(v)
+	case int:
+		maxDoublings = v
+	}
+	return minimum, maximum, maxDoublings, true, nil
 }

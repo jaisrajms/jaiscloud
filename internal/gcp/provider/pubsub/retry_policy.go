@@ -24,6 +24,27 @@ const (
 // out-of-range duration is InvalidArgument.
 func normalizeRetryPolicy(rp map[string]any) (map[string]any, error) {
 	out := map[string]any{}
+	// maxDoublings is an emulator extension (the Pub/Sub RetryPolicy proto has
+	// only minimum/maximum backoff); it bounds the delivery engine's doubling
+	// steps without changing the public default of unlimited doubling to max.
+	if raw, ok := rp["maxDoublings"]; ok && raw != nil {
+		var md int
+		switch v := raw.(type) {
+		case float64:
+			if v != math.Trunc(v) {
+				return nil, model.NewProviderError("InvalidArgument", "maxDoublings must be an integer", 400)
+			}
+			md = int(v)
+		case int:
+			md = v
+		default:
+			return nil, model.NewProviderError("InvalidArgument", "maxDoublings must be an integer", 400)
+		}
+		if md < 0 || md > 100 {
+			return nil, model.NewProviderError("InvalidArgument", "maxDoublings must be between 0 and 100", 400)
+		}
+		out["maxDoublings"] = md
+	}
 	for _, f := range []string{"minimumBackoff", "maximumBackoff"} {
 		raw, ok := rp[f]
 		if !ok || raw == nil {
@@ -96,9 +117,9 @@ func applyRetryPolicyUpdate(meta, in map[string]any, path string) error {
 
 // retryPolicyLeaf resolves a raw field-mask path to the RetryPolicy leaf it
 // names: ("", false, true) for the `retry_policy` root, ("minimumBackoff",
-// true, true) / ("maximumBackoff", true, true) for a nested leaf, and
-// ("", false, false) for anything else. Path spelling is folded so snake_case
-// and camelCase resolve alike.
+// true, true) / ("maximumBackoff", true, true) / ("maxDoublings", true, true)
+// for a nested leaf, and ("", false, false) for anything else. Path spelling is
+// folded so snake_case and camelCase resolve alike.
 func retryPolicyLeaf(path string) (leaf string, nested, ok bool) {
 	switch normalizeRetryPolicyPath(path) {
 	case "retrypolicy":
@@ -107,6 +128,8 @@ func retryPolicyLeaf(path string) (leaf string, nested, ok bool) {
 		return "minimumBackoff", true, true
 	case "retrypolicy.maximumbackoff":
 		return "maximumBackoff", true, true
+	case "retrypolicy.maxdoublings":
+		return "maxDoublings", true, true
 	}
 	return "", false, false
 }

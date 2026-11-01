@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/gcp/eventing"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
@@ -78,6 +79,10 @@ func (f *fakeSubs) DeleteEventarcSubscription(_ context.Context, _, subscription
 
 func (f *fakeSubs) SubscriptionDeadLetter(context.Context, string, string) (string, int, bool, error) {
 	return "", 0, false, nil
+}
+
+func (f *fakeSubs) SubscriptionRetryPolicy(context.Context, string, string) (time.Duration, time.Duration, int, bool, error) {
+	return 0, 0, 0, false, nil
 }
 
 func (f *fakeSubs) PublishDeadLetter(context.Context, string, string, []byte, map[string]string) error {

@@ -118,7 +118,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 
 | Service | Transport(s) | `ga`/total | Tier | Depth | Locally trustworthy? | Note |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `pubsub` | grpc, rest | 45/45 | 🟢 | Full | Yes | Topics, subscriptions, snapshots, seek, ordering, DLQ; subscription `retryPolicy` (`minimumBackoff`/`maximumBackoff`, 0–600s) is validated and round-tripped on `subscriptions.create`/`patch` over REST + gRPC, but has no effect on the emulator's fixed delivery backoff. |
+| `pubsub` | grpc, rest | 45/45 | 🟢 | Full | Yes | Topics, subscriptions, snapshots, seek, ordering, DLQ; subscription `retryPolicy` (`minimumBackoff`/`maximumBackoff`, 0–600s, plus an emulator-extension `maxDoublings`) is validated and round-tripped on `subscriptions.create`/`patch` over REST + gRPC and drives the Cloud Functions event-delivery retry curve for a function's backing subscription (no policy keeps the 200 ms → 2 s default). |
 | `storage` | grpc, rest | 52/52 | 🟢 | Full | Yes | Bucket/object/IAM/resumable; server-streaming `ReadObject` + bidirectional `BidiReadObject`. |
 | `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. Crypto operations honor the cryptoKey IAM policy **default-permissively** (a key with no policy allows; a policy that omits the required role returns `PERMISSION_DENIED`). |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
