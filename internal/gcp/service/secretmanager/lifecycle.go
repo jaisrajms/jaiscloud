@@ -1,9 +1,9 @@
 // Lifecycle sweeps shared by the Secret Manager REST provider and gRPC service
 // (DC70).
 //
-// The emulator has no background worker, so the two time-driven lifecycle
-// transitions real Secret Manager performs on its own are applied lazily by
-// every read of the affected resource:
+// The provider and gRPC service run a proactive sweep loop, but the same
+// time-driven transitions are also applied by every read of the affected
+// resource so the boundary is strict even between ticks:
 //
 //   - Secret expiration: a secret whose expireTime has passed is deleted (with
 //     its versions) and SECRET_DELETE deleteType EXPIRATION is published.

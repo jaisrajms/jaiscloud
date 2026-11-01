@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,15 +36,20 @@ type grpcPublishedMessage struct {
 }
 
 type grpcFakePublisher struct {
+	mu   sync.Mutex
 	msgs []grpcPublishedMessage
 }
 
 func (f *grpcFakePublisher) PublishEvent(_ context.Context, accountID, topic string, data []byte, attributes map[string]string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.msgs = append(f.msgs, grpcPublishedMessage{project: accountID, topic: topic, data: data, attrs: attributes})
 	return "1", nil
 }
 
 func (f *grpcFakePublisher) drain() []grpcPublishedMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := f.msgs
 	f.msgs = nil
 	return out

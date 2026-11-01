@@ -1561,6 +1561,23 @@ func startCmd() *cobra.Command {
 				defer deliverCancel()
 			}
 
+			// Secret Manager proactive lifecycle sweeps (rotation notifications,
+			// expiration and delayed destruction) run without client reads. Both
+			// transports share the store, so either transport's worker makes
+			// progress; the atomic transitions prevent double notifications.
+			if secretP != nil && secretGRPC != nil {
+				secretCtx, secretCancel := context.WithCancel(ctx)
+				secretP.TrackProject(cfg.ProjectID)
+				secretGRPC.TrackProject(cfg.ProjectID)
+				secretP.Start(secretCtx)
+				secretGRPC.Start(secretCtx)
+				defer func() {
+					secretCancel()
+					secretP.Stop()
+					secretGRPC.Stop()
+				}()
+			}
+
 			// Serve gRPC on its own listener (plaintext h2c) alongside the HTTP
 			// gateway. Emulator-mode SDKs point FIRESTORE_EMULATOR_HOST here.
 			// Skipped entirely when the gRPC transport is not selected.

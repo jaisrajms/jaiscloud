@@ -10,12 +10,14 @@ import (
 	"hash/crc32"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/gcp/resource"
 	secretmanagersvc "jaiscloud/internal/gcp/service/secretmanager"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/gcp/timestamp"
@@ -35,16 +37,167 @@ type Provider struct {
 	// publisher delivers the secret's event notifications (DC64); nil disables
 	// them.
 	publisher secretmanagersvc.Publisher
+	// lifecycle is the proactive sweep worker (DC71/DC72): it scans projects
+	// seen by this provider so rotation, expiration and delayed destruction
+	// happen even when no client reads the secret.
+	lifecycleMu     sync.Mutex
+	lifecycleCancel context.CancelFunc
+	lifecycleDone   chan struct{}
+	lifecycleSeen   map[string]struct{}
+	sweepInterval   time.Duration
 }
 
+// defaultSweepInterval is the proactive lifecycle scan cadence. It is short
+// enough that a test using the virtual clock observes a notification promptly,
+// while the sweep itself is cheap (one list per known project).
+const defaultSweepInterval = time.Second
+
 func New(secrets secretmanagerstore.Store, resources store.ResourceStore, encryptor crypto.EnvelopeEncryptor) *Provider {
-	return &Provider{secrets: secrets, resources: resources, encryptor: encryptor}
+	return &Provider{
+		secrets:       secrets,
+		resources:     resources,
+		encryptor:     encryptor,
+		lifecycleSeen: map[string]struct{}{},
+		sweepInterval: defaultSweepInterval,
+	}
+}
+
+// SetSweepInterval overrides the background lifecycle cadence (tests use a
+// short interval; a non-positive value restores the default).
+func (p *Provider) SetSweepInterval(d time.Duration) {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if d <= 0 {
+		d = defaultSweepInterval
+	}
+	p.sweepInterval = d
+}
+
+// TrackProject registers a project for the proactive lifecycle sweep. It is
+// called by every Secret Manager entry point and can also be called at startup
+// with the configured default project.
+func (p *Provider) TrackProject(account string) {
+	if account == "" {
+		return
+	}
+	p.lifecycleMu.Lock()
+	if p.lifecycleSeen == nil {
+		p.lifecycleSeen = map[string]struct{}{}
+	}
+	p.lifecycleSeen[account] = struct{}{}
+	p.lifecycleMu.Unlock()
 }
 
 // SetEventPublisher wires the Pub/Sub publisher used to deliver a secret's
 // event notifications, the same way the GCS provider receives its notification
 // publisher.
 func (p *Provider) SetEventPublisher(pub secretmanagersvc.Publisher) { p.publisher = pub }
+
+// Start launches the non-blocking lifecycle sweep. It is a no-op if already
+// running; Stop (or the supplied context ending) shuts it down.
+func (p *Provider) Start(ctx context.Context) {
+	p.lifecycleMu.Lock()
+	if p.lifecycleCancel != nil {
+		p.lifecycleMu.Unlock()
+		return
+	}
+	interval := p.sweepInterval
+	if interval <= 0 {
+		interval = defaultSweepInterval
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	p.lifecycleCancel, p.lifecycleDone = cancel, done
+	p.lifecycleMu.Unlock()
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				p.sweepLifecycle(runCtx)
+			}
+		}
+	}()
+}
+
+// Stop halts the lifecycle sweep and waits for the current tick to finish.
+func (p *Provider) Stop() {
+	p.lifecycleMu.Lock()
+	cancel, done := p.lifecycleCancel, p.lifecycleDone
+	p.lifecycleCancel, p.lifecycleDone = nil, nil
+	p.lifecycleMu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}
+
+// sweepLifecycle applies every due time-driven transition across the projects
+// this provider has seen:
+//
+//   - expired secrets are deleted and SECRET_DELETE EXPIRATION is published;
+//   - due rotation schedules advance and SECRET_ROTATE is published;
+//   - due scheduled version destructions become DESTROYED and
+//     SECRET_VERSION_DESTROY is published.
+//
+// The atomic store helpers make concurrent ticks (or a read racing the sweep)
+// safe: only the caller that performs each transition publishes its event.
+func (p *Provider) sweepLifecycle(ctx context.Context) {
+	p.lifecycleMu.Lock()
+	accounts := make([]string, 0, len(p.lifecycleSeen))
+	for account := range p.lifecycleSeen {
+		accounts = append(accounts, account)
+	}
+	p.lifecycleMu.Unlock()
+
+	for _, account := range accounts {
+		if ctx.Err() != nil {
+			return
+		}
+		nr := syntheticRequest(account)
+		secrets, err := p.secrets.ListSecrets(ctx, account)
+		if err != nil {
+			continue
+		}
+		now := clock.Now()
+		for _, s := range secrets {
+			if secretmanagersvc.Expired(s, now) {
+				_ = p.expireSecret(ctx, nr, s.ID)
+				continue
+			}
+			if s.Rotation != nil && s.Rotation.NextRotationTime != "" {
+				if next, err := time.Parse(time.RFC3339Nano, s.Rotation.NextRotationTime); err == nil && !now.Before(next) {
+					p.maybeRotate(ctx, nr, s.ID, s)
+				}
+			}
+			versions, err := p.secrets.ListVersions(ctx, account, s.ID)
+			if err != nil {
+				continue
+			}
+			for _, v := range versions {
+				if secretmanagersvc.ScheduledDestroyDue(v, now) {
+					p.finalizeScheduledDestroy(ctx, nr, s.ID, v)
+				}
+			}
+		}
+	}
+}
+
+// syntheticRequest builds the request context a background transition needs for
+// resource-name rendering and notification publishing.
+func syntheticRequest(account string) *model.NormalizedRequest {
+	return &model.NormalizedRequest{
+		AccountID:  account,
+		Params:     map[string]any{},
+		ResourceID: resource.ResourceID(account),
+	}
+}
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
@@ -418,6 +571,7 @@ func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version)
 }
 
 func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	p.TrackProject(nr.AccountID)
 	id, _ := nr.Params["secretId"].(string)
 	if id == "" {
 		if body, ok := nr.Params["body"].(map[string]any); ok {
@@ -503,6 +657,7 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	p.TrackProject(nr.AccountID)
 	secrets, err := p.secrets.ListSecrets(ctx, nr.AccountID)
 	if err != nil {
 		return nil, err
@@ -556,6 +711,7 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 }
 
 func (p *Provider) Get(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	p.TrackProject(nr.AccountID)
 	name, err := resourceName(nr)
 	if err != nil {
 		return nil, err
@@ -761,6 +917,7 @@ func (p *Provider) expireSecret(ctx context.Context, nr *model.NormalizedRequest
 // to operate on, returning the documented 404 once it has expired. A missing
 // secret is left for the handler's own lookup to report.
 func (p *Provider) rejectExpired(ctx context.Context, nr *model.NormalizedRequest, id string) error {
+	p.TrackProject(nr.AccountID)
 	s, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
 	if err != nil || !secretmanagersvc.Expired(s, clock.Now()) {
 		return nil
@@ -782,10 +939,9 @@ func (p *Provider) rejectExpired(ctx context.Context, nr *model.NormalizedReques
 // schedule is notification-only — it publishes a SECRET_ROTATE message to the
 // secret's Pub/Sub topics and reschedules the next one; it never creates a
 // SecretVersion (only *managed* rotation, the Cloud SQL typed secret, adds
-// versions, see RotateSecret). The emulator evaluates the schedule lazily on
-// read (no background worker) and does not deliver the notification yet (the
-// `topics` field is unmodelled, recorded as DC64), so the reschedule is the
-// only observable effect of reading a due secret.
+// versions, see RotateSecret). The proactive sweep advances due schedules;
+// reads still perform the same check for a client that arrives before the next
+// tick, and the message is published to every configured topic.
 //
 // s is the caller's (possibly stale — read by Get/Access some time before
 // this call) snapshot, used only for the cheap up-front "is rotation even
@@ -834,18 +990,17 @@ func (p *Provider) maybeRotate(ctx context.Context, nr *model.NormalizedRequest,
 		return s
 	}
 	// The schedule is notification-only: real Secret Manager publishes
-	// SECRET_ROTATE at nextRotationTime and reschedules. The emulator has no
-	// background worker, so the message goes out when a read observes the due
-	// schedule (DC71).
+	// SECRET_ROTATE at nextRotationTime and reschedules. The background sweep
+	// performs this without traffic; a read that observes the due schedule
+	// before the next tick does the same (DC71).
 	p.notifySecret(ctx, nr, secretmanagersvc.EventSecretRotate, updated)
 	return updated
 }
 
 // finalizeScheduledDestroy applies a due delayed destruction (shared with the
 // gRPC service) and publishes SECRET_VERSION_DESTROY when this call performed
-// it. Real Secret Manager destroys the version without client traffic; the
-// emulator has no background worker, so every version read applies the
-// transition lazily (the same compromise as DC71).
+// it. The background sweep applies it without client traffic; every version
+// read also applies it so the access gate is strict even before the next tick.
 func (p *Provider) finalizeScheduledDestroy(ctx context.Context, nr *model.NormalizedRequest, secretID string, v secretmanagerstore.Version) secretmanagerstore.Version {
 	updated, destroyed := secretmanagersvc.FinalizeScheduledDestroy(ctx, p.secrets, nr.AccountID, secretID, v)
 	if destroyed && p.publisher != nil {

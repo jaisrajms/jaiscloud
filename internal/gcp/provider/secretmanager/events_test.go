@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,16 +27,21 @@ type publishedMessage struct {
 
 // fakePublisher records every notification the provider emits.
 type fakePublisher struct {
+	mu   sync.Mutex
 	msgs []publishedMessage
 }
 
 func (f *fakePublisher) PublishEvent(_ context.Context, accountID, topic string, data []byte, attributes map[string]string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.msgs = append(f.msgs, publishedMessage{account: accountID, topic: topic, data: data, attrs: attributes})
 	return fmt.Sprintf("%d", len(f.msgs)), nil
 }
 
 // drain returns the messages observed so far and clears them.
 func (f *fakePublisher) drain() []publishedMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := f.msgs
 	f.msgs = nil
 	return out
