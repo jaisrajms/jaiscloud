@@ -346,7 +346,7 @@ security-scan-go: ## govulncheck over the whole main module, gated by the cited 
 	go run ./tools/vulnallow -allowlist $(VULN_ALLOWLIST) < "$$tmp"
 
 security-scan-ui: ## pnpm audit against the committed ui/pnpm-lock.yaml (low and up)
-	corepack pnpm --dir ui audit --audit-level=low
+	cd ui && corepack pnpm audit --audit-level=low
 
 # pip-audit resolves the pins into a throwaway --target tree and audits that,
 # which needs no venv (and therefore no ensurepip) on the runner.
