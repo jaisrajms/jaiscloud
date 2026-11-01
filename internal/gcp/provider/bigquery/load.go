@@ -6,12 +6,15 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"math/big"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,7 +23,6 @@ import (
 	"github.com/hamba/avro/v2"
 	"github.com/hamba/avro/v2/ocf"
 	"github.com/parquet-go/parquet-go"
-	"github.com/parquet-go/parquet-go/format"
 
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/gcp/store/gcs"
@@ -417,8 +419,14 @@ func validateLoadOptions(load map[string]any) error {
 			return unsupported("configuration.load." + k + " is not supported")
 		}
 	}
-	if len(stringSlice(load, "decimalTargetTypes")) > 0 || len(stringSlice(load, "nullMarkers")) > 0 {
-		return unsupported("configuration.load decimalTargetTypes/nullMarkers is not supported")
+	if len(stringSlice(load, "nullMarkers")) > 0 {
+		return unsupported("configuration.load.nullMarkers is not supported")
+	}
+	// decimalTargetTypes is supported (it drives the Parquet/Avro DECIMAL target
+	// selection); validate the list here so a bad entry fails before any source
+	// is read.
+	if _, err := parseDecimalTargetTypes(load); err != nil {
+		return err
 	}
 	if boolValue(load, "preserveAsciiControlCharacters") {
 		return unsupported("configuration.load.preserveAsciiControlCharacters is not supported")
@@ -1018,62 +1026,6 @@ func intOption(m map[string]any, key string) (int, error) {
 
 // ─── Parquet ─────────────────────────────────────────────────────────────────
 
-// decodeParquet decodes a Parquet file into schema-coerced rows. The Parquet
-// schema is mapped to BigQuery types (unsupported shapes fail loud before any
-// row is read); each row is reconstructed generically and its logical-typed
-// values are normalized to their canonical string form.
-func decodeParquet(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, invalidArgument("failed to read Parquet source: " + err.Error())
-	}
-	nodes, err := parquetNodes(f.Schema().Fields())
-	if err != nil {
-		return nil, err
-	}
-	ignore := boolValue(load, "ignoreUnknownValues")
-	rdr := parquet.NewReader(f)
-	defer rdr.Close()
-	res := &loadRecords{}
-	row := 0
-	for {
-		raw := map[string]any{}
-		rerr := rdr.Read(&raw)
-		if errors.Is(rerr, io.EOF) {
-			break
-		}
-		row++
-		if rerr != nil {
-			return nil, invalidArgument(fmt.Sprintf("failed to read Parquet row %d: %v", row, rerr))
-		}
-		obj := make(map[string]any, len(nodes))
-		var rerr2 error
-		for _, n := range nodes {
-			v, ok := raw[n.bq.Name]
-			if !ok {
-				continue
-			}
-			nv, nerr := n.normalize(v)
-			if nerr != nil {
-				rerr2 = nerr
-				break
-			}
-			obj[n.bq.Name] = nv
-		}
-		if rerr2 != nil {
-			res.bad = append(res.bad, fmt.Sprintf("row %d: %v", row, rerr2))
-			continue
-		}
-		cv, cerr := coerceRow(fields, obj, ignore)
-		if cerr != nil {
-			res.bad = append(res.bad, fmt.Sprintf("row %d: %v", row, cerr))
-			continue
-		}
-		res.rows = append(res.rows, cv)
-	}
-	return res, nil
-}
-
 // describeSource derives a BigQuery schema from the first source file of a
 // self-describing format (Parquet/Avro).
 func describeSource(format string, load map[string]any, sources []loadSource) ([]schemaField, error) {
@@ -1086,7 +1038,7 @@ func describeSource(format string, load map[string]any, sources []loadSource) ([
 		if err != nil {
 			return nil, invalidArgument("failed to read Parquet source: " + err.Error())
 		}
-		nodes, err := parquetNodes(f.Schema().Fields())
+		nodes, _, err := parquetNodes(f.Schema(), load)
 		if err != nil {
 			return nil, err
 		}
@@ -1096,75 +1048,12 @@ func describeSource(format string, load map[string]any, sources []loadSource) ([
 		if err != nil {
 			return nil, err
 		}
-		return avroSchemaFields(schema, boolValue(load, "useAvroLogicalTypes"))
+		return avroSchemaFields(schema, load)
 	}
 	return nil, model.NewProviderError("Unimplemented", "sourceFormat "+format+" is not self-describing", 501)
 }
 
-// pqNode is a normalized view of one Parquet schema node: its BigQuery field
-// shape plus the conversion needed to turn the decoded Go value into a
-// BigQuery-compatible value.
-type pqNode struct {
-	bq       schemaField
-	scalar   func(any) (any, error)
-	fields   map[string]*pqNode
-	repeated bool
-	elem     *pqNode
-}
-
-// normalize converts a decoded Parquet value (recursing for RECORD/REPEATED).
-func (n *pqNode) normalize(v any) (any, error) {
-	if v == nil {
-		return nil, nil
-	}
-	if n.repeated {
-		arr, ok := v.([]any)
-		if !ok {
-			return nil, fmt.Errorf("field %q: expected an array, got %T", n.bq.Name, v)
-		}
-		out := make([]any, 0, len(arr))
-		for _, e := range arr {
-			nv, err := n.elem.normalizeValue(e)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, nv)
-		}
-		return out, nil
-	}
-	return n.normalizeValue(v)
-}
-
-func (n *pqNode) normalizeValue(v any) (any, error) {
-	if v == nil {
-		return nil, nil
-	}
-	if len(n.fields) > 0 {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("field %q: expected an object, got %T", n.bq.Name, v)
-		}
-		out := make(map[string]any, len(m))
-		for k, cv := range m {
-			child, ok := n.fields[strings.ToLower(k)]
-			if !ok {
-				out[k] = cv
-				continue
-			}
-			nv, err := child.normalize(cv)
-			if err != nil {
-				return nil, err
-			}
-			out[child.bq.Name] = nv
-		}
-		return out, nil
-	}
-	if n.scalar != nil {
-		return n.scalar(v)
-	}
-	return v, nil
-}
-
+// nodesSchema projects normalized Parquet nodes onto their BigQuery fields.
 func nodesSchema(nodes []*pqNode) []schemaField {
 	out := make([]schemaField, 0, len(nodes))
 	for _, n := range nodes {
@@ -1173,241 +1062,56 @@ func nodesSchema(nodes []*pqNode) []schemaField {
 	return out
 }
 
-func nodeChildMap(nodes []*pqNode) map[string]*pqNode {
-	m := make(map[string]*pqNode, len(nodes))
-	for _, n := range nodes {
-		m[strings.ToLower(n.bq.Name)] = n
-	}
-	return m
-}
+// ─── Avro ────────────────────────────────────────────────────────────────────
 
-// parquetNodes maps a Parquet field list to normalized nodes, failing loud on
-// shapes the subset cannot represent (MAP, VARIANT, GEOMETRY, DECIMAL, ...).
-func parquetNodes(fields []parquet.Field) ([]*pqNode, error) {
-	out := make([]*pqNode, 0, len(fields))
-	for _, f := range fields {
-		n, err := parquetNode(f)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, nil
-}
+// The Avro contract implemented here is the conversion table on
+// https://cloud.google.com/bigquery/docs/loading-data-cloud-storage-avro
+// (page rev 2026-10-27):
+//
+//	record          -> RECORD
+//	enum            -> STRING
+//	array           -> repeated field ("Arrays of arrays are not supported")
+//	map<T>          -> "a repeated RECORD that contains two fields: a key and a
+//	                   value. BigQuery stores the key as a STRING, and converts
+//	                   the value to its corresponding data type"
+//	union           -> "When union only has one non-null type, it converts to a
+//	                   nullable field. Otherwise it converts to a RECORD with a
+//	                   list of nullable fields. Only one of these fields will be
+//	                   set at read time."
+//	fixed           -> BYTES
+//	null            -> ignored
+//	boolean/int/long/float/double/bytes/string -> BOOLEAN/INTEGER/FLOAT/BYTES/STRING
+//
+// Logical types (ignored unless useAvroLogicalTypes is true, except decimal and
+// duration which the table converts in both columns):
+//
+//	date                    -> INTEGER | DATE
+//	time-millis             -> INTEGER | TIME
+//	time-micros             -> INTEGER | TIME
+//	timestamp-millis        -> INTEGER | TIMESTAMP
+//	timestamp-micros        -> INTEGER | TIMESTAMP
+//	local-timestamp-millis  -> INTEGER | DATETIME
+//	local-timestamp-micros  -> INTEGER | DATETIME
+//	duration                -> BYTES   | BYTES ("converted from fixed type of size 12")
+//	decimal                 -> NUMERIC/BIGNUMERIC/STRING in both columns
+//	                           (JobConfigurationLoad.decimalTargetTypes)
 
-func parquetNode(f parquet.Field) (*pqNode, error) {
-	name := f.Name()
-	if !f.Leaf() {
-		lt := f.Type().LogicalType()
-		if lt != nil {
-			switch {
-			case lt.List != nil:
-				kids := f.Fields()
-				if len(kids) != 1 {
-					return nil, unsupportedParquetShape("LIST", name)
-				}
-				elems := kids[0].Fields()
-				if len(elems) != 1 {
-					return nil, unsupportedParquetShape("LIST", name)
-				}
-				elem, err := parquetNode(elems[0])
-				if err != nil {
-					return nil, err
-				}
-				n := &pqNode{bq: elem.bq, repeated: true, elem: elem}
-				n.bq.Mode = "REPEATED"
-				n.bq.Name = name
-				return n, nil
-			case lt.Map != nil:
-				return nil, unsupportedParquetShape("MAP", name)
-			case lt.Variant != nil:
-				return nil, unsupportedParquetShape("VARIANT", name)
-			case lt.Geometry != nil:
-				return nil, unsupportedParquetShape("GEOMETRY", name)
-			case lt.Geography != nil:
-				return nil, unsupportedParquetShape("GEOGRAPHY", name)
-			}
-		}
-		kids := f.Fields()
-		if len(kids) == 0 {
-			return nil, unsupportedParquetShape("empty group", name)
-		}
-		children, err := parquetNodes(kids)
-		if err != nil {
-			return nil, err
-		}
-		sf := schemaField{Name: name, Type: "RECORD", Mode: parquetMode(f)}
-		if f.Repeated() {
-			// A legacy repeated group without the LIST logical type: treat it as a
-			// REPEATED RECORD rather than silently dropping the repetition.
-			sf.Mode = "REPEATED"
-			for _, c := range children {
-				sf.Fields = append(sf.Fields, c.bq)
-			}
-			elem := &pqNode{bq: sf, fields: nodeChildMap(children)}
-			elem.bq.Mode = "NULLABLE"
-			return &pqNode{bq: sf, repeated: true, elem: elem}, nil
-		}
-		for _, c := range children {
-			sf.Fields = append(sf.Fields, c.bq)
-		}
-		return &pqNode{bq: sf, fields: nodeChildMap(children)}, nil
-	}
-	leaf, err := parquetLeaf(f)
+// decodeAvro decodes an Avro Object Container File into schema-coerced rows.
+// useAvroLogicalTypes controls whether the date/time/timestamp logical types
+// become BigQuery DATE/TIME/TIMESTAMP/DATETIME (true) or stay their raw integer
+// base type (false) — matching the Discovery default of false.
+func decodeAvro(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
+	mapper, err := newAvroMapper(load)
 	if err != nil {
 		return nil, err
 	}
-	if f.Repeated() {
-		n := &pqNode{bq: leaf.bq, repeated: true, elem: leaf}
-		n.bq.Mode = "REPEATED"
-		return n, nil
-	}
-	return leaf, nil
-}
-
-func parquetLeaf(f parquet.Field) (*pqNode, error) {
-	bqType, conv, err := parquetType(f.Type())
-	if err != nil {
-		return nil, fmt.Errorf("Parquet field %q: %w", f.Name(), err)
-	}
-	sf := schemaField{Name: f.Name(), Type: bqType, Mode: parquetMode(f)}
-	return &pqNode{bq: sf, scalar: conv}, nil
-}
-
-func parquetMode(f parquet.Field) string {
-	if f.Required() {
-		return "REQUIRED"
-	}
-	return "NULLABLE"
-}
-
-func unsupportedParquetShape(shape, name string) error {
-	return model.NewProviderError("Unimplemented",
-		"Parquet "+shape+" field "+strconv.Quote(name)+" is not supported", 501)
-}
-
-// parquetType maps a Parquet leaf type (with its logical type) to a BigQuery
-// type and the conversion of a decoded value to a BigQuery-compatible value.
-func parquetType(t parquet.Type) (string, func(any) (any, error), error) {
-	if lt := t.LogicalType(); lt != nil {
-		switch {
-		case lt.Date != nil:
-			return "DATE", parquetDate, nil
-		case lt.Time != nil:
-			factor, err := parquetTimeFactor(lt.Time.Unit)
-			if err != nil {
-				return "", nil, err
-			}
-			return "TIME", func(v any) (any, error) { return parquetTime(v, factor) }, nil
-		case lt.Timestamp != nil:
-			factor, err := parquetTimeFactor(lt.Timestamp.Unit)
-			if err != nil {
-				return "", nil, err
-			}
-			if !lt.Timestamp.IsAdjustedToUTC {
-				// A local (non-UTC-adjusted) timestamp is a BigQuery DATETIME.
-				return "DATETIME", func(v any) (any, error) { return parquetDatetime(v, factor) }, nil
-			}
-			return "TIMESTAMP", func(v any) (any, error) { return parquetTimestamp(v, factor) }, nil
-		case lt.Decimal != nil:
-			return "", nil, fmt.Errorf("DECIMAL is not supported")
-		case lt.UTF8 != nil, lt.Enum != nil, lt.Json != nil, lt.UUID != nil:
-			return "STRING", nil, nil
-		case lt.Bson != nil:
-			return "BYTES", nil, nil
-		case lt.Integer != nil:
-			return "INTEGER", nil, nil
-		case lt.Float16 != nil:
-			return "FLOAT", nil, nil
-		case lt.Unknown != nil:
-			return "", nil, fmt.Errorf("NULL type is not supported")
-		}
-	}
-	switch t.Kind() {
-	case parquet.Boolean:
-		return "BOOLEAN", nil, nil
-	case parquet.Int32, parquet.Int64:
-		return "INTEGER", nil, nil
-	case parquet.Float, parquet.Double:
-		return "FLOAT", nil, nil
-	case parquet.ByteArray, parquet.FixedLenByteArray:
-		return "BYTES", nil, nil
-	}
-	return "", nil, fmt.Errorf("type %s is not supported", t)
-}
-
-// parquetTimeFactor returns the nanoseconds-per-unit factor for a Parquet time
-// or timestamp unit.
-func parquetTimeFactor(u format.TimeUnit) (int64, error) {
-	switch {
-	case u.Millis != nil:
-		return int64(time.Millisecond), nil
-	case u.Micros != nil:
-		return int64(time.Microsecond), nil
-	case u.Nanos != nil:
-		return int64(time.Nanosecond), nil
-	}
-	return 0, fmt.Errorf("unknown time unit")
-}
-
-// parquetDate converts a Parquet DATE (days since the Unix epoch) to a BigQuery
-// DATE string.
-func parquetDate(v any) (any, error) {
-	n, ok := int64Value(v)
-	if !ok {
-		return nil, fmt.Errorf("DATE value is not an integer")
-	}
-	return time.Unix(n*86400, 0).UTC().Format("2006-01-02"), nil
-}
-
-// parquetTime converts a Parquet TIME (a count of units since midnight) to a
-// BigQuery TIME string.
-func parquetTime(v any, factor int64) (any, error) {
-	n, ok := int64Value(v)
-	if !ok {
-		return nil, fmt.Errorf("TIME value is not an integer")
-	}
-	return formatDuration(time.Duration(n) * time.Duration(factor)), nil
-}
-
-// parquetTimestamp converts a Parquet TIMESTAMP (a count of units since the
-// Unix epoch) to a BigQuery TIMESTAMP string.
-func parquetTimestamp(v any, factor int64) (any, error) {
-	n, ok := int64Value(v)
-	if !ok {
-		return nil, fmt.Errorf("TIMESTAMP value is not an integer")
-	}
-	ts := time.Unix(0, n*factor).UTC()
-	return trimFraction(ts.Format("2006-01-02 15:04:05.000000000")) + " UTC", nil
-}
-
-// parquetDatetime converts a Parquet local (non-UTC-adjusted) TIMESTAMP to a
-// BigQuery DATETIME string.
-func parquetDatetime(v any, factor int64) (any, error) {
-	n, ok := int64Value(v)
-	if !ok {
-		return nil, fmt.Errorf("TIMESTAMP value is not an integer")
-	}
-	ts := time.Unix(0, n*factor).UTC()
-	return trimFraction(ts.Format("2006-01-02T15:04:05.000000000")), nil
-}
-
-// ─── Avro ────────────────────────────────────────────────────────────────────
-
-// decodeAvro decodes an Avro Object Container File into schema-coerced rows.
-// useAvroLogicalTypes controls whether logical types (date/time/timestamp) are
-// interpreted as BigQuery DATE/TIME/TIMESTAMP/DATETIME (true) or left as their
-// raw integer base types (false) — matching the Discovery default of false.
-func decodeAvro(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
-	useLogical := boolValue(load, "useAvroLogicalTypes")
-	// Validate the embedded schema's shapes first so an unsupported field (map,
-	// decimal, multi-type union) fails loud even when an explicit schema was
-	// supplied.
+	// Validate the embedded schema's shapes first so an unsupported field fails
+	// loud even when an explicit schema was supplied.
 	schema, serr := avroSourceSchema(data)
 	if serr != nil {
 		return nil, serr
 	}
-	if _, aerr := avroSchemaFields(schema, useLogical); aerr != nil {
+	if _, aerr := mapper.fields(schema); aerr != nil {
 		return nil, aerr
 	}
 	dec, err := ocf.NewDecoder(bytes.NewReader(data))
@@ -1424,22 +1128,27 @@ func decodeAvro(load map[string]any, fields []schemaField, data []byte) (*loadRe
 			res.bad = append(res.bad, fmt.Sprintf("row %d: %v", row, err))
 			continue
 		}
-		if !useLogical {
-			raw, rerr := avroRawify(schema, rec)
-			if rerr != nil {
-				res.bad = append(res.bad, fmt.Sprintf("row %d: %v", row, rerr))
-				continue
+		normalized, nerr := mapper.normalize(schema, rec)
+		if nerr != nil {
+			var rangeErr *decimalRangeError
+			if errors.As(nerr, &rangeErr) {
+				// Same contract as Parquet: a value the selected decimal target
+				// cannot hold is a request-level InvalidArgument.
+				return nil, invalidArgument(fmt.Sprintf("Avro row %d: %v", row, rangeErr))
 			}
-			if m, ok := raw.(map[string]any); ok {
-				rec = m
-			}
+			res.bad = append(res.bad, fmt.Sprintf("row %d: %v", row, nerr))
+			continue
 		}
-		obj, cerr := coerceRow(fields, rec, ignore)
+		obj, ok := normalized.(map[string]any)
+		if !ok {
+			return nil, invalidArgument("Avro source must contain records")
+		}
+		cv, cerr := coerceRow(fields, obj, ignore)
 		if cerr != nil {
 			res.bad = append(res.bad, fmt.Sprintf("row %d: %v", row, cerr))
 			continue
 		}
-		res.rows = append(res.rows, obj)
+		res.rows = append(res.rows, cv)
 	}
 	if err := dec.Error(); err != nil {
 		return nil, invalidArgument("failed to read Avro source: " + err.Error())
@@ -1464,18 +1173,42 @@ func avroSourceSchema(data []byte) (avro.Schema, error) {
 	return schema, nil
 }
 
-// avroSchemaFields maps an Avro record schema to BigQuery fields, failing loud
-// on shapes the subset cannot represent (map, decimal, duration, multi-type
-// unions). useLogical selects whether logical types become DATE/TIME/TIMESTAMP/
-// DATETIME or their raw integer base types (the Discovery default is false).
-func avroSchemaFields(schema avro.Schema, useLogical bool) ([]schemaField, error) {
+// avroMapper maps an Avro schema to BigQuery fields and decoded values to
+// BigQuery-shaped values with one shared configuration.
+type avroMapper struct {
+	useLogical bool
+	targets    []decimalTarget
+}
+
+func newAvroMapper(load map[string]any) (*avroMapper, error) {
+	targets, err := parseDecimalTargetTypes(load)
+	if err != nil {
+		return nil, err
+	}
+	return &avroMapper{useLogical: boolValue(load, "useAvroLogicalTypes"), targets: targets}, nil
+}
+
+// avroSchemaFields maps an Avro record schema to BigQuery fields.
+func avroSchemaFields(schema avro.Schema, load map[string]any) ([]schemaField, error) {
+	mapper, err := newAvroMapper(load)
+	if err != nil {
+		return nil, err
+	}
+	return mapper.fields(schema)
+}
+
+func (m *avroMapper) fields(schema avro.Schema) ([]schemaField, error) {
 	rs, ok := schema.(*avro.RecordSchema)
 	if !ok {
 		return nil, invalidArgument("Avro source must contain records")
 	}
 	out := make([]schemaField, 0, len(rs.Fields()))
 	for _, f := range rs.Fields() {
-		sf, err := avroField(f.Name(), f.Type(), useLogical)
+		if avroNullOnly(f.Type()) {
+			// "null | BigQuery ignores these values".
+			continue
+		}
+		sf, err := m.field(f.Name(), f.Type())
 		if err != nil {
 			return nil, err
 		}
@@ -1484,25 +1217,35 @@ func avroSchemaFields(schema avro.Schema, useLogical bool) ([]schemaField, error
 	return out, nil
 }
 
-func avroField(name string, s avro.Schema, useLogical bool) (schemaField, error) {
+func (m *avroMapper) field(name string, s avro.Schema) (schemaField, error) {
+	s = avroDeref(s)
 	if u, ok := s.(*avro.UnionSchema); ok {
-		var nonNull []avro.Schema
-		for _, t := range u.Types() {
-			if t.Type() == avro.Null {
-				continue
+		nonNull := avroNonNullTypes(u)
+		if len(nonNull) == 0 {
+			return schemaField{}, avroUnsupported(name, "union with no non-null type")
+		}
+		if len(nonNull) == 1 {
+			sf, err := m.field(name, nonNull[0])
+			if err != nil {
+				return schemaField{}, err
 			}
-			nonNull = append(nonNull, t)
+			if !strings.EqualFold(sf.Mode, "REPEATED") {
+				sf.Mode = "NULLABLE"
+			}
+			return sf, nil
 		}
-		if len(nonNull) != 1 {
-			return schemaField{}, model.NewProviderError("Unimplemented",
-				"Avro field "+strconv.Quote(name)+" has a union with more than one non-null type, which is not supported", 501)
-		}
-		sf, err := avroField(name, nonNull[0], useLogical)
-		if err != nil {
-			return schemaField{}, err
-		}
-		if !strings.EqualFold(sf.Mode, "REPEATED") {
-			sf.Mode = "NULLABLE"
+		// "Otherwise it converts to a RECORD with a list of nullable fields.
+		// Only one of these fields will be set at read time."
+		sf := schemaField{Name: name, Type: "RECORD", Mode: "NULLABLE"}
+		for _, branch := range nonNull {
+			bf, err := m.field(avroUnionFieldName(branch), branch)
+			if err != nil {
+				return schemaField{}, err
+			}
+			if !strings.EqualFold(bf.Mode, "REPEATED") {
+				bf.Mode = "NULLABLE"
+			}
+			sf.Fields = append(sf.Fields, bf)
 		}
 		return sf, nil
 	}
@@ -1512,7 +1255,7 @@ func avroField(name string, s avro.Schema, useLogical bool) (schemaField, error)
 			case avro.Date, avro.TimeMillis, avro.TimeMicros,
 				avro.TimestampMillis, avro.TimestampMicros,
 				avro.LocalTimestampMillis, avro.LocalTimestampMicros:
-				if !useLogical {
+				if !m.useLogical {
 					return avroBaseField(name, s)
 				}
 				switch lt.Type() {
@@ -1528,15 +1271,21 @@ func avroField(name string, s avro.Schema, useLogical bool) (schemaField, error)
 			case avro.UUID:
 				return schemaField{Name: name, Type: "STRING", Mode: "NULLABLE"}, nil
 			case avro.Decimal:
-				return schemaField{}, avroUnsupported(name, "DECIMAL")
+				decimal, ok := lt.(*avro.DecimalLogicalSchema)
+				if !ok {
+					return schemaField{}, avroUnsupported(name, "DECIMAL")
+				}
+				target := selectDecimalTarget(m.targets, decimal.Precision(), decimal.Scale())
+				return schemaField{Name: name, Type: target.name, Mode: "NULLABLE"}, nil
 			case avro.Duration:
-				return schemaField{}, avroUnsupported(name, "DURATION")
+				// "BYTES (converted from fixed type of size 12)" in both columns.
+				return schemaField{Name: name, Type: "BYTES", Mode: "NULLABLE"}, nil
 			}
 		}
 	}
 	switch t := s.(type) {
 	case *avro.RecordSchema:
-		sub, err := avroSchemaFields(s, useLogical)
+		sub, err := m.fields(s)
 		if err != nil {
 			return schemaField{}, err
 		}
@@ -1544,14 +1293,30 @@ func avroField(name string, s avro.Schema, useLogical bool) (schemaField, error)
 	case *avro.EnumSchema:
 		return schemaField{Name: name, Type: "STRING", Mode: "NULLABLE"}, nil
 	case *avro.ArraySchema:
-		elem, err := avroField(name, t.Items(), useLogical)
+		elem, err := m.field(name, t.Items())
 		if err != nil {
 			return schemaField{}, err
+		}
+		if strings.EqualFold(elem.Mode, "REPEATED") {
+			// "Arrays of arrays are not supported."
+			return schemaField{}, model.NewProviderError("Unimplemented",
+				"Avro field "+strconv.Quote(name)+" is an array of arrays, which BigQuery does not support "+
+					"(https://cloud.google.com/bigquery/docs/loading-data-cloud-storage-avro: \"Arrays of arrays are not supported\")", 501)
 		}
 		elem.Mode = "REPEATED"
 		return elem, nil
 	case *avro.MapSchema:
-		return schemaField{}, avroUnsupported(name, "MAP")
+		// "BigQuery converts an Avro map<T> field to a repeated RECORD that
+		// contains two fields: a key and a value. BigQuery stores the key as a
+		// STRING, and converts the value to its corresponding data type."
+		value, err := m.field("value", t.Values())
+		if err != nil {
+			return schemaField{}, err
+		}
+		return schemaField{Name: name, Type: "RECORD", Mode: "REPEATED", Fields: []schemaField{
+			{Name: "key", Type: "STRING", Mode: "NULLABLE"},
+			value,
+		}}, nil
 	case *avro.FixedSchema:
 		return schemaField{Name: name, Type: "BYTES", Mode: "NULLABLE"}, nil
 	case *avro.PrimitiveSchema:
@@ -1562,11 +1327,12 @@ func avroField(name string, s avro.Schema, useLogical bool) (schemaField, error)
 			return schemaField{Name: name, Type: "INTEGER", Mode: "NULLABLE"}, nil
 		case avro.Float, avro.Double:
 			return schemaField{Name: name, Type: "FLOAT", Mode: "NULLABLE"}, nil
-		case avro.String, avro.Bytes:
-			if t.Type() == avro.String {
-				return schemaField{Name: name, Type: "STRING", Mode: "NULLABLE"}, nil
-			}
+		case avro.String:
+			return schemaField{Name: name, Type: "STRING", Mode: "NULLABLE"}, nil
+		case avro.Bytes:
 			return schemaField{Name: name, Type: "BYTES", Mode: "NULLABLE"}, nil
+		case avro.Null:
+			return schemaField{}, avroUnsupported(name, "NULL")
 		}
 	}
 	return schemaField{}, model.NewProviderError("Unimplemented",
@@ -1591,69 +1357,59 @@ func avroBaseField(name string, s avro.Schema) (schemaField, error) {
 	return schemaField{}, avroUnsupported(name, "logical type "+string(ps.Type()))
 }
 
-// avroRawify converts hamba's logical-typed Go values (time.Time, time.Duration)
-// back to the raw Avro base values when useAvroLogicalTypes is false, walking
-// the writer schema.
-func avroRawify(schema avro.Schema, v any) (any, error) {
+// normalize converts a decoded hamba value into the BigQuery-shaped value for
+// its writer schema: a union unwraps (one non-null branch) or becomes a
+// one-field RECORD (several branches), a map becomes a repeated {key,value}
+// RECORD, a decimal becomes an exact decimal string and a duration becomes its
+// 12-byte representation.
+func (m *avroMapper) normalize(s avro.Schema, v any) (any, error) {
+	s = avroDeref(s)
 	if v == nil {
 		return nil, nil
 	}
-	if u, ok := schema.(*avro.UnionSchema); ok {
-		var nonNull avro.Schema
-		for _, t := range u.Types() {
-			if t.Type() != avro.Null {
-				nonNull = t
-				break
-			}
-		}
-		if nonNull == nil {
-			return v, nil
-		}
-		return avroRawify(nonNull, v)
+	if u, ok := s.(*avro.UnionSchema); ok {
+		return m.normalizeUnion(u, v)
 	}
-	if ls, ok := schema.(avro.LogicalTypeSchema); ok {
+	if ls, ok := s.(avro.LogicalTypeSchema); ok {
 		if lt := ls.Logical(); lt != nil {
 			switch lt.Type() {
-			case avro.Date:
-				if t, ok := v.(time.Time); ok {
-					return int32(t.Unix() / 86400), nil
+			case avro.Decimal:
+				return m.decimal(s, v)
+			case avro.Duration:
+				if d, ok := v.(avro.LogicalDuration); ok {
+					return avroDurationBytes(d), nil
 				}
-			case avro.TimeMillis:
-				if d, ok := v.(time.Duration); ok {
-					return int32(d.Milliseconds()), nil
+				return v, nil
+			case avro.Date, avro.TimeMillis, avro.TimeMicros,
+				avro.TimestampMillis, avro.TimestampMicros,
+				avro.LocalTimestampMillis, avro.LocalTimestampMicros:
+				if !m.useLogical {
+					return avroRawLogical(lt.Type(), v), nil
 				}
-			case avro.TimeMicros:
-				if d, ok := v.(time.Duration); ok {
-					return d.Microseconds(), nil
-				}
-			case avro.TimestampMillis, avro.LocalTimestampMillis:
-				if t, ok := v.(time.Time); ok {
-					return t.UnixMilli(), nil
-				}
-			case avro.TimestampMicros, avro.LocalTimestampMicros:
-				if t, ok := v.(time.Time); ok {
-					return t.UnixMicro(), nil
-				}
+				return v, nil
 			}
-			return v, nil
 		}
 	}
-	switch t := schema.(type) {
+	switch t := s.(type) {
 	case *avro.RecordSchema:
-		m, ok := v.(map[string]any)
+		mv, ok := v.(map[string]any)
 		if !ok {
 			return v, nil
 		}
-		out := make(map[string]any, len(m))
-		for k, fv := range m {
+		out := make(map[string]any, len(mv))
+		for k, fv := range mv {
 			out[k] = fv
 		}
 		for _, f := range t.Fields() {
-			fv, ok := m[f.Name()]
+			if avroNullOnly(f.Type()) {
+				delete(out, f.Name())
+				continue
+			}
+			fv, ok := mv[f.Name()]
 			if !ok {
 				continue
 			}
-			nv, err := avroRawify(f.Type(), fv)
+			nv, err := m.normalize(f.Type(), fv)
 			if err != nil {
 				return nil, err
 			}
@@ -1667,20 +1423,249 @@ func avroRawify(schema avro.Schema, v any) (any, error) {
 		}
 		out := make([]any, len(arr))
 		for i, e := range arr {
-			nv, err := avroRawify(t.Items(), e)
+			nv, err := m.normalize(t.Items(), e)
 			if err != nil {
 				return nil, err
 			}
 			out[i] = nv
 		}
 		return out, nil
+	case *avro.MapSchema:
+		mv, ok := v.(map[string]any)
+		if !ok {
+			return v, nil
+		}
+		keys := make([]string, 0, len(mv))
+		for k := range mv {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make([]any, 0, len(keys))
+		for _, k := range keys {
+			nv, err := m.normalize(t.Values(), mv[k])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, map[string]any{"key": k, "value": nv})
+		}
+		return out, nil
+	case *avro.FixedSchema:
+		return avroFixedBytes(v), nil
+	case *avro.EnumSchema:
+		return v, nil
 	}
 	return v, nil
 }
 
+func (m *avroMapper) normalizeUnion(u *avro.UnionSchema, v any) (any, error) {
+	nonNull := avroNonNullTypes(u)
+	if len(nonNull) == 0 {
+		return nil, nil
+	}
+	if len(nonNull) == 1 {
+		// hamba decodes a union into a one-entry map keyed by the branch type
+		// name; unwrap it (the previous decoder passed that wrapper through).
+		inner := v
+		if wrapper, ok := v.(map[string]any); ok && len(wrapper) == 1 {
+			if branchValue, ok := wrapper[avroBranchKey(nonNull[0])]; ok {
+				inner = branchValue
+			}
+		}
+		return m.normalize(nonNull[0], inner)
+	}
+	wrapper, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("Avro union value has unexpected type %T", v)
+	}
+	for _, branch := range nonNull {
+		branchValue, ok := wrapper[avroBranchKey(branch)]
+		if !ok {
+			continue
+		}
+		nv, err := m.normalize(branch, branchValue)
+		if err != nil {
+			return nil, err
+		}
+		// "Only one of these fields will be set at read time."
+		return map[string]any{avroUnionFieldName(branch): nv}, nil
+	}
+	return nil, fmt.Errorf("Avro union value does not carry a known branch (got keys %v)", mapKeys(wrapper))
+}
+
+// decimal renders a decoded Avro decimal (*big.Rat, or raw bytes) as the exact
+// decimal string for the target selected from decimalTargetTypes.
+func (m *avroMapper) decimal(s avro.Schema, v any) (any, error) {
+	decimal, ok := s.(avro.LogicalTypeSchema).Logical().(*avro.DecimalLogicalSchema)
+	if !ok {
+		return nil, fmt.Errorf("Avro DECIMAL field has no decimal logical schema")
+	}
+	unscaled, err := avroDecimalUnscaled(v, decimal.Scale())
+	if err != nil {
+		return nil, err
+	}
+	target := selectDecimalTarget(m.targets, decimal.Precision(), decimal.Scale())
+	return renderDecimal(unscaled, decimal.Scale(), target, decimal.Precision())
+}
+
+// avroDecimalUnscaled turns the decoded value into the unscaled integer for the
+// schema's scale. hamba decodes a bytes/fixed decimal into a *big.Rat holding
+// exactly unscaled/10^scale.
+func avroDecimalUnscaled(v any, scale int) (*big.Int, error) {
+	switch x := v.(type) {
+	case *big.Rat:
+		return ratUnscaled(x, scale)
+	case big.Rat:
+		return ratUnscaled(&x, scale)
+	case []byte:
+		return decimalFromBytes(x), nil
+	}
+	return nil, fmt.Errorf("Avro DECIMAL value has unexpected type %T", v)
+}
+
+func ratUnscaled(r *big.Rat, scale int) (*big.Int, error) {
+	scaled := new(big.Int).Mul(r.Num(), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
+	quotient, remainder := new(big.Int).QuoRem(scaled, r.Denom(), new(big.Int))
+	if remainder.Sign() != 0 {
+		return nil, fmt.Errorf("Avro DECIMAL value %s has more than %d fractional digits", r.RatString(), scale)
+	}
+	return quotient, nil
+}
+
+// avroRawLogical converts a logical-typed value back to its raw Avro base value
+// when useAvroLogicalTypes is false.
+func avroRawLogical(lt avro.LogicalType, v any) any {
+	switch lt {
+	case avro.Date:
+		if t, ok := v.(time.Time); ok {
+			return int32(t.Unix() / 86400)
+		}
+	case avro.TimeMillis:
+		if d, ok := v.(time.Duration); ok {
+			return int32(d.Milliseconds())
+		}
+	case avro.TimeMicros:
+		if d, ok := v.(time.Duration); ok {
+			return d.Microseconds()
+		}
+	case avro.TimestampMillis, avro.LocalTimestampMillis:
+		if t, ok := v.(time.Time); ok {
+			return t.UnixMilli()
+		}
+	case avro.TimestampMicros, avro.LocalTimestampMicros:
+		if t, ok := v.(time.Time); ok {
+			return t.UnixMicro()
+		}
+	}
+	return v
+}
+
+// avroDurationBytes renders a duration logical value as the 12-byte fixed value
+// the Avro spec defines (three little-endian uint32: months, days, millis),
+// which is what BigQuery stores in the BYTES column.
+func avroDurationBytes(d avro.LogicalDuration) []byte {
+	b := make([]byte, 12)
+	binary.LittleEndian.PutUint32(b[0:4], d.Months)
+	binary.LittleEndian.PutUint32(b[4:8], d.Days)
+	binary.LittleEndian.PutUint32(b[8:12], d.Milliseconds)
+	return b
+}
+
+// avroFixedBytes renders hamba's fixed-width array value as bytes.
+func avroFixedBytes(v any) any {
+	if b, ok := v.([]byte); ok {
+		return b
+	}
+	rv := reflect.ValueOf(v)
+	if rv.IsValid() && rv.Kind() == reflect.Array && rv.Type().Elem().Kind() == reflect.Uint8 {
+		b := make([]byte, rv.Len())
+		reflect.Copy(reflect.ValueOf(b), rv)
+		return b
+	}
+	return v
+}
+
+func avroDeref(s avro.Schema) avro.Schema {
+	if rs, ok := s.(*avro.RefSchema); ok {
+		return rs.Schema()
+	}
+	return s
+}
+
+// avroNullOnly reports whether a schema can only hold null — the Avro "null"
+// type itself or a union with no non-null member — which BigQuery ignores.
+func avroNullOnly(s avro.Schema) bool {
+	s = avroDeref(s)
+	if s.Type() == avro.Null {
+		return true
+	}
+	if u, ok := s.(*avro.UnionSchema); ok {
+		return len(avroNonNullTypes(u)) == 0
+	}
+	return false
+}
+
+func avroNonNullTypes(u *avro.UnionSchema) []avro.Schema {
+	out := make([]avro.Schema, 0, len(u.Types()))
+	for _, t := range u.Types() {
+		if t.Type() == avro.Null {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// avroBranchKey mirrors hamba's branch key for a union member, which is the key
+// hamba uses in the map it decodes a union into: a named schema's full name, or
+// the type name (plus the logical type) otherwise.
+func avroBranchKey(s avro.Schema) string {
+	s = avroDeref(s)
+	if named, ok := s.(avro.NamedSchema); ok {
+		return named.FullName()
+	}
+	name := string(s.Type())
+	if ls, ok := s.(avro.LogicalTypeSchema); ok {
+		if lt := ls.Logical(); lt != nil {
+			name += "." + string(lt.Type())
+		}
+	}
+	return name
+}
+
+// avroUnionFieldName is the BigQuery field name of a multi-branch union's
+// branch: the Avro branch name (the same key the reference decoder uses),
+// sanitised to a BigQuery-valid identifier.
+func avroUnionFieldName(s avro.Schema) string {
+	key := avroBranchKey(s)
+	var b strings.Builder
+	for i, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9' && i > 0:
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "value"
+	}
+	return b.String()
+}
+
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func avroUnsupported(name, shape string) error {
 	return model.NewProviderError("Unimplemented",
-		"Avro "+shape+" field "+strconv.Quote(name)+" is not supported", 501)
+		"Avro "+shape+" field "+strconv.Quote(name)+" is not supported by BigQuery", 501)
 }
 
 // ─── Autodetect ──────────────────────────────────────────────────────────────
