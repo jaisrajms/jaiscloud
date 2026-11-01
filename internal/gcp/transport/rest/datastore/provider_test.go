@@ -214,6 +214,80 @@ func TestRESTRunQueryProjection(t *testing.T) {
 	}
 }
 
+// TestRESTRunQueryNestedProjection verifies that a dotted projection path is
+// resolved against embedded entities on the REST wire, returning the leaf with
+// its enclosing structure (DGT6).
+func TestRESTRunQueryNestedProjection(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	_, err := call(t, c, p, "test", "commit", map[string]any{
+		"mode": "NON_TRANSACTIONAL",
+		"mutations": []any{
+			map[string]any{"upsert": map[string]any{
+				"key": nameKey("Task", "a"),
+				"properties": map[string]any{
+					"a": map[string]any{"entityValue": map[string]any{
+						"properties": map[string]any{
+							"b": map[string]any{"entityValue": map[string]any{
+								"properties": map[string]any{"c": map[string]any{"integerValue": "7"}},
+							}},
+							"e": map[string]any{"stringValue": "drop"},
+						},
+					}},
+					"plain": map[string]any{"integerValue": "1"},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	run := func(name string) (*model.ProviderResponse, error) {
+		return call(t, c, p, "test", "runQuery", map[string]any{
+			"query": map[string]any{
+				"kind":       []any{map[string]any{"name": "Task"}},
+				"projection": []any{map[string]any{"property": map[string]any{"name": name}}},
+			},
+		})
+	}
+
+	rq, err := run("a.b.c")
+	if err != nil {
+		t.Fatalf("runQuery(a.b.c): %v", err)
+	}
+	batch := rq.Data["batch"].(map[string]any)
+	ers := batch["entityResults"].([]any)
+	props := ers[0].(map[string]any)["entity"].(map[string]any)["properties"].(map[string]any)
+	aProps := props["a"].(map[string]any)["entityValue"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := aProps["e"]; ok {
+		t.Fatal("nested projection must drop the un-projected sibling a.e")
+	}
+	bProps := aProps["b"].(map[string]any)["entityValue"].(map[string]any)["properties"].(map[string]any)
+	if got := bProps["c"].(map[string]any)["integerValue"]; got != "7" {
+		t.Fatalf("a.b.c = %v, want 7", got)
+	}
+
+	// A repeated parent is an invalid alignment on both transports. Seed an
+	// entity carrying an array of embedded entities to exercise it.
+	_, _ = call(t, c, p, "test", "commit", map[string]any{
+		"mode": "NON_TRANSACTIONAL",
+		"mutations": []any{
+			map[string]any{"upsert": map[string]any{
+				"key": nameKey("Task", "b"),
+				"properties": map[string]any{
+					"arr": map[string]any{"arrayValue": map[string]any{"values": []any{
+						map[string]any{"entityValue": map[string]any{"properties": map[string]any{"b": map[string]any{"integerValue": "2"}}}},
+					}}},
+				},
+			}},
+		},
+	})
+	if _, err := run("arr.b"); err == nil {
+		t.Fatal("runQuery(arr.b) succeeded, want InvalidArgument")
+	}
+}
+
 func TestRESTRunAggregationQuery(t *testing.T) {
 	c, p := newTestProvider(t)
 	upsert(t, c, p, "Task", "a", 1)
