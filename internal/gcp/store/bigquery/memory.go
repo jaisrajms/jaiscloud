@@ -151,6 +151,39 @@ func (s *MemoryStore) CreateTable(_ context.Context, projectID, datasetID string
 	return nil
 }
 
+func (s *MemoryStore) CreateTableWithRows(_ context.Context, projectID, datasetID string, t Table, rows []Row) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := tableScope(projectID, datasetID, t.TableID)
+	if _, ok := s.tables[key]; ok {
+		return ErrAlreadyExists
+	}
+	if t.CreateTime.IsZero() {
+		t.CreateTime = clock.Now()
+	}
+	if t.UpdateTime.IsZero() {
+		t.UpdateTime = t.CreateTime
+	}
+	t.ProjectID = projectID
+	t.DatasetID = datasetID
+	t.NumRows = int64(len(rows))
+	if len(rows) > 0 {
+		t.UpdateTime = clock.Now().UTC()
+	}
+	s.tables[key] = t
+	stored := make([]Row, len(rows))
+	for i := range rows {
+		rows[i].ProjectID = projectID
+		rows[i].DatasetID = datasetID
+		rows[i].TableID = t.TableID
+		rows[i].Seq = int64(i + 1)
+		stored[i] = rows[i]
+	}
+	s.rows[key] = stored
+	s.dedup.forget(key)
+	return nil
+}
+
 func (s *MemoryStore) GetTable(_ context.Context, projectID, datasetID, tableID string) (Table, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

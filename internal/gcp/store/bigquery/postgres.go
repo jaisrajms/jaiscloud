@@ -214,6 +214,49 @@ func (s *PostgresStore) CreateTable(ctx context.Context, projectID, datasetID st
 	return nil
 }
 
+func (s *PostgresStore) CreateTableWithRows(ctx context.Context, projectID, datasetID string, t Table, rows []Row) error {
+	if t.CreateTime.IsZero() {
+		t.CreateTime = clock.Now()
+	}
+	if t.UpdateTime.IsZero() {
+		t.UpdateTime = t.CreateTime
+	}
+	t.NumRows = int64(len(rows))
+	if len(rows) > 0 {
+		t.UpdateTime = clock.Now().UTC()
+	}
+	labels, _ := json.Marshal(t.Labels)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO jc_bq_tables (project_id, dataset_id, table_id, config, schema, labels, num_rows, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, projectID, datasetID, t.TableID, nullableJSONRaw(t.Config, "{}"), nullableJSONRaw(t.Schema, "{}"), nullableJSONRaw(labels, "{}"), t.NumRows, t.CreateTime, t.UpdateTime); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	for i := range rows {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_bq_rows (project_id, dataset_id, table_id, seq, data)
+			VALUES ($1,$2,$3,$4,$5)
+		`, projectID, datasetID, t.TableID, int64(i+1), nullableJSONRaw(rows[i].Data, "{}")); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.dedup.forget(tableScope(projectID, datasetID, t.TableID))
+	return nil
+}
+
 func scanTable(row pgx.Row) (Table, error) {
 	var t Table
 	var config, schema, labels []byte

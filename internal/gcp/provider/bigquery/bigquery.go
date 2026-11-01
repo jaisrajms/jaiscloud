@@ -98,6 +98,12 @@ type Provider struct {
 	// bounded and cleared on Reset.
 	mu      sync.Mutex
 	uploads map[string]*loadUploadSession
+	// queryMu serializes SQL execution spans. DML is a read-modify-write of
+	// the hydrated table (hydrate → SQLite DML → ReplaceRows); without this
+	// lock two statements can each hydrate the same pre-write rows and the
+	// later ReplaceRows silently drops the earlier update. CTAS is additionally
+	// atomic at the store layer (CreateTableWithRows).
+	queryMu sync.Mutex
 }
 
 // New returns a Provider backed by the given store.
@@ -379,6 +385,7 @@ func (p *Provider) jobMap(projectID string, j bqstore.Job) map[string]any {
 	if len(j.Config) > 0 {
 		_ = json.Unmarshal(j.Config, &out)
 	}
+	delete(out, jobResultSnapshotKey)
 	out["kind"] = kindPrefix + "job"
 	out["id"] = projectID + ":" + j.JobID
 	out["etag"] = millis(j.CreateTime)
@@ -1093,6 +1100,8 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 			}
 			body["statistics"] = map[string]any{"query": stats}
 		}
+		attachJobResultSnapshot(body, projectOf(nr), jobID,
+			strValue(mapValue(body, "jobReference"), "location"), res, false)
 	}
 	// A load job is likewise evaluated synchronously: the source is read from
 	// the emulated GCS (or, for a multipart upload, supplied as the request
@@ -1467,6 +1476,7 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 		}
 		jobCfg["statistics"] = map[string]any{"query": stats}
 	}
+	attachJobResultSnapshot(jobCfg, projectOf(nr), jobID, strValue(body, "location"), res, false)
 	data, err := json.Marshal(jobCfg)
 	if err != nil {
 		// Never report jobComplete=true for a job that wasn't actually stored —
@@ -1508,9 +1518,17 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	// Re-execute the stored query (jobs.query persists the request body on the
-	// job). This keeps the store the single source of truth: no result cache,
-	// no schema change, and snapshots/--dsn stay untouched.
+	// Serve the materialised result captured when the job executed. Every page
+	// is an offset into this immutable snapshot, so writes between pages never
+	// change a result the client has already started reading (BQ6).
+	if snap, ok := jobResultSnapshot(j); ok {
+		resp := getQueryResultsFromSnapshot(snap, projectOf(nr), jobID, jobLocation(j))
+		pageQueryResponse(resp, start, maxResults, false)
+		return provider.OK(resp), nil
+	}
+	// Compatibility fallback for a job persisted by an older build without a
+	// snapshot: re-execute the stored query. New jobs always take the snapshot
+	// path above.
 	q := jobQueryBody(j)
 	if q == nil {
 		return nil, invalidQuery(fmt.Sprintf("job %s is not a query job", jobID))
@@ -1558,6 +1576,52 @@ func jobQueryStats(j bqstore.Job) (typ string, affected int64, ok bool) {
 		affected, _ = strconv.ParseInt(s, 10, 64)
 	}
 	return typ, affected, true
+}
+
+// jobResultSnapshotKey is the private job-config field that carries the
+// materialised result of a SELECT (BQ6). It is stripped from every wire Job
+// rendering; jobQueryBody ignores it.
+const jobResultSnapshotKey = "_jaiscloudResultSnapshot"
+
+// attachJobResultSnapshot stores the full, untruncated query response on the
+// job so getQueryResults pages an immutable snapshot instead of re-executing
+// the query against a store that may have changed.
+func attachJobResultSnapshot(cfg map[string]any, project, jobID, location string, res queryengine.Result, dryRun bool) {
+	cfg[jobResultSnapshotKey] = encodeQueryResult("queryResponse", project, jobID, location, res, dryRun)
+}
+
+// jobResultSnapshot returns the persisted materialised result, if any.
+func jobResultSnapshot(j bqstore.Job) (map[string]any, bool) {
+	if len(j.Config) == 0 {
+		return nil, false
+	}
+	var cfg map[string]any
+	if json.Unmarshal(j.Config, &cfg) != nil {
+		return nil, false
+	}
+	snap, ok := cfg[jobResultSnapshotKey].(map[string]any)
+	return snap, ok
+}
+
+// getQueryResultsFromSnapshot reshapes a stored jobs.query response into a
+// getQueryResults response without touching the store. The snapshot is fresh
+// per call (JSON-unmarshalled), so paging can mutate it safely.
+func getQueryResultsFromSnapshot(snap map[string]any, project, jobID, location string) map[string]any {
+	snap["kind"] = kindPrefix + "getQueryResultsResponse"
+	delete(snap, "statementType")
+	delete(snap, "pageRowCount")
+	delete(snap, "pageToken")
+	ref, _ := snap["jobReference"].(map[string]any)
+	if ref == nil {
+		ref = map[string]any{}
+	}
+	ref["projectId"] = project
+	ref["jobId"] = jobID
+	if location != "" {
+		ref["location"] = location
+	}
+	snap["jobReference"] = ref
+	return snap
 }
 
 func (p *Provider) GetServiceAccount(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

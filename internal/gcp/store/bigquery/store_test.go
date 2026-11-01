@@ -286,6 +286,26 @@ func runStoreTimestampTests(t *testing.T, s Store) {
 		t.Fatalf("ReplaceRows did not bump UpdateTime: %v", tb.UpdateTime)
 	}
 
+	// CreateTableWithRows is the CTAS primitive: the table and its rows become
+	// visible together, with NumRows and the same UpdateTime bump as a separate
+	// create+insert would produce.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(4 * time.Second)})
+	ctasRows := []Row{{Data: []byte(`{"id":1}`)}, {Data: []byte(`{"id":2}`)}}
+	if err := s.CreateTableWithRows(ctx, "proj", "TsDs", Table{TableID: "Ctas"}, ctasRows); err != nil {
+		t.Fatalf("create table with rows: %v", err)
+	}
+	ctas, err := s.GetTable(ctx, "proj", "TsDs", "Ctas")
+	if err != nil || ctas.NumRows != 2 || !ctas.UpdateTime.Equal(t0.Add(4*time.Second)) {
+		t.Fatalf("CTAS table = %+v err=%v", ctas, err)
+	}
+	ctasStored, err := s.ListRows(ctx, "proj", "TsDs", "Ctas")
+	if err != nil || len(ctasStored) != 2 || ctasStored[0].Seq != 1 || ctasStored[1].Seq != 2 {
+		t.Fatalf("CTAS rows = %+v err=%v", ctasStored, err)
+	}
+	if err := s.CreateTableWithRows(ctx, "proj", "TsDs", Table{TableID: "Ctas"}, nil); err != ErrAlreadyExists {
+		t.Fatalf("duplicate CreateTableWithRows = %v, want ErrAlreadyExists", err)
+	}
+
 	_ = s.DeleteJob(ctx, "proj", "TsJ")
 	_ = s.DeleteDataset(ctx, "proj", "TsDs")
 }
