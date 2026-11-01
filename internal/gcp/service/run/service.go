@@ -618,6 +618,7 @@ func (s *Service) emitStatus(verb string, svc runstore.Service) {
 			ID:       svc.ID,
 			State:    state,
 			Detail:   verb + " " + ServiceName(svc.ProjectID, svc.Location, svc.ID),
+			Project:  svc.ProjectID,
 		},
 	})
 }
@@ -631,7 +632,7 @@ func (s *Service) settle(op runstore.Operation) runstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lro.Delay)
-	s.tracker.EmitOperation("run", op.ID, op.ID, op.Verb)
+	s.tracker.EmitOperation("run", op.ID, op.ID, op.Verb, op.ProjectID)
 	return op
 }
 

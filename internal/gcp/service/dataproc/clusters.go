@@ -544,6 +544,16 @@ func applyConfigMask(stored, incoming map[string]any, mask []string) {
 		return
 	}
 	for _, field := range mask {
+		if camelKey(field) == "config" {
+			// A bare `config` mask names the whole field. Treat it like an
+			// omitted mask (merge every supplied top-level key) rather than
+			// matching no path at all: silently discarding the caller's config
+			// while answering 200 is the one behaviour no client can detect.
+			for k, v := range incoming {
+				stored[k] = v
+			}
+			continue
+		}
 		if !strings.HasPrefix(field, "config.") {
 			continue
 		}

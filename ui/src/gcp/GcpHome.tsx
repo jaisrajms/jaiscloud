@@ -27,9 +27,17 @@ import { tierLabel } from '../lib/tier'
 import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { serviceAccent } from './icons/serviceIcons'
 import { ProjectPickerDialog } from './chrome/ProjectPicker'
-import { buildNavGroups, type NavEntry } from './chrome/navModel'
+import {
+  buildNavGroups,
+  relativeProjectAge,
+  type NavEntry,
+} from './chrome/navModel'
 import { rememberRecentService, useRecentServices } from './chrome/recentServices'
+import { useProjectDiscovery } from './chrome/useProjectDiscovery'
+import { activeBannerProject } from './home/activity'
 import { resourceCount, summarySourcesFor } from './home/resourceSummary'
+
+const DISMISSED_BANNER_KEY = 'jaiscloud-activity-banner-dismissed'
 
 const TILE_GRID = {
   display: 'grid',
@@ -98,14 +106,24 @@ function HomeTile({ id, title, subtitle, to, onVisit, badge, action }: HomeTileP
 /** Google Cloud console overview: welcome, project, resources and pinned/recent. */
 export function GcpHome() {
   const { data: meta } = useMeta()
-  const { accountId } = useAccount()
+  const { accountId, setAccountId } = useAccount()
   const { data: servicesData } = useServices()
   const services = useMemo(() => servicesData?.services ?? [], [servicesData])
   const { favorites, isFavorite, toggle } = useFavorites()
   const recent = useRecentServices()
   const [projectOpen, setProjectOpen] = useState(false)
+  const { data: discovery } = useProjectDiscovery(5_000)
+  const [dismissedBanner, setDismissedBanner] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem(DISMISSED_BANNER_KEY) ?? ''
+    } catch {
+      return ''
+    }
+  })
 
-  const project = accountId || meta?.accountId || '—'
+  const currentProject = accountId || meta?.accountId || ''
+  const project = currentProject || '—'
+  const observedProjects = useMemo(() => discovery?.projects ?? [], [discovery])
 
   const groups = useMemo(
     () => buildNavGroups(services, favorites, recent, ''),
@@ -127,6 +145,26 @@ export function GcpHome() {
       retry: false,
     })),
   })
+
+  const resourcesLoaded =
+    sources.length > 0 && counts.every((query) => !query.isPending && query.data != null)
+  const noResources =
+    resourcesLoaded &&
+    counts.reduce(
+      (total, query, index) =>
+        total + resourceCount(query.data, sources[index]?.arrayKey ?? ''),
+      0,
+    ) === 0
+  const banner = noResources ? activeBannerProject(observedProjects, currentProject) : undefined
+  const bannerVisible = banner != null && dismissedBanner !== banner.id
+  const dismissBanner = (id: string) => {
+    setDismissedBanner(id)
+    try {
+      sessionStorage.setItem(DISMISSED_BANNER_KEY, id)
+    } catch {
+      /* ignore storage errors */
+    }
+  }
 
   const pinAction = (id: string, label: string) => (
     <Tooltip title={isFavorite(id) ? `Unpin ${label}` : `Pin ${label}`}>
@@ -208,6 +246,27 @@ export function GcpHome() {
           </Stack>
         </CardContent>
       </Card>
+
+      {bannerVisible && banner && (
+        <Alert
+          severity="info"
+          sx={{ mt: 2 }}
+          action={
+            <Stack direction="row" spacing={1}>
+              <Button size="small" onClick={() => setAccountId(banner.id)}>
+                Switch
+              </Button>
+              <Button size="small" onClick={() => dismissBanner(banner.id)}>
+                Dismiss
+              </Button>
+            </Stack>
+          }
+        >
+          Workload activity in <strong>{banner.id}</strong> ({relativeProjectAge(banner.lastSeen)})
+          {' — its resources may be there instead of in '}
+          {currentProject || 'this project'}.
+        </Alert>
+      )}
 
       {pinned.length > 0 && (
         <>

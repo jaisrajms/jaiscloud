@@ -353,6 +353,7 @@ func TestOperationAsyncSettleEmitsStatusEvent(t *testing.T) {
 		ID:       op.Name,
 		State:    "DONE",
 		Detail:   "create",
+		Project:  "async-project",
 	}
 	if !reflect.DeepEqual(ev, want) {
 		t.Fatalf("settle event = %+v, want %+v", ev, want)

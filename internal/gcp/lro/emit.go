@@ -1,6 +1,7 @@
 package lro
 
 import (
+	"strings"
 	"sync"
 
 	"jaiscloud/internal/events"
@@ -39,7 +40,9 @@ func NewTracker(bus *events.EventBus) *Tracker {
 // within the core (a fully-qualified operation name or its id). service is the
 // console query-key segment (e.g. "run"), id and verb identify the operation and
 // the mutation that produced it; the event invalidates ["gcp", service].
-func (t *Tracker) EmitOperation(service, key, id, verb string) {
+// project, when non-empty, lets the console refresh project discovery for a
+// write that landed outside the project in view.
+func (t *Tracker) EmitOperation(service, key, id, verb, project string) {
 	if t == nil || t.bus == nil {
 		return
 	}
@@ -53,14 +56,15 @@ func (t *Tracker) EmitOperation(service, key, id, verb string) {
 
 	t.bus.Publish(events.Event{
 		Type:    events.EventStatus,
-		Payload: OperationStatus(service, id, verb),
+		Payload: OperationStatus(service, id, verb, project),
 	})
 }
 
 // OperationStatus builds the status event a core publishes when a long-running
 // operation settles. The console invalidates the ["gcp", service] query-key
-// prefix on receipt; Resource, ID, State and Detail are display/diagnostic.
-func OperationStatus(service, id, verb string) events.StatusEvent {
+// prefix on receipt and, when project is set, refreshes project discovery;
+// Resource, ID, State and Detail are display/diagnostic.
+func OperationStatus(service, id, verb, project string) events.StatusEvent {
 	return events.StatusEvent{
 		Cloud:    model.CloudGCP,
 		Keys:     []string{"gcp", service},
@@ -68,5 +72,18 @@ func OperationStatus(service, id, verb string) events.StatusEvent {
 		ID:       id,
 		State:    "DONE",
 		Detail:   verb,
+		Project:  project,
 	}
+}
+
+// ProjectFromName extracts the project segment from a GCP resource name
+// ("projects/{p}/..."), returning "" when the name is not project-scoped.
+func ProjectFromName(name string) string {
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "projects" && parts[i+1] != "" {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
