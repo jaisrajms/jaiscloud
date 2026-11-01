@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1137**
+Cells: **1140**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 985 |
+| ga | 988 |
 | limited | 106 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1137**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 543 | 105 | 14 | 12 |
+| rest | 546 | 105 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 630 | 44 |
+| rest | 633 | 44 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -236,7 +236,7 @@ _66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
 
 ## dataproc
 
-_45 cell(s): ga=43 limited=0 preview=0 unsupported=2_
+_48 cell(s): ga=46 limited=0 preview=0 unsupported=2_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -266,6 +266,9 @@ _45 cell(s): ga=43 limited=0 preview=0 unsupported=2_
 | Dataproc.UpdateCluster | rest | ga | yes | — |
 | Dataproc.UpdateJob | rest | ga | yes | — |
 | Dataproc.UpdateWorkflowTemplate | rest | ga | yes | — |
+| Dataproc.WorkflowTemplateGetIamPolicy | rest | ga | yes | — |
+| Dataproc.WorkflowTemplateSetIamPolicy | rest | ga | yes | — |
+| Dataproc.WorkflowTemplateTestIamPermissions | rest | ga | yes | — |
 | DeleteCluster | grpc | ga | yes | — |
 | DeleteJob | grpc | ga | yes | — |
 | DeleteWorkflowTemplate | grpc | ga | yes | — |

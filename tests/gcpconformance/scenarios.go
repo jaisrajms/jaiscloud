@@ -1205,6 +1205,27 @@ func Scenarios(suffix string) []Scenario {
 				`{"id":%q,"version":1,"labels":{"conformance":"true"},"placement":{"managedCluster":{"clusterName":%q}},"jobs":[{"stepId":"extract","pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract-v2.py"}}]}`,
 				dpTemplate, dpCluster, suffix)},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/workflowTemplates/" + dpTemplate},
+		// The workflowTemplates IAM mixin is served on the resource itself and,
+		// unlike Metastore/KMS, every verb is a POST (Dataproc's Discovery
+		// methods). A conditional binding must be stored at version 3 (AIP-149);
+		// the stale-etag write proves the policy plane's etag OCC, and the
+		// missing-template read proves the existence check runs first.
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/dataproc.worker","members":["user:conformance@example.com"],` +
+				`"condition":{"title":"conformance","description":"time bounded","expression":"request.time < timestamp(\"2027-01-01T00:00:00Z\")"}}]}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":testIamPermissions",
+			Body: `{"permissions":["dataproc.workflowTemplates.get","dataproc.workflowTemplates.update"]}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:stale@example.com"]}],"etag":"stale"}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/workflowTemplates/" + dpTemplate + "-absent:getIamPolicy", Body: `{}`},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/workflowTemplates/" + dpTemplate},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpCluster},
 	)

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 487,
-  "passed": 487,
+  "total": 490,
+  "passed": 490,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 487,
-    "passed": 487,
+    "checks": 490,
+    "passed": 490,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -65,8 +65,8 @@
     },
     {
       "service": "iam",
-      "total": 12,
-      "passed": 12,
+      "total": 15,
+      "passed": 15,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3571,6 +3571,27 @@
       "method": "TestIamPermissions",
       "status": "pass",
       "key_field": "requested permissions echoed back"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy (dataproc)",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "workflow template policy present, empty by default"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy (dataproc)",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "conditional binding round-trips at version 3"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions (dataproc)",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back for a workflow template"
     },
     {
       "service": "iamcredentials",

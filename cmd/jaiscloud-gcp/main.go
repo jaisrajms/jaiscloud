@@ -1062,18 +1062,23 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub, KMS, Eventarc and Dataproc Metastore share the single
-				// IAMPolicy service, so their IAM surfaces are dispatched through
-				// one router. Eventarc and Metastore only join the router when
-				// their gRPC transport is selected, so a trigger/channel or
-				// metastore IAM name cannot reach a nil core.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") {
+				// Pub/Sub, KMS, Eventarc, Dataproc Metastore and Dataproc each
+				// own IAM resources served through the single IAMPolicy service,
+				// so their IAM surfaces are dispatched through one router.
+				// Eventarc, Metastore and Dataproc only join the router when
+				// their gRPC transport is selected, so a trigger/channel,
+				// metastore or workflow-template IAM name cannot reach a nil
+				// core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") || transports.GRPCFor("dataproc") {
 					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
 					if transports.GRPCFor("eventarc") {
 						iamHandlers = append(iamHandlers, eventarcGRPC)
 					}
 					if transports.GRPCFor("metastore") {
 						iamHandlers = append(iamHandlers, metastoreGRPC)
+					}
+					if transports.GRPCFor("dataproc") && dataprocCore != nil {
+						iamHandlers = append(iamHandlers, dataprocGRPC)
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
