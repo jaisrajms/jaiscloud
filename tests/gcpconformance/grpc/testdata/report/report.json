@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 487,
-  "passed": 487,
+  "total": 488,
+  "passed": 488,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 487,
-    "passed": 487,
+    "checks": 488,
+    "passed": 488,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "dataproc",
-      "total": 26,
-      "passed": 26,
+      "total": 27,
+      "passed": 27,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3032,6 +3032,13 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "auxiliaryServicesConfig.metastoreConfig echo"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (spark history server)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "PHS cluster validated + spark.eventLog.* properties"
     },
     {
       "service": "dataproc",

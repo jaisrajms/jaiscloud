@@ -44,6 +44,7 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "DeleteJob", Method: "DeleteJob", KeyField: "NotFound after delete", Run: checkDPDeleteJob},
 		{Service: "dataproc", RPC: "CreateCluster (vcc)", Method: "CreateCluster", KeyField: "GKE virtualClusterConfig round-trip", Run: checkDPVirtualClusterConfig},
 		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
+		{Service: "dataproc", RPC: "CreateCluster (spark history server)", Method: "CreateCluster", KeyField: "PHS cluster validated + spark.eventLog.* properties", Run: checkDPHistoryServerAttachment},
 		{Service: "dataproc", RPC: "GetJob (placement)", Method: "GetJob", KeyField: "placement.clusterUuid", Run: checkDPJobPlacementClusterUUID},
 		{Service: "dataproc", RPC: "SubmitJob (driver output)", Method: "SubmitJob", KeyField: "driver output/control URIs present", Run: checkDPDriverOutputURIs},
 		{Service: "dataproc", RPC: "CreateWorkflowTemplate", Method: "CreateWorkflowTemplate", KeyField: "name/version round-trip", Run: checkDPCreateWorkflowTemplate},
@@ -722,6 +723,90 @@ func checkDPMetastoreAttachment(ctx context.Context, cfg Config) error {
 	ref := got.GetVirtualClusterConfig().GetAuxiliaryServicesConfig().GetMetastoreConfig().GetDataprocMetastoreService()
 	if ref != svcName {
 		return fmt.Errorf("metastore attachment = %q, want %q", ref, svcName)
+	}
+	return nil
+}
+
+// checkDPHistoryServerAttachment covers
+// virtualClusterConfig.auxiliaryServicesConfig.sparkHistoryServerConfig: the
+// referenced Dataproc cluster must exist (a missing one is NotFound) and a
+// successful create returns the documented spark.eventLog.* workload
+// properties. The PHS source is an ordinary Dataproc cluster, so it is created
+// first (run-uniquely, AlreadyExists tolerated on a long-lived emulator).
+func checkDPHistoryServerAttachment(ctx context.Context, cfg Config) error {
+	cc, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer cc.Close()
+
+	phsID := cfg.ResourceName("gcpc-grpc-dp-phs-src")
+	op, err := cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: phsID,
+			Config: &dataprocpb.ClusterConfig{
+				SoftwareConfig: &dataprocpb.SoftwareConfig{ImageVersion: "2.2.0"},
+			},
+		},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("create PHS source cluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("PHS source operation Wait: %w", err)
+	}
+	phsRef := "projects/" + cfg.Project + "/regions/" + dataprocRegion + "/clusters/" + phsID
+
+	// A reference to a cluster that does not exist is NotFound.
+	missing := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+	missing.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		SparkHistoryServerConfig: &dataprocpb.SparkHistoryServerConfig{
+			DataprocCluster: "projects/" + cfg.Project + "/regions/" + dataprocRegion +
+				"/clusters/" + cfg.ResourceName("gcpc-grpc-dp-phs-missing"),
+		},
+	}
+	if _, err := cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: cfg.ResourceName("gcpc-grpc-dp-phs-bad"), VirtualClusterConfig: missing},
+	}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("missing PHS cluster: got %v, want NotFound", err)
+	}
+
+	id := cfg.ResourceName("gcpc-grpc-dp-phs")
+	vcc := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+	vcc.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		SparkHistoryServerConfig: &dataprocpb.SparkHistoryServerConfig{DataprocCluster: phsRef},
+	}
+	op, err = cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vcc},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+	got, err := cc.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if ref := got.GetVirtualClusterConfig().GetAuxiliaryServicesConfig().GetSparkHistoryServerConfig().GetDataprocCluster(); ref != phsRef {
+		return fmt.Errorf("spark history server ref = %q, want %q", ref, phsRef)
+	}
+	props := got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetKubernetesSoftwareConfig().GetProperties()
+	if props["spark:spark.eventLog.enabled"] != "true" {
+		return fmt.Errorf("spark.eventLog.enabled = %q, want true", props["spark:spark.eventLog.enabled"])
+	}
+	wantDir := "gs://dataproc-staging-probe/" + id + "/spark-job-history"
+	if props["spark:spark.eventLog.dir"] != wantDir {
+		return fmt.Errorf("spark.eventLog.dir = %q, want %q", props["spark:spark.eventLog.dir"], wantDir)
 	}
 	return nil
 }
