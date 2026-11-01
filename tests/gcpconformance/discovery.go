@@ -152,27 +152,116 @@ func (d *DiscoveryDoc) WalkMethods(fn func(*Method)) {
 
 // LoadSnapshots loads and gunzips every *.json.gz in dir, keying the result by
 // the file basename (e.g. "storage", "clouddns").
+//
+// A basename of the form "<svc>@<version>" is a secondary version of the
+// "<svc>" snapshot: its Resources and Schemas are deep-merged into the primary
+// document, so a service whose API spans more than one Discovery version is
+// matched under a single service key. Cloud Monitoring is the case in point:
+// monitoring.json.gz is the v3 proto-defined document (no dashboards), and
+// monitoring@v1.json.gz is the REST-only v1 document that declares
+// projects.dashboards. Keeping version/rootUrl from the primary means v3 stays
+// the canonical document while MatchMethodInService("monitoring", GET,
+// /v1/projects/p/dashboards) still finds dashboards.list.
 func LoadSnapshots(dir string) (map[string]*DiscoveryDoc, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read discovery dir %s: %w", dir, err)
 	}
 	docs := map[string]*DiscoveryDoc{}
+	// Load primaries first so a "<svc>@<version>" file always has its base
+	// document to merge into regardless of directory order.
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json.gz") {
 			continue
 		}
-		svc := strings.TrimSuffix(e.Name(), ".json.gz")
+		base := strings.TrimSuffix(e.Name(), ".json.gz")
+		if strings.Contains(base, "@") {
+			continue
+		}
 		doc, err := loadDoc(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", e.Name(), err)
 		}
-		docs[svc] = doc
+		docs[base] = doc
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json.gz") {
+			continue
+		}
+		base := strings.TrimSuffix(e.Name(), ".json.gz")
+		svc, version, ok := strings.Cut(base, "@")
+		if !ok || svc == "" || version == "" {
+			continue
+		}
+		doc, err := loadDoc(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", e.Name(), err)
+		}
+		primary := docs[svc]
+		if primary == nil {
+			// No base document: keep the versioned one addressable under its
+			// full basename rather than silently dropping it.
+			docs[base] = doc
+			continue
+		}
+		mergeDiscoveryVersion(primary, doc)
 	}
 	if len(docs) == 0 {
 		return nil, fmt.Errorf("no *.json.gz discovery snapshots found in %s", dir)
 	}
 	return docs, nil
+}
+
+// mergeDiscoveryVersion deep-merges a secondary Discovery document's Resources
+// and Schemas into the primary one. The primary wins on any method or schema
+// name it already declares (v3 stays authoritative for the monitoring service);
+// the secondary contributes only what is missing. Every merged method is
+// re-pointed at the primary document so schema resolution and the method index
+// agree on one document.
+func mergeDiscoveryVersion(primary, secondary *DiscoveryDoc) {
+	primary.Resources = mergeDiscoveryResources(primary.Resources, secondary.Resources)
+	if primary.Schemas == nil {
+		primary.Schemas = map[string]*Schema{}
+	}
+	for name, schema := range secondary.Schemas {
+		if _, exists := primary.Schemas[name]; !exists {
+			primary.Schemas[name] = schema
+		}
+	}
+	primary.WalkMethods(func(m *Method) { m.doc = primary })
+}
+
+// mergeDiscoveryResources recursively merges secondary resource nodes into dst,
+// returning the destination map (initialized when dst is nil) so a document
+// whose parent node carries no nested resource map — or a nil child map inside
+// such a node — cannot panic on assignment.
+func mergeDiscoveryResources(dst, src map[string]*Resource) map[string]*Resource {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = map[string]*Resource{}
+	}
+	for name, s := range src {
+		if s == nil {
+			continue
+		}
+		d, ok := dst[name]
+		if !ok || d == nil {
+			dst[name] = s
+			continue
+		}
+		if d.Methods == nil && len(s.Methods) > 0 {
+			d.Methods = map[string]*Method{}
+		}
+		for mk, m := range s.Methods {
+			if _, exists := d.Methods[mk]; !exists {
+				d.Methods[mk] = m
+			}
+		}
+		d.Resources = mergeDiscoveryResources(d.Resources, s.Resources)
+	}
+	return dst
 }
 
 func loadDoc(path string) (*DiscoveryDoc, error) {

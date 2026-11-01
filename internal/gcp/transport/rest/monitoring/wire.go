@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -25,6 +26,38 @@ func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
 
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// boolParam accepts the "true"/"false" string the REST query decoder stores and
+// a native bool for in-process callers.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(v, "true")
+	}
+	return false
+}
+
+// rawBodyOf returns the request body as raw JSON for the opaque-document
+// surfaces. It prefers the bytes the codec captured verbatim ("rawBody"), so
+// integers beyond 2^53 and precise decimals are not re-rendered through the
+// float64 decode; in-process callers that never went through Decode fall back
+// to re-marshaling the decoded body map.
+func rawBodyOf(nr *model.NormalizedRequest) json.RawMessage {
+	if raw, ok := nr.Params["rawBody"].(json.RawMessage); ok && len(raw) > 0 {
+		return raw
+	}
+	body, ok := nr.Params["body"].(map[string]any)
+	if !ok || body == nil {
+		return nil
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // bodyOf returns the decoded JSON request body, or an empty map when absent.

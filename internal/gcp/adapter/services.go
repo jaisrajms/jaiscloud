@@ -255,8 +255,12 @@ var gcpServices = []ServiceDescriptor{
 	},
 	{
 		// Cloud Monitoring v3 owns the /v3/ namespace (no other emulated
-		// service uses it), so it is identified by path prefix. The codec lives
-		// with the REST transport package that adapts it to the shared core.
+		// service uses it), so it is identified by path prefix. The REST-only
+		// v1 dashboards API (/v1/projects/{p}/dashboards) shares the /v1/
+		// namespace with the other services and is claimed by segment
+		// detection (detectV1Service) on the "dashboards" segment. The codec
+		// lives with the REST transport package that adapts it to the shared
+		// core.
 		ServiceName:    "monitoring",
 		PathPrefixes:   []string{"/v3/"},
 		ProviderPrefix: "Monitoring",

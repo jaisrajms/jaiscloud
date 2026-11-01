@@ -11,6 +11,7 @@ import (
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	"jaiscloud/internal/gcp/timestamp"
+	"jaiscloud/internal/gcp/wire"
 )
 
 // Provider handles the Cloud Monitoring v3 REST data plane. It is a thin
@@ -64,6 +65,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Monitoring.CreateServiceLevelObjective":             p.CreateServiceLevelObjective,
 		"Monitoring.UpdateServiceLevelObjective":             p.UpdateServiceLevelObjective,
 		"Monitoring.DeleteServiceLevelObjective":             p.DeleteServiceLevelObjective,
+		"Monitoring.ListDashboards":                          p.ListDashboards,
+		"Monitoring.GetDashboard":                            p.GetDashboard,
+		"Monitoring.CreateDashboard":                         p.CreateDashboard,
+		"Monitoring.UpdateDashboard":                         p.UpdateDashboard,
+		"Monitoring.DeleteDashboard":                         p.DeleteDashboard,
 	}
 }
 
@@ -610,6 +616,82 @@ func (p *Provider) DeleteServiceLevelObjective(ctx context.Context, nr *model.No
 		return nil, invalidArgument("invalid service level objective name: " + strParam(nr, "name"))
 	}
 	if err := p.core.DeleteServiceLevelObjective(ctx, project, service, id); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ─── dashboards (REST-only v1) ────────────────────────────────────────────────
+
+func (p *Provider) ListDashboards(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, ok := core.SplitDashboardParent(strParam(nr, "parent"))
+	if !ok {
+		return nil, invalidArgument("invalid dashboards parent: " + strParam(nr, "parent"))
+	}
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListDashboards(ctx, project, pageSize, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(page) > 0 {
+		arr := make([]any, 0, len(page))
+		for _, d := range page {
+			arr = append(arr, d.Document)
+		}
+		out["dashboards"] = arr
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) GetDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitDashboardName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid dashboard name: " + strParam(nr, "name"))
+	}
+	d, err := p.core.GetDashboard(ctx, project, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: d.Document}), nil
+}
+
+func (p *Provider) CreateDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, ok := core.SplitDashboardParent(strParam(nr, "parent"))
+	if !ok {
+		return nil, invalidArgument("invalid dashboards parent: " + strParam(nr, "parent"))
+	}
+	d, err := p.core.CreateDashboard(ctx, project, rawBodyOf(nr), boolParam(nr, "validateOnly"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: d.Document}), nil
+}
+
+func (p *Provider) UpdateDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitDashboardName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid dashboard name: " + strParam(nr, "name"))
+	}
+	d, err := p.core.UpdateDashboard(ctx, project, id, rawBodyOf(nr), boolParam(nr, "validateOnly"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: d.Document}), nil
+}
+
+func (p *Provider) DeleteDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitDashboardName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid dashboard name: " + strParam(nr, "name"))
+	}
+	if err := p.core.DeleteDashboard(ctx, project, id); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

@@ -1,4 +1,4 @@
-// Package monitoring is the REST transport for Cloud Monitoring v3.
+// Package monitoring is the REST transport for Cloud Monitoring.
 //
 // Real GCP serves Monitoring's proto-defined v3 API over both gRPC and REST
 // (grpc-gateway transcoding), and the REST surface here follows the vendored
@@ -16,9 +16,14 @@
 //	projects.services.{list,get,create,patch,delete}
 //	projects.services.serviceLevelObjectives.{list,get,create,patch,delete}
 //
-// The rest of the v3 surface (snoozes, uptime checks, groups, dashboards) is
-// not implemented and returns 501 UNIMPLEMENTED when it is a recognized v3
-// collection, or 404 NOT_FOUND for an unknown path.
+// The REST-only v1 dashboards API (projects.dashboards.{list,get,create,patch,
+// delete}, official v1 Discovery document revision 20261022) is served from the
+// same provider over the shared core; dashboards have no gRPC surface in the
+// real API.
+//
+// The rest of the v3 surface (snoozes, uptime checks, groups) is not implemented
+// and returns 501 UNIMPLEMENTED when it is a recognized v3 collection, or 404
+// NOT_FOUND for an unknown path.
 //
 // The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the core's typed
 // API); the Provider holds the routes. Neither owns business logic — both
@@ -55,35 +60,49 @@ func (c *Codec) ServiceName() string { return ServiceName }
 
 // knownUnimplemented are real v3 collections the emulator does not serve over
 // REST. They are reported as 501 UNIMPLEMENTED, distinct from an unknown path
-// (404 NOT_FOUND). Dashboards are a v1 API (not part of the vendored v3
-// Discovery document) and correctly fall through to 404.
+// (404 NOT_FOUND). Dashboards are a v1 API served by this transport (see
+// routeDashboards); a /v3/ dashboards path is not a real v3 collection and
+// stays 404.
 var knownUnimplemented = []string{
 	"/snoozes", "/uptimeCheckConfigs",
 	"/groups", "/alerts", "/collectdTimeSeries", "uptimeCheckIps",
 }
 
-// Decode parses a Monitoring v3 REST path into a NormalizedRequest. Params carry
-// apiVersion, project/name, body (POST/PATCH), and any query parameters.
+// Decode parses a Cloud Monitoring REST path into a NormalizedRequest. Params
+// carry apiVersion, project/name, body (POST/PATCH), and any query parameters.
+// The v3 surface is the proto-defined Monitoring API; the v1 surface is the
+// REST-only dashboards API (projects.dashboards), which the official v1
+// Discovery document declares on the same host
+// (https://monitoring.googleapis.com/$discovery/rest?version=v1). Every other
+// /v1/ path stays 404.
 func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	path := "/" + strings.TrimLeft(r.URL.EscapedPath(), "/")
-	if !strings.HasPrefix(path, "/v3/") {
+	version := ""
+	switch {
+	case strings.HasPrefix(path, "/v3/"):
+		version = "v3"
+	case strings.HasPrefix(path, "/v1/"):
+		version = "v1"
+	default:
 		return nil, model.NewProviderError("NotFound", "unsupported operation", 404)
 	}
-	rest := strings.TrimPrefix(path, "/v3/")
+	rest := strings.TrimPrefix(path, "/"+version+"/")
 
 	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
-	action, ok := route(rest, r.Method, nr)
+	action, ok := route(version, rest, r.Method, nr)
 	if !ok {
-		for _, c := range knownUnimplemented {
-			if strings.Contains(rest, c) {
-				return nil, model.NewProviderError("Unimplemented", "method not implemented over REST", 501)
+		if version == "v3" {
+			for _, collection := range knownUnimplemented {
+				if strings.Contains(rest, collection) {
+					return nil, model.NewProviderError("Unimplemented", "method not implemented over REST", 501)
+				}
 			}
 		}
 		return nil, model.NewProviderError("NotFound", "unsupported operation", 404)
 	}
 	nr.Action = action
 
-	nr.Params["apiVersion"] = "v3"
+	nr.Params["apiVersion"] = version
 	if len(body) > 0 {
 		var m map[string]any
 		if err := json.Unmarshal(body, &m); err != nil {
@@ -92,13 +111,27 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Params["body"] = m
 	}
 	queryToParams(r, nr.Params)
+	// Keep the request body's original bytes as well: the map above is a
+	// float64 round-trip, which would silently re-render integers beyond 2^53
+	// and precise decimals. The opaque-document surfaces (v1 dashboards) read
+	// this value so the client's document is stored verbatim. Set after
+	// queryToParams so a query parameter cannot spoof the key.
+	if len(body) > 0 {
+		nr.Params["rawBody"] = json.RawMessage(body)
+	}
 	return nr, nil
 }
 
-// route maps an escaped path (without the leading /v3/) and HTTP method to a
-// provider action, populating nr.Params with the resolved project or resource
-// name. It returns ok=false for paths the emulator does not serve.
-func route(rest, method string, nr *model.NormalizedRequest) (string, bool) {
+// route maps an escaped path (without the leading /v3/ or /v1/) and HTTP method
+// to a provider action, populating nr.Params with the resolved project or
+// resource name. It returns ok=false for paths the emulator does not serve.
+func route(version, rest, method string, nr *model.NormalizedRequest) (string, bool) {
+	// Dashboards are the only v1 API. They share the projects/{p}/... namespace
+	// with the v3 surface but not the URL version, so they are routed by version
+	// first.
+	if version == "v1" {
+		return routeDashboards(rest, method, nr)
+	}
 	// Service Monitoring is checked before the MetricService paths because an
 	// SLO name ("projects/{p}/services/{s}/serviceLevelObjectives/{id}") also
 	// contains "/services/".
@@ -299,6 +332,49 @@ func route(rest, method string, nr *model.NormalizedRequest) (string, bool) {
 			return "DeleteNotificationChannel", true
 		}
 		return "", false
+	}
+	return "", false
+}
+
+// routeDashboards maps the REST-only v1 dashboards surface
+// (projects.dashboards.{list,get,create,patch,delete}, official v1 Discovery
+// document revision 20261022). Every other v1 path is unsupported (404). The
+// document's flatPath binds both the collection ("v1/projects/{projectsId}/
+// dashboards") and the item ("v1/projects/{projectsId}/dashboards/
+// {dashboardsId}"), so the parent/name split is on the literal "dashboards"
+// segment.
+func routeDashboards(rest, method string, nr *model.NormalizedRequest) (string, bool) {
+	if strings.HasSuffix(rest, "/dashboards") {
+		parent := strings.TrimSuffix(rest, "/dashboards")
+		project, ok := core.SplitDashboardParent(parent)
+		if !ok {
+			return "", false
+		}
+		nr.Params["parent"] = parent
+		nr.Params["project"] = project
+		switch method {
+		case http.MethodGet:
+			return "ListDashboards", true
+		case http.MethodPost:
+			return "CreateDashboard", true
+		}
+		return "", false
+	}
+	if strings.Contains(rest, "/dashboards/") {
+		project, _, ok := core.SplitDashboardName(rest)
+		if !ok {
+			return "", false
+		}
+		nr.Params["name"] = rest
+		nr.Params["project"] = project
+		switch method {
+		case http.MethodGet:
+			return "GetDashboard", true
+		case http.MethodPatch:
+			return "UpdateDashboard", true
+		case http.MethodDelete:
+			return "DeleteDashboard", true
+		}
 	}
 	return "", false
 }

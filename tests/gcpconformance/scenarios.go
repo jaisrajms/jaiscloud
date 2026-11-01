@@ -879,6 +879,32 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "monitoring", Method: "DELETE", Path: monBase + "/metricDescriptors/" + mType},
 	)
 
+	// ─── Cloud Monitoring v1 dashboards (REST-only) ───────────────────────────
+	// The v1 Discovery document (a secondary version of the monitoring snapshot,
+	// merged under the same service key) declares projects.dashboards. A
+	// dashboard is an opaque document stored verbatim, with etag-based optimistic
+	// concurrency. This flow creates one with an explicit name, reads it, lists
+	// the collection, fully replaces it with a patch (first carrying the body
+	// name, then the Terraform-style name-less body with the stored etag), then
+	// deletes it and proves the NotFound envelope with a post-delete read.
+	dashName := "projects/" + p + "/dashboards/conf-dash-" + suffix
+	sc = append(sc,
+		Scenario{Service: "monitoring", Method: "POST", Path: "/v1/projects/" + p + "/dashboards",
+			Body: fmt.Sprintf(`{"name":%q,"displayName":"Conf Dashboard %s","gridLayout":{"columns":"2","widgets":[{"title":"Requests","xyChart":{"dataSets":[{"timeSeriesQuery":{"prometheusQuery":"rate(requests_total[5m])"}}]}}]},"dashboardFilters":[{"filterType":"VALUE_ONLY","labelKey":"env"}],"labels":{"team":"conf"}}`, dashName, suffix)},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v1/" + dashName},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v1/projects/" + p + "/dashboards"},
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v1/" + dashName,
+			Body: fmt.Sprintf(`{"name":%q,"displayName":"Conf Dashboard %s updated","mosaicLayout":{"columns":12,"tiles":[{"xPos":0,"yPos":0,"width":6,"height":4,"widget":{"title":"Latency"}}]}}`, dashName, suffix),
+			Save: map[string]string{"dashEtag": "etag"}},
+		// The Terraform google_monitoring_dashboard update shape: the dashboard
+		// JSON plus the etag from the most recent read, with no name field (the
+		// name is the path-bound resource name).
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v1/" + dashName,
+			Body: fmt.Sprintf(`{"etag":"${dashEtag}","displayName":"Conf Dashboard %s patched again"}`, suffix)},
+		Scenario{Service: "monitoring", Method: "DELETE", Path: "/v1/" + dashName},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v1/" + dashName},
+	)
+
 	// ─── Google Kubernetes Engine (GKE) v1 ────────────────────────────────────
 	// GKE shares the canonical /v1/projects/{p}/locations/{l}/clusters path with
 	// Managed Kafka on one origin, so the recorder reaches it through the

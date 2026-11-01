@@ -27,4 +27,18 @@ type ProviderInterface interface {
 	UpdateNotificationChannel(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	DeleteNotificationChannel(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ListNotificationChannelDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
+	// Service Monitoring: services.
+	ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	GetService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	CreateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	UpdateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	DeleteService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
+	// Service Monitoring: service level objectives.
+	ListServiceLevelObjectives(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	GetServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	CreateServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	UpdateServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	DeleteServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 }
