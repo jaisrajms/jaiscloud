@@ -134,7 +134,9 @@ func checkKMSExportImportTrustedKeyWrapped(ctx context.Context, cfg Config) erro
 	if err != nil {
 		return err
 	}
-	targetKey, err := kmsEnsureKey(ctx, client, cfg, "trusted", kmspb.CryptoKey_ENCRYPT_DECRYPT, kmspb.CryptoKeyVersion_CRYPTO_KEY_VERSION_ALGORITHM_UNSPECIFIED)
+	// Discovery: trusted wrapping is only valid for HSM_SINGLE_TENANT keys and
+	// never for ENCRYPT_DECRYPT, so the target is a single-tenant raw AES key.
+	targetKey, err := kmsEnsureHSMKey(ctx, client, cfg, "trusted", kmspb.CryptoKey_RAW_ENCRYPT_DECRYPT, kmspb.CryptoKeyVersion_AES_256_GCM)
 	if err != nil {
 		return err
 	}

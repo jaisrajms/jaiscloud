@@ -410,6 +410,12 @@ func Scenarios(suffix string) []Scenario {
 			Save: map[string]string{"kmsTrustedVersion": "name"}},
 		Scenario{Service: "kms", Method: "GET",
 			Path: "/v1/${kmsTrustedVersion}:exportTrustedKeyWrappedCryptoKeyVersion?wrappingKey=${kwpVersion}"},
+		// trustedWrappingEnabled is only valid for HSM_SINGLE_TENANT keys and
+		// never for ENCRYPT_DECRYPT (Discovery, cryptoKeys.create); a software
+		// key fails loud with INVALID_ARGUMENT instead of silently accepting it.
+		Scenario{Service: "kms", Method: "POST",
+			Path: kmsBase + "/cryptoKeys?cryptoKeyId=tw-soft&trustedWrappingEnabled=true",
+			Body: `{"purpose":"RAW_ENCRYPT_DECRYPT"}`},
 
 		// Deletion: a version must be created, destroyed, past its destruction
 		// window, deleted, and only then can the crypto key be deleted. The

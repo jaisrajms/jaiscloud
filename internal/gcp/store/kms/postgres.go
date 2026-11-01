@@ -133,10 +133,10 @@ func (s *PostgresStore) ListKeyRings(ctx context.Context, projectID, location st
 }
 
 func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error {
-	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, true)
+	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, Version{}, true)
 }
 
-func (s *PostgresStore) CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error {
+func (s *PostgresStore) CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, initial Version, withInitialVersion bool) error {
 	if ck.CreateTime.IsZero() {
 		ck.CreateTime = clock.Now()
 	}
@@ -177,9 +177,9 @@ func (s *PostgresStore) CreateCryptoKeyWithVersion(ctx context.Context, projectI
 		return tx.Commit(ctx)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, protection_level, hsm_trusted)
-		VALUES ($1,$2,$3,$4,'1','ENABLED',$5,$6,$7,$8,$9,$10,$11)
-	`, projectID, location, keyringID, id, v.Algorithm, ck.CreateTime, v.KeyMaterial, v.PrivateKey, v.PublicKey, protectionLevelOrDefault(ck.ProtectionLevel), ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"); err != nil {
+		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, protection_level, trusted_wrapping_enabled, hsm_trusted)
+		VALUES ($1,$2,$3,$4,'1','ENABLED',$5,$6,$7,$8,$9,$10,$11,$12)
+	`, projectID, location, keyringID, id, v.Algorithm, ck.CreateTime, v.KeyMaterial, v.PrivateKey, v.PublicKey, protectionLevelOrDefault(ck.ProtectionLevel), initial.TrustedWrappingEnabled, initial.HsmTrusted || ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

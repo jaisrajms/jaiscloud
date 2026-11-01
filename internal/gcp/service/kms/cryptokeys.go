@@ -26,6 +26,11 @@ type CryptoKeyInput struct {
 	// SkipInitialVersion is CreateCryptoKeyRequest.skip_initial_version_creation:
 	// the key is created without the implicit first version.
 	SkipInitialVersion bool
+	// TrustedWrappingEnabled is the cryptoKeys.create trustedWrappingEnabled
+	// query parameter / CreateCryptoKeyRequest.trusted_wrapping_enabled: it
+	// enables trusted wrapping on the implicit first version (Discovery:
+	// HSM_SINGLE_TENANT keys only, never for ENCRYPT_DECRYPT).
+	TrustedWrappingEnabled bool
 }
 
 // CryptoKeyUpdate carries a masked UpdateCryptoKey. UpdateMask is the request's
@@ -183,6 +188,21 @@ func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id
 	if algorithm == "" {
 		algorithm = DefaultAlgorithmForPurpose(purpose)
 	}
+	protectionLevel := in.ProtectionLevel
+	if protectionLevel == "" {
+		protectionLevel = "SOFTWARE"
+	}
+	// The emulator has no EKM plane, so an EXTERNAL / EXTERNAL_VPC key could
+	// never have a usable version: fail loud instead of fabricating SOFTWARE
+	// material (see externalVersionUnsupported).
+	if isExternalProtectionLevel(protectionLevel) {
+		return kmsstore.CryptoKey{}, externalVersionUnsupported()
+	}
+	if in.TrustedWrappingEnabled {
+		if err := validateTrustedWrappingTarget(purpose, protectionLevel); err != nil {
+			return kmsstore.CryptoKey{}, err
+		}
+	}
 	// A deleted crypto key leaves a RetiredResource behind; its name cannot be
 	// reused (Cloud KMS RetiredResource semantics).
 	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(location, id)); err == nil {
@@ -216,7 +236,14 @@ func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id
 		RotationPeriod: in.RotationPeriod, NextRotationTime: nrt,
 		ProtectionLevel: in.ProtectionLevel, ImportOnly: in.ImportOnly,
 	}
-	if err := s.keys.CreateCryptoKeyWithVersion(ctx, project, location, kr, id, ck, withInitialVersion); err != nil {
+	// trustedWrappingEnabled applies to the CryptoKeyVersions created by this
+	// request (the implicit first version). A create that skips that version has
+	// no version to stamp, so the flag only validates here.
+	initial := kmsstore.Version{
+		ProtectionLevel:        in.ProtectionLevel,
+		TrustedWrappingEnabled: in.TrustedWrappingEnabled && withInitialVersion,
+	}
+	if err := s.keys.CreateCryptoKeyWithVersion(ctx, project, location, kr, id, ck, initial, withInitialVersion); err != nil {
 		if errorsIsAlreadyExists(err) {
 			return kmsstore.CryptoKey{}, alreadyExists("crypto key already exists")
 		}
@@ -365,8 +392,18 @@ func (s *Service) DeleteCryptoKey(ctx context.Context, project, location, kr, id
 
 // ─── Versions ─────────────────────────────────────────────────────────────────
 
+// CreateVersionInput carries the caller-supplied fields of a
+// CreateCryptoKeyVersion request. ExternalProtectionLevelOptions reports
+// whether the request carried Discovery's ExternalProtectionLevelOptions
+// (external key URI / EKM connection key path), which the emulator cannot
+// represent.
+type CreateVersionInput struct {
+	TrustedWrappingEnabled         bool
+	ExternalProtectionLevelOptions bool
+}
+
 // CreateVersion creates a generated version of a crypto key.
-func (s *Service) CreateVersion(ctx context.Context, project, location, kr, id string) (kmsstore.Version, error) {
+func (s *Service) CreateVersion(ctx context.Context, project, location, kr, id string, in CreateVersionInput) (kmsstore.Version, error) {
 	ck, err := s.keys.GetCryptoKey(ctx, project, location, kr, id)
 	if err != nil {
 		return kmsstore.Version{}, keyErr(err)
@@ -374,12 +411,29 @@ func (s *Service) CreateVersion(ctx context.Context, project, location, kr, id s
 	if ck.ImportOnly {
 		return kmsstore.Version{}, failedPrecondition("CryptoKey is import-only; versions must be created by import")
 	}
+	// Discovery: ExternalProtectionLevelOptions is "specific to the EXTERNAL and
+	// EXTERNAL_VPC protection levels"; on any other key it is a shape error.
+	if isExternalProtectionLevel(ck.ProtectionLevel) {
+		return kmsstore.Version{}, externalVersionUnsupported()
+	}
+	if in.ExternalProtectionLevelOptions {
+		return kmsstore.Version{}, invalidArgument("external_protection_level_options is only valid for EXTERNAL or EXTERNAL_VPC CryptoKeyVersions")
+	}
+	if in.TrustedWrappingEnabled {
+		if err := validateTrustedWrappingTarget(ck.Purpose, ck.ProtectionLevel); err != nil {
+			return kmsstore.Version{}, err
+		}
+	}
 	now := clock.Now()
-	version, err := s.keys.CreateVersion(ctx, project, location, kr, id, kmsstore.Version{CreateTime: now, Algorithm: ck.Algorithm, ProtectionLevel: ck.ProtectionLevel, HsmTrusted: ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"})
+	version, err := s.keys.CreateVersion(ctx, project, location, kr, id, kmsstore.Version{
+		CreateTime: now, Algorithm: ck.Algorithm, ProtectionLevel: ck.ProtectionLevel,
+		TrustedWrappingEnabled: in.TrustedWrappingEnabled,
+		HsmTrusted:             ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT",
+	})
 	if err != nil {
 		return kmsstore.Version{}, versionErr(err)
 	}
-	return kmsstore.Version{Version: version, State: "ENABLED", Algorithm: ck.Algorithm, CreateTime: now, ProtectionLevel: ck.ProtectionLevel}, nil
+	return kmsstore.Version{Version: version, State: "ENABLED", Algorithm: ck.Algorithm, CreateTime: now, ProtectionLevel: ck.ProtectionLevel, TrustedWrappingEnabled: in.TrustedWrappingEnabled}, nil
 }
 
 // GetVersion returns a version, applying elapsed destruction windows.
