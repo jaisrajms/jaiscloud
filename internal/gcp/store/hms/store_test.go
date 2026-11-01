@@ -257,6 +257,55 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected ErrPartitionNotFound on re-drop, got %v", err)
 	}
 
+	// AddPartitions is one atomic unit across tables: a later element that fails
+	// writes nothing (Hive rolls the request back), a duplicate fails the whole
+	// batch, and ifNotExists skips the stored entries.
+	if err := s.CreateTable(ctx, "db2", "d", Table{DBName: "db2", TableName: "d", TableJSON: tblJSON}); err != nil {
+		t.Fatalf("create table d: %v", err)
+	}
+	batch := []Partition{
+		{DBName: "db2", TableName: "c", Values: []string{"2030"}, PartJSON: partJSON("2030")},
+		{DBName: "db2", TableName: "d", Values: []string{"2030"}, PartJSON: partJSON("2030")},
+	}
+	added, err := s.AddPartitions(ctx, batch, false)
+	if err != nil || len(added) != 2 {
+		t.Fatalf("add partitions across tables: %v (%d added)", err, len(added))
+	}
+	if _, err := s.GetPartition(ctx, "db2", "d", []string{"2030"}); err != nil {
+		t.Fatalf("second table's partition missing: %v", err)
+	}
+	// The failure lands on the second element, after the first was inserted:
+	// both must roll back.
+	if _, err := s.AddPartitions(ctx, []Partition{
+		{DBName: "db2", TableName: "c", Values: []string{"2031"}, PartJSON: partJSON("2031")},
+		{DBName: "db2", TableName: "missing", Values: []string{"2031"}, PartJSON: partJSON("2031")},
+	}, false); err != ErrTableNotFound {
+		t.Fatalf("expected ErrTableNotFound, got %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2031"}); err != ErrPartitionNotFound {
+		t.Fatalf("mid-batch failure left the first partition behind: %v", err)
+	}
+	// A duplicate — already stored, or repeated inside the batch — fails the
+	// batch and writes nothing.
+	if _, err := s.AddPartitions(ctx, []Partition{batch[0]}, false); err != ErrPartitionExists {
+		t.Fatalf("expected ErrPartitionExists for a stored duplicate, got %v", err)
+	}
+	dup := Partition{DBName: "db2", TableName: "c", Values: []string{"2032"}, PartJSON: partJSON("2032")}
+	if _, err := s.AddPartitions(ctx, []Partition{dup, dup}, false); err != ErrPartitionExists {
+		t.Fatalf("expected ErrPartitionExists for an in-batch duplicate, got %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2032"}); err != ErrPartitionNotFound {
+		t.Fatalf("in-batch duplicate should have written nothing: %v", err)
+	}
+	// ifNotExists skips the stored entry and adds the rest.
+	added, err = s.AddPartitions(ctx, []Partition{
+		batch[0],
+		{DBName: "db2", TableName: "c", Values: []string{"2033"}, PartJSON: partJSON("2033")},
+	}, true)
+	if err != nil || len(added) != 1 || len(added[0].Values) != 1 || added[0].Values[0] != "2033" {
+		t.Fatalf("ifNotExists batch = %+v, %v; want only 2033 added", added, err)
+	}
+
 	// Renaming a table preserves its partitions (Hive keeps partition metadata).
 	if _, err := s.RenameTable(ctx, "db2", "c", "db2", "c_renamed", Table{DBName: "db2", TableName: "c_renamed", TableJSON: tblJSON}); err != nil {
 		t.Fatalf("rename table: %v", err)
@@ -375,6 +424,61 @@ func TestAlterTableAtomicity(t *testing.T) {
 	}
 	if inner := fields[1].([]any); len(inner) != writers {
 		t.Fatalf("lost update: expected %d markers, got %d", writers, len(inner))
+	}
+}
+
+// TestAddPartitionsAtomicity verifies a batch is one critical section: when two
+// concurrent requests race for the same partitions, exactly one inserts the
+// whole batch and the other writes nothing at all.
+func TestAddPartitionsAtomicity(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	defer s.Reset(ctx)
+
+	if err := s.CreateDatabase(ctx, Database{Name: "db"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range []string{"a", "b"} {
+		if err := s.CreateTable(ctx, "db", tbl, Table{DBName: "db", TableName: tbl, TableJSON: json.RawMessage(`["o",[]]`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batch := []Partition{
+		{DBName: "db", TableName: "a", Values: []string{"1"}, PartJSON: partJSON("1")},
+		{DBName: "db", TableName: "b", Values: []string{"1"}, PartJSON: partJSON("1")},
+	}
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.AddPartitions(ctx, batch, false)
+		}(i)
+	}
+	wg.Wait()
+
+	admitted := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			admitted++
+		case err == ErrPartitionExists:
+		default:
+			t.Fatalf("unexpected batch error: %v", err)
+		}
+	}
+	if admitted != 1 {
+		t.Fatalf("admitted %d batches, want exactly 1", admitted)
+	}
+	// Exactly the winning batch is present in both tables — never a half batch.
+	for _, tbl := range []string{"a", "b"} {
+		got, err := s.ListPartitions(ctx, "db", tbl)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("%s partitions = %+v, %v; want the one winning batch element", tbl, got, err)
+		}
 	}
 }
 

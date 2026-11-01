@@ -143,6 +143,15 @@ type Store interface {
 	// ErrTableNotFound; duplicate (dbName, tableName, values) ->
 	// ErrPartitionExists.
 	CreatePartition(ctx context.Context, dbName, tableName string, p Partition) error
+	// AddPartitions adds a batch of partitions as one atomic unit, across
+	// databases and tables: either every partition is stored or none is.
+	// Missing table -> ErrTableNotFound; a duplicate (dbName, tableName, values)
+	// — already stored or repeated inside the batch — -> ErrPartitionExists,
+	// with nothing written. With ifNotExists, an already-existing partition is
+	// skipped instead of failing the batch (Hive's add_partitions_req
+	// semantics); the returned slice is the partitions actually added, in input
+	// order.
+	AddPartitions(ctx context.Context, parts []Partition, ifNotExists bool) ([]Partition, error)
 	// GetPartition returns the partition identified by its value tuple.
 	// Missing table or partition -> ErrTableNotFound / ErrPartitionNotFound.
 	GetPartition(ctx context.Context, dbName, tableName string, values []string) (Partition, error)

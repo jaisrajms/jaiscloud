@@ -951,3 +951,79 @@ func TestServerGetTableObjectsByNameReq(t *testing.T) {
 		t.Fatalf("table order/names wrong: %+v", tables)
 	}
 }
+
+// TestServerAddPartitionsReqAtomicAcrossTables is the MP8 probe: with
+// ifNotExists=false a non-duplicate failure on a later element of
+// add_partitions_req — a partition naming a table that does not exist, under a
+// different table from the first element — must roll back the elements the same
+// request already inserted, leaving the catalog exactly as it was.
+func TestServerAddPartitionsReqAtomicAcrossTables(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	if r := hmsCall(t, addr, "create_database", NewBuilder().Struct(1, NewBuilder().Str(dbName, "default").Str(dbLocationURI, "gs://bucket/wh/default").Build()).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_database: %+v", r.result)
+	}
+	for _, tbl := range []string{"ta", "tb"} {
+		if r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testPartitionedTable("default", tbl, "gs://bucket/wh/default/"+tbl, "ds")).Build()); r.msgType != thrift.REPLY {
+			t.Fatalf("create %s: %+v", tbl, r.result)
+		}
+	}
+	addReq := func(ifNotExists bool, parts ...*Struct) reply {
+		vals := make([]Value, 0, len(parts))
+		for _, p := range parts {
+			vals = append(vals, StructV(p))
+		}
+		req := NewBuilder().Str(1, "default").Str(2, "ta").
+			Add(3, ListV(thrift.STRUCT, vals)).
+			Bool(4, ifNotExists).Bool(5, true).Build()
+		return hmsCall(t, addr, "add_partitions_req", NewBuilder().Struct(1, req).Build())
+	}
+
+	// The second element targets another table that does not exist, so the error
+	// lands mid-batch; the add clause maps it to InvalidObjectException at
+	// field 1.
+	r := addReq(false,
+		testPartition("default", "ta", "gs://bucket/wh/default/ta/ds=1", "1"),
+		testPartition("default", "missing", "gs://bucket/wh/default/missing/ds=2", "2"),
+	)
+	if len(r.result.Fields) != 1 || r.result.Fields[0].ID != 1 {
+		t.Fatalf("mid-batch missing table should throw InvalidObjectException at field 1, got %+v", r.result.Fields)
+	}
+	if g := hmsCall(t, addr, "get_partition", NewBuilder().Str(1, "default").Str(2, "ta").Add(3, ListV(thrift.STRING, strList([]string{"1"}))).Build()); g.result.Struct(0) != nil {
+		t.Fatalf("add_partitions_req left a partially applied partition: %+v", g.result.Struct(0))
+	}
+
+	// The same batch across two existing tables commits as a unit.
+	r = addReq(false,
+		testPartition("default", "ta", "gs://bucket/wh/default/ta/ds=1", "1"),
+		testPartition("default", "tb", "gs://bucket/wh/default/tb/ds=1", "1"),
+	)
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("cross-table add_partitions_req: %+v", r.result)
+	}
+	for _, tbl := range []string{"ta", "tb"} {
+		if g := hmsCall(t, addr, "get_partition", NewBuilder().Str(1, "default").Str(2, tbl).Add(3, ListV(thrift.STRING, strList([]string{"1"}))).Build()); g.result.Struct(0) == nil {
+			t.Fatalf("cross-table batch did not store %s: %+v", tbl, g.result)
+		}
+	}
+	if got := len(r.result.Struct(0).List(1)); got != 2 {
+		t.Fatalf("needResult should list both added partitions, got %d", got)
+	}
+
+	// ifNotExists skips the stored one and still adds the new one.
+	r = addReq(true,
+		testPartition("default", "ta", "gs://bucket/wh/default/ta/ds=1", "1"),
+		testPartition("default", "ta", "gs://bucket/wh/default/ta/ds=2", "2"),
+	)
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("ifNotExists add_partitions_req: %+v", r.result)
+	}
+	if got := len(r.result.Struct(0).List(1)); got != 1 {
+		t.Fatalf("ifNotExists result should hold only the newly added partition, got %d", got)
+	}
+	if g := hmsCall(t, addr, "get_partition", NewBuilder().Str(1, "default").Str(2, "ta").Add(3, ListV(thrift.STRING, strList([]string{"2"}))).Build()); g.result.Struct(0) == nil {
+		t.Fatalf("ifNotExists skipped the new partition too: %+v", g.result)
+	}
+}

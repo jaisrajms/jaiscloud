@@ -787,21 +787,15 @@ func (s *Server) addPartitions(ctx context.Context, args *Struct) (*Struct, erro
 		}
 		entries = append(entries, hmsstore.Partition{DBName: db, TableName: tbl, Values: values, PartJSON: raw})
 	}
-	// Old add_partitions API assumes one table and ifNotExists=false: if any
-	// partition already exists the whole call fails (Hive add_partitions_core).
-	for _, e := range entries {
-		if _, err := s.store.GetPartition(ctx, e.DBName, e.TableName, e.Values); err == nil {
-			return nil, declared(2, excAlreadyExistsException, "partition already exists")
-		} else if !errors.Is(err, hmsstore.ErrPartitionNotFound) {
-			return nil, s.addPartitionErr(err)
-		}
+	// Old add_partitions API assumes one table and ifNotExists=false, and Hive
+	// adds the whole list in one transaction: the batch is inserted atomically,
+	// so a pre-existing partition anywhere in it fails the call with nothing
+	// written (Hive add_partitions_core).
+	added, err := s.store.AddPartitions(ctx, entries, false)
+	if err != nil {
+		return nil, s.addPartitionErr(err)
 	}
-	for _, e := range entries {
-		if err := s.store.CreatePartition(ctx, e.DBName, e.TableName, e); err != nil {
-			return nil, s.addPartitionErr(err)
-		}
-	}
-	return result0(I32V(int32(len(entries)))), nil
+	return result0(I32V(int32(len(added)))), nil
 }
 
 func (s *Server) addPartitionsReq(ctx context.Context, args *Struct) (*Struct, error) {
@@ -816,12 +810,9 @@ func (s *Server) addPartitionsReq(ctx context.Context, args *Struct) (*Struct, e
 	if v, ok := req.Get(5); ok && v.T == thrift.BOOL {
 		needResult = v.B
 	}
-	type pending struct {
-		db, tbl string
-		values  []string
-		raw     []byte
-	}
-	var pend []pending
+	// A partition struct may override the request's db/table, so a batch can span
+	// tables; it is inserted as one atomic unit below.
+	pend := make([]hmsstore.Partition, 0, len(req.List(3)))
 	for _, v := range req.List(3) {
 		if v.T != thrift.STRUCT || v.S == nil {
 			continue
@@ -836,37 +827,26 @@ func (s *Server) addPartitionsReq(ctx context.Context, args *Struct) (*Struct, e
 		if ptbl == "" {
 			ptbl = tbl
 		}
-		pend = append(pend, pending{db: pdb, tbl: ptbl, values: values, raw: raw})
+		pend = append(pend, hmsstore.Partition{DBName: pdb, TableName: ptbl, Values: values, PartJSON: raw})
 	}
-	// add_partitions_req is transactional in Hive: with ifNotExists=false a
-	// pre-existing partition fails the whole call before anything is written.
-	if !ifNotExists {
-		for _, p := range pend {
-			if _, err := s.store.GetPartition(ctx, p.db, p.tbl, p.values); err == nil {
-				return nil, declared(2, excAlreadyExistsException, "partition already exists")
-			} else if !errors.Is(err, hmsstore.ErrPartitionNotFound) {
-				return nil, s.addPartitionErr(err)
-			}
-		}
-	}
-	var added []Value
-	for _, p := range pend {
-		cerr := s.store.CreatePartition(ctx, p.db, p.tbl, hmsstore.Partition{DBName: p.db, TableName: p.tbl, Values: p.values, PartJSON: p.raw})
-		if cerr != nil {
-			if errors.Is(cerr, hmsstore.ErrPartitionExists) && ifNotExists {
-				continue
-			}
-			return nil, s.addPartitionErr(cerr)
-		}
-		if needResult {
-			if st, err := UnmarshalStruct(p.raw); err == nil {
-				added = append(added, StructV(st))
-			}
-		}
+	// add_partitions_req is transactional in Hive: the batch is one unit, so a
+	// failure on any element — a duplicate with ifNotExists=false, or a
+	// non-duplicate error such as a missing table on a later element, even under
+	// another table's db/table override — rolls back the elements already
+	// inserted for this request. ifNotExists skips stored partitions instead.
+	added, err := s.store.AddPartitions(ctx, pend, ifNotExists)
+	if err != nil {
+		return nil, s.addPartitionErr(err)
 	}
 	res := NewBuilder()
 	if needResult {
-		res.Add(1, ListV(thrift.STRUCT, added))
+		vals := make([]Value, 0, len(added))
+		for _, p := range added {
+			if st, err := UnmarshalStruct(p.PartJSON); err == nil {
+				vals = append(vals, StructV(st))
+			}
+		}
+		res.Add(1, ListV(thrift.STRUCT, vals))
 	}
 	return result0(StructV(res.Build())), nil
 }

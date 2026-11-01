@@ -183,6 +183,48 @@ func (s *MemoryStore) CreatePartition(_ context.Context, dbName, tableName strin
 	return nil
 }
 
+// AddPartitions stages the whole batch before writing anything, so a failing
+// element leaves the catalog untouched. The store mutex makes the staging and
+// the write one step: no reader can observe a subset of the batch.
+func (s *MemoryStore) AddPartitions(_ context.Context, parts []Partition, ifNotExists bool) ([]Partition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	added := make([]Partition, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		if _, ok := s.tables[p.DBName][p.TableName]; !ok {
+			return nil, ErrTableNotFound
+		}
+		key := PartitionKey(p.Values)
+		batchKey := p.DBName + "\x00" + p.TableName + "\x00" + key
+		_, exists := s.partitions[p.DBName][p.TableName][key]
+		if exists || seen[batchKey] {
+			if ifNotExists {
+				continue
+			}
+			return nil, ErrPartitionExists
+		}
+		seen[batchKey] = true
+		added = append(added, p)
+	}
+	// Every element is valid: commit the staged set. Nothing above this point
+	// wrote, so an error can never leave a partially applied batch behind.
+	for _, p := range added {
+		if s.partitions[p.DBName] == nil {
+			s.partitions[p.DBName] = make(map[string]map[string]Partition)
+		}
+		if s.partitions[p.DBName][p.TableName] == nil {
+			s.partitions[p.DBName][p.TableName] = make(map[string]Partition)
+		}
+		stored := p
+		if stored.Values == nil {
+			stored.Values = []string{}
+		}
+		s.partitions[p.DBName][p.TableName][PartitionKey(p.Values)] = stored
+	}
+	return added, nil
+}
+
 func (s *MemoryStore) GetPartition(_ context.Context, dbName, tableName string, values []string) (Partition, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
