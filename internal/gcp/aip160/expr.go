@@ -73,9 +73,6 @@ func (p *Parser) parseAndExpr(clause func(*Parser) (any, error)) (*Expr, error) 
 			left = &Expr{Op: "AND", Left: left, Right: right}
 		case t.Kind == KindEOF, t.Kind == KindOp && t.Text == ")":
 			return left, nil
-		case t.Kind == KindIdent && strings.EqualFold(t.Text, "OR"):
-			// parseOrExpr consumes OR; reaching here means it was dangling.
-			return nil, fmt.Errorf("unexpected token %s", TokenText(t))
 		default:
 			// Whitespace-separated clauses are an implicit AND.
 			right, err := p.parseOrExpr(clause)

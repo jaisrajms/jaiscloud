@@ -55,6 +55,8 @@ packages:
     min_percent: 83.64
   - package: internal/gcp/lro
     min_percent: 100
+  - package: internal/gcp/operationfilter
+    min_percent: 87.50
   - package: internal/gcp/paging
     min_percent: 88.37
   - package: internal/gcp/pluginchain
