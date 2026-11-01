@@ -261,15 +261,67 @@ the same source for every package they share**. The released archives are static
 2. **Your plugin, built to match**: the same Go version, `-trimpath`, `CGO_ENABLED=1`, and the same
    SDK source, as **a module of its own that requires the SDK**.
 
+The SDK has to reach both builds **the same way**, and there are two ways:
+
+| | Emulator | Plugin | For |
+|---|---|---|---|
+| **From a checkout** | `make build-plugins` (the repository's `replace => ./sdk`) | `make plugin` / `make plugin-example`, or your own `replace` pointing at the same checkout | Developing, and everything in this repository's tests |
+| **Published** | `make build-plugins-release`: pinned to the SDK tag `sdk/<version>` | `require github.com/jaisrajms/jaiscloud/sdk <version>` in your `go.mod`, from the module proxy | Someone with an emulator binary and their own plugin repository |
+
+Do not mix them. Go treats the SDK as a different package when one build takes it through a `replace`
+and the other from a module version, **even when the source is identical**, and refuses the plugin
+(`The SDK package differs`).
+
 `jaiscloud-<cloud> version` prints what the emulator was built with:
 
 ```text
 $ ./jaiscloud-aws-plugins version
 jaiscloud-aws dev (commit: none, built: unknown)
-in-process plugins: supported, built with go1.27.1 darwin/amd64, cgo=true, tags=none, trimpath=true, sdk=replaced by ./sdk
+in-process plugins: supported, built with go1.27.1 darwin/amd64, cgo=true, tags=none, trimpath=true, sdk=v0.1.0 (require github.com/jaisrajms/jaiscloud/sdk v0.1.0)
 ```
 
 `GET /_jaiscloud/doctor` shows the same under `pluginBuild`.
+
+### With an emulator binary and your own plugin repository
+
+This is the flow for someone who downloaded a plugin-capable emulator and keeps their plugin in a
+repository of their own, with no jaiscloud checkout:
+
+1. Ask the emulator what to build against:
+
+   ```text
+   $ jaiscloud-aws-plugins version
+   in-process plugins: supported, built with go1.26.10 linux/amd64, cgo=true, tags=ui, trimpath=true,
+   sdk=v0.1.0 (require github.com/jaisrajms/jaiscloud/sdk v0.1.0)
+   ```
+
+2. In your plugin repository (a module of its own), require that SDK version and write `package main`
+   with `New()` (see [Writing an in-process plugin](#writing-an-in-process-plugin)):
+
+   ```bash
+   go mod init example.com/acme-redact
+   go get github.com/jaisrajms/jaiscloud/sdk@v0.1.0      # the version `version` printed
+   ```
+
+3. Build with **that Go release**, with cgo and `-trimpath`. The `GOTOOLCHAIN` setting makes Go fetch
+   exactly the release the emulator was built with:
+
+   ```bash
+   GOTOOLCHAIN=go1.26.10 CGO_ENABLED=1 go build -buildmode=plugin -trimpath -o acme-redact.so .
+   ```
+
+4. Start the emulator with it:
+
+   ```bash
+   jaiscloud-aws-plugins start --plugin so:$PWD/acme-redact.so
+   ```
+
+If anything differs, startup stops and the message says what the emulator was built with.
+
+> **Status.** This flow needs two things that are not published yet: the SDK tag `sdk/v0.1.0` (so
+> `go get` can fetch the SDK) and an emulator built with `make build-plugins-release` (pinned to that
+> tag). Until they are, use the checkout route or the container image. The tag is created from the commit a
+> release is built from with `make sdk-tag`; see the developer guide.
 
 ### Quick start: the example plugin
 
@@ -329,10 +381,14 @@ docker build -f Dockerfile.plugins --build-arg CLOUD=aws --build-arg PORT=4566 -
 docker run --rm -p 4566:4566 jaiscloud-aws-plugins start --plugin so:/plugins/inprocess.so
 ```
 
-To build **your own** plugin with exactly the image's toolchain, use the builder stage:
+To build **your own** plugin with exactly this toolchain, use the builder stage. The image contains the
+SDK source at `/src/sdk` and is built from the checkout, so your plugin takes the SDK from there with a
+`replace` (until a published SDK version exists):
 
 ```bash
 docker build -f Dockerfile.plugins --target builder -t jaiscloud-plugin-builder .
+# in your plugin repository:
+go mod edit -replace github.com/jaisrajms/jaiscloud/sdk=/src/sdk   # or keep it in a copy with -modfile
 docker run --rm -v "$PWD":/plugin -w /plugin jaiscloud-plugin-builder \
     go build -buildmode=plugin -trimpath -o my-plugin.so .
 docker run --rm -p 4566:4566 -v "$PWD":/plugins jaiscloud-aws-plugins start --plugin so:/plugins/my-plugin.so
@@ -424,7 +480,7 @@ may still call plugins have stopped.
 | Go version | Printed by `version`. The same release, not just the same minor |
 | `-trimpath` | Both with it or both without. The `build-plugins` and `plugin` targets use it |
 | `CGO_ENABLED=1` | A plugin cannot be built without it |
-| SDK source | The same files. A published tag works when its source equals the emulator's. The plugin must **require** the SDK; built inside the SDK module itself the SDK package counts as different and the plugin is refused |
+| SDK source | The same files, **taken the same way** (see the table above). A published tag works when `sdk/` at the tag equals the emulator's and the emulator was built pinned to it. The plugin must **require** the SDK; built inside the SDK module itself the SDK package counts as different and the plugin is refused |
 
 Build tags (`-tags ui`) do not have to match for a plugin that imports only the standard library and
 the SDK.
@@ -435,7 +491,7 @@ and misbehaving:
 ```text
 Error: plugin "so:/work/acme-redact.so": opening /work/acme-redact.so: plugin.Open("/work/acme-redact"):
 plugin was built with a different version of package internal/goarch
-This emulator is built with go1.27.1 darwin/amd64, cgo=true, tags=none, trimpath=true, sdk=replaced by ./sdk.
+This emulator is built with go1.27.1 darwin/amd64, cgo=true, tags=none, trimpath=true, sdk=v0.1.0 (require github.com/jaisrajms/jaiscloud/sdk v0.1.0).
 A plugin must be built with the same Go toolchain, -trimpath, CGO_ENABLED=1 and the same SDK source ...
 ```
 
@@ -584,7 +640,8 @@ sequenceDiagram
 | Symptom | Cause and fix |
 |---|---|
 | `plugin was built with a different version of package ...` at startup | An in-process plugin built with another Go release, without `-trimpath`, or against other SDK source. The second line of the error is this emulator's build; rebuild the plugin with `make plugin` or the printed settings |
-| `... The SDK package differs` | The plugin was built inside the SDK module. Make it a module of its own that requires the SDK |
+| `... The SDK package differs` | The SDK reached the plugin differently from the emulator: built inside the SDK module, or through a `replace` while the emulator was built pinned to a version (or the reverse). Match them as in [What you need](#what-you-need) |
+| `go: ... reading .../sdk/go.mod ... unknown revision sdk/v0.1.0` | The SDK tag is not published yet. Use the checkout route or the container image |
 | `this build cannot load in-process plugins` | The emulator has no cgo (a release archive or image). Use `make build-plugins-<cloud>` or `Dockerfile.plugins` |
 | `plugin requires "in-process"` | The plugin calls `Next` or returns streams, so it was written for `so:<path>`; it was given as `http://...` |
 | Emulator will not start, error names a plugin address | The plugin was not reachable within `--plugin-wait`. Start it first, or raise the wait |

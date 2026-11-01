@@ -2540,6 +2540,25 @@ branches to `callLocal`, which passes the raw `nr.Params` (no JSON projection), 
 - The release archives are built without cgo, so `loader_stub.go` answers a `so:` spec with a message
   that names `make build-plugins`.
 
+#### Releasing the SDK so authors can require it
+
+Go treats the SDK as a different package when one build takes it through the repository's
+`replace => ./sdk` and the other from a module version, even with identical source. So the emulator
+that is **published** must be built pinned to the tagged SDK, and plugin authors `require` that tag.
+`sdk.Version` (`sdk/version.go`) is the one place the version lives; `jaiscloud-<cloud> version` prints it as
+the line to require.
+
+1. Change `Version` in `sdk/version.go` in the same pull request as any SDK change that is released. Never
+   reuse a version: the Go module proxy caches a tag for good.
+2. After that commit is on `main`: `make sdk-tag` (checks a clean tree, `HEAD == origin/main`, and that the tag
+   is new), then `git push origin sdk/<version>`.
+3. Build the emulator for release with `make build-plugins-release` (both clouds, pinned to the tag from the module
+   proxy; `PLUGIN_CLOUDS` and `PLUGIN_OUT` narrow it). `make check-sdk-tag` fails if `sdk/` differs from the tag.
+4. `TestInProcessPluginRequiringThePublishedSDKVersion` runs this whole topology against a local module proxy
+   and pins that the checkout build refuses the published plugin.
+
+Builds from a checkout (`make build-plugins`, the tests, `Dockerfile.plugins`) keep the `replace` on purpose.
+
 ### Running the plugin tests
 
 ```bash

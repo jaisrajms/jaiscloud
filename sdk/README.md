@@ -201,7 +201,7 @@ func main() {}
 
 It needs a plugin-capable emulator (`make build-plugins`, linux or darwin, cgo) and a plugin built to match:
 the same Go release, `-trimpath`, `CGO_ENABLED=1`, and the same SDK source, in a module of its own that
-requires the SDK. See [examples/inprocess](examples/inprocess/main.go) (AWS and GCP) and
+requires the SDK, at the version `jaiscloud-<cloud> version` prints (`sdk=v0.1.0`; `sdk.Version` in this module). See [examples/inprocess](examples/inprocess/main.go) (AWS and GCP) and
 [docs/PLUGINS.md](../docs/PLUGINS.md#in-process-plugins) for the build, the container image and the rules.
 
 ## State
