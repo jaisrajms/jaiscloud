@@ -430,7 +430,7 @@ func (s *Service) settle(op Operation) Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
-	s.tracker.EmitOperation("resourcemanager", op.Name, op.Name, op.Verb)
+	s.tracker.EmitOperation("resourcemanager", op.Name, op.Name, op.Verb, op.Project.ProjectID)
 	return op
 }
 

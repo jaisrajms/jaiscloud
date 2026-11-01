@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	core "jaiscloud/internal/gcp/service/container"
 	containerstore "jaiscloud/internal/gcp/store/container"
 	"jaiscloud/internal/model"
 )
@@ -81,6 +82,30 @@ func int32From(m map[string]any, key string) int32 {
 	return int32(intFrom(m[key]))
 }
 
+// int64From reads an int64 that GKE encodes as a JSON string (int64 fields are
+// strings on the REST surface) or, tolerantly, as a JSON number.
+func int64From(v any) int64 {
+	switch x := v.(type) {
+	case string:
+		n, _ := strconv.ParseInt(x, 10, 64)
+		return n
+	case float64:
+		return int64(x)
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	default:
+		return 0
+	}
+}
+
+// boolFrom reads a JSON boolean, treating a missing value as false.
+func boolFrom(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
 // clusterFromBody decodes a GKE Cluster JSON object into the store model's
 // writable subset. Input-only/derived fields are ignored; the core fills the
 // defaults.
@@ -91,9 +116,12 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 		return c, model.NewProviderError("InvalidArgument", "cluster name is required", 400)
 	}
 	if strings.Contains(raw, "/") {
-		_, _, id, ok := ParseClusterPath(raw)
+		// The canonical path is parsed by the core, the same parser the gRPC
+		// codec uses, so both transports accept exactly the same names and
+		// answer the same message for a malformed one.
+		_, _, id, ok := core.ParseClusterName(raw)
 		if !ok {
-			return c, model.NewProviderError("InvalidArgument", "invalid cluster name", 400)
+			return c, model.NewProviderError("InvalidArgument", "invalid cluster name: "+raw, 400)
 		}
 		c.Name = id
 	} else {
@@ -103,8 +131,34 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 	c.Network = str(m, "network")
 	c.Subnetwork = str(m, "subnetwork")
 	c.InitialNodeCount = int32From(m, "initialNodeCount")
+	if cfg, ok := m["nodeConfig"].(map[string]any); ok {
+		c.NodeConfig = nodeConfigFromMap(cfg)
+	}
+	if sn, ok := m["shieldedNodes"].(map[string]any); ok {
+		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: boolFrom(sn["enabled"])}
+	}
+	if dpc, ok := m["defaultMaxPodsConstraint"].(map[string]any); ok {
+		if n := int64From(dpc["maxPodsPerNode"]); n > 0 {
+			c.MaxPodsPerNode = n
+		}
+	}
 	if labels := strMap(m["resourceLabels"]); labels != nil {
 		c.ResourceLabels = labels
+	}
+	if ap, ok := m["autopilot"].(map[string]any); ok {
+		c.Autopilot = &containerstore.Autopilot{Enabled: boolVal(ap, "enabled")}
+	}
+	if wi, ok := m["workloadIdentityConfig"].(map[string]any); ok {
+		// An empty object still enables Workload Identity (the core defaults the
+		// workload pool from the project), matching the API's meaning.
+		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{WorkloadPool: str(wi, "workloadPool")}
+	}
+	if pools, ok := m["nodePools"].([]any); ok {
+		for _, raw := range pools {
+			if pm, ok := raw.(map[string]any); ok {
+				c.NodePools = append(c.NodePools, nodePoolFromBody(pm))
+			}
+		}
 	}
 	return c, nil
 }
@@ -123,29 +177,11 @@ func strMap(v any) map[string]string {
 	return out
 }
 
-// ParseClusterPath parses a GKE cluster name that may be either the short id
-// ("my-cluster") or the canonical path.
-func ParseClusterPath(name string) (project, location, cluster string, ok bool) {
-	if !strings.Contains(name, "/") {
-		return "", "", name, true
-	}
-	return parseCanonical(name, "clusters")
-}
-
-func parseCanonical(name, resource string) (project, location, id string, ok bool) {
-	segs := strings.Split(strings.Trim(name, "/"), "/")
-	if len(segs) != 6 {
-		return "", "", "", false
-	}
-	if segs[0] != "projects" || segs[2] != "locations" || segs[4] != resource {
-		return "", "", "", false
-	}
-	return segs[1], segs[3], segs[5], true
-}
-
 // ─── wire encoding ────────────────────────────────────────────────────────────
 
 func clusterToJSON(c containerstore.Cluster) map[string]any {
+	c = core.WithReadDefaults(c)
+	network, subnetwork := core.NetworkConfigPaths(c)
 	out := map[string]any{
 		"name":                  c.Name,
 		"location":              c.Location,
@@ -157,6 +193,19 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 		"initialClusterVersion": c.InitialClusterVersion,
 		"network":               c.Network,
 		"subnetwork":            c.Subnetwork,
+		// Real GKE always renders these three response messages, and clients
+		// (the hashicorp/google provider among them) dereference them
+		// unconditionally, so they are never omitted.
+		"networkConfig": map[string]any{
+			"network":    network,
+			"subnetwork": subnetwork,
+		},
+		"shieldedNodes": map[string]any{
+			"enabled": c.ShieldedNodes != nil && c.ShieldedNodes.Enabled,
+		},
+		"defaultMaxPodsConstraint": map[string]any{
+			"maxPodsPerNode": strconv.FormatInt(c.MaxPodsPerNode, 10),
+		},
 		"masterAuth": map[string]any{
 			"clusterCaCertificate": c.CaCertificate,
 		},
@@ -170,6 +219,12 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 			pools = append(pools, nodePoolToJSON(p))
 		}
 		out["nodePools"] = pools
+	}
+	// Discovery: on read this is "populated with the node configuration of the
+	// first node pool" (filled by core.WithReadDefaults), so a create that sent
+	// the legacy nodeConfig + initialNodeCount shape reads it back.
+	if c.NodeConfig != nil {
+		out["nodeConfig"] = nodeConfigToJSON(c.NodeConfig)
 	}
 	if c.LoggingService != "" {
 		out["loggingService"] = c.LoggingService
@@ -195,6 +250,12 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 	}
 	if c.MaintenancePolicy != nil {
 		out["maintenancePolicy"] = maintenancePolicyToJSON(c.MaintenancePolicy)
+	}
+	if c.Autopilot != nil {
+		out["autopilot"] = map[string]any{"enabled": c.Autopilot.Enabled}
+	}
+	if c.WorkloadIdentityConfig != nil {
+		out["workloadIdentityConfig"] = map[string]any{"workloadPool": c.WorkloadIdentityConfig.WorkloadPool}
 	}
 	if c.AdminUsername != "" {
 		out["masterAuth"].(map[string]any)["username"] = c.AdminUsername
@@ -379,7 +440,11 @@ func nodePoolFromBody(m map[string]any) containerstore.NodePool {
 		Locations:        strSlice(m["locations"]),
 	}
 	if p.Name != "" && strings.Contains(p.Name, "/") {
-		if _, _, _, id, ok := parseCanonicalNodePool(p.Name); ok {
+		// The core parser is the one the gRPC codec uses, so a canonical pool
+		// name is reduced to its id identically on both transports. An
+		// unparseable name is left as sent and rejected by the core's grammar
+		// check with the same 400.
+		if _, _, _, id, ok := core.ParseNodePoolName(p.Name); ok {
 			p.Name = id
 		}
 	}
@@ -481,17 +546,6 @@ func maintenancePolicyFromMap(m map[string]any) containerstore.MaintenancePolicy
 	}
 	mp.Window = win
 	return mp
-}
-
-func parseCanonicalNodePool(name string) (project, location, cluster, pool string, ok bool) {
-	segs := strings.Split(strings.Trim(name, "/"), "/")
-	if len(segs) != 8 {
-		return "", "", "", "", false
-	}
-	if segs[0] != "projects" || segs[2] != "locations" || segs[4] != "clusters" || segs[6] != "nodePools" {
-		return "", "", "", "", false
-	}
-	return segs[1], segs[3], segs[5], segs[7], true
 }
 
 func strSlice(v any) []string {

@@ -114,7 +114,7 @@ schema by `TestTranscriptsConform`.
   `google.cloud.dataproc.v1.ClusterController`, `google.cloud.dataproc.v1.JobController`,
   `google.cloud.dataproc.v1.WorkflowTemplateService`,
   `google.cloud.functions.v1.CloudFunctionsService`, `google.cloud.functions.v2.FunctionService`,
-  `google.iam.v1.IAMPolicy`, `google.iam.credentials.v1.IAMCredentials`,
+  `google.iam.v1.IAMPolicy`, `google.iam.admin.v1.IAM`, `google.iam.credentials.v1.IAMCredentials`,
   `google.longrunning.Operations`.
 - **No breaking wire change to a `ga` cell without a release bump.** The fidelity matrix
   and the CI conformance gates are part of that promise.
@@ -149,12 +149,14 @@ commit.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **475/475 checks pass** (Dataproc 26,
-  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 9, IAM Credentials 4, KMS 35, Logging 21,
+- **gRPC** — official `cloud.google.com/go` clients: **488/488 checks pass** (Dataproc 26,
+  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 13, IAM Credentials 4, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 18, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger/message-bus IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
-  `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS.
+  `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS, and the IAM Admin service's
+  `UploadServiceAccountKey` (the `google.iam.admin.v1.IAM` surface, which also serves the service-account
+  CRUD/key/policy RPCs over the same provider).
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 586.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §5).
@@ -346,17 +348,56 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `setResourceLabels`/`startIpRotation`/`completeIpRotation`), served over both the REST surface and
   the native gRPC `google.container.v1.ClusterManager` transport. Every mutating call returns a GKE
   `Operation` (correct `operationType`, `DONE`) and the recorded fields are echoed on read-back. A
-  cluster is an instantly-`RUNNING` stored record (default master version, a `default-pool`,
-  `network`/`subnetwork`); there is **no real Kubernetes control plane** behind it, so `Autopilot`
-  compatibility, `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
+  cluster is an instantly-`RUNNING` stored record (default master version, `network`/`subnetwork`);
+  a create that carries inline `nodePools` materializes those pools in the same call (each with its
+  canonical `selfLink`, `RUNNING` status, the cluster's node version and its `initialNodeCount`
+  node count) through the same materialiser `nodePools.create` uses, so the two paths cannot assign
+  different fields; a name repeated inside one create request is `400` (`duplicate node pool name:
+  <name>`, nothing stored), while `nodePools.create` with a name already taken on the cluster is the
+  `409` conflict that call answers — a request-scope distinction stated in one place in the core;
+  a create that carries none gets the generated `default-pool` built from the legacy
+  `initialNodeCount`/`nodeConfig` pair (Discovery: the config "will be used to create a NodePool
+  object with an auto-generated name"), so that pool gets the same `selfLink`/`RUNNING`
+  status/version/node count and the caller's `nodeConfig` as its `config`. Combining `nodePools`
+  with either legacy default-pool field is the 400 real GKE returns — `initialNodeCount > 0` gets
+  "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a
+  node pool.", a `nodeConfig` gets the same sentence with cluster.node_config (it wins when both are
+  set), and a zero `initialNodeCount` means "no default node pool" and is accepted, all captured
+  against real GKE in [`gke-create-pool-conflict.md`](gke-create-pool-conflict.md). A negative
+  cluster-level `initialNodeCount` on a request with no `nodePools` is the 400
+  "Cluster.initial_node_count must be zero or higher."; with pools it is accepted and ignored, as
+  on real GKE. On read, a
+  cluster-level `nodeConfig` is rendered from the first node pool's `config` (Discovery: "this field
+  will be populated with the node configuration of the first node pool"), so the legacy create shape
+  round-trips, and every node pool's own `config` is fully populated even when the create named none
+  — `e2-medium`, `COS_CONTAINERD`, a 100 GB `pd-balanced` boot disk, the `default` service account
+  and the six default OAuth scopes, captured in
+  [`gke-node-pool-config-defaults.md`](gke-node-pool-config-defaults.md). The read carries the
+  nested response messages real GKE always returns and clients dereference unconditionally:
+  `legacyAbac.enabled` (`false` unless `setLegacyAbac` enabled it), `networkConfig.network`/
+  `subnetwork` (relative resource names derived from `network`/`subnetwork` whatever spelling the
+  caller used — a short name, a project-relative partial resource name or a Compute self-link, which
+  is what Terraform's `google_container_cluster.network` feeds from
+  `google_compute_network.*.self_link` — with a zone reduced to its region and the link's own project
+  kept, so a Shared-VPC host project is not rewritten into the cluster's), `shieldedNodes.enabled` (GKE's default `true`, honouring a create-time `false`),
+  `defaultMaxPodsConstraint.maxPodsPerNode` (`"110"`, honouring a create-time value) and the
+  `logging.googleapis.com/kubernetes`/`monitoring.googleapis.com/kubernetes` service defaults —
+  while `masterAuth.clusterCaCertificate` stays empty because the mock mints no CA. There is **no
+  real Kubernetes control plane** behind it, so `Autopilot` compatibility,
+  `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
   `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys`, `getServerConfig` and
   `listUsableSubnetworks` remain explicit `Unimplemented` stubs, and there is no Artifact
   Registry/OCI pull path. GKE shares the canonical
   `/v1/projects/{p}/locations/{l}/clusters` path with Managed Kafka on the single emulator origin, so
   it is disambiguated by host (the first DNS label is `container`, as in
   `container.googleapis.com`) or by the `/container` path prefix Terraform/gcloud use; Managed
-  Kafka's routing for the default host is unchanged. The `ClusterManager` seam exists so a real
-  engine could attach later.
+  Kafka's routing for the default host is unchanged. Both transports parse cluster and node-pool
+  names with the core's parsers, so a malformed canonical name is the same `400` with the same
+  message (`invalid cluster name: <value>` / `invalid node pool name: <value>`) on REST and gRPC.
+  The `ClusterManager` seam exists so a real
+  engine could attach later. This control plane is what a Dataproc-on-GKE virtual cluster reconciles
+  against: a `nodePoolTarget` is created or verified through the node-pool operations above and read
+  back through `NodePools.list`/`get` (see the Dataproc row and §5).
 - **Cloud Run (run.googleapis.com)** — the Cloud Run Admin v2 control plane, served over both the REST surface and the native gRPC
   `google.cloud.run.v2.Services`/`Revisions` transports: service
   `create`/`get`/`list`/`update` (PATCH)/`delete`, revision `list`/`get`/`delete` (one revision per
@@ -428,8 +469,35 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
   `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
   and has no subworkflows/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
-  a GKE-backed cluster's `virtualClusterConfig` is still a metadata-only GKE control plane (the
-  Dataproc path attaches no external GKE cluster), but in K8s executor mode each Dataproc cluster
+  a GKE-backed cluster's `gkeClusterTarget` is resolved through the emulated GKE control plane at
+  create (same project/region, standard not Autopilot, Workload Identity enabled) and its
+  `nodePoolTarget` pools are created through the GKE API or verified field-by-field against an
+  existing one (adopted when the caller sends no `nodePoolConfig`, which is input-only and never
+  read back; a `nodePool` that is not the full
+  `projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{pool}` resource name is
+  `InvalidArgument`, as on real GCP — DPG44); a mismatch does not fail the create — the cluster is
+  persisted in `ERROR` with the pool and field in `status.detail`, and the create operation still
+  completes with that `ERROR` cluster as its response —
+  pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
+  a `virtualClusterConfig` create collects its shape, software-config, staging-bucket, pool-rule and
+  placement failures into one `InvalidArgument` whose message is
+  `Multiple validation errors:\n - …\n - …` (the envelope captured from real GCP in
+  [`dataproc-aggregate-validation-errors.md`](dataproc-aggregate-validation-errors.md); a request
+  with one failure keeps its bare message), while existence/ownership answers (an unknown Metastore
+  service, a namespace already owned on the GKE cluster, a duplicate cluster name) remain their own
+  responses; a `config`-shaped cluster created with neither `networkUri` nor `subnetworkUri` reads
+  back the project's `default` network and no `subnetworkUri`
+  ([`dataproc-gce-network-default.md`](dataproc-gce-network-default.md), DPG47) —
+  `kubernetesSoftwareConfig` is optional (a present one must carry a non-empty `componentVersion.SPARK`);
+  a virtual cluster is also recreate-only (`clusters.patch` whose `updateMask` applies
+  `virtualClusterConfig` or `config` is `InvalidArgument`; an empty mask applies everything supplied,
+  so a full resource under a `labels`-only mask is applied for labels and leaves the placement alone)
+  and a `kubernetesNamespace` already owned on the same GKE cluster is
+  `FailedPrecondition`, while the SPARK engine version is dereferenced at create —
+  `latest`/`<major>`/`<major.minor>`/`dataproc-2.2` resolve to a concrete release, and the
+  other `dataproc-<major.minor>` image lines stay `InvalidArgument` because real GCP rejects
+  them too (DPG36, `docs/gcp/dataproc-gke-version-aliases.md`) —
+  the cluster is still not scheduled onto a GKE cluster — but in K8s executor mode each Dataproc cluster
   runs in its own Kubernetes
   workload namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied,
   else a deterministic derived name — provisioned on cluster create and removed on cluster

@@ -181,7 +181,7 @@ func TestLongRunningJob_MockStaysRunningUntilCancelled(t *testing.T) {
 	freezeClock(t, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
 	p := newJobStateProvider(t, 0)
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 
@@ -334,7 +334,7 @@ func runRestartJob(t *testing.T, p *Service, client *fake.Clientset, j dpstore.J
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "", nil)
 	}()
 
 	base := "jc-spark-cm-" + strings.ToLower(j.JobID)

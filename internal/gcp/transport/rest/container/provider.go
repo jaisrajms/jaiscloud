@@ -391,6 +391,9 @@ func clusterUpdateFromMap(m map[string]any) core.ClusterUpdate {
 	if a, ok := m["desiredNodePoolAutoscaling"].(map[string]any); ok {
 		out.DesiredNodePoolAutoscaling = nodePoolAutoscalingFromMap(a)
 	}
+	if sn, ok := m["desiredShieldedNodes"].(map[string]any); ok {
+		out.DesiredShieldedNodes = &containerstore.ShieldedNodes{Enabled: boolFrom(sn["enabled"])}
+	}
 	return out
 }
 

@@ -768,3 +768,90 @@ func TestRESTDatabaseOutputFields(t *testing.T) {
 		t.Errorf("create(ENTERPRISE) concurrencyMode = %v, want %s", entObj["concurrencyMode"], concurrencyOptimistic)
 	}
 }
+
+// TestRESTExplicitStarReplaces covers DC50: an explicit updateMask=* is AIP-134
+// full replacement, so mutable fields the request omits are cleared rather than
+// left at their stored value. The implied mask (no updateMask parameter) keeps
+// its populated-field merge semantics.
+func TestRESTExplicitStarReplaces(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "star-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	})); err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/star-db", map[string]any{
+		"updateMask": "concurrencyMode,appEngineIntegrationMode",
+		"body":       map[string]any{"concurrencyMode": "PESSIMISTIC", "appEngineIntegrationMode": "ENABLED"},
+	})); err != nil {
+		t.Fatalf("UpdateDatabase(seed): %v", err)
+	}
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/star-db", map[string]any{
+		"updateMask": "*",
+		"body":       map[string]any{"concurrencyMode": "OPTIMISTIC"},
+	})); err != nil {
+		t.Fatalf("UpdateDatabase(*): %v", err)
+	}
+	db, err := p.GetDatabase(ctx, adminNR("databases/star-db", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if db.Data["concurrencyMode"] != "OPTIMISTIC" {
+		t.Errorf("concurrencyMode = %v, want OPTIMISTIC (supplied field)", db.Data["concurrencyMode"])
+	}
+	if db.Data["appEngineIntegrationMode"] != "DISABLED" {
+		t.Errorf("appEngineIntegrationMode = %v, want DISABLED (omitted mutable field cleared)", db.Data["appEngineIntegrationMode"])
+	}
+
+	if _, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
+		"updateMask": "ttlConfig",
+		"body":       map[string]any{"ttlConfig": map[string]any{"expirationOffset": "3600s"}},
+	})); err != nil {
+		t.Fatalf("UpdateField(seed ttl): %v", err)
+	}
+	if _, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
+		"updateMask": "*",
+		"body":       map[string]any{"indexConfig": map[string]any{}},
+	})); err != nil {
+		t.Fatalf("UpdateField(*): %v", err)
+	}
+	field, err := p.GetField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", nil))
+	if err != nil {
+		t.Fatalf("GetField: %v", err)
+	}
+	if _, stored := field.Data["ttlConfig"]; stored {
+		t.Errorf("ttlConfig = %v, want cleared by an explicit * replace", field.Data["ttlConfig"])
+	}
+
+	if _, err := p.CreateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules", map[string]any{
+		"backupScheduleId": "1",
+		"body":             map[string]any{"retention": "604800s", "dailyRecurrence": map[string]any{}},
+	})); err != nil {
+		t.Fatalf("CreateBackupSchedule: %v", err)
+	}
+	if _, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
+		"updateMask": "*",
+		"body":       map[string]any{"retention": "1209600s"},
+	})); err == nil {
+		t.Error("UpdateBackupSchedule(*) without a recurrence succeeded, want InvalidArgument")
+	}
+	bs, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
+		"updateMask": "*",
+		"body":       map[string]any{"retention": "1209600s", "weeklyRecurrence": map[string]any{"day": "WEDNESDAY"}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateBackupSchedule(*): %v", err)
+	}
+	if bs.Data["retention"] != "1209600s" {
+		t.Errorf("retention = %v, want 1209600s", bs.Data["retention"])
+	}
+	if _, daily := bs.Data["dailyRecurrence"]; daily {
+		t.Errorf("dailyRecurrence survived an explicit * replace: %v", bs.Data["dailyRecurrence"])
+	}
+	if _, weekly := bs.Data["weeklyRecurrence"]; !weekly {
+		t.Errorf("weeklyRecurrence = %v, want present", bs.Data["weeklyRecurrence"])
+	}
+}

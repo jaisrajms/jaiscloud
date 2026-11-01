@@ -16,7 +16,11 @@ RUN mkdir -p /src/internal/ui && pnpm run build
 
 # ─── Stage 2: build ──────────────────────────────────────────────────────────
 # --platform=$BUILDPLATFORM ensures the correct Go binary is used for the target architecture in multi-platform builds.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+# Pinned to the patch release `go.mod` requires: the stdlib advisories fixed in
+# go1.26.9/go1.26.10 are baked into the shipped binary, and `make security-scan`
+# reads the binary's embedded module list, so a floating tag would let an older
+# patch back in.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS builder
 
 # Build args injected by Docker Buildx for multi-platform builds
 ARG TARGETOS
@@ -27,6 +31,11 @@ ARG CLOUD=aws
 # Passed by CI (docker-publish.yml) and `make docker-%`; the default keeps a
 # bare `docker build` reporting "dev" instead of an empty string.
 ARG VERSION=dev
+# Build identity stamped alongside the version (REL5): a released image must be
+# able to report the commit and build date. Defaults mirror the Go declarations
+# so a bare `docker build` stays honest.
+ARG COMMIT=none
+ARG DATE=unknown
 
 # ca-certificates needed for TLS to external registries during `go mod download`
 RUN apk add --no-cache ca-certificates git
@@ -44,7 +53,7 @@ RUN go mod download
 COPY . .
 COPY --from=ui /src/internal/ui/dist /src/internal/ui/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -tags ui -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
+    go build -tags ui -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
 
 # ─── Stage 3: runtime ────────────────────────────────────────────────────────
 FROM gcr.io/distroless/static:nonroot

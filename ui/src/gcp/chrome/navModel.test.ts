@@ -4,10 +4,14 @@ import {
   breadcrumbsFor,
   buildNavGroups,
   buildSearchGroups,
+  groupProjects,
   pageTitleFor,
+  projectServiceChips,
   pushRecent,
   readRecent,
+  relativeProjectAge,
   withResourceGroup,
+  type ProjectRowInfo,
   type StorageLike,
 } from './navModel'
 
@@ -178,5 +182,64 @@ describe('pageTitleFor', () => {
     expect(pageTitleFor(services, '/gcp')).toBe('JaisCloud Console')
     expect(pageTitleFor(services, '/gcp/pubsub/topics/t1')).toBe('Pub/Sub · JaisCloud')
     expect(pageTitleFor(services, '/gcp/admin')).toBe('Admin · JaisCloud')
+  })
+})
+
+describe('groupProjects', () => {
+  const projects: ProjectRowInfo[] = [
+    { id: 'jaiscloud-project', kind: 'configured' },
+    { id: 'billing-demo', kind: 'registered' },
+    { id: 'old-e2e', kind: 'observed', lastSeen: '2026-10-31T10:00:00Z' },
+    { id: 'acme-e2e', kind: 'observed', lastSeen: '2026-10-31T11:59:42Z' },
+  ]
+
+  it('splits observed, recent and known projects', () => {
+    const groups = groupProjects(['jaiscloud-project'], projects, ['billing-demo'])
+    expect(groups.active.map((p) => p.id)).toEqual(['acme-e2e', 'old-e2e'])
+    expect(groups.recent.map((p) => p.id)).toEqual(['billing-demo'])
+    expect(groups.all.map((p) => p.id)).toEqual(['jaiscloud-project'])
+  })
+
+  it('keeps recent ids that the server no longer lists', () => {
+    const groups = groupProjects(['jaiscloud-project'], projects, ['evicted-e2e'])
+    expect(groups.recent).toEqual([{ id: 'evicted-e2e', kind: 'unknown' }])
+  })
+
+  it('does not repeat an observed project under Recent', () => {
+    const groups = groupProjects(['jaiscloud-project'], projects, ['acme-e2e'])
+    expect(groups.recent).toEqual([])
+    expect(groups.active.map((p) => p.id)).toContain('acme-e2e')
+  })
+
+  it('falls back to the accounts list when discovery is empty', () => {
+    const groups = groupProjects(['jaiscloud-project', 'billing-demo'], [], [])
+    expect(groups.all.map((p) => p.id)).toEqual(['billing-demo', 'jaiscloud-project'])
+    expect(groups.active).toEqual([])
+  })
+
+  it('filters every group by the search query', () => {
+    const groups = groupProjects(['jaiscloud-project'], projects, ['billing-demo'], 'acme')
+    expect(groups.active.map((p) => p.id)).toEqual(['acme-e2e'])
+    expect(groups.recent).toEqual([])
+    expect(groups.all).toEqual([])
+  })
+})
+
+describe('project presentation helpers', () => {
+  it('caps service chips at three', () => {
+    expect(projectServiceChips(['storage', 'pubsub', 'firestore', 'bigquery'])).toEqual([
+      'storage',
+      'pubsub',
+      'firestore',
+    ])
+    expect(projectServiceChips(undefined)).toEqual([])
+  })
+
+  it('renders relative ages', () => {
+    const now = Date.parse('2026-10-31T12:00:00Z')
+    expect(relativeProjectAge('2026-10-31T11:59:42Z', now)).toBe('18s ago')
+    expect(relativeProjectAge('2026-10-31T10:00:00Z', now)).toBe('2h ago')
+    expect(relativeProjectAge(undefined, now)).toBe('')
+    expect(relativeProjectAge('not-a-date', now)).toBe('')
   })
 })

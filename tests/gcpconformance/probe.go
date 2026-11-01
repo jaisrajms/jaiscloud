@@ -89,6 +89,10 @@ var bodyOverrides = map[string]map[string]any{
 	},
 
 	"iam.projects.serviceAccounts.create": {"accountId": "$ID"},
+	// keys.upload requires publicKeyData (the emulator answers
+	// INVALID_ARGUMENT without it); the value is a certificate-wrapped RSA
+	// public key, the documented form.
+	"iam.projects.serviceAccounts.keys.upload": {"publicKeyData": iamUploadPublicKeyData()},
 
 	"cloudscheduler.projects.locations.jobs.create": {
 		"name":     "projects/" + defaultProject + "/locations/us-central1/jobs/$ID",
@@ -157,6 +161,12 @@ var bodyOverrides = map[string]map[string]any{
 
 	"monitoring.services.create": {"displayName": "probe", "basicService": map[string]any{"serviceType": "probe", "serviceLabels": map[string]any{"probe": "probe"}}},
 
+	// Cloud Monitoring v1 dashboards: displayName is required by the resource
+	// contract but not marked required in the Discovery schema. The body name
+	// must be the full resource name, supplied by resourceNameOverrides below.
+	"monitoring.projects.dashboards.create": {"displayName": "probe"},
+	"monitoring.projects.dashboards.patch":  {"displayName": "probe"},
+
 	"dns.managedZones.create": {"dnsName": "probe-" + defaultProject + ".example.com."},
 	"cloudtasks.projects.locations.queues.tasks.create": {
 		"httpRequest": map[string]any{"httpMethod": "GET", "url": "http://example.com/probe"},
@@ -170,6 +180,13 @@ var bodyOverrides = map[string]map[string]any{
 		"sourceContents": "main:\n  steps:\n    - r:\n        return: 1\n",
 	},
 
+	// Discovery does not mark either placement required, but a create must
+	// carry exactly one of config or virtualClusterConfig ("Exactly one of
+	// ClusterConfig or VirtualClusterConfig must be specified"), so the
+	// synthesised probe sends the Compute-Engine shape.
+	"dataproc.projects.regions.clusters.create": {
+		"config": map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+	},
 	"dataproc.projects.regions.workflowTemplates.create": {
 		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "probe"}},
 		"jobs":      []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
@@ -278,6 +295,26 @@ var bodyOverrides = map[string]map[string]any{
 			},
 		},
 	},
+}
+
+// resourceNameOverrides maps a create/patch method whose request body must
+// repeat the target's full resource name to the body field and a formatter that
+// builds that name from the probe's project and target id. The generic
+// synthesizer writes a create's body name as the bare id (correct only for
+// path-id creates such as Pub/Sub's PUT); these methods require the canonical
+// resource name instead. Cloud Monitoring v1 dashboards name a dashboard
+// "projects/{project}/dashboards/{id}" in both create and patch.
+var resourceNameOverrides = map[string]struct {
+	field  string
+	format func(project, id string) string
+}{
+	"monitoring.projects.dashboards.create": {"name", dashboardProbeName},
+	"monitoring.projects.dashboards.patch":  {"name", dashboardProbeName},
+}
+
+// dashboardProbeName formats the canonical Cloud Monitoring dashboard name.
+func dashboardProbeName(project, id string) string {
+	return "projects/" + project + "/dashboards/" + id
 }
 
 // extraSetupServices maps a probe service to other services whose Discovery
@@ -636,11 +673,20 @@ func synthScenario(svc string, cfg synthService, doc *DiscoveryDoc, m *Method, s
 			field = f
 		}
 		body = setJSONField(body, field, targetID)
+	} else if lastSegmentIsPlaceholder(templateOf(m)) {
+		// A get/patch/delete probe addresses the resource its setup chain just
+		// created; resolve the same id so a body field that repeats the target
+		// name (dashboards.patch) agrees with the path.
+		targetColl := lastLiteralSegment(templateOf(m))
+		targetID = deriveID(targetColl, suffix, tokens[targetColl])
 	}
 	if extra, ok := bodyOverrides[m.ID]; ok {
 		body = mergeJSONObjects(body, extra)
 	}
 	body = strings.ReplaceAll(body, "$ID", targetID)
+	if rn, ok := resourceNameOverrides[m.ID]; ok {
+		body = setJSONField(body, rn.field, rn.format(defaultProject, targetID))
+	}
 
 	return Scenario{Service: svc, Method: m.HTTPMethod, Path: path, Body: body, Host: cfg.host}
 }

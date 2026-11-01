@@ -25,7 +25,7 @@ func submitTestService(t *testing.T) *Service {
 	t.Helper()
 	ctx := context.Background()
 	p := NewService(dpstore.NewMemoryStore(), store.NewMemoryResourceStore())
-	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
 	require.NoError(t, err, "create cluster")
 	return p
 }

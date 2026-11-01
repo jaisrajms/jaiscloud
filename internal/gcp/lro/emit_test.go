@@ -24,9 +24,9 @@ func TestTrackerEmitsOncePerKey(t *testing.T) {
 	})
 
 	tr := NewTracker(bus)
-	tr.EmitOperation("functions", "op-1", "op-1", "create")
-	tr.EmitOperation("functions", "op-1", "op-1", "create")
-	tr.EmitOperation("functions", "op-2", "op-2", "delete")
+	tr.EmitOperation("functions", "op-1", "op-1", "create", "acme-e2e")
+	tr.EmitOperation("functions", "op-1", "op-1", "create", "acme-e2e")
+	tr.EmitOperation("functions", "op-2", "op-2", "delete", "acme-e2e")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -40,9 +40,40 @@ func TestTrackerEmitsOncePerKey(t *testing.T) {
 		ID:       "op-1",
 		State:    "DONE",
 		Detail:   "create",
+		Project:  "acme-e2e",
 	}
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("event = %+v, want %+v", got[0], want)
+	}
+}
+
+// TestOperationStatusCarriesProject locks the optional project field the
+// console uses to refresh project discovery.
+func TestOperationStatusCarriesProject(t *testing.T) {
+	got := OperationStatus("run", "op", "create", "acme-e2e")
+	if got.Project != "acme-e2e" {
+		t.Fatalf("project = %q, want acme-e2e", got.Project)
+	}
+	if got.Resource != "gcp-run-operation" || got.State != "DONE" || got.Detail != "create" {
+		t.Fatalf("status = %+v", got)
+	}
+}
+
+// TestProjectFromName covers the resource-name derivation used by cores whose
+// operation store has no explicit project field.
+func TestProjectFromName(t *testing.T) {
+	cases := map[string]string{
+		"projects/proj/locations/l/functions/f": "proj",
+		"/projects/proj/locations/l/clusters/c": "proj",
+		"projects/proj":                         "proj",
+		"operations/op-1":                       "",
+		"projects//locations/l":                 "",
+		"":                                      "",
+	}
+	for name, want := range cases {
+		if got := ProjectFromName(name); got != want {
+			t.Errorf("ProjectFromName(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -50,7 +81,7 @@ func TestTrackerEmitsOncePerKey(t *testing.T) {
 // bus are both no-ops, so a core can hold one unconditionally.
 func TestTrackerNilIsInert(t *testing.T) {
 	var tr *Tracker
-	tr.EmitOperation("run", "op", "op", "create") // must not panic
+	tr.EmitOperation("run", "op", "op", "create", "") // must not panic
 
-	NewTracker(nil).EmitOperation("run", "op", "op", "create") // must not panic
+	NewTracker(nil).EmitOperation("run", "op", "op", "create", "") // must not panic
 }

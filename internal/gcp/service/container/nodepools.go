@@ -16,18 +16,18 @@ var validNodePoolName = validClusterName
 // CREATE_NODE_POOL operation. The mock materializes the pool already RUNNING
 // (there is no real node lifecycle).
 func (s *Service) CreateNodePool(ctx context.Context, project, location, cluster string, p containerstore.NodePool) (containerstore.Operation, error) {
-	if p.Name == "" {
-		return containerstore.Operation{}, invalidArgument("node pool name is required")
-	}
-	if !validNodePoolName.MatchString(p.Name) {
-		return containerstore.Operation{}, invalidArgument("invalid node pool name: " + p.Name)
-	}
 	now := clock.Now()
-	p.SelfLink = NodePoolName(project, location, cluster, p.Name)
+	p, err := materializeNodePool(project, location, cluster, p, "")
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
 	var clusterNodeVersion string
-	err := s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
+	err = s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
 		for _, existing := range c.NodePools {
 			if existing.Name == p.Name {
+				// A name already taken on the cluster is a resource conflict —
+				// 409 AlreadyExists — per the duplicate-name rule documented on
+				// materializeNodePool.
 				return containerstore.ErrAlreadyExists
 			}
 		}
@@ -35,21 +35,68 @@ func (s *Service) CreateNodePool(ctx context.Context, project, location, cluster
 		if clusterNodeVersion == "" {
 			clusterNodeVersion = c.CurrentMasterVersion
 		}
-		stored := p
-		stored.Status = containerstore.StatusRunning
-		if stored.Version == "" {
-			stored.Version = clusterNodeVersion
+		if p.Version == "" {
+			p.Version = clusterNodeVersion
 		}
-		if stored.NodeCount == 0 {
-			stored.NodeCount = stored.InitialNodeCount
-		}
-		c.NodePools = append(c.NodePools, stored)
+		c.NodePools = append(c.NodePools, p)
 		return nil
 	})
 	if err != nil {
 		return containerstore.Operation{}, mapStoreErr(err)
 	}
 	return s.recordNodePoolOperation(ctx, project, location, containerstore.OperationCreateNodePool, p.SelfLink, now)
+}
+
+// materializeNodePool validates a pool's name and fills the fields real GKE
+// assigns when it materializes the pool: the canonical selfLink, the pool's node
+// version (inherited from the cluster when the caller named none) and the node
+// count implied by initialNodeCount. The mock has no node lifecycle, so the pool
+// is stored RUNNING. Both the cluster create (inline nodePools) and
+// CreateNodePool go through this one function, so the two paths cannot drift.
+//
+// Duplicate names, one story: a name already taken on the cluster is a resource
+// conflict (409 AlreadyExists — the answer CreateNodePool gives for an existing
+// pool), while the same name appearing twice inside one create request is a
+// malformed request (400 InvalidArgument, the answer real GKE gives for an
+// invalid cluster body — neither occurrence can be "the existing one", and
+// nothing is created). Neither case is a name-grammar failure.
+func materializeNodePool(project, location, cluster string, p containerstore.NodePool, nodeVersion string) (containerstore.NodePool, error) {
+	if p.Name == "" {
+		return p, invalidArgument("node pool name is required")
+	}
+	if !validNodePoolName.MatchString(p.Name) {
+		return p, invalidArgument("invalid node pool name: " + p.Name)
+	}
+	p.Status = containerstore.StatusRunning
+	p.SelfLink = NodePoolName(project, location, cluster, p.Name)
+	if p.Version == "" {
+		p.Version = nodeVersion
+	}
+	if p.NodeCount == 0 {
+		p.NodeCount = p.InitialNodeCount
+	}
+	return p, nil
+}
+
+// materializeNodePools materializes the pools a cluster create request supplied
+// inline through materializeNodePool, and rejects a name that appears twice in
+// the same request (400 InvalidArgument — see the duplicate-name rule there).
+func materializeNodePools(project, location string, c *containerstore.Cluster) error {
+	seen := make(map[string]bool, len(c.NodePools))
+	out := make([]containerstore.NodePool, 0, len(c.NodePools))
+	for _, p := range c.NodePools {
+		p, err := materializeNodePool(project, location, c.Name, p, c.CurrentMasterVersion)
+		if err != nil {
+			return err
+		}
+		if seen[p.Name] {
+			return invalidArgument("duplicate node pool name: " + p.Name)
+		}
+		seen[p.Name] = true
+		out = append(out, p)
+	}
+	c.NodePools = out
+	return nil
 }
 
 // GetNodePool returns a node pool by short name.
@@ -60,7 +107,9 @@ func (s *Service) GetNodePool(ctx context.Context, project, location, cluster, p
 	}
 	for _, p := range c.NodePools {
 		if p.Name == pool {
-			return p, nil
+			// A pool read carries the same rendered config a cluster read does
+			// (DPG46); the stored record keeps only what was sent.
+			return NodePoolWithReadDefaults(p), nil
 		}
 	}
 	return containerstore.NodePool{}, modelNotFound("node pool not found")
@@ -72,7 +121,11 @@ func (s *Service) ListNodePools(ctx context.Context, project, location, cluster 
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
-	return sortNodePools(c.NodePools), nil
+	pools := sortNodePools(c.NodePools)
+	for i := range pools {
+		pools[i] = NodePoolWithReadDefaults(pools[i])
+	}
+	return pools, nil
 }
 
 // DeleteNodePool removes a node pool and returns the DELETE_NODE_POOL operation.

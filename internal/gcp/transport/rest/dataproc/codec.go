@@ -105,6 +105,10 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	case "workflowTemplates":
 		if len(tail) >= 2 {
 			nr.Params["workflowTemplateId"] = tail[1]
+			// iamName is the canonical google.iam.v1.IAMPolicy resource name.
+			// It is built AFTER the custom suffix is stripped: `name` above was
+			// joined from the unstripped segments and would carry ":getIamPolicy".
+			nr.Params["iamName"] = strings.Join(seg[pi:], "/")
 		}
 	}
 
@@ -145,9 +149,15 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 				return "InstantiateWorkflowTemplate"
 			case "instantiateInline":
 				return "InstantiateInlineWorkflowTemplate"
+			case "getIamPolicy":
+				return "WorkflowTemplateGetIamPolicy"
+			case "setIamPolicy":
+				return "WorkflowTemplateSetIamPolicy"
+			case "testIamPermissions":
+				return "WorkflowTemplateTestIamPermissions"
 			}
-			// The workflowTemplates IAM verbs are not routed yet; an unhandled
-			// custom verb must not fall through to the create/patch method switch.
+			// An unhandled custom verb must not fall through to the
+			// create/patch method switch below.
 			return ""
 		}
 	}

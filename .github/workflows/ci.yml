@@ -305,6 +305,61 @@ jobs:
       - name: Verify UI-enabled GCP server builds
         run: go build -tags ui -o /tmp/jaiscloud-ui-gcp ./cmd/jaiscloud-gcp/
 
+  # ─── Dependency + image vulnerability gate (SEC1) ──────────────────────────
+  # One required check over the four supply chains behind the released
+  # artifacts: the Go module graph of both cloud binaries (including cmd/* and
+  # the build-tagged conformance/integration packages), the console's
+  # ui/pnpm-lock.yaml (dev deps compile the embedded assets, so they count),
+  # the Python client-suite pins, and the OS/library packages of both runtime
+  # images. Scanner versions are pinned in the Makefile
+  # (GOVULNCHECK_VERSION, PIP_AUDIT_VERSION, TRIVY_VERSION) so a red run means
+  # a new advisory, not a new scanner. A finding fails this job: there is no
+  # continue-on-error and no bare ignore list. An advisory with no upstream fix
+  # is recorded in the SEC1 row of plan_docs/gcp-remaining-wave-plan.md with its
+  # advisory id and URL, and only then added to the owning scanner's ignore
+  # list. The scanners refresh their advisory data online (vuln.go.dev, the npm
+  # registry, PyPI/OSV, the trivy DB); no scanning step needs the k3d cluster or
+  # any cloud credentials.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: govulncheck (Go module graph + stdlib)
+        run: make security-scan-go
+
+      - name: pnpm audit (console lockfile)
+        run: make security-scan-ui
+
+      - name: pip-audit (Python client-suite pins)
+        run: make security-scan-python
+
+      - name: Install the pinned trivy release
+        run: make security-tool-trivy
+
+      - name: trivy (jaiscloud-gcp + jaiscloud-aws runtime images)
+        run: make security-scan-images TRIVY=bin/trivy
+
   # ─── GCP unit + integration + persistence tests ────────────────────────────
 
   # Unit tests for the shared engine packages the GCP Dataproc/Spark path
@@ -340,7 +395,7 @@ jobs:
         run: make test-gcp-coverage
 
       - name: Run GCP dev-tool tests
-        run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+        run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
 
       - name: Behavioral-coverage gate (every `ga` service has a suite or reasoned exemption)
         run: make gcp-status-behavioral-gate

@@ -39,36 +39,6 @@ func ClusterInputFromMap(body map[string]any) ClusterInput {
 	return in
 }
 
-// validateVirtualClusterConfig validates the required shape of a caller-supplied
-// dataproc.v1.VirtualClusterConfig. The emulator models the GKE placement as
-// metadata only (there is no GKE control plane), so this checks the API's
-// required structure: kubernetesClusterConfig.gkeClusterConfig must name a
-// target cluster (gkeClusterTarget) or at least one node pool
-// (nodePoolTarget). Unknown sub-fields are accepted and preserved verbatim.
-func validateVirtualClusterConfig(raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	var vcc map[string]any
-	if err := json.Unmarshal(raw, &vcc); err != nil {
-		return invalidArgument("virtualClusterConfig must be an object")
-	}
-	kcc, ok := vcc["kubernetesClusterConfig"].(map[string]any)
-	if !ok {
-		return invalidArgument("virtualClusterConfig requires kubernetesClusterConfig")
-	}
-	gke, ok := kcc["gkeClusterConfig"].(map[string]any)
-	if !ok {
-		return invalidArgument("kubernetesClusterConfig requires gkeClusterConfig")
-	}
-	target, _ := gke["gkeClusterTarget"].(string)
-	pools, _ := gke["nodePoolTarget"].([]any)
-	if target == "" && len(pools) == 0 {
-		return invalidArgument("gkeClusterConfig requires gkeClusterTarget or nodePoolTarget")
-	}
-	return nil
-}
-
 // clusterPlacement is the human-readable placement of a cluster for logs.
 func clusterPlacement(c dpstore.Cluster) string {
 	if c.IsGKEBacked() {
@@ -88,24 +58,73 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if region == "" || name == "" {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("missing region or clusterName")
 	}
-	if len(in.Config) > 0 && len(in.VirtualClusterConfig) > 0 {
+	// Discovery's Cluster.config/virtualClusterConfig descriptions make the two
+	// mutually exclusive and one of them required: "Exactly one of ClusterConfig
+	// or VirtualClusterConfig must be specified". A create carrying neither is
+	// therefore as invalid as one carrying both — and staying tolerant would
+	// hand the caller an invented default GCE config on the read.
+	if (len(in.Config) > 0) == (len(in.VirtualClusterConfig) > 0) {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 	}
-	if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
-		return dpstore.Cluster{}, dpstore.Operation{}, err
-	}
-	if err := validateMetastoreConfigShape(in); err != nil {
+	// Collect the request's InvalidArgument failures so one response lists every
+	// problem, the way real Dataproc answers a create (DPG45). The checks run in
+	// a fixed order — virtualClusterConfig, placement, metastore shape — so the
+	// joined message is deterministic, and a request with one problem keeps its
+	// original message.
+	var errs validationErrors
+	gkeVCC, vccErrs := collectVirtualClusterConfig(in.VirtualClusterConfig, name)
+	errs.addAll(vccErrs)
+	errs.addAll(collectGKEPlacement(gkeVCC, project, region))
+	errs.add(validateMetastoreConfigShape(in))
+	if err := errs.err(); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	if err := s.validateClusterMetastore(ctx, project, region, in); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	// A Kubernetes namespace belongs to one live virtual cluster per GKE
+	// cluster: real Dataproc verifies that "another Dataproc VirtualCluster is
+	// not installed into it", which is why the recreate guide drops
+	// kubernetesNamespace before re-creating.
+	if err := s.validateGKENamespaceOwnership(ctx, project, region, name, gkeVCC); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	// Persist the effective virtualClusterConfig: the namespace defaulted to the
+	// cluster name and the SPARK componentVersion dereferenced from its alias, so
+	// a read echoes the values the cluster actually runs with. The k8s placement
+	// namespace keeps using the caller's value only (see resolveClusterNamespace).
+	requestedNamespace := KubernetesNamespaceFromVirtualClusterConfig(in.VirtualClusterConfig)
+	normalizedVCC, err := applyVirtualClusterDefaults(in.VirtualClusterConfig, name, gkeVCC)
+	if err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	in.VirtualClusterConfig = normalizedVCC
+	// Reject a duplicate name before any side effect: reconciling node pools and
+	// provisioning the workload namespace both create state that a rejected
+	// create must not leave behind (pools are never deleted), and real Dataproc
+	// answers the duplicate before it provisions anything.
+	if _, err := s.store.GetCluster(ctx, project, region, name); err == nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(dpstore.ErrAlreadyExists)
+	} else if !errors.Is(err, dpstore.ErrNoSuchCluster) {
+		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
+	// Validate the Spark History Server attachment (if any) and add the
+	// documented workload event-log properties to the cluster's effective
+	// virtualClusterConfig (after the GKE defaults, so the injected log directory
+	// sees the effective staging bucket).
+	if in.VirtualClusterConfig != nil {
+		prepared, err := s.preparePHSClusterConfig(ctx, project, region, name, in.VirtualClusterConfig)
+		if err != nil {
+			return dpstore.Cluster{}, dpstore.Operation{}, err
+		}
+		in.VirtualClusterConfig = prepared
 	}
 	now := clock.Now().UTC()
 	// Provision the cluster's workload namespace before persisting the record, so
 	// a job submitted immediately after create has a placement. Mock execution
 	// yields ("", false); an RBAC/tech failure falls back to the process-wide
 	// namespace (see resolveClusterNamespace).
-	ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, in)
+	ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, requestedNamespace)
 	c := dpstore.Cluster{
 		ProjectID:            project,
 		Region:               region,
@@ -120,12 +139,35 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		Namespace:            ns,
 		NamespaceOwned:       nsOwned,
 	}
+	// Reconcile the Dataproc-on-GKE placement against the emulated GKE service:
+	// resolve gkeClusterTarget, then create or verify each nodePoolTarget. A
+	// provisioning failure is not a transport error — real Dataproc fails the
+	// create operation, so the cluster is persisted in ERROR with a
+	// status.detail naming the pool and field, and its pools survive a delete. A
+	// resolution failure (unknown/Autopilot/no-Workload-Identity target) rejects
+	// the request instead: nothing was created.
+	reconcileErr := s.reconcileGKEVirtualCluster(ctx, project, region, name, c.ClusterUUID, gkeVCC, in.Labels)
+	var poolFailure *gkeReconcileFailure
+	if reconcileErr != nil {
+		if !errors.As(reconcileErr, &poolFailure) {
+			// Nothing was created — including the workload namespace provisioned
+			// above, which a rejected request must not leak.
+			s.rollbackNamespace(ctx, ns, nsOwned)
+			return dpstore.Cluster{}, dpstore.Operation{}, reconcileErr
+		}
+		c.Status = gkeErrorState(poolFailure.err, now)
+	}
 	if err := s.store.CreateCluster(ctx, project, region, c); err != nil {
 		s.rollbackNamespace(ctx, ns, nsOwned)
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
-	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
-		"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
+	if reconcileErr != nil {
+		slog.Warn("dataproc: cluster create failed GKE node-pool reconciliation",
+			"project", project, "region", region, "cluster", name, "detail", c.Status.Detail)
+	} else {
+		slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
+			"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
+	}
 	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
@@ -226,7 +268,7 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 		return len(mask) == 0 || containsMaskField(mask, field)
 	}
 	if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
-		if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
+		if _, err := validateVirtualClusterConfig(in.VirtualClusterConfig, name); err != nil {
 			return dpstore.Cluster{}, dpstore.Operation{}, err
 		}
 	}
@@ -239,11 +281,20 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
+	// Dataproc on GKE is recreate-only: real GCP disallows update operations on a
+	// virtual cluster, so a patch may not touch virtualClusterConfig or add a GCE
+	// config to a GKE-backed cluster.
+	if err := rejectGKEVirtualClusterUpdate(current, in, mask); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
 	// Validate the attachment of the cluster this update will actually produce
 	// (the effective merged config under the mask), not the raw request body.
 	if err := s.validateClusterMetastoreUpdate(ctx, project, region, current, in, mask); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
+	// A virtualClusterConfig update is rejected above (recreate-only), so a PHS
+	// attachment is validated at create time only; there is no update path that
+	// could introduce or change one.
 	var transitioned bool
 	var prev dpstore.ClusterStatus
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
@@ -253,7 +304,11 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 		if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
 			c.VirtualClusterConfig = in.VirtualClusterConfig
 		}
-		if in.Config != nil {
+		// Only merge a supplied config when the mask applies it: a full resource
+		// sent under a labels-only mask must not install an (empty) config, which
+		// would then trip the "exactly one of config or virtualClusterConfig"
+		// invariant on a GKE-backed cluster.
+		if in.Config != nil && apply("config") {
 			stored := map[string]any{}
 			if len(c.Config) > 0 {
 				_ = json.Unmarshal(c.Config, &stored)
@@ -544,6 +599,16 @@ func applyConfigMask(stored, incoming map[string]any, mask []string) {
 		return
 	}
 	for _, field := range mask {
+		if camelKey(field) == "config" {
+			// A bare `config` mask names the whole field. Treat it like an
+			// omitted mask (merge every supplied top-level key) rather than
+			// matching no path at all: silently discarding the caller's config
+			// while answering 200 is the one behaviour no client can detect.
+			for k, v := range incoming {
+				stored[k] = v
+			}
+			continue
+		}
 		if !strings.HasPrefix(field, "config.") {
 			continue
 		}

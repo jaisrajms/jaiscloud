@@ -57,11 +57,28 @@ func RetrySerializable[T any](ctx context.Context, fn func() (T, error)) (T, err
 		if err == nil || !IsSerializationFailure(err) || attempt >= SerializableMaxAttempts {
 			return v, err
 		}
-		select {
-		case <-ctx.Done():
-			return zero, ctx.Err()
-		case <-time.After(serializableBackoff(attempt)):
+		if err := sleepCtx(ctx, serializableBackoff(attempt)); err != nil {
+			return zero, err
 		}
+	}
+}
+
+// sleepCtx waits for d or for ctx cancellation, whichever comes first. The
+// context is checked before arming the timer: a cancellation raised by the
+// retried function itself leaves both channels ready when the jittered backoff
+// is very short, and select would then pick between them at random — running
+// one more attempt after the caller asked to stop.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

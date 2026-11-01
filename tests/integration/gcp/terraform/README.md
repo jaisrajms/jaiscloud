@@ -18,6 +18,10 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Cloud KMS (key ring + crypto key)
 - Pub/Sub (topic + subscription + topic/subscription IAM members)
 - Cloud SQL for PostgreSQL (instance + database + user)
+- Dataproc Metastore (federation + database IAM member)
+- Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets, plus a
+  Compute-Engine `cluster_config` cluster)
+- GKE (`google_container_cluster`, the Dataproc-on-GKE prerequisite)
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
 - Service Usage (`/v1/projects/{project}/services`)
@@ -26,6 +30,30 @@ Deliberately **excluded** because it makes `apply` fail (and abort the run):
 
 - **Cloud Run v2** — not implemented; declared out of scope in
   `docs/gcp/wire-contract.md` §5.
+
+`google_container_cluster` was excluded until DPG37: the provider's cluster read
+dereferences `legacyAbac.enabled`, `networkConfig.network`,
+`shieldedNodes.enabled` and `defaultMaxPodsConstraint.maxPodsPerNode`
+unconditionally and panicked (`SIGSEGV` in `resourceContainerClusterRead`) when
+the emulator omitted them. The GKE cluster read now renders all four (plus the
+`loggingService`/`monitoringService` defaults), so the resource is in `main.tf`,
+and a second `plan` after `apply` must report no changes — that is the
+permadiff assertion for those computed fields.
+
+The GKE resource also needs a `container.`-prefixed host: the emulator routes
+`container.v1` by host (or by a `/container/` path prefix) because the bare
+`/v1/projects/{p}/locations/{l}/clusters` path belongs to Managed Kafka, and the
+provider keeps only the scheme+host of `container_custom_endpoint` (its trailing
+path segment exists only to satisfy the provider's endpoint regexp). `run.sh`
+therefore derives `container.<host>` from `ENDPOINT` (e.g.
+`http://container.localhost:8080/container/`) and fails loudly if it does not
+resolve; add `127.0.0.1 container.localhost` to the hosts file on a host without
+`*.localhost` resolution.
+
+The plain `cluster_config` (Compute-Engine) shape is included: it used to panic
+the provider's read-back (`flattenSoftwareConfig` on an absent
+`config.softwareConfig`, DPG38), so the emulator now reports the service
+defaults a real cluster always carries and `run.sh` asserts them.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
@@ -63,6 +91,8 @@ TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-pr
 `run.sh` runs `init -> validate -> plan -> apply`, performs the spot checks
 below, then `destroy` (also on exit via a trap, so failures still clean up):
 
+- A second `plan` reports **no changes** (no permadiff on the computed
+  `google_container_cluster` fields)
 - GCS bucket exists and its `labels` round-trip (`"env":"compat-test"`)
 - GCS object exists with `contentType: text/plain`
 - IAM service account exists
@@ -85,6 +115,20 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
   and project `:getIamPolicy` accepts the provider's POST
 - The `google_project_service` API is `ENABLED` and appears in
   `GET .../services?filter=state:ENABLED`
+- The GKE cluster read carries the nested messages real GKE always renders —
+  `legacyAbac.enabled: false`, `networkConfig.network`/`.subnetwork`, the
+  `shieldedNodes.enabled: true` default and
+  `defaultMaxPodsConstraint.maxPodsPerNode: "110"` — which is what the provider
+  dereferences
+- The Dataproc-on-GKE virtual cluster is `RUNNING`, echoes both `nodePoolTarget`
+  names and the GKE target, and its read carries **no** `nodePoolConfig`
+  (input-only in the real API)
+- The node pools it named exist through the GKE API
+  (`GET /container/v1/…/nodePools`): the caller-shaped one with `machineType`
+  `n1-standard-4`, `maxNodeCount: 3` and the `goog-dataproc-cluster-name` label,
+  the named-only one with the 1/10 autoscaler defaults
+- After the virtual cluster alone is destroyed (`destroy -target`), the pool is
+  still readable — real Dataproc does not delete a virtual cluster's node pools
 
 ## Provenance
 

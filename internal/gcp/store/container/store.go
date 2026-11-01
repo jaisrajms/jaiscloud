@@ -142,6 +142,29 @@ type NetworkPolicy struct {
 	Enabled  bool   `json:"enabled,omitempty"`
 }
 
+// Autopilot is the persisted subset of google.container.v1.Autopilot. The mock
+// carries the flag so a Dataproc-on-GKE create can refuse an Autopilot cluster
+// the way real Dataproc does (it requires a standard cluster); there is no
+// Autopilot behaviour behind it.
+type Autopilot struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// WorkloadIdentityConfig is the persisted subset of
+// google.container.v1.WorkloadIdentityConfig. Real Dataproc-on-GKE requires
+// Workload Identity on the target cluster, so the mock records the workload
+// pool (defaulting to <project>.svc.id.goog) and a Dataproc create checks it.
+type WorkloadIdentityConfig struct {
+	WorkloadPool string `json:"workloadPool,omitempty"`
+}
+
+// ShieldedNodes is the persisted subset of google.container.v1.ShieldedNodes.
+// Real GKE enables Shielded Nodes on every new cluster unless the create asks
+// otherwise, so the core stores the flag rather than a "set or not" marker.
+type ShieldedNodes struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
 // MaintenancePolicy is the persisted subset of
 // google.container.v1.MaintenancePolicy.
 type MaintenancePolicy struct {
@@ -200,6 +223,11 @@ type Cluster struct {
 	// InitialNodeCount is the request's cluster-level initialNodeCount; the mock
 	// materializes it as the default node pool's size.
 	InitialNodeCount int32 `json:"initialNodeCount,omitempty"`
+	// NodeConfig is the request's cluster-level nodeConfig (the parameters of
+	// the generated default node pool). It is decoded so a create that also
+	// carries nodePools is rejected the way real GKE rejects it; applying it to
+	// the default pool is still open (DPG42).
+	NodeConfig *NodeConfig `json:"nodeConfig,omitempty"`
 
 	NodePools      []NodePool        `json:"nodePools,omitempty"`
 	ResourceLabels map[string]string `json:"resourceLabels,omitempty"`
@@ -213,6 +241,21 @@ type Cluster struct {
 	NetworkPolicy     *NetworkPolicy     `json:"networkPolicy,omitempty"`
 	MaintenancePolicy *MaintenancePolicy `json:"maintenancePolicy,omitempty"`
 	Locations         []string           `json:"locations,omitempty"`
+	// Autopilot and WorkloadIdentityConfig are the cluster-level settings a
+	// Dataproc-on-GKE virtual cluster is validated against (it requires a
+	// standard, Workload-Identity-enabled cluster). Both are echoed on read.
+	Autopilot              *Autopilot              `json:"autopilot,omitempty"`
+	WorkloadIdentityConfig *WorkloadIdentityConfig `json:"workloadIdentityConfig,omitempty"`
+
+	// ShieldedNodes and MaxPodsPerNode are the two response messages real GKE
+	// always renders and clients dereference unconditionally (the
+	// hashicorp/google provider does, in its google_container_cluster read).
+	// They are stored because a create may set them; the core's read defaults
+	// fill the GKE values (enabled, 110) for records stored before they were
+	// modelled.
+	ShieldedNodes  *ShieldedNodes `json:"shieldedNodes,omitempty"`
+	MaxPodsPerNode int64          `json:"maxPodsPerNode,omitempty"`
+
 	// AdminUsername is masterAuth.username (SetMasterAuth SET_USERNAME). The
 	// admin password is never echoed, matching real GKE.
 	AdminUsername string `json:"adminUsername,omitempty"`

@@ -83,7 +83,10 @@ func TestUpdateClusterAndMaster(t *testing.T) {
 	if _, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{Name: "c1"}); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
-	op, err := s.UpdateCluster(ctx, "p", "us-central1", "c1", ClusterUpdate{DesiredMonitoringService: "monitoring.googleapis.com/kubernetes"})
+	op, err := s.UpdateCluster(ctx, "p", "us-central1", "c1", ClusterUpdate{
+		DesiredMonitoringService: "monitoring.googleapis.com/kubernetes",
+		DesiredShieldedNodes:     &containerstore.ShieldedNodes{Enabled: false},
+	})
 	if err != nil || op.OperationType != containerstore.OperationUpdateCluster {
 		t.Fatalf("UpdateCluster = %+v, %v", op, err)
 	}
@@ -94,6 +97,11 @@ func TestUpdateClusterAndMaster(t *testing.T) {
 	c, _ := s.GetCluster(ctx, "p", "us-central1", "c1")
 	if c.CurrentMasterVersion != "1.31.0-gke.100" || c.MonitoringService != "monitoring.googleapis.com/kubernetes" {
 		t.Fatalf("cluster = %+v", c)
+	}
+	// ClusterUpdate.desiredShieldedNodes is the update path for the flag the
+	// read renders (DPG37), so it must not be silently dropped.
+	if c.ShieldedNodes == nil || c.ShieldedNodes.Enabled {
+		t.Fatalf("shieldedNodes = %+v, want disabled", c.ShieldedNodes)
 	}
 }
 

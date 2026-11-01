@@ -118,6 +118,11 @@ type Service struct {
 	// main.go, so the core never imports service/metastore. Nil leaves the
 	// attachment stored/echoed but unvalidated and not injected into jobs.
 	metastoreResolver MetastoreResolver
+	// gkePools reconciles a Dataproc-on-GKE virtual cluster's node pools against
+	// the emulated GKE service. Satisfied by an adapter over the GKE core and
+	// wired in main.go, so the core never imports service/container. Nil leaves
+	// gkeClusterTarget/nodePoolTarget stored and echoed but unreconciled.
+	gkePools GKENodePoolProvisioner
 	// hmsEndpointOverride, when set, replaces the synthesized per-service
 	// endpoint with a reachable Hive Metastore address (from
 	// JAISCLOUD_DATAPROC_HMS_ENDPOINT). See WithHMSEndpointOverride.

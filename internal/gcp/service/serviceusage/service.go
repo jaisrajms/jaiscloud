@@ -571,7 +571,11 @@ func (s *Service) settle(op Operation) Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
-	s.tracker.EmitOperation("serviceusage", op.Name, op.Name, op.Verb)
+	project := ""
+	if len(op.ResourceNames) > 0 {
+		project = lro.ProjectFromName(op.ResourceNames[0])
+	}
+	s.tracker.EmitOperation("serviceusage", op.Name, op.Name, op.Verb, project)
 	return op
 }
 

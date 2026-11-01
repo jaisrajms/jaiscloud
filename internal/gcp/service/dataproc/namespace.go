@@ -31,11 +31,13 @@ func (s *Service) defaultNamespace() string {
 	return "jaiscloud"
 }
 
-// KubernetesNamespaceFromVirtualClusterConfig extracts the caller-supplied
+// KubernetesNamespaceFromVirtualClusterConfig extracts the effective
 // kubernetesClusterConfig.kubernetesNamespace from a Dataproc-on-GKE
-// VirtualClusterConfig ("" for a GCE-shaped or malformed config). It is
-// exported so the console UI can render the requested namespace alongside the
-// cluster's effective namespace without duplicating the parse.
+// VirtualClusterConfig ("" for a GCE-shaped or malformed config, and for a
+// cluster created before the namespace default was recorded). A cluster created
+// now stores the effective value, so this is the caller's namespace or the
+// cluster-name default. It is exported so the console UI can render the
+// requested namespace without duplicating the parse.
 func KubernetesNamespaceFromVirtualClusterConfig(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -51,21 +53,25 @@ func KubernetesNamespaceFromVirtualClusterConfig(raw json.RawMessage) string {
 	return vcc.KubernetesClusterConfig.KubernetesNamespace
 }
 
-// resolveClusterNamespace resolves and provisions the effective workload
-// namespace for a cluster: the caller's virtualClusterConfig
-// kubernetesNamespace when supplied, else a deterministic derived name. It
-// returns whether the emulator created the namespace (NamespaceOwned).
+// resolveClusterNamespace resolves and provisions the workload namespace for a
+// cluster from the caller-requested namespace ("" when the caller sent none,
+// which yields a deterministic derived name). The Dataproc API's
+// virtualClusterConfig.kubernetesNamespace defaults to the *cluster name*, but the
+// emulator's k3d host is shared by every project, so the placement namespace
+// carries the project and a hash instead; the API-visible value is defaulted in
+// applyVirtualClusterDefaults. It returns whether the emulator created the
+// namespace (NamespaceOwned).
 //
 // Mock execution (no k8s client) returns ("", false): there is no placement to
 // record. When the namespace cannot be created/managed (the ServiceAccount
 // lacks cluster-scoped namespace RBAC, or another error) it falls back to the
 // process-wide namespace with owned=false, so a job never hard-fails on
 // namespace plumbing.
-func (s *Service) resolveClusterNamespace(ctx context.Context, project, region, name string, in ClusterInput) (string, bool) {
+func (s *Service) resolveClusterNamespace(ctx context.Context, project, region, name, requested string) (string, bool) {
 	if s.k8sClient == nil {
 		return "", false
 	}
-	candidate := KubernetesNamespaceFromVirtualClusterConfig(in.VirtualClusterConfig)
+	candidate := requested
 	if candidate == "" {
 		candidate = k8shelpers.NamespaceName(dataprocService, project, name)
 	}

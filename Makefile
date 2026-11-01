@@ -6,18 +6,21 @@
 PYTHON ?= python3
 
 # Plan families in priority order for `make gcp-status-next` (comma-separated);
-# other families sort after these, alphabetically. ga-fidelity (the GA-fidelity
-# wave plan: closing the tractable fidelity-matrix gaps) is the current priority,
-# then functions-docker-executor (FDF1/FDF2: the GCP Functions docker-executor
-# consistency fixes), then console-ui (the GCP console UI effort), then
+# other families sort after these, alphabetically. dataproc-gke (the
+# Dataproc-on-GKE completion work: W5.2/W5.3 plus DPG35) is the current priority
+# and runs ahead of everything else, then ga-fidelity (the GA-fidelity wave plan:
+# closing the tractable fidelity-matrix gaps), then functions-docker-executor
+# (FDF1/FDF2: the GCP Functions docker-executor consistency fixes), then the GCP
+# console UI effort — both families: console-ui (the UI wave plan) and
+# console-project-discovery (UI80–UI83, the only UI rows still open) — then
 # ledger-integrity (it repairs merge-link accuracy so the planned list can be
-# trusted), then dataproc-gke (the Dataproc-on-GKE completion work), then the
-# Java-compat effort owns waves W1–W3. The AWS-parity families run next; the
-# BigQuery engine decision (bigquery-ga) is deliberately deprioritized behind them.
-# The audit family (gcp-audit-wave-plan.md: evidence coverage, cross-transport
-# parity, convention invariants) runs after the service families and immediately
-# before demo-spikes, so the emulator is verified before the demo is de-risked.
-SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,test-coverage,test-depth,demo-spikes
+# trusted), then the Java-compat effort owns waves W1–W3. The AWS-parity families
+# run next; the BigQuery engine decision (bigquery-ga) is deliberately
+# deprioritized behind them. The audit family (gcp-audit-wave-plan.md: evidence
+# coverage, cross-transport parity, convention invariants) runs after the service
+# families and immediately before demo-spikes, so the emulator is verified before
+# the demo is de-risked.
+SERIES ?= dataproc-gke,ga-fidelity,functions-docker-executor,console-ui,console-project-discovery,ledger-integrity,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,test-coverage,test-depth,demo-spikes
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
@@ -198,7 +201,8 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
+        security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
+        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -318,6 +322,8 @@ docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
 docker-%:  ## Build jaiscloud-<cloud> Docker image
 	docker build \
 		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo none) \
+		--build-arg DATE=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
 		--build-arg CLOUD=$* \
 		--build-arg PORT=$(or $(DOCKER_PORT_$*),4566) \
 		--tag jaiscloud-$*:$(VERSION) \
@@ -357,6 +363,89 @@ lint-gcp: ## GCP convention lint (clock, resource formatters, store sentinels, u
 lint-pagination: ## Heuristic check that List*/Describe* provider methods use pagination
 	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/... ./internal/gcp/provider/...
 
+##@ Security scans  (dependency + image advisories)
+
+# One gate over the four supply chains the released artifacts pull from: the Go
+# module graph of both cloud binaries, the console's pnpm lockfile (dev deps
+# included — they compile the assets embedded in the binaries), the Python
+# client-suite pins, and the OS/library packages of the built runtime images.
+#
+# Every scanner fails the target on a finding: no `|| true`, no `continue-on-error`,
+# no skip. The single exception mechanism is the cited govulncheck allowlist
+# below, and it is enforced in both directions (see VULN_ALLOWLIST).
+#
+# Tool versions are pinned so a red check means a new advisory, not a new
+# scanner. Each scanner refreshes its advisory data over the network on first
+# use (govulncheck: vuln.go.dev, pnpm audit: the npm registry, pip-audit:
+# PyPI/OSV, trivy: its vuln DB). With SECURITY_OFFLINE=1 trivy reuses its warm
+# cache (`--skip-db-update`) and govulncheck uses the module cache, so a
+# pre-warmed runner can gate without egress.
+GOVULNCHECK_VERSION ?= v1.9.0
+PIP_AUDIT_VERSION   ?= 2.10.1
+TRIVY_VERSION       ?= 0.76.1
+TRIVY               ?= $(if $(wildcard bin/trivy),bin/trivy,trivy)
+DOCKER              ?= docker
+SECURITY_IMAGES     ?= gcp aws
+SECURITY_PY_RUNNER  ?= $(PYTHON)
+# Cited exceptions. govulncheck has no ignore flag, so tools/vulnallow enforces
+# the list: an advisory missing from the file fails the target, and an entry
+# that no longer matches a finding fails it too. Every entry carries the
+# advisory id, module, reason and upstream URL and is mirrored in the SEC1 row
+# of the wave plan.
+VULN_ALLOWLIST ?= docs/security/govulncheck-allowlist.yaml
+SECURITY_TRIVY_FLAGS := --scanners vuln --exit-code 1 --ignore-unfixed=false
+ifeq ($(SECURITY_OFFLINE),1)
+SECURITY_TRIVY_FLAGS += --skip-db-update
+endif
+
+security-scan: security-scan-go security-scan-ui security-scan-python security-scan-images ## Run all four advisory scanners (fails on any finding)
+
+# govulncheck exits 3 when it reports findings; the JSON is still complete, so
+# the allowlist check below (not the exit code) decides.
+security-scan-go: ## govulncheck over the whole main module, gated by the cited allowlist
+	@set -e; tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+	rc=0; \
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -format json ./... > "$$tmp" || rc=$$?; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 3 ]; then echo "govulncheck failed (exit $$rc)"; exit $$rc; fi; \
+	go run ./tools/vulnallow -allowlist $(VULN_ALLOWLIST) < "$$tmp"
+
+security-scan-ui: ## pnpm audit against the committed ui/pnpm-lock.yaml (low and up)
+	cd ui && corepack pnpm audit --audit-level=low
+
+# pip-audit resolves the pins into a throwaway --target tree and audits that,
+# which needs no venv (and therefore no ensurepip) on the runner.
+security-scan-python: ## pip-audit against tests/clients/python/requirements.txt
+	@tmp=$$(mktemp -d); rc=0; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	$(SECURITY_PY_RUNNER) -m pip install --quiet --target "$$tmp/tool" pip-audit==$(PIP_AUDIT_VERSION) || rc=1; \
+	$(SECURITY_PY_RUNNER) -m pip install --quiet --target "$$tmp/site" -r tests/clients/python/requirements.txt || rc=1; \
+	if [ $$rc -eq 0 ]; then \
+	  PYTHONPATH="$$tmp/tool" $(SECURITY_PY_RUNNER) -m pip_audit --path "$$tmp/site" || rc=1; \
+	fi; \
+	exit $$rc
+
+security-tool-trivy: ## Install the pinned trivy release into bin/ (sha256-verified)
+	@mkdir -p bin
+	@set -e; \
+	ver=$(TRIVY_VERSION); tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	asset="trivy_$${ver}_Linux-64bit.tar.gz"; \
+	base="https://github.com/aquasecurity/trivy/releases/download/v$$ver"; \
+	curl -sSfL -o "$$tmp/$$asset" "$$base/$$asset"; \
+	curl -sSfL -o "$$tmp/trivy_$${ver}_checksums.txt" "$$base/trivy_$${ver}_checksums.txt"; \
+	(cd "$$tmp" && grep " $$asset$$" "trivy_$${ver}_checksums.txt" | sha256sum -c -); \
+	tar xzf "$$tmp/$$asset" -C bin trivy; \
+	./bin/trivy --version | head -1
+
+security-scan-images: ## trivy scan of the built jaiscloud-gcp/jaiscloud-aws runtime images
+	@set -e; \
+	for cloud in $(SECURITY_IMAGES); do \
+	  port=$$( [ "$$cloud" = gcp ] && echo $(DOCKER_PORT_gcp) || echo 4566 ); \
+	  echo "== trivy: jaiscloud-$$cloud =="; \
+	  $(DOCKER) build --build-arg CLOUD=$$cloud --build-arg PORT=$$port \
+	    -t jaiscloud-$$cloud:security-scan -f Dockerfile . ; \
+	  $(TRIVY) image $(SECURITY_TRIVY_FLAGS) jaiscloud-$$cloud:security-scan ; \
+	done
+
 ##@ Unit tests
 
 test: ## Run all unit tests with the race detector  (no server needed)
@@ -379,8 +468,8 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 	go test -race -count=1 -timeout 120s -run '(?i)(Scheduling|LongRunning|RestartPolicy|Restartable|NonRestartable|JarFileUri)' \
 	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
 
-test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow)
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
 
 test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
 	go test -count=1 -tags release ./tests/release/...
@@ -1223,7 +1312,7 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
 
-gcp-session-start: ## Guard the checkout, fast-forward the gcp base from upstream, rebuild the ledger (used by /gcp:new)
+gcp-session-start: ## Guard the checkout, fast-forward the session base from upstream (create it if new), rebuild the ledger (used by /gcp/new; GCP_SESSION_BASE=<branch> for a series)
 	@bash tools/gcp-session-start.sh
 	@$(MAKE) --no-print-directory gcp-status
 
@@ -1294,6 +1383,48 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 	  $(MAKE) --no-print-directory gcp-status gcp-status-lint-plans gcp-status-coverage; \
 	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/main; fi; \
 	fi
+
+# Pre-push mirror of the gates the `test-gcp-unit` and `test-gcp-conformance` CI
+# jobs run offline (no Docker, no booted emulator; the client/conformance jobs
+# are `ga-check`). Run it before `git push` on a GCP session — a stale
+# `docs/fidelity` (any change to a conformance check or an operation's evidence)
+# is the most common red-CI cause and `check-gcp-fidelity-matrix` catches it
+# locally, after regenerating the matrix to be committed.
+gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
+	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
+	$(MAKE) --no-print-directory test-gcp-coverage
+	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
+	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
+	$(MAKE) --no-print-directory check-gcp-fidelity-matrix
+
+# Block until a PR's checks settle; on a red check, print the failing jobs and
+# their `--log-failed` tail (minus the runner's cache-restore tar noise) so the
+# next fix is obvious. A session is not finished while this exits non-zero.
+gcp-ci-wait: ## Wait for PR=<n>'s checks; on failure print the failing logs and exit 1
+	@test -n "$(PR)" || { echo 'usage: make gcp-ci-wait PR=<number>  (repo: GCP_REPO=<owner>/<repo>)'; exit 2; }
+	@set -e; repo="$${GCP_REPO:-jaisrajms/jaiscloud}"; \
+	echo "gcp-ci-wait: waiting for checks on PR $(PR) (new PRs report none for ~30s)"; \
+	for i in $$(seq 1 20); do \
+	  n=$$(gh pr checks "$(PR)" --repo "$$repo" --json name --jq 'length' 2>/dev/null || echo 0); \
+	  [ "$${n:-0}" -gt 0 ] && break; \
+	  [ "$$i" -eq 20 ] && { echo "gcp-ci-wait: no checks reported on PR $(PR)"; exit 1; }; \
+	  sleep 15; \
+	done; \
+	if gh pr checks "$(PR)" --repo "$$repo" --watch --fail-fast --interval 20; then \
+	  echo "gcp-ci-wait: all checks passed on PR $(PR)"; exit 0; \
+	fi; \
+	echo; echo "gcp-ci-wait: failing checks on PR $(PR):"; \
+	gh pr checks "$(PR)" --repo "$$repo" --json name,state,link \
+	  --jq '.[] | select(.state=="FAILURE" or .state=="CANCELLED" or .state=="TIMED_OUT") | "  \(.name)  \(.link)"'; \
+	for run in $$(gh pr checks "$(PR)" --repo "$$repo" --json link \
+	    --jq '.[] | select(.state=="FAILURE") | .link' | grep -oE '/runs/[0-9]+' | cut -d/ -f3 | sort -u); do \
+	  echo; echo "--- run $$run (failing steps) ---"; \
+	  gh run view "$$run" --repo "$$repo" --log-failed 2>/dev/null \
+	    | grep -vE 'Cannot open: File exists|^##\[group\]|^##\[endgroup\]' | tail -40 || true; \
+	done; \
+	echo; echo "gcp-ci-wait: fix the failures, push, and run this again"; \
+	exit 1
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/gcp/wire-contract.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;

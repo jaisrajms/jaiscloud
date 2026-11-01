@@ -396,9 +396,10 @@ func pollOperation(t *testing.T, base string, op map[string]any) map[string]any 
 	return nil
 }
 
-// gkeVirtualBody builds a Dataproc-on-GKE create body. The emulator models the
-// GKE control plane as metadata; kubernetesNamespace is the caller-supplied
-// workload placement KNS2 provisions.
+// gkeVirtualBody builds a Dataproc-on-GKE create body. The emulator's GKE
+// control plane is real metadata, so the target must exist and the create
+// reconciles against it (see ensureGKECluster); kubernetesNamespace is the
+// caller-supplied workload placement KNS2 provisions.
 func gkeVirtualBody(name, ns string) map[string]any {
 	return map[string]any{
 		"clusterName": name,
@@ -406,10 +407,32 @@ func gkeVirtualBody(name, ns string) map[string]any {
 			"kubernetesClusterConfig": map[string]any{
 				"kubernetesNamespace": ns,
 				"gkeClusterConfig": map[string]any{
-					"gkeClusterTarget": fmt.Sprintf("projects/%s/locations/%s/clusters/gke-target", testProject, testRegion),
+					"gkeClusterTarget": gkeTargetName(),
 				},
 			},
 		},
+	}
+}
+
+// gkeTargetName is the prerequisite GKE cluster the virtual clusters target.
+func gkeTargetName() string {
+	return fmt.Sprintf("projects/%s/locations/%s/clusters/gke-target", testProject, testRegion)
+}
+
+// ensureGKECluster creates the prerequisite GKE cluster over the emulator's GKE
+// REST surface: standard and Workload-Identity-enabled, which is what a
+// Dataproc-on-GKE create requires. An existing cluster (409) is success.
+func ensureGKECluster(t *testing.T, base string) {
+	t.Helper()
+	url := base + "/container/v1/projects/" + testProject + "/locations/" + testRegion + "/clusters"
+	code, body := api(t, http.MethodPost, url, map[string]any{
+		"cluster": map[string]any{
+			"name":                   "gke-target",
+			"workloadIdentityConfig": map[string]any{"workloadPool": testProject + ".svc.id.goog"},
+		},
+	})
+	if code != http.StatusOK && code != http.StatusConflict {
+		t.Fatalf("create GKE cluster: HTTP %d: %v", code, body)
 	}
 }
 
@@ -670,6 +693,7 @@ func TestDataprocNamespaceIsolationK3d(t *testing.T) {
 	uploadText(t, base, bucket, jobB+"-stream.py", streamingScript(bucket, jobB))
 
 	// ── provision two clusters in distinct namespaces ─────────────────────────
+	ensureGKECluster(t, base)
 	createCluster(t, base, clusterA, gkeVirtualBody(clusterA, nsA))
 	t.Cleanup(func() { deleteCluster(t, base, clusterA) })
 	createCluster(t, base, clusterB, gceBody(clusterB))

@@ -6,16 +6,18 @@
 #   jaiscloud-aws -> BINARY=jaiscloud-aws, PORT=4566
 #   jaiscloud-gcp -> BINARY=jaiscloud-gcp, PORT=8080
 # PORT is the default REST listener and the port EXPOSEd here; the binary's own
-# --port flag still wins at runtime. gRPC (:8081) and the UI portal (:4567, only
-# with `start --ui`; /ui/ is also served on the REST port) are reached with an
-# explicit -p.
+# --port flag still wins at runtime. EXTRA_PORTS carries any additional fixed
+# listener that should be published by `docker run -P` — the GCP image passes
+# 8081 for gRPC. The UI portal (:4567, only with `start --ui`; /ui/ is also
+# served on the REST port) stays an explicit -p.
 FROM gcr.io/distroless/static:nonroot
 
 ARG TARGETPLATFORM
 ARG BINARY=jaiscloud-aws
 ARG PORT=4566
+ARG EXTRA_PORTS=
 
 COPY ${TARGETPLATFORM}/${BINARY} /jaiscloud
-EXPOSE ${PORT}
+EXPOSE ${PORT} ${EXTRA_PORTS}
 ENTRYPOINT ["/jaiscloud"]
 CMD ["start"]

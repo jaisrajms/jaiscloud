@@ -26,6 +26,7 @@ import (
 	"jaiscloud/internal/executor/gcf"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
+	"jaiscloud/internal/gcp/adapter/dataprocgke"
 	gcauth "jaiscloud/internal/gcp/auth"
 	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 	"jaiscloud/internal/gcp/crypto"
@@ -102,6 +103,7 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
+	grpciam "jaiscloud/internal/gcp/transport/grpc/iam"
 	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
 	grpckms "jaiscloud/internal/gcp/transport/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
@@ -139,6 +141,7 @@ import (
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
+	projectsui "jaiscloud/internal/gcp/ui/projects"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/k8shelpers"
@@ -161,6 +164,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
+	iamadminpb "cloud.google.com/go/iam/admin/apiv1/adminpb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	credentialspb "cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -187,6 +191,13 @@ import (
 
 var version = "dev"
 
+// commit and date are stamped by the linker (-X main.commit/-X main.date) the
+// same way as the AWS binary; a bare `go build` reports the placeholders.
+var (
+	commit = "none"
+	date   = "unknown"
+)
+
 const defaultHost = "http://localhost:8080"
 
 func main() {
@@ -202,6 +213,7 @@ func main() {
 	root.AddCommand(exportCmd())
 	root.AddCommand(importCmd())
 	root.AddCommand(snapshotCmd())
+	root.AddCommand(projectsCmd())
 	root.AddCommand(kafkaProbeCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -351,8 +363,9 @@ func startCmd() *cobra.Command {
 
 			// Cloud Monitoring's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter (and the background evaluator)
-			// below, so every surface reads and writes one store.
-			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
+			// below, so every surface reads and writes one store. The shared
+			// ResourceStore backs the REST-only v1 dashboards API.
+			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID, monitoringcore.WithResources(stores.resources))
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
 			// Cloud Functions runs on the shared, cloud-neutral container
@@ -475,6 +488,16 @@ func startCmd() *cobra.Command {
 			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus), metastorecore.WithResources(stores.resources))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
+			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
+			// Built here (rather than with the other control planes below) because
+			// the Dataproc core reconciles a virtual cluster's node pools through
+			// it — the same reason Metastore is built first. One core serves both
+			// transports: the REST provider below and the gRPC ClusterManager
+			// adapter (docs/gcp/wire-contract.md §5). It sits behind a
+			// ClusterManager seam whose only implementation is the mock: a
+			// cluster is a stored record, not a real Kubernetes control plane.
+			containerCore := containercore.NewService(stores.container)
+
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE, or Docker on the
 			// local daemon. The core (and its K8s client) is only built when
@@ -504,6 +527,11 @@ func startCmd() *cobra.Command {
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
 					dataproccore.WithBlobSink(storageSeam),
+					// Reconcile a Dataproc-on-GKE virtual cluster's target and node
+					// pools through the GKE core (resolved at create, verified or
+					// created through the container API). The core only sees the
+					// interface, so it never imports service/container.
+					dataproccore.WithGKENodePoolProvisioner(dataprocgke.New(containerCore)),
 					// Resolve a cluster's metastoreConfig attachment through the
 					// Metastore core (validated at cluster create, formatted at
 					// job submit). The core only sees the interface, so it never
@@ -701,13 +729,9 @@ func startCmd() *cobra.Command {
 			// Compute Engine is metadata-only over the shared ResourceStore.
 			computeP := computeprovider.New(stores.resources)
 
-			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
-			// REST only — GKE's native transport is gRPC, but the emulator
-			// deliberately exposes the REST metadata surface (docs/gcp/wire-contract.md §5).
-			// The core sits behind a ClusterManager seam whose only
-			// implementation is the mock: a cluster is a stored record, not a
-			// real Kubernetes control plane.
-			containerCore := containercore.NewService(stores.container)
+			// The GKE REST provider is a thin adapter over the core built above;
+			// the gRPC ClusterManager adapter is registered against the same core,
+			// so both transports read and write one metadata store.
 			containerP := restcontainer.NewProvider(containerCore)
 
 			// Cloud Run Admin v2's behavioural control plane, served over REST and
@@ -966,6 +990,7 @@ func startCmd() *cobra.Command {
 			tasksGRPC := grpctasks.NewService(tasksCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			iamCredentialsGRPC := grpciamcredentials.NewService(iamCredentialsCore, cfg.ProjectID)
+			iamGRPC := grpciam.NewService(iamP)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
@@ -1018,6 +1043,13 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("iamcredentials") {
 					credentialspb.RegisterIAMCredentialsServer(gserv.GRPC(), iamCredentialsGRPC)
 				}
+				// The IAM Admin API (google.iam.admin.v1.IAM) owns the
+				// service-account surface: CRUD, keys (including
+				// keys.upload), the deprecated sign verbs and the
+				// service-account IAM policy.
+				if transports.GRPCFor("iam") {
+					iamadminpb.RegisterIAMServer(gserv.GRPC(), iamGRPC)
+				}
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
@@ -1062,18 +1094,23 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub, KMS, Eventarc and Dataproc Metastore share the single
-				// IAMPolicy service, so their IAM surfaces are dispatched through
-				// one router. Eventarc and Metastore only join the router when
-				// their gRPC transport is selected, so a trigger/channel or
-				// metastore IAM name cannot reach a nil core.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") {
+				// Pub/Sub, KMS, Eventarc, Dataproc Metastore and Dataproc each
+				// own IAM resources served through the single IAMPolicy service,
+				// so their IAM surfaces are dispatched through one router.
+				// Eventarc, Metastore and Dataproc only join the router when
+				// their gRPC transport is selected, so a trigger/channel,
+				// metastore or workflow-template IAM name cannot reach a nil
+				// core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") || transports.GRPCFor("dataproc") {
 					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
 					if transports.GRPCFor("eventarc") {
 						iamHandlers = append(iamHandlers, eventarcGRPC)
 					}
 					if transports.GRPCFor("metastore") {
 						iamHandlers = append(iamHandlers, metastoreGRPC)
+					}
+					if transports.GRPCFor("dataproc") && dataprocCore != nil {
+						iamHandlers = append(iamHandlers, dataprocGRPC)
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
@@ -1186,6 +1223,16 @@ func startCmd() *cobra.Command {
 			}
 
 			adminHandler := admin.NewHandler()
+			// Project discovery on the admin plane: the same configured ∪
+			// registered ∪ observed snapshot the console reads, so a shell or CI
+			// job can ask which project a workload actually used.
+			var projectProvider projectsui.ProviderInterface
+			if resourceManagerCore != nil {
+				projectProvider = resourceManagerCore
+			}
+			adminHandler.RegisterProjectLister(projectLister{
+				handler: projectsui.NewHandler(projectProvider, cfg),
+			})
 			// Cloud Functions source archives are served to the K8s code-mount
 			// init container through the shared /lambda/code admin route (the
 			// executor's codeKey is path-safe: "location.id").
@@ -1866,7 +1913,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("jaiscloud-gcp %s\n", version)
+			fmt.Printf("jaiscloud-gcp %s (commit: %s, built: %s)\n", version, commit, date)
 			fmt.Println(pluginhost.Build().Line())
 		},
 	}

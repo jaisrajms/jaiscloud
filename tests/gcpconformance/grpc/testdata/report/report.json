@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 487,
-  "passed": 487,
+  "total": 504,
+  "passed": 504,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 487,
-    "passed": 487,
+    "checks": 504,
+    "passed": 504,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,15 +16,15 @@
   "services": [
     {
       "service": "container",
-      "total": 30,
-      "passed": 30,
+      "total": 34,
+      "passed": 34,
       "failed": 0,
       "unimplemented": 0
     },
     {
       "service": "dataproc",
-      "total": 26,
-      "passed": 26,
+      "total": 35,
+      "passed": 35,
       "failed": 0,
       "unimplemented": 0
     },
@@ -65,8 +65,8 @@
     },
     {
       "service": "iam",
-      "total": 12,
-      "passed": 12,
+      "total": 16,
+      "passed": 16,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2923,6 +2923,20 @@
     },
     {
       "service": "dataproc",
+      "rpc": "CreateCluster (no placement)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "InvalidArgument when neither config nor virtualClusterConfig is set"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (on GKE, unknown target)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "NotFound for an unresolvable gkeClusterTarget"
+    },
+    {
+      "service": "dataproc",
       "rpc": "GetCluster",
       "method": "GetCluster",
       "status": "pass",
@@ -3028,10 +3042,59 @@
     },
     {
       "service": "dataproc",
+      "rpc": "CreateCluster (vcc pools)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "reconciled pools read back through ClusterManager + survive delete"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc reuse)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "a second virtual cluster adopts existing pools"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc rules)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "GKE placement/pool validation as client-visible errors"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc pool shape)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "done LRO -\u003e ERROR cluster with the pool and field in status.detail"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "UpdateCluster (vcc)",
+      "method": "UpdateCluster",
+      "status": "pass",
+      "key_field": "recreate-only: virtualClusterConfig patch is InvalidArgument"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc image alias)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "dataproc-2.2 dereferences to the newest engine release"
+    },
+    {
+      "service": "dataproc",
       "rpc": "CreateCluster (metastore)",
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "auxiliaryServicesConfig.metastoreConfig echo"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (spark history server)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "PHS cluster validated + spark.eventLog.* properties"
     },
     {
       "service": "dataproc",
@@ -3105,10 +3168,38 @@
     },
     {
       "service": "container",
+      "rpc": "CreateCluster (nodePools + default-pool fields)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "InvalidArgument on the default-pool conflict"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateCluster (nodeConfig default pool)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "default-pool config + cluster nodeConfig echo"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateCluster (duplicate inline nodePool names)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "InvalidArgument on a repeated pool name, nothing persisted"
+    },
+    {
+      "service": "container",
+      "rpc": "GetCluster (Compute self-link network)",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "networkConfig resolved from a self-link, host project kept"
+    },
+    {
+      "service": "container",
       "rpc": "GetCluster",
       "method": "GetCluster",
       "status": "pass",
-      "key_field": "name/status/currentMasterVersion round-trip"
+      "key_field": "name/status/masterVersion + nested response messages"
     },
     {
       "service": "container",
@@ -3276,7 +3367,7 @@
       "rpc": "UpdateCluster",
       "method": "UpdateCluster",
       "status": "pass",
-      "key_field": "UPDATE_CLUSTER DONE + field applied"
+      "key_field": "UPDATE_CLUSTER DONE + fields applied (monitoring, shieldedNodes)"
     },
     {
       "service": "container",
@@ -3571,6 +3662,34 @@
       "method": "TestIamPermissions",
       "status": "pass",
       "key_field": "requested permissions echoed back"
+    },
+    {
+      "service": "iam",
+      "rpc": "UploadServiceAccountKey",
+      "method": "UploadServiceAccountKey",
+      "status": "pass",
+      "key_field": "USER_MANAGED/USER_PROVIDED key, publicKeyData on get, listed, deletable"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy (dataproc)",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "workflow template policy present, empty by default"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy (dataproc)",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "conditional binding round-trips at version 3"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions (dataproc)",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back for a workflow template"
     },
     {
       "service": "iamcredentials",

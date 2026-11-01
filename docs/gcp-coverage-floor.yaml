@@ -15,6 +15,8 @@
 packages:
   - package: internal/gcp/adapter
     min_percent: 79.09
+  - package: internal/gcp/adapter/dataprocgke
+    min_percent: 85.48
   - package: internal/gcp/aip160
     min_percent: 96.18
   - package: internal/gcp/auth
@@ -195,6 +197,8 @@ packages:
     min_percent: 54.59
   - package: internal/gcp/transport/grpc/functions
     min_percent: 72.76
+  - package: internal/gcp/transport/grpc/iam
+    min_percent: 62.27
   - package: internal/gcp/transport/grpc/iamcredentials
     min_percent: 83.33
   - package: internal/gcp/transport/grpc/kms

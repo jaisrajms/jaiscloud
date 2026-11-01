@@ -134,6 +134,9 @@ func (s *Server) buildRouter() {
 	r.Route("/_jaiscloud", func(r chi.Router) {
 		r.Get("/health", s.adminHandler.Health)
 		r.Get("/doctor", s.adminHandler.Doctor)
+		// GCP project discovery (configured ∪ registered ∪ observed). Registered
+		// by the GCP binary; 501 on a binary that does not wire it.
+		r.Get("/projects", s.adminHandler.Projects)
 		r.Post("/reset", s.adminHandler.Reset)
 		r.Get("/export", s.adminHandler.Export)
 		r.Post("/import", s.adminHandler.Import)

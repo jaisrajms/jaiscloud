@@ -3,7 +3,10 @@ package grpcconformance
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	container "cloud.google.com/go/container/apiv1"
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	dataproc "cloud.google.com/go/dataproc/v2/apiv1"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	"google.golang.org/api/iterator"
@@ -28,8 +31,9 @@ import (
 func dataprocChecks() []Check {
 	return []Check{
 		{Service: "dataproc", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "LRO done + RUNNING cluster", Run: checkDPCreateCluster},
-		{Service: "dataproc", RPC: "GetCluster", Method: "GetCluster", KeyField: "clusterName round-trip", Run: checkDPGetCluster},
-		{Service: "dataproc", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkDPListClusters},
+		{Service: "dataproc", RPC: "CreateCluster (no placement)", Method: "CreateCluster", KeyField: "InvalidArgument when neither config nor virtualClusterConfig is set", Run: checkDPCreateClusterNoPlacement},
+		{Service: "dataproc", RPC: "CreateCluster (on GKE, unknown target)", Method: "CreateCluster", KeyField: "NotFound for an unresolvable gkeClusterTarget", Run: checkDPCreateClusterGKEUnknownTarget},
+		{Service: "dataproc", RPC: "GetCluster", Method: "GetCluster", KeyField: "clusterName round-trip", Run: checkDPGetCluster}, {Service: "dataproc", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkDPListClusters},
 		{Service: "dataproc", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "labels updated via LRO", Run: checkDPUpdateCluster},
 		{Service: "dataproc", RPC: "StopCluster", Method: "StopCluster", KeyField: "STOPPED cluster returned", Run: checkDPStopCluster},
 		{Service: "dataproc", RPC: "StartCluster", Method: "StartCluster", KeyField: "RUNNING cluster returned", Run: checkDPStartCluster},
@@ -43,7 +47,14 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "CancelJob", Method: "CancelJob", KeyField: "CANCEL_PENDING polls to CANCELLED", Run: checkDPCancelJob},
 		{Service: "dataproc", RPC: "DeleteJob", Method: "DeleteJob", KeyField: "NotFound after delete", Run: checkDPDeleteJob},
 		{Service: "dataproc", RPC: "CreateCluster (vcc)", Method: "CreateCluster", KeyField: "GKE virtualClusterConfig round-trip", Run: checkDPVirtualClusterConfig},
+		{Service: "dataproc", RPC: "CreateCluster (vcc pools)", Method: "CreateCluster", KeyField: "reconciled pools read back through ClusterManager + survive delete", Run: checkDPGKEVirtualClusterPools},
+		{Service: "dataproc", RPC: "CreateCluster (vcc reuse)", Method: "CreateCluster", KeyField: "a second virtual cluster adopts existing pools", Run: checkDPGKEVirtualClusterPoolReuse},
+		{Service: "dataproc", RPC: "CreateCluster (vcc rules)", Method: "CreateCluster", KeyField: "GKE placement/pool validation as client-visible errors", Run: checkDPGKEVirtualClusterRules},
+		{Service: "dataproc", RPC: "CreateCluster (vcc pool shape)", Method: "CreateCluster", KeyField: "done LRO -> ERROR cluster with the pool and field in status.detail", Run: checkDPGKEVirtualClusterPoolShapeConflict},
+		{Service: "dataproc", RPC: "UpdateCluster (vcc)", Method: "UpdateCluster", KeyField: "recreate-only: virtualClusterConfig patch is InvalidArgument", Run: checkDPVirtualClusterRecreateOnly},
+		{Service: "dataproc", RPC: "CreateCluster (vcc image alias)", Method: "CreateCluster", KeyField: "dataproc-2.2 dereferences to the newest engine release", Run: checkDPGKEImageVersionAlias},
 		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
+		{Service: "dataproc", RPC: "CreateCluster (spark history server)", Method: "CreateCluster", KeyField: "PHS cluster validated + spark.eventLog.* properties", Run: checkDPHistoryServerAttachment},
 		{Service: "dataproc", RPC: "GetJob (placement)", Method: "GetJob", KeyField: "placement.clusterUuid", Run: checkDPJobPlacementClusterUUID},
 		{Service: "dataproc", RPC: "SubmitJob (driver output)", Method: "SubmitJob", KeyField: "driver output/control URIs present", Run: checkDPDriverOutputURIs},
 		{Service: "dataproc", RPC: "CreateWorkflowTemplate", Method: "CreateWorkflowTemplate", KeyField: "name/version round-trip", Run: checkDPCreateWorkflowTemplate},
@@ -77,6 +88,13 @@ func newDataprocJobClient(ctx context.Context, cfg Config) (*dataproc.JobControl
 // dataprocClusterID is the run-unique cluster shared by the probes.
 func dataprocClusterID(cfg Config) string { return cfg.ResourceName("gcpc-grpc-dp") }
 
+// probeClusterConfig is the minimal Compute-Engine placement: a create must
+// carry exactly one of config or virtualClusterConfig ("Exactly one of
+// ClusterConfig or VirtualClusterConfig must be specified").
+func probeClusterConfig() *dataprocpb.ClusterConfig {
+	return &dataprocpb.ClusterConfig{GceClusterConfig: &dataprocpb.GceClusterConfig{ZoneUri: "us-central1-a"}}
+}
+
 // ensureDataprocCluster creates the run-unique probe cluster, treating
 // AlreadyExists as success so repeated probes are idempotent.
 func ensureDataprocCluster(ctx context.Context, client *dataproc.ClusterControllerClient, cfg Config) (string, error) {
@@ -84,7 +102,7 @@ func ensureDataprocCluster(ctx context.Context, client *dataproc.ClusterControll
 	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
 		ProjectId: cfg.Project,
 		Region:    dataprocRegion,
-		Cluster:   &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"probe": "gcpc"}},
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, Config: probeClusterConfig(), Labels: map[string]string{"probe": "gcpc"}},
 	})
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
@@ -132,7 +150,7 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
 		ProjectId: cfg.Project,
 		Region:    dataprocRegion,
-		Cluster:   &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"probe": "gcpc"}},
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, Config: probeClusterConfig(), Labels: map[string]string{"probe": "gcpc"}},
 	})
 	if err != nil {
 		return fmt.Errorf("CreateCluster: %w", err)
@@ -161,6 +179,86 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	}
 	if cluster.GetStatus().GetState() != dataprocpb.ClusterStatus_RUNNING {
 		return fmt.Errorf("cluster state = %v, want RUNNING", cluster.GetStatus().GetState())
+	}
+	// A caller names the zone by short name; a read answers the absolute
+	// Compute self-link (DPG40).
+	wantZone := "https://www.googleapis.com/compute/v1/projects/" + cfg.Project + "/zones/us-central1-a"
+	if got := cluster.GetConfig().GetGceClusterConfig().GetZoneUri(); got != wantZone {
+		return fmt.Errorf("gceClusterConfig.zoneUri = %q, want %q", got, wantZone)
+	}
+	return nil
+}
+
+// checkDPCreateClusterNoPlacement verifies Discovery's "Exactly one of
+// ClusterConfig or VirtualClusterConfig must be specified": a create carrying
+// neither is InvalidArgument, and no cluster is persisted from it.
+func checkDPCreateClusterNoPlacement(ctx context.Context, cfg Config) error {
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-noplacement")
+	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("create without config or virtualClusterConfig: code = %v, want InvalidArgument", status.Code(err))
+	}
+	if msg := status.Convert(err).Message(); !strings.Contains(msg, "exactly one of config or virtualClusterConfig") {
+		return fmt.Errorf("create without placement message = %q", msg)
+	}
+	if _, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{
+		ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id,
+	}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("rejected create left a cluster behind: code = %v, want NotFound", status.Code(err))
+	}
+	return nil
+}
+
+// checkDPCreateClusterGKEUnknownTarget verifies a Dataproc-on-GKE create
+// resolves gkeClusterTarget through the GKE service on both transports: an
+// unknown target is NotFound, not a silently-accepted metadata-only cluster.
+func checkDPCreateClusterGKEUnknownTarget(ctx context.Context, cfg Config) error {
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-gke-missing")
+	missingTarget := "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gcpc-missing-gke"
+	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: id,
+			VirtualClusterConfig: &dataprocpb.VirtualClusterConfig{
+				StagingBucket: "dataproc-staging-" + cfg.Project,
+				InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+					KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+						Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+							GkeClusterConfig: &dataprocpb.GkeClusterConfig{
+								GkeClusterTarget: missingTarget,
+								NodePoolTarget: []*dataprocpb.GkeNodePoolTarget{{
+									NodePool: missingTarget + "/nodePools/default-pool",
+									Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+								}},
+							},
+						},
+						KubernetesSoftwareConfig: &dataprocpb.KubernetesSoftwareConfig{
+							ComponentVersion: map[string]string{"SPARK": "3.5"},
+						},
+					},
+				},
+			},
+		},
+	})
+	if status.Code(err) != codes.NotFound {
+		return fmt.Errorf("CreateCluster with an unknown gkeClusterTarget: got %v, want NotFound", err)
 	}
 	return nil
 }
@@ -302,7 +400,7 @@ func checkDPDeleteCluster(ctx context.Context, cfg Config) error {
 	defer client.Close()
 	id := cfg.ResourceName("gcpc-grpc-dp-del")
 	if op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
-		ProjectId: cfg.Project, Region: dataprocRegion, Cluster: &dataprocpb.Cluster{ClusterName: id},
+		ProjectId: cfg.Project, Region: dataprocRegion, Cluster: &dataprocpb.Cluster{ClusterName: id, Config: probeClusterConfig()},
 	}); err != nil {
 		return fmt.Errorf("create: %w", err)
 	} else if _, err := op.Wait(ctx); err != nil {
@@ -636,15 +734,19 @@ func gkeVirtualClusterConfig(target string) *dataprocpb.VirtualClusterConfig {
 	}
 }
 
-// dpGkeTarget is the GKE cluster target the probes reference (metadata only; the
-// emulator has no GKE control plane).
+// dpGkeTarget is the GKE cluster target the probes reference. Dataproc on GKE
+// resolves it through the emulated GKE service, so the GKE cluster is a real
+// prerequisite (see ensureGKEPrereqCluster), not just a name.
 func dpGkeTarget(cfg Config) string {
-	return "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gke-1"
+	return "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/" + cfg.ResourceName("gcpc-gke")
 }
 
 // Check 15: a GKE-backed cluster keeps its virtualClusterConfig through gRPC and
 // never invents a GCE config.
 func checkDPVirtualClusterConfig(ctx context.Context, cfg Config) error {
+	if _, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-gke"); err != nil {
+		return err
+	}
 	client, err := newDataprocClusterClient(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
@@ -678,6 +780,623 @@ func checkDPVirtualClusterConfig(ctx context.Context, cfg Config) error {
 	return nil
 }
 
+// Check 15b: a Dataproc-on-GKE virtual cluster is recreate-only. A create with
+// no kubernetesNamespace renders the cluster name as the effective namespace and
+// dereferences the SPARK alias to a concrete release; a patch touching
+// virtualClusterConfig is InvalidArgument, while a labels-only patch succeeds.
+func checkDPVirtualClusterRecreateOnly(ctx context.Context, cfg Config) error {
+	if _, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-gke"); err != nil {
+		return err
+	}
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vccupd")
+	vcc := &dataprocpb.VirtualClusterConfig{
+		InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+			KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+				Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+					GkeClusterConfig: &dataprocpb.GkeClusterConfig{GkeClusterTarget: dpGkeTarget(cfg)},
+				},
+				KubernetesSoftwareConfig: &dataprocpb.KubernetesSoftwareConfig{
+					ComponentVersion: map[string]string{"SPARK": "3.5"},
+				},
+			},
+		},
+	}
+	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vcc},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+
+	got, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	kcc := got.GetVirtualClusterConfig().GetKubernetesClusterConfig()
+	if ns := kcc.GetKubernetesNamespace(); ns != id {
+		return fmt.Errorf("kubernetesNamespace = %q, want the cluster name %q", ns, id)
+	}
+	if v := kcc.GetKubernetesSoftwareConfig().GetComponentVersion()["SPARK"]; v != "3.5-dataproc-28" {
+		return fmt.Errorf("componentVersion[SPARK] = %q, want the dereferenced release 3.5-dataproc-28", v)
+	}
+
+	// The patch that changes virtualClusterConfig is rejected.
+	_, err = client.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		ProjectId:   cfg.Project,
+		Region:      dataprocRegion,
+		ClusterName: id,
+		Cluster:     &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: gkeVirtualClusterConfig(dpGkeTarget(cfg))},
+		UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"virtual_cluster_config"}},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("virtualClusterConfig patch: got %v, want InvalidArgument", err)
+	}
+	if !strings.Contains(status.Convert(err).Message(), "recreate-only") {
+		return fmt.Errorf("virtualClusterConfig patch message %q does not explain the recreate-only rule", status.Convert(err).Message())
+	}
+
+	// A labels-only patch is still allowed.
+	upd, err := client.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		ProjectId:   cfg.Project,
+		Region:      dataprocRegion,
+		ClusterName: id,
+		Cluster:     &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"probe": "true"}},
+		UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		return fmt.Errorf("labels patch: %w", err)
+	}
+	if _, err := upd.Wait(ctx); err != nil {
+		return fmt.Errorf("labels patch Wait: %w", err)
+	}
+	got, err = client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster after patch: %w", err)
+	}
+	if got.GetLabels()["probe"] != "true" {
+		return fmt.Errorf("labels patch not applied: %v", got.GetLabels())
+	}
+	if got.GetConfig() != nil {
+		return fmt.Errorf("labels patch invented a GCE config: %+v", got.GetConfig())
+	}
+	return nil
+}
+
+// Check 15c: the image-line alias `dataproc-<major.minor>` is a documented Spark
+// version form, and the only line real GCP accepts for a virtual cluster is
+// `dataproc-2.2`, which dereferences to the newest engine release — it resolves
+// exactly like `latest` (recorded from real GCP, DPG36). Any other image line
+// stays InvalidArgument rather than being mapped by inference.
+func checkDPGKEImageVersionAlias(ctx context.Context, cfg Config) error {
+	if _, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-gke"); err != nil {
+		return err
+	}
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	vccWithVersion := func(version string) *dataprocpb.VirtualClusterConfig {
+		vcc := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+		vcc.GetKubernetesClusterConfig().KubernetesSoftwareConfig = &dataprocpb.KubernetesSoftwareConfig{
+			ComponentVersion: map[string]string{"SPARK": version},
+		}
+		return vcc
+	}
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vccimg")
+	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vccWithVersion("dataproc-2.2")},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster(dataproc-2.2): %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+	got, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if v := got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetKubernetesSoftwareConfig().GetComponentVersion()["SPARK"]; v != "3.5-dataproc-28" {
+		return fmt.Errorf("componentVersion[SPARK] = %q, want dataproc-2.2 dereferenced to 3.5-dataproc-28", v)
+	}
+
+	// An image line real GCP does not accept is not invented here either.
+	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: cfg.ResourceName("gcpc-grpc-dp-vccimg-bad"), VirtualClusterConfig: vccWithVersion("dataproc-2.3")},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("CreateCluster(dataproc-2.3): got %v, want InvalidArgument", err)
+	}
+	return nil
+}
+
+// ensureGKEPrereqCluster creates a run-unique standard, Workload-Identity-enabled
+// GKE cluster through the official ClusterManager client and returns its
+// canonical name. AlreadyExists is success so repeated runs are idempotent.
+func ensureGKEPrereqCluster(ctx context.Context, cfg Config, prefix string) (string, error) {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return "", fmt.Errorf("new container client: %w", err)
+	}
+	defer client.Close()
+	name := cfg.ResourceName(prefix)
+	op, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name:                   name,
+			InitialNodeCount:       1,
+			WorkloadIdentityConfig: &containerpb.WorkloadIdentityConfig{WorkloadPool: cfg.Project + ".svc.id.goog"},
+		},
+	})
+	if err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			return containerNameRaw(cfg, name), nil
+		}
+		return "", fmt.Errorf("CreateCluster: %w", err)
+	}
+	// The emulator completes GKE operations inline (like real GKE's fast path),
+	// so a DONE operation is the create's completion signal.
+	if op.GetStatus() != containerpb.Operation_DONE {
+		return "", fmt.Errorf("CreateCluster operation status = %v, want DONE", op.GetStatus())
+	}
+	return containerNameRaw(cfg, name), nil
+}
+
+// gkePoolTargets is the two-pool target set the cross-API probes use: one pool
+// the caller shapes (config + autoscaler + zone) and one named-only pool
+// ("any node pool with the specified name is used").
+func gkePoolTargets(target string) []*dataprocpb.GkeNodePoolTarget {
+	return []*dataprocpb.GkeNodePoolTarget{
+		{
+			NodePool: target + "/nodePools/shaped-pool",
+			Roles: []dataprocpb.GkeNodePoolTarget_Role{
+				dataprocpb.GkeNodePoolTarget_DEFAULT,
+				dataprocpb.GkeNodePoolTarget_CONTROLLER,
+			},
+			NodePoolConfig: &dataprocpb.GkeNodePoolConfig{
+				Config:      &dataprocpb.GkeNodePoolConfig_GkeNodeConfig{MachineType: "n1-standard-4", LocalSsdCount: 1},
+				Autoscaling: &dataprocpb.GkeNodePoolConfig_GkeNodePoolAutoscalingConfig{MinNodeCount: 1, MaxNodeCount: 4},
+				Locations:   []string{dataprocRegion + "-a"},
+			},
+		},
+		{
+			NodePool: target + "/nodePools/named-pool",
+			Roles: []dataprocpb.GkeNodePoolTarget_Role{
+				dataprocpb.GkeNodePoolTarget_SPARK_DRIVER,
+				dataprocpb.GkeNodePoolTarget_SPARK_EXECUTOR,
+			},
+		},
+	}
+}
+
+// gkePoolVirtualCluster builds a virtual cluster naming pools on target.
+func gkePoolVirtualCluster(cfg Config, target string, pools []*dataprocpb.GkeNodePoolTarget) *dataprocpb.VirtualClusterConfig {
+	return &dataprocpb.VirtualClusterConfig{
+		StagingBucket: "dataproc-staging-" + cfg.Project,
+		InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+			KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+				Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+					GkeClusterConfig: &dataprocpb.GkeClusterConfig{
+						GkeClusterTarget: target,
+						NodePoolTarget:   pools,
+					},
+				},
+				KubernetesSoftwareConfig: &dataprocpb.KubernetesSoftwareConfig{
+					ComponentVersion: map[string]string{"SPARK": "3.5"},
+				},
+			},
+		},
+	}
+}
+
+// checkDPGKEVirtualClusterPools is the cross-API case users actually exercise:
+// a virtual cluster created through dataproc.v1 names two pools, and both are
+// visible through the GKE ClusterManager client with the requested shape, the
+// Dataproc auto labels and the documented autoscaler defaults; deleting the
+// virtual cluster leaves the pools in place (real GCP does not delete them).
+func checkDPGKEVirtualClusterPools(ctx context.Context, cfg Config) error {
+	target, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-grpc-dp-gkepools")
+	if err != nil {
+		return err
+	}
+	dp, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer dp.Close()
+	gke, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new container client: %w", err)
+	}
+	defer gke.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vcppools")
+	op, err := dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName:          id,
+			VirtualClusterConfig: gkePoolVirtualCluster(cfg, target, gkePoolTargets(target)),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+
+	pools, err := listGKEPools(ctx, gke, target)
+	if err != nil {
+		return err
+	}
+	shaped, ok := pools["shaped-pool"]
+	if !ok {
+		return fmt.Errorf("shaped-pool not created through the GKE API: %v", poolNames(pools))
+	}
+	if got := shaped.GetConfig().GetMachineType(); got != "n1-standard-4" {
+		return fmt.Errorf("shaped-pool machineType = %q", got)
+	}
+	if got := shaped.GetConfig().GetLocalSsdCount(); got != 1 {
+		return fmt.Errorf("shaped-pool localSsdCount = %d", got)
+	}
+	if got := shaped.GetAutoscaling().GetMaxNodeCount(); got != 4 {
+		return fmt.Errorf("shaped-pool autoscaling.maxNodeCount = %d, want 4", got)
+	}
+	if got := shaped.GetLocations(); len(got) != 1 || got[0] != dataprocRegion+"-a" {
+		return fmt.Errorf("shaped-pool locations = %v", got)
+	}
+	labels := shaped.GetConfig().GetLabels()
+	if labels["goog-dataproc-cluster-name"] != id {
+		return fmt.Errorf("shaped-pool goog-dataproc-cluster-name = %q, want %q", labels["goog-dataproc-cluster-name"], id)
+	}
+	if labels["goog-dataproc-location"] != dataprocRegion {
+		return fmt.Errorf("shaped-pool goog-dataproc-location = %q", labels["goog-dataproc-location"])
+	}
+	if labels["goog-dataproc-cluster-uuid"] == "" {
+		return fmt.Errorf("shaped-pool has no goog-dataproc-cluster-uuid label: %v", labels)
+	}
+	named, ok := pools["named-pool"]
+	if !ok {
+		return fmt.Errorf("named-pool not created through the GKE API: %v", poolNames(pools))
+	}
+	if got := named.GetAutoscaling(); got.GetMinNodeCount() != 1 || got.GetMaxNodeCount() != 10 {
+		return fmt.Errorf("named-pool autoscaler = %d/%d, want the 1/10 defaults", got.GetMinNodeCount(), got.GetMaxNodeCount())
+	}
+
+	// The virtual cluster's read never echoes nodePoolConfig: it is input-only.
+	got, err := dp.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	for _, t := range got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetNodePoolTarget() {
+		if t.GetNodePoolConfig() != nil {
+			return fmt.Errorf("nodePoolTarget %s echoes nodePoolConfig %v: it is input-only", t.GetNodePool(), t.GetNodePoolConfig())
+		}
+	}
+
+	// Pools outlive the virtual cluster: delete it, then read the pools again.
+	del, err := dp.DeleteCluster(ctx, &dataprocpb.DeleteClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("DeleteCluster: %w", err)
+	}
+	if err := del.Wait(ctx); err != nil {
+		return fmt.Errorf("delete Wait: %w", err)
+	}
+	for _, pool := range []string{"shaped-pool", "named-pool"} {
+		if _, err := gke.GetNodePool(ctx, &containerpb.GetNodePoolRequest{
+			Name: target + "/nodePools/" + pool,
+		}); err != nil {
+			return fmt.Errorf("node pool %s did not survive the virtual cluster delete: %w", pool, err)
+		}
+	}
+	return nil
+}
+
+// checkDPGKEVirtualClusterPoolReuse proves the pools belong to the GKE cluster,
+// not the virtual cluster: a second virtual cluster naming the same pools adopts
+// them, so the pool set through the GKE API does not grow.
+func checkDPGKEVirtualClusterPoolReuse(ctx context.Context, cfg Config) error {
+	target, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-grpc-dp-gkereuse")
+	if err != nil {
+		return err
+	}
+	dp, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer dp.Close()
+	gke, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new container client: %w", err)
+	}
+	defer gke.Close()
+
+	create := func(name string) error {
+		op, err := dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+			ProjectId: cfg.Project,
+			Region:    dataprocRegion,
+			Cluster: &dataprocpb.Cluster{
+				ClusterName:          name,
+				VirtualClusterConfig: gkePoolVirtualCluster(cfg, target, gkePoolTargets(target)),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("CreateCluster %s: %w", name, err)
+		}
+		if _, err := op.Wait(ctx); err != nil {
+			return fmt.Errorf("CreateCluster %s wait: %w", name, err)
+		}
+		return nil
+	}
+	// The two virtual clusters are created sequentially: the second one adopts
+	// the pools the first reconciled.
+	first := cfg.ResourceName("gcpc-grpc-dp-gkea")
+	if err := create(first); err != nil {
+		return err
+	}
+	before, err := listGKEPools(ctx, gke, target)
+	if err != nil {
+		return err
+	}
+	second := cfg.ResourceName("gcpc-grpc-dp-gkeb")
+	if err := create(second); err != nil {
+		return err
+	}
+	after, err := listGKEPools(ctx, gke, target)
+	if err != nil {
+		return err
+	}
+	if len(after) != len(before) {
+		return fmt.Errorf("second virtual cluster duplicated pools: %v -> %v", poolNames(before), poolNames(after))
+	}
+	for _, pool := range []string{"shaped-pool", "named-pool"} {
+		if _, ok := after[pool]; !ok {
+			return fmt.Errorf("pool %s disappeared after the second virtual cluster: %v", pool, poolNames(after))
+		}
+	}
+	return nil
+}
+
+// checkDPGKEVirtualClusterRules asserts the documented GKE placement/pool rules
+// as client-visible gRPC codes, and the namespace-ownership conflict.
+func checkDPGKEVirtualClusterRules(ctx context.Context, cfg Config) error {
+	target, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-grpc-dp-gkerules")
+	if err != nil {
+		return err
+	}
+	dp, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer dp.Close()
+
+	missing := "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/" + cfg.ResourceName("gcpc-grpc-missing-gke")
+	cases := []struct {
+		name  string
+		pools []*dataprocpb.GkeNodePoolTarget
+		tgt   string
+		code  codes.Code
+		text  string
+	}{
+		{
+			// A bare pool id is not a resource name: real GCP rejects it with the
+			// documented pattern (DPG44).
+			name: "short node pool name",
+			pools: []*dataprocpb.GkeNodePoolTarget{{
+				NodePool: "bare-pool",
+				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+			}},
+			code: codes.InvalidArgument, text: "must conform to pattern",
+		},
+		{
+			name: "missing DEFAULT role",
+			pools: []*dataprocpb.GkeNodePoolTarget{{
+				NodePool: target + "/nodePools/driver-only",
+				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_SPARK_DRIVER},
+			}},
+			code: codes.InvalidArgument, text: "DEFAULT",
+		},
+		{
+			name: "two pools claim one role",
+			pools: []*dataprocpb.GkeNodePoolTarget{
+				{NodePool: target + "/nodePools/role-a", Roles: []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT}},
+				{NodePool: target + "/nodePools/role-b", Roles: []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT}},
+			},
+			code: codes.InvalidArgument, text: "only one nodePoolTarget",
+		},
+		{
+			name: "pool outside the region",
+			pools: []*dataprocpb.GkeNodePoolTarget{{
+				NodePool: target + "/nodePools/wrong-zone",
+				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+				NodePoolConfig: &dataprocpb.GkeNodePoolConfig{
+					Locations: []string{"us-east1-b"},
+				},
+			}},
+			code: codes.InvalidArgument, text: "not a zone in region",
+		},
+		{
+			name:  "unknown GKE cluster",
+			pools: nil,
+			tgt:   missing,
+			code:  codes.NotFound, text: "",
+		},
+	}
+	for i, tc := range cases {
+		tgt := tc.tgt
+		if tgt == "" {
+			tgt = target
+		}
+		_, err := dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+			ProjectId: cfg.Project,
+			Region:    dataprocRegion,
+			Cluster: &dataprocpb.Cluster{
+				ClusterName:          cfg.ResourceName(fmt.Sprintf("gcpc-grpc-dp-gkerule-%d", i)),
+				VirtualClusterConfig: gkePoolVirtualCluster(cfg, tgt, tc.pools),
+			},
+		})
+		if err == nil {
+			// A rejected request is synchronous; a nil error means it was
+			// accepted, which is the bug this probe guards.
+			return fmt.Errorf("%s: CreateCluster was accepted, want %v", tc.name, tc.code)
+		}
+		if status.Code(err) != tc.code {
+			return fmt.Errorf("%s: got %v (%v), want %v", tc.name, status.Code(err), err, tc.code)
+		}
+		if tc.text != "" && !strings.Contains(status.Convert(err).Message(), tc.text) {
+			return fmt.Errorf("%s: message %q does not mention %q", tc.name, status.Convert(err).Message(), tc.text)
+		}
+	}
+
+	// A kubernetesNamespace is owned by one live virtual cluster at a time.
+	namespace := cfg.ResourceName("gcpc-dp-ns")
+	owned := cfg.ResourceName("gcpc-grpc-dp-gkens-a")
+	vcc := gkePoolVirtualCluster(cfg, target, gkePoolTargets(target))
+	vcc.GetKubernetesClusterConfig().KubernetesNamespace = namespace
+	op, err := dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: owned, VirtualClusterConfig: vcc},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateCluster %s: %w", owned, err)
+	}
+	if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("CreateCluster %s wait: %w", owned, err)
+	}
+	duplicate := gkePoolVirtualCluster(cfg, target, gkePoolTargets(target))
+	duplicate.GetKubernetesClusterConfig().KubernetesNamespace = namespace
+	_, err = dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: cfg.ResourceName("gcpc-grpc-dp-gkens-b"), VirtualClusterConfig: duplicate},
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		return fmt.Errorf("duplicate kubernetesNamespace: got %v, want FailedPrecondition", err)
+	}
+	if !strings.Contains(status.Convert(err).Message(), "already used by Dataproc virtual cluster") {
+		return fmt.Errorf("duplicate namespace message %q does not name the owning cluster", status.Convert(err).Message())
+	}
+	return nil
+}
+
+// checkDPGKEVirtualClusterPoolShapeConflict is the gRPC half of the ERROR-status
+// path: a nodePoolConfig that disagrees with an existing pool does not reject the
+// request, it fails the provisioned cluster. The create's LRO completes
+// successfully and its response cluster is persisted in ERROR with a
+// status.detail naming the pool and the field that differed, the documented
+// shape (README-GCP.md §Dataproc workload placement, wire-contract §5). The REST
+// half is TestSDKDataprocOnGKEConflictingPoolShape in the sdk-dataproc suite.
+func checkDPGKEVirtualClusterPoolShapeConflict(ctx context.Context, cfg Config) error {
+	target, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-grpc-dp-gkeconflict")
+	if err != nil {
+		return err
+	}
+	dp, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer dp.Close()
+	gke, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new container client: %w", err)
+	}
+	defer gke.Close()
+
+	// An existing pool whose shape the virtual cluster's nodePoolConfig
+	// contradicts. It is created through the GKE API, so the mismatch is a
+	// verification failure rather than a create-time validation error.
+	pool := "taken-pool"
+	if _, err := gke.CreateNodePool(ctx, &containerpb.CreateNodePoolRequest{
+		Parent: target,
+		NodePool: &containerpb.NodePool{
+			Name:             pool,
+			InitialNodeCount: 1,
+			Config:           &containerpb.NodeConfig{MachineType: "e2-medium"},
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateNodePool: %w", err)
+	}
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vccconflict")
+	op, err := dp.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: id,
+			VirtualClusterConfig: gkePoolVirtualCluster(cfg, target, []*dataprocpb.GkeNodePoolTarget{{
+				NodePool: target + "/nodePools/" + pool,
+				Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+				NodePoolConfig: &dataprocpb.GkeNodePoolConfig{
+					Config: &dataprocpb.GkeNodePoolConfig_GkeNodeConfig{MachineType: "n1-standard-4"},
+				},
+			}}),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	// The reconciliation failure lands on the cluster, not on the operation:
+	// Wait must succeed and still return the ERROR cluster.
+	cluster, err := op.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("operation Wait: %w (the pool-shape failure belongs on the cluster, not the LRO)", err)
+	}
+	if got := cluster.GetStatus().GetState(); got != dataprocpb.ClusterStatus_ERROR {
+		return fmt.Errorf("cluster state = %v, want ERROR", got)
+	}
+	detail := cluster.GetStatus().GetDetail()
+	if !strings.Contains(detail, pool) {
+		return fmt.Errorf("status.detail %q does not name the pool %q", detail, pool)
+	}
+	if !strings.Contains(detail, "machineType") {
+		return fmt.Errorf("status.detail %q does not name the differing field machineType", detail)
+	}
+	return nil
+}
+
+// listGKEPools lists target's pools keyed by pool id.
+func listGKEPools(ctx context.Context, client *container.ClusterManagerClient, target string) (map[string]*containerpb.NodePool, error) {
+	resp, err := client.ListNodePools(ctx, &containerpb.ListNodePoolsRequest{Parent: target})
+	if err != nil {
+		return nil, fmt.Errorf("ListNodePools: %w", err)
+	}
+	out := map[string]*containerpb.NodePool{}
+	for _, p := range resp.GetNodePools() {
+		out[p.GetName()] = p
+	}
+	return out, nil
+}
+
+func poolNames(pools map[string]*containerpb.NodePool) []string {
+	out := make([]string, 0, len(pools))
+	for _, p := range pools {
+		out = append(out, p.GetName())
+	}
+	return out
+}
+
 // Check 16: a cluster's auxiliaryServicesConfig.metastoreConfig round-trips over
 // gRPC. The attachment is validated against the Metastore control plane at
 // create, so a run-unique service is created first.
@@ -687,6 +1406,9 @@ func checkDPMetastoreAttachment(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new metastore client: %w", err)
 	}
 	defer mc.Close()
+	if _, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-gke"); err != nil {
+		return err
+	}
 	svcName, err := ensureMetastoreService(ctx, mc, cfg)
 	if err != nil {
 		return err
@@ -722,6 +1444,90 @@ func checkDPMetastoreAttachment(ctx context.Context, cfg Config) error {
 	ref := got.GetVirtualClusterConfig().GetAuxiliaryServicesConfig().GetMetastoreConfig().GetDataprocMetastoreService()
 	if ref != svcName {
 		return fmt.Errorf("metastore attachment = %q, want %q", ref, svcName)
+	}
+	return nil
+}
+
+// checkDPHistoryServerAttachment covers
+// virtualClusterConfig.auxiliaryServicesConfig.sparkHistoryServerConfig: the
+// referenced Dataproc cluster must exist (a missing one is NotFound) and a
+// successful create returns the documented spark.eventLog.* workload
+// properties. The PHS source is an ordinary Dataproc cluster, so it is created
+// first (run-uniquely, AlreadyExists tolerated on a long-lived emulator).
+func checkDPHistoryServerAttachment(ctx context.Context, cfg Config) error {
+	cc, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer cc.Close()
+
+	phsID := cfg.ResourceName("gcpc-grpc-dp-phs-src")
+	op, err := cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: phsID,
+			Config: &dataprocpb.ClusterConfig{
+				SoftwareConfig: &dataprocpb.SoftwareConfig{ImageVersion: "2.2.0"},
+			},
+		},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("create PHS source cluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("PHS source operation Wait: %w", err)
+	}
+	phsRef := "projects/" + cfg.Project + "/regions/" + dataprocRegion + "/clusters/" + phsID
+
+	// A reference to a cluster that does not exist is NotFound.
+	missing := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+	missing.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		SparkHistoryServerConfig: &dataprocpb.SparkHistoryServerConfig{
+			DataprocCluster: "projects/" + cfg.Project + "/regions/" + dataprocRegion +
+				"/clusters/" + cfg.ResourceName("gcpc-grpc-dp-phs-missing"),
+		},
+	}
+	if _, err := cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: cfg.ResourceName("gcpc-grpc-dp-phs-bad"), VirtualClusterConfig: missing},
+	}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("missing PHS cluster: got %v, want NotFound", err)
+	}
+
+	id := cfg.ResourceName("gcpc-grpc-dp-phs")
+	vcc := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+	vcc.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		SparkHistoryServerConfig: &dataprocpb.SparkHistoryServerConfig{DataprocCluster: phsRef},
+	}
+	op, err = cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vcc},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+	got, err := cc.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if ref := got.GetVirtualClusterConfig().GetAuxiliaryServicesConfig().GetSparkHistoryServerConfig().GetDataprocCluster(); ref != phsRef {
+		return fmt.Errorf("spark history server ref = %q, want %q", ref, phsRef)
+	}
+	props := got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetKubernetesSoftwareConfig().GetProperties()
+	if props["spark:spark.eventLog.enabled"] != "true" {
+		return fmt.Errorf("spark.eventLog.enabled = %q, want true", props["spark:spark.eventLog.enabled"])
+	}
+	wantDir := "gs://dataproc-staging-probe/" + id + "/spark-job-history"
+	if props["spark:spark.eventLog.dir"] != wantDir {
+		return fmt.Errorf("spark.eventLog.dir = %q, want %q", props["spark:spark.eventLog.dir"], wantDir)
 	}
 	return nil
 }

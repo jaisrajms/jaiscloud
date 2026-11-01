@@ -2,6 +2,9 @@ package dataproc
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +33,118 @@ func testNR(params map[string]any) *model.NormalizedRequest {
 func newProvider(t *testing.T) *Provider {
 	t.Helper()
 	return NewProvider(core.NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore()), "proj")
+}
+
+// gceBody is the minimal create body: a cluster must carry exactly one of
+// config or virtualClusterConfig, so a test that is not about the placement
+// sends the Compute-Engine shape.
+func gceBody(clusterName string, labels map[string]any) map[string]any {
+	body := map[string]any{
+		"projectId":   "proj",
+		"clusterName": clusterName,
+		"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+	}
+	if labels != nil {
+		body["labels"] = labels
+	}
+	return body
+}
+
+// decodeIAM builds the NormalizedRequest the adapter would hand the provider for
+// a workflowTemplates IAM POST.
+func decodeIAM(t *testing.T, verb, resourceID, body string) *model.NormalizedRequest {
+	t.Helper()
+	path := "/v1/projects/proj/regions/us-central1/workflowTemplates/" + resourceID + ":" + verb
+	nr, err := NewCodec().Decode(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)), []byte(body))
+	if err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return nr
+}
+
+func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.core.CreateWorkflowTemplate(ctx, "proj", "us-central1", core.WorkflowTemplateInput{
+		ID: "t1",
+		Definition: map[string]any{
+			"id":        "t1",
+			"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "c"}},
+			"jobs": []any{
+				map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateWorkflowTemplate: %v", err)
+	}
+
+	// An unset policy is the empty default.
+	resp, err := p.WorkflowTemplateGetIamPolicy(ctx, decodeIAM(t, "getIamPolicy", "t1", "{}"))
+	if err != nil {
+		t.Fatalf("getIamPolicy: %v", err)
+	}
+	if resp.Data["version"] != 1 {
+		t.Fatalf("default version = %v, want 1", resp.Data["version"])
+	}
+
+	body := `{"policy":{"bindings":[{"role":"roles/dataproc.worker","members":["user:a@example.com"],` +
+		`"condition":{"title":"expires-soon","expression":"request.time < timestamp(\"2027-01-01T00:00:00Z\")"}}]}}`
+	set, err := p.WorkflowTemplateSetIamPolicy(ctx, decodeIAM(t, "setIamPolicy", "t1", body))
+	if err != nil {
+		t.Fatalf("setIamPolicy: %v", err)
+	}
+	if set.Data["version"] != 3 {
+		t.Fatalf("set version = %v, want 3", set.Data["version"])
+	}
+
+	got, err := p.WorkflowTemplateGetIamPolicy(ctx, decodeIAM(t, "getIamPolicy", "t1", "{}"))
+	if err != nil {
+		t.Fatalf("getIamPolicy: %v", err)
+	}
+	if got.Data["version"] != 3 {
+		t.Fatalf("read-back version = %v, want 3", got.Data["version"])
+	}
+	bindings, _ := got.Data["bindings"].([]any)
+	if len(bindings) != 1 {
+		t.Fatalf("bindings = %v", got.Data["bindings"])
+	}
+	bm := bindings[0].(map[string]any)
+	cm, _ := bm["condition"].(map[string]any)
+	if cm["title"] != "expires-soon" {
+		t.Fatalf("condition did not round-trip: %v", bm)
+	}
+
+	perms, err := p.WorkflowTemplateTestIamPermissions(ctx, decodeIAM(t, "testIamPermissions", "t1",
+		`{"permissions":["dataproc.workflowTemplates.get","dataproc.workflowTemplates.update"]}`))
+	if err != nil {
+		t.Fatalf("testIamPermissions: %v", err)
+	}
+	gotPerms, _ := perms.Data["permissions"].([]string)
+	if len(gotPerms) != 2 {
+		t.Fatalf("permissions = %v", perms.Data["permissions"])
+	}
+
+	// A missing template is NotFound for every verb.
+	for _, verb := range []string{"getIamPolicy", "setIamPolicy", "testIamPermissions"} {
+		body := "{}"
+		if verb == "testIamPermissions" {
+			body = `{"permissions":["dataproc.workflowTemplates.get"]}`
+		}
+		nr := decodeIAM(t, verb, "absent", body)
+		var err error
+		switch verb {
+		case "getIamPolicy":
+			_, err = p.WorkflowTemplateGetIamPolicy(ctx, nr)
+		case "setIamPolicy":
+			_, err = p.WorkflowTemplateSetIamPolicy(ctx, nr)
+		default:
+			_, err = p.WorkflowTemplateTestIamPermissions(ctx, nr)
+		}
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 404 {
+			t.Fatalf("%s(absent) = %v, want 404", verb, err)
+		}
+	}
 }
 
 func TestCreateCluster_LRO(t *testing.T) {
@@ -98,12 +213,31 @@ func TestCreateCluster_LRO(t *testing.T) {
 	}
 }
 
+// TestCreateCluster_RequiresPlacement verifies Discovery's "Exactly one of
+// ClusterConfig or VirtualClusterConfig must be specified": a create carrying
+// neither is 400 InvalidArgument and leaves no cluster behind.
+func TestCreateCluster_RequiresPlacement(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+	if _, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"})); err == nil {
+		t.Fatal("a rejected create must not persist a cluster")
+	}
+}
+
 func TestCreateCluster_AlreadyExists(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	body := map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}
 	if _, err := p.CreateCluster(ctx, testNR(body)); err != nil {
 		t.Fatalf("first create: %v", err)
@@ -112,6 +246,74 @@ func TestCreateCluster_AlreadyExists(t *testing.T) {
 	pe, ok := err.(*model.ProviderError)
 	if !ok || pe.HTTPStatus != 409 {
 		t.Fatalf("expected 409 AlreadyExists, got %v", err)
+	}
+}
+
+// TestGetCluster_GCEConfigDefaults pins the wire shape a real Dataproc read
+// always carries for a Compute-Engine cluster, even when the create request sent
+// no config at all: config.softwareConfig.imageVersion plus the documented
+// instance-group and zone defaults. The hashicorp/google provider reads
+// config.softwareConfig.imageVersion without a nil check on the read-back of a
+// google_dataproc_cluster with a plain cluster_config, so leaving it absent
+// panics the provider (DPG38).
+func TestGetCluster_GCEConfigDefaults(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	// An empty cluster_config is the shape a real client sends when it pins
+	// nothing (Terraform omits every computed field, gcloud sends the flags it
+	// was given); the service fills in the rest.
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":   "proj",
+			"clusterName": "c1",
+			"config":      map[string]any{},
+		},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	// Compare the wire body: the response is JSON-encoded, so this also pins the
+	// field names and numeric shapes clients receive.
+	raw, err := json.Marshal(c.Data)
+	if err != nil {
+		t.Fatalf("marshal cluster: %v", err)
+	}
+	var body struct {
+		Config struct {
+			SoftwareConfig struct {
+				ImageVersion string `json:"imageVersion"`
+			} `json:"softwareConfig"`
+			GceClusterConfig struct {
+				ZoneUri string `json:"zoneUri"`
+			} `json:"gceClusterConfig"`
+			MasterConfig struct {
+				NumInstances   int    `json:"numInstances"`
+				MachineTypeUri string `json:"machineTypeUri"`
+			} `json:"masterConfig"`
+			WorkerConfig struct {
+				NumInstances int `json:"numInstances"`
+			} `json:"workerConfig"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("unmarshal cluster: %v", err)
+	}
+	if body.Config.SoftwareConfig.ImageVersion == "" {
+		t.Fatalf("config.softwareConfig.imageVersion missing: %s", raw)
+	}
+	if body.Config.GceClusterConfig.ZoneUri == "" {
+		t.Fatalf("config.gceClusterConfig.zoneUri missing: %s", raw)
+	}
+	if body.Config.MasterConfig.NumInstances != 1 || body.Config.WorkerConfig.NumInstances != 2 {
+		t.Fatalf("instance group counts = %d/%d, want 1/2", body.Config.MasterConfig.NumInstances, body.Config.WorkerConfig.NumInstances)
+	}
+	wantMachine := "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-a/machineTypes/n1-standard-4"
+	if body.Config.MasterConfig.MachineTypeUri != wantMachine {
+		t.Fatalf("masterConfig.machineTypeUri = %q, want %q", body.Config.MasterConfig.MachineTypeUri, wantMachine)
 	}
 }
 
@@ -191,7 +393,7 @@ func TestUpdateClusterVsStopClusterConcurrent_NoLostUpdate(t *testing.T) {
 	ctx := context.Background()
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1", "labels": map[string]any{"env": "dev"}},
+		"body":   gceBody("c1", map[string]any{"env": "dev"}),
 	})); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -237,7 +439,7 @@ func TestDeleteCluster(t *testing.T) {
 	ctx := context.Background()
 	_, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -256,7 +458,7 @@ func TestStartStopCluster(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	if _, err := p.StopCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"})); err != nil {
 		t.Fatalf("stop: %v", err)
@@ -307,7 +509,7 @@ func TestSubmitJob_MockProgression(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -348,7 +550,7 @@ func TestUpdateJob_Labels(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	if _, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -392,7 +594,7 @@ func TestSubmitJob_SchedulingRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -425,7 +627,7 @@ func TestSubmitJob_UnsupportedJobTypeFailsLoud(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -457,7 +659,7 @@ func TestSubmitJob_MissingPlacement(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 
 	for name, job := range map[string]map[string]any{
@@ -487,7 +689,7 @@ func TestSubmitJob_UnsupportedExtraTypes(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 
 	for _, typ := range []string{"prestoJob", "trinoJob", "flinkJob"} {
@@ -528,7 +730,7 @@ func TestSubmitJob_SparkSqlJobAccepted(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
@@ -555,7 +757,7 @@ func TestListJobs(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	_, _ = p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -587,7 +789,7 @@ func TestListJobs_FilterAndMatcher(t *testing.T) {
 	for _, c := range []string{"c1", "c2"} {
 		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 			"region": "us-central1",
-			"body":   map[string]any{"projectId": "proj", "clusterName": c},
+			"body":   gceBody(c, nil),
 		})); err != nil {
 			t.Fatalf("CreateCluster(%s): %v", c, err)
 		}
@@ -662,7 +864,7 @@ func TestListClusters_FilterAndPageSize(t *testing.T) {
 		t.Helper()
 		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 			"region": "us-central1",
-			"body":   map[string]any{"projectId": "proj", "clusterName": name, "labels": labels},
+			"body":   gceBody(name, labels),
 		})); err != nil {
 			t.Fatalf("CreateCluster(%s): %v", name, err)
 		}
@@ -720,7 +922,7 @@ func TestSubmitJobAsOperation(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJobAsOperation(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -799,7 +1001,7 @@ func TestOperationTTLSweep(t *testing.T) {
 	// Creating a cluster mints an LRO, which triggers the sweep.
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	})); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
@@ -875,7 +1077,7 @@ func TestJobSubstateTerminalOmitted(t *testing.T) {
 	ctx := context.Background()
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	})); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
@@ -943,5 +1145,79 @@ func TestListNonIntegerPageSize(t *testing.T) {
 		if _, err := call(testNR(map[string]any{"region": "us-central1", "pageSize": "5"})); err != nil {
 			t.Errorf("%s pageSize=5: %v", name, err)
 		}
+	}
+}
+
+// TestCreateCluster_PHSHistoryServer verifies the REST create path parses
+// sparkHistoryServerConfig.dataprocCluster, validates it against the referenced
+// Dataproc cluster, and returns the documented spark.eventLog.* properties.
+func TestCreateCluster_PHSHistoryServer(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":   "proj",
+			"clusterName": "phs",
+			"config":      map[string]any{"softwareConfig": map[string]any{"imageVersion": "2.2.0"}},
+		},
+	})); err != nil {
+		t.Fatalf("create PHS source: %v", err)
+	}
+
+	ref := "projects/proj/regions/us-central1/clusters/phs"
+	vcc := map[string]any{
+		"stagingBucket": "dataproc-staging-proj",
+		"kubernetesClusterConfig": map[string]any{
+			"gkeClusterConfig": map[string]any{
+				"gkeClusterTarget": "projects/proj/locations/us-central1/clusters/gke-1",
+			},
+		},
+		"auxiliaryServicesConfig": map[string]any{
+			"sparkHistoryServerConfig": map[string]any{"dataprocCluster": ref},
+		},
+	}
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-phs",
+			"virtualClusterConfig": vcc,
+		},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "gke-phs"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	gotVCC, _ := c.Data["virtualClusterConfig"].(map[string]any)
+	kcc, _ := gotVCC["kubernetesClusterConfig"].(map[string]any)
+	software, _ := kcc["kubernetesSoftwareConfig"].(map[string]any)
+	props, _ := software["properties"].(map[string]any)
+	if props["spark:spark.eventLog.enabled"] != "true" {
+		t.Fatalf("spark.eventLog.enabled = %v", props["spark:spark.eventLog.enabled"])
+	}
+	if props["spark:spark.eventLog.dir"] != "gs://dataproc-staging-proj/gke-phs/spark-job-history" {
+		t.Fatalf("spark.eventLog.dir = %v", props["spark:spark.eventLog.dir"])
+	}
+
+	// A missing PHS cluster is a 404 through the REST error mapping.
+	vcc["auxiliaryServicesConfig"] = map[string]any{
+		"sparkHistoryServerConfig": map[string]any{
+			"dataprocCluster": "projects/proj/regions/us-central1/clusters/missing",
+		},
+	}
+	_, err = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-missing-phs",
+			"virtualClusterConfig": vcc,
+		},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 404 || pe.Code != "NotFound" {
+		t.Fatalf("missing PHS cluster: expected 404 NotFound, got %v", err)
 	}
 }

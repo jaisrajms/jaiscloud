@@ -2,8 +2,18 @@ package grpcconformance
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"strings"
+	"time"
 
+	iamadmin "cloud.google.com/go/iam/admin/apiv1"
+	iamadminpb "cloud.google.com/go/iam/admin/apiv1/adminpb"
 	iam "cloud.google.com/go/iam/apiv1"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
@@ -26,6 +36,149 @@ func iamChecks() []Check {
 		{Service: "iam", RPC: "SetIamPolicy", Method: "SetIamPolicy", KeyField: "role+member binding round-trips via GetIamPolicy", Run: checkIAMSetPolicy},
 		{Service: "iam", RPC: "TestIamPermissions", Method: "TestIamPermissions", KeyField: "requested permissions echoed back", Run: checkIAMTestPermissions},
 	}
+}
+
+// iamKeyChecks covers the IAM Admin API's key surface
+// (google.iam.admin.v1.IAM) through the official admin client, including
+// projects.serviceAccounts.keys.upload (DC27).
+func iamKeyChecks() []Check {
+	return []Check{
+		{Service: "iam", RPC: "UploadServiceAccountKey", Method: "UploadServiceAccountKey",
+			KeyField: "USER_MANAGED/USER_PROVIDED key, publicKeyData on get, listed, deletable",
+			Run:      checkIAMUploadKey},
+	}
+}
+
+// newIAMAdminClient dials the IAM Admin RPC service at the emulator with
+// insecure transport and no authentication, mirroring the other official
+// clients in this suite.
+func newIAMAdminClient(ctx context.Context, cfg Config) (*iamadmin.IamClient, error) {
+	return iamadmin.NewIamClient(ctx,
+		option.WithEndpoint(cfg.GRPCAddr()),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		option.WithoutAuthentication(),
+	)
+}
+
+// iamUploadCertificatePEM builds a self-signed X.509 v3 certificate around a
+// fresh 2048-bit RSA public key. projects.serviceAccounts.keys.upload documents
+// exactly that envelope for publicKeyData, and no private key is needed: the
+// emulator stores the public material only.
+func iamUploadCertificatePEM() ([]byte, *rsa.PublicKey, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "jaiscloud-grpc-conformance-upload"},
+		NotBefore:             time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2120, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), &priv.PublicKey, nil
+}
+
+// checkIAMUploadKey uploads a caller-managed public key to a throwaway service
+// account, then proves the key round-trips: get carries publicKeyData for the
+// uploaded key, list includes it classified USER_MANAGED/USER_PROVIDED, and
+// delete removes it.
+func checkIAMUploadKey(ctx context.Context, cfg Config) (err error) {
+	client, err := newIAMAdminClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new IAM admin client: %w", err)
+	}
+	defer client.Close()
+
+	parent := "projects/" + cfg.Project
+	accountID := strings.ToLower(cfg.ResourceName("gcpc-sa-up"))
+	sa, err := client.CreateServiceAccount(ctx, &iamadminpb.CreateServiceAccountRequest{
+		Name:      parent,
+		AccountId: accountID,
+		ServiceAccount: &iamadminpb.ServiceAccount{
+			DisplayName: "gRPC conformance key upload",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateServiceAccount(%s/%s): %w", parent, accountID, err)
+	}
+	defer func() {
+		derr := client.DeleteServiceAccount(ctx, &iamadminpb.DeleteServiceAccountRequest{Name: sa.GetName()})
+		if derr != nil && status.Code(derr) != codes.NotFound && err == nil {
+			err = fmt.Errorf("DeleteServiceAccount(%s): %w", sa.GetName(), derr)
+		}
+	}()
+
+	certPEM, wantPub, err := iamUploadCertificatePEM()
+	if err != nil {
+		return fmt.Errorf("build upload certificate: %w", err)
+	}
+	uploaded, err := client.UploadServiceAccountKey(ctx, &iamadminpb.UploadServiceAccountKeyRequest{
+		Name:          sa.GetName(),
+		PublicKeyData: certPEM,
+	})
+	if err != nil {
+		return fmt.Errorf("UploadServiceAccountKey(%s): %w", sa.GetName(), err)
+	}
+	if uploaded.GetKeyType() != iamadminpb.ListServiceAccountKeysRequest_USER_MANAGED {
+		return fmt.Errorf("uploaded keyType = %v, want USER_MANAGED", uploaded.GetKeyType())
+	}
+	if uploaded.GetKeyOrigin() != iamadminpb.ServiceAccountKeyOrigin_USER_PROVIDED {
+		return fmt.Errorf("uploaded keyOrigin = %v, want USER_PROVIDED", uploaded.GetKeyOrigin())
+	}
+	if uploaded.GetKeyAlgorithm() != iamadminpb.ServiceAccountKeyAlgorithm_KEY_ALG_RSA_2048 {
+		return fmt.Errorf("uploaded keyAlgorithm = %v, want KEY_ALG_RSA_2048", uploaded.GetKeyAlgorithm())
+	}
+	if !strings.HasPrefix(uploaded.GetName(), sa.GetName()+"/keys/") {
+		return fmt.Errorf("uploaded key name = %q, want a key under %s", uploaded.GetName(), sa.GetName())
+	}
+	if len(uploaded.GetPrivateKeyData()) != 0 || len(uploaded.GetPublicKeyData()) != 0 {
+		return fmt.Errorf("upload response carried key material (private=%d public=%d bytes)",
+			len(uploaded.GetPrivateKeyData()), len(uploaded.GetPublicKeyData()))
+	}
+
+	got, err := client.GetServiceAccountKey(ctx, &iamadminpb.GetServiceAccountKeyRequest{Name: uploaded.GetName()})
+	if err != nil {
+		return fmt.Errorf("GetServiceAccountKey(%s): %w", uploaded.GetName(), err)
+	}
+	block, _ := pem.Decode(got.GetPublicKeyData())
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return fmt.Errorf("uploaded key publicKeyData is not a PUBLIC KEY PEM block")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse uploaded publicKeyData: %w", err)
+	}
+	if pub.(*rsa.PublicKey).N.Cmp(wantPub.N) != 0 {
+		return fmt.Errorf("uploaded key publicKeyData does not describe the uploaded key")
+	}
+
+	list, err := client.ListServiceAccountKeys(ctx, &iamadminpb.ListServiceAccountKeysRequest{Name: sa.GetName()})
+	if err != nil {
+		return fmt.Errorf("ListServiceAccountKeys(%s): %w", sa.GetName(), err)
+	}
+	found := false
+	for _, k := range list.GetKeys() {
+		if k.GetName() == uploaded.GetName() {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("ListServiceAccountKeys(%s) dropped the uploaded key %q", sa.GetName(), uploaded.GetName())
+	}
+
+	if err := client.DeleteServiceAccountKey(ctx, &iamadminpb.DeleteServiceAccountKeyRequest{Name: uploaded.GetName()}); err != nil {
+		return fmt.Errorf("DeleteServiceAccountKey(%s): %w", uploaded.GetName(), err)
+	}
+	if _, err := client.GetServiceAccountKey(ctx, &iamadminpb.GetServiceAccountKeyRequest{Name: uploaded.GetName()}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetServiceAccountKey after delete = %v, want NotFound", err)
+	}
+	return nil
 }
 
 // newIAMPolicyClient dials the standalone IAMPolicy RPC service at the emulator

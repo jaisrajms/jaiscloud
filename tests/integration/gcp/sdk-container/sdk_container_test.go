@@ -26,6 +26,7 @@ package sdk_container_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -148,6 +149,20 @@ func TestSDKContainerClusterLifecycle(t *testing.T) {
 	require.Equal(t, "default-pool", got.NodePools[0].Name)
 	require.Equal(t, "RUNNING", got.NodePools[0].Status)
 
+	// DPG37: real GKE always renders these nested messages, and clients (the
+	// hashicorp/google provider dereferences all four) need them present.
+	require.NotNil(t, got.NetworkConfig)
+	require.Equal(t, "projects/"+projectID()+"/global/networks/default", got.NetworkConfig.Network)
+	require.Equal(t, "projects/"+projectID()+"/regions/"+locationID()+"/subnetworks/default", got.NetworkConfig.Subnetwork)
+	require.NotNil(t, got.ShieldedNodes)
+	require.True(t, got.ShieldedNodes.Enabled)
+	require.NotNil(t, got.DefaultMaxPodsConstraint)
+	require.EqualValues(t, 110, got.DefaultMaxPodsConstraint.MaxPodsPerNode)
+	require.NotNil(t, got.LegacyAbac)
+	require.False(t, got.LegacyAbac.Enabled)
+	require.Equal(t, "logging.googleapis.com/kubernetes", got.LoggingService)
+	require.Equal(t, "monitoring.googleapis.com/kubernetes", got.MonitoringService)
+
 	list, err := svc.Projects.Locations.Clusters.List(parent()).Do()
 	require.NoError(t, err)
 	require.Len(t, list.Clusters, 1)
@@ -166,6 +181,100 @@ func TestSDKContainerClusterLifecycle(t *testing.T) {
 	require.Equal(t, "DONE", delOp.Status)
 	_, err = svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
 	requireAPIError(t, err, 404)
+}
+
+// TestSDKContainerClusterCreateWithInlineNodePools pins create-time pools: a
+// Cluster body that carries node_pools materializes them in the same call
+// (real GKE behavior) instead of silently getting a lone default-pool.
+func TestSDKContainerClusterCreateWithInlineNodePools(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	id := unique("c")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name: id,
+			NodePools: []*container.NodePool{
+				{Name: "pool-a", InitialNodeCount: 2, Config: &container.NodeConfig{MachineType: "e2-medium"}},
+				{Name: "pool-b", InitialNodeCount: 1},
+			},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.NodePools, 2)
+	require.Equal(t, "pool-a", got.NodePools[0].Name)
+	require.Equal(t, "pool-b", got.NodePools[1].Name)
+	for _, p := range got.NodePools {
+		require.Equal(t, "RUNNING", p.Status)
+		require.Equal(t, nodePoolName(id, p.Name), p.SelfLink)
+		require.Equal(t, got.CurrentMasterVersion, p.Version)
+	}
+	require.Equal(t, "e2-medium", got.NodePools[0].Config.MachineType)
+
+	// The materialized pools are full members of the cluster's node-pool
+	// collection: listable and individually addressable afterwards.
+	pools, err := svc.Projects.Locations.Clusters.NodePools.List(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, pools.NodePools, 2)
+	pool, err := svc.Projects.Locations.Clusters.NodePools.Get(nodePoolName(id, "pool-b")).Do()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), pool.InitialNodeCount)
+
+	// A pool name supplied twice is rejected, as real GKE does.
+	dup := unique("c")
+	_, err = svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name: dup,
+			NodePools: []*container.NodePool{
+				{Name: "pool-a", InitialNodeCount: 1},
+				{Name: "pool-a", InitialNodeCount: 1},
+			},
+		},
+	}).Do()
+	requireAPIError(t, err, 400)
+}
+
+// TestSDKContainerClusterCreateAppliesNodeConfigToDefaultPool covers the legacy
+// create shape through the official client: a cluster-level nodeConfig with
+// initialNodeCount and no nodePools is applied to the generated default-pool and
+// echoed on the cluster read (Discovery: the response's nodeConfig holds the
+// first pool's node configuration).
+func TestSDKContainerClusterCreateAppliesNodeConfigToDefaultPool(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	id := unique("c")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:             id,
+			InitialNodeCount: 2,
+			NodeConfig:       &container.NodeConfig{MachineType: "e2-micro", DiskSizeGb: 50},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.NodeConfig)
+	require.Equal(t, "e2-micro", got.NodeConfig.MachineType)
+	require.Equal(t, int64(50), got.NodeConfig.DiskSizeGb)
+	require.Len(t, got.NodePools, 1)
+	pool := got.NodePools[0]
+	require.Equal(t, "default-pool", pool.Name)
+	require.Equal(t, "RUNNING", pool.Status)
+	require.Equal(t, nodePoolName(id, "default-pool"), pool.SelfLink)
+	require.Equal(t, got.CurrentMasterVersion, pool.Version)
+	require.Equal(t, int64(2), pool.InitialNodeCount)
+	require.Equal(t, "e2-micro", pool.Config.MachineType)
+	require.Equal(t, int64(50), pool.Config.DiskSizeGb)
+
+	// The generated pool is addressable as a node pool, like an inline one.
+	gotPool, err := svc.Projects.Locations.Clusters.NodePools.Get(nodePoolName(id, "default-pool")).Do()
+	require.NoError(t, err)
+	require.Equal(t, "e2-micro", gotPool.Config.MachineType)
 }
 
 // TestSDKContainerNodePools covers node-pool CRUD, the update/setter custom
@@ -366,4 +475,150 @@ func TestSDKContainerErrors(t *testing.T) {
 		NodeCount: -1,
 	}).Do()
 	requireAPIError(t, err, 400)
+}
+
+// TestSDKContainerClusterCreateRejectsDefaultPoolFieldsWithNodePools drives the
+// official client through the conflict real GKE 400s on (Discovery:
+// "This field should not be set if node_config or initial_node_count are
+// specified"), with the verbatim server messages captured against real GKE.
+func TestSDKContainerClusterCreateRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	cases := []struct {
+		name    string
+		cluster *container.Cluster
+		want    string
+	}{
+		{
+			name: "initialNodeCount",
+			cluster: &container.Cluster{
+				Name:             unique("c"),
+				InitialNodeCount: 1,
+				NodePools:        []*container.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+			},
+			want: "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.",
+		},
+		{
+			name: "nodeConfig",
+			cluster: &container.Cluster{
+				Name:       unique("c"),
+				NodeConfig: &container.NodeConfig{MachineType: "e2-micro"},
+				NodePools:  []*container.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+			},
+			want: "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{Cluster: tc.cluster}).Do()
+			requireAPIError(t, err, 400)
+			var apiErr *googleapi.Error
+			require.ErrorAs(t, err, &apiErr)
+			require.Equal(t, tc.want, apiErr.Message)
+			// The rejected create persists nothing.
+			_, err = svc.Projects.Locations.Clusters.Get(clusterName(tc.cluster.Name)).Do()
+			requireAPIError(t, err, 404)
+		})
+	}
+}
+
+// TestSDKContainerClusterNegativeInitialNodeCount pins the DPG49 boundary
+// captured against real GKE: the official client's negative cluster-level count
+// is rejected with the verbatim message when the request carries no nodePools,
+// and accepted (ignored) when it does.
+func TestSDKContainerClusterNegativeInitialNodeCount(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	neg := unique("cn")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{Cluster: &container.Cluster{
+		Name:             neg,
+		InitialNodeCount: -1,
+	}}).Do()
+	requireAPIError(t, err, 400)
+	var apiErr *googleapi.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, "Cluster.initial_node_count must be zero or higher.", apiErr.Message)
+	_, err = svc.Projects.Locations.Clusters.Get(clusterName(neg)).Do()
+	requireAPIError(t, err, 404)
+
+	withPools := unique("cn")
+	_, err = svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{Cluster: &container.Cluster{
+		Name:             withPools,
+		InitialNodeCount: -1,
+		NodePools:        []*container.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	}}).Do()
+	require.NoError(t, err)
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(withPools)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.NodePools, 1)
+	require.Equal(t, "pool-a", got.NodePools[0].Name)
+}
+
+// TestSDKContainerClusterCreatePoolConflictOnTheWire pins the encoded REST
+// contract the apiary client hides: the google.rpc envelope's status string, and
+// the one case the client cannot express — an explicit `initialNodeCount: 0`,
+// which its `omitempty` tag would drop. A zero cluster-level count means "no
+// default node pool", so real GKE accepts it alongside nodePools.
+func TestSDKContainerClusterCreatePoolConflictOnTheWire(t *testing.T) {
+	resetState(t)
+
+	post := func(t *testing.T, body string) (*http.Response, map[string]any) {
+		t.Helper()
+		resp, err := http.Post(endpoint()+"v1/"+parent()+"/clusters", "application/json", strings.NewReader(body)) //nolint:noctx
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		var decoded map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
+		return resp, decoded
+	}
+
+	// The 400 keeps GKE's envelope: {"error":{"code","message","status"}}.
+	resp, body := post(t, fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1,"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`, unique("cw")))
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	apiErr, ok := body["error"].(map[string]any)
+	require.True(t, ok, "error envelope = %v", body)
+	require.Equal(t, "INVALID_ARGUMENT", apiErr["status"])
+	require.Equal(t, "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.", apiErr["message"])
+
+	// An explicit zero count is accepted, and the inline pool materializes.
+	id := unique("cz")
+	resp, body = post(t, fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":0,"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`, id))
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create with initialNodeCount 0: %v", body)
+	require.Equal(t, "CREATE_CLUSTER", body["operationType"])
+	got, err := newService(t).Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.NodePools, 1)
+	require.Equal(t, "pool-a", got.NodePools[0].Name)
+}
+
+// TestSDKContainerClusterNestedMessagesOnCreate pins the create-time decode of
+// the two nested settings a caller may set — Shielded Nodes can be disabled and
+// the pod-per-node constraint chosen — because a create body that is silently
+// dropped would read back a cluster the caller never asked for (DPG37).
+func TestSDKContainerClusterNestedMessagesOnCreate(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	id := unique("cn")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:             id,
+			InitialNodeCount: 1,
+			ShieldedNodes: &container.ShieldedNodes{
+				Enabled:         false,
+				ForceSendFields: []string{"Enabled"},
+			},
+			DefaultMaxPodsConstraint: &container.MaxPodsConstraint{MaxPodsPerNode: 64},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.ShieldedNodes)
+	require.False(t, got.ShieldedNodes.Enabled)
+	require.NotNil(t, got.DefaultMaxPodsConstraint)
+	require.EqualValues(t, 64, got.DefaultMaxPodsConstraint.MaxPodsPerNode)
 }

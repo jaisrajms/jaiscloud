@@ -14,7 +14,7 @@ classes:
   p3:
     state: present
     suites: [sdk-container]
-    note: "googleapi error codes on cluster/node-pool RPCs"
+    note: "googleapi error codes on cluster/node-pool RPCs, including the create-time default-pool conflict (nodePools with initialNodeCount>0 or nodeConfig is 400 InvalidArgument with the verbatim real-GKE message; both transports assert it, and the REST side now has recorded transcripts for the inline-nodePools create, the legacy initialNodeCount+nodeConfig default-pool, and both conflict 400s, alongside the SDK suite; gRPC through tests/gcpconformance/grpc/checks_container.go)"
   p4:
     state: exempt
     reason: "no client-observable listing cursor: the GKE Discovery document declares no pageSize/pageToken on projects.locations.clusters.list or ...nodePools.list, neither ListClustersResponse nor ListNodePoolsResponse carries a nextPageToken, and the generated client has no PageSize method — so no client pages these collections (the emulator's offset paging is an undocumented extension); the complete-collection listing that is observable is asserted as p5"

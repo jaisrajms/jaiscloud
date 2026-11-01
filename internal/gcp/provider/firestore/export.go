@@ -1,5 +1,9 @@
 package firestore
 
+import (
+	firestorestore "jaiscloud/internal/gcp/store/firestore"
+)
+
 // Exported type aliases for the wire structs shared between the REST adapter
 // (this package) and the gRPC transport (internal/gcp/grpc/firestore). The
 // unexported canonical names remain the source of truth used throughout this
@@ -52,4 +56,14 @@ type (
 // builds the value here instead of reaching into the struct.
 func NewPageParams(size int, token string) PageParams {
 	return pageParams{size: size, token: token}
+}
+
+// ExecuteQuery runs a StructuredQuery over an explicit document set instead of
+// the live store and returns the matching documents in query order, with
+// projection applied. parent is the runQuery parent resource prefix. The gRPC
+// Listen transport uses it to decide whether a document was in a target's
+// result set at a resume position, reusing the exact same filter, ordering,
+// limit, and offset semantics as a live query rather than reimplementing them.
+func ExecuteQuery(docs []*firestorestore.Document, q *StructuredQuery, parent string) ([]*firestorestore.Document, error) {
+	return executeQuery(docs, q, parent)
 }

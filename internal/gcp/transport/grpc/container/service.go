@@ -571,6 +571,9 @@ func clusterUpdateFromProto(u *containerpb.ClusterUpdate) core.ClusterUpdate {
 	if a := u.GetDesiredNodePoolAutoscaling(); a != nil {
 		out.DesiredNodePoolAutoscaling = nodePoolAutoscalingFromProto(a)
 	}
+	if sn := u.GetDesiredShieldedNodes(); sn != nil {
+		out.DesiredShieldedNodes = &containerstore.ShieldedNodes{Enabled: sn.GetEnabled()}
+	}
 	return out
 }
 

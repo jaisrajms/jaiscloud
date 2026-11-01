@@ -24,7 +24,7 @@ func newJobStateProvider(t *testing.T, delay time.Duration, opts ...Option) *Ser
 func submitTestJob(t *testing.T, p *Service, jobID string) dpstore.Job {
 	t.Helper()
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	j, err := p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
@@ -151,7 +151,7 @@ func TestSubmitJobAsOperation_MockNotDoneThenTerminal(t *testing.T) {
 	p := newJobStateProvider(t, 30*time.Second)
 	ctx := context.Background()
 
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	op, err := p.SubmitJobAsOperation(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{

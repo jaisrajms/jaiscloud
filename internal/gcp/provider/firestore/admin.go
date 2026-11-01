@@ -67,6 +67,11 @@ const (
 	pitrDisabled = "POINT_IN_TIME_RECOVERY_DISABLED"
 )
 
+// appEngineIntegrationDisabled is the documented create-time default for
+// Database.app_engine_integration_mode, restored when an explicit `*` patch
+// omits the field.
+const appEngineIntegrationDisabled = "DISABLED"
+
 // Database.databaseEdition values. STANDARD is the documented default when a
 // create omits the field ("This is the default setting if not specified").
 const (
@@ -618,6 +623,37 @@ func impliedMask(mask []string, maskPresent bool) []string {
 	return mask
 }
 
+// replacesResource reports whether the request carried an explicit `*` mask.
+// An omitted mask becomes `*` through impliedMask but keeps maskPresent false,
+// and AIP-134 gives the two different meanings: implied `*` is "every populated
+// field" (a merge), an explicit `*` is a full replacement (unlisted mutable
+// fields are cleared). The transports pass presence (proto oneof / REST
+// query-parameter presence), so this is decidable here (DC37).
+func replacesResource(mask []string, maskPresent bool) bool {
+	return maskPresent && len(mask) == 1 && mask[0] == "*"
+}
+
+// applyDatabaseReplace implements an explicit `*` patch: every mutable field
+// takes the request value, falling back to its documented default when the
+// request omits it. Output-only fields (name, uid, times, etag, key_prefix,
+// version_retention_period) and immutable ones (location_id, type,
+// database_edition) stay under the server's control.
+func applyDatabaseReplace(cur *databaseDef, patch databaseDef) {
+	cur.ConcurrencyMode = patch.ConcurrencyMode
+	if cur.ConcurrencyMode == "" {
+		cur.ConcurrencyMode = defaultConcurrencyMode(cur.DatabaseEdition)
+	}
+	cur.AppEngineIntegrationMode = patch.AppEngineIntegrationMode
+	if cur.AppEngineIntegrationMode == "" {
+		cur.AppEngineIntegrationMode = appEngineIntegrationDisabled
+	}
+	cur.PointInTimeRecoveryEnablement = patch.PointInTimeRecoveryEnablement
+	if cur.PointInTimeRecoveryEnablement == "" {
+		cur.PointInTimeRecoveryEnablement = pitrDisabled
+	}
+	cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
+}
+
 // UpdateDatabaseDef applies patch to the database record under mask (field
 // paths, or "*" for all), honoring an optional etag for optimistic concurrency.
 // The read-check-write runs inside the store's atomic UpsertAtomic so two
@@ -630,6 +666,7 @@ func impliedMask(mask []string, maskPresent bool) []string {
 // requires, but a masked write that would *change* the IMMUTABLE database_edition
 // is INVALID_ARGUMENT (AIP-203); resending the current value is a no-op.
 func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, maskPresent bool, etag string) (databaseDef, string, error) {
+	replace := replacesResource(mask, maskPresent)
 	mask = impliedMask(mask, maskPresent)
 	if db == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database name is required")
@@ -653,8 +690,12 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 		if editionMasked && patch.DatabaseEdition != "" && patch.DatabaseEdition != cur.DatabaseEdition {
 			return databaseDef{}, gcpInvalidArgument("database_edition is immutable and cannot be changed")
 		}
-		for _, path := range mask {
-			applyDatabaseField(&cur, path, patch)
+		if replace {
+			applyDatabaseReplace(&cur, patch)
+		} else {
+			for _, path := range mask {
+				applyDatabaseField(&cur, path, patch)
+			}
 		}
 		// version_retention_period is OUTPUT_ONLY and derived from the effective
 		// PITR toggle, never from the request: real GCP reports 7 days once PITR
@@ -987,6 +1028,7 @@ func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath
 		return fieldDef{}, "", gcpInvalidArgument("field path is required")
 	}
 	// An omitted mask is the implied mask of every populated field (AIP-134).
+	replace := replacesResource(mask, maskPresent)
 	mask = impliedMask(mask, maskPresent)
 	name := fieldName(project, db, cg, fieldPath)
 	opName := databaseOperationName(project, db, randomHex(12))
@@ -1006,8 +1048,12 @@ func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath
 				deriveFieldServerFields(project, db, cg, &cur)
 				return cur, false, nil
 			}
-			for _, path := range mask {
-				applyFieldMask(&cur, path, patch)
+			if replace {
+				applyFieldReplace(&cur, patch)
+			} else {
+				for _, path := range mask {
+					applyFieldMask(&cur, path, patch)
+				}
 			}
 			deriveFieldServerFields(project, db, cg, &cur)
 			return cur, true, nil
@@ -1052,6 +1098,16 @@ func applyFieldMask(cur *fieldDef, path string, patch fieldDef) {
 			cur.TtlConfig.ExpirationOffset = patch.TtlConfig.ExpirationOffset
 		}
 	}
+}
+
+// applyFieldReplace implements an explicit `*` patch: both writable configs
+// take the request value, so a `*` patch that omits ttl_config clears a stored
+// TTL policy instead of keeping it (AIP-134 replace). Server-derived members
+// (uses_ancestor_config, ancestor_field, reverting, ttl_config.state) are
+// recomputed afterwards by deriveFieldServerFields.
+func applyFieldReplace(cur *fieldDef, patch fieldDef) {
+	cur.IndexConfig = patch.IndexConfig
+	cur.TtlConfig = patch.TtlConfig
 }
 
 func ensureTtlConfig(f *fieldDef) {
@@ -1190,12 +1246,35 @@ func (s *Service) ListBackupSchedules(ctx context.Context, project, db string) (
 func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id string, patch backupScheduleDef, mask []string, maskPresent bool) (backupScheduleDef, error) {
 	// An omitted mask is the implied mask of every populated field (AIP-134),
 	// exactly as UpdateFieldDef documents above.
+	replace := replacesResource(mask, maskPresent)
 	mask = impliedMask(mask, maskPresent)
 	return mutateOne(ctx, s, project, rtBackupSchedule, backupScheduleRel(db, id), nil,
 		func(cur backupScheduleDef, _ bool) (backupScheduleDef, bool, error) {
 			if len(mask) == 0 {
 				// Present-but-empty mask: no-op (AIP-134), no write.
 				return cur, false, nil
+			}
+			if replace {
+				// Explicit `*` is a full replacement, and both retention and the
+				// recurrence oneof are REQUIRED on the resource: a replace that
+				// omits either is the same INVALID_ARGUMENT real GCP returns,
+				// rather than silently keeping the stored value.
+				if patch.Retention <= 0 {
+					return cur, false, gcpInvalidArgument("retention is required for a full replacement")
+				}
+				switch patch.Recurrence {
+				case "DAILY":
+					cur.Retention, cur.Recurrence, cur.DayOfWeek = patch.Retention, "DAILY", 0
+				case "WEEKLY":
+					if patch.DayOfWeek < 1 || patch.DayOfWeek > 7 {
+						return cur, false, gcpInvalidArgument("day_of_week must be 1-7 for a weekly recurrence")
+					}
+					cur.Retention, cur.Recurrence, cur.DayOfWeek = patch.Retention, "WEEKLY", patch.DayOfWeek
+				default:
+					return cur, false, gcpInvalidArgument("a daily or weekly recurrence is required for a full replacement")
+				}
+				cur.UpdateTime = clock.Now()
+				return cur, true, nil
 			}
 			for _, path := range mask {
 				switch path {

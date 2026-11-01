@@ -98,10 +98,13 @@ type Store interface {
 	ListKeyRings(ctx context.Context, projectID, location string) ([]KeyRing, error)
 
 	CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error
-	// CreateCryptoKeyWithVersion also stores ck but lets the caller decide whether
-	// the implicit initial CryptoKeyVersion is created (Cloud KMS creates it
-	// unless import-only or skipInitialVersionCreation is requested).
-	CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error
+	// CreateCryptoKeyWithVersion also stores ck and, when withInitialVersion is
+	// set, the implicit first CryptoKeyVersion described by initial (Cloud KMS
+	// creates it unless import-only or skipInitialVersionCreation is requested).
+	// The store derives the version's key material from ck.Algorithm and fills
+	// in the identity/state/timestamps; initial contributes the create-time-only
+	// fields the API sets on the first version, notably trusted_wrapping_enabled.
+	CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, initial Version, withInitialVersion bool) error
 	GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error)
 	ListCryptoKeys(ctx context.Context, projectID, location, keyringID string) ([]CryptoKey, error)
 	// UpdateCryptoKeyAtomic atomically reads the current crypto key, calls

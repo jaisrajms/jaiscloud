@@ -142,7 +142,7 @@ func runJobWithDriverPod(t *testing.T, p *Service, client *fake.Clientset, j dat
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "", nil)
 	}()
 
 	// Wait until the spark-submit Job exists (SubmitClientMode finished), then
@@ -311,7 +311,7 @@ func TestCancelJob_TransitionsToCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "", nil)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -481,7 +481,7 @@ func TestCancelJob_ConcurrentCancels_SingleTerminal(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "", nil)
 	}()
 	require.Eventually(t, func() bool {
 		jobs, _ := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
@@ -534,7 +534,7 @@ func TestRunJob_WaitError_ReapsDriverAndFails(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.runJob(ctx, j.ProjectID, j.Region, j, "", "")
+		p.runJob(ctx, j.ProjectID, j.Region, j, "", "", nil)
 	}()
 
 	select {
@@ -564,7 +564,7 @@ func TestSubmitJob_RegistersCancelBeforeReturn(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	p := newK8sProvider(t, client)
 	ctx := context.Background()
-	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput()); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	// A watcher that never emits keeps the executor in its terminal wait, so

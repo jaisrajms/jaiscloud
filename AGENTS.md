@@ -6,7 +6,7 @@
 ## GCP parity work — check the status ledger before you plan
 
 **Toolchain:** `go` is on `PATH`; the `make gcp-status*` targets (which shell
-out to `go build`) and any `go`/`gofmt` work need it. The `/gcp:*` slash
+out to `go build`) and any `go`/`gofmt` work need it. The `/gcp/*` slash
 commands prepend their own toolchain dir when they run. The **optional** floci
 Java interop suite also needs `JAVA_HOME` and `mvn` on `PATH`.
 
@@ -36,13 +36,19 @@ host) for image builds; the emulator and the docker-executor gates use the
 **local** daemon at `/var/run/docker.sock` (`docker --context default`), so the
 invoking shell must be in the `docker` group (or `sg docker -c '…'`).
 
-**Starting a session (`/gcp:new`):** the command first runs
+**Starting a session (`/gcp/new`):** the command first runs
 `make gcp-session-start`, which aborts if the current checkout has uncommitted
 changes (commit or stash a previous or concurrent session's work first),
-otherwise `git fetch upstream --prune` and fast-forwards the local `main` base
-from `upstream/main` (`--ff-only`, so a diverged base fails loudly rather than
-resetting), then rebuilds the ledger. Branch the item's `Branch` off the
-refreshed `main`. Always refresh from `upstream` — `origin` is a fork and its
+otherwise `git fetch upstream --prune` and fast-forwards the session base from
+`upstream` (`--ff-only`, so a diverged base fails loudly rather than resetting),
+then rebuilds the ledger. The base defaults to `main`; for a series, name it
+explicitly with `base=<branch>` (`/gcp/new base=gke datastore timestamps`) or
+`--base <branch>`, which sets `GCP_SESSION_BASE`. There is no bare-word form —
+an argument without `base=` is always an item query, never a branch. A base that
+does not exist yet is created off `upstream/main` and pushed to origin **and**
+upstream — upstream matters because a PR cannot target a branch that exists only
+in the fork — and that series' PRs then use it as their base instead of `main`.
+Branch the item's `Branch` off the refreshed base. Always refresh from `upstream` — `origin` is a fork and its
 branches are stale. The old `gcp` branch is frozen: it was merged into `main`
 (#610, released as `v0.1.1`), so nothing new targets it.
 
@@ -56,8 +62,9 @@ branch = one PR. The ledger parses it automatically; a plan without those
 headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
 Plans are independent *families* (default: the filename) and order via
 `SERIES` (e.g. `make gcp-status-next SERIES="java-compat,bigquery-ga"`); the
-Makefile default keeps `ga-fidelity` first (the current priority), then
-`console-ui`. Scaffold a new plan with
+Makefile default keeps `dataproc-gke` first (the current priority), then
+`ga-fidelity`, `functions-docker-executor` and `console-ui` (the full order is
+`SERIES` at the top of the `Makefile`). Scaffold a new plan with
 `make gcp-plan-new SERVICE=<svc>` (pre-fills that service's non-`ga` fidelity
 cells), and `make gcp-status-lint-plans` fails any plan-shaped doc that lacks a
 parseable index/detail.
@@ -86,10 +93,10 @@ parseable index/detail.
    in priority order — the wave-plan execution order (Wave 1 client-impact
    first), with an explicit `Pri` (P1–P20) as the fallback when an item is not in
    a wave and `impact` breaking ties — plus a separate `ATTENTION` list. Take
-   the top item unless told otherwise. Slash aliases: `/gcp:next` (show next),
-   `/gcp:new` (next item + start), `/gcp:plan <service>` (scaffold a GA wave plan),
-   `/gcp:status`, `/gcp:list`, `/gcp:audit`,
-   `/gcp:find` (nested `/gcp/next` etc. resolve too).
+   the top item unless told otherwise. Slash commands live in
+   `.opencode/commands/gcp/` and are invoked nested: `/gcp/next` (show next),
+   `/gcp/new` (next item + start), `/gcp/plan <service>` (scaffold a GA wave
+   plan), `/gcp/status`, `/gcp/list`, `/gcp/audit`, `/gcp/find`.
 4. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
    `unowned` (fix verdict, no branch, only a historical table), `stale-doc` (a
@@ -113,6 +120,14 @@ parseable index/detail.
    the matrix). Then run `make gcp-status` plus `make gcp-status-lint-plans` and
    `make gcp-status-coverage`. If the session changed operations, also run
    `make gcp-matrix-diff REF=upstream/main` (fails on a `ga`→worse regression).
+6. **Do not finish on a red PR.** Run `make gcp-ci-preflight` before pushing (it
+   mirrors CI's offline GCP gates; a stale `docs/fidelity` — any new/changed
+   conformance check or evidence string — is the most common CI failure, fixed by
+   `make gen-gcp-fidelity-matrix` + committing `docs/fidelity`). After opening the
+   PR, `make gcp-ci-wait PR=<n>` blocks until the checks settle and prints the
+   failing jobs' logs; fix, push, and repeat until every check is green. A check
+   may only be dismissed as runner infrastructure, and then only after
+   `gh run rerun <run-id>` comes back green.
 
 `plan_docs/` is gitignored local scratch; `tools/gcpstatus` and this file are
 committed.

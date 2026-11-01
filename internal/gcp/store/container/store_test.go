@@ -138,6 +138,30 @@ func TestMemoryStoreNoNodePoolAliasing(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreNoClusterNodeConfigAliasing(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	if err := s.CreateCluster(ctx, "p", "l", Cluster{Name: "c1", NodeConfig: &NodeConfig{
+		MachineType: "e2-micro",
+		Labels:      map[string]string{"k": "v"},
+	}}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	before, err := s.GetCluster(ctx, "p", "l", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	before.NodeConfig.Labels["k"] = "mutated"
+	before.NodeConfig.MachineType = "e2-small"
+	after, err := s.GetCluster(ctx, "p", "l", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if after.NodeConfig.MachineType != "e2-micro" || after.NodeConfig.Labels["k"] != "v" {
+		t.Fatalf("returned cluster aliased the stored nodeConfig: %+v", after.NodeConfig)
+	}
+}
+
 func TestMemoryStoreSnapshotRestoresNodePools(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
