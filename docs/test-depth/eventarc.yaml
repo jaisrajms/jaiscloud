@@ -24,7 +24,7 @@ classes:
   p4:
     state: present
     suites: [sdk-eventarc]
-    note: "triggers.list across a location boundary with pageSize/pageToken (every trigger exactly once), orderBy name/name desc/trigger_id/createTime desc, the AIP-160 filter (labels.<k>=v, destination:<member>) composed with the order and the page cursor, and an unsupported filter/orderBy failing loud with 400 instead of returning the unfiltered list"
+    note: "triggers.list across a location boundary with pageSize/pageToken (every trigger exactly once), orderBy name/name desc/trigger_id/createTime desc, the shared AIP-160 filter (labels.<k>=v, destination:<member>, AND/OR/NOT, implicit AND, parentheses and ordering comparisons) composed with the order and the page cursor, and an unsupported filter/orderBy failing loud with 400 instead of returning the unfiltered list"
   p5:
     state: present
     suites: [sdk-eventarc]

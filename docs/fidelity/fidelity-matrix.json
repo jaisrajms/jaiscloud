@@ -4860,7 +4860,7 @@
         "discovery=firestore.projects.databases.documents.commit",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {

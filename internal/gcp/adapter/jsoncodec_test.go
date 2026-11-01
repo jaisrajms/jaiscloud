@@ -383,6 +383,47 @@ func TestFirestoreAdminDecode(t *testing.T) {
 	}
 }
 
+// TestFirestoreDocumentColonIDs pins the colon-aware path splitter (TD36): a
+// Firestore document/collection ID may contain ':', so the colon is a custom
+// method separator only on the documents collection marker itself. A real
+// documents custom verb still derives its action, and an unknown verb on the
+// marker still fails loud.
+func TestFirestoreDocumentColonIDs(t *testing.T) {
+	cases := []struct{ method, path, action, name string }{
+		{"GET", "/v1/projects/p/databases/db/documents/cities/SF:1", "GetDocument", "databases/db/documents/cities/SF:1"},
+		{"GET", "/v1/projects/p/databases/db/documents/cities/SF:1:runQuery", "GetDocument", "databases/db/documents/cities/SF:1:runQuery"},
+		{"GET", "/v1/projects/p/databases/db/documents/cities:2024/SF", "GetDocument", "databases/db/documents/cities:2024/SF"},
+		{"GET", "/v1/projects/p/databases/db/documents/cities:2024", "ListDocuments", "databases/db/documents/cities:2024"},
+		{"POST", "/v1/projects/p/databases/db/documents/cities:2024", "CreateDocument", "databases/db/documents/cities:2024"},
+		{"GET", "/v1/projects/p/databases/db/documents/cities/SF:1?mask.fieldPaths=name", "GetDocument", "databases/db/documents/cities/SF:1"},
+		{"POST", "/v1/projects/p/databases/db/documents:runQuery", "RunQuery", "databases/db/documents"},
+		{"POST", "/v1/projects/p/databases/db/documents:batchWrite", "BatchWrite", "databases/db/documents"},
+		{"POST", "/v1/projects/p/databases/db/documents:beginTransaction", "BeginTransaction", "databases/db/documents"},
+		// A document ID that happens to be "documents" is not the method marker.
+		{"GET", "/v1/projects/p/databases/db/documents/cities/documents:1", "GetDocument", "databases/db/documents/cities/documents:1"},
+	}
+	for _, tc := range cases {
+		nr, err := (&JSONCodec{Service: "firestore"}).Decode(httptest.NewRequest(tc.method, tc.path, nil), nil)
+		if err != nil {
+			t.Errorf("%s %s: %v", tc.method, tc.path, err)
+			continue
+		}
+		if nr.Action != tc.action {
+			t.Errorf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+		if got := nr.Params["name"]; got != tc.name {
+			t.Errorf("%s %s: name = %q, want %q", tc.method, tc.path, got, tc.name)
+		}
+	}
+
+	// An unknown verb on the documents marker is not a document ID and must
+	// still fail loud rather than dispatch as a plain documents method.
+	if _, err := (&JSONCodec{Service: "firestore"}).Decode(
+		httptest.NewRequest("POST", "/v1/projects/p/databases/db/documents:bogus", nil), nil); err == nil {
+		t.Fatal("documents:bogus decoded without error, want unsupported-operation")
+	}
+}
+
 func TestJSONCodecSubscriptionDetachRouting(t *testing.T) {
 	c := &JSONCodec{Service: "pubsub"}
 	r := httptest.NewRequest("POST", "/v1/projects/p/subscriptions/s:detach", nil)

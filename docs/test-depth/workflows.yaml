@@ -18,7 +18,7 @@ classes:
   p4:
     state: present
     suites: [sdk-workflows]
-    note: "workflows.list honours filter and orderBy composed with pageSize/pageToken: the suite walks a page, filters by labels.<key> and name (labels.\"key\":value included) and sorts by name desc, while the remaining accepted fields (state, revisionId, createTime, updateTime) are asserted by the package unit tests; a filter or orderBy outside the grammar fails loud with 400 rather than returning an unfiltered/default-ordered list"
+    note: "workflows.list honours filter and orderBy composed with pageSize/pageToken: the suite walks a page, filters by labels.<key> and name (labels.\"key\":value included) and sorts by name desc, while the remaining accepted fields (state, revisionId, createTime, updateTime) are asserted by the package unit tests; operations.list evaluates the shared AIP-160 done/name/state/metadata filter (AND/OR/NOT, implicit AND, parentheses) before pagination on both transports; a filter or orderBy outside the grammar fails loud with 400 rather than returning an unfiltered/default-ordered list"
   p5:
     state: present
     suites: [sdk-workflows]

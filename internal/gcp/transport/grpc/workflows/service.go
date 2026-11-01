@@ -163,8 +163,8 @@ func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunni
 // service) answers when the request is not endpoint-scoped. When the request is
 // addressed to the Cloud Workflows endpoint the page is authoritative, so an
 // empty page is returned rather than falling through. The standard `filter`
-// parameter is not modelled; the core fails loud on a non-empty filter rather
-// than silently returning unfiltered results.
+// parameter is evaluated by the shared AIP-160 operations compiler in the core
+// before pagination; an unparseable filter is InvalidArgument.
 func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
 	project, location, ok := parseOperationParent(parent)
 	if !ok {
@@ -175,7 +175,7 @@ func (s *Service) ListOperations(ctx context.Context, parent string, pageSize in
 	if err != nil {
 		return nil, true, mapError(err)
 	}
-	if len(page) == 0 {
+	if page == nil {
 		return nil, false, nil
 	}
 	out := &longrunningpb.ListOperationsResponse{NextPageToken: next}

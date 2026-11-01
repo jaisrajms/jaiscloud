@@ -65,6 +65,9 @@ func (h *hydrator) executeSelect(toks []token) (Result, error) {
 		return Result{}, err
 	}
 	inferred := inferOutputFields(toks, h.fields)
+	if err := validateCoercions(toks, h.fields); err != nil {
+		return Result{}, err
+	}
 	if h.dryRun {
 		return Result{StatementType: StatementSelect, Fields: inferred}, nil
 	}
@@ -299,6 +302,9 @@ func (h *hydrator) executeDML(typ string, toks []token) (Result, error) {
 	} else {
 		translated, err = translateTokens(toks, h.resolve, true)
 		if err != nil {
+			return Result{}, err
+		}
+		if err := validateCoercions(toks, h.fields); err != nil {
 			return Result{}, err
 		}
 	}

@@ -92,7 +92,11 @@ subset, plus the encoding to the Discovery result shape. Results:
 
 **Emulated** (translated, must not silently diverge):
 
-- BigQuery `/` → `CAST(… AS REAL)/CAST(… AS REAL)` (FLOAT64 division).
+- BigQuery `/` → FLOAT64 division with a runtime denominator guard: a zero
+  denominator is `400 invalidQuery` ("division by zero"), not SQLite's NULL.
+- Comparison and arithmetic operators reject operands whose inferred BigQuery
+  types have no common signature (`INT64`/`FLOAT64`/`NUMERIC` coerce within the
+  numeric family; a string literal may compare with a temporal column).
 - Backticked `` `project.dataset.table` `` / `` `dataset.table` `` → hydrated
   temp tables (`defaultDataset` supplies the project/dataset when unqualified).
 - Bare-column and expression output types inferred from the query plan

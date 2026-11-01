@@ -439,6 +439,9 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if err := validateFilter(q.Filter); err != nil {
 		return nil, err
 	}
+	if err := validateProjection(q.Projection); err != nil {
+		return nil, err
+	}
 	offset, limit, err := queryWindow(q)
 	if err != nil {
 		return nil, err
@@ -514,7 +517,11 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// A projection restricts the returned properties (the key is always
 		// kept); a keys-only projection strips every property.
 		if q.Projection != nil {
-			e = projectEntity(e, q.Projection.Properties)
+			projected, err := projectEntity(e, q.Projection.Properties)
+			if err != nil {
+				return nil, err
+			}
+			e = projected
 		}
 		out.Entities = append(out.Entities, EntityResult{
 			Entity:     e,

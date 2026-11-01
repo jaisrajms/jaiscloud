@@ -30,6 +30,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
+	"jaiscloud/internal/gcp/operationfilter"
 	"jaiscloud/internal/gcp/paging"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/model"
@@ -455,32 +456,79 @@ func (s *Service) GetOperation(ctx context.Context, project, location, opID stri
 // (gcloud workflows operations list / the Go SDK) and the shared gRPC
 // google.longrunning.Operations.List.
 //
-// The documented `filter` parameter is not evaluated: a non-empty filter is
-// InvalidArgument rather than a silently unfiltered page (the shared
-// Operations.List contract, matching the gRPC ListRegistry surface).
+// The standard google.longrunning.Operations `filter` is evaluated with the
+// shared AIP-160 operations compiler over name, done, verb, target and state
+// (including their metadata.* aliases); the filter runs on the settled
+// operation and before pagination, so a page is always a page of matches.
 func (s *Service) ListOperations(ctx context.Context, project, location string, pageSize int, pageToken, filter string) ([]workflowsstore.Operation, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
 	}
-	if filter != "" {
-		return nil, "", invalidArgument("operations filter is not supported")
+	compiled, err := operationfilter.Compile(filter,
+		"verb", "target", "state",
+		"metadata.verb", "metadata.target", "metadata.state",
+		"createTime", "endTime", "metadata.createTime", "metadata.endTime",
+	)
+	if err != nil {
+		return nil, "", invalidArgument("workflows ListOperations filter: " + err.Error())
 	}
 	ops, err := s.workflows.ListOperations(ctx, project, location)
 	if err != nil {
 		return nil, "", mapStoreError(err)
 	}
+	if len(ops) == 0 {
+		// nil means "this location has no operations" (the gRPC ListRegistry
+		// declines so another service can answer); a non-nil empty page below
+		// means the location is owned but the filter matched nothing.
+		return nil, "", nil
+	}
+	matched := make([]workflowsstore.Operation, 0, len(ops))
+	for _, stored := range ops {
+		op := s.settle(stored)
+		if compiled.Match(workflowOperationRecord(project, op)) {
+			matched = append(matched, op)
+		}
+	}
 	params := map[string]any{"pageSize": pageSize}
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next, err := paging.Page(ops, func(op workflowsstore.Operation) string { return op.ID }, params)
+	page, next, err := paging.Page(matched, func(op workflowsstore.Operation) string { return op.ID }, params)
 	if err != nil {
 		return nil, "", err
 	}
-	for i := range page {
-		page[i] = s.settle(page[i])
-	}
 	return page, next, nil
+}
+
+// workflowOperationRecord renders one settled operation into the shared filter
+// view. state is the generic DONE/RUNNING projection of the done flag; the
+// metadata.* aliases mirror the rendered google.longrunning.Operation shape.
+func workflowOperationRecord(project string, op workflowsstore.Operation) operationfilter.Record {
+	state := "RUNNING"
+	if op.Done {
+		state = "DONE"
+	}
+	created := op.CreateTime.UTC().Format(time.RFC3339Nano)
+	fields := map[string]string{
+		"verb":                op.Verb,
+		"target":              op.Target,
+		"state":               state,
+		"metadata.verb":       op.Verb,
+		"metadata.target":     op.Target,
+		"metadata.state":      state,
+		"createtime":          created,
+		"metadata.createtime": created,
+	}
+	if !op.EndTime.IsZero() {
+		end := op.EndTime.UTC().Format(time.RFC3339Nano)
+		fields["endtime"] = end
+		fields["metadata.endtime"] = end
+	}
+	return operationfilter.Record{
+		Name:   OperationName(project, op.Location, op.ID),
+		Done:   op.Done,
+		Fields: fields,
+	}
 }
 
 // DeleteOperation removes a persisted long-running operation, or NotFound when

@@ -8,9 +8,10 @@
 // bare identifier, a double-quoted string, or the `*` wildcard — and differ
 // only in which fields they accept and how a clause evaluates. This package
 // owns the shared part: each surface supplies its own field set and predicates
-// through Parser.ParseClauses, and rejects anything outside its grammar so a
-// filter is never silently ignored (which would return an unfiltered list to a
-// client that asked for a subset).
+// through Parser.ParseClauses (conjunction-only) or Parser.ParseExpression
+// (full AIP-160 AND/OR/NOT/parentheses), and rejects anything outside its
+// grammar so a filter is never silently ignored (which would return an
+// unfiltered list to a client that asked for a subset).
 package aip160
 
 import (
@@ -56,6 +57,14 @@ func Tokenize(s string) ([]Token, error) {
 			i++
 		case c == '*':
 			toks = append(toks, Token{Kind: KindStar, Text: "*"})
+			i++
+		case c == '(' || c == ')':
+			toks = append(toks, Token{Kind: KindOp, Text: string(c)})
+			i++
+		case c == '-':
+			// A leading '-' is AIP-160 negation; a hyphen inside an identifier
+			// (us-central1) is consumed by the identifier scanner below.
+			toks = append(toks, Token{Kind: KindOp, Text: "-"})
 			i++
 		case c == '"':
 			j := i + 1

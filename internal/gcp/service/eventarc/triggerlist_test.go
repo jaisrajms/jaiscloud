@@ -114,8 +114,18 @@ func TestTriggerListFilter(t *testing.T) {
 		{"labels:*", []string{"tA", "tB"}},                  // any label present
 		{"labels.env != test", []string{"tB", "tC", "tD"}},  // absent label is not equal
 		{`name="projects/proj/locations/us-central1/triggers/tA"`, []string{"tA"}},
-		{`name:"triggers/tB"`, []string{"tB"}}, // ":" is AIP-160 contains; a value with "/" must be quoted
-		{"uid=uid-tC", []string{"tC"}},         //
+		{`name:"triggers/tB"`, []string{"tB"}},           // ":" is AIP-160 contains; a value with "/" must be quoted
+		{"uid=uid-tC", []string{"tC"}},                   //
+		{"destination=gke", []string{"tA"}},              // "=" is the same as ":"
+		{"destination!=gke", []string{"tB", "tC", "tD"}}, //
+		{"destination:gke OR destination:cloudRun", []string{"tA", "tB"}},
+		{"destination:gke OR destination:cloudRun OR destination:httpEndpoint", []string{"tA", "tB", "tC"}},
+		{"NOT destination:gke", []string{"tB", "tC", "tD"}},
+		{"-destination:gke", []string{"tB", "tC", "tD"}},
+		{"(destination:gke OR destination:cloudRun) AND labels.env=prod", []string{"tB"}},
+		{"(destination:gke OR destination:cloudRun) labels.env=test", []string{"tA"}},
+		{"uid>uid-tB", []string{"tC", "tD"}},            // ordering comparison
+		{"labels.env<test", []string{"tB", "tC", "tD"}}, // "prod" and absent labels sort before "test"
 		{"destination:gke AND labels.env=test", []string{"tA"}},
 		{"labels.env=prod destination:cloudRun", []string{"tB"}}, // implicit AND
 		{"labels.env=prod destination:gke", nil},                 // no trigger satisfies both
@@ -142,15 +152,14 @@ func TestTriggerListFilter(t *testing.T) {
 	// Anything outside the grammar fails with InvalidArgument (400) rather than
 	// silently returning the unfiltered list.
 	bad := []string{
-		"destination=gke",     // ":" is the only documented operator on destination
+		"destination<gke",     // ordering is not defined on the destination oneof
 		"destination:zzz",     // unknown destination
 		"name=*",              // name takes no wildcard
 		"bogus=1",             // unknown field
-		"labels.env>1",        // comparison operators are unsupported
 		"labels.env=",         // missing value
 		"name=\"unterminated", // tokenizer error
-		"(name=x)",            // parenthesised groups are unsupported
-		"name=x OR name=y",    // OR is unsupported
+		"(name=x",             // missing closing parenthesis
+		"name=x OR",           // dangling OR
 		"labels.env=test AND", // dangling AND
 		"destination:",        // missing value
 		"name=projects/proj/locations/us-central1/triggers/tA", // an unquoted value with "/" is invalid
