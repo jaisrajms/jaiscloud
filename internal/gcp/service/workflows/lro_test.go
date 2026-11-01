@@ -180,12 +180,78 @@ func TestListOperationsPagesAndSettles(t *testing.T) {
 		t.Fatalf("empty location = %d ops err=%v; want empty page", len(empty), err)
 	}
 
-	// A missing location and a non-empty filter fail loud.
+	// A missing location fails loud; a valid filter is evaluated.
 	if _, _, err := s.ListOperations(ctx, "proj", "", 0, "", ""); err == nil {
 		t.Fatalf("expected InvalidArgument for a missing location")
 	}
-	if _, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", "done=true"); err == nil {
-		t.Fatalf("expected InvalidArgument for a non-empty operations filter")
+	if done, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", "done=true"); err != nil || len(done) != 3 {
+		t.Fatalf("done=true after the delay = %d ops, err=%v; want 3", len(done), err)
+	}
+	if _, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", "bogus=1"); err == nil {
+		t.Fatalf("expected InvalidArgument for an unknown operations filter field")
+	}
+}
+
+// TestListOperationsFilter pins the shared AIP-160 operations filter over the
+// Cloud Workflows operations surface: done/name/state/metadata fields,
+// AND/OR/NOT, implicit AND, parentheses and comparisons.
+func TestListOperationsFilter(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+	for _, id := range []string{"wf1", "wf2", "wf3"} {
+		if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{ID: id, SourceContents: simpleSource}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	all, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", "")
+	if err != nil || len(all) != 3 {
+		t.Fatalf("unfiltered list = %d ops, err=%v; want 3", len(all), err)
+	}
+	first := all[0]
+
+	cases := []struct {
+		filter string
+		want   int
+	}{
+		{"", 3},
+		{"done=true", 3},
+		{"done=false", 0},
+		{"NOT done=true", 0},
+		{"-done=true", 0},
+		{"done=false OR done=true", 3},
+		{"(done=true OR done=false) AND state=DONE", 3},
+		{"state=RUNNING", 0},
+		{"verb=create", 3},
+		{"metadata.verb:create", 3},
+		{`target:"wf1"`, 1},
+		{`metadata.target:"wf2"`, 1},
+		{`name:"operations/" AND done=true`, 3},
+		{`name:"` + first.ID + `"`, 1},
+		{`done=true done=true`, 3}, // implicit AND
+		{`done=true AND (verb=create OR verb=update)`, 3},
+	}
+	for _, tc := range cases {
+		page, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", tc.filter)
+		if err != nil {
+			t.Errorf("filter %q: %v", tc.filter, err)
+			continue
+		}
+		if len(page) != tc.want {
+			t.Errorf("filter %q = %d ops, want %d", tc.filter, len(page), tc.want)
+		}
+	}
+
+	for _, bad := range []string{
+		"bogus=1",
+		"done=maybe",
+		"done=true AND",
+		"name=\"unterminated",
+		"(done=true",
+		"done=true OR",
+	} {
+		if _, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "", bad); err == nil {
+			t.Errorf("filter %q decoded, want InvalidArgument", bad)
+		}
 	}
 }
 

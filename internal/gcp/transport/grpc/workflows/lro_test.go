@@ -170,9 +170,29 @@ func TestListOperationsRegistry(t *testing.T) {
 	if _, handled, _ := s.ListOperations(ctx, "operations", 0, "", ""); handled {
 		t.Fatalf("top-level parent must not be handled by workflows")
 	}
-	// A non-empty filter fails loud rather than returning unfiltered results.
-	if _, handled, err := s.ListOperations(ctx, "projects/proj/locations/us-central1", 0, "", "done=true"); !handled || err == nil {
-		t.Fatalf("filter: handled=%v err=%v; want a loud error", handled, err)
+	// The shared operations filter is evaluated over the settled page.
+	for _, tc := range []struct {
+		filter string
+		want   int
+	}{
+		{"done=true", 1},
+		{"done=false", 0},
+		{"NOT done=false", 1},
+		{"done=false OR done=true", 1},
+		{"(done=false OR done=true) AND verb=create", 1},
+		{"state=DONE", 1},
+	} {
+		resp, handled, err := s.ListOperations(ctx, "projects/proj/locations/us-central1", 0, "", tc.filter)
+		if err != nil || !handled {
+			t.Errorf("filter %q: handled=%v err=%v", tc.filter, handled, err)
+			continue
+		}
+		if len(resp.GetOperations()) != tc.want {
+			t.Errorf("filter %q = %d operations, want %d", tc.filter, len(resp.GetOperations()), tc.want)
+		}
+	}
+	if _, handled, err := s.ListOperations(ctx, "projects/proj/locations/us-central1", 0, "", "bogus=1"); !handled || err == nil {
+		t.Fatalf("unknown field filter: handled=%v err=%v; want a loud error", handled, err)
 	}
 }
 

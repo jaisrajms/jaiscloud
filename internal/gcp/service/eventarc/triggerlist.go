@@ -23,21 +23,15 @@ import (
 // triggerPredicate is one compiled triggers.list filter clause.
 type triggerPredicate func(eventarcstore.Trigger) bool
 
-// triggerListFilter is the compiled subset of the triggers.list filter grammar:
-// a conjunction of clauses over name, uid, displayName, labels and destination.
-// An empty filter matches every trigger.
+// triggerListFilter is a compiled triggers.list AIP-160 expression over name,
+// uid, labels and destination. An empty filter matches every trigger.
 type triggerListFilter struct {
-	preds []triggerPredicate
+	expr *aip160.Expr
 }
 
-// match reports whether t satisfies every clause.
+// match reports whether t satisfies the expression.
 func (f triggerListFilter) match(t eventarcstore.Trigger) bool {
-	for _, p := range f.preds {
-		if !p(t) {
-			return false
-		}
-	}
-	return true
+	return f.expr.Match(func(leaf any) bool { return leaf.(triggerPredicate)(t) })
 }
 
 // triggerDestinationFields are the destination oneof members the
@@ -73,22 +67,26 @@ func foldDestinationName(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
 }
 
-// compileTriggerListFilter parses the bounded triggers.list filter grammar:
+// compileTriggerListFilter parses the triggers.list AIP-160 filter:
 //
+//	expr   := and
+//	and    := or ( ("AND" | implicit whitespace) or )*
+//	or     := unary ( "OR" unary )*
+//	unary  := ("NOT" | "-") unary | primary
+//	primary:= "(" expr ")" | clause
 //	clause := field op value
-//	filter := clause ( ("AND" | implicit whitespace) clause )*
 //	field  := "name" | "uid" | "labels." <key> | "labels" | "destination"
-//	op     := "=" | "!=" | ":"            (":" only on destination and labels)
+//	op     := "=" | "!=" | ":" | "<" | "<=" | ">" | ">="
 //	value  := <ident> | <double-quoted string> | "*"
 //
 // The clause set mirrors the API's own example ("?filter=destination:gke") plus
-// the identity and label fields every AIP-160 list exposes. Only fields the
-// Discovery Trigger schema actually defines are accepted (there is no
-// displayName on a Trigger, so naming one is INVALID_ARGUMENT like any other
-// unknown field). Comparison operators (<, <=, >, >=) and the OR/NOT/
-// parenthesis forms are outside the grammar and fail with INVALID_ARGUMENT; a
-// filter is never silently ignored, which would return an unfiltered list to a
-// client that asked for a subset.
+// the identity and label fields every AIP-160 list exposes. Logical OR, NOT,
+// implicit AND, parentheses and ordering comparisons are evaluated by the
+// shared aip160 engine. Only fields the Discovery Trigger schema actually
+// defines are accepted (there is no displayName on a Trigger, so naming one is
+// INVALID_ARGUMENT like any other unknown field). A filter is never silently
+// ignored, which would return an unfiltered list to a client that asked for a
+// subset.
 func compileTriggerListFilter(s string) (triggerListFilter, error) {
 	if strings.TrimSpace(s) == "" {
 		return triggerListFilter{}, nil
@@ -97,19 +95,11 @@ func compileTriggerListFilter(s string) (triggerListFilter, error) {
 	if err != nil {
 		return triggerListFilter{}, invalidArgument("eventarc ListTriggers filter: " + err.Error())
 	}
-	preds, err := aip160.NewParser(toks).ParseClauses(parseTriggerClause)
+	expr, err := aip160.NewParser(toks).ParseExpression(parseTriggerClause)
 	if err != nil {
 		return triggerListFilter{}, invalidArgument("eventarc ListTriggers filter: " + err.Error())
 	}
-	f := triggerListFilter{preds: make([]triggerPredicate, 0, len(preds))}
-	for _, p := range preds {
-		pred, ok := p.(triggerPredicate)
-		if !ok {
-			return triggerListFilter{}, invalidArgument("eventarc ListTriggers filter: internal clause type")
-		}
-		f.preds = append(f.preds, pred)
-	}
-	return f, nil
+	return triggerListFilter{expr: expr}, nil
 }
 
 // parseTriggerClause parses one triggers.list filter clause (`field op value`)
@@ -154,10 +144,7 @@ func parseTriggerClause(p *aip160.Parser) (any, error) {
 		return triggerPredicate(func(t eventarcstore.Trigger) bool { return len(t.Labels) > 0 }), nil
 
 	case key == "destination":
-		if op != ":" {
-			return nil, fmt.Errorf("unsupported operator %q on destination (only \":\" is supported)", op)
-		}
-		return parseTriggerDestinationClause(p)
+		return parseTriggerDestinationClause(p, op)
 
 	default:
 		return nil, fmt.Errorf("unsupported filter key %q "+
@@ -166,10 +153,13 @@ func parseTriggerClause(p *aip160.Parser) (any, error) {
 }
 
 // parseTriggerStringClause compiles an identity-field clause. "=" and "!=" are
-// exact matches; ":" is AIP-160's has/contains operator (a substring match).
+// exact matches; ":" is AIP-160's has/contains operator (a substring match);
+// the ordering operators compare the strings lexicographically.
 func parseTriggerStringClause(p *aip160.Parser, key, op string, get func(eventarcstore.Trigger) string) (any, error) {
-	if op != "=" && op != "!=" && op != ":" {
-		return nil, fmt.Errorf("unsupported operator %q on %s (only \"=\", \"!=\" and \":\" are supported)", op, key)
+	switch op {
+	case "=", "!=", ":", "<", "<=", ">", ">=":
+	default:
+		return nil, fmt.Errorf("unsupported operator %q on %s", op, key)
 	}
 	valTok := p.Next()
 	if valTok.Kind == aip160.KindStar {
@@ -184,20 +174,36 @@ func parseTriggerStringClause(p *aip160.Parser, key, op string, get func(eventar
 		return triggerPredicate(func(t eventarcstore.Trigger) bool { return get(t) == val }), nil
 	case "!=":
 		return triggerPredicate(func(t eventarcstore.Trigger) bool { return get(t) != val }), nil
-	default:
-		return triggerPredicate(func(t eventarcstore.Trigger) bool { return strings.Contains(get(t), val) }), nil
+	case ":":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool {
+			return strings.Contains(strings.ToLower(get(t)), strings.ToLower(val))
+		}), nil
+	case "<":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return get(t) < val }), nil
+	case "<=":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return get(t) <= val }), nil
+	case ">":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return get(t) > val }), nil
+	default: // ">="
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return get(t) >= val }), nil
 	}
 }
 
 // parseTriggerLabelClause compiles a labels.<key> clause. "=" and "!=" are exact
-// matches; ":" (or "*" as the value) tests that the key is present with any
-// value, and "!= *" tests that it is absent.
+// matches; ":" is a substring match; the ordering operators compare the values
+// lexicographically; "*" tests that the key is present and "!= *" that it is
+// absent.
 func parseTriggerLabelClause(p *aip160.Parser, op, key string) (any, error) {
-	if op != "=" && op != "!=" && op != ":" {
-		return nil, fmt.Errorf("unsupported operator %q on labels.%s (only \"=\", \"!=\" and \":\" are supported)", op, key)
+	switch op {
+	case "=", "!=", ":", "<", "<=", ">", ">=":
+	default:
+		return nil, fmt.Errorf("unsupported operator %q on labels.%s", op, key)
 	}
 	valTok := p.Next()
 	if valTok.Kind == aip160.KindStar {
+		if op != "=" && op != "!=" && op != ":" {
+			return nil, fmt.Errorf("labels.%s does not accept \"*\" with %q", key, op)
+		}
 		if op == "!=" {
 			return triggerPredicate(func(t eventarcstore.Trigger) bool { _, ok := t.Labels[key]; return !ok }), nil
 		}
@@ -212,21 +218,34 @@ func parseTriggerLabelClause(p *aip160.Parser, op, key string) (any, error) {
 		return triggerPredicate(func(t eventarcstore.Trigger) bool { return t.Labels[key] == val }), nil
 	case "!=":
 		return triggerPredicate(func(t eventarcstore.Trigger) bool { return t.Labels[key] != val }), nil
-	default:
+	case ":":
 		return triggerPredicate(func(t eventarcstore.Trigger) bool {
-			return strings.Contains(t.Labels[key], val)
+			return strings.Contains(strings.ToLower(t.Labels[key]), strings.ToLower(val))
 		}), nil
+	case "<":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return t.Labels[key] < val }), nil
+	case "<=":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return t.Labels[key] <= val }), nil
+	case ">":
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return t.Labels[key] > val }), nil
+	default: // ">="
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return t.Labels[key] >= val }), nil
 	}
 }
 
-// parseTriggerDestinationClause compiles the documented `destination:<member>`
-// clause: `destination:gke` selects triggers whose destination is a GKE target,
-// and `destination:*` selects any trigger with a destination set.
-func parseTriggerDestinationClause(p *aip160.Parser) (any, error) {
+// parseTriggerDestinationClause compiles a destination clause. `destination:gke`
+// and `destination=gke` select triggers whose destination is a GKE target,
+// `destination!=gke` selects the rest, and the `*` form tests whether any
+// destination is set (`!= *` tests that none is).
+func parseTriggerDestinationClause(p *aip160.Parser, op string) (any, error) {
+	if op != ":" && op != "=" && op != "!=" {
+		return nil, fmt.Errorf("unsupported operator %q on destination (only \":\", \"=\" and \"!=\" are supported)", op)
+	}
 	valTok := p.Next()
 	if valTok.Kind == aip160.KindStar {
+		wantSet := op != "!="
 		return triggerPredicate(func(t eventarcstore.Trigger) bool {
-			return bodyMap(decodeBody(t.Config), "destination") != nil
+			return (bodyMap(decodeBody(t.Config), "destination") != nil) == wantSet
 		}), nil
 	}
 	val, ok := aip160.TokenValue(valTok)
@@ -238,7 +257,7 @@ func parseTriggerDestinationClause(p *aip160.Parser) (any, error) {
 		return nil, fmt.Errorf("unsupported destination %q "+
 			"(want gke, cloudRun, httpEndpoint, workflow, cloudFunction or \"*\")", val)
 	}
-	return triggerPredicate(func(t eventarcstore.Trigger) bool {
+	match := triggerPredicate(func(t eventarcstore.Trigger) bool {
 		dest := bodyMap(decodeBody(t.Config), "destination")
 		for _, f := range fields {
 			if _, set := dest[f]; set {
@@ -246,7 +265,11 @@ func parseTriggerDestinationClause(p *aip160.Parser) (any, error) {
 			}
 		}
 		return false
-	}), nil
+	})
+	if op == "!=" {
+		return triggerPredicate(func(t eventarcstore.Trigger) bool { return !match(t) }), nil
+	}
+	return match, nil
 }
 
 // ─── orderBy ──────────────────────────────────────────────────────────────────

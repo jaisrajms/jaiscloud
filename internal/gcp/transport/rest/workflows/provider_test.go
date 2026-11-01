@@ -244,11 +244,34 @@ func TestProviderListAndDeleteOperations(t *testing.T) {
 		t.Fatalf("empty location operations = %d, want 0", len(got))
 	}
 
-	// A non-empty filter fails loud rather than silently returning unfiltered.
-	flt := nr(map[string]any{"project": "proj", "location": "us-central1",
-		"name": "locations/us-central1/operations", "filter": "done=true"})
-	if _, err := p.ListOperations(ctx, flt); err == nil {
-		t.Fatalf("expected InvalidArgument for a non-empty operations filter")
+	// The standard operations filter is evaluated (done, name, state, metadata,
+	// AND/OR/NOT and parentheses).
+	for _, tc := range []struct {
+		filter string
+		want   int
+	}{
+		{"done=true", 1},
+		{"done=false", 0},
+		{"NOT done=false", 1},
+		{"done=false OR done=true", 1},
+		{"(done=false OR done=true) AND target:\"wf1\"", 1},
+		{"state=DONE metadata.verb=create", 1},
+	} {
+		flt := nr(map[string]any{"project": "proj", "location": "us-central1",
+			"name": "locations/us-central1/operations", "filter": tc.filter})
+		resp, err := p.ListOperations(ctx, flt)
+		if err != nil {
+			t.Errorf("filter %q: %v", tc.filter, err)
+			continue
+		}
+		if got, _ := resp.Data["operations"].([]any); len(got) != tc.want {
+			t.Errorf("filter %q = %d operations, want %d", tc.filter, len(got), tc.want)
+		}
+	}
+	bad := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": "locations/us-central1/operations", "filter": "bogus=1"})
+	if _, err := p.ListOperations(ctx, bad); err == nil {
+		t.Fatalf("expected InvalidArgument for an unknown operations filter field")
 	}
 
 	// returnPartialSuccess is not supported (the Discovery's documented
