@@ -305,6 +305,16 @@ func maskFieldPaths(nr *model.NormalizedRequest) []string {
 	return queryFieldPaths(nr, "mask.fieldPaths")
 }
 
+// responseMaskFromQuery returns the response field mask with its presence
+// preserved: an absent mask is nil (return every field), while a supplied but
+// empty `mask.fieldPaths=` is an explicit empty mask (return no fields).
+func responseMaskFromQuery(nr *model.NormalizedRequest) *ResponseMask {
+	if !maskParamPresent(nr, "mask.fieldPaths") {
+		return nil
+	}
+	return &ResponseMask{Paths: maskFieldPaths(nr)}
+}
+
 // preconditionFromQuery parses the currentDocument precondition query parameters
 // (currentDocument.exists / currentDocument.updateTime) used by patch/delete.
 // It returns nil when no precondition is set.
@@ -691,7 +701,7 @@ func (p *Provider) DocumentsGet(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	doc, err := p.Service.GetDocument(ctx, name, txn, maskFieldPaths(nr))
+	doc, err := p.Service.GetDocument(ctx, name, txn, responseMaskFromQuery(nr))
 	if err != nil {
 		return nil, err
 	}
@@ -743,7 +753,7 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(documentMap(ProjectDocument(doc, maskFieldPaths(nr)))), nil
+	return provider.OK(documentMap(ProjectDocument(doc, responseMaskFromQuery(nr)))), nil
 }
 
 // updateMaskFromQuery reads the documents.patch *write* mask from the
@@ -791,7 +801,7 @@ func (p *Provider) ListDocuments(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), boolParam(nr, "showMissing"), page)
+	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, responseMaskFromQuery(nr), boolParam(nr, "showMissing"), page)
 	if err != nil {
 		return nil, err
 	}

@@ -282,6 +282,80 @@ func TestRunQueryEqualityFilter(t *testing.T) {
 	}
 }
 
+// TestRunQueryNestedProjection verifies the gRPC wire path resolves a dotted
+// projection against embedded entities, returning the leaf with its enclosing
+// structure, and rejects a repeated parent as InvalidArgument (DGT6).
+func TestRunQueryNestedProjection(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	entityVal := func(props map[string]*datastorepb.Value) *datastorepb.Value {
+		return &datastorepb.Value{ValueType: &datastorepb.Value_EntityValue{
+			EntityValue: &datastorepb.Entity{Properties: props},
+		}}
+	}
+
+	if _, err := client.Commit(ctx, &datastorepb.CommitRequest{
+		ProjectId: "test",
+		Mutations: []*datastorepb.Mutation{{
+			Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", "a"), map[string]*datastorepb.Value{
+				"a": entityVal(map[string]*datastorepb.Value{
+					"b": entityVal(map[string]*datastorepb.Value{"c": intVal(7)}),
+					"e": strVal("drop"),
+				}),
+				"plain": intVal(1),
+			})},
+		}},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	run := func(name string) (*datastorepb.RunQueryResponse, error) {
+		return client.RunQuery(ctx, &datastorepb.RunQueryRequest{
+			ProjectId: "test",
+			QueryType: &datastorepb.RunQueryRequest_Query{Query: &datastorepb.Query{
+				Kind:       []*datastorepb.KindExpression{{Name: "Task"}},
+				Projection: []*datastorepb.Projection{{Property: &datastorepb.PropertyReference{Name: name}}},
+			}},
+		})
+	}
+
+	resp, err := run("a.b.c")
+	if err != nil {
+		t.Fatalf("runquery(a.b.c): %v", err)
+	}
+	results := resp.GetBatch().GetEntityResults()
+	if len(results) != 1 {
+		t.Fatalf("query results = %v, want 1", results)
+	}
+	props := results[0].GetEntity().GetProperties()
+	aProps := props["a"].GetEntityValue().GetProperties()
+	if _, ok := aProps["e"]; ok {
+		t.Fatal("nested projection must drop the un-projected sibling a.e")
+	}
+	if got := aProps["b"].GetEntityValue().GetProperties()["c"].GetIntegerValue(); got != 7 {
+		t.Fatalf("a.b.c = %d, want 7", got)
+	}
+
+	// A repeated parent is an invalid alignment.
+	if _, err := client.Commit(ctx, &datastorepb.CommitRequest{
+		ProjectId: "test",
+		Mutations: []*datastorepb.Mutation{{
+			Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", "b"), map[string]*datastorepb.Value{
+				"arr": {ValueType: &datastorepb.Value_ArrayValue{ArrayValue: &datastorepb.ArrayValue{
+					Values: []*datastorepb.Value{entityVal(map[string]*datastorepb.Value{"b": intVal(2)})},
+				}}},
+			})},
+		}},
+	}); err != nil {
+		t.Fatalf("commit arr: %v", err)
+	}
+	if _, err := run("arr.b"); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("runquery(arr.b) err = %v, want InvalidArgument", err)
+	}
+}
+
 func TestRunQueryCompositeAnd(t *testing.T) {
 	client, cleanup := testServer(t)
 	defer cleanup()

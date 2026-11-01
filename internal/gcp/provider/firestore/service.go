@@ -254,8 +254,8 @@ func (p pageParams) params() map[string]any {
 // ─── document methods ────────────────────────────────────────────────────────
 
 // GetDocument returns a document by full name, recording the read in the
-// transaction read-set and applying the field mask when present.
-func (s *Service) GetDocument(ctx context.Context, name string, transaction []byte, mask []string) (firestorestore.Document, error) {
+// transaction read-set and applying the response field mask when present.
+func (s *Service) GetDocument(ctx context.Context, name string, transaction []byte, mask *ResponseMask) (firestorestore.Document, error) {
 	if err := s.requireActive(transaction); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -269,10 +269,7 @@ func (s *Service) GetDocument(ctx context.Context, name string, transaction []by
 	if len(transaction) > 0 {
 		s.recordRead(transaction, name, doc, true)
 	}
-	if len(mask) > 0 {
-		doc.Fields = maskFields(doc, mask)
-	}
-	return doc, nil
+	return ProjectDocument(doc, mask), nil
 }
 
 // CreateDocument creates a document. The document id comes from docID; when
@@ -311,6 +308,15 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 	return doc, nil
 }
 
+// ResponseMask is Firestore's response field mask (DocumentMask.mask, "fields
+// to return") together with its presence. nil means no mask was supplied and
+// every field is returned; a non-nil mask with no paths is an explicit
+// instruction to return no fields. The distinction is proto message presence,
+// so it cannot be derived from len(Paths).
+type ResponseMask struct {
+	Paths []string
+}
+
 // UpdateMask is a *write* mask (Firestore's `update_mask`, which fields to
 // update) together with its presence. Presence is carried separately because
 // the proto's message-presence is what tells an omitted mask from an empty one,
@@ -328,13 +334,13 @@ type UpdateMask struct {
 }
 
 // ProjectDocument applies a response field mask (`mask` / `mask.fieldPaths`):
-// the returned document carries only the requested paths. A request without a
-// mask, or with an empty one, returns every field, matching GetDocument.
-func ProjectDocument(doc firestorestore.Document, paths []string) firestorestore.Document {
-	if len(paths) == 0 {
+// the returned document carries only the requested paths. A nil mask returns
+// every field; a present-but-empty mask returns no fields.
+func ProjectDocument(doc firestorestore.Document, mask *ResponseMask) firestorestore.Document {
+	if mask == nil {
 		return doc
 	}
-	doc.Fields = maskFields(doc, paths)
+	doc.Fields = maskFields(doc, mask.Paths)
 	return doc
 }
 
@@ -468,7 +474,7 @@ func (s *Service) DeleteDocument(ctx context.Context, project, database, path st
 // showMissing is set, documents that do not exist but have sub-documents nested
 // underneath them are also returned, keyed by name with no fields or timestamps
 // (Firestore's documents.list showMissing semantics).
-func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask []string, showMissing bool, page pageParams) ([]firestorestore.Document, string, error) {
+func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask *ResponseMask, showMissing bool, page pageParams) ([]firestorestore.Document, string, error) {
 	if err := s.requireActive(transaction); err != nil {
 		return nil, "", err
 	}
@@ -519,9 +525,9 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 		}
 	}
 
-	if len(mask) > 0 {
+	if mask != nil {
 		for i := range pageDocs {
-			pageDocs[i].Fields = maskFields(pageDocs[i], mask)
+			pageDocs[i].Fields = maskFields(pageDocs[i], mask.Paths)
 		}
 	}
 	return pageDocs, nextToken, nil

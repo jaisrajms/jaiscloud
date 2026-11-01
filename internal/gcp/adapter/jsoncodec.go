@@ -62,16 +62,29 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		nr.Params["body"] = m
 	}
 
+	// Split a trailing custom method off the last path segment, but only where
+	// the resource grammar places one. Firestore document IDs may contain ':'
+	// (…/documents/cities/SF:1), so for the documents resource the colon is a
+	// method separator only on the documents collection marker itself
+	// (…/documents:runQuery); on a document ID the colon is part of the name
+	// (TD36).
 	custom := ""
+	resourceType := detectResourceType(rest)
 	if len(rest) > 0 {
 		last := rest[len(rest)-1]
 		if i := strings.IndexByte(last, ':'); i >= 0 {
-			custom = last[i+1:]
-			rest[len(rest)-1] = last[:i]
+			candidate := last[:i]
+			rest[len(rest)-1] = candidate
+			splitType := detectResourceType(rest)
+			if splitType != "documents" || isDocumentsMethodMarker(rest) {
+				custom = last[i+1:]
+				resourceType = splitType
+			} else {
+				rest[len(rest)-1] = last
+			}
 		}
 	}
 
-	resourceType := detectResourceType(rest)
 	name := strings.Join(rest, "/") // full relative resource name
 
 	nr.Params["resourceType"] = resourceType
@@ -1221,6 +1234,20 @@ func segmentAfter(segs []string, marker string) string {
 func isSecretVersionsCollection(name string) bool {
 	parts := strings.Split(name, "/")
 	return len(parts) == 3 && parts[0] == "secrets" && parts[2] == "versions"
+}
+
+// isDocumentsMethodMarker reports whether the last segment is the Firestore
+// "documents" collection marker itself, the only place the documents resource
+// documents its custom methods (documents:commit, documents:runQuery, ...).
+// An earlier "documents" marker followed by a document ID that happens to be
+// "documents" is not a method position.
+func isDocumentsMethodMarker(rest []string) bool {
+	for i, s := range rest {
+		if s == "documents" {
+			return i == len(rest)-1
+		}
+	}
+	return false
 }
 
 // segmentsAfterDocuments returns the number of path segments after the

@@ -855,3 +855,108 @@ func TestRESTExplicitStarReplaces(t *testing.T) {
 		t.Errorf("weeklyRecurrence = %v, want present", bs.Data["weeklyRecurrence"])
 	}
 }
+
+// TestRESTDatabaseEnumValidation pins DC48: every enum-typed Database field is
+// checked against the Discovery enum set at the REST boundary, so an unknown
+// proto3 JSON enum name is INVALID_ARGUMENT instead of being stored/echoed.
+func TestRESTDatabaseEnumValidation(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	cases := []struct{ field, value string }{
+		{"type", "BOGUS"},
+		{"concurrencyMode", "BOGUS"},
+		{"appEngineIntegrationMode", "BOGUS"},
+		{"pointInTimeRecoveryEnablement", "BOGUS"},
+		{"deleteProtectionState", "BOGUS"},
+		{"databaseEdition", "BOGUS"},
+	}
+	for _, tc := range cases {
+		// Create rejects before the record is written.
+		_, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+			"databaseId": "enum-db",
+			"body":       map[string]any{tc.field: tc.value},
+		}))
+		assertRESTInvalidArgument(t, "CreateDatabase."+tc.field, err)
+
+		// Patch rejects too, before the mask/record is applied.
+		_, err = p.UpdateDatabase(ctx, adminNR("databases/(default)", map[string]any{
+			"updateMask": tc.field,
+			"body":       map[string]any{tc.field: tc.value},
+		}))
+		assertRESTInvalidArgument(t, "UpdateDatabase."+tc.field, err)
+	}
+
+	// Enum names are case-sensitive: a near-miss is still INVALID_ARGUMENT.
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "enum-db",
+		"body": map[string]any{
+			"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLEd",
+		},
+	})); err == nil {
+		t.Fatal("CreateDatabase accepted a misspelled enum name (DISABLEd), want InvalidArgument")
+	}
+
+	// The documented enum names (including the unspecified zero values) are
+	// accepted.
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "enum-db",
+		"body": map[string]any{
+			"type":                          "DATABASE_TYPE_UNSPECIFIED",
+			"concurrencyMode":               "OPTIMISTIC_WITH_ENTITY_GROUPS",
+			"appEngineIntegrationMode":      "APP_ENGINE_INTEGRATION_MODE_UNSPECIFIED",
+			"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+			"deleteProtectionState":         "DELETE_PROTECTION_STATE_UNSPECIFIED",
+			"databaseEdition":               "DATABASE_EDITION_UNSPECIFIED",
+		},
+	})); err != nil {
+		t.Fatalf("CreateDatabase with documented enum names: %v", err)
+	}
+}
+
+func assertRESTInvalidArgument(t *testing.T, label string, err error) {
+	t.Helper()
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+		t.Errorf("%s error = %v, want InvalidArgument/400", label, err)
+	}
+}
+
+// TestRESTDeleteDatabaseRequiresQueryEtag pins DC47: DeleteDatabaseRequest.etag
+// is a query parameter in the Discovery HTTP binding, so a body-only etag must
+// not satisfy the precondition (or delete the database).
+func TestRESTDeleteDatabaseRequiresQueryEtag(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "etag-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	resp, _ := created.Data["response"].(map[string]any)
+	etag, _ := resp["etag"].(string)
+	if etag == "" {
+		t.Fatal("created database carries no etag")
+	}
+
+	// Body etag, no query parameter: the non-compliant request fails and the
+	// database survives.
+	_, err = p.DeleteDatabase(ctx, adminNR("databases/etag-db", map[string]any{
+		"body": map[string]any{"etag": etag},
+	}))
+	assertRESTInvalidArgument(t, "DeleteDatabase(body etag)", err)
+	if _, err := p.GetDatabase(ctx, adminNR("databases/etag-db", nil)); err != nil {
+		t.Errorf("body-etag delete removed the database: %v", err)
+	}
+
+	// The documented query parameter form succeeds.
+	if _, err := p.DeleteDatabase(ctx, adminNR("databases/etag-db", map[string]any{"etag": etag})); err != nil {
+		t.Fatalf("DeleteDatabase(query etag): %v", err)
+	}
+	if _, err := p.GetDatabase(ctx, adminNR("databases/etag-db", nil)); err == nil {
+		t.Error("GetDatabase after delete succeeded, want NotFound")
+	}
+}

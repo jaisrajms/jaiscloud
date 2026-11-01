@@ -106,6 +106,85 @@ func TestUnaryDocumentCRUD(t *testing.T) {
 	_ = db
 }
 
+// TestUnaryEmptyResponseMask pins DC60 on the gRPC surface: a set-but-empty
+// DocumentMask is an explicit request for zero fields, distinct from an unset
+// mask (which returns every field). The document's name is still returned.
+func TestUnaryEmptyResponseMask(t *testing.T) {
+	client, _, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := client.CreateDocument(ctx, &firestorepb.CreateDocumentRequest{
+		Parent:       listenParent,
+		CollectionId: "mask-empty",
+		DocumentId:   "d1",
+		Document:     &firestorepb.Document{Fields: map[string]*firestorepb.Value{"n": intPb(5)}},
+	})
+	if err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+
+	got, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{
+		Name: created.GetName(),
+		Mask: &firestorepb.DocumentMask{},
+	})
+	if err != nil {
+		t.Fatalf("GetDocument(empty mask): %v", err)
+	}
+	if len(got.GetFields()) != 0 {
+		t.Fatalf("empty response mask returned fields: %v", got.GetFields())
+	}
+	if got.GetName() != created.GetName() {
+		t.Errorf("empty response mask dropped the name: %q", got.GetName())
+	}
+
+	list, err := client.ListDocuments(ctx, &firestorepb.ListDocumentsRequest{
+		Parent:       listenParent,
+		CollectionId: "mask-empty",
+		Mask:         &firestorepb.DocumentMask{},
+	})
+	if err != nil {
+		t.Fatalf("ListDocuments(empty mask): %v", err)
+	}
+	if len(list.GetDocuments()) != 1 {
+		t.Fatalf("ListDocuments returned %d documents", len(list.GetDocuments()))
+	}
+	if len(list.GetDocuments()[0].GetFields()) != 0 {
+		t.Fatalf("empty response mask returned fields: %v", list.GetDocuments()[0].GetFields())
+	}
+
+	// The unset-mask form still returns every field.
+	full, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDocument(no mask): %v", err)
+	}
+	if full.GetFields()["n"].GetIntegerValue() != 5 {
+		t.Fatalf("unset mask did not return the fields: %v", full.GetFields())
+	}
+
+	// UpdateDocument's response mask is resolved the same way.
+	op, err := client.UpdateDocument(ctx, &firestorepb.UpdateDocumentRequest{
+		Document: &firestorepb.Document{
+			Name:   created.GetName(),
+			Fields: map[string]*firestorepb.Value{"n": intPb(6)},
+		},
+		Mask: &firestorepb.DocumentMask{},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDocument(empty response mask): %v", err)
+	}
+	if len(op.GetFields()) != 0 {
+		t.Fatalf("empty response mask returned fields: %v", op.GetFields())
+	}
+	stored, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDocument after patch: %v", err)
+	}
+	if stored.GetFields()["n"].GetIntegerValue() != 6 {
+		t.Errorf("empty response mask restricted the write: %v", stored.GetFields())
+	}
+}
+
 // TestUnaryUpdateDocumentMaskPresence distinguishes the three update_mask
 // states through the generated client/server: a populated mask patches only the
 // listed paths, a set-but-empty mask is AIP-134's no-op, and an unset mask
