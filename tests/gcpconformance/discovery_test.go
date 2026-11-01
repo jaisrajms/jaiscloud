@@ -103,6 +103,145 @@ func TestCommonLocationGetMatchesLocationSchema(t *testing.T) {
 	}
 }
 
+// TestMonitoringV1DashboardsMerged pins the multi-version snapshot merge: the
+// v1 dashboards document is folded into the v3 "monitoring" document, so the
+// dashboards methods are matchable under the same service key while the
+// primary document keeps its version/rootUrl and every v3 method.
+func TestMonitoringV1DashboardsMerged(t *testing.T) {
+	docs := loadDocs(t)
+	doc := docs["monitoring"]
+	if doc == nil {
+		t.Fatal("monitoring doc not loaded")
+	}
+	if doc.Version != "v3" {
+		t.Fatalf("primary version = %q, want v3", doc.Version)
+	}
+	if _, ok := docs["monitoring@v1"]; ok {
+		t.Fatal("versioned snapshot must merge into the primary, not stay a separate key")
+	}
+
+	ix := BuildMethodIndex(docs)
+	cases := []struct{ method, path, want string }{
+		{"GET", "/v1/projects/p/dashboards", "monitoring.projects.dashboards.list"},
+		{"POST", "/v1/projects/p/dashboards", "monitoring.projects.dashboards.create"},
+		{"GET", "/v1/projects/p/dashboards/d1", "monitoring.projects.dashboards.get"},
+		{"PATCH", "/v1/projects/p/dashboards/d1", "monitoring.projects.dashboards.patch"},
+		{"DELETE", "/v1/projects/p/dashboards/d1", "monitoring.projects.dashboards.delete"},
+		// The v3 methods survive the merge and still match under monitoring.
+		{"GET", "/v3/projects/p/alertPolicies", "monitoring.projects.alertPolicies.list"},
+	}
+	for _, tc := range cases {
+		_, m, ok := ix.MatchMethodInService("monitoring", tc.method, tc.path)
+		if !ok {
+			t.Errorf("%s %s: no match under monitoring", tc.method, tc.path)
+			continue
+		}
+		if m.ID != tc.want {
+			t.Errorf("%s %s matched %s, want %s", tc.method, tc.path, m.ID, tc.want)
+		}
+	}
+	// The merged schemas make the dashboard response validatable.
+	for _, schema := range []string{"Dashboard", "ListDashboardsResponse", "GridLayout"} {
+		if _, ok := doc.ResolveRef(schema); !ok {
+			t.Errorf("merged document cannot resolve schema %q", schema)
+		}
+	}
+	// Every merged method resolves against the primary document.
+	doc.WalkMethods(func(m *Method) {
+		if m.doc != doc {
+			t.Errorf("method %s is not attached to the primary document", m.ID)
+		}
+	})
+}
+
+// TestMergeDiscoveryVersionPrefersPrimary covers the merge rule directly: a
+// method or schema the primary already declares is never overwritten.
+func TestMergeDiscoveryVersionPrefersPrimary(t *testing.T) {
+	primary := &DiscoveryDoc{
+		Version: "v3",
+		Resources: map[string]*Resource{
+			"projects": {Methods: map[string]*Method{"get": {ID: "primary.get"}}, Resources: map[string]*Resource{}},
+		},
+		Schemas: map[string]*Schema{"Shared": {Type: "primary"}},
+	}
+	secondary := &DiscoveryDoc{
+		Version: "v1",
+		Resources: map[string]*Resource{
+			"projects": {
+				Methods: map[string]*Method{"get": {ID: "secondary.get"}, "create": {ID: "secondary.create"}},
+				Resources: map[string]*Resource{
+					"dashboards": {Methods: map[string]*Method{"list": {ID: "secondary.dashboards.list"}}},
+				},
+			},
+		},
+		Schemas: map[string]*Schema{"Shared": {Type: "secondary"}, "Extra": {Type: "extra"}},
+	}
+	mergeDiscoveryVersion(primary, secondary)
+
+	if got := primary.Resources["projects"].Methods["get"].ID; got != "primary.get" {
+		t.Errorf("primary method overwritten: %s", got)
+	}
+	if got := primary.Resources["projects"].Methods["create"].ID; got != "secondary.create" {
+		t.Errorf("secondary method not merged: %s", got)
+	}
+	if got := primary.Resources["projects"].Resources["dashboards"].Methods["list"].ID; got != "secondary.dashboards.list" {
+		t.Errorf("nested resource not merged: %s", got)
+	}
+	if got := primary.Schemas["Shared"].Type; got != "primary" {
+		t.Errorf("primary schema overwritten: %s", got)
+	}
+	if got := primary.Schemas["Extra"].Type; got != "extra" {
+		t.Errorf("secondary schema not merged: %s", got)
+	}
+	if primary.Version != "v3" {
+		t.Errorf("primary version changed: %s", primary.Version)
+	}
+	if primary.Resources["projects"].Methods["create"].doc != primary {
+		t.Error("merged method not attached to the primary document")
+	}
+}
+
+// TestMergeDiscoveryResourcesInitialisesNilChildMaps covers a nil destination
+// map at both levels: a nil document resource map and a primary node whose
+// nested resource map is nil must gain the secondary's children rather than
+// panic on assignment.
+func TestMergeDiscoveryResourcesInitialisesNilChildMaps(t *testing.T) {
+	secondary := map[string]*Resource{
+		"projects": {
+			Methods: map[string]*Method{"get": {ID: "secondary.get"}},
+			Resources: map[string]*Resource{
+				"dashboards": {Methods: map[string]*Method{"list": {ID: "secondary.dashboards.list"}}},
+			},
+		},
+	}
+	primary := map[string]*Resource{
+		// No Resources map: the secondary's dashboards must be merged in.
+		"projects": {Methods: map[string]*Method{"get": {ID: "primary.get"}}},
+	}
+	merged := mergeDiscoveryResources(primary, secondary)
+	if merged["projects"].Resources == nil {
+		t.Fatal("nil child-resource map was not initialized")
+	}
+	if got := merged["projects"].Resources["dashboards"].Methods["list"].ID; got != "secondary.dashboards.list" {
+		t.Fatalf("nested method not merged: %q", got)
+	}
+	if got := merged["projects"].Methods["get"].ID; got != "primary.get" {
+		t.Fatalf("primary method overwritten: %q", got)
+	}
+
+	// A nil destination document map is initialized from the secondary.
+	fromNil := mergeDiscoveryResources(nil, secondary)
+	if fromNil == nil || fromNil["projects"] == nil {
+		t.Fatal("nil destination map was not initialized")
+	}
+	if got := fromNil["projects"].Resources["dashboards"].Methods["list"].ID; got != "secondary.dashboards.list" {
+		t.Fatalf("nil-destination merge lost the nested method: %q", got)
+	}
+	if mergeDiscoveryResources(nil, nil) != nil {
+		t.Fatal("empty merge should stay nil")
+	}
+}
+
 func TestResolveRefForms(t *testing.T) {
 	docs := loadDocs(t)
 	storage := docs["storage"]
