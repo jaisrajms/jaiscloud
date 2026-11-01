@@ -151,6 +151,7 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 - [Multi-Cloud Spark Transforms](#multi-cloud-spark-transforms)
   - [Azure](#azure-spark-transform)
   - [GCP](#gcp-spark-transform)
+- [Plugins](#plugins)
 - [Platform Setup](#platform-setup)
 
 ---
@@ -2476,6 +2477,108 @@ export JAISCLOUD_PLATFORM_TLS_ENABLED=false   # GCP root CAs already trusted by 
 
 ./jaiscloud-gcp start --dsn "postgres://..."
 ```
+
+---
+
+## Plugins
+
+User-facing guide: [docs/PLUGINS.md](docs/PLUGINS.md). SDK reference: [sdk/README.md](sdk/README.md).
+This section is for people changing the emulator itself.
+
+### Where the code is
+
+| Path | Role |
+|---|---|
+| `sdk/` | Public contract (nested stdlib-only module `github.com/jaisrajms/jaiscloud/sdk`): `Manifest`, `Route`, `Request`, `Result`, `Mux`, the HTTP server and the wire shapes |
+| `internal/pluginhost/` | Loads plugins, turns routes into links on the provider registry, retries and fails closed, projects params to JSON and back, serves the store callbacks. `loader_so.go` (cgo, linux/darwin) opens a `.so`; `loader_stub.go` is every other build; `local.go` and `links.go` (`callLocal`) call an in-process plugin; `buildinfo.go` describes the build a plugin must match |
+| `internal/aws/seams/`, `internal/gcp/seams/` | Service-to-service calls made as ordinary registry clients (origin `internal`) |
+| `internal/gcp/grpcplugin/` | GCP gRPC interceptor: maps an RPC to its REST twin's registry key |
+| `internal/gcp/pluginchain/` | The shadow registry shared by the gRPC interceptor and the typed console |
+| `internal/gcp/ui/routed.go`, `ui/typed*.go` | Console calls routed through the registry or the plugin chain |
+| `sdk/examples/inprocess/` | The in-process example (AWS and GCP), also what `tests/plugins/inprocess_e2e_test.go` builds |
+| `Dockerfile.plugins` | The glibc/cgo image that loads `.so` plugins, with the example plugin built by the same toolchain |
+| `tests/plugins/` | End-to-end tests against the real binaries (tag `plugin_e2e`; the in-process ones also need cgo on linux or darwin) |
+
+### The rule to keep
+
+The registry is the only way into a service. When you add a call from one service to another, a poller,
+a scheduler or a console method, make it a `Registry.Dispatch` (or a seam) with the right `nr.Origin`.
+A direct call to another provider silently bypasses plugins. Two guards fail the build when that happens:
+`cmd/jaiscloud-aws/architecture_test.go` and `cmd/jaiscloud-gcp/architecture_test.go`. A link that is not
+an API call (an event bus, an executor) goes in the guard's allow-list with a reason.
+
+For GCP, also keep these in step when you add or change a service:
+
+- `internal/gcp/grpcplugin/testdata/coverage.golden` lists, per served service, which RPCs reach a key and
+  which have no REST twin. Regenerate it with the test's update flag and review the diff.
+- `internal/gcp/ui/routed_guard_test.go` fails if a console method is neither forwarded through the
+  registry nor listed as an emulator-only helper.
+- A console service on typed structs needs a `ui/typed_<service>.go` forwarder and a passthrough test.
+
+### In-process plugins
+
+Go loads a `.so` only into a binary built by the same toolchain, with the same flags and the same source
+for every shared package. The emulator and the plugins are therefore built from `PLUGIN_FLAGS` in the
+Makefile (`-trimpath`, `CGO_ENABLED=1`): `make build-plugins` and `make plugin` / `make plugin-example`.
+Change the flags in one place only.
+
+How a call reaches a `.so`: `pluginhost.Load` opens it (`openSO`), checks its manifest like any other, and
+adopts it as a `plugin` with `local` set. The links are the same ones an HTTP plugin gets; `plugin.call`
+branches to `callLocal`, which passes the raw `nr.Params` (no JSON projection), a `localStore` and, for a
+`replace`, a `Next` that runs the rest of the chain on the same goroutine. Keep these rules when you touch it:
+
+- The Store goes through `storeOp`, shared with the HTTP callbacks, so both enforce the same limits and
+  the in-flight gate. An in-process plugin has no callback token; `authenticate` skips it.
+- A panic on the request goroutine is recovered in `call`. Calls made outside a request (lifecycle,
+  reset, shutdown) go through `guardLocal`.
+- A plugin that uses `Next` or streams lists `sdk.CapInProcess` in `Requires`; an HTTP plugin is not
+  offered it.
+- Two things a plugin must match are not obvious: it has to be a module of its own that requires the SDK
+  (built inside the SDK module, the SDK package differs), and `-trimpath` must agree. `-tags` need not.
+  `TestInProcessRefusesAPluginBuiltInsideTheSDKModule` and `TestInProcessRefusesAPluginFromAnotherBuild`
+  pin both.
+- The release archives are built without cgo, so `loader_stub.go` answers a `so:` spec with a message
+  that names `make build-plugins`.
+
+#### Releasing the SDK so authors can require it
+
+Go treats the SDK as a different package when one build takes it through the repository's
+`replace => ./sdk` and the other from a module version, even with identical source. So the emulator
+that is **published** must be built pinned to the tagged SDK, and plugin authors `require` that tag.
+`sdk.Version` (`sdk/version.go`) is the one place the version lives; `jaiscloud-<cloud> version` prints it as
+the line to require.
+
+1. Change `Version` in `sdk/version.go` in the same pull request as any SDK change that is released. Never
+   reuse a version: the Go module proxy caches a tag for good.
+2. After that commit is on `main`: `make sdk-tag` (checks a clean tree, `HEAD == origin/main`, and that the tag
+   is new), then `git push origin sdk/<version>`.
+3. Build the emulator for release with `make build-plugins-release` (both clouds, pinned to the tag from the module
+   proxy; `PLUGIN_CLOUDS` and `PLUGIN_OUT` narrow it). `make check-sdk-tag` fails if `sdk/` differs from the tag.
+4. `TestInProcessPluginRequiringThePublishedSDKVersion` runs this whole topology against a local module proxy
+   and pins that the checkout build refuses the published plugin.
+
+Builds from a checkout (`make build-plugins`, the tests, `Dockerfile.plugins`) keep the `replace` on purpose.
+
+### Running the plugin tests
+
+```bash
+make test-sdk
+make test-plugins        # builds the binaries; several minutes (includes the cgo builds for in-process)
+go test -tags plugin_e2e -run InProcess ./tests/plugins/    # only the in-process end-to-end tests
+go test -race ./internal/pluginhost/ ./internal/gcp/grpcplugin/ ./internal/gcp/seams/ ./internal/gcp/ui/
+```
+
+Plugin tests that compare a value read back through the REST rendering must not depend on the host's
+clock resolution: REST timestamps carry microseconds, so `internal/gcp/ui` runs its tests on a
+microsecond clock (`TestMain` in `typed_test.go`).
+
+### Known limitations
+
+The same list as [docs/PLUGINS.md#limitations](docs/PLUGINS.md#limitations). In short: out-of-process
+plugins see JSON only (streams are observable, not replaceable) and fail closed with no fallback to the
+built-in; in-process plugins need a cgo build and a matching toolchain and share the process; plugins load
+at startup only; and on GCP there is no interception of RPCs without a REST twin or of the generic
+long-running operation RPCs. Design record and decisions D1 to D33 are kept with the plugin design notes.
 
 ---
 

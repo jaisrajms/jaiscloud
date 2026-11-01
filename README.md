@@ -479,6 +479,57 @@ jaiscloud-aws snapshot inspect <name>          # show snapshot metadata
 
 ---
 
+## Plugins
+
+Change how a running emulator answers calls without forking it: audit or rewrite requests, replace one
+action or a whole service, and keep plugin state in JaisCloud's own stores so `reset`, `export` / `import`,
+snapshots and the frozen clock cover it. A plugin is either a small HTTP/JSON process (any language, works
+with every release) or Go code loaded into the emulator itself (**in-process**, for wrapping the built-in
+and answering with streams). The Go SDK is in [sdk/README.md](sdk/README.md).
+
+```bash
+(cd sdk && go run ./examples/audit) &              # a plugin listening on 127.0.0.1:9100
+jaiscloud-aws start --plugin http://127.0.0.1:9100
+```
+
+An in-process plugin needs an emulator built with cgo (linux or darwin) and a plugin built to match it:
+
+```bash
+make build-plugins-aws                        # jaiscloud-aws-plugins (or build-plugins-gcp)
+make plugin-example OUT=inprocess.so          # sdk/examples/inprocess, built to match
+./jaiscloud-aws-plugins start --plugin so:$PWD/inprocess.so
+```
+
+The same `.so` serves AWS and GCP; the example wraps SQS `SendMessage` and Pub/Sub publish with `Next`,
+answers an S3 read with a stream, and keeps state in memory that `reset` and `export` / `import` cover.
+`docker build -f Dockerfile.plugins .` builds the matching container image.
+
+If a plugin overrides a key, every caller uses it: client requests, one service calling another
+(SNS to SQS, pollers, executors), Step Functions, CloudFormation, the console and, on GCP, gRPC. With no
+plugin configured nothing changes.
+
+**Limitations.**
+
+- Plugins are loaded at startup only (no hot reload). New services and new path routes are not available
+  yet; the SDK is experimental.
+- An out-of-process plugin sees everything as JSON, so it can observe but not replace a binary stream (for
+  example a wire S3 `GetObject` body), and requests and responses over 32 MiB are refused. An in-process
+  plugin has neither limit.
+- An in-process plugin needs a cgo build of the emulator (linux or darwin; the release archives and images
+  are static and cannot load one), must be built with the same Go release, `-trimpath` and SDK source, and
+  shares the emulator's process: a panic in a goroutine it starts stops the emulator. No release artifact
+  for the cgo build is published yet.
+- A failing out-of-process plugin is never bypassed: its keys answer `503 PluginUnavailable` until it is back.
+- A plugin that replaces a service also owns that service's background behaviour (expiry, schedules,
+  alarms); the test-hook endpoints send it a `tick:<service>` event.
+- GCP gRPC: RPCs with no REST twin (Cloud Storage v2, Pub/Sub `StreamingPull`, Firestore `Listen`/`Write`
+  and others) cannot be intercepted, and streaming RPCs are checked once, at stream open.
+- GCP console: with a plugin in the path the console shows the REST rendering of a resource.
+
+Full guide, diagrams and the complete limitation list: [docs/PLUGINS.md](docs/PLUGINS.md).
+
+---
+
 ## Admin API
 
 All endpoints are available at the emulator's base URL (default `http://localhost:4566`; `http://localhost:8080` for the GCP binary).
