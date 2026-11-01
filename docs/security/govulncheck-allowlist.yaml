@@ -1,0 +1,47 @@
+# Cited exceptions for `make security-scan-go` (govulncheck) — SEC1.
+#
+# This file is NOT a mute button. `tools/vulnallow` fails the security gate when
+# a reported (advisory, module) pair is missing here, and it fails just as loudly
+# when an entry here no longer matches a finding (a fixed advisory must leave the
+# file, so a stale line cannot hide the next one).
+#
+# Rules for adding an entry:
+#   1. Fix it instead, whenever a patched release exists and the upgrade does
+#      not change wire behaviour.
+#   2. If it cannot be fixed here, record it in the SEC1 row of
+#      plan_docs/gcp-remaining-wave-plan.md with the advisory id, the affected
+#      module, and the upstream issue/advisory URL.
+#   3. Copy that citation into the entry below, with the reason it is not fixed.
+#   4. Never delete the reason. Never add an entry "to make CI green".
+exempt:
+  # hamba/avro is archived upstream (github.com/hamba/avro, archived 2026-01-18)
+  # and the Go vulnerability DB lists no fixed version for it. The patch landed in
+  # the maintained fork github.com/iskorotkov/avro/v2 v2.33.0 — but every release
+  # from v2.31.0 on (fork and upstream alike) decodes a multi-branch union into the
+  # branch's natural value instead of map[branch]value, and
+  # internal/gcp/provider/bigquery/load.go derives the documented BigQuery
+  # multi-branch-union RECORD schema (one nullable field per branch) from those
+  # keys. Swapping the module therefore changes BigQuery load results and derived
+  # schemas — wire behaviour, which SEC1 must not touch. The migration belongs to
+  # a BigQuery Avro work item, not to a dependency bump.
+  - id: GO-2026-5046
+    module: github.com/hamba/avro/v2
+    reason: >-
+      hamba/avro is archived with no patched release; the fix (iskorotkov/avro/v2
+      v2.33.0) changes multi-branch union decode representation, which would
+      change BigQuery Avro load results and derived schemas.
+    url: https://github.com/advisories/GHSA-w8j3-pq8g-8m7w
+  - id: GO-2026-5047
+    module: github.com/hamba/avro/v2
+    reason: >-
+      hamba/avro is archived with no patched release; the fix (iskorotkov/avro/v2
+      v2.33.0) changes multi-branch union decode representation, which would
+      change BigQuery Avro load results and derived schemas.
+    url: https://github.com/advisories/GHSA-mc57-h6j3-3hmv
+  - id: GO-2026-5048
+    module: github.com/hamba/avro/v2
+    reason: >-
+      hamba/avro is archived with no patched release; the fix (iskorotkov/avro/v2
+      v2.33.0) changes multi-branch union decode representation, which would
+      change BigQuery Avro load results and derived schemas.
+    url: https://github.com/advisories/GHSA-mx64-mj3q-7prj

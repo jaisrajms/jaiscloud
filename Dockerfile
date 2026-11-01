@@ -16,7 +16,11 @@ RUN mkdir -p /src/internal/ui && pnpm run build
 
 # ─── Stage 2: build ──────────────────────────────────────────────────────────
 # --platform=$BUILDPLATFORM ensures the correct Go binary is used for the target architecture in multi-platform builds.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+# Pinned to the patch release `go.mod` requires: the stdlib advisories fixed in
+# go1.26.9/go1.26.10 are baked into the shipped binary, and `make security-scan`
+# reads the binary's embedded module list, so a floating tag would let an older
+# patch back in.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS builder
 
 # Build args injected by Docker Buildx for multi-platform builds
 ARG TARGETOS
