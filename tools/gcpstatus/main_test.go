@@ -623,7 +623,7 @@ func TestResolvedOverlay(t *testing.T) {
 	entries := []resolvedEntry{
 		{Source: "gcp-terraform", Match: "project-level-iam", PR: 151, Note: "done in #151"},
 	}
-	prs := []ghPR{{Number: 151, State: "MERGED"}, {Number: 200, State: "OPEN"}}
+	prs := []ghPR{{Number: 151, State: "MERGED"}, {Number: 200, State: "OPEN"}, {Number: 534, State: "MERGED"}}
 
 	// Not yet merged -> untouched.
 	open := &Item{ID: "prose:project-level-iam-x", State: "todo", DocState: "open", Disposition: "fix", Source: "plan_docs/gcp-terraform-compat.md"}
@@ -642,6 +642,13 @@ func TestResolvedOverlay(t *testing.T) {
 	applyResolved([]*Item{other}, entries, prs)
 	if other.State != "todo" {
 		t.Fatalf("source filter must exclude non-matching docs: %+v", other)
+	}
+	// A row held open by its declared branch (the close-out session's own
+	// branch in the wave plan) still closes on the overlay's merged PR.
+	branched := &Item{ID: "TD24", State: "branch", DocState: "open", Disposition: "fix", Branch: "chore/gcp-ledger-closeouts", Source: "plan_docs/gcp-test-depth-wave-plan.md"}
+	applyResolved([]*Item{branched}, []resolvedEntry{{Match: "TD24", PR: 534, Note: "done in #534"}}, prs)
+	if branched.State != "merged" || branched.PR != 534 || branched.DocState != "done" {
+		t.Fatalf("a merged overlay PR must close a branch-state row: %+v", branched)
 	}
 }
 

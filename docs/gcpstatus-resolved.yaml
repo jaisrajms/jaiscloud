@@ -268,3 +268,35 @@ entries:
     match: "Docker execution mode"
     pr: 383
     note: "resolved: Cloud Run docker runtime shipped as D1 (#383); stale optional row"
+
+  # W1.1 (ledger close-outs): fixes that merged but whose source docs still read
+  # open. Each row is matched on a phrase from the ORIGINAL gap (so an
+  # unedited scratch copy closes too) and is evidence-gated on its merged PR.
+  - source: "gcp-remaining-wave-plan"
+    match: "merged fixes (#532"
+    pr: 532
+    note: "resolved: in-flight Cloud Run operation metadata shipped in #532 (TD23)"
+  - source: "gcp-test-depth-wave-plan"
+    match: "fail-open shape"
+    pr: 534
+    note: "resolved: an unrecognized codec custom verb now fails loud in #534 (TD24)"
+  - source: "DC10-depth-closure-wave-plan"
+    match: "silently coerce a negative"
+    pr: 571
+    note: "resolved: the bespoke pagers reject a negative pageSize in #571 (DC22)"
+  - source: "DC10-depth-closure-wave-plan"
+    match: "still renders its wrapping"
+    pr: 584
+    note: "resolved: an EXPIRED import job omits its wrapping public key in #584 (DC43)"
+  - source: "DC10-depth-closure-wave-plan"
+    match: "recorded blocker"
+    pr: 591
+    note: "resolved: an empty-mask commit is a no-op in #591 (DC59)"
+  - source: "DC10-depth-closure-wave-plan"
+    match: "every write without ever calling"
+    pr: 591
+    note: "resolved: documents:batchWrite notifies Listen subscribers in #591 (DC66)"
+  - source: "gcp-remaining-wave-plan"
+    match: "decapsulate"
+    pr: 423
+    note: "resolved: KMS Service.Decapsulate + :decapsulate adapter mapping shipped in #423 (B1-6)"
