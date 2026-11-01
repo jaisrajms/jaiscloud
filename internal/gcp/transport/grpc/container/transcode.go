@@ -510,8 +510,14 @@ func networkPolicyProviderToProto(s string) containerpb.NetworkPolicy_Provider {
 
 func operationStatusToProto(status string) containerpb.Operation_Status {
 	switch status {
+	case containerstore.OperationStatusPending:
+		return containerpb.Operation_PENDING
+	case containerstore.OperationStatusRunning:
+		return containerpb.Operation_RUNNING
 	case containerstore.OperationStatusDone:
 		return containerpb.Operation_DONE
+	case containerstore.OperationStatusAborting:
+		return containerpb.Operation_ABORTING
 	default:
 		return containerpb.Operation_STATUS_UNSPECIFIED
 	}

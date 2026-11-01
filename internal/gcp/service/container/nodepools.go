@@ -21,6 +21,14 @@ func (s *Service) CreateNodePool(ctx context.Context, project, location, cluster
 	if err != nil {
 		return containerstore.Operation{}, err
 	}
+	// One operation per node pool: a pool that already has an operation running
+	// is rejected, while other pools of the cluster stay mutable.
+	release, err := s.acquireOperation(ctx, project, location,
+		ClusterName(project, location, cluster), NodePoolName(project, location, cluster, p.Name))
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	var clusterNodeVersion string
 	err = s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
 		for _, existing := range c.NodePools {
@@ -130,9 +138,15 @@ func (s *Service) ListNodePools(ctx context.Context, project, location, cluster 
 
 // DeleteNodePool removes a node pool and returns the DELETE_NODE_POOL operation.
 func (s *Service) DeleteNodePool(ctx context.Context, project, location, cluster, pool string) (containerstore.Operation, error) {
+	release, err := s.acquireOperation(ctx, project, location,
+		ClusterName(project, location, cluster), NodePoolName(project, location, cluster, pool))
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	now := clock.Now()
 	var selfLink string
-	err := s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
+	err = s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
 		out := c.NodePools[:0]
 		found := false
 		for _, p := range c.NodePools {
@@ -161,9 +175,15 @@ func (s *Service) DeleteNodePool(ctx context.Context, project, location, cluster
 // UpdateNodePool applies the provided (non-empty) fields of a node pool and
 // returns the UPGRADE_NODES operation. Fields left unset are preserved.
 func (s *Service) UpdateNodePool(ctx context.Context, project, location, cluster string, update containerstore.NodePool) (containerstore.Operation, error) {
+	release, err := s.acquireOperation(ctx, project, location,
+		ClusterName(project, location, cluster), NodePoolName(project, location, cluster, update.Name))
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	now := clock.Now()
 	selfLink := NodePoolName(project, location, cluster, update.Name)
-	err := s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
+	err = s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
 		for i := range c.NodePools {
 			if c.NodePools[i].Name == update.Name {
 				selfLink = c.NodePools[i].SelfLink
@@ -214,9 +234,15 @@ func (s *Service) RollbackNodePoolUpgrade(ctx context.Context, project, location
 // mutateNodePool applies fn to a node pool that must exist and records an
 // operation of the given type.
 func (s *Service) mutateNodePool(ctx context.Context, project, location, cluster, pool, opType string, fn func(*containerstore.NodePool)) (containerstore.Operation, error) {
+	release, err := s.acquireOperation(ctx, project, location,
+		ClusterName(project, location, cluster), NodePoolName(project, location, cluster, pool))
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	now := clock.Now()
 	selfLink := NodePoolName(project, location, cluster, pool)
-	err := s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
+	err = s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
 		for i := range c.NodePools {
 			if c.NodePools[i].Name == pool {
 				selfLink = c.NodePools[i].SelfLink

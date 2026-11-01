@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -51,11 +52,22 @@ var validClusterName = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
 type Service struct {
 	store   containerstore.Store
 	manager ClusterManager
+
+	// opMu serializes a mutation's target check and its operation record while
+	// a simulated in-flight window is open (see operations.go). Both fields are
+	// set at construction, before any call, so they need no further locking.
+	opMu                      sync.Mutex
+	operationWindow           time.Duration
+	concurrentOperationsQuota int
 }
 
 // NewService returns a GKE core over the store using the mock ClusterManager.
-func NewService(s containerstore.Store) *Service {
-	return &Service{store: s, manager: MockClusterManager{}}
+func NewService(s containerstore.Store, opts ...Option) *Service {
+	svc := &Service{store: s, manager: MockClusterManager{}}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
 }
 
 // SetClusterManager overrides the cluster manager seam. A nil manager is a
@@ -105,6 +117,13 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	}
 
 	now := clock.Now()
+	// GKE serializes mutations: a create for a cluster that already has an
+	// operation running on it is rejected before anything is provisioned.
+	release, err := s.acquireOperation(ctx, project, location, ClusterName(project, location, c.Name), "")
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	c.Location = location
 	c.Status = containerstore.StatusProvisioning
 	if c.CurrentMasterVersion == "" {
@@ -197,10 +216,17 @@ func (s *Service) ListClusters(ctx context.Context, project, location string) ([
 // DeleteCluster deprovisions and removes a cluster, returning the
 // DELETE_CLUSTER operation.
 func (s *Service) DeleteCluster(ctx context.Context, project, location, name string) (containerstore.Operation, error) {
+	// Fetch first so an unknown cluster is the 404 it has always been; the
+	// concurrent-operation check only guards a cluster that exists.
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
 		return containerstore.Operation{}, mapStoreErr(err)
 	}
+	release, err := s.acquireOperation(ctx, project, location, ClusterName(project, location, name), "")
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	if err := s.manager.Deprovision(ctx, c); err != nil {
 		return containerstore.Operation{}, err
 	}
@@ -214,27 +240,32 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, name str
 	return op, nil
 }
 
-// GetOperation returns an operation by id.
+// GetOperation returns an operation by id, with a simulated in-flight
+// operation settled to DONE once its window has elapsed.
 func (s *Service) GetOperation(ctx context.Context, project, location, name string) (containerstore.Operation, error) {
 	op, err := s.store.GetOperation(ctx, project, location, name)
 	if err != nil {
 		return containerstore.Operation{}, mapStoreErr(err)
 	}
-	return op, nil
+	return s.settleOperation(op), nil
 }
 
-// ListOperations lists operations under a location, sorted by id.
+// ListOperations lists operations under a location, sorted by id, with
+// simulated in-flight operations settled to DONE once their window has elapsed.
 func (s *Service) ListOperations(ctx context.Context, project, location string) ([]containerstore.Operation, error) {
 	ops, err := s.store.ListOperations(ctx, project, location)
 	if err != nil {
 		return nil, mapStoreErr(err)
+	}
+	for i := range ops {
+		ops[i] = s.settleOperation(ops[i])
 	}
 	return ops, nil
 }
 
 func (s *Service) newOperation(project, location, opType, targetLink string, now time.Time) containerstore.Operation {
 	name := newOperationID()
-	return containerstore.Operation{
+	op := containerstore.Operation{
 		ProjectID:     project,
 		Location:      location,
 		Name:          name,
@@ -245,6 +276,13 @@ func (s *Service) newOperation(project, location, opType, targetLink string, now
 		StartTime:     now,
 		EndTime:       now,
 	}
+	if s.operationWindow > 0 {
+		// A simulated in-flight operation is RUNNING for one window and leaves
+		// endTime unset, as real GKE does until the operation completes.
+		op.Status = containerstore.OperationStatusRunning
+		op.EndTime = time.Time{}
+	}
+	return op
 }
 
 func newOperationID() string {

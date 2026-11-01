@@ -2,12 +2,15 @@ package container
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/container"
 	containerstore "jaiscloud/internal/gcp/store/container"
 )
@@ -374,5 +377,45 @@ func TestInvalidNameMessagesMatchREST(t *testing.T) {
 	})
 	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "invalid node pool name: "+badPool {
 		t.Fatalf("create node pool error = %v (%q)", err, status.Convert(err).Message())
+	}
+}
+
+// TestOperationConflictSurfacesOnGRPC proves the simulated in-flight window is
+// visible over the native ClusterManager transport: a running operation reads
+// RUNNING, an overlapping mutation is FAILED_PRECONDITION with the real GKE
+// message, and an exhausted concurrent-operations quota is RESOURCE_EXHAUSTED.
+func TestOperationConflictSurfacesOnGRPC(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	svc := NewService(core.NewService(containerstore.NewMemoryStore(),
+		core.WithOperationWindow(time.Hour), core.WithConcurrentOperationQuota(1)), "p")
+	parent := "projects/p/locations/us-central1"
+
+	op, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: pbCluster("c1")})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if op.GetStatus() != containerpb.Operation_RUNNING {
+		t.Fatalf("create operation status = %v, want RUNNING", op.GetStatus())
+	}
+
+	_, err = svc.SetLabels(ctx, &containerpb.SetLabelsRequest{
+		Name:           parent + "/clusters/c1",
+		ResourceLabels: map[string]string{"k": "v"},
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("overlapping SetLabels code = %v, want FailedPrecondition (%v)", status.Code(err), err)
+	}
+	if msg := status.Convert(err).Message(); !strings.HasPrefix(msg, "Cluster is running incompatible operation ") {
+		t.Fatalf("conflict message = %q", msg)
+	}
+
+	// A second cluster in the same project/location is over the quota of one.
+	_, err = svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: pbCluster("c2")})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("quota rejection code = %v, want ResourceExhausted (%v)", status.Code(err), err)
 	}
 }
