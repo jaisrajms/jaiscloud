@@ -211,3 +211,97 @@ export function pageTitleFor(services: ServiceDescriptor[], pathname: string): s
   const service = serviceForPath(services, pathname)
   return service ? `${service.label} · JaisCloud` : 'JaisCloud Console'
 }
+
+/** A project row as the picker and home card render it. */
+export interface ProjectRowInfo {
+  id: string
+  kind: 'configured' | 'registered' | 'observed' | 'unknown'
+  firstSeen?: string
+  lastSeen?: string
+  services?: string[]
+  requests?: number
+}
+
+export interface ProjectGroups {
+  /** Observed on the wire but never registered, newest activity first. */
+  active: ProjectRowInfo[]
+  /** Recently used ids, including ones no longer in the server list. */
+  recent: ProjectRowInfo[]
+  /** Configured and registered projects not already shown under Recent. */
+  all: ProjectRowInfo[]
+}
+
+function lastSeenMs(row: ProjectRowInfo): number {
+  const t = row.lastSeen ? Date.parse(row.lastSeen) : NaN
+  return Number.isNaN(t) ? -Infinity : t
+}
+
+/**
+ * Split project rows into the picker's three groups. `accounts` is the
+ * configured ∪ created list the console already had and acts as a fallback when
+ * discovery is unavailable; `recent` is the localStorage list, which keeps an
+ * id reachable after its observed entry is evicted (the client-side backstop).
+ */
+export function groupProjects(
+  accounts: string[],
+  projects: ProjectRowInfo[],
+  recent: string[],
+  query = '',
+): ProjectGroups {
+  const q = query.trim().toLowerCase()
+  const matches = (id: string) => !q || id.toLowerCase().includes(q)
+
+  const observed = projects.filter((project) => project.kind === 'observed')
+  const known = projects.filter((project) => project.kind !== 'observed')
+  const knownIds = new Set(known.map((project) => project.id))
+  const observedIds = new Set(observed.map((project) => project.id))
+  for (const id of accounts) {
+    if (!knownIds.has(id) && !observedIds.has(id)) {
+      known.push({ id, kind: 'configured' })
+      knownIds.add(id)
+    }
+  }
+  known.sort((a, b) => a.id.localeCompare(b.id))
+
+  const active = observed
+    .filter((project) => matches(project.id))
+    .sort((a, b) => lastSeenMs(b) - lastSeenMs(a) || a.id.localeCompare(b.id))
+
+  const byId = new Map<string, ProjectRowInfo>()
+  for (const project of [...observed, ...known]) byId.set(project.id, project)
+
+  const recentRows: ProjectRowInfo[] = []
+  const recentIds = new Set<string>()
+  for (const id of recent) {
+    if (!id || recentIds.has(id) || observedIds.has(id) || !matches(id)) continue
+    recentIds.add(id)
+    recentRows.push(byId.get(id) ?? { id, kind: 'unknown' })
+  }
+
+  const all = known.filter((project) => !recentIds.has(project.id) && matches(project.id))
+
+  return { active, recent: recentRows, all }
+}
+
+/** Up to `limit` service labels for a project's chips. */
+export function projectServiceChips(
+  services: string[] | undefined,
+  labelFor?: (id: string) => string,
+  limit = 3,
+): string[] {
+  return (services ?? [])
+    .slice(0, limit)
+    .map((id) => labelFor?.(id) ?? id)
+}
+
+/** Relative last-activity label ("18s ago"), empty for an absent timestamp. */
+export function relativeProjectAge(iso: string | undefined, now = Date.now()): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ''
+  const d = Math.max(0, now - t)
+  if (d < 60_000) return `${Math.floor(d / 1000)}s ago`
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`
+  return `${Math.floor(d / 86_400_000)}d ago`
+}

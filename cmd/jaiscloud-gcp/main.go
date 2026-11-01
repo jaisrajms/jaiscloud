@@ -139,6 +139,7 @@ import (
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
+	projectsui "jaiscloud/internal/gcp/ui/projects"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/k8shelpers"
@@ -202,6 +203,7 @@ func main() {
 	root.AddCommand(exportCmd())
 	root.AddCommand(importCmd())
 	root.AddCommand(snapshotCmd())
+	root.AddCommand(projectsCmd())
 	root.AddCommand(kafkaProbeCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -1186,6 +1188,16 @@ func startCmd() *cobra.Command {
 			}
 
 			adminHandler := admin.NewHandler()
+			// Project discovery on the admin plane: the same configured ∪
+			// registered ∪ observed snapshot the console reads, so a shell or CI
+			// job can ask which project a workload actually used.
+			var projectProvider projectsui.ProviderInterface
+			if resourceManagerCore != nil {
+				projectProvider = resourceManagerCore
+			}
+			adminHandler.RegisterProjectLister(projectLister{
+				handler: projectsui.NewHandler(projectProvider, cfg),
+			})
 			// Cloud Functions source archives are served to the K8s code-mount
 			// init container through the shared /lambda/code admin route (the
 			// executor's codeKey is path-safe: "location.id").

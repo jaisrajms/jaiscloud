@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -9,6 +10,7 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  Stack,
   TextField,
   Typography,
 } from '@mui/material'
@@ -17,7 +19,17 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { useAccount, useAccounts } from '../../context/AccountContext'
 import { useMeta } from '../../hooks/useMeta'
 import { useServices } from '../../hooks/useServices'
-import { pushRecent, readRecent, RECENT_PROJECTS_KEY } from './navModel'
+import {
+  groupProjects,
+  projectServiceChips,
+  pushRecent,
+  readRecent,
+  relativeProjectAge,
+  RECENT_PROJECTS_KEY,
+  type ProjectRowInfo,
+} from './navModel'
+import { useProjectDiscovery } from './useProjectDiscovery'
+import { useRegisterProject } from './useRegisterProject'
 
 interface Props {
   open: boolean
@@ -25,8 +37,10 @@ interface Props {
 }
 
 /**
- * "Select a project" dialog: a searchable list of every project the emulator
- * knows, with recently used projects pinned to the top.
+ * "Select a project" dialog: an "Active (not registered)" group for projects a
+ * workload wrote to, recently used projects, then every configured/registered
+ * project. The active rows are selectable — the wire API serves any project id —
+ * and can be registered in place.
  */
 export function ProjectPickerDialog({ open, onClose }: Props) {
   const navigate = useNavigate()
@@ -34,24 +48,33 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
   const { data } = useAccounts()
   const { data: meta } = useMeta()
   const { data: servicesData } = useServices()
+  const { data: discovery } = useProjectDiscovery()
   const [query, setQuery] = useState('')
   const [recent, setRecent] = useState<string[]>(() => readRecent(RECENT_PROJECTS_KEY))
+  const { register, registering, errors } = useRegisterProject()
 
   // Only offer the project manager when the server advertises Resource Manager,
   // so the picker never links to a page whose service is disabled.
   const canManage = (servicesData?.services ?? []).some((s) => s.id === 'resourcemanager')
+  const serviceLabel = useMemo(() => {
+    const byId = new Map((servicesData?.services ?? []).map((s) => [s.id, s.label]))
+    return (id: string) => byId.get(id) ?? id
+  }, [servicesData])
 
   const current = accountId || meta?.accountId || ''
   const accounts = useMemo(
     () => data?.accounts ?? (current ? [current] : []),
     [data, current],
   )
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return q ? accounts.filter((account) => account.toLowerCase().includes(q)) : accounts
-  }, [accounts, query])
-  const recentShown = recent.filter((id) => filtered.includes(id))
-  const others = filtered.filter((id) => !recentShown.includes(id))
+  const projects = useMemo(
+    () => (discovery?.projects ?? []) as ProjectRowInfo[],
+    [discovery],
+  )
+  const groups = useMemo(
+    () => groupProjects(accounts, projects, recent, query),
+    [accounts, projects, recent, query],
+  )
+  const empty = groups.active.length === 0 && groups.recent.length === 0 && groups.all.length === 0
 
   const choose = (id: string) => {
     setAccountId(id)
@@ -65,16 +88,59 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
     navigate('/gcp/resourcemanager/projects')
   }
 
-  const projectList = (ids: string[]) => (
-    <List dense disablePadding>
-      {ids.map((id) => (
-        <ListItemButton key={id} selected={id === current} onClick={() => choose(id)}>
-          <ListItemText primary={id} />
-          {id === current && <CheckIcon fontSize="small" />}
+  const row = (project: ProjectRowInfo) => {
+    const observed = project.kind === 'observed'
+    const services = projectServiceChips(project.services, serviceLabel)
+    const age = relativeProjectAge(project.lastSeen)
+    return (
+      <Fragment key={project.id}>
+        <ListItemButton selected={project.id === current} onClick={() => choose(project.id)}>
+          <ListItemText
+            primary={project.id}
+            secondary={
+              observed && (age || services.length > 0) ? (
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5, alignItems: 'center' }}
+                >
+                  {age && (
+                    <Typography variant="caption" color="text.secondary">
+                      {age}
+                    </Typography>
+                  )}
+                  {services.map((service) => (
+                    <Chip key={service} size="small" label={service} variant="outlined" />
+                  ))}
+                </Stack>
+              ) : undefined
+            }
+          />
+          {observed && (
+            <Chip size="small" label="not registered" sx={{ mr: 1 }} variant="outlined" />
+          )}
+          {observed && (
+            <Button
+              size="small"
+              disabled={registering === project.id}
+              onClick={(event) => {
+                event.stopPropagation()
+                void register(project.id)
+              }}
+            >
+              Register
+            </Button>
+          )}
+          {project.id === current && <CheckIcon fontSize="small" />}
         </ListItemButton>
-      ))}
-    </List>
-  )
+        {errors[project.id] && (
+          <Typography variant="caption" color="error" sx={{ display: 'block', pl: 2, pb: 0.5 }}>
+            {errors[project.id]}
+          </Typography>
+        )}
+      </Fragment>
+    )
+  }
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
@@ -90,26 +156,40 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
           slotProps={{ htmlInput: { 'aria-label': 'Search projects' } }}
           sx={{ my: 1 }}
         />
-        {filtered.length === 0 ? (
+        {empty ? (
           <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
             No projects match.
           </Typography>
         ) : (
           <>
-            {recentShown.length > 0 && (
+            {groups.active.length > 0 && (
+              <>
+                <Typography variant="overline" color="text.secondary">
+                  Active (not registered)
+                </Typography>
+                <List dense disablePadding>
+                  {groups.active.map(row)}
+                </List>
+              </>
+            )}
+            {groups.recent.length > 0 && (
               <>
                 <Typography variant="overline" color="text.secondary">
                   Recent
                 </Typography>
-                {projectList(recentShown)}
+                <List dense disablePadding>
+                  {groups.recent.map(row)}
+                </List>
               </>
             )}
-            {others.length > 0 && (
+            {groups.all.length > 0 && (
               <>
                 <Typography variant="overline" color="text.secondary">
                   All projects
                 </Typography>
-                {projectList(others)}
+                <List dense disablePadding>
+                  {groups.all.map(row)}
+                </List>
               </>
             )}
           </>
