@@ -255,6 +255,95 @@ func TestGRPCTaskRetryConfigRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGRPCBatchTasks covers the BatchCreateTasks/BatchDeleteTasks RPCs: each
+// returns a done google.longrunning.Operation, the batch create response carries
+// the created tasks, and every request must sit under the batch parent.
+func TestGRPCBatchTasks(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	newTask := func(url string) *cloudtaskspb.CreateTaskRequest {
+		return &cloudtaskspb.CreateTaskRequest{
+			Parent: q.GetName(),
+			Task: &cloudtaskspb.Task{MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{Url: url, HttpMethod: cloudtaskspb.HttpMethod_POST},
+			}},
+		}
+	}
+	op, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{
+		Parent:   q.GetName(),
+		Requests: []*cloudtaskspb.CreateTaskRequest{newTask("http://example.test/a"), newTask("http://example.test/b")},
+	})
+	if err != nil {
+		t.Fatalf("BatchCreateTasks: %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("BatchCreateTasks operation not done: %+v", op)
+	}
+	resp := &cloudtaskspb.BatchCreateTasksResponse{}
+	if err := op.GetResponse().UnmarshalTo(resp); err != nil {
+		t.Fatalf("BatchCreateTasks response: %v", err)
+	}
+	if len(resp.GetTasks()) != 2 {
+		t.Fatalf("BatchCreateTasks tasks = %d, want 2", len(resp.GetTasks()))
+	}
+	names := make([]string, 0, 2)
+	for _, tk := range resp.GetTasks() {
+		names = append(names, tk.GetName())
+		if _, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: tk.GetName()}); err != nil {
+			t.Fatalf("GetTask(%s): %v", tk.GetName(), err)
+		}
+	}
+
+	del, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: q.GetName(), Names: names})
+	if err != nil {
+		t.Fatalf("BatchDeleteTasks: %v", err)
+	}
+	if !del.GetDone() {
+		t.Fatalf("BatchDeleteTasks operation not done: %+v", del)
+	}
+	if _, err := del.GetResponse().UnmarshalNew(); err != nil {
+		t.Fatalf("BatchDeleteTasks response: %v", err)
+	}
+	for _, name := range names {
+		if _, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: name}); status.Code(err) != codes.NotFound {
+			t.Fatalf("GetTask(%s) after batch delete code = %v, want NotFound", name, status.Code(err))
+		}
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: q.GetName(), Names: names}); status.Code(err) != codes.NotFound {
+		t.Fatalf("BatchDeleteTasks(already gone) code = %v, want NotFound", status.Code(err))
+	}
+
+	// Every request must sit under the batch parent.
+	wrong := newTask("http://example.test/c")
+	wrong.Parent = parent + "/queues/other"
+	if _, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{
+		Parent: q.GetName(), Requests: []*cloudtaskspb.CreateTaskRequest{wrong},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchCreateTasks(mismatched parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{Parent: q.GetName()}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchCreateTasks(no requests) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{Parent: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchCreateTasks(bad parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchDeleteTasks(bad parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: q.GetName(), Names: []string{"bogus"}}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchDeleteTasks(bad name) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{
+		Parent: q.GetName(), Names: []string{parent + "/queues/other/tasks/t1"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchDeleteTasks(mismatched parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
 // TestGRPCListNegativePageSize pins AIP-158 on the gRPC surface: a negative
 // page_size is INVALID_ARGUMENT on both list methods, and queues.list accepts
 // its documented 9800 ceiling.
