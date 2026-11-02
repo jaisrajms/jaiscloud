@@ -13,6 +13,10 @@ import (
 	"strings"
 )
 
+// ProjectPrefix is the root segment of every project-scoped GCP resource name.
+// Use it when validating or parsing a name; build names with ResourceID.
+const ProjectPrefix = "projects/"
+
 // ValidBucketName reports whether name satisfies the GCS bucket-naming
 // character rules: lowercase letters, digits, and '-', '_' or '.', with the
 // name beginning and ending in a letter or digit. It is shared by the REST and

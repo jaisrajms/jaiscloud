@@ -79,10 +79,7 @@ func (s *Service) Seek(ctx context.Context, project, sub string, at *time.Time, 
 		}
 		subTopic, _ := meta["topic"].(string)
 		if snap.Topic != subTopic {
-			return &model.ProviderError{
-				Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-				Message: "snapshot topic " + snap.Topic + " does not match subscription topic " + subTopic,
-			}
+			return model.NewProviderError("FailedPrecondition", "snapshot topic "+snap.Topic+" does not match subscription topic "+subTopic, 400).WithStatus("FAILED_PRECONDITION")
 		}
 		return s.restoreSnapshot(ctx, sub, snap)
 	default:

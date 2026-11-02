@@ -52,12 +52,7 @@ var kmsRolePermissions = map[string][]string{
 // PermissionDenied returns the canonical Cloud IAM denial (HTTP 403 /
 // google.rpc.PERMISSION_DENIED) with the real Cloud KMS message shape.
 func PermissionDenied(permission, resource string) error {
-	return &model.ProviderError{
-		Code:       "PermissionDenied",
-		Message:    "Permission '" + permission + "' denied on resource '" + resource + "' (or it may not exist).",
-		HTTPStatus: 403,
-		Status:     "PERMISSION_DENIED",
-	}
+	return model.NewProviderError("PermissionDenied", "Permission '"+permission+"' denied on resource '"+resource+"' (or it may not exist).", 403).WithStatus("PERMISSION_DENIED")
 }
 
 // AuthorizeKMS evaluates a cryptoKey's stored IAM policy for one crypto-use

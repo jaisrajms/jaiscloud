@@ -590,10 +590,7 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 	var meta map[string]any
 	json.Unmarshal(e.Data, &meta)
 	if detached, _ := meta["detached"].(bool); detached {
-		return nil, mapError(&model.ProviderError{
-			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-			Message: "subscription " + sub + " is detached",
-		})
+		return nil, mapError(model.NewProviderError("FailedPrecondition", "subscription "+sub+" is detached", 400).WithStatus("FAILED_PRECONDITION"))
 	}
 	subFilter, _ := meta["filter"].(string)
 	topic, _ := meta["topic"].(string)
@@ -767,10 +764,7 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	var meta map[string]any
 	json.Unmarshal(e.Data, &meta)
 	if detached, _ := meta["detached"].(bool); detached {
-		return mapError(&model.ProviderError{
-			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-			Message: "subscription " + sub + " is detached",
-		})
+		return mapError(model.NewProviderError("FailedPrecondition", "subscription "+sub+" is detached", 400).WithStatus("FAILED_PRECONDITION"))
 	}
 	exactlyOnce, _ := meta["enableExactlyOnceDelivery"].(bool)
 	ordering, _ := meta["enableMessageOrdering"].(bool)

@@ -12,14 +12,17 @@
 |---|---|---|
 | `clock` | `time.Now()` / `time.Since()` / `time.Until()` | use `clock.Now()` (business) or `clock.RealNow()` (infrastructure) |
 | `clock-realnow` | a `clock.Now()` driving a wall-clock wait (poll-loop condition, a derived deadline compared inside a loop, or an argument to `time.Sleep`/`After`/`NewTimer`/`NewTicker`/`Tick`/`context.WithDeadline`) | use `clock.RealNow()` for infrastructure time |
-| `resource-prefix` | a literal `projects/…`, `organizations/…` or `folders/…` used to **build** a name (`+` operand or `fmt.Sprintf`/`Sprint`/`Sprintln`/`strings.Join` argument) | build it with `internal/gcp/resource.ResourceID` |
-| `store-sentinel` | `==` / `!=` against `store.ErrNotFound` / `store.ErrAlreadyExists` | use `errors.Is` |
+| `resource-prefix` | a literal `projects/…`, `organizations/…` or `folders/…` used to **build** a name (`+` operand, `fmt.Sprintf`/`Sprint`/`Sprintln`/`strings.Join` argument, a `const`/`var` assignment, or a `strings.Builder.WriteString`/`Write`/`WriteRune` argument) | build it with `internal/gcp/resource.ResourceID`; parse with `resource.ProjectPrefix` |
+| `store-sentinel` | `==` / `!=` or a `switch` case against `store.ErrNotFound` / `store.ErrAlreadyExists` | use `errors.Is` |
+| `provider-error-ctor` | a direct `&model.ProviderError{…}` under `internal/gcp` (outside `_test.go`) | `model.NewProviderError(...)`, chaining `.WithStatus`/`.WithDetails`/`.WithData` |
 | `unsafe-assert` | a `.(string)` type assertion not in comma-ok form | use `s, ok := x.(string)` |
-| `reset-registration` | a mutating provider/service core that implements `Reset(context.Context)` but is never passed to `RegisterResetter`/`RegisterSnapshotter` | register it (or allowlist if it delegates to a registered store) |
+| `reset-registration` | a mutating provider/service core with no `Reset(context.Context)` hook, or one that has it but is never passed to `RegisterResetter`/`RegisterSnapshotter` | implement and register `Reset` (or allowlist if it delegates to a registered store) |
 | `aws-import` | a file under `internal/gcp` importing `internal/aws` | remove the import (cloud isolation) |
 
 Construction-only for `resource-prefix` means parsing idioms
-(`strings.HasPrefix`/`TrimPrefix`/`Split`) are not flagged.
+(`strings.HasPrefix`/`TrimPrefix`/`Split`) are not flagged. A validation
+pattern that merely starts with a prefix (a quoted regex, for example) is an
+allowlist case with a reason.
 
 ## Usage
 

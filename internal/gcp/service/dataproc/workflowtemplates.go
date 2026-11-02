@@ -111,12 +111,7 @@ func (s *Service) UpdateWorkflowTemplate(ctx context.Context, project, region st
 	now := clock.Now().UTC()
 	updated, err := s.store.UpdateWorkflowTemplateAtomic(ctx, project, region, in.ID, func(cur dpstore.WorkflowTemplate) (dpstore.WorkflowTemplate, error) {
 		if in.Version == 0 || in.Version != cur.Version {
-			return cur, &model.ProviderError{
-				Code:       "Aborted",
-				Message:    "workflow template version mismatch",
-				HTTPStatus: 409,
-				Status:     "ABORTED",
-			}
+			return cur, model.NewProviderError("Aborted", "workflow template version mismatch", 409).WithStatus("ABORTED")
 		}
 		cur.Definition = def
 		cur.Version++

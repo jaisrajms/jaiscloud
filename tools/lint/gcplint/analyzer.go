@@ -63,6 +63,7 @@ func run(pass *analysis.Pass) (any, error) {
 			checkClockRealNow(pass, file)
 			checkResourcePrefix(pass, file)
 			checkStoreSentinel(pass, file)
+			checkProviderErrorCtor(pass, file)
 			checkUnsafeAssert(pass, file)
 			checkAWSImport(pass, file)
 		}
@@ -355,7 +356,30 @@ func checkResourcePrefix(pass *analysis.Pass, file *ast.File) {
 			if lit, ok := v.Y.(*ast.BasicLit); ok {
 				reportLit(lit)
 			}
+		case *ast.ValueSpec:
+			// A literal assigned to a name, e.g. const prefix = "projects/".
+			for _, value := range v.Values {
+				if lit, ok := value.(*ast.BasicLit); ok {
+					reportLit(lit)
+				}
+			}
+		case *ast.AssignStmt:
+			for _, value := range v.Rhs {
+				if lit, ok := value.(*ast.BasicLit); ok {
+					reportLit(lit)
+				}
+			}
 		case *ast.CallExpr:
+			// strings.Builder writes build a name just as concatenation does.
+			if isStringsBuilderWrite(pass, v) {
+				ast.Inspect(v, func(m ast.Node) bool {
+					if lit, ok := m.(*ast.BasicLit); ok {
+						reportLit(lit)
+					}
+					return true
+				})
+				return true
+			}
 			// A name-construction call: report any prefixed literal anywhere in
 			// its arguments (they nest inside composite literals, e.g.
 			// strings.Join([]string{"projects/", id}, "")).
@@ -377,25 +401,86 @@ func checkResourcePrefix(pass *analysis.Pass, file *ast.File) {
 
 func checkStoreSentinel(pass *analysis.Pass, file *ast.File) {
 	ast.Inspect(file, func(n ast.Node) bool {
-		be, ok := n.(*ast.BinaryExpr)
-		if !ok || (be.Op != token.EQL && be.Op != token.NEQ) {
+		switch v := n.(type) {
+		case *ast.BinaryExpr:
+			if v.Op != token.EQL && v.Op != token.NEQ {
+				return true
+			}
+			for _, e := range []ast.Expr{v.X, v.Y} {
+				if name, ok := storeSentinelOf(pass, e); ok {
+					report(pass, file, v.Pos(), "store-sentinel",
+						"compare store.%s with errors.Is, not %s (CLAUDE.md)", name, v.Op)
+				}
+			}
+		case *ast.SwitchStmt:
+			for _, stmt := range v.Body.List {
+				cc, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, e := range cc.List {
+					if name, ok := storeSentinelOf(pass, e); ok {
+						report(pass, file, e.Pos(), "store-sentinel",
+							"compare store.%s with errors.Is, not a switch case (CLAUDE.md)", name)
+					}
+				}
+			}
+		}
+		return true
+	})
+}
+
+// storeSentinelOf reports the store sentinel an expression names, if any.
+func storeSentinelOf(pass *analysis.Pass, e ast.Expr) (string, bool) {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	v, ok := pass.TypesInfo.Uses[sel.Sel].(*types.Var)
+	if !ok || v.Pkg() == nil || v.Pkg().Path() != "jaiscloud/internal/store" {
+		return "", false
+	}
+	switch v.Name() {
+	case "ErrNotFound", "ErrAlreadyExists":
+		return v.Name(), true
+	}
+	return "", false
+}
+
+// builderWriteMethods are the strings.Builder methods that append a name part.
+var builderWriteMethods = map[string]bool{"WriteString": true, "Write": true, "WriteRune": true}
+
+// isStringsBuilderWrite reports whether call is a write on a *strings.Builder.
+func isStringsBuilderWrite(pass *analysis.Pass, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || !builderWriteMethods[sel.Sel.Name] {
+		return false
+	}
+	nt := namedType(pass.TypesInfo.TypeOf(sel.X))
+	return nt != nil && nt.Obj().Pkg() != nil &&
+		nt.Obj().Pkg().Path() == "strings" && nt.Obj().Name() == "Builder"
+}
+
+// ---- rule: provider-error-ctor --------------------------------------------
+
+// checkProviderErrorCtor flags a direct &model.ProviderError{...} construction
+// under the GCP tree: the constructor is the one place the code/status/HTTP
+// mapping is applied, and the fluent With* helpers cover the overrides.
+func checkProviderErrorCtor(pass *analysis.Pass, file *ast.File) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
 			return true
 		}
-		for _, e := range []ast.Expr{be.X, be.Y} {
-			sel, ok := e.(*ast.SelectorExpr)
-			if !ok {
-				continue
-			}
-			v, ok := pass.TypesInfo.Uses[sel.Sel].(*types.Var)
-			if !ok || v.Pkg() == nil || v.Pkg().Path() != "jaiscloud/internal/store" {
-				continue
-			}
-			switch v.Name() {
-			case "ErrNotFound", "ErrAlreadyExists":
-				report(pass, file, be.Pos(), "store-sentinel",
-					"compare store.%s with errors.Is, not %s (CLAUDE.md)", v.Name(), be.Op)
-			}
+		nt := namedType(pass.TypesInfo.TypeOf(cl))
+		if nt == nil || nt.Obj().Pkg() == nil {
+			return true
 		}
+		if nt.Obj().Pkg().Path() != "jaiscloud/internal/model" || nt.Obj().Name() != "ProviderError" {
+			return true
+		}
+		report(pass, file, cl.Pos(), "provider-error-ctor",
+			"build provider errors with model.NewProviderError(...) so the code/status/HTTP mapping is applied in one place (CLAUDE.md); chain .WithStatus/.WithDetails for overrides")
 		return true
 	})
 }
@@ -489,6 +574,7 @@ func checkResetRegistration(pass *analysis.Pass) {
 	}
 
 	unregistered := map[string][]string{}
+	missingReset := map[string][]string{}
 	seen := map[string]bool{}
 	for pkg := range transitiveImports(pass.Pkg) {
 		path := pkg.Path()
@@ -502,13 +588,20 @@ func checkResetRegistration(pass *analysis.Pass) {
 				continue
 			}
 			nt := namedType(obj.Type())
-			if nt == nil || !hasResetMethod(nt) || !hasMutatingMethod(nt) {
-				continue
-			}
-			if registered[qualifiedName(obj)] {
+			if nt == nil || !hasMutatingMethod(nt) {
 				continue
 			}
 			if allow().match(pass.Fset.Position(obj.Pos()).Filename, "reset-registration") {
+				continue
+			}
+			// A mutating core without Reset is in scope even when it is
+			// registered: registration cannot reset state a missing hook never
+			// reaches. One message per type, distinct from the unregistered case.
+			if !hasResetMethod(nt) {
+				missingReset[path] = append(missingReset[path], name)
+				continue
+			}
+			if registered[qualifiedName(obj)] {
 				continue
 			}
 			unregistered[path] = append(unregistered[path], name)
@@ -522,6 +615,16 @@ func checkResetRegistration(pass *analysis.Pass) {
 		}
 		report(pass, file, pos, "reset-registration",
 			"type(s) %s (%s) implement Reset(context.Context) but are never passed to RegisterResetter/RegisterSnapshotter",
+			strings.Join(names, ", "), path)
+	}
+	for path, names := range missingReset {
+		file := fileForImport(pass, path)
+		pos := importPos(pass, path)
+		if file == nil || !pos.IsValid() {
+			continue
+		}
+		report(pass, file, pos, "reset-registration",
+			"mutating core %s (%s) has no Reset(context.Context) hook; every stateful core must implement Reset and be registered (CLAUDE.md)",
 			strings.Join(names, ", "), path)
 	}
 }

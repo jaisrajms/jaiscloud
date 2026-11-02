@@ -121,10 +121,5 @@ func expireTimeString(t time.Time) string {
 // etagMismatch is the failed etag precondition: HTTP 409 with the ABORTED
 // google.rpc status (AIP-154, matching the emulator's other OCC surfaces).
 func etagMismatch(name string) error {
-	return &model.ProviderError{
-		Code:       "Aborted",
-		Message:    "etag mismatch for " + name + ": the resource changed since the etag was read",
-		HTTPStatus: 409,
-		Status:     "ABORTED",
-	}
+	return model.NewProviderError("Aborted", "etag mismatch for "+name+": the resource changed since the etag was read", 409).WithStatus("ABORTED")
 }

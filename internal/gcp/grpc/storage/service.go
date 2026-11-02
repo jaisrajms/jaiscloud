@@ -1133,7 +1133,7 @@ func (s *Service) DeleteObject(ctx context.Context, req *storagepb.DeleteObjectR
 // preconditionErr returns a FAILED_PRECONDITION provider error (HTTP 400),
 // matching the canonical precondition-failure shape used across GCP services.
 func preconditionErr(msg string) error {
-	return &model.ProviderError{Code: "FailedPrecondition", Message: msg, HTTPStatus: 400, Status: "FAILED_PRECONDITION"}
+	return model.NewProviderError("FailedPrecondition", msg, 400).WithStatus("FAILED_PRECONDITION")
 }
 
 // grpcObjectPrecondition builds a gcs.Precondition from a gRPC request's four
@@ -1658,7 +1658,7 @@ func (s *Service) appendData(sess *uploadSession, writeOffset int64, content []b
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if writeOffset != sess.length {
-		return &model.ProviderError{Code: "OutOfRange", Message: "write offset does not match the persisted size", HTTPStatus: 400, Status: "OUT_OF_RANGE"}
+		return model.NewProviderError("OutOfRange", "write offset does not match the persisted size", 400).WithStatus("OUT_OF_RANGE")
 	}
 	if sess.tmpFile != nil {
 		if _, err := sess.tmpFile.Write(content); err != nil {

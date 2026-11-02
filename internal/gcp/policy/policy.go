@@ -54,12 +54,7 @@ func Load(ctx context.Context, s store.ResourceStore, account, resourceType, id 
 // httpToCode(409) (and the REST envelope reports "ABORTED" instead of the
 // generic 409 "ALREADY_EXISTS"). HTTP stays 409 — ABORTED → 409 is correct
 // on the REST path. Scoped to the etag-OCC sentinel; other 409s are untouched.
-var errEtagMismatch = &model.ProviderError{
-	Code:       "Aborted",
-	Message:    "etag mismatch: optimistic concurrency control failed",
-	HTTPStatus: 409,
-	Status:     "ABORTED",
-}
+var errEtagMismatch = model.NewProviderError("Aborted", "etag mismatch: optimistic concurrency control failed", 409).WithStatus("ABORTED")
 
 // Set stores a policy for a resource, enforcing etag OCC. body is the parsed
 // request JSON — either the Policy fields directly, or wrapped in a "policy"
