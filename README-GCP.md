@@ -21,7 +21,7 @@
 | Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`/`batchGet`), `filter=state:ENABLED` |
 | Cloud Resource Manager | REST + gRPC | Project lifecycle (create/get/list/delete/undelete), admin (`update`/`move the parent reference`/`search`) + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`); unknown ids still synthesize as `ACTIVE`, project numbers are deterministic, the org/folder hierarchy itself is not modelled, and a project etag rotates on update/move — authz not enforced |
 | Cloud Scheduler | REST + gRPC | Cron jobs (`jobs` CRUD + `pause`/`resume`/`run`); a real cron engine fires `httpTarget`/`pubsubTarget` jobs on the emulator clock — see [Known Limitations](#known-limitations) |
-| Cloud Tasks | REST + gRPC | Queues (`queues` CRUD + `pause`/`resume`/`purge`, queue IAM) and tasks (`tasks` CRUD + REST `tasks:batchCreate`/`tasks:batchDelete`); a dispatch engine delivers due `httpRequest` tasks with rate limits and retries, and `run` forces an attempt — see [Known Limitations](#known-limitations) |
+| Cloud Tasks | REST + gRPC | Queues (`queues` CRUD + `pause`/`resume`/`purge`, queue IAM) and tasks (`tasks` CRUD + `batchCreate`/`batchDelete`, REST also `buffer`), plus the location CMEK config; a dispatch engine delivers due `httpRequest` tasks with rate limits and retries, and `run` forces an attempt — see [Known Limitations](#known-limitations) |
 | Cloud Firestore (Native mode) | REST + gRPC | Documents, transactions, structured/aggregation/partition queries, composite indexes, `BatchWrite`/`Write`/`Listen` streaming, pipelines (read-only subset); the Admin control plane (databases, collection-group fields, backup schedules, backups, user creds) over REST (`firestore.googleapis.com/v1/…`) and gRPC (`google.firestore.admin.v1.FirestoreAdmin`) |
 | Cloud Datastore mode | REST + gRPC | Entities, queries (structured + GQL), ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke via `:call` or the deployed HTTPS trigger URL (mock echo by default; Docker/K8s run the **GCP Functions Framework** contract — `POST /` on `$PORT`, source at `/workspace` — with the legacy Lambda-RIE contract behind `JAISCLOUD_FUNCTIONS_EXECUTOR=lambda`), locations, source URLs, v2 `serviceConfig` instance/concurrency config (`minInstanceCount`/`maxInstanceCount`/`maxInstanceRequestConcurrency`/`availableCpu`, validated, surfaced + admission-enforced) |
@@ -459,7 +459,9 @@ Cloud Tasks v2 is served over REST (`cloudtasks.googleapis.com/v2`) and gRPC
 (`google.cloud.tasks.v2.CloudTasks`) from one transport-neutral core and store. Queues support
 `create`/`get`/`list`/`patch`/`delete` plus `pause`/`resume`/`purge` and queue IAM
 (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`). Tasks support `create`/`get`/`list`/`delete`
-plus the REST-only `tasks:batchCreate`/`tasks:batchDelete`. Both `httpRequest`
+plus `batchCreate`/`batchDelete` on both surfaces (REST `tasks:batchCreate`/`tasks:batchDelete`, gRPC
+`BatchCreateTasks`/`BatchDeleteTasks`, each a synchronously-completed operation) and the REST-only
+`tasks:buffer`. Both `httpRequest`
 (url/method/headers/body/`oauthToken`/`oidcToken`) and `appEngineHttpRequest` are accepted and
 echoed, and created tasks get a `scheduleTime`, `createTime`, and default `dispatchDeadline`.
 
@@ -474,12 +476,15 @@ and a 2xx response deletes the task while a failure retries with exponential bac
 attempt, bypassing the queue's paused state and rate limits.
 
 Limitations: `appEngineHttpRequest` is stored and echoed but never delivered (no App Engine
-router) — its attempts are recorded as `Unimplemented` failures. REST `tasks:buffer`, task
-auto-expiry (31 days), IAM enforcement (queue policies are stored but not enforced),
-task-level `retryConfig` overrides (the queue's `retryConfig` governs), and
-`oauthToken`/`oidcToken` Google-token minting (a synthetic emulator-local bearer token is attached
-instead) are not modelled. Rate-limit and retry state is in-memory and not persisted across
-restarts; the engine polls once per second, so sustained throughput is bounded by
+router) — its attempts are recorded as `Unimplemented` failures. A task-level `retryConfig`
+overrides the queue's wholesale, and a task is deleted 31 days after its `scheduleTime` (the
+maximum task retention) by the dispatch tick. REST-only `tasks:buffer` accepts a full task (the
+emulator models no queue-level `httpTarget`, so a body-only buffer request is `INVALID_ARGUMENT`);
+`locations.getCmekConfig`/`updateCmekConfig` are stored per project+location over REST and gRPC but
+are metadata only — payloads are kept in plaintext. IAM enforcement (queue policies are stored but
+not enforced) and `oauthToken`/`oidcToken` Google-token minting (a synthetic emulator-local bearer
+token is attached instead) are not modelled. Rate-limit and retry state is in-memory and not
+persisted across restarts; the engine polls once per second, so sustained throughput is bounded by
 `maxBurstSize` per second rather than `maxDispatchesPerSecond`.
 
 ### Managed Kafka: metadata control plane, optional real broker

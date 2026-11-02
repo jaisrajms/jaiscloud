@@ -27,6 +27,23 @@ func OperationName(project, location, id string) string {
 	return resource.ResourceID(project)("tasks-operation", location+"/"+id)
 }
 
+// CmekConfigName returns the location's CMEK config resource name
+// (projects/{project}/locations/{location}/cmekConfig), the name both the REST
+// and gRPC surfaces expose for locations.getCmekConfig/updateCmekConfig.
+func CmekConfigName(project, location string) string {
+	return resource.ResourceID(project)("tasks-cmek", location)
+}
+
+// ParseCmekConfigName splits a canonical CMEK config name
+// (projects/{p}/locations/{l}/cmekConfig). ok is false for any other path.
+func ParseCmekConfigName(name string) (project, location string, ok bool) {
+	segs := strings.Split(strings.Trim(name, "/"), "/")
+	if len(segs) != 5 || segs[0] != "projects" || segs[2] != "locations" || segs[4] != "cmekConfig" {
+		return "", "", false
+	}
+	return segs[1], segs[3], true
+}
+
 // ParseQueueName splits a canonical queue name into its parts. It returns
 // ok=false when the name is not a
 // projects/{p}/locations/{l}/queues/{q} path.

@@ -149,10 +149,11 @@ commit.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **488/488 checks pass** (Dataproc 26,
-  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 13, IAM Credentials 4, KMS 35, Logging 21,
-  Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
-  Scheduler 8, Secret Manager 18, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
+- **gRPC** — official `cloud.google.com/go` clients: **508/508 checks pass** (Cloud Run 15, Container 34,
+  Dataproc 35, Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 16,
+  IAM Credentials 4, KMS 35, Logging 42, Managed Kafka 21, Metastore 18, Monitoring 34, Operations 10,
+  Pub/Sub 25, Resource Manager 11, Scheduler 8, Secret Manager 21, Service Usage 6, Storage 24,
+  Tasks 20, Workflow Executions 4, Workflows 6) against `:8081`. The IAM probes
   include Eventarc trigger/message-bus IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
   `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS, and the IAM Admin service's
   `UploadServiceAccountKey` (the `google.iam.admin.v1.IAM` surface, which also serves the service-account
@@ -225,12 +226,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   proto descriptors only. The explicit `Unimplemented` stubs are `unsupported` (see the
   `Unimplemented` list below); the rest of the gRPC surface is `ga` and verified with the
   official `cloud.google.com/go` clients against a live emulator. The conformance harness
-  exercises **483** checks over those `ga` proto methods (Cloud Run 15,
-  Container 30, Dataproc 26,
-  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 9, KMS 35, Logging 21,
-  Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
-  Scheduler 8, Secret Manager 18, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5, the rest one
-  per method). The remaining `limited` cell is Logging `TailLogEntries` (a bounded store-poll with
+  exercises **508** checks over those `ga` proto methods (Cloud Run 15,
+  Container 34, Dataproc 35,
+  Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 16, IAM Credentials 4,
+  KMS 35, Logging 42,
+  Managed Kafka 21, Metastore 18, Monitoring 34, Operations 10, Pub/Sub 25, Resource Manager 11,
+  Scheduler 8, Secret Manager 21, Service Usage 6, Storage 24, Tasks 20, Workflow Executions 4,
+  Workflows 6, the rest one per method). The remaining `limited` cell is Logging `TailLogEntries` (a bounded store-poll with
   no deterministic conformance assertion); Secret Manager's Cloud SQL managed rotation
   (`RotateSecret`/`EnableManagedRotation`) is `ga` — the emulator records the managed-rotation
   config/status and stores the generated password as a version, but has no Cloud SQL data plane to
@@ -334,19 +336,31 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Cloud Tasks** — the v2 control plane plus a dispatch engine: queue CRUD plus
   `pause`/`resume`/`purge`, queue IAM (`getIamPolicy`/`setIamPolicy`/`testIamPermissions` over the
   shared policy store — metadata only, authorization is not enforced), and task CRUD plus the
-  REST-only `tasks:batchCreate`/`tasks:batchDelete`. `httpRequest`
+  `tasks:buffer` (REST-only) and `tasks:batchCreate`/`tasks:batchDelete` (both surfaces). `httpRequest`
   (url/method/headers/body/oauth|oidcToken) and `appEngineHttpRequest` are accepted and echoed. The
   engine delivers due `httpRequest` tasks on the emulator clock (advance `/_jaiscloud/clock`, or use
   `POST /_jaiscloud/tasks-tick`, to fire deterministically) with per-queue rate limits and
   exponential-backoff retries, attaching the documented `X-CloudTasks-*` headers; a 2xx target
-  response deletes the task, a failure retries until `retryConfig.maxAttempts`/`maxRetryDuration` is
-  exhausted. `RunTask` / REST `:run` forces a synchronous attempt that bypasses pause and rate
-  limits. `appEngineHttpRequest` is never delivered (no App Engine router) — its attempts are
-  recorded as `Unimplemented`; REST `tasks:buffer`, App Engine delivery, task auto-expiry
-  (31 days), task-level `retryConfig` overrides (the queue's `retryConfig` governs), and real
-  `oauthToken`/`oidcToken` token minting (a synthetic emulator-local bearer token is attached
-  instead) are not modelled. The engine polls once per second, so sustained throughput is bounded
-  by `maxBurstSize` per second rather than `maxDispatchesPerSecond`.
+  response deletes the task, a failure retries until the attempt's effective
+  `retryConfig.maxAttempts`/`maxRetryDuration` is exhausted — a task-level `retryConfig` overrides
+  the queue's wholesale (never a field merge), and a zero `maxAttempts` means "unspecified" (the
+  documented default of 100), not "inherit the queue". A task is deleted once it has been retained
+  for 31 days past its `scheduleTime` (the maximum task retention), on the dispatch tick and before
+  the due check; reads never delete. `RunTask` / REST `:run` forces a synchronous attempt that
+  bypasses pause and rate limits. `appEngineHttpRequest` is never delivered (no App Engine router) —
+  its attempts are recorded as `Unimplemented`. **`tasks:buffer` is REST-only**: the REST Discovery
+  document declares it, but the `google.cloud.tasks.v2.CloudTasks` proto declares no `BufferTask`
+  RPC (the generated clients have no such method), so the gRPC server does not expose one. Because
+  the emulator models no queue-level `httpTarget` (the field real Cloud Tasks resolves a buffered
+  task's URL from), a `BufferTaskRequest` must carry the full task to create; a body-only request is
+  `INVALID_ARGUMENT`, which is the error real Cloud Tasks returns for a queue without an HTTP
+  target. `locations.getCmekConfig`/`updateCmekConfig` are served over both REST and gRPC and are
+  **metadata only**: the KMS key name is shape-validated
+  (`projects/*/locations/*/keyRings/*/cryptoKeys/*`), stored per project+location, echoed back and
+  cleared by an empty `kmsKey`, but task payloads are stored in plaintext — there is no at-rest
+  encryption. Real `oauthToken`/`oidcToken` token minting is not modelled (a synthetic
+  emulator-local bearer token is attached instead). The engine polls once per second, so sustained
+  throughput is bounded by `maxBurstSize` per second rather than `maxDispatchesPerSecond`.
 - **Google Kubernetes Engine (GKE)** — a metadata-only mock of the v1 control plane
   (`container.googleapis.com`), REST + gRPC: cluster `create`/`get`/`list`/`delete` plus the GKE
   `Operation` records they return (`get`/`list`), node-pool `create`/`get`/`list`/`delete`/`update`

@@ -70,13 +70,7 @@ func queueFromProto(pb *cloudtaskspb.Queue) tasksstore.Queue {
 		}
 	}
 	if rc := pb.GetRetryConfig(); rc != nil {
-		q.RetryConfig = &tasksstore.RetryConfig{
-			MaxAttempts:      rc.GetMaxAttempts(),
-			MaxRetryDuration: durationFromProto(rc.GetMaxRetryDuration()),
-			MinBackoff:       durationFromProto(rc.GetMinBackoff()),
-			MaxBackoff:       durationFromProto(rc.GetMaxBackoff()),
-			MaxDoublings:     rc.GetMaxDoublings(),
-		}
+		q.RetryConfig = retryFromProto(rc)
 	}
 	if sc := pb.GetStackdriverLoggingConfig(); sc != nil {
 		q.StackdriverLoggingConfig = &tasksstore.StackdriverLoggingConfig{SamplingRatio: sc.GetSamplingRatio()}
@@ -109,6 +103,11 @@ func taskToProto(t tasksstore.Task) *cloudtaskspb.Task {
 	}
 	if t.DispatchDeadline > 0 {
 		out.DispatchDeadline = durationpb.New(t.DispatchDeadline)
+	}
+	// RetryConfig is the optional task-level override of the queue's retry
+	// config (a full override, never a field merge).
+	if t.RetryConfig != nil {
+		out.RetryConfig = retryToProto(t.RetryConfig)
 	}
 	if t.FirstAttempt != nil {
 		out.FirstAttempt = attemptToProto(t.FirstAttempt)
@@ -145,6 +144,9 @@ func taskFromProto(pb *cloudtaskspb.Task) tasksstore.Task {
 	}
 	if dd := pb.GetDispatchDeadline(); dd != nil {
 		t.DispatchDeadline = durationFromProto(dd)
+	}
+	if rc := pb.GetRetryConfig(); rc != nil {
+		t.RetryConfig = retryFromProto(rc)
 	}
 	return t
 }
@@ -250,6 +252,26 @@ func retryToProto(rc *tasksstore.RetryConfig) *cloudtaskspb.RetryConfig {
 		out.MaxBackoff = durationpb.New(rc.MaxBackoff)
 	}
 	return out
+}
+
+// retryFromProto decodes a proto RetryConfig. It is shared by the queue and the
+// task-level override (the same message).
+func retryFromProto(rc *cloudtaskspb.RetryConfig) *tasksstore.RetryConfig {
+	return &tasksstore.RetryConfig{
+		MaxAttempts:      rc.GetMaxAttempts(),
+		MaxRetryDuration: durationFromProto(rc.GetMaxRetryDuration()),
+		MinBackoff:       durationFromProto(rc.GetMinBackoff()),
+		MaxBackoff:       durationFromProto(rc.GetMaxBackoff()),
+		MaxDoublings:     rc.GetMaxDoublings(),
+	}
+}
+
+// cmekToProto renders a location CMEK config as the proto CmekConfig.
+func cmekToProto(cfg tasksstore.CmekConfig) *cloudtaskspb.CmekConfig {
+	return &cloudtaskspb.CmekConfig{
+		Name:   core.CmekConfigName(cfg.ProjectID, cfg.Location),
+		KmsKey: cfg.KmsKey,
+	}
 }
 
 func attemptToProto(a *tasksstore.Attempt) *cloudtaskspb.Attempt {

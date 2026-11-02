@@ -173,11 +173,14 @@ google.cloud.scheduler.v1.CloudScheduler: 8 mapped, 0 without a registry key
   + ResumeJob=Scheduler.JobsResume
   + RunJob=Scheduler.JobsRun
   + UpdateJob=Scheduler.JobsPatch
-google.cloud.tasks.v2.CloudTasks: 16 mapped, 0 without a registry key
+google.cloud.tasks.v2.CloudTasks: 20 mapped, 0 without a registry key
+  + BatchCreateTasks=Tasks.TasksBatchCreate
+  + BatchDeleteTasks=Tasks.TasksBatchDelete
   + CreateQueue=Tasks.QueuesCreate
   + CreateTask=Tasks.TasksCreate
   + DeleteQueue=Tasks.QueuesDelete
   + DeleteTask=Tasks.TasksDelete
+  + GetCmekConfig=Tasks.GetCmekConfig
   + GetIamPolicy=Tasks.QueuesGetIamPolicy
   + GetQueue=Tasks.QueuesGet
   + GetTask=Tasks.TasksGet
@@ -189,6 +192,7 @@ google.cloud.tasks.v2.CloudTasks: 16 mapped, 0 without a registry key
   + RunTask=Tasks.TasksRun
   + SetIamPolicy=Tasks.QueuesSetIamPolicy
   + TestIamPermissions=Tasks.QueuesTestIamPermissions
+  + UpdateCmekConfig=Tasks.UpdateCmekConfig
   + UpdateQueue=Tasks.QueuesPatch
 google.cloud.resourcemanager.v3.Projects: 9 mapped, 2 without a registry key
   + CreateProject=ResourceManager.ProjectCreate

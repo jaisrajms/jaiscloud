@@ -20,6 +20,15 @@ func tasksScenario() Scenario {
 	const location = "us-central1"
 	parent := func(e *Env) string { return fmt.Sprintf("projects/%s/locations/%s", e.Cfg.Project, location) }
 	queueName := func(e *Env) string { return parent(e) + "/queues/" + e.Resource(queueID) }
+	// CMEK is location-scoped, so the parity case uses its own location to keep
+	// the config from touching the queue scenarios.
+	const cmekLocation = "us-east1"
+	cmekName := func(e *Env) string {
+		return fmt.Sprintf("projects/%s/locations/%s/cmekConfig", e.Cfg.Project, cmekLocation)
+	}
+	cmekKey := func(e *Env) string {
+		return fmt.Sprintf("projects/%s/locations/global/keyRings/parity/cryptoKeys/key", e.Cfg.Project)
+	}
 
 	newClient := func(ctx context.Context, e *Env) (*cloudtasks.Client, error) {
 		return cloudtasks.NewClient(ctx, e.GRPCClientOptions()...)
@@ -248,6 +257,32 @@ func tasksScenario() Scenario {
 						`{"rateLimits":{"maxDispatchesPerSecond":10}}`)
 				},
 				Cleanup: delQueue,
+			},
+		},
+		{
+			// locations.updateCmekConfig on both transports: same name and key.
+			// A separate location keeps the config from leaking into the queue
+			// scenarios above.
+			Op: "UpdateCmekConfig (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					return c.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+						CmekConfig: &cloudtaskspb.CmekConfig{Name: cmekName(e), KmsKey: cmekKey(e)},
+					})
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					return e.Rest(ctx, "PATCH", "/v2/"+cmekName(e)+"?updateMask=kmsKey",
+						fmt.Sprintf(`{"kmsKey":%q}`, cmekKey(e)))
+				},
+				Cleanup: func(ctx context.Context, e *Env) error {
+					_, err := e.Rest(ctx, "PATCH", "/v2/"+cmekName(e), `{"kmsKey":""}`)
+					return err
+				},
 			},
 		},
 	}}

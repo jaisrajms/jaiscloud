@@ -414,7 +414,40 @@ func (s *PostgresStore) DeleteTasks(ctx context.Context, projectID, location, qu
 	return int(tag.RowsAffected()), nil
 }
 
+func (s *PostgresStore) GetCmekConfig(ctx context.Context, projectID, location string) (CmekConfig, error) {
+	cfg := CmekConfig{ProjectID: projectID, Location: location}
+	err := s.pool.QueryRow(ctx, `
+		SELECT kms_key FROM jc_tasks_cmek_configs
+		WHERE project_id=$1 AND location=$2
+	`, projectID, location).Scan(&cfg.KmsKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return cfg, nil
+	}
+	if err != nil {
+		return CmekConfig{}, err
+	}
+	return cfg, nil
+}
+
+func (s *PostgresStore) SetCmekConfig(ctx context.Context, projectID, location string, cfg CmekConfig) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_tasks_cmek_configs (project_id, location, kms_key)
+		VALUES ($1,$2,$3)
+		ON CONFLICT (project_id, location) DO UPDATE SET kms_key = EXCLUDED.kms_key
+	`, projectID, location, cfg.KmsKey)
+	return err
+}
+
+func (s *PostgresStore) DeleteCmekConfig(ctx context.Context, projectID, location string) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_tasks_cmek_configs
+		WHERE project_id=$1 AND location=$2
+	`, projectID, location)
+	return err
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_tasks_tasks`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_tasks_queues`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_tasks_cmek_configs`)
 }

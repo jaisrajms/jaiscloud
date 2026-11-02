@@ -213,22 +213,9 @@ func queueFromBody(m map[string]any) (tasksstore.Queue, error) {
 		}
 	}
 	if rc, ok := m["retryConfig"].(map[string]any); ok {
-		cfg := &tasksstore.RetryConfig{
-			MaxAttempts:  int32(intFrom(rc["maxAttempts"])),
-			MaxDoublings: int32(intFrom(rc["maxDoublings"])),
-		}
-		for key, dst := range map[string]*time.Duration{
-			"maxRetryDuration": &cfg.MaxRetryDuration,
-			"minBackoff":       &cfg.MinBackoff,
-			"maxBackoff":       &cfg.MaxBackoff,
-		} {
-			if s := str(rc, key); s != "" {
-				d, err := time.ParseDuration(s)
-				if err != nil {
-					return q, model.NewProviderError("InvalidArgument", "invalid retryConfig."+key, 400)
-				}
-				*dst = d
-			}
+		cfg, err := retryConfigFromBody(rc)
+		if err != nil {
+			return q, err
 		}
 		q.RetryConfig = cfg
 	}
@@ -236,6 +223,29 @@ func queueFromBody(m map[string]any) (tasksstore.Queue, error) {
 		q.StackdriverLoggingConfig = &tasksstore.StackdriverLoggingConfig{SamplingRatio: numFrom(sc["samplingRatio"])}
 	}
 	return q, nil
+}
+
+// retryConfigFromBody decodes a Discovery RetryConfig object. It is shared by
+// the queue and the task-level override because both are the same message.
+func retryConfigFromBody(rc map[string]any) (*tasksstore.RetryConfig, error) {
+	cfg := &tasksstore.RetryConfig{
+		MaxAttempts:  int32(intFrom(rc["maxAttempts"])),
+		MaxDoublings: int32(intFrom(rc["maxDoublings"])),
+	}
+	for key, dst := range map[string]*time.Duration{
+		"maxRetryDuration": &cfg.MaxRetryDuration,
+		"minBackoff":       &cfg.MinBackoff,
+		"maxBackoff":       &cfg.MaxBackoff,
+	} {
+		if s := str(rc, key); s != "" {
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidArgument", "invalid retryConfig."+key, 400)
+			}
+			*dst = d
+		}
+	}
+	return cfg, nil
 }
 
 // taskFromBody decodes a Discovery Task JSON object into the store model.
@@ -308,6 +318,13 @@ func taskFromBody(m map[string]any) (tasksstore.Task, error) {
 		}
 		t.DispatchDeadline = d
 	}
+	if rc, ok := m["retryConfig"].(map[string]any); ok {
+		cfg, err := retryConfigFromBody(rc)
+		if err != nil {
+			return t, err
+		}
+		t.RetryConfig = cfg
+	}
 	return t, nil
 }
 
@@ -349,26 +366,33 @@ func queueToJSON(q tasksstore.Queue) map[string]any {
 		}
 	}
 	if q.RetryConfig != nil {
-		rc := map[string]any{"maxAttempts": q.RetryConfig.MaxAttempts}
-		if q.RetryConfig.MaxDoublings != 0 {
-			rc["maxDoublings"] = q.RetryConfig.MaxDoublings
-		}
-		if q.RetryConfig.MaxRetryDuration > 0 {
-			rc["maxRetryDuration"] = formatDuration(q.RetryConfig.MaxRetryDuration)
-		}
-		if q.RetryConfig.MinBackoff > 0 {
-			rc["minBackoff"] = formatDuration(q.RetryConfig.MinBackoff)
-		}
-		if q.RetryConfig.MaxBackoff > 0 {
-			rc["maxBackoff"] = formatDuration(q.RetryConfig.MaxBackoff)
-		}
-		out["retryConfig"] = rc
+		out["retryConfig"] = retryConfigToJSON(q.RetryConfig)
 	}
 	if q.StackdriverLoggingConfig != nil {
 		out["stackdriverLoggingConfig"] = map[string]any{"samplingRatio": q.StackdriverLoggingConfig.SamplingRatio}
 	}
 	if !q.PurgeTime.IsZero() {
 		out["purgeTime"] = timestamp.Canonical(q.PurgeTime)
+	}
+	return out
+}
+
+// retryConfigToJSON renders a RetryConfig (queue-level or task-level override).
+// A zero field is omitted, matching the queue-side convention that an unset value
+// is "unspecified" rather than an explicit zero.
+func retryConfigToJSON(c *tasksstore.RetryConfig) map[string]any {
+	out := map[string]any{"maxAttempts": c.MaxAttempts}
+	if c.MaxDoublings != 0 {
+		out["maxDoublings"] = c.MaxDoublings
+	}
+	if c.MaxRetryDuration > 0 {
+		out["maxRetryDuration"] = formatDuration(c.MaxRetryDuration)
+	}
+	if c.MinBackoff > 0 {
+		out["minBackoff"] = formatDuration(c.MinBackoff)
+	}
+	if c.MaxBackoff > 0 {
+		out["maxBackoff"] = formatDuration(c.MaxBackoff)
 	}
 	return out
 }
@@ -403,6 +427,9 @@ func taskToJSON(t tasksstore.Task) map[string]any {
 	}
 	if t.ResponseCount != 0 {
 		out["responseCount"] = t.ResponseCount
+	}
+	if t.RetryConfig != nil {
+		out["retryConfig"] = retryConfigToJSON(t.RetryConfig)
 	}
 	if t.FirstAttempt != nil {
 		out["firstAttempt"] = attemptToJSON(t.FirstAttempt)
@@ -501,6 +528,38 @@ func attemptToJSON(a *tasksstore.Attempt) map[string]any {
 // fractional part), never Go's "1h0m0s" form which the wire does not accept.
 func formatDuration(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
+}
+
+// cmekConfigToJSON renders a location CMEK config as the Discovery-shaped
+// CmekConfig: the output-only name plus kmsKey when one is configured. An
+// unconfigured location omits kmsKey (the documented default is "no kms_key").
+func cmekConfigToJSON(cfg tasksstore.CmekConfig) map[string]any {
+	out := map[string]any{"name": core.CmekConfigName(cfg.ProjectID, cfg.Location)}
+	if cfg.KmsKey != "" {
+		out["kmsKey"] = cfg.KmsKey
+	}
+	return out
+}
+
+// bufferTaskFromBody decodes a BufferTaskRequest into the task the emulator
+// will create plus the optional raw HttpBody it carried. Real Cloud Tasks
+// resolves the delivery URL from the queue's httpTarget, which the emulator does
+// not model, so the request is expected to carry a full task (a documented
+// limitation, docs/gcp/wire-contract.md §5); a bare HttpBody is returned so the
+// core can reject it with the error real GCP gives a queue without an HTTP
+// target.
+func bufferTaskFromBody(m map[string]any) (tasksstore.Task, *core.HttpBody, error) {
+	var body *core.HttpBody
+	if b, ok := m["body"].(map[string]any); ok {
+		data, err := decodeBytes(b["data"])
+		if err != nil {
+			return tasksstore.Task{}, nil, model.NewProviderError("InvalidArgument", "body.data is not valid base64", 400)
+		}
+		body = &core.HttpBody{ContentType: str(b, "contentType"), Data: data}
+	}
+	taskBody, _ := m["task"].(map[string]any)
+	t, err := taskFromBody(taskBody)
+	return t, body, err
 }
 
 // QueueFromBody, QueueToJSON, TaskFromBody and TaskToJSON expose the wire

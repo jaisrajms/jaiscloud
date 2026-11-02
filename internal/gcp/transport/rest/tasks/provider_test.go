@@ -242,6 +242,110 @@ func TestProviderListNegativePageSize(t *testing.T) {
 	}
 }
 
+// TestProviderBufferTask covers both tasks:buffer path forms at the REST layer:
+// the collection form (.../tasks:buffer) generates an id, the item form
+// (.../tasks/{taskId}:buffer) uses the path id, and a body-only request is
+// rejected because the emulator models no queue-level httpTarget.
+func TestProviderBufferTask(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	if _, err := p.CreateQueue(ctx, req(map[string]any{"project": "p", "location": "l", "body": queueBody()})); err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	fullTask := map[string]any{"httpRequest": map[string]any{"url": "http://example.test/buffered", "httpMethod": "POST"}}
+
+	// Item form: the path task id wins.
+	created, err := p.BufferTask(ctx, req(map[string]any{
+		"project": "p", "location": "l", "queue": "q1", "task": "buffered-item",
+		"body": map[string]any{"task": fullTask},
+	}))
+	if err != nil {
+		t.Fatalf("BufferTask(item): %v", err)
+	}
+	buffered, _ := created.Data["task"].(map[string]any)
+	want := "projects/p/locations/l/queues/q1/tasks/buffered-item"
+	if buffered["name"] != want {
+		t.Fatalf("BufferTask(item) name = %v, want %v", buffered["name"], want)
+	}
+
+	// Collection form: an id is generated.
+	created, err = p.BufferTask(ctx, req(map[string]any{
+		"project": "p", "location": "l", "queue": "q1",
+		"body": map[string]any{"task": fullTask},
+	}))
+	if err != nil {
+		t.Fatalf("BufferTask(collection): %v", err)
+	}
+	buffered, _ = created.Data["task"].(map[string]any)
+	if name, _ := buffered["name"].(string); !strings.HasPrefix(name, "projects/p/locations/l/queues/q1/tasks/") {
+		t.Fatalf("BufferTask(collection) name = %q", name)
+	}
+
+	// Body-only request: rejected like real GCP rejects a queue with no HTTP
+	// target (the emulator models no queue-level httpTarget).
+	_, err = p.BufferTask(ctx, req(map[string]any{
+		"project": "p", "location": "l", "queue": "q1",
+		"body": map[string]any{"body": map[string]any{"contentType": "text/plain", "data": "aGk="}},
+	}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("BufferTask(body only) err = %v, want InvalidArgument/400", err)
+	}
+}
+
+// TestProviderCmekConfig covers locations.getCmekConfig/updateCmekConfig over
+// REST: the default is an empty config, an update sets kmsKey, an empty kmsKey
+// clears it and a malformed key name is INVALID_ARGUMENT.
+func TestProviderCmekConfig(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	loc := func() map[string]any { return map[string]any{"project": "p", "location": "l"} }
+
+	got, err := p.GetCmekConfig(ctx, req(loc()))
+	if err != nil {
+		t.Fatalf("GetCmekConfig: %v", err)
+	}
+	if got.Data["name"] != "projects/p/locations/l/cmekConfig" {
+		t.Fatalf("GetCmekConfig name = %v", got.Data["name"])
+	}
+	if _, ok := got.Data["kmsKey"]; ok {
+		t.Fatalf("GetCmekConfig(default) emitted kmsKey: %v", got.Data)
+	}
+
+	key := "projects/p/locations/global/keyRings/ring/cryptoKeys/key"
+	params := loc()
+	params["body"] = map[string]any{"kmsKey": key}
+	upd, err := p.UpdateCmekConfig(ctx, req(params))
+	if err != nil {
+		t.Fatalf("UpdateCmekConfig: %v", err)
+	}
+	if upd.Data["kmsKey"] != key {
+		t.Fatalf("UpdateCmekConfig = %v", upd.Data)
+	}
+	if got, err := p.GetCmekConfig(ctx, req(loc())); err != nil || got.Data["kmsKey"] != key {
+		t.Fatalf("GetCmekConfig after update = %v, %v", got.Data, err)
+	}
+
+	// Bad key name.
+	bad := loc()
+	bad["body"] = map[string]any{"kmsKey": "not-a-key"}
+	if _, err := p.UpdateCmekConfig(ctx, req(bad)); err == nil {
+		t.Fatalf("UpdateCmekConfig(bad key) succeeded")
+	}
+
+	// Empty kmsKey clears it.
+	clear := loc()
+	clear["body"] = map[string]any{"kmsKey": ""}
+	if _, err := p.UpdateCmekConfig(ctx, req(clear)); err != nil {
+		t.Fatalf("UpdateCmekConfig(clear): %v", err)
+	}
+	if got, err := p.GetCmekConfig(ctx, req(loc())); err != nil {
+		t.Fatalf("GetCmekConfig: %v", err)
+	} else if _, ok := got.Data["kmsKey"]; ok {
+		t.Fatalf("UpdateCmekConfig(clear) left kmsKey: %v", got.Data)
+	}
+}
+
 func taskNameOf(t *testing.T, full string) string {
 	t.Helper()
 	_, _, _, id, ok := core.ParseTaskName(full)

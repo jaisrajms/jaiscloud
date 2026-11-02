@@ -429,8 +429,10 @@ func seedScheduler(d *driver, suffix string) (func() error, func() error, error)
 }
 
 // seedTasks creates a Cloud Tasks queue (v2 projects.locations.queues.create)
-// and a task under it, then verifies both survive a restart and are cleared by
-// reset (the queue delete cascades to the task).
+// and a task under it, plus the location's CMEK config, then verifies they
+// survive a restart and are cleared by reset (the queue delete cascades to the
+// task; an unconfigured CMEK location reads back with an empty kmsKey rather
+// than a 404).
 func seedTasks(d *driver, suffix string) (func() error, func() error, error) {
 	id := "tasks-" + suffix
 	queuePath := fmt.Sprintf("/v2/projects/%s/locations/%s/queues/%s", project, location, id)
@@ -448,17 +450,44 @@ func seedTasks(d *driver, suffix string) (func() error, func() error, error) {
 	}), http.StatusOK); err != nil {
 		return nil, nil, err
 	}
+	cmekPath := fmt.Sprintf("/v2/projects/%s/locations/%s/cmekConfig", project, location)
+	kmsKey := fmt.Sprintf("projects/%s/locations/global/keyRings/parity/cryptoKeys/tasks", project)
+	if err := d.expect("PATCH", cmekPath, jsonBody(map[string]any{"kmsKey": kmsKey}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	cmekCheck := func(wantKey bool) func() error {
+		return func() error {
+			code, resp, err := d.do("GET", cmekPath, "")
+			if err != nil {
+				return fmt.Errorf("GET %s: %w", cmekPath, err)
+			}
+			if code != http.StatusOK {
+				return fmt.Errorf("GET %s: got HTTP %d (want 200): %s", cmekPath, code, truncate(resp))
+			}
+			if got := strings.Contains(resp, kmsKey); got != wantKey {
+				return fmt.Errorf("GET %s: kmsKey present = %t, want %t: %s",
+					cmekPath, got, wantKey, truncate(resp))
+			}
+			return nil
+		}
+	}
 	survived := func() error {
 		if err := d.verifyPresent(queuePath)(); err != nil {
 			return err
 		}
-		return d.verifyPresent(taskPath)()
+		if err := d.verifyPresent(taskPath)(); err != nil {
+			return err
+		}
+		return cmekCheck(true)()
 	}
 	cleared := func() error {
 		if err := d.verifyGone(queuePath)(); err != nil {
 			return err
 		}
-		return d.verifyGone(taskPath)()
+		if err := d.verifyGone(taskPath)(); err != nil {
+			return err
+		}
+		return cmekCheck(false)()
 	}
 	return survived, cleared, nil
 }

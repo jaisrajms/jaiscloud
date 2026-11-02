@@ -2,12 +2,17 @@ package tasks
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	longrunningpb "google.golang.org/genproto/googleapis/longrunning"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
@@ -269,6 +274,82 @@ func (s *Service) RunTask(ctx context.Context, req *cloudtaskspb.RunTaskRequest)
 	return taskToProto(t), nil
 }
 
+// BatchCreateTasks creates several tasks under one queue and returns a done
+// google.longrunning.Operation carrying the typed BatchCreateTasksResponse (the
+// emulator performs the batch synchronously). The proto requires every request's
+// parent to equal the batch parent.
+func (s *Service) BatchCreateTasks(ctx context.Context, req *cloudtaskspb.BatchCreateTasksRequest) (*longrunningpb.Operation, error) {
+	project, location, queue, ok := core.ParseTaskParent(req.GetParent())
+	if !ok {
+		return nil, mapError(invalid("invalid parent"))
+	}
+	if len(req.GetRequests()) == 0 {
+		return nil, mapError(invalid("requests is required"))
+	}
+	resp := &cloudtaskspb.BatchCreateTasksResponse{}
+	for _, r := range req.GetRequests() {
+		rp, rl, rq, ok := core.ParseTaskParent(r.GetParent())
+		if !ok || rp != project || rl != location || rq != queue {
+			return nil, mapError(invalid("every request parent must equal the batch parent"))
+		}
+		t, err := s.core.CreateTask(ctx, s.projectFor(ctx, project), location, queue, taskFromProto(r.GetTask()))
+		if err != nil {
+			return nil, mapError(err)
+		}
+		resp.Tasks = append(resp.Tasks, taskToProto(t))
+	}
+	return batchOperation(project, location, &cloudtaskspb.BatchCreateTasksMetadata{}, resp)
+}
+
+// BatchDeleteTasks deletes several tasks and returns a done
+// google.longrunning.Operation with a google.protobuf.Empty response, as the
+// proto declares. It is non-atomic like the real method: the first failing name
+// decides the error, names already deleted stay deleted.
+func (s *Service) BatchDeleteTasks(ctx context.Context, req *cloudtaskspb.BatchDeleteTasksRequest) (*longrunningpb.Operation, error) {
+	project, location, queue, ok := core.ParseTaskParent(req.GetParent())
+	if !ok {
+		return nil, mapError(invalid("invalid parent"))
+	}
+	project = s.projectFor(ctx, project)
+	for _, name := range req.GetNames() {
+		p, l, q, t, ok := core.ParseTaskName(name)
+		if !ok {
+			return nil, mapError(invalid("invalid task name: " + name))
+		}
+		if p != project || l != location || q != queue {
+			return nil, mapError(invalid("every task name must be under the batch parent"))
+		}
+		if err := s.core.DeleteTask(ctx, project, location, queue, t); err != nil {
+			return nil, mapError(err)
+		}
+	}
+	return batchOperation(project, location, &cloudtaskspb.BatchDeleteTasksMetadata{}, &emptypb.Empty{})
+}
+
+func (s *Service) GetCmekConfig(ctx context.Context, req *cloudtaskspb.GetCmekConfigRequest) (*cloudtaskspb.CmekConfig, error) {
+	project, location, ok := core.ParseCmekConfigName(req.GetName())
+	if !ok {
+		return nil, mapError(invalid("invalid cmekConfig name"))
+	}
+	cfg, err := s.core.GetCmekConfig(ctx, s.projectFor(ctx, project), location)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return cmekToProto(cfg), nil
+}
+
+func (s *Service) UpdateCmekConfig(ctx context.Context, req *cloudtaskspb.UpdateCmekConfigRequest) (*cloudtaskspb.CmekConfig, error) {
+	project, location, ok := core.ParseCmekConfigName(req.GetCmekConfig().GetName())
+	if !ok {
+		return nil, mapError(invalid("invalid cmekConfig name"))
+	}
+	cfg, err := s.core.UpdateCmekConfig(ctx, s.projectFor(ctx, project), location, req.GetCmekConfig().GetKmsKey())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return cmekToProto(cfg), nil
+}
+
 // --- helpers ---
 
 func pageOffset(token string, n int) int {
@@ -283,6 +364,34 @@ func pageOffset(token string, n int) int {
 		offset = n
 	}
 	return offset
+}
+
+// batchOperation renders a completed google.longrunning.Operation for a
+// synchronous Cloud Tasks batch mutation: done=true, a location-scoped name, the
+// packed metadata and the packed typed response.
+func batchOperation(project, location string, metadata, response proto.Message) (*longrunningpb.Operation, error) {
+	md, err := anypb.New(metadata)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	resp, err := anypb.New(response)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &longrunningpb.Operation{
+		Name:     core.OperationName(project, location, taskOperationID()),
+		Metadata: md,
+		Done:     true,
+		Result:   &longrunningpb.Operation_Response{Response: resp},
+	}, nil
+}
+
+// taskOperationID returns an ephemeral operation id for a synchronously
+// completed batch operation.
+func taskOperationID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // policyToProto converts a stored policy into an iampb.Policy.

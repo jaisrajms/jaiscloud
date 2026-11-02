@@ -4,11 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	core "jaiscloud/internal/gcp/service/tasks"
@@ -138,6 +140,207 @@ func TestGRPCQueueIAM(t *testing.T) {
 	resp, err := s.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{Resource: q.GetName(), Permissions: []string{"cloudtasks.queues.get"}})
 	if err != nil || len(resp.GetPermissions()) != 1 {
 		t.Fatalf("TestIamPermissions = %+v, %v", resp, err)
+	}
+}
+
+// TestGRPCCmekConfig covers locations.getCmekConfig/updateCmekConfig over gRPC,
+// the same core the REST transport uses.
+func TestGRPCCmekConfig(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	name := parent + "/cmekConfig"
+
+	got, err := s.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetCmekConfig: %v", err)
+	}
+	if got.GetName() != name || got.GetKmsKey() != "" {
+		t.Fatalf("GetCmekConfig(default) = %+v", got)
+	}
+
+	key := "projects/p/locations/global/keyRings/ring/cryptoKeys/key"
+	upd, err := s.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: name, KmsKey: key},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCmekConfig: %v", err)
+	}
+	if upd.GetKmsKey() != key || upd.GetName() != name {
+		t.Fatalf("UpdateCmekConfig = %+v", upd)
+	}
+
+	if _, err := s.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: name, KmsKey: "bad"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("UpdateCmekConfig(bad key) code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	// Empty kmsKey clears the config.
+	if _, err := s.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: name},
+	}); err != nil {
+		t.Fatalf("UpdateCmekConfig(clear): %v", err)
+	}
+	if got, err := s.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: name}); err != nil || got.GetKmsKey() != "" {
+		t.Fatalf("GetCmekConfig after clear = %+v, %v", got, err)
+	}
+
+	if _, err := s.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: "projects/p/locations/l/queues/q1"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("GetCmekConfig(bad name) code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestGRPCTaskRetryConfigRoundTrip pins the task-level retryConfig on the gRPC
+// wire: it is stored and echoed, and an absent config stays absent.
+func TestGRPCTaskRetryConfigRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	tk, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: q.GetName(),
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{Url: "http://example.test/hook", HttpMethod: cloudtaskspb.HttpMethod_POST},
+			},
+			RetryConfig: &cloudtaskspb.RetryConfig{
+				MaxAttempts: 3,
+				MinBackoff:  durationpb.New(2 * time.Second),
+				MaxBackoff:  durationpb.New(time.Minute),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if rc := tk.GetRetryConfig(); rc.GetMaxAttempts() != 3 || rc.GetMinBackoff().AsDuration() != 2*time.Second || rc.GetMaxBackoff().AsDuration() != time.Minute {
+		t.Fatalf("created task retryConfig = %+v", rc)
+	}
+	got, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: tk.GetName()})
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if rc := got.GetRetryConfig(); rc.GetMaxAttempts() != 3 {
+		t.Fatalf("GetTask retryConfig = %+v", rc)
+	}
+
+	// An absent task-level config means "inherit the queue", so it is omitted
+	// rather than defaulted to the queue's values.
+	plain, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: q.GetName(),
+		Task: &cloudtaskspb.Task{MessageType: &cloudtaskspb.Task_HttpRequest{
+			HttpRequest: &cloudtaskspb.HttpRequest{Url: "http://example.test/plain", HttpMethod: cloudtaskspb.HttpMethod_POST},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(plain): %v", err)
+	}
+	if plain.GetRetryConfig() != nil {
+		t.Fatalf("plain task retryConfig = %+v, want nil (inherit the queue)", plain.GetRetryConfig())
+	}
+
+	// A task-level maxAttempts below -1 is INVALID_ARGUMENT.
+	if _, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: q.GetName(),
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{Url: "http://example.test/bad", HttpMethod: cloudtaskspb.HttpMethod_POST},
+			},
+			RetryConfig: &cloudtaskspb.RetryConfig{MaxAttempts: -5},
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateTask(maxAttempts=-5) code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestGRPCBatchTasks covers the BatchCreateTasks/BatchDeleteTasks RPCs: each
+// returns a done google.longrunning.Operation, the batch create response carries
+// the created tasks, and every request must sit under the batch parent.
+func TestGRPCBatchTasks(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	newTask := func(url string) *cloudtaskspb.CreateTaskRequest {
+		return &cloudtaskspb.CreateTaskRequest{
+			Parent: q.GetName(),
+			Task: &cloudtaskspb.Task{MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{Url: url, HttpMethod: cloudtaskspb.HttpMethod_POST},
+			}},
+		}
+	}
+	op, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{
+		Parent:   q.GetName(),
+		Requests: []*cloudtaskspb.CreateTaskRequest{newTask("http://example.test/a"), newTask("http://example.test/b")},
+	})
+	if err != nil {
+		t.Fatalf("BatchCreateTasks: %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("BatchCreateTasks operation not done: %+v", op)
+	}
+	resp := &cloudtaskspb.BatchCreateTasksResponse{}
+	if err := op.GetResponse().UnmarshalTo(resp); err != nil {
+		t.Fatalf("BatchCreateTasks response: %v", err)
+	}
+	if len(resp.GetTasks()) != 2 {
+		t.Fatalf("BatchCreateTasks tasks = %d, want 2", len(resp.GetTasks()))
+	}
+	names := make([]string, 0, 2)
+	for _, tk := range resp.GetTasks() {
+		names = append(names, tk.GetName())
+		if _, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: tk.GetName()}); err != nil {
+			t.Fatalf("GetTask(%s): %v", tk.GetName(), err)
+		}
+	}
+
+	del, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: q.GetName(), Names: names})
+	if err != nil {
+		t.Fatalf("BatchDeleteTasks: %v", err)
+	}
+	if !del.GetDone() {
+		t.Fatalf("BatchDeleteTasks operation not done: %+v", del)
+	}
+	if _, err := del.GetResponse().UnmarshalNew(); err != nil {
+		t.Fatalf("BatchDeleteTasks response: %v", err)
+	}
+	for _, name := range names {
+		if _, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: name}); status.Code(err) != codes.NotFound {
+			t.Fatalf("GetTask(%s) after batch delete code = %v, want NotFound", name, status.Code(err))
+		}
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: q.GetName(), Names: names}); status.Code(err) != codes.NotFound {
+		t.Fatalf("BatchDeleteTasks(already gone) code = %v, want NotFound", status.Code(err))
+	}
+
+	// Every request must sit under the batch parent.
+	wrong := newTask("http://example.test/c")
+	wrong.Parent = parent + "/queues/other"
+	if _, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{
+		Parent: q.GetName(), Requests: []*cloudtaskspb.CreateTaskRequest{wrong},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchCreateTasks(mismatched parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{Parent: q.GetName()}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchCreateTasks(no requests) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{Parent: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchCreateTasks(bad parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchDeleteTasks(bad parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{Parent: q.GetName(), Names: []string{"bogus"}}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchDeleteTasks(bad name) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{
+		Parent: q.GetName(), Names: []string{parent + "/queues/other/tasks/t1"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("BatchDeleteTasks(mismatched parent) code = %v, want InvalidArgument", status.Code(err))
 	}
 }
 

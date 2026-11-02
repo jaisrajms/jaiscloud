@@ -14,11 +14,15 @@
 //	POST   /v2/projects/{p}/locations/{l}/queues/{q}:testIamPermissions
 //	GET    /v2/projects/{p}/locations/{l}/queues/{q}/tasks
 //	POST   /v2/projects/{p}/locations/{l}/queues/{q}/tasks
+//	POST   /v2/projects/{p}/locations/{l}/queues/{q}/tasks:buffer
 //	POST   /v2/projects/{p}/locations/{l}/queues/{q}/tasks:batchCreate
 //	POST   /v2/projects/{p}/locations/{l}/queues/{q}/tasks:batchDelete
 //	GET    /v2/projects/{p}/locations/{l}/queues/{q}/tasks/{t}
 //	DELETE /v2/projects/{p}/locations/{l}/queues/{q}/tasks/{t}
 //	POST   /v2/projects/{p}/locations/{l}/queues/{q}/tasks/{t}:run
+//	POST   /v2/projects/{p}/locations/{l}/queues/{q}/tasks/{t}:buffer
+//	GET    /v2/projects/{p}/locations/{l}/cmekConfig
+//	PATCH  /v2/projects/{p}/locations/{l}/cmekConfig
 //
 // The Codec is a NormalizedRequest adapter; the Provider holds the routes.
 // Neither owns business logic — both delegate to the single core Service shared
@@ -82,6 +86,16 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 			rest[len(rest)-1] = last[:i]
 		}
 	}
+	// The location-scoped CMEK config (projects/{p}/locations/{l}/cmekConfig)
+	// is not a queue sub-resource: it is the third segment after the project.
+	if len(rest) == 3 && rest[0] == "locations" && rest[2] == "cmekConfig" {
+		nr.Params["location"] = rest[1]
+		if action := cmekAction(custom, r.Method); action != "" {
+			nr.Action = action
+			return nr, nil
+		}
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+	}
 	if len(rest) < 3 || rest[0] != "locations" || rest[2] != "queues" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
@@ -132,6 +146,8 @@ func tasksAction(rest []string, custom, method string) string {
 		return "TasksList"
 	case isTaskCollection && custom == "" && method == http.MethodPost:
 		return "TasksCreate"
+	case isTaskCollection && custom == "buffer" && method == http.MethodPost:
+		return "TasksBuffer"
 	case isTaskCollection && custom == "batchCreate" && method == http.MethodPost:
 		return "TasksBatchCreate"
 	case isTaskCollection && custom == "batchDelete" && method == http.MethodPost:
@@ -142,8 +158,27 @@ func tasksAction(rest []string, custom, method string) string {
 		return "TasksDelete"
 	case isTaskItem && custom == "run" && method == http.MethodPost:
 		return "TasksRun"
+	case isTaskItem && custom == "buffer" && method == http.MethodPost:
+		return "TasksBuffer"
 	}
 	return ""
+}
+
+// cmekAction maps the location-scoped CMEK config methods
+// (projects.locations.getCmekConfig / updateCmekConfig). Both are plain CRUD
+// verbs on the cmekConfig resource, so the method decides.
+func cmekAction(custom, method string) string {
+	if custom != "" {
+		return ""
+	}
+	switch method {
+	case http.MethodGet:
+		return "GetCmekConfig"
+	case http.MethodPatch:
+		return "UpdateCmekConfig"
+	default:
+		return ""
+	}
 }
 
 // Encode serialises a provider response as JSON.

@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 1175,
+    "total": 1182,
     "by_state": {
-      "ga": 996,
+      "ga": 1003,
       "limited": 123,
       "preview": 14,
       "unsupported": 42
     },
     "by_transport": {
       "grpc": {
-        "ga": 443,
+        "ga": 447,
         "limited": 18,
         "unsupported": 30
       },
       "rest": {
-        "ga": 553,
+        "ga": 556,
         "limited": 105,
         "preview": 14,
         "unsupported": 12
@@ -120,7 +120,7 @@
         "ga": 57
       },
       "tasks": {
-        "ga": 34
+        "ga": 41
       },
       "workflowexecutions": {
         "ga": 8
@@ -131,8 +131,8 @@
     },
     "evidence": {
       "verified": {
-        "grpc": 443,
-        "rest": 639
+        "grpc": 447,
+        "rest": 642
       },
       "unverified": {
         "grpc": 48,
@@ -15300,6 +15300,34 @@
     },
     {
       "service": "tasks",
+      "operation": "BatchCreateTasks",
+      "transport": "grpc",
+      "state": "ga",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=BatchCreateTasks",
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "BatchDeleteTasks",
+      "transport": "grpc",
+      "state": "ga",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=BatchDeleteTasks",
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "tasks",
       "operation": "CreateQueue",
       "transport": "grpc",
       "state": "ga",
@@ -15349,6 +15377,19 @@
       "evidence": [
         "grpc-checks=DeleteTask",
         "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "GetCmekConfig",
+      "transport": "grpc",
+      "state": "ga",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=GetCmekConfig",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)",
         "verified=true (grpc)"
@@ -15487,6 +15528,19 @@
     },
     {
       "service": "tasks",
+      "operation": "Tasks.GetCmekConfig",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudtasks.projects.locations.getCmekConfig",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.getCmekConfig",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "tasks",
       "operation": "Tasks.QueuesCreate",
       "transport": "rest",
       "state": "ga",
@@ -15496,7 +15550,7 @@
         "discovery=cloudtasks.projects.locations.queues.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 18 transcript entries)"
+        "verified=true (rest, 19 transcript entries)"
       ]
     },
     {
@@ -15662,6 +15716,19 @@
     },
     {
       "service": "tasks",
+      "operation": "Tasks.TasksBuffer",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudtasks.projects.locations.queues.tasks.buffer",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.buffer",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "tasks",
       "operation": "Tasks.TasksCreate",
       "transport": "rest",
       "state": "ga",
@@ -15671,7 +15738,7 @@
         "discovery=cloudtasks.projects.locations.queues.tasks.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -15729,12 +15796,40 @@
     },
     {
       "service": "tasks",
+      "operation": "Tasks.UpdateCmekConfig",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudtasks.projects.locations.updateCmekConfig",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.updateCmekConfig",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "tasks",
       "operation": "TestIamPermissions",
       "transport": "grpc",
       "state": "ga",
       "verified": true,
       "evidence": [
         "grpc-checks=TestIamPermissions",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "UpdateCmekConfig",
+      "transport": "grpc",
+      "state": "ga",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=UpdateCmekConfig",
+        "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)",
         "verified=true (grpc)"

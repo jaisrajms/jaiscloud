@@ -456,8 +456,12 @@ func detectV2Service(path string) string {
 	// Cloud Tasks v2 lives under
 	// /v2/projects/{project}/locations/{location}/queues[/{queue}/tasks...] —
 	// detect it before the Functions location switch (its "queues" segment is
-	// otherwise unmatched).
+	// otherwise unmatched). Its CMEK config is the location-scoped
+	// /v2/projects/{project}/locations/{location}/cmekConfig.
 	if len(rest) >= 3 && rest[2] == "queues" {
+		return "tasks"
+	}
+	if len(rest) == 3 && rest[2] == "cmekConfig" {
 		return "tasks"
 	}
 	// Cloud Run v2 shares the /v2/projects/{p}/locations/{l} namespace. It owns

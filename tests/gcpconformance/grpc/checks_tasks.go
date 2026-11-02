@@ -24,7 +24,9 @@ const tasksLocation = "us-central1"
 // (google.cloud.tasks.v2.CloudTasks) via the official generated
 // cloud.google.com/go/cloudtasks/apiv2 client. RunTask is probed: it forces a
 // synchronous delivery to the task's HTTP target, which is the emulator's own
-// health endpoint, and a successful (2xx) run deletes the task. The REST-only
+// health endpoint, and a successful (2xx) run deletes the task. The
+// location-scoped CMEK config is probed through
+// GetCmekConfig/UpdateCmekConfig. The REST-only tasks:buffer and
 // tasks:batchCreate / tasks:batchDelete have no gRPC method.
 //
 // Every probe is self-contained and run-unique (cfg.ResourceName).
@@ -42,10 +44,14 @@ func tasksChecks() []Check {
 		{Service: "tasks", RPC: "SetIamPolicy", Method: "SetIamPolicy", KeyField: "binding persisted", Run: checkTasksSetIamPolicy},
 		{Service: "tasks", RPC: "TestIamPermissions", Method: "TestIamPermissions", KeyField: "requested permission echoed", Run: checkTasksTestIamPermissions},
 		{Service: "tasks", RPC: "CreateTask", Method: "CreateTask", KeyField: "name + scheduleTime + httpRequest round-trip", Run: checkTasksCreateTask},
+		{Service: "tasks", RPC: "BatchCreateTasks", Method: "BatchCreateTasks", KeyField: "done operation carrying both created tasks", Run: checkTasksBatchCreate},
+		{Service: "tasks", RPC: "BatchDeleteTasks", Method: "BatchDeleteTasks", KeyField: "done operation; tasks gone", Run: checkTasksBatchDelete},
 		{Service: "tasks", RPC: "GetTask", Method: "GetTask", KeyField: "name round-trip", Run: checkTasksGetTask},
 		{Service: "tasks", RPC: "ListTasks", Method: "ListTasks", KeyField: "created task present", Run: checkTasksListTasks},
 		{Service: "tasks", RPC: "DeleteTask", Method: "DeleteTask", KeyField: "subsequent GetTask NOT_FOUND", Run: checkTasksDeleteTask},
 		{Service: "tasks", RPC: "RunTask", Method: "RunTask", KeyField: "dispatched task returned; success deletes it", Run: checkTasksRunTask},
+		{Service: "tasks", RPC: "GetCmekConfig", Method: "GetCmekConfig", KeyField: "default config: name set, kmsKey empty", Run: checkTasksGetCmekConfig},
+		{Service: "tasks", RPC: "UpdateCmekConfig", Method: "UpdateCmekConfig", KeyField: "kmsKey round-trip", Run: checkTasksUpdateCmekConfig},
 	}
 }
 
@@ -502,6 +508,161 @@ func checkTasksRunTask(ctx context.Context, cfg Config) error {
 	}
 	if _, err := client.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: task.GetName()}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetTask after successful RunTask code = %v, want NotFound", status.Code(err))
+	}
+	return nil
+}
+
+// checkTasksBatchCreate creates two tasks in one batch call and asserts the
+// synchronous done operation carries the typed BatchCreateTasksResponse with
+// both tasks.
+func checkTasksBatchCreate(ctx context.Context, cfg Config) error {
+	client, err := newTasksClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	q, err := createTasksQueue(ctx, client, cfg, "gcpc-grpc-tasks-bcreate")
+	if err != nil {
+		return err
+	}
+	newTask := func(path string) *cloudtaskspb.CreateTaskRequest {
+		return &cloudtaskspb.CreateTaskRequest{
+			Parent: q.GetName(),
+			Task: &cloudtaskspb.Task{MessageType: &cloudtaskspb.Task_HttpRequest{HttpRequest: &cloudtaskspb.HttpRequest{
+				Url:        cfg.RESTEndpoint + "/_jaiscloud/health" + path,
+				HttpMethod: cloudtaskspb.HttpMethod_GET,
+			}}},
+		}
+	}
+	op, err := client.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{
+		Parent:   q.GetName(),
+		Requests: []*cloudtaskspb.CreateTaskRequest{newTask("/a"), newTask("/b")},
+	})
+	if err != nil {
+		return fmt.Errorf("BatchCreateTasks: %w", err)
+	}
+	resp, err := op.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("BatchCreateTasks wait: %w", err)
+	}
+	if len(resp.GetTasks()) != 2 {
+		return fmt.Errorf("BatchCreateTasks returned %d tasks, want 2", len(resp.GetTasks()))
+	}
+	for _, t := range resp.GetTasks() {
+		if _, err := client.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: t.GetName()}); err != nil {
+			return fmt.Errorf("GetTask(%s): %w", t.GetName(), err)
+		}
+	}
+	// A request parent that differs from the batch parent is INVALID_ARGUMENT.
+	other := *newTask("/c")
+	other.Parent = q.GetName() + "x"
+	if _, err := client.BatchCreateTasks(ctx, &cloudtaskspb.BatchCreateTasksRequest{
+		Parent: q.GetName(), Requests: []*cloudtaskspb.CreateTaskRequest{&other},
+	}); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("BatchCreateTasks(mismatched parent) code = %v, want InvalidArgument", status.Code(err))
+	}
+	return client.DeleteQueue(ctx, &cloudtaskspb.DeleteQueueRequest{Name: q.GetName()})
+}
+
+// checkTasksBatchDelete deletes two tasks in one batch call and asserts the done
+// operation plus the subsequent NOT_FOUND reads.
+func checkTasksBatchDelete(ctx context.Context, cfg Config) error {
+	client, err := newTasksClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	q, err := createTasksQueue(ctx, client, cfg, "gcpc-grpc-tasks-bdelete")
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, 2)
+	for _, suffix := range []string{"a", "b"} {
+		t, err := createTasksTask(ctx, client, cfg, q.GetName(), "gcpc-grpc-tasks-bdelete-"+suffix)
+		if err != nil {
+			return err
+		}
+		names = append(names, t.GetName())
+	}
+	op, err := client.BatchDeleteTasks(ctx, &cloudtaskspb.BatchDeleteTasksRequest{
+		Parent: q.GetName(),
+		Names:  names,
+	})
+	if err != nil {
+		return fmt.Errorf("BatchDeleteTasks: %w", err)
+	}
+	if err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("BatchDeleteTasks wait: %w", err)
+	}
+	for _, name := range names {
+		if _, err := client.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: name}); status.Code(err) != codes.NotFound {
+			return fmt.Errorf("GetTask(%s) after batch delete code = %v, want NotFound", name, status.Code(err))
+		}
+	}
+	return client.DeleteQueue(ctx, &cloudtaskspb.DeleteQueueRequest{Name: q.GetName()})
+}
+
+// tasksCmekName is the location-scoped CMEK config resource name; the emulator
+// does not validate the location list.
+func tasksCmekName(cfg Config) string { return tasksParent(cfg) + "/cmekConfig" }
+
+// checkTasksGetCmekConfig reads the location's CMEK config. An unconfigured
+// location returns the documented default (a config with an empty kmsKey), not
+// NOT_FOUND.
+func checkTasksGetCmekConfig(ctx context.Context, cfg Config) error {
+	client, err := newTasksClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	got, err := client.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: tasksCmekName(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetCmekConfig: %w", err)
+	}
+	if got.GetName() != tasksCmekName(cfg) {
+		return fmt.Errorf("GetCmekConfig name = %q, want %q", got.GetName(), tasksCmekName(cfg))
+	}
+	return nil
+}
+
+// checkTasksUpdateCmekConfig sets the location's CMEK key, reads it back and
+// clears it again (an empty kmsKey turns CMEK off).
+func checkTasksUpdateCmekConfig(ctx context.Context, cfg Config) error {
+	client, err := newTasksClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	key := fmt.Sprintf("projects/%s/locations/global/keyRings/gcpc/cryptoKeys/tasks", cfg.Project)
+	upd, err := client.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: tasksCmekName(cfg), KmsKey: key},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateCmekConfig: %w", err)
+	}
+	if upd.GetKmsKey() != key || upd.GetName() != tasksCmekName(cfg) {
+		return fmt.Errorf("UpdateCmekConfig = %+v, want kmsKey %q", upd, key)
+	}
+	got, err := client.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: tasksCmekName(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetCmekConfig: %w", err)
+	}
+	if got.GetKmsKey() != key {
+		return fmt.Errorf("GetCmekConfig kmsKey = %q, want %q", got.GetKmsKey(), key)
+	}
+	if _, err := client.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: tasksCmekName(cfg)},
+	}); err != nil {
+		return fmt.Errorf("UpdateCmekConfig(clear): %w", err)
+	}
+	if got, err := client.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: tasksCmekName(cfg)}); err != nil {
+		return fmt.Errorf("GetCmekConfig after clear: %w", err)
+	} else if got.GetKmsKey() != "" {
+		return fmt.Errorf("GetCmekConfig after clear kmsKey = %q, want empty", got.GetKmsKey())
 	}
 	return nil
 }

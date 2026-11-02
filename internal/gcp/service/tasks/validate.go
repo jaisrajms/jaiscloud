@@ -50,19 +50,29 @@ func validateQueue(q *tasksstore.Queue) error {
 		}
 	}
 	if q.RetryConfig != nil {
-		r := q.RetryConfig
-		if r.MaxAttempts < -1 {
-			return invalidArgument("retryConfig.maxAttempts must be >= -1")
+		if err := validateRetryConfig(q.RetryConfig); err != nil {
+			return err
 		}
-		if r.MaxDoublings < 0 {
-			return invalidArgument("retryConfig.maxDoublings must be non-negative")
-		}
-		if r.MinBackoff < 0 || r.MaxBackoff < 0 || r.MaxRetryDuration < 0 {
-			return invalidArgument("retryConfig durations must be non-negative")
-		}
-		if r.MinBackoff > 0 && r.MaxBackoff > 0 && r.MinBackoff > r.MaxBackoff {
-			return invalidArgument("retryConfig.minBackoff must not exceed maxBackoff")
-		}
+	}
+	return nil
+}
+
+// validateRetryConfig applies the documented RetryConfig constraints. It is
+// shared by the queue and the task-level override because both are the same
+// message: a task config is a full override of the queue's, validated by the
+// same rules.
+func validateRetryConfig(r *tasksstore.RetryConfig) error {
+	if r.MaxAttempts < -1 {
+		return invalidArgument("retryConfig.maxAttempts must be >= -1")
+	}
+	if r.MaxDoublings < 0 {
+		return invalidArgument("retryConfig.maxDoublings must be non-negative")
+	}
+	if r.MinBackoff < 0 || r.MaxBackoff < 0 || r.MaxRetryDuration < 0 {
+		return invalidArgument("retryConfig durations must be non-negative")
+	}
+	if r.MinBackoff > 0 && r.MaxBackoff > 0 && r.MinBackoff > r.MaxBackoff {
+		return invalidArgument("retryConfig.minBackoff must not exceed maxBackoff")
 	}
 	return nil
 }

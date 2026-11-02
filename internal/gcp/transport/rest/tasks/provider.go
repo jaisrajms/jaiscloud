@@ -42,11 +42,14 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Tasks.QueuesTestIamPermissions": p.TestQueueIamPermissions,
 		"Tasks.TasksList":                p.ListTasks,
 		"Tasks.TasksCreate":              p.CreateTask,
+		"Tasks.TasksBuffer":              p.BufferTask,
 		"Tasks.TasksBatchCreate":         p.BatchCreateTasks,
 		"Tasks.TasksBatchDelete":         p.BatchDeleteTasks,
 		"Tasks.TasksGet":                 p.GetTask,
 		"Tasks.TasksDelete":              p.DeleteTask,
 		"Tasks.TasksRun":                 p.RunTask,
+		"Tasks.GetCmekConfig":            p.GetCmekConfig,
+		"Tasks.UpdateCmekConfig":         p.UpdateCmekConfig,
 	}
 }
 
@@ -217,6 +220,21 @@ func (p *Provider) CreateTask(ctx context.Context, nr *model.NormalizedRequest) 
 	return provider.OK(taskToJSON(created)), nil
 }
 
+// BufferTask handles POST .../tasks:buffer and .../tasks/{taskId}:buffer. The
+// request is a BufferTaskRequest; see bufferTaskFromBody for the emulator's
+// documented shape (no queue-level httpTarget is modelled).
+func (p *Provider) BufferTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	t, body, err := bufferTaskFromBody(bodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	created, err := p.core.BufferTask(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "queue"), strParam(nr, "task"), t, body)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"task": taskToJSON(created)}), nil
+}
+
 // BatchCreateTasks handles POST .../tasks:batchCreate.
 func (p *Provider) BatchCreateTasks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
@@ -294,6 +312,26 @@ func (p *Provider) RunTask(ctx context.Context, nr *model.NormalizedRequest) (*m
 		return nil, err
 	}
 	return provider.OK(taskToJSON(t)), nil
+}
+
+// GetCmekConfig handles GET .../locations/{location}/cmekConfig.
+func (p *Provider) GetCmekConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	cfg, err := p.core.GetCmekConfig(ctx, p.project(nr), strParam(nr, "location"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(cmekConfigToJSON(cfg)), nil
+}
+
+// UpdateCmekConfig handles PATCH .../locations/{location}/cmekConfig. kmsKey is
+// the only mutable field (Discovery marks the resource name output-only); an
+// empty kmsKey clears the config.
+func (p *Provider) UpdateCmekConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	cfg, err := p.core.UpdateCmekConfig(ctx, p.project(nr), strParam(nr, "location"), str(bodyOf(nr), "kmsKey"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(cmekConfigToJSON(cfg)), nil
 }
 
 // --- helpers ---
