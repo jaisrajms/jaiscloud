@@ -127,9 +127,14 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	// write like PUT /storage/v1/b/{bucket}/o/{object} would be mistaken for an
 	// object upload (and its gzip transport body left undecoded). The versioned
 	// /v1//v2/ namespaces are reserved by the other GCP services' routers.
+	// "$discovery/" and "discovery/" are Discovery-document probes, not GCS
+	// objects: a bare /$discovery/rest or the legacy
+	// /discovery/v1/apis/{svc}/{ver}/rest form is never a raw media download of
+	// a bucket literally named "$discovery" or "discovery".
 	for _, prefix := range []string{
 		"v1/", "v2/", "bigquery/", "storage/v1/", "upload/storage/", "download/storage/",
 		"upload/bigquery/", "resumable/upload/", "batch/storage/", "projects/",
+		"$discovery/", "discovery/",
 	} {
 		if strings.HasPrefix(p, prefix) {
 			return false
@@ -140,14 +145,22 @@ func isRawStorageMediaPath(r *http.Request) bool {
 }
 
 // detectBigQueryService maps a BigQuery path to the "bigquery" service name.
-// Two forms are accepted: the full servicePath /bigquery/v2/projects/{project}/...
+// Three forms are accepted: the discovery-document probes (see
+// isBigQueryDiscoveryPath), the full servicePath /bigquery/v2/projects/{project}/...
 // and the WithEndpoint-stripped form /projects/{project}/{datasets|jobs|queries|serviceAccount}
 // (the apiary client resolves method paths against the endpoint option, which
-// drops the bigquery/v2/ servicePath). Both are unambiguous — no other GCP
+// drops the bigquery/v2/ servicePath). All are unambiguous — no other GCP
 // service in the emulator routes bare /projects/{project}/... without a
 // version segment, so this runs before the generic /v1/ resolver and the raw
 // GCS media fallback without colliding.
 func detectBigQueryService(path string) string {
+	// The bq CLI fetches {--api}/$discovery/rest?version=v2 (google-cloud-sdk
+	// >= 469) and older SDKs probe /discovery/v1/apis/bigquery/v2/rest. Neither
+	// path carries a project segment, so both are claimed here, ahead of the
+	// resource-path forms and the raw-media fallback.
+	if isBigQueryDiscoveryPath(path) {
+		return "bigquery"
+	}
 	if strings.HasPrefix(path, "/bigquery/v2/projects/") {
 		return "bigquery"
 	}

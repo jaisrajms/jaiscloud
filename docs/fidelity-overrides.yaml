@@ -259,6 +259,21 @@ operations:
     state: unsupported
     reason: "row access policies are not modelled; explicit Unimplemented (501) stub"
 
+  # The discovery surface is not an API operation (it is how a client learns the
+  # API), so it has no Discovery method of its own to be verified against and
+  # would otherwise inherit the service's `limited` SQL/load reason. The
+  # response is the vendored real v2 document served verbatim (a test pins it
+  # byte-identical to tests/gcpconformance/discovery/bigquery.json.gz) with only
+  # rootUrl/baseUrl rewritten to the caller's origin, and the bq CLI
+  # (google-cloud-sdk 591) builds its client from it and drives the emulator end
+  # to end — the same "emulator-only surface proven by a client" grading as
+  # Function.InvokeTrigger.
+  - service: bigquery
+    operation: BigQuery.GetDiscovery
+    state: ga
+    allow_upgrade: true
+    reason: "the BigQuery v2 Discovery document itself (not a Discovery API operation): the vendored v2 snapshot served verbatim, with rootUrl/baseUrl rewritten to the caller's origin, at both /$discovery/rest?version=v2 and the legacy /discovery/v1/apis/bigquery/v2/rest; the bq CLI (SDK 591) builds its client from it and creates/lists datasets and tables end to end"
+
   # GKE ClusterManager is a metadata control plane (no real Kubernetes control
   # plane; docs/gcp/wire-contract.md §5): cluster CRUD, operations, node-pool CRUD, and the
   # update/setter/rotation RPCs are all served and verified by the official

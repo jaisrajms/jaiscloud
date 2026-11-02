@@ -30,6 +30,12 @@ type BigQueryCodec struct {
 func (c *BigQueryCodec) ServiceName() string { return c.Service }
 
 func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+	// The discovery document carries no project or resource segment, so it is
+	// claimed before the resource-path scan below (which would otherwise reject
+	// the request for a missing project).
+	if isBigQueryDiscoveryPath(r.URL.Path) {
+		return c.decodeDiscovery(r)
+	}
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1
 	for i, s := range seg {
@@ -76,6 +82,36 @@ func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		nr.Params["jobId"] = jobID
 	}
 	nr.Action = action
+	return nr, nil
+}
+
+// isBigQueryDiscoveryPath reports whether path is one of the two discovery
+// document probes the bq CLI and the official SDKs use: the current
+// {endpoint}/$discovery/rest form (google-cloud-sdk >= 469, with
+// ?version=v2) and the legacy /discovery/v1/apis/bigquery/v2/rest form. Leading
+// slashes are collapsed so the endpoint/version concatenation the clients do
+// cannot defeat the match.
+func isBigQueryDiscoveryPath(path string) bool {
+	p := "/" + strings.TrimLeft(path, "/")
+	return p == "/$discovery/rest" || p == "/discovery/v1/apis/bigquery/v2/rest"
+}
+
+// decodeDiscovery resolves a discovery-document probe. version defaults to v2
+// (the only version the emulator serves) and is validated by the provider.
+func (c *BigQueryCodec) decodeDiscovery(r *http.Request) (*model.NormalizedRequest, error) {
+	if r.Method != http.MethodGet {
+		return nil, model.NewProviderError("InvalidRequest", "the bigquery discovery document is served only for GET", http.StatusMethodNotAllowed)
+	}
+	version := r.URL.Query().Get("version")
+	if version == "" {
+		version = "v2"
+	}
+	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
+	nr.Action = "GetDiscovery"
+	nr.Params["version"] = version
+	// The provider rewrites the document's rootUrl/baseUrl to the origin the
+	// client called, so it must be absolute and reflect any proxy scheme.
+	nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
 	return nr, nil
 }
 
@@ -289,7 +325,11 @@ func (c *BigQueryCodec) Encode(nr *model.NormalizedRequest, resp *model.Provider
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
-
+	// The discovery document is served from an embedded snapshot that only
+	// changes with a release, so no client may cache it across an upgrade.
+	if nr != nil && nr.Action == "GetDiscovery" {
+		headers.Set("Cache-Control", "no-store")
+	}
 	// A resumable-upload session start returns its session URI in Location (and
 	// no body); an incomplete chunk returns 308 with a Range header. These share
 	// the GCS resumable wire contract (see internal/gcp/wire).

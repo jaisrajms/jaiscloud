@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1174,
+    "total": 1175,
     "by_state": {
-      "ga": 995,
+      "ga": 996,
       "limited": 123,
       "preview": 14,
       "unsupported": 42
@@ -15,7 +15,7 @@
         "unsupported": 30
       },
       "rest": {
-        "ga": 552,
+        "ga": 553,
         "limited": 105,
         "preview": 14,
         "unsupported": 12
@@ -23,6 +23,7 @@
     },
     "by_service": {
       "bigquery": {
+        "ga": 1,
         "limited": 22,
         "unsupported": 3
       },
@@ -135,7 +136,7 @@
       },
       "unverified": {
         "grpc": 48,
-        "rest": 44
+        "rest": 45
       }
     },
     "grpc_only_services": [
@@ -246,6 +247,18 @@
         "discovery=bigquery.datasets.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.GetDiscovery",
+      "transport": "rest",
+      "state": "ga",
+      "reason": "the BigQuery v2 Discovery document itself (not a Discovery API operation): the vendored v2 snapshot served verbatim, with rootUrl/baseUrl rewritten to the caller's origin, at both /$discovery/rest?version=v2 and the legacy /discovery/v1/apis/bigquery/v2/rest; the bq CLI (SDK 591) builds its client from it and creates/lists datasets and tables end to end",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "verified=false (rest, no Discovery method)"
       ]
     },
     {
