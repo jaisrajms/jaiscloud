@@ -305,6 +305,60 @@ func (h *Handler) GetCryptoKey(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, cryptoKeyFromMap(resp.Data))
 }
 
+// PATCH /locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}
+func (h *Handler) UpdateCryptoKey(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.cryptoKeyName(w, r)
+	if !ok {
+		return
+	}
+	var req UpdateCryptoKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	// AIP-134 semantics: update only the fields the mask selects. Derive the
+	// mask from the fields the caller supplied when it is omitted; an explicit
+	// empty mask is a no-op the core accepts, but the console has nothing to
+	// send in that case.
+	mask := req.UpdateMask
+	if len(mask) == 0 {
+		if req.Labels != nil {
+			mask = append(mask, "labels")
+		}
+		if req.RotationPeriod != "" {
+			mask = append(mask, "rotationPeriod")
+		}
+		if req.NextRotationTime != "" {
+			mask = append(mask, "nextRotationTime")
+		}
+	}
+	if len(mask) == 0 {
+		uihelper.UIError(w, "BadRequest", "at least one of labels, rotationPeriod or nextRotationTime is required", http.StatusBadRequest)
+		return
+	}
+	body := map[string]any{}
+	if req.Labels != nil {
+		body["labels"] = uihelper.StringMapToAny(req.Labels)
+	}
+	if req.RotationPeriod != "" {
+		body["rotationPeriod"] = req.RotationPeriod
+	}
+	if req.NextRotationTime != "" {
+		body["nextRotationTime"] = req.NextRotationTime
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "kms", "KMS.CryptoKeyUpdate", "", h.account(r))
+	nr.Params["name"] = name
+	nr.Params["updateMask"] = strings.Join(mask, ",")
+	nr.Params["body"] = body
+
+	resp, err := h.provider.CryptoKeyUpdate(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, cryptoKeyFromMap(resp.Data))
+}
+
 // POST /locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/setPrimary
 func (h *Handler) SetPrimaryVersion(w http.ResponseWriter, r *http.Request) {
 	name, ok := h.cryptoKeyName(w, r)
@@ -503,11 +557,22 @@ func (h *Handler) AsymmetricSign(w http.ResponseWriter, r *http.Request) {
 		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if !validDigest(req.Digest) {
-		uihelper.UIError(w, "BadRequest", "digest is required", http.StatusBadRequest)
+	hasDigest := len(req.Digest) > 0
+	if hasDigest == (req.Data != "") {
+		uihelper.UIError(w, "BadRequest", "exactly one of digest or data is required", http.StatusBadRequest)
 		return
 	}
-	h.cryptoOp(w, r, "KMS.CryptoKeyVersionAsymmetricSign", name, map[string]any{"digest": req.Digest},
+	body := map[string]any{}
+	if hasDigest {
+		if !validDigest(req.Digest) {
+			uihelper.UIError(w, "BadRequest", "digest must carry exactly one of sha256/sha384/sha512", http.StatusBadRequest)
+			return
+		}
+		body["digest"] = req.Digest
+	} else {
+		body["data"] = req.Data
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyVersionAsymmetricSign", name, body,
 		func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 			return h.provider.CryptoKeyVersionAsymmetricSign(r.Context(), nr)
 		})

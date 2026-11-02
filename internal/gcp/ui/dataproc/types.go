@@ -7,10 +7,11 @@
 // field. Detail/actions link back with the region carried from the list row, so
 // a resource id never has to be disambiguated by hand.
 //
-// This surface is read + lifecycle only: clusters list/detail with
-// start/stop/create/delete, jobs list/detail with cancel, and workflow
-// templates list/detail. Job submit and workflow-template CRUD are deferred
-// (see the console-UI plan's deferral rows).
+// The surface is clusters list/detail with start/stop/create/update/delete,
+// jobs list/detail with submit/cancel, and workflow templates list/detail with
+// create/update/delete/instantiate. Mutations return the settled-or-in-flight
+// record; the core's long-running operation is dropped (the record settles on a
+// later read), except instantiate, whose operation the console shows.
 package dataprocui
 
 import "encoding/json"
@@ -74,6 +75,16 @@ type CreateClusterRequest struct {
 	VirtualClusterConfig json.RawMessage   `json:"virtualClusterConfig,omitempty"`
 }
 
+// UpdateClusterRequest is the console patch body
+// (PATCH /clusters/{region}/{cluster}). UpdateMask carries the fields the user
+// touched as camelCase paths (config.workerConfig.numInstances, labels); it is
+// passed to the core verbatim, and an empty mask applies everything supplied.
+type UpdateClusterRequest struct {
+	Labels     map[string]string `json:"labels,omitempty"`
+	Config     json.RawMessage   `json:"config,omitempty"`
+	UpdateMask []string          `json:"updateMask,omitempty"`
+}
+
 // Job is the console rendering of a Dataproc job, flattened across regions for
 // the list page. TypeJob carries the type-specific body (sparkJob, pysparkJob,
 // ...) and is only populated on the detail read.
@@ -101,6 +112,14 @@ type ListJobsResponse struct {
 	Total int   `json:"total"`
 }
 
+// SubmitJobRequest is the console submit body (POST /jobs). The console is
+// region-optional, so the region travels in the body alongside the
+// dataproc.v1.Job object (reference/placement and exactly one type-job field).
+type SubmitJobRequest struct {
+	Region string          `json:"region"`
+	Job    json.RawMessage `json:"job"`
+}
+
 // WorkflowTemplate is the console rendering of a Dataproc workflow template,
 // flattened across regions for the list page. Definition carries the full wire
 // workflow object and is only populated on the detail read.
@@ -118,4 +137,25 @@ type WorkflowTemplate struct {
 type ListWorkflowTemplatesResponse struct {
 	Templates []WorkflowTemplate `json:"templates"`
 	Total     int                `json:"total"`
+}
+
+// WorkflowTemplateRequest is the console create/update body. It mirrors the
+// wire WorkflowTemplate (placement, jobs, parameters, labels, dagTimeout, ...)
+// with region and version moved out of the definition: the console is
+// region-optional on create, and version is the optimistic-concurrency token on
+// update. Definition is passed to the core verbatim.
+type WorkflowTemplateRequest struct {
+	Region     string          `json:"region"`
+	ID         string          `json:"id"`
+	Version    int32           `json:"version,omitempty"`
+	Definition json.RawMessage `json:"definition,omitempty"`
+}
+
+// InstantiateWorkflowTemplateRequest is the console instantiate body
+// (POST /workflow-templates/{region}/{template}/instantiate), matching
+// dataproc.v1.InstantiateWorkflowTemplateRequest without requestId (the
+// emulator, like real GCP best-effort, does not deduplicate runs).
+type InstantiateWorkflowTemplateRequest struct {
+	Version    int32             `json:"version,omitempty"`
+	Parameters map[string]string `json:"parameters,omitempty"`
 }

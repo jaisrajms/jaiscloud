@@ -46,6 +46,9 @@ func (m *mockProvider) CryptoKeyList(_ context.Context, nr *model.NormalizedRequ
 func (m *mockProvider) CryptoKeyGet(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) CryptoKeyUpdate(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 func (m *mockProvider) CryptoKeyVersionCreate(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
@@ -400,5 +403,100 @@ func TestCryptoOps_MissingRequiredFields(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status = %d, want 400: %s", tc.name, w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestAsymmetricSign_PassesData(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"signature": "c2ln"}}}
+	w := do(t, mock, http.MethodPost,
+		"/locations/global/keyRings/kr1/cryptoKeys/ck1/versions/1/asymmetricSign",
+		`{"data":"aGVsbG8="}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	body := mock.lastNR.Params["body"].(map[string]any)
+	if body["data"] != "aGVsbG8=" {
+		t.Fatalf("data = %v", body["data"])
+	}
+	if _, ok := body["digest"]; ok {
+		t.Fatalf("digest must not be sent with data: %+v", body)
+	}
+}
+
+func TestAsymmetricSign_RejectsBothOrNeither(t *testing.T) {
+	for _, body := range []string{
+		`{"digest":{"sha256":"aGFzaA=="},"data":"aGVsbG8="}`,
+		`{}`,
+	} {
+		w := do(t, &mockProvider{}, http.MethodPost,
+			"/locations/global/keyRings/kr1/cryptoKeys/ck1/versions/1/asymmetricSign", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "exactly one of digest or data") {
+			t.Fatalf("body %s error = %s", body, w.Body.String())
+		}
+	}
+}
+
+func TestAsymmetricSign_RejectsMalformedDigest(t *testing.T) {
+	w := do(t, &mockProvider{}, http.MethodPost,
+		"/locations/global/keyRings/kr1/cryptoKeys/ck1/versions/1/asymmetricSign",
+		`{"digest":{"sha256":"aA==","sha384":"aA=="}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateCryptoKey_DerivesMask(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"name": "projects/test-project/locations/global/keyRings/kr1/cryptoKeys/ck1",
+	}}}
+	body := `{"labels":{"team":"payments"},"rotationPeriod":"7776000s","nextRotationTime":"2027-01-01T00:00:00Z"}`
+	w := do(t, mock, http.MethodPatch,
+		"/locations/global/keyRings/kr1/cryptoKeys/ck1", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["updateMask"]; got != "labels,rotationPeriod,nextRotationTime" {
+		t.Fatalf("updateMask = %v", got)
+	}
+	b := mock.lastNR.Params["body"].(map[string]any)
+	if b["rotationPeriod"] != "7776000s" || b["nextRotationTime"] != "2027-01-01T00:00:00Z" {
+		t.Fatalf("body = %+v", b)
+	}
+}
+
+func TestUpdateCryptoKey_PassesExplicitMaskVerbatim(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPatch,
+		"/locations/global/keyRings/kr1/cryptoKeys/ck1",
+		`{"labels":{},"updateMask":["labels"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["updateMask"]; got != "labels" {
+		t.Fatalf("updateMask = %v", got)
+	}
+}
+
+func TestUpdateCryptoKey_RequiresAField(t *testing.T) {
+	w := do(t, &mockProvider{}, http.MethodPatch,
+		"/locations/global/keyRings/kr1/cryptoKeys/ck1", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateCryptoKey_ProviderErrorMapped(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("InvalidArgument",
+		"rotation_period must be at least 24h", http.StatusBadRequest)}
+	w := do(t, mock, http.MethodPatch,
+		"/locations/global/keyRings/kr1/cryptoKeys/ck1", `{"rotationPeriod":"60s"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "at least 24h") {
+		t.Fatalf("body = %s", w.Body.String())
 	}
 }

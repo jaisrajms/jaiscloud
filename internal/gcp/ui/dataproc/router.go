@@ -14,16 +14,22 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/clusters", h.ListClusters)
 	r.Post("/clusters", h.CreateCluster)
 	r.Get("/clusters/{region}/{cluster}", h.GetCluster)
+	r.Patch("/clusters/{region}/{cluster}", h.UpdateCluster)
 	r.Post("/clusters/{region}/{cluster}/start", h.StartCluster)
 	r.Post("/clusters/{region}/{cluster}/stop", h.StopCluster)
 	r.Delete("/clusters/{region}/{cluster}", h.DeleteCluster)
 
 	r.Get("/jobs", h.ListJobs)
+	r.Post("/jobs", h.SubmitJob)
 	r.Get("/jobs/{region}/{job}", h.GetJob)
 	r.Post("/jobs/{region}/{job}/cancel", h.CancelJob)
 
 	r.Get("/workflow-templates", h.ListWorkflowTemplates)
+	r.Post("/workflow-templates", h.CreateWorkflowTemplate)
 	r.Get("/workflow-templates/{region}/{template}", h.GetWorkflowTemplate)
+	r.Put("/workflow-templates/{region}/{template}", h.UpdateWorkflowTemplate)
+	r.Delete("/workflow-templates/{region}/{template}", h.DeleteWorkflowTemplate)
+	r.Post("/workflow-templates/{region}/{template}/instantiate", h.InstantiateWorkflowTemplate)
 
 	return r
 }

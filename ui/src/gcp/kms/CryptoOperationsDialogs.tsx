@@ -32,7 +32,9 @@ import {
   digestAlgorithmFor,
   digestFieldFor,
   downloadText,
+  rawSignLimit,
   shaDigestBase64,
+  signInputFor,
   type DigestAlgorithm,
 } from './util'
 
@@ -297,12 +299,19 @@ export function AsymmetricSignDialog({
   onClose,
 }: VersionOpDialogProps) {
   const fixed = digestAlgorithmFor(algorithm)
+  const mode = signInputFor(algorithm)
+  const rawLimit = rawSignLimit(algorithm)
   const [message, setMessage] = useState('')
   const [digestAlgorithm, setDigestAlgorithm] = useState<DigestAlgorithm>(fixed ?? 'SHA-256')
   const [result, setResult] = useState<string | null>(null)
 
   const sign = useMutation({
     mutationFn: async () => {
+      if (mode === 'data') {
+        // Ed25519 and RSA_SIGN_RAW_PKCS1_* sign the supplied bytes directly;
+        // sending a Digest would be rejected by the API.
+        return asymmetricSign(location, keyRing, cryptoKey, version, { data: base64Encode(message) })
+      }
       const digest = await shaDigestBase64(message, digestAlgorithm)
       return asymmetricSign(location, keyRing, cryptoKey, version, {
         digest: { [digestFieldFor(digestAlgorithm)]: digest },
@@ -310,6 +319,9 @@ export function AsymmetricSignDialog({
     },
     onSuccess: (response) => setResult(response.signature),
   })
+
+  const tooLong =
+    rawLimit !== undefined && new TextEncoder().encode(message).length > rawLimit
 
   useEffect(() => {
     if (open) {
@@ -325,11 +337,15 @@ export function AsymmetricSignDialog({
     <CryptoDialog
       open={open}
       title={`Sign · v${version}`}
-      description="The message is hashed with the key's digest algorithm; the base64 signature is returned."
+      description={
+        mode === 'data'
+          ? 'The data is signed directly (no hashing); the base64 signature is returned.'
+          : "The message is hashed with the key's digest algorithm; the base64 signature is returned."
+      }
       submitLabel="Sign"
       pending={sign.isPending}
       error={sign.isError ? sign.error : null}
-      submitDisabled={message.length === 0}
+      submitDisabled={message.length === 0 || tooLong}
       onClose={onClose}
       onSubmit={() => {
         setResult(null)
@@ -339,27 +355,35 @@ export function AsymmetricSignDialog({
     >
       <TextField
         autoFocus
-        label="Message"
+        label={mode === 'data' ? 'Data (signed as UTF-8 bytes)' : 'Message'}
         value={message}
         onChange={(e) => setMessage(e.target.value)}
+        error={tooLong}
+        helperText={
+          rawLimit !== undefined
+            ? `Raw input limit: ${rawLimit} bytes (modulus minus PKCS#1 v1.5 padding).`
+            : undefined
+        }
         multiline
         minRows={3}
         fullWidth
       />
-      <TextField
-        select
-        label="Digest algorithm"
-        value={digestAlgorithm}
-        onChange={(e) => setDigestAlgorithm(e.target.value as DigestAlgorithm)}
-        disabled={Boolean(fixed)}
-        fullWidth
-      >
-        {(fixed ? [fixed] : (['SHA-256', 'SHA-384', 'SHA-512'] as DigestAlgorithm[])).map((alg) => (
-          <MenuItem key={alg} value={alg}>
-            {alg}
-          </MenuItem>
-        ))}
-      </TextField>
+      {mode === 'digest' && (
+        <TextField
+          select
+          label="Digest algorithm"
+          value={digestAlgorithm}
+          onChange={(e) => setDigestAlgorithm(e.target.value as DigestAlgorithm)}
+          disabled={Boolean(fixed)}
+          fullWidth
+        >
+          {(fixed ? [fixed] : (['SHA-256', 'SHA-384', 'SHA-512'] as DigestAlgorithm[])).map((alg) => (
+            <MenuItem key={alg} value={alg}>
+              {alg}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
     </CryptoDialog>
   )
 }

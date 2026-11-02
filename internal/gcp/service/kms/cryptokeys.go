@@ -2,6 +2,7 @@ package kms
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -625,8 +626,17 @@ func (s *Service) RawDecrypt(ctx context.Context, project, location, kr, key, ve
 	return pt, nil
 }
 
-// AsymmetricSign signs a pre-computed digest with an asymmetric version.
-func (s *Service) AsymmetricSign(ctx context.Context, project, location, kr, key, version string, digest []byte) (SignResult, error) {
+// AsymmetricSign signs with an asymmetric version. Exactly one of digest and
+// data is supplied: a hash-based algorithm accepts either (data is hashed with
+// the algorithm's digest), while RSA_SIGN_RAW_PKCS1_* and EC_SIGN_ED25519 take
+// data only — they sign the supplied bytes and have no digest algorithm.
+func (s *Service) AsymmetricSign(ctx context.Context, project, location, kr, key, version string, digest, data []byte) (SignResult, error) {
+	if len(digest) == 0 && len(data) == 0 {
+		return SignResult{}, invalidArgument("digest or data is required")
+	}
+	if len(digest) > 0 && len(data) > 0 {
+		return SignResult{}, invalidArgument("digest and data are mutually exclusive")
+	}
 	if err := s.authorizeCryptoKey(ctx, project, location, kr, key, policy.PermCryptoKeyUseToSign); err != nil {
 		return SignResult{}, err
 	}
@@ -637,6 +647,24 @@ func (s *Service) AsymmetricSign(ctx context.Context, project, location, kr, key
 	if v.State != "ENABLED" {
 		return SignResult{}, versionNotEnabledErr(version, v.State)
 	}
+	raw := v.Algorithm == "EC_SIGN_ED25519" || strings.Contains(v.Algorithm, "_RAW_")
+	if raw && len(data) == 0 {
+		return SignResult{}, invalidArgument("data is required for " + v.Algorithm)
+	}
+	if len(data) > 0 {
+		if raw {
+			// Raw RSA and Ed25519 sign the supplied bytes directly: no digest,
+			// no DigestInfo encoding.
+			digest = data
+		} else {
+			h := signHashForAlgorithm(v.Algorithm)
+			hasher := h.New()
+			if _, err := hasher.Write(data); err != nil {
+				return SignResult{}, invalidArgument("signing failed")
+			}
+			digest = hasher.Sum(nil)
+		}
+	}
 	priv, err := s.keys.PrivateKey(ctx, project, location, kr, key, version)
 	if err != nil {
 		return SignResult{}, versionErr(err)
@@ -646,7 +674,7 @@ func (s *Service) AsymmetricSign(ctx context.Context, project, location, kr, key
 	case strings.HasPrefix(v.Algorithm, "RSA_SIGN"):
 		sig, err = kmsstore.RSASign(priv, digest, v.Algorithm)
 	case strings.HasPrefix(v.Algorithm, "EC_SIGN"):
-		sig, err = kmsstore.ECSign(priv, digest)
+		sig, err = kmsstore.ECSign(priv, digest, v.Algorithm)
 	default:
 		return SignResult{}, failedPrecondition("key is not for asymmetric signing")
 	}
@@ -654,6 +682,22 @@ func (s *Service) AsymmetricSign(ctx context.Context, project, location, kr, key
 		return SignResult{}, invalidArgument("signing failed")
 	}
 	return SignResult{Version: version, Signature: sig}, nil
+}
+
+// signHashForAlgorithm maps a signing algorithm to the digest it hashes data
+// with, matching the algorithm name's SHA suffix (EC_SIGN_ED25519 and the RAW
+// RSA algorithms never reach it).
+func signHashForAlgorithm(algorithm string) crypto.Hash {
+	switch {
+	case strings.Contains(algorithm, "SHA512"):
+		return crypto.SHA512
+	case strings.Contains(algorithm, "SHA384"):
+		return crypto.SHA384
+	case strings.Contains(algorithm, "SHA1"):
+		return crypto.SHA1
+	default:
+		return crypto.SHA256
+	}
 }
 
 // AsymmetricDecrypt decrypts ciphertext with an RSA-OAEP version.

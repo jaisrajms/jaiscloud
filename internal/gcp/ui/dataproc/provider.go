@@ -26,6 +26,12 @@ type ProviderInterface interface {
 	// shows CREATING and then RUNNING on refresh.
 	CreateCluster(ctx context.Context, project, region, name string, in dataproccore.ClusterInput) (dpstore.Cluster, error)
 
+	// UpdateCluster applies a masked config/labels patch. An empty mask means
+	// "apply everything supplied", which is the wire behaviour; the console
+	// always sends the fields the caller touched. The returned long-running
+	// operation is discarded (the cluster settles on a later read).
+	UpdateCluster(ctx context.Context, project, region, name string, in dataproccore.ClusterInput, mask []string) (dpstore.Cluster, error)
+
 	// StartCluster / StopCluster transition a cluster's state. The returned
 	// operation is discarded (the transition settles lazily on the next read).
 	StartCluster(ctx context.Context, project, region, name string) (dpstore.Cluster, error)
@@ -41,6 +47,11 @@ type ProviderInterface interface {
 	// GetJob returns one job.
 	GetJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error)
 
+	// SubmitJob submits a job to a cluster. The core validates and dispatches
+	// the type-specific body; the returned operation-less job is PENDING or
+	// RUNNING and settles on a later read.
+	SubmitJob(ctx context.Context, project, region string, in dataproccore.JobInput) (dpstore.Job, error)
+
 	// CancelJob transitions a running job to CANCELLED.
 	CancelJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error)
 
@@ -50,6 +61,20 @@ type ProviderInterface interface {
 
 	// GetWorkflowTemplate returns one workflow template (its latest version).
 	GetWorkflowTemplate(ctx context.Context, project, region, id string) (dpstore.WorkflowTemplate, error)
+
+	// CreateWorkflowTemplate stores a new template at version 1.
+	CreateWorkflowTemplate(ctx context.Context, project, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error)
+
+	// UpdateWorkflowTemplate replaces a definition and bumps the version; a
+	// version that no longer matches the server's is ABORTED by the core.
+	UpdateWorkflowTemplate(ctx context.Context, project, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error)
+
+	// DeleteWorkflowTemplate removes a template (version 0 = all versions).
+	DeleteWorkflowTemplate(ctx context.Context, project, region, id string, version int32) error
+
+	// InstantiateWorkflowTemplate runs a stored template. The operation is
+	// returned to the console so it can show the run's name.
+	InstantiateWorkflowTemplate(ctx context.Context, project, region, templateID string, version int32, parameters map[string]string) (dpstore.Operation, error)
 }
 
 // Provider adapts the transport-neutral Dataproc core onto ProviderInterface,
@@ -98,6 +123,13 @@ func (p *Provider) CreateCluster(ctx context.Context, project, region, name stri
 	return c, err
 }
 
+// UpdateCluster implements ProviderInterface; the update operation is discarded
+// and the cluster is returned in UPDATING state.
+func (p *Provider) UpdateCluster(ctx context.Context, project, region, name string, in dataproccore.ClusterInput, mask []string) (dpstore.Cluster, error) {
+	c, _, err := p.svc.UpdateCluster(ctx, project, region, name, in, mask)
+	return c, err
+}
+
 // ListAllJobs implements ProviderInterface.
 func (p *Provider) ListAllJobs(ctx context.Context, project string) ([]dpstore.Job, error) {
 	return p.svc.ListAllJobs(ctx, project)
@@ -106,6 +138,11 @@ func (p *Provider) ListAllJobs(ctx context.Context, project string) ([]dpstore.J
 // GetJob implements ProviderInterface.
 func (p *Provider) GetJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error) {
 	return p.svc.GetJob(ctx, project, region, jobID)
+}
+
+// SubmitJob implements ProviderInterface.
+func (p *Provider) SubmitJob(ctx context.Context, project, region string, in dataproccore.JobInput) (dpstore.Job, error) {
+	return p.svc.SubmitJob(ctx, project, region, in)
 }
 
 // CancelJob implements ProviderInterface.
@@ -122,4 +159,24 @@ func (p *Provider) ListAllWorkflowTemplates(ctx context.Context, project string)
 // latest.
 func (p *Provider) GetWorkflowTemplate(ctx context.Context, project, region, id string) (dpstore.WorkflowTemplate, error) {
 	return p.svc.GetWorkflowTemplate(ctx, project, region, id, 0)
+}
+
+// CreateWorkflowTemplate implements ProviderInterface.
+func (p *Provider) CreateWorkflowTemplate(ctx context.Context, project, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error) {
+	return p.svc.CreateWorkflowTemplate(ctx, project, region, in)
+}
+
+// UpdateWorkflowTemplate implements ProviderInterface.
+func (p *Provider) UpdateWorkflowTemplate(ctx context.Context, project, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error) {
+	return p.svc.UpdateWorkflowTemplate(ctx, project, region, in)
+}
+
+// DeleteWorkflowTemplate implements ProviderInterface.
+func (p *Provider) DeleteWorkflowTemplate(ctx context.Context, project, region, id string, version int32) error {
+	return p.svc.DeleteWorkflowTemplate(ctx, project, region, id, version)
+}
+
+// InstantiateWorkflowTemplate implements ProviderInterface.
+func (p *Provider) InstantiateWorkflowTemplate(ctx context.Context, project, region, templateID string, version int32, parameters map[string]string) (dpstore.Operation, error) {
+	return p.svc.InstantiateWorkflowTemplate(ctx, project, region, templateID, version, parameters)
 }

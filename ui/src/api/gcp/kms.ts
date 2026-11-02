@@ -136,6 +136,13 @@ export const createCryptoKey = (
 export const getCryptoKey = (location: string, keyRing: string, key: string) =>
   api.get<CryptoKey>(cryptoKeyPath(location, keyRing, key))
 
+export const updateCryptoKey = (
+  location: string,
+  keyRing: string,
+  key: string,
+  body: UpdateCryptoKeyRequest,
+) => api.patch<CryptoKey>(cryptoKeyPath(location, keyRing, key), body)
+
 export const setPrimaryVersion = (
   location: string,
   keyRing: string,
@@ -253,8 +260,21 @@ export interface DecryptResponse {
   usedPrimary?: boolean
 }
 
+/**
+ * AsymmetricSign body. Exactly one of digest and data: hash-based algorithms
+ * accept either, while RSA_SIGN_RAW_PKCS1_* and EC_SIGN_ED25519 take data only.
+ */
 export interface AsymmetricSignRequest {
-  digest: Record<string, string>
+  digest?: Record<string, string>
+  data?: string
+}
+
+/** UpdateCryptoKey body (PATCH .../cryptoKeys/{key}). */
+export interface UpdateCryptoKeyRequest {
+  labels?: Record<string, string>
+  rotationPeriod?: string
+  nextRotationTime?: string
+  updateMask?: string[]
 }
 
 export interface AsymmetricSignResponse {
@@ -319,7 +339,7 @@ export const decryptCryptoKey = (
   body: DecryptRequest,
 ) => api.post<DecryptResponse>(`${cryptoKeyPath(location, keyRing, key)}/decrypt`, body)
 
-/** Sign a base64 digest with an asymmetric-sign version. */
+/** Sign with an asymmetric-sign version (a digest or raw data, never both). */
 export const asymmetricSign = (
   location: string,
   keyRing: string,

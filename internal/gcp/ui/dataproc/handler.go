@@ -3,7 +3,9 @@ package dataprocui
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"jaiscloud/internal/config"
@@ -210,6 +212,33 @@ func (h *Handler) CreateCluster(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSONStatus(w, http.StatusCreated, renderCluster(project, c, true))
 }
 
+// PATCH /clusters/{region}/{cluster}
+func (h *Handler) UpdateCluster(w http.ResponseWriter, r *http.Request) {
+	region, name, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	var in UpdateClusterRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if in.Labels == nil && len(in.Config) == 0 {
+		uihelper.UIError(w, "InvalidArgument", "config or labels is required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	c, err := h.provider.UpdateCluster(r.Context(), project, region, name, dataproccore.ClusterInput{
+		Labels: in.Labels,
+		Config: in.Config,
+	}, in.UpdateMask)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderCluster(project, c, true))
+}
+
 // GET /clusters/{region}/{cluster}
 func (h *Handler) GetCluster(w http.ResponseWriter, r *http.Request) {
 	region, name, ok := h.target(w, r, "cluster")
@@ -294,6 +323,31 @@ func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, renderJob(project, j, true))
 }
 
+// POST /jobs
+func (h *Handler) SubmitJob(w http.ResponseWriter, r *http.Request) {
+	var in SubmitJobRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if in.Region == "" {
+		uihelper.UIError(w, "InvalidArgument", "region is required", http.StatusBadRequest)
+		return
+	}
+	var job map[string]any
+	if len(in.Job) == 0 || json.Unmarshal(in.Job, &job) != nil {
+		uihelper.UIError(w, "InvalidArgument", "job is required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	j, err := h.provider.SubmitJob(r.Context(), project, in.Region, dataproccore.JobInputFromMap(job))
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderJob(project, j, true))
+}
+
 // POST /jobs/{region}/{job}/cancel
 func (h *Handler) CancelJob(w http.ResponseWriter, r *http.Request) {
 	region, id, ok := h.target(w, r, "job")
@@ -339,6 +393,126 @@ func (h *Handler) GetWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uihelper.WriteJSON(w, renderTemplate(project, t, true))
+}
+
+// POST /workflow-templates
+func (h *Handler) CreateWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
+	in, def, ok := h.templateRequest(w, r)
+	if !ok {
+		return
+	}
+	if in.Region == "" || in.ID == "" {
+		uihelper.UIError(w, "InvalidArgument", "region and id are required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	t, err := h.provider.CreateWorkflowTemplate(r.Context(), project, in.Region, dataproccore.WorkflowTemplateInput{
+		ID:         in.ID,
+		Definition: def,
+	})
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, renderTemplate(project, t, true))
+}
+
+// PUT /workflow-templates/{region}/{template}
+func (h *Handler) UpdateWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
+	region, id, ok := h.target(w, r, "template")
+	if !ok {
+		return
+	}
+	in, def, ok := h.templateRequest(w, r)
+	if !ok {
+		return
+	}
+	if in.ID != "" && in.ID != id {
+		uihelper.UIError(w, "InvalidArgument", "id does not match the template in the path", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	t, err := h.provider.UpdateWorkflowTemplate(r.Context(), project, region, dataproccore.WorkflowTemplateInput{
+		ID:         id,
+		Version:    in.Version,
+		Definition: def,
+	})
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderTemplate(project, t, true))
+}
+
+// DELETE /workflow-templates/{region}/{template}?version=
+func (h *Handler) DeleteWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
+	region, id, ok := h.target(w, r, "template")
+	if !ok {
+		return
+	}
+	version, ok := h.versionQuery(w, r)
+	if !ok {
+		return
+	}
+	if err := h.provider.DeleteWorkflowTemplate(r.Context(), h.account(r), region, id, version); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /workflow-templates/{region}/{template}/instantiate
+func (h *Handler) InstantiateWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
+	region, id, ok := h.target(w, r, "template")
+	if !ok {
+		return
+	}
+	var in InstantiateWorkflowTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && err != io.EOF {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	op, err := h.provider.InstantiateWorkflowTemplate(r.Context(), h.account(r), region, id, in.Version, in.Parameters)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, dataproccore.OperationJSON(op))
+}
+
+// templateRequest decodes a workflow-template create/update body. The console
+// nests the wire WorkflowTemplate under "definition" so region and version
+// stay request metadata; the definition is passed to the core verbatim and the
+// core validates it (placement, jobs, step ids, prerequisites).
+func (h *Handler) templateRequest(w http.ResponseWriter, r *http.Request) (WorkflowTemplateRequest, map[string]any, bool) {
+	var in WorkflowTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return in, nil, false
+	}
+	def := map[string]any{}
+	if len(in.Definition) > 0 {
+		if err := json.Unmarshal(in.Definition, &def); err != nil {
+			uihelper.UIError(w, "InvalidArgument", "definition must be a JSON object", http.StatusBadRequest)
+			return in, nil, false
+		}
+	}
+	return in, def, true
+}
+
+// versionQuery reads the optional ?version= concurrency token, writing a 400
+// and returning false when it is not a non-negative int32.
+func (h *Handler) versionQuery(w http.ResponseWriter, r *http.Request) (int32, bool) {
+	raw := r.URL.Query().Get("version")
+	if raw == "" {
+		return 0, true
+	}
+	v, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || v < 0 {
+		uihelper.UIError(w, "InvalidArgument", "version must be a non-negative integer", http.StatusBadRequest)
+		return 0, false
+	}
+	return int32(v), true
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

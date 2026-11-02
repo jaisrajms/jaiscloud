@@ -3,6 +3,7 @@ package kms
 import (
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -90,5 +91,74 @@ func TestKMSMacSignVerify(t *testing.T) {
 	}))
 	if vr.Data["success"] != false {
 		t.Errorf("expected success=false for wrong mac, got %v", vr.Data["success"])
+	}
+}
+
+// TestKMSAsymmetricSignDataEd25519 covers the data path on REST: the key is a
+// real Ed25519 key, the signature verifies with the published public key, and
+// digest+data (or neither) is rejected.
+func TestKMSAsymmetricSignDataEd25519(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr", "cryptoKeyId": "ed",
+		"body": map[string]any{
+			"purpose":         "ASYMMETRIC_SIGN",
+			"versionTemplate": map[string]any{"algorithm": "EC_SIGN_ED25519"},
+		},
+	})); err != nil {
+		t.Fatalf("cryptokey: %v", err)
+	}
+	versionName := "locations/global/keyRings/kr/cryptoKeys/ed/cryptoKeyVersions/1"
+	msg := []byte("hello ed25519")
+	data := base64.StdEncoding.EncodeToString(msg)
+
+	sr, err := p.CryptoKeyVersionAsymmetricSign(ctx, newNR(map[string]any{
+		"name": versionName,
+		"body": map[string]any{"data": data, "dataCrc32c": crc32cString(msg)},
+	}))
+	if err != nil {
+		t.Fatalf("asymmetricSign: %v", err)
+	}
+	if sr.Data["verifiedDataCrc32c"] != true {
+		t.Fatalf("verifiedDataCrc32c = %v, want true", sr.Data["verifiedDataCrc32c"])
+	}
+	sig, err := base64.StdEncoding.DecodeString(sr.Data["signature"].(string))
+	if err != nil {
+		t.Fatalf("decode sig: %v", err)
+	}
+	pr, err := p.CryptoKeyVersionGetPublicKey(ctx, newNR(map[string]any{"name": versionName + "/publicKey"}))
+	if err != nil {
+		t.Fatalf("getPublicKey: %v", err)
+	}
+	block, _ := pem.Decode([]byte(pr.Data["pem"].(string)))
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	if !ed25519.Verify(pub.(ed25519.PublicKey), msg, sig) {
+		t.Fatal("Ed25519 signature did not verify")
+	}
+
+	if _, err := p.CryptoKeyVersionAsymmetricSign(ctx, newNR(map[string]any{
+		"name": versionName,
+		"body": map[string]any{"data": data, "digest": map[string]any{"sha256": data}},
+	})); err == nil {
+		t.Fatal("digest and data together were accepted")
+	}
+	if _, err := p.CryptoKeyVersionAsymmetricSign(ctx, newNR(map[string]any{
+		"name": versionName,
+		"body": map[string]any{},
+	})); err == nil {
+		t.Fatal("neither digest nor data was accepted")
+	}
+	if _, err := p.CryptoKeyVersionAsymmetricSign(ctx, newNR(map[string]any{
+		"name": versionName,
+		"body": map[string]any{"data": data, "dataCrc32c": crc32cString([]byte("other"))},
+	})); err == nil {
+		t.Fatal("mismatched dataCrc32c was accepted")
 	}
 }
