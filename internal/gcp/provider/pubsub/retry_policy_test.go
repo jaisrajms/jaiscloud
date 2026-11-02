@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // TestSubscriptionRetryPolicyRoundTrip covers the REST transport's handling of
@@ -66,6 +67,13 @@ func TestSubscriptionRetryPolicyRoundTrip(t *testing.T) {
 		t.Fatalf("camelCase nested patch = %v", rp)
 	}
 
+	// The delivery scheduler consumes the patched policy through the
+	// SubscriptionProvisioner seam; no restart or re-create is needed.
+	min, max, _, ok, err := p.SubscriptionRetryPolicy(ctx, "proj", "retry-sub")
+	if err != nil || !ok || min != 20*time.Second || max != 120*time.Second {
+		t.Fatalf("retry policy read back = %v..%v ok=%v err=%v", min, max, ok, err)
+	}
+
 	// An out-of-range backoff is InvalidArgument.
 	if _, err := p.SubscriptionUpdate(ctx, newNR(map[string]any{
 		"name": "subscriptions/retry-sub",
@@ -89,6 +97,9 @@ func TestSubscriptionRetryPolicyRoundTrip(t *testing.T) {
 	}
 	if rp := retryPolicyOf(t, p, "retry-sub"); rp != nil {
 		t.Fatalf("retryPolicy after clear = %v, want nil", rp)
+	}
+	if _, _, _, ok, err := p.SubscriptionRetryPolicy(ctx, "proj", "retry-sub"); err != nil || ok {
+		t.Fatalf("cleared retry policy read = ok=%v err=%v, want ok=false", ok, err)
 	}
 }
 
@@ -161,4 +172,61 @@ func retryPolicyOf(t *testing.T, p *Provider, sub string) map[string]any {
 	}
 	rp, _ := resp.Data["retryPolicy"].(map[string]any)
 	return rp
+}
+
+// TestSubscriptionRetryPolicyMaxDoublings covers the emulator-extension
+// maxDoublings leaf on the subscription patch mask and the read path the
+// delivery scheduler uses.
+func TestSubscriptionRetryPolicyMaxDoublings(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	mustTopic(t, p, "src")
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/md-sub",
+		"body": map[string]any{
+			"topic": "projects/proj/topics/src",
+			"retryPolicy": map[string]any{
+				"minimumBackoff": "0.010s",
+				"maximumBackoff": "0.080s",
+				"maxDoublings":   1,
+			},
+		},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	min, max, md, ok, err := p.SubscriptionRetryPolicy(ctx, "proj", "md-sub")
+	if err != nil || !ok || min != 10*time.Millisecond || max != 80*time.Millisecond || md != 1 {
+		t.Fatalf("retry policy = %v..%v md=%d ok=%v err=%v", min, max, md, ok, err)
+	}
+
+	// A nested mask updates just maxDoublings.
+	if _, err := p.SubscriptionUpdate(ctx, newNR(map[string]any{
+		"name": "subscriptions/md-sub",
+		"body": map[string]any{
+			"subscription": map[string]any{
+				"retryPolicy": map[string]any{"maxDoublings": 2},
+			},
+			"updateMask": "retry_policy.max_doublings",
+		},
+	})); err != nil {
+		t.Fatalf("patch maxDoublings: %v", err)
+	}
+	if _, _, md, ok, err := p.SubscriptionRetryPolicy(ctx, "proj", "md-sub"); err != nil || !ok || md != 2 {
+		t.Fatalf("maxDoublings after patch = %d ok=%v err=%v", md, ok, err)
+	}
+
+	// Negative and fractional values are rejected.
+	for _, bad := range []any{-1, 1.5} {
+		if _, err := p.SubscriptionUpdate(ctx, newNR(map[string]any{
+			"name": "subscriptions/md-sub",
+			"body": map[string]any{
+				"subscription": map[string]any{
+					"retryPolicy": map[string]any{"maxDoublings": bad},
+				},
+				"updateMask": "retry_policy.max_doublings",
+			},
+		})); err == nil {
+			t.Errorf("maxDoublings %v accepted, want InvalidArgument", bad)
+		}
+	}
 }

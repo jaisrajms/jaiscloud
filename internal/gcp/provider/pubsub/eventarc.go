@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/resource"
@@ -142,6 +143,59 @@ func (p *Provider) SubscriptionDeadLetter(ctx context.Context, project, subscrip
 		attempts = mda
 	}
 	return lastSegment(topic), attempts, true, nil
+}
+
+// SubscriptionRetryPolicy reports a subscription's configured retryPolicy: the
+// minimum/maximum delivery backoff and, when present, an emulator-extension
+// maxDoublings count. A missing subscription or policy reports ok=false so the
+// caller keeps its documented emulator defaults.
+func (p *Provider) SubscriptionRetryPolicy(ctx context.Context, project, subscription string) (time.Duration, time.Duration, int, bool, error) {
+	if subscription == "" {
+		return 0, 0, 0, false, nil
+	}
+	e, err := p.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, lastSegment(subscription))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return 0, 0, 0, false, nil
+		}
+		return 0, 0, 0, false, err
+	}
+	var sub map[string]any
+	if json.Unmarshal(e.Data, &sub) != nil {
+		return 0, 0, 0, false, nil
+	}
+	rp, ok := sub["retryPolicy"].(map[string]any)
+	if !ok {
+		return 0, 0, 0, false, nil
+	}
+	return retryPolicyDurations(rp)
+}
+
+// retryPolicyDurations decodes the stored retryPolicy map's backoff leaves.
+func retryPolicyDurations(rp map[string]any) (time.Duration, time.Duration, int, bool, error) {
+	var minimum, maximum time.Duration
+	if s, _ := rp["minimumBackoff"].(string); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		minimum = d
+	}
+	if s, _ := rp["maximumBackoff"].(string); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return 0, 0, 0, false, err
+		}
+		maximum = d
+	}
+	maxDoublings := 0
+	switch v := rp["maxDoublings"].(type) {
+	case float64:
+		maxDoublings = int(v)
+	case int:
+		maxDoublings = v
+	}
+	return minimum, maximum, maxDoublings, true, nil
 }
 
 // PublishDeadLetter forwards data with attributes to a dead-letter topic

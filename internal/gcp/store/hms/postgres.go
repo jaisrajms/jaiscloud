@@ -353,24 +353,88 @@ func (s *PostgresStore) tableExists(ctx context.Context, dbName, tableName strin
 	return true, nil
 }
 
-func (s *PostgresStore) CreatePartition(ctx context.Context, dbName, tableName string, p Partition) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_hms_partitions (db_name, table_name, part_key, values_json, part_json)
-		VALUES ($1,$2,$3,$4,$5)
-	`, dbName, tableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "23505":
-				return ErrPartitionExists
-			case "23503":
-				return ErrTableNotFound
-			}
+const partitionInsertSQL = `
+	INSERT INTO jc_hms_partitions (db_name, table_name, part_key, values_json, part_json)
+	VALUES ($1,$2,$3,$4,$5)
+`
+
+// partitionInsertSkipSQL is the ifNotExists form: an already-stored partition
+// is left alone (0 rows affected) instead of raising a unique violation.
+const partitionInsertSkipSQL = partitionInsertSQL + `
+	ON CONFLICT (db_name, table_name, part_key) DO NOTHING
+`
+
+// partitionWriteErr maps a Postgres partition-insert failure to the store's
+// sentinels: duplicate (db_name, table_name, part_key) -> ErrPartitionExists,
+// missing table (FK) -> ErrTableNotFound.
+func partitionWriteErr(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			return ErrPartitionExists
+		case "23503":
+			return ErrTableNotFound
 		}
-		return err
+	}
+	return err
+}
+
+func (s *PostgresStore) CreatePartition(ctx context.Context, dbName, tableName string, p Partition) error {
+	_, err := s.pool.Exec(ctx, partitionInsertSQL,
+		dbName, tableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
+	if err != nil {
+		return partitionWriteErr(err)
 	}
 	return nil
+}
+
+// AddPartitions inserts the whole batch in one Serializable transaction, so a
+// failing element rolls back every insert already made for the request — the
+// atomicity Hive's add_partitions_req has. A transient conflict retries the
+// whole (never partially committed) transaction.
+func (s *PostgresStore) AddPartitions(ctx context.Context, parts []Partition, ifNotExists bool) ([]Partition, error) {
+	return storeutil.RetrySerializable(ctx, func() ([]Partition, error) {
+		return s.addPartitionsOnce(ctx, parts, ifNotExists)
+	})
+}
+
+func (s *PostgresStore) addPartitionsOnce(ctx context.Context, parts []Partition, ifNotExists bool) ([]Partition, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	query := partitionInsertSQL
+	if ifNotExists {
+		query = partitionInsertSkipSQL
+	}
+	added := make([]Partition, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		key := p.DBName + "\x00" + p.TableName + "\x00" + PartitionKey(p.Values)
+		if seen[key] {
+			if ifNotExists {
+				continue
+			}
+			return nil, ErrPartitionExists
+		}
+		seen[key] = true
+		tag, err := tx.Exec(ctx, query,
+			p.DBName, p.TableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
+		if err != nil {
+			return nil, partitionWriteErr(err)
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		added = append(added, p)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return added, nil
 }
 
 func scanPartition(row pgx.Row) (Partition, error) {

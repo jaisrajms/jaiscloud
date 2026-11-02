@@ -34,6 +34,46 @@ const (
 	deliveryBackoffMax  = 2 * time.Second
 )
 
+// deliveryRetryPolicy is the backed subscription's retryPolicy resolved onto
+// the delivery engine's retry arithmetic. The emulator defaults (200ms → 2s)
+// apply when the subscription carries no policy. maxDoublings is an emulator
+// extension (Pub/Sub's RetryPolicy has no such field): when positive it bounds
+// the number of doublings before the delay stays flat.
+type deliveryRetryPolicy struct {
+	min, max     time.Duration
+	maxDoublings int
+}
+
+func defaultDeliveryRetryPolicy() deliveryRetryPolicy {
+	return deliveryRetryPolicy{min: deliveryBackoffBase, max: deliveryBackoffMax}
+}
+
+// backoff returns the delay before retry attempt n (1-based), doubling from
+// the configured minimum and capped at the configured maximum.
+func (p deliveryRetryPolicy) backoff(attempt int) time.Duration {
+	if p.max < p.min {
+		p.max = p.min
+	}
+	if attempt <= 1 {
+		return p.min
+	}
+	steps := attempt - 1
+	if p.maxDoublings > 0 && steps > p.maxDoublings {
+		steps = p.maxDoublings
+	}
+	d := p.min
+	for i := 0; i < steps; i++ {
+		if d >= p.max || d > p.max/2 {
+			return p.max
+		}
+		d *= 2
+	}
+	if d > p.max {
+		return p.max
+	}
+	return d
+}
+
 // deliveryTarget is one function an event resolves to.
 type deliveryTarget struct {
 	project  string
@@ -155,8 +195,10 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	rec := job.rec
 	// A terminal retry failure is forwarded to the backing subscription's
 	// dead-letter topic when one is configured (FD9); its maxDeliveryAttempts
-	// replaces the emulator's bounded cap.
+	// replaces the emulator's bounded cap. Its retryPolicy drives the delay
+	// between invocation attempts (FP7).
 	dlqTopic, maxAttempts := e.deadLetter(ctx, job)
+	retryPolicy := e.retryPolicy(ctx, job)
 	var lastErr string
 	// throttleTries counts how many times this delivery has been refused by the
 	// admission gate. A throttled delivery is re-polled with bounded backoff
@@ -213,7 +255,7 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 		if !job.retry || attempt >= maxAttempts {
 			break
 		}
-		if !sleepCtx(ctx, backoffFor(attempt)) {
+		if !sleepCtx(ctx, retryPolicy.backoff(attempt)) {
 			return
 		}
 		attempt++
@@ -228,6 +270,38 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	}
 	rec.Error = lastErr
 	e.persist(ctx, rec)
+}
+
+// retryPolicy resolves the job's backing subscription retryPolicy onto the
+// delivery backoff curve. A missing provisioner/subscription/policy keeps the
+// emulator defaults (200ms → 2s). The read happens per delivery, so a
+// subscriptions.patch that changes the policy applies to the next attempt.
+func (e *deliveryEngine) retryPolicy(ctx context.Context, job deliveryJob) deliveryRetryPolicy {
+	policy := defaultDeliveryRetryPolicy()
+	if e.svc.subscriptions == nil || job.subscription == "" {
+		return policy
+	}
+	minimum, maximum, maxDoublings, ok, err := e.svc.subscriptions.SubscriptionRetryPolicy(ctx, job.rec.Project, job.subscription)
+	if err != nil {
+		slog.Warn("functions: resolve retry policy", "subscription", job.subscription, "err", err)
+		return policy
+	}
+	if !ok {
+		return policy
+	}
+	if minimum > 0 {
+		policy.min = minimum
+	}
+	if maximum > 0 {
+		policy.max = maximum
+	}
+	if policy.max < policy.min {
+		policy.max = policy.min
+	}
+	if maxDoublings > 0 {
+		policy.maxDoublings = maxDoublings
+	}
+	return policy
 }
 
 // deadLetter resolves the job's backing subscription deadLetterPolicy. It

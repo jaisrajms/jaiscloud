@@ -64,6 +64,10 @@ type fakeSubs struct {
 	ok          bool
 	published   int
 	lastAttrs   map[string]string
+
+	retryMin, retryMax time.Duration
+	retryMaxDoublings  int
+	retryOK            bool
 }
 
 func (f *fakeSubs) EnsureEventarcTopic(context.Context, string, string, string) (string, error) {
@@ -76,6 +80,9 @@ func (f *fakeSubs) EnsureEventarcSubscription(context.Context, string, string, s
 func (f *fakeSubs) DeleteEventarcSubscription(context.Context, string, string) error { return nil }
 func (f *fakeSubs) SubscriptionDeadLetter(context.Context, string, string) (string, int, bool, error) {
 	return f.dlqTopic, f.maxAttempts, f.ok, nil
+}
+func (f *fakeSubs) SubscriptionRetryPolicy(context.Context, string, string) (time.Duration, time.Duration, int, bool, error) {
+	return f.retryMin, f.retryMax, f.retryMaxDoublings, f.retryOK, nil
 }
 func (f *fakeSubs) PublishDeadLetter(_ context.Context, _, _ string, _ []byte, attrs map[string]string) error {
 	f.published++
@@ -896,5 +903,55 @@ func TestDispatchDeliversRealCloudEventToExecutor(t *testing.T) {
 	}
 	if string(exec.req.Payload) != `{"marker":"x"}` {
 		t.Fatalf("executor payload = %q, want the raw published data", exec.req.Payload)
+	}
+}
+
+// TestDeliveryRetryPolicyBackoff pins FP7's arithmetic: the configured minimum
+// is the first delay, each retry doubles, and the configured maximum caps it.
+// A positive maxDoublings bounds the doubling steps.
+func TestDeliveryRetryPolicyBackoff(t *testing.T) {
+	p := deliveryRetryPolicy{min: 100 * time.Millisecond, max: time.Second}
+	want := []time.Duration{
+		100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond,
+		800 * time.Millisecond, time.Second, time.Second,
+	}
+	for i, w := range want {
+		if got := p.backoff(i + 1); got != w {
+			t.Errorf("backoff(attempt %d) = %v, want %v", i+1, got, w)
+		}
+	}
+
+	bounded := deliveryRetryPolicy{min: 100 * time.Millisecond, max: 10 * time.Second, maxDoublings: 2}
+	wantBounded := []time.Duration{
+		100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond,
+		400 * time.Millisecond, 400 * time.Millisecond,
+	}
+	for i, w := range wantBounded {
+		if got := bounded.backoff(i + 1); got != w {
+			t.Errorf("bounded backoff(attempt %d) = %v, want %v", i+1, got, w)
+		}
+	}
+}
+
+// TestDeliveryRetryPolicyResolvedFromSubscription verifies the delivery engine
+// reads the backing subscription's retryPolicy and applies it instead of the
+// fixed emulator curve.
+func TestDeliveryRetryPolicyResolvedFromSubscription(t *testing.T) {
+	subs := &fakeSubs{retryMin: 25 * time.Millisecond, retryMax: 75 * time.Millisecond, retryOK: true}
+	s, _ := newDeliveryService(t, WithSubscriptions(subs))
+	got := s.deliveries.retryPolicy(context.Background(), deliveryJob{
+		rec: functionsstore.Delivery{Project: "proj"}, subscription: "sub",
+	})
+	if got.min != 25*time.Millisecond || got.max != 75*time.Millisecond {
+		t.Fatalf("resolved retry policy = %+v, want min 25ms max 75ms", got)
+	}
+	if d := got.backoff(1); d != 25*time.Millisecond {
+		t.Errorf("first retry = %v, want 25ms", d)
+	}
+	if d := got.backoff(2); d != 50*time.Millisecond {
+		t.Errorf("second retry = %v, want 50ms", d)
+	}
+	if d := got.backoff(3); d != 75*time.Millisecond {
+		t.Errorf("third retry = %v, want 75ms", d)
 	}
 }

@@ -6,7 +6,9 @@
 //
 // The emulator is metadata-only: a cluster is a stored record, not a schedulable
 // Kubernetes control plane, and an operation is created already DONE (there is
-// no asynchronous lifecycle to observe). The store persists the record the
+// no asynchronous lifecycle to observe). A simulated in-flight window
+// (WithOperationWindow in the core) stores the operation RUNNING instead and
+// settles it lazily on a later read; the record itself keeps only startTime. The store persists the record the
 // caller last observed so read-back is stable across a Postgres restart.
 package container
 
@@ -35,9 +37,15 @@ const (
 	StatusError        = "ERROR"
 )
 
-// Operation status values (google.container.v1.Operation.Status).
+// Operation status values (google.container.v1.Operation.Status). The emulator
+// creates operations DONE (there is no asynchronous lifecycle); PENDING/RUNNING
+// appear only while a simulated in-flight window is open (see the container
+// core's operation-conflict rules).
 const (
-	OperationStatusDone = "DONE"
+	OperationStatusPending  = "PENDING"
+	OperationStatusRunning  = "RUNNING"
+	OperationStatusDone     = "DONE"
+	OperationStatusAborting = "ABORTING"
 )
 
 // Operation type values (google.container.v1.Operation.Type). The proto enum

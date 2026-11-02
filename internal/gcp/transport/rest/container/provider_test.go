@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/gcperr"
 	core "jaiscloud/internal/gcp/service/container"
 	containerstore "jaiscloud/internal/gcp/store/container"
 	"jaiscloud/internal/model"
@@ -421,5 +424,53 @@ func assertProviderMessage(t *testing.T, err error, want string) {
 	}
 	if pe.Code != "InvalidArgument" || pe.Message != want {
 		t.Fatalf("error = %q / %q, want InvalidArgument / %q", pe.Code, pe.Message, want)
+	}
+}
+
+// TestProviderOperationConflictAndQuota proves the REST surface resolves the
+// simulated operation conflict and quota rejection to the google.rpc statuses
+// real GKE uses: 400 FAILED_PRECONDITION for an overlapping mutation, 429
+// RESOURCE_EXHAUSTED for an exhausted concurrent-operations quota.
+func TestProviderOperationConflictAndQuota(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	p := NewProvider(core.NewService(containerstore.NewMemoryStore(),
+		core.WithOperationWindow(time.Hour), core.WithConcurrentOperationQuota(1)))
+	resp, err := p.CreateCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "body": clusterBody("c1")}))
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if resp.Data["status"] != containerstore.OperationStatusRunning {
+		t.Fatalf("create operation = %v, want RUNNING", resp.Data)
+	}
+
+	_, err = p.SetLabels(ctx, req(map[string]any{
+		"project": "p", "location": "us-central1", "cluster": "c1",
+		"body": map[string]any{"resourceLabels": map[string]any{"k": "v"}},
+	}))
+	assertGCPError(t, err, "FAILED_PRECONDITION", 400, "Cluster is running incompatible operation "+resp.Data["name"].(string))
+
+	_, err = p.CreateCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "body": clusterBody("c2")}))
+	assertGCPError(t, err, "RESOURCE_EXHAUSTED", 429, "")
+}
+
+func assertGCPError(t *testing.T, err error, wantStatus string, wantHTTP int, wantMessage string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("want %s, got nil", wantStatus)
+	}
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *model.ProviderError, got %T (%v)", err, err)
+	}
+	statusName, httpStatus := gcperr.Resolve(pe)
+	if statusName != wantStatus || httpStatus != wantHTTP {
+		t.Fatalf("resolved = %s/%d, want %s/%d (%v)", statusName, httpStatus, wantStatus, wantHTTP, err)
+	}
+	if wantMessage != "" && pe.Message != wantMessage {
+		t.Fatalf("message = %q, want %q", pe.Message, wantMessage)
 	}
 }

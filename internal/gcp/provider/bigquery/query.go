@@ -75,9 +75,9 @@ func (c storeCatalog) ListTables(ctx context.Context, project, dataset string) (
 	return names, nil
 }
 
-// CreateTable creates a store table with the engine's schema and rows. The
-// rows (if any) are streamed through InsertRows so the store's NumRows and
-// ordering stay consistent with tabledata.insertAll.
+// CreateTable creates a store table with the engine's schema and rows in one
+// atomic store operation, so a CTAS never exposes a table before its rows (or
+// a partially materialized row set).
 func (c storeCatalog) CreateTable(ctx context.Context, t queryengine.Table) error {
 	if _, err := c.store.GetDataset(ctx, t.Project, t.Dataset); err != nil {
 		if errors.Is(err, bqstore.ErrNoSuchDataset) {
@@ -103,24 +103,19 @@ func (c storeCatalog) CreateTable(ctx context.Context, t queryengine.Table) erro
 		CreateTime: now,
 		UpdateTime: now,
 	}
-	if err := c.store.CreateTable(ctx, t.Project, t.Dataset, st); err != nil {
+	rows := make([]bqstore.Row, len(t.Rows))
+	for i, r := range t.Rows {
+		data, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		rows[i] = bqstore.Row{Data: data}
+	}
+	if err := c.store.CreateTableWithRows(ctx, t.Project, t.Dataset, st, rows); err != nil {
 		if errors.Is(err, bqstore.ErrAlreadyExists) {
 			return queryengine.ErrTableExists
 		}
 		return err
-	}
-	if len(t.Rows) > 0 {
-		rows := make([]bqstore.Row, len(t.Rows))
-		for i, r := range t.Rows {
-			data, err := json.Marshal(r)
-			if err != nil {
-				return err
-			}
-			rows[i] = bqstore.Row{Data: data}
-		}
-		if _, err := c.store.InsertRows(ctx, t.Project, t.Dataset, t.Table, rows); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -213,6 +208,15 @@ func (p *Provider) runQuery(ctx context.Context, project string, body map[string
 		defProject = strValue(dd, "projectId")
 		defDataset = strValue(dd, "datasetId")
 	}
+	// Serialize the whole hydrate → execute → write-back span. A DML statement
+	// hydrates its target table, mutates a disposable SQLite copy, then
+	// ReplaceRows the result; without this span lock a concurrent DML could
+	// hydrate the same pre-write rows and overwrite the other statement's
+	// update. This is a coarse table-write guard (all SQL shares it) chosen for
+	// correctness over concurrency; SELECTs are short and the emulator is a
+	// local test target.
+	p.queryMu.Lock()
+	defer p.queryMu.Unlock()
 	res, err := queryengine.ExecuteStatement(ctx, storeCatalog{store: p.store}, queryengine.Request{
 		Project:        project,
 		Query:          strValue(body, "query"),

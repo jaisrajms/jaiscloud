@@ -182,8 +182,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   schema supplied, embedded in the file, or autodetected; `tabledata.*` reads and writes the
   stored rows;
   `routines`/`models`/`rowAccessPolicies` are explicit `501` stubs. Simplifications
-  (synchronous DDL/DML jobs, no result paging, degraded `getQueryResults` snapshot,
-  documented divergences) are the cell reasons.
+  (synchronous DDL/DML jobs, serialized DML spans, atomic CTAS, immutable
+  `getQueryResults` snapshots, documented divergences) are the cell reasons.
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (23 + 1 `unsupported` stub),
   **Compute Engine** (32 + 1), **Cloud DNS** (15 + 1), **Memorystore** (8). No control plane,
   VM/disk/network data plane, authoritative DNS server, or Redis data plane.
@@ -347,7 +347,17 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `setLogging`/`setMonitoring`/`setNetworkPolicy`/`setMaintenancePolicy`/`setMasterAuth`/
   `setResourceLabels`/`startIpRotation`/`completeIpRotation`), served over both the REST surface and
   the native gRPC `google.container.v1.ClusterManager` transport. Every mutating call returns a GKE
-  `Operation` (correct `operationType`, `DONE`) and the recorded fields are echoed on read-back. A
+  `Operation` (correct `operationType`, and `DONE` by default) and the recorded fields are echoed on
+  read-back. GKE's concurrent-operation rules sit behind an opt-in simulated in-flight window
+  (`JAISCLOUD_GKE_OPERATION_WINDOW`; unset keeps every operation instant-`DONE`): while a window is
+  open the returned operation is `RUNNING` with no `endTime` and settles to `DONE` one window after
+  it started, a mutating call that overlaps an operation still running on its target is the 400
+  `FAILED_PRECONDITION` real GKE answers — "Cluster is running incompatible operation
+  <operation-id>" — and because the granularity is one operation per node pool, different pools of
+  a cluster still mutate in parallel while a cluster-level change waits for all of them.
+  `JAISCLOUD_GKE_CONCURRENT_OPERATIONS` caps the operations in flight per project/location and
+  rejects the next mutation with 429 `RESOURCE_EXHAUSTED`. With no window open nothing is ever in
+  flight, so both rules are inert. A
   cluster is an instantly-`RUNNING` stored record (default master version, `network`/`subnetwork`);
   a create that carries inline `nodePools` materializes those pools in the same call (each with its
   canonical `selfLink`, `RUNNING` status, the cluster's node version and its `initialNodeCount`

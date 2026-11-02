@@ -24,9 +24,9 @@ const (
 
 // normalizeRetryPolicy validates and canonicalizes a subscription's
 // retry_policy into the stored camelCase map. Only the fields the client
-// supplied are kept. An out-of-range backoff is InvalidArgument. The policy is
-// stored so it round-trips on get/list/update; it has no effect on the
-// emulator's fixed delivery backoff (documented limitation).
+// supplied are kept. An out-of-range backoff is InvalidArgument. The policy
+// round-trips on get/list/update and drives the Cloud Functions event-delivery
+// retry curve for a function's backing subscription.
 func normalizeRetryPolicy(rp *pubsubpb.RetryPolicy) (map[string]any, error) {
 	out := map[string]any{}
 	if d := rp.GetMinimumBackoff(); d != nil {

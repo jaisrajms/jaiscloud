@@ -313,6 +313,11 @@ type SubscriptionProvisioner interface {
 	// deadLetterPolicy: the dead-letter topic (short id), the maximum delivery
 	// attempts, and whether a policy is set.
 	SubscriptionDeadLetter(ctx context.Context, project, subscription string) (topic string, maxAttempts int, ok bool, err error)
+	// SubscriptionRetryPolicy reports the subscription's configured retryPolicy:
+	// the minimum/maximum delivery backoff, the optional maximum doubling count,
+	// and whether a policy is set. An absent policy leaves ok=false so the
+	// delivery engine can use its bounded emulator defaults.
+	SubscriptionRetryPolicy(ctx context.Context, project, subscription string) (minimum, maximum time.Duration, maxDoublings int, ok bool, err error)
 	// PublishDeadLetter publishes data with attributes to a dead-letter topic
 	// (short id or full name) on behalf of a subscription's deadLetterPolicy.
 	PublishDeadLetter(ctx context.Context, project, topic string, data []byte, attrs map[string]string) error

@@ -1684,3 +1684,87 @@ func TestMaxResultsUint32Range(t *testing.T) {
 		}
 	}
 }
+
+// TestQueryResultSnapshotIsImmutable covers BQ6: getQueryResults serves the
+// result materialised when the job ran, so writes between page 1 and page 2
+// cannot change the rows or totalRows already reported to the client.
+func TestQueryResultSnapshotIsImmutable(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(map[string]any{"name": "id", "type": "INTEGER"}))
+	rows := make([]any, 0, 5)
+	for i := 1; i <= 5; i++ {
+		rows = append(rows, map[string]any{"json": map[string]any{"id": i}})
+	}
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t", "body": map[string]any{"rows": rows},
+	})); err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+
+	ids := func(resp *model.ProviderResponse) []string {
+		out := make([]string, 0)
+		rws, _ := resp.Data["rows"].([]any)
+		for _, rw := range rws {
+			m, _ := rw.(map[string]any)
+			f, _ := m["f"].([]any)
+			c, _ := f[0].(map[string]any)
+			out = append(out, fmt.Sprint(c["v"]))
+		}
+		return out
+	}
+
+	first, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "SELECT id FROM `proj.d.t` ORDER BY id", "maxResults": float64(2),
+	}}))
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	token, _ := first.Data["pageToken"].(string)
+	ref, _ := first.Data["jobReference"].(map[string]any)
+	jobID, _ := ref["jobId"].(string)
+	if token == "" || jobID == "" {
+		t.Fatalf("first page = %v, want token and jobId", first.Data)
+	}
+
+	// Mutate the table after page 1: a re-executing getQueryResults would now
+	// see the replacement rows instead of the snapshot.
+	replacement := []bqstore.Row{
+		{Data: []byte(`{"id":10}`)}, {Data: []byte(`{"id":11}`)},
+		{Data: []byte(`{"id":12}`)}, {Data: []byte(`{"id":13}`)}, {Data: []byte(`{"id":14}`)},
+	}
+	if err := p.store.ReplaceRows(ctx, "proj", "d", "t", replacement); err != nil {
+		t.Fatalf("replace rows: %v", err)
+	}
+
+	page2, err := p.GetQueryResults(ctx, newNR(map[string]any{
+		"jobId": jobID, "pageToken": token, "maxResults": "2",
+	}))
+	if err != nil {
+		t.Fatalf("getQueryResults page2: %v", err)
+	}
+	if got := ids(page2); !reflect.DeepEqual(got, []string{"3", "4"}) {
+		t.Fatalf("page2 = %v, want the original snapshot rows 3,4", got)
+	}
+	if page2.Data["totalRows"] != "5" {
+		t.Fatalf("page2 totalRows = %v, want 5 from the snapshot", page2.Data["totalRows"])
+	}
+
+	all, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": jobID}))
+	if err != nil {
+		t.Fatalf("getQueryResults all: %v", err)
+	}
+	if got := ids(all); !reflect.DeepEqual(got, []string{"1", "2", "3", "4", "5"}) {
+		t.Fatalf("all rows = %v, want the original snapshot", got)
+	}
+
+	// The private snapshot payload never leaks through jobs.get.
+	job, err := p.GetJob(ctx, newNR(map[string]any{"jobId": jobID}))
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if _, ok := job.Data[jobResultSnapshotKey]; ok {
+		t.Fatal("jobs.get leaked the materialised-result cache")
+	}
+}

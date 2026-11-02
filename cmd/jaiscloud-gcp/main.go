@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -496,7 +497,7 @@ func startCmd() *cobra.Command {
 			// adapter (docs/gcp/wire-contract.md §5). It sits behind a
 			// ClusterManager seam whose only implementation is the mock: a
 			// cluster is a stored record, not a real Kubernetes control plane.
-			containerCore := containercore.NewService(stores.container)
+			containerCore := containercore.NewService(stores.container, containerOptions()...)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE, or Docker on the
@@ -1561,6 +1562,23 @@ func startCmd() *cobra.Command {
 				defer deliverCancel()
 			}
 
+			// Secret Manager proactive lifecycle sweeps (rotation notifications,
+			// expiration and delayed destruction) run without client reads. Both
+			// transports share the store, so either transport's worker makes
+			// progress; the atomic transitions prevent double notifications.
+			if secretP != nil && secretGRPC != nil {
+				secretCtx, secretCancel := context.WithCancel(ctx)
+				secretP.TrackProject(cfg.ProjectID)
+				secretGRPC.TrackProject(cfg.ProjectID)
+				secretP.Start(secretCtx)
+				secretGRPC.Start(secretCtx)
+				defer func() {
+					secretCancel()
+					secretP.Stop()
+					secretGRPC.Stop()
+				}()
+			}
+
 			// Serve gRPC on its own listener (plaintext h2c) alongside the HTTP
 			// gateway. Emulator-mode SDKs point FIRESTORE_EMULATOR_HOST here.
 			// Skipped entirely when the gRPC transport is not selected.
@@ -2384,6 +2402,28 @@ func snapshotInspectCmd() *cobra.Command {
 // JAISCLOUD_GCS_EMULATOR_ENDPOINT (the same precedence as the Dataproc Spark
 // wiring) so a deploy through a port-forward or k3d address reaches the
 // emulator, and otherwise falls back to the local REST listener.
+// containerOptions builds the GKE core's simulated concurrency knobs from the
+// environment. The defaults (no window, no quota) keep the metadata emulator's
+// instant-DONE operations; see internal/gcp/service/container/operations.go.
+func containerOptions() []containercore.Option {
+	var opts []containercore.Option
+	if v := os.Getenv("JAISCLOUD_GKE_OPERATION_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("container: invalid JAISCLOUD_GKE_OPERATION_WINDOW", "value", v, "err", err)
+		} else {
+			opts = append(opts, containercore.WithOperationWindow(d))
+		}
+	}
+	if v := os.Getenv("JAISCLOUD_GKE_CONCURRENT_OPERATIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			slog.Warn("container: invalid JAISCLOUD_GKE_CONCURRENT_OPERATIONS", "value", v, "err", err)
+		} else {
+			opts = append(opts, containercore.WithConcurrentOperationQuota(n))
+		}
+	}
+	return opts
+}
+
 func functionsUploadOrigin(port int) string {
 	for _, env := range []string{"STORAGE_EMULATOR_HOST", "JAISCLOUD_GCS_EMULATOR_ENDPOINT"} {
 		if v := os.Getenv(env); v != "" {

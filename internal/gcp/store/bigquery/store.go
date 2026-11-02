@@ -84,6 +84,10 @@ type Store interface {
 	ListDatasets(ctx context.Context, projectID string) ([]Dataset, error)
 
 	CreateTable(ctx context.Context, projectID, datasetID string, t Table) error
+	// CreateTableWithRows creates a table and its initial rows atomically, so a
+	// CTAS result never exposes a table before its rows (or a partial row set).
+	// It returns ErrAlreadyExists when the table already exists.
+	CreateTableWithRows(ctx context.Context, projectID, datasetID string, t Table, rows []Row) error
 	GetTable(ctx context.Context, projectID, datasetID, tableID string) (Table, error)
 	UpdateTable(ctx context.Context, projectID, datasetID string, t Table) error
 	// UpdateTableAtomic performs a locked get-mutate-set cycle: mutate

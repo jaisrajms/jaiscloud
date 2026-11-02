@@ -162,8 +162,10 @@ func (s *Service) CompleteIPRotation(ctx context.Context, project, location, clu
 	})
 }
 
-// CancelOperation is a no-op success for an existing operation (the emulator's
-// operations are created already DONE, so there is nothing to cancel).
+// CancelOperation is a no-op success for an existing operation. The
+// emulator's operations are recorded, not driven, so there is nothing to abort:
+// with a simulated in-flight window an operation that has not settled yet is
+// simply left to settle at its deadline.
 func (s *Service) CancelOperation(ctx context.Context, project, location, name string) error {
 	if _, err := s.store.GetOperation(ctx, project, location, name); err != nil {
 		return mapStoreErr(err)
@@ -174,9 +176,16 @@ func (s *Service) CancelOperation(ctx context.Context, project, location, name s
 // mutateClusterOp applies fn to a cluster that must exist and records an
 // operation of the given type targeting it.
 func (s *Service) mutateClusterOp(ctx context.Context, project, location, cluster, opType string, fn func(*containerstore.Cluster)) (containerstore.Operation, error) {
+	// A cluster-level change serializes the whole cluster: it is rejected while
+	// any cluster-level or node-pool operation is still running on it.
+	release, err := s.acquireOperation(ctx, project, location, ClusterName(project, location, cluster), "")
+	if err != nil {
+		return containerstore.Operation{}, err
+	}
+	defer release()
 	now := clock.Now()
 	var selfLink string
-	err := s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
+	err = s.store.MutateCluster(ctx, project, location, cluster, func(c *containerstore.Cluster) error {
 		selfLink = c.SelfLink
 		fn(c)
 		return nil

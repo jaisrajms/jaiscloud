@@ -2,6 +2,8 @@ package bigquery
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
@@ -302,5 +304,64 @@ func TestQueryCoercionErrors(t *testing.T) {
 		"query": "SELECT id FROM `proj.sales.orders` WHERE id = 1.0",
 	}})); err != nil {
 		t.Errorf("numeric comparison rejected: %v", err)
+	}
+}
+
+// TestConcurrentDMLDoesNotLoseUpdates covers BQ11: each UPDATE hydrates the
+// table, mutates its SQLite scratch, and writes the row set back. Serializing
+// that span means concurrent updates to different columns both survive instead
+// of the last ReplaceRows overwriting the other statement's work.
+func TestConcurrentDMLDoesNotLoseUpdates(t *testing.T) {
+	ctx := context.Background()
+	p := seedDMLProvider(t)
+	if _, err := p.CreateTable(ctx, newNR(map[string]any{
+		"datasetId": "sales",
+		"body": map[string]any{
+			"tableReference": map[string]any{"projectId": "proj", "datasetId": "sales", "tableId": "pair"},
+			"schema": map[string]any{"fields": []any{
+				map[string]any{"name": "a", "type": "INT64"},
+				map[string]any{"name": "b", "type": "INT64"},
+			}},
+		},
+	})); err != nil {
+		t.Fatalf("create pair: %v", err)
+	}
+	queryOK(t, p, "INSERT INTO `proj.sales.pair` (a, b) VALUES (0, 0)")
+
+	const workers = 5
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, workers*2)
+	run := func(q string) {
+		defer wg.Done()
+		<-start
+		if _, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": q}})); err != nil {
+			errs <- err
+		}
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(2)
+		go run("UPDATE `proj.sales.pair` SET a = a + 1")
+		go run("UPDATE `proj.sales.pair` SET b = b + 1")
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent DML: %v", err)
+	}
+
+	data := queryOK(t, p, "SELECT a, b FROM `proj.sales.pair`")
+	rows, _ := data["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want 1", rows)
+	}
+	cells, _ := rows[0].(map[string]any)["f"].([]any)
+	got := make([]string, len(cells))
+	for i, c := range cells {
+		got[i] = fmt.Sprint(c.(map[string]any)["v"])
+	}
+	if len(got) != 2 || got[0] != "5" || got[1] != "5" {
+		t.Fatalf("a,b = %v, want [5 5] (no lost updates)", got)
 	}
 }
