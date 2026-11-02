@@ -6,7 +6,6 @@ package kms
 
 import (
 	"context"
-	"crypto"
 	"hash/crc32"
 	"strings"
 
@@ -464,21 +463,17 @@ func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignR
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	v, err := s.core.GetVersion(ctx, project, loc, kr, key, version)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	digest, err := digestBytes(req.GetDigest(), req.GetData(), v.Algorithm)
+	digest, data, err := signInputs(req)
 	if err != nil {
 		return nil, mapError(err)
 	}
 	if err := verifyCRC("digest_crc32c", req.GetDigestCrc32C(), digest); err != nil {
 		return nil, err
 	}
-	if err := verifyCRC("data_crc32c", req.GetDataCrc32C(), req.GetData()); err != nil {
+	if err := verifyCRC("data_crc32c", req.GetDataCrc32C(), data); err != nil {
 		return nil, err
 	}
-	res, err := s.core.AsymmetricSign(ctx, project, loc, kr, key, version, digest)
+	res, err := s.core.AsymmetricSign(ctx, project, loc, kr, key, version, digest, data)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -486,8 +481,8 @@ func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignR
 		Name:                 kmscore.VersionName(project, loc, kr, key, version),
 		Signature:            res.Signature,
 		SignatureCrc32C:      wrapperspb.Int64(crc32cOf(res.Signature)),
-		VerifiedDigestCrc32C: req.GetDigestCrc32C() != nil,
-		VerifiedDataCrc32C:   req.GetDataCrc32C() != nil,
+		VerifiedDigestCrc32C: len(digest) > 0 && req.GetDigestCrc32C() != nil,
+		VerifiedDataCrc32C:   len(data) > 0 && req.GetDataCrc32C() != nil,
 		ProtectionLevel:      kmspb.ProtectionLevel_SOFTWARE,
 	}, nil
 }
@@ -1054,37 +1049,28 @@ func protectionLevelToProto(s string) kmspb.ProtectionLevel {
 	return kmspb.ProtectionLevel_SOFTWARE
 }
 
-func digestBytes(d *kmspb.Digest, data []byte, algo string) ([]byte, error) {
-	if d != nil {
-		if dg := d.GetSha256(); len(dg) > 0 {
-			return dg, nil
-		}
-		if dg := d.GetSha384(); len(dg) > 0 {
-			return dg, nil
-		}
-		if dg := d.GetSha512(); len(dg) > 0 {
-			return dg, nil
+// signInputs splits a request into its digest and data. AsymmetricSignRequest
+// carries exactly one: digest and data are mutually exclusive, and the core
+// hashes data for hash-based algorithms while signing it directly for raw RSA
+// and Ed25519.
+func signInputs(req *kmspb.AsymmetricSignRequest) ([]byte, []byte, error) {
+	var digest []byte
+	if d := req.GetDigest(); d != nil {
+		for _, dg := range [][]byte{d.GetSha256(), d.GetSha384(), d.GetSha512()} {
+			if len(dg) > 0 {
+				digest = dg
+				break
+			}
 		}
 	}
-	if len(data) > 0 {
-		h := signHashFor(algo).New()
-		if _, err := h.Write(data); err != nil {
-			return nil, err
-		}
-		return h.Sum(nil), nil
+	data := req.GetData()
+	if len(digest) == 0 && len(data) == 0 {
+		return nil, nil, model.NewProviderError("InvalidArgument", "digest or data is required", 400)
 	}
-	return nil, model.NewProviderError("InvalidArgument", "digest is required", 400)
-}
-
-func signHashFor(algo string) crypto.Hash {
-	switch {
-	case strings.Contains(algo, "SHA512"):
-		return crypto.SHA512
-	case strings.Contains(algo, "SHA384"):
-		return crypto.SHA384
-	default:
-		return crypto.SHA256
+	if len(digest) > 0 && len(data) > 0 {
+		return nil, nil, model.NewProviderError("InvalidArgument", "digest and data are mutually exclusive", 400)
 	}
+	return digest, data, nil
 }
 
 func crc32cOf(b []byte) int64 {

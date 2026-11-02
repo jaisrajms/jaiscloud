@@ -125,11 +125,26 @@ type DecryptRequest struct {
 	AdditionalAuthenticatedData string `json:"additionalAuthenticatedData,omitempty"`
 }
 
+// UpdateCryptoKeyRequest is the body for PATCH .../cryptoKeys/{key}.
+// UpdateMask names the paths the user touched (labels, rotationPeriod,
+// nextRotationTime); the handler passes it through verbatim and derives it from
+// the supplied fields when the caller omits it. The core rejects paths outside
+// its writable set and validates the rotation invariants.
+type UpdateCryptoKeyRequest struct {
+	Labels           map[string]string `json:"labels,omitempty"`
+	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
+	NextRotationTime string            `json:"nextRotationTime,omitempty"`
+	UpdateMask       []string          `json:"updateMask,omitempty"`
+}
+
 // AsymmetricSignRequest is the body for POST
-// .../versions/{version}/asymmetricSign. Digest carries exactly one of
-// sha256/sha384/sha512, base64-encoded, matching Cloud KMS's Digest.
+// .../versions/{version}/asymmetricSign. Exactly one of Digest (a Cloud KMS
+// Digest carrying one base64 sha256/sha384/sha512) or Data (base64 bytes) is
+// supplied: hash-based algorithms accept either, while RSA_SIGN_RAW_PKCS1_* and
+// EC_SIGN_ED25519 take Data only.
 type AsymmetricSignRequest struct {
-	Digest map[string]any `json:"digest"`
+	Digest map[string]any `json:"digest,omitempty"`
+	Data   string         `json:"data,omitempty"`
 }
 
 // AsymmetricDecryptRequest is the body for POST

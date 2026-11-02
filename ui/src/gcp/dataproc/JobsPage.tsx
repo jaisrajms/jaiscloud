@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import { Alert, Button, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
 import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { cancelJob, listJobs, type DataprocJob } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
+import { JobDialog } from './JobDialog'
 import { jobStateColor, jobTypeLabel, shortDate } from './util'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
@@ -23,6 +25,7 @@ export function JobsPage() {
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'dataproc'] })
 
@@ -133,7 +136,11 @@ export function JobsPage() {
         filterPlaceholder="Filter jobs"
         onRefresh={() => void jobs.refetch()}
         refreshing={jobs.isFetching}
-      />
+      >
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setSubmitting(true)}>
+          Submit job
+        </Button>
+      </GcpToolbar>
 
       <GcpDataTable
         aria-label="Dataproc jobs"
@@ -149,6 +156,8 @@ export function JobsPage() {
         renderDetail={(job) => <GcpRowDetail row={job} />}
         detailTitle={(job) => job.id}
       />
+
+      <JobDialog open={submitting} onClose={() => setSubmitting(false)} />
     </Stack>
   )
 }

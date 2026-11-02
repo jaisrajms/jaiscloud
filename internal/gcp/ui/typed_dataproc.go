@@ -189,6 +189,28 @@ func (p typedDataproc) CreateCluster(ctx context.Context, project, region, name 
 	return p.operationCluster(ctx, project, region, name, data)
 }
 
+func (p typedDataproc) UpdateCluster(ctx context.Context, project, region, name string, in dataproccore.ClusterInput, mask []string) (dpstore.Cluster, error) {
+	body := map[string]any{}
+	if in.Labels != nil {
+		body["labels"] = in.Labels
+	}
+	if len(in.Config) > 0 {
+		body["config"] = bodyOfConfig(in.Config)
+	}
+	params := map[string]any{"project": project, "region": region, "clusterName": name, "body": body}
+	if len(mask) > 0 {
+		params["updateMask"] = strings.Join(mask, ",")
+	}
+	data, covered, err := p.c.do(ctx, "Dataproc.UpdateCluster", project, region, params, nil)
+	if !covered {
+		return p.ProviderInterface.UpdateCluster(ctx, project, region, name, in, mask)
+	}
+	if err != nil {
+		return dpstore.Cluster{}, err
+	}
+	return p.operationCluster(ctx, project, region, name, data)
+}
+
 func (p typedDataproc) lifecycle(ctx context.Context, key, project, region, name string, direct func() (dpstore.Cluster, error)) (dpstore.Cluster, error) {
 	data, covered, err := p.c.do(ctx, key, project, region, map[string]any{"project": project, "region": region, "clusterName": name}, nil)
 	if !covered {
@@ -265,6 +287,50 @@ func (p typedDataproc) GetJob(ctx context.Context, project, region, jobID string
 	})
 }
 
+// jobBody renders a JobInput back into the dataproc.v1.Job shape the REST
+// provider parses, so a covered SubmitJob is dispatched with the same body a
+// real client would send.
+func jobBody(project string, in dataproccore.JobInput) map[string]any {
+	reference := map[string]any{"projectId": project}
+	if in.JobID != "" {
+		reference["jobId"] = in.JobID
+	}
+	body := map[string]any{"reference": reference}
+	if in.PlacementClusterName != "" {
+		body["placement"] = map[string]any{"clusterName": in.PlacementClusterName}
+	}
+	if in.Type != "" && len(in.TypeJob) > 0 {
+		var typeJob any
+		if json.Unmarshal(in.TypeJob, &typeJob) == nil {
+			body[in.Type] = typeJob
+		}
+	}
+	if in.Labels != nil {
+		body["labels"] = in.Labels
+	}
+	if in.Scheduling != nil {
+		// The REST provider parses scheduling from a decoded JSON map, so send
+		// the struct's JSON shape rather than the Go value.
+		var scheduling map[string]any
+		if b, err := json.Marshal(in.Scheduling); err == nil && json.Unmarshal(b, &scheduling) == nil {
+			body["scheduling"] = scheduling
+		}
+	}
+	return body
+}
+
+func (p typedDataproc) SubmitJob(ctx context.Context, project, region string, in dataproccore.JobInput) (dpstore.Job, error) {
+	data, covered, err := p.c.do(ctx, "Dataproc.SubmitJob", project, region,
+		map[string]any{"project": project, "region": region, "body": map[string]any{"job": jobBody(project, in)}}, nil)
+	if !covered {
+		return p.ProviderInterface.SubmitJob(ctx, project, region, in)
+	}
+	if err != nil {
+		return dpstore.Job{}, err
+	}
+	return decodeDataprocJob(data, region), nil
+}
+
 func (p typedDataproc) CancelJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error) {
 	return p.job(ctx, "Dataproc.CancelJob", project, region, jobID, func() (dpstore.Job, error) {
 		return p.ProviderInterface.CancelJob(ctx, project, region, jobID)
@@ -307,4 +373,98 @@ func (p typedDataproc) GetWorkflowTemplate(ctx context.Context, project, region,
 		return dpstore.WorkflowTemplate{}, err
 	}
 	return decodeTemplate(data, region), nil
+}
+
+// templateBody renders a WorkflowTemplateInput into the dataproc.v1
+// WorkflowTemplate shape the REST provider parses (it takes the whole body as
+// the definition). Version is sent as an int because the provider's coercion
+// helper does not know int32.
+func templateBody(in dataproccore.WorkflowTemplateInput) map[string]any {
+	body := make(map[string]any, len(in.Definition)+2)
+	for k, v := range in.Definition {
+		body[k] = v
+	}
+	body["id"] = in.ID
+	body["version"] = int(in.Version)
+	return body
+}
+
+func (p typedDataproc) CreateWorkflowTemplate(ctx context.Context, project, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error) {
+	data, covered, err := p.c.do(ctx, "Dataproc.CreateWorkflowTemplate", project, region,
+		map[string]any{"project": project, "region": region, "body": templateBody(in)}, nil)
+	if !covered {
+		return p.ProviderInterface.CreateWorkflowTemplate(ctx, project, region, in)
+	}
+	if err != nil {
+		return dpstore.WorkflowTemplate{}, err
+	}
+	return decodeTemplate(data, region), nil
+}
+
+func (p typedDataproc) UpdateWorkflowTemplate(ctx context.Context, project, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error) {
+	data, covered, err := p.c.do(ctx, "Dataproc.UpdateWorkflowTemplate", project, region,
+		map[string]any{"project": project, "region": region, "workflowTemplateId": in.ID, "body": templateBody(in)}, nil)
+	if !covered {
+		return p.ProviderInterface.UpdateWorkflowTemplate(ctx, project, region, in)
+	}
+	if err != nil {
+		return dpstore.WorkflowTemplate{}, err
+	}
+	return decodeTemplate(data, region), nil
+}
+
+func (p typedDataproc) DeleteWorkflowTemplate(ctx context.Context, project, region, id string, version int32) error {
+	_, covered, err := p.c.do(ctx, "Dataproc.DeleteWorkflowTemplate", project, region,
+		map[string]any{"project": project, "region": region, "workflowTemplateId": id, "version": int(version)}, nil)
+	if !covered {
+		return p.ProviderInterface.DeleteWorkflowTemplate(ctx, project, region, id, version)
+	}
+	return err
+}
+
+// decodeDataprocOperation turns an operation JSON answer into the store shape
+// the console renders (OperationJSON).
+func decodeDataprocOperation(m map[string]any, project, region string) dpstore.Operation {
+	parts := nameParts(strField(m, "name"))
+	op := dpstore.Operation{ID: parts["operations"], ProjectID: project, Region: region}
+	if v := parts["projects"]; v != "" {
+		op.ProjectID = v
+	}
+	if v := parts["regions"]; v != "" {
+		op.Region = v
+	}
+	op.Done, _ = m["done"].(bool)
+	if md, ok := m["metadata"]; ok {
+		if b, err := json.Marshal(md); err == nil {
+			op.Metadata = string(b)
+		}
+	}
+	if rs, ok := m["response"]; ok {
+		if b, err := json.Marshal(rs); err == nil {
+			op.Response = string(b)
+		}
+	}
+	return op
+}
+
+func (p typedDataproc) InstantiateWorkflowTemplate(ctx context.Context, project, region, templateID string, version int32, parameters map[string]string) (dpstore.Operation, error) {
+	body := map[string]any{"version": int(version)}
+	if len(parameters) > 0 {
+		// The REST provider coerces parameters from a decoded JSON object; a
+		// map[string]string would be dropped by its type assertion.
+		params := make(map[string]any, len(parameters))
+		for k, v := range parameters {
+			params[k] = v
+		}
+		body["parameters"] = params
+	}
+	data, covered, err := p.c.do(ctx, "Dataproc.InstantiateWorkflowTemplate", project, region,
+		map[string]any{"project": project, "region": region, "workflowTemplateId": templateID, "body": body}, nil)
+	if !covered {
+		return p.ProviderInterface.InstantiateWorkflowTemplate(ctx, project, region, templateID, version, parameters)
+	}
+	if err != nil {
+		return dpstore.Operation{}, err
+	}
+	return decodeDataprocOperation(data, project, region), nil
 }

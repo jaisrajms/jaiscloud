@@ -3,6 +3,7 @@ package kms
 import (
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -1187,5 +1188,66 @@ func TestKMSListNegativePageSizeRejected(t *testing.T) {
 		if err := tc.call(); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
 		}
+	}
+}
+
+// TestKMSAsymmetricSignDataEd25519 covers the data-only path over gRPC: the
+// request carries data (never digest), the signature verifies with the PKIX
+// public key, and digest+data (or neither) is InvalidArgument.
+func TestKMSAsymmetricSignDataEd25519(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: "ed",
+		CryptoKey: &kmspb.CryptoKey{
+			Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: kmspb.CryptoKeyVersion_EC_SIGN_ED25519,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+	verName := keyRing + "/cryptoKeys/ed/cryptoKeyVersions/1"
+	msg := []byte("hello ed25519")
+
+	resp, err := client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:       verName,
+		Data:       msg,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(msg)),
+	})
+	if err != nil {
+		t.Fatalf("AsymmetricSign(data): %v", err)
+	}
+	if !resp.GetVerifiedDataCrc32C() || resp.GetVerifiedDigestCrc32C() {
+		t.Fatalf("verified = (data %v, digest %v), want (true, false)",
+			resp.GetVerifiedDataCrc32C(), resp.GetVerifiedDigestCrc32C())
+	}
+	pk, err := client.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: verName})
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	block, _ := pem.Decode([]byte(pk.GetPem()))
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	if !ed25519.Verify(pub.(ed25519.PublicKey), msg, resp.GetSignature()) {
+		t.Fatal("Ed25519 signature did not verify")
+	}
+
+	digest := sha256.Sum256(msg)
+	if _, err := client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:   verName,
+		Data:   msg,
+		Digest: &kmspb.Digest{Digest: &kmspb.Digest_Sha256{Sha256: digest[:]}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("digest+data err = %v, want InvalidArgument", err)
+	}
+	if _, err := client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{Name: verName}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("neither err = %v, want InvalidArgument", err)
 	}
 }

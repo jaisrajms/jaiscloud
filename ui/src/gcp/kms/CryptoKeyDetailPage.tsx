@@ -20,6 +20,7 @@ import {
 import AddIcon from '@mui/icons-material/Add'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
   createCryptoKeyVersion,
@@ -35,6 +36,7 @@ import {
 } from '../../api/gcp/kms'
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
+import { EditCryptoKeyDialog } from './EditCryptoKeyDialog'
 import { GcpPageTitle } from '../common/PageTitle'
 import {
   AsymmetricDecryptDialog,
@@ -79,6 +81,7 @@ export function CryptoKeyDetailPage() {
   const [macSignVersion, setMacSignVersion] = useState<CryptoKeyVersion | null>(null)
   const [macVerifyVersion, setMacVerifyVersion] = useState<CryptoKeyVersion | null>(null)
   const [publicKeyVersion, setPublicKeyVersion] = useState<CryptoKeyVersion | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'kms', 'cryptoKey', location, keyRing, key, accountId],
@@ -137,6 +140,11 @@ export function CryptoKeyDetailPage() {
             Crypto key · {keyRing} · {location} · project {accountId || '—'}
           </Typography>
         </Box>
+        {detail.data && (
+          <Button startIcon={<EditOutlinedIcon />} onClick={() => setEditOpen(true)}>
+            Edit
+          </Button>
+        )}
         {detail.data?.purpose === 'ENCRYPT_DECRYPT' && (
           <>
             <Button variant="outlined" onClick={() => setEncryptOpen(true)}>
@@ -158,6 +166,16 @@ export function CryptoKeyDetailPage() {
       </Stack>
 
       {detail.isError && <Alert severity="error">Failed to load the crypto key.</Alert>}
+      {detail.data && (
+        <EditCryptoKeyDialog
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          location={location}
+          keyRing={keyRing}
+          cryptoKeyID={key}
+          cryptoKey={detail.data}
+        />
+      )}
       {detail.data && (
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2, mb: 3 }}>
           <Stack spacing={0.5}>

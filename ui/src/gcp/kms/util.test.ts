@@ -10,7 +10,9 @@ import {
   isAsymmetricDecryptAlgorithm,
   isMacAlgorithm,
   isSignAlgorithm,
+  rawSignLimit,
   shaDigestBase64,
+  signInputFor,
 } from './util'
 
 describe('base64Encode', () => {
@@ -88,11 +90,32 @@ describe('algorithm classification', () => {
     expect(isAsymmetricAlgorithm('HMAC_SHA256')).toBe(false)
     expect(isSignAlgorithm('RSA_SIGN_PKCS1_2048_SHA256')).toBe(true)
     expect(isSignAlgorithm('EC_SIGN_P384_SHA384')).toBe(true)
-    expect(isSignAlgorithm('RSA_SIGN_RAW_PKCS1_2048')).toBe(false)
-    expect(isSignAlgorithm('EC_SIGN_ED25519')).toBe(false)
+    expect(isSignAlgorithm('RSA_SIGN_RAW_PKCS1_2048')).toBe(true)
+    expect(isSignAlgorithm('EC_SIGN_ED25519')).toBe(true)
     expect(isSignAlgorithm('RSA_DECRYPT_OAEP_2048_SHA256')).toBe(false)
     expect(isAsymmetricDecryptAlgorithm('RSA_DECRYPT_OAEP_2048_SHA256')).toBe(true)
     expect(isMacAlgorithm('HMAC_SHA256')).toBe(true)
     expect(isMacAlgorithm('GOOGLE_SYMMETRIC_ENCRYPTION')).toBe(false)
+  })
+})
+
+describe('sign input mode', () => {
+  it('uses digest for hash-based algorithms', () => {
+    expect(signInputFor('RSA_SIGN_PKCS1_2048_SHA256')).toBe('digest')
+    expect(signInputFor('EC_SIGN_P256_SHA256')).toBe('digest')
+  })
+
+  it('uses data for raw RSA and Ed25519', () => {
+    expect(signInputFor('RSA_SIGN_RAW_PKCS1_2048')).toBe('data')
+    expect(signInputFor('RSA_SIGN_RAW_PKCS1_4096')).toBe('data')
+    expect(signInputFor('EC_SIGN_ED25519')).toBe('data')
+  })
+
+  it('derives the raw input limit from the modulus', () => {
+    expect(rawSignLimit('RSA_SIGN_RAW_PKCS1_2048')).toBe(245)
+    expect(rawSignLimit('RSA_SIGN_RAW_PKCS1_3072')).toBe(373)
+    expect(rawSignLimit('RSA_SIGN_RAW_PKCS1_4096')).toBe(501)
+    expect(rawSignLimit('EC_SIGN_ED25519')).toBeUndefined()
+    expect(digestAlgorithmFor('EC_SIGN_ED25519')).toBeUndefined()
   })
 })

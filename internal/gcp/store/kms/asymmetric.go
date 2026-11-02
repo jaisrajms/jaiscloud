@@ -3,6 +3,7 @@ package kms
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
@@ -26,6 +27,24 @@ func GenerateRSAKeyPair(bits int) (privDER, pubDER []byte, err error) {
 		return nil, nil, err
 	}
 	pubDER, err = x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return privDER, pubDER, nil
+}
+
+// generateEd25519KeyPair returns PKCS8 private DER + PKIX public DER for an
+// Ed25519 key (RFC 8410 on the wire, which is what GetPublicKey serves).
+func generateEd25519KeyPair() (privDER, pubDER []byte, err error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	privDER, err = x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, err
+	}
+	pubDER, err = x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -88,6 +107,11 @@ func generateVersionMaterial(algorithm string) (keyMat, privDER, pubDER []byte, 
 	case strings.HasPrefix(algorithm, "RSA_SIGN"), strings.HasPrefix(algorithm, "RSA_DECRYPT"):
 		privDER, pubDER, err = GenerateRSAKeyPair(rsaBits(algorithm))
 		return nil, privDER, pubDER, err
+	case algorithm == "EC_SIGN_ED25519":
+		// Ed25519 is not an ECDSA curve; it must not fall through to ecCurve's
+		// P-256 default, which would mint a key the algorithm cannot sign with.
+		privDER, pubDER, err = generateEd25519KeyPair()
+		return nil, privDER, pubDER, err
 	case strings.HasPrefix(algorithm, "EC_SIGN"):
 		privDER, pubDER, err = generateECKeyPair(ecCurve(algorithm))
 		return nil, privDER, pubDER, err
@@ -100,8 +124,9 @@ func generateVersionMaterial(algorithm string) (keyMat, privDER, pubDER []byte, 
 	}
 }
 
-// RSASign signs a pre-hashed digest with an RSA PKCS8 key using PKCS1v15 or PSS
-// per the algorithm name.
+// RSASign signs with an RSA PKCS8 key using PKCS1v15 or PSS per the algorithm
+// name. A hash-based algorithm takes its digest; RSA_SIGN_RAW_PKCS1_* takes the
+// bytes to sign directly and pads them without a DigestInfo prefix.
 func RSASign(privDER, digest []byte, algo string) ([]byte, error) {
 	key, err := x509.ParsePKCS8PrivateKey(privDER)
 	if err != nil {
@@ -111,6 +136,15 @@ func RSASign(privDER, digest []byte, algo string) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("kms: not an RSA key")
 	}
+	if strings.Contains(algo, "_RAW_") {
+		// PKCS#1 v1.5 still appends its 11-byte padding, so the raw input has
+		// to fit in modulus size minus 11 bytes (Cloud KMS documents the same
+		// limit); SignPKCS1v15 with hash 0 applies no prefix and no hashing.
+		if len(digest) > rk.Size()-11 {
+			return nil, errors.New("kms: raw input exceeds the modulus minus PKCS#1 v1.5 padding")
+		}
+		return rsa.SignPKCS1v15(rand.Reader, rk, crypto.Hash(0), digest)
+	}
 	h := hashAlgo(algo)
 	if strings.Contains(algo, "_PSS_") {
 		return rsa.SignPSS(rand.Reader, rk, h, digest, &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: h})
@@ -118,11 +152,19 @@ func RSASign(privDER, digest []byte, algo string) ([]byte, error) {
 	return rsa.SignPKCS1v15(rand.Reader, rk, h, digest)
 }
 
-// ECSign signs a pre-hashed digest with an ECDSA key (ASN.1 DER R||S).
-func ECSign(privDER, digest []byte) ([]byte, error) {
+// ECSign signs a pre-hashed digest with an ECDSA key (ASN.1 DER R||S), or a
+// message with Ed25519 (raw 64-byte signature, no hashing).
+func ECSign(privDER, digest []byte, algo string) ([]byte, error) {
 	key, err := x509.ParsePKCS8PrivateKey(privDER)
 	if err != nil {
 		return nil, err
+	}
+	if strings.Contains(algo, "ED25519") {
+		ek, ok := key.(ed25519.PrivateKey)
+		if !ok {
+			return nil, errors.New("kms: not an Ed25519 key")
+		}
+		return ed25519.Sign(ek, digest), nil
 	}
 	ek, ok := key.(*ecdsa.PrivateKey)
 	if !ok {

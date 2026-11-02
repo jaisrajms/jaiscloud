@@ -24,6 +24,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/locations/{location}/keyRings/{keyRing}/cryptoKeys", h.ListCryptoKeys)
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys", h.CreateCryptoKey)
 	r.Get("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}", h.GetCryptoKey)
+	r.Patch("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}", h.UpdateCryptoKey)
 	r.Get("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/iam", h.GetCryptoKeyIam)
 	r.Put("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/iam", h.SetCryptoKeyIam)
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/iam/testIamPermissions", h.TestCryptoKeyIam)

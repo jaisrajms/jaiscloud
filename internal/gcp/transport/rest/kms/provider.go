@@ -660,14 +660,35 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 	} else if s, _ := body["digest"].(string); s != "" {
 		digestStr = s
 	}
-	digest, err := base64.StdEncoding.DecodeString(digestStr)
-	if err != nil {
-		return nil, model.NewProviderError("InvalidRequest", "digest must be base64", 400)
+	dataStr, _ := body["data"].(string)
+	if (digestStr == "") == (dataStr == "") {
+		return nil, model.NewProviderError("InvalidRequest", "exactly one of digest or data is required", 400)
 	}
-	if err := verifyCRCField(body, "digestCrc32c", digest); err != nil {
-		return nil, err
+	var digest, data []byte
+	if digestStr != "" {
+		digest, err = base64.StdEncoding.DecodeString(digestStr)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "digest must be base64", 400)
+		}
+	} else {
+		data, err = base64.StdEncoding.DecodeString(dataStr)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "data must be base64", 400)
+		}
 	}
-	res, err := p.core.AsymmetricSign(ctx, nr.AccountID, loc, kr, key, version, digest)
+	verifiedDigest, verifiedData := false, false
+	if digestStr != "" {
+		if err := verifyCRCField(body, "digestCrc32c", digest); err != nil {
+			return nil, err
+		}
+		verifiedDigest = strField(body, "digestCrc32c") != ""
+	} else {
+		if err := verifyCRCField(body, "dataCrc32c", data); err != nil {
+			return nil, err
+		}
+		verifiedData = strField(body, "dataCrc32c") != ""
+	}
+	res, err := p.core.AsymmetricSign(ctx, nr.AccountID, loc, kr, key, version, digest, data)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +696,8 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 		"name":                 kmscore.VersionName(nr.AccountID, loc, kr, key, version),
 		"signature":            base64.StdEncoding.EncodeToString(res.Signature),
 		"signatureCrc32c":      crc32cString(res.Signature),
-		"verifiedDigestCrc32c": strField(body, "digestCrc32c") != "",
+		"verifiedDigestCrc32c": verifiedDigest,
+		"verifiedDataCrc32c":   verifiedData,
 		"protectionLevel":      "SOFTWARE",
 	}), nil
 }

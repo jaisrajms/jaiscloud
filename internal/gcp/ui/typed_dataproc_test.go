@@ -158,3 +158,124 @@ func TestDataprocConsoleJobAndTemplateCallsStayDirectWithoutAPlugin(t *testing.T
 		t.Fatalf("GetWorkflowTemplate err = %v, built-in %v", err, wantTpl)
 	}
 }
+
+// TestDataprocConsoleMutationsTravelThroughTheChain pins the wire shape of the
+// new mutations: a plugin's REST handler must receive the same body and mask a
+// real client sends (submit wraps the Job under "job", updateMask is comma
+// separated, template version travels in the body).
+func TestDataprocConsoleMutationsTravelThroughTheChain(t *testing.T) {
+	_, direct, builtins := newDataproc()
+	var seen []seenCall
+	wrap := map[string]func(provider.HandlerFunc) provider.HandlerFunc{}
+	for k := range builtins {
+		wrap[k] = passthrough(&seen, k)
+	}
+	p := routeDataproc(typedFixture(builtins, wrap), direct)
+	ctx := context.Background()
+
+	cfg := json.RawMessage(`{"gceClusterConfig":{"zoneUri":"us-central1-a"},"workerConfig":{"numInstances":2}}`)
+	if _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", dataproccore.ClusterInput{Config: cfg}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if _, err := p.UpdateCluster(ctx, "proj", "us-central1", "c1", dataproccore.ClusterInput{
+		Labels: map[string]string{"env": "prod"},
+		Config: json.RawMessage(`{"workerConfig":{"numInstances":4}}`),
+	}, []string{"config.workerConfig.numInstances", "labels"}); err != nil {
+		t.Fatalf("UpdateCluster: %v", err)
+	}
+
+	job, err := p.SubmitJob(ctx, "proj", "us-central1", dataproccore.JobInput{
+		JobID: "j1", PlacementClusterName: "c1", Type: "sparkJob",
+		TypeJob:    json.RawMessage(`{"mainClass":"com.example.Main"}`),
+		Labels:     map[string]string{"team": "data"},
+		Scheduling: &dpstore.JobScheduling{MaxFailuresTotal: 2},
+	})
+	if err != nil || job.JobID != "j1" || job.Type != "sparkJob" {
+		t.Fatalf("SubmitJob = %+v, %v", job, err)
+	}
+
+	tpl, err := p.CreateWorkflowTemplate(ctx, "proj", "us-central1", dataproccore.WorkflowTemplateInput{
+		ID: "wt1",
+		Definition: map[string]any{
+			"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "c1"}},
+			"jobs":      []any{map[string]any{"stepId": "a", "sparkJob": map[string]any{"mainClass": "Main"}}},
+		},
+	})
+	if err != nil || tpl.TemplateID != "wt1" || tpl.Version != 1 {
+		t.Fatalf("CreateWorkflowTemplate = %+v, %v", tpl, err)
+	}
+	updated, err := p.UpdateWorkflowTemplate(ctx, "proj", "us-central1", dataproccore.WorkflowTemplateInput{
+		ID: "wt1", Version: 1,
+		Definition: map[string]any{
+			"placement":  map[string]any{"managedCluster": map[string]any{"clusterName": "c1"}},
+			"jobs":       []any{map[string]any{"stepId": "a", "sparkJob": map[string]any{"mainClass": "Main2"}}},
+			"parameters": map[string]any{"date": "2026-01-01"},
+		},
+	})
+	if err != nil || updated.Version != 2 {
+		t.Fatalf("UpdateWorkflowTemplate = %+v, %v", updated, err)
+	}
+	op, err := p.InstantiateWorkflowTemplate(ctx, "proj", "us-central1", "wt1", 2, map[string]string{"date": "2026-02-02"})
+	if err != nil || op.ID == "" || op.Region != "us-central1" {
+		t.Fatalf("InstantiateWorkflowTemplate = %+v, %v", op, err)
+	}
+	if err := p.DeleteWorkflowTemplate(ctx, "proj", "us-central1", "wt1", 2); err != nil {
+		t.Fatalf("DeleteWorkflowTemplate: %v", err)
+	}
+
+	params := func(key string) map[string]any {
+		t.Helper()
+		for _, call := range seen {
+			if call.key == key {
+				return call.params
+			}
+		}
+		t.Fatalf("the plugin never saw %s (%v)", key, seen)
+		return nil
+	}
+	submit := params("Dataproc.SubmitJob")
+	jobBody, ok := submit["body"].(map[string]any)["job"].(map[string]any)
+	if !ok {
+		t.Fatalf("SubmitJob body = %+v, want {job: …}", submit["body"])
+	}
+	if jobBody["sparkJob"] == nil || jobBody["labels"] == nil || jobBody["scheduling"] == nil {
+		t.Fatalf("SubmitJob job body lost fields: %+v", jobBody)
+	}
+
+	update := params("Dataproc.UpdateCluster")
+	if update["updateMask"] != "config.workerConfig.numInstances,labels" {
+		t.Fatalf("updateMask = %v", update["updateMask"])
+	}
+
+	instantiate := params("Dataproc.InstantiateWorkflowTemplate")
+	if p, ok := instantiate["body"].(map[string]any)["parameters"].(map[string]any); !ok || p["date"] != "2026-02-02" {
+		t.Fatalf("instantiate parameters = %+v", instantiate["body"])
+	}
+}
+
+// Without a plugin the new mutations call the typed core directly, exactly as
+// before the chain existed.
+func TestDataprocConsoleMutationsStayDirectWithoutAPlugin(t *testing.T) {
+	_, direct, builtins := newDataproc()
+	p := routeDataproc(typedFixture(builtins, map[string]func(provider.HandlerFunc) provider.HandlerFunc{}), direct)
+	ctx := context.Background()
+
+	_, wantJob := direct.SubmitJob(ctx, "proj", "us-central1", dataproccore.JobInput{
+		PlacementClusterName: "nope", Type: "sparkJob", TypeJob: json.RawMessage(`{"mainClass":"Main"}`),
+	})
+	if _, err := p.SubmitJob(ctx, "proj", "us-central1", dataproccore.JobInput{
+		PlacementClusterName: "nope", Type: "sparkJob", TypeJob: json.RawMessage(`{"mainClass":"Main"}`),
+	}); (err == nil) != (wantJob == nil) {
+		t.Fatalf("SubmitJob err = %v, built-in %v", err, wantJob)
+	}
+	_, wantUpdate := direct.UpdateCluster(ctx, "proj", "us-central1", "nope",
+		dataproccore.ClusterInput{Labels: map[string]string{"a": "b"}}, []string{"labels"})
+	if _, err := p.UpdateCluster(ctx, "proj", "us-central1", "nope",
+		dataproccore.ClusterInput{Labels: map[string]string{"a": "b"}}, []string{"labels"}); (err == nil) != (wantUpdate == nil) {
+		t.Fatalf("UpdateCluster err = %v, built-in %v", err, wantUpdate)
+	}
+	_, wantOp := direct.InstantiateWorkflowTemplate(ctx, "proj", "us-central1", "nope", 0, nil)
+	if _, err := p.InstantiateWorkflowTemplate(ctx, "proj", "us-central1", "nope", 0, nil); (err == nil) != (wantOp == nil) {
+		t.Fatalf("InstantiateWorkflowTemplate err = %v, built-in %v", err, wantOp)
+	}
+}

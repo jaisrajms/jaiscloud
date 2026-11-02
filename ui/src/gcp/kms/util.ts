@@ -64,15 +64,31 @@ export function isAsymmetricAlgorithm(algorithm?: string): boolean {
   return Boolean(algorithm && (algorithm.startsWith('RSA_') || algorithm.startsWith('EC_')))
 }
 
-/** isSignAlgorithm reports whether an algorithm signs with a private key AND
- * uses a digest the console can compute (a trailing SHA-256/384/512). Ed25519
- * (signs the message, not a digest) and RSA_SIGN_RAW_* (the caller supplies an
- * already-encoded digest) are excluded because the console always sends a
- * Cloud KMS Digest, so it cannot drive them correctly. */
+/**
+ * signInputFor reports how a signing algorithm is driven: a Cloud KMS Digest
+ * for the hash-based algorithms, or the raw data field for EC_SIGN_ED25519
+ * (which signs a message, not a digest) and RSA_SIGN_RAW_PKCS1_* (whose caller
+ * supplies the bytes to pad and sign).
+ */
+export function signInputFor(algorithm?: string): 'digest' | 'data' {
+  if (!algorithm) return 'digest'
+  if (algorithm === 'EC_SIGN_ED25519' || algorithm.includes('_RAW_')) return 'data'
+  return 'digest'
+}
+
+/** rawSignLimit is the largest raw input a RSA_SIGN_RAW_PKCS1_* key accepts:
+ * the modulus size minus the 11 bytes of PKCS#1 v1.5 padding. */
+export function rawSignLimit(algorithm?: string): number | undefined {
+  const match = /RSA_SIGN_RAW_PKCS1_(\d+)/.exec(algorithm ?? '')
+  if (!match) return undefined
+  return Number(match[1]) / 8 - 11
+}
+
+/** isSignAlgorithm reports whether an algorithm signs with a private key. */
 export function isSignAlgorithm(algorithm?: string): boolean {
   if (!algorithm) return false
   if (!(algorithm.startsWith('RSA_SIGN') || algorithm.startsWith('EC_SIGN'))) return false
-  return digestAlgorithmFor(algorithm) !== undefined
+  return signInputFor(algorithm) === 'data' || digestAlgorithmFor(algorithm) !== undefined
 }
 
 /** isAsymmetricDecryptAlgorithm reports whether an algorithm decrypts with a

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, Stack } from '@mui/material'
+import { Button, Link, Stack } from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
 import { Link as RouterLink } from 'react-router-dom'
 import {
   listWorkflowTemplates,
@@ -8,6 +9,7 @@ import {
 } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { shortDate } from './util'
+import { WorkflowTemplateDialog } from './WorkflowTemplateDialog'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -19,6 +21,7 @@ export function WorkflowTemplatesPage() {
   const { accountId } = useAccount()
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string[]>([])
+  const [creating, setCreating] = useState(false)
 
   const templates = useQuery({
     queryKey: ['gcp', 'dataproc', 'workflow-templates', accountId],
@@ -88,7 +91,11 @@ export function WorkflowTemplatesPage() {
         filterPlaceholder="Filter workflow templates"
         onRefresh={() => void templates.refetch()}
         refreshing={templates.isFetching}
-      />
+      >
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreating(true)}>
+          Create template
+        </Button>
+      </GcpToolbar>
 
       <GcpDataTable
         aria-label="Dataproc workflow templates"
@@ -106,6 +113,8 @@ export function WorkflowTemplatesPage() {
         renderDetail={(template) => <GcpRowDetail row={template} />}
         detailTitle={(template) => template.id}
       />
+
+      <WorkflowTemplateDialog open={creating} onClose={() => setCreating(false)} />
     </Stack>
   )
 }

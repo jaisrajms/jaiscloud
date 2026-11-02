@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -12,11 +13,13 @@ import {
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { deleteCluster, getCluster, startCluster, stopCluster } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
+import { ClusterEditDialog } from './ClusterEditDialog'
 import { Detail, JsonBlock } from './common'
 import { clusterStateColor, shortDate } from './util'
 import { GcpPageTitle } from '../common/PageTitle'
@@ -27,6 +30,7 @@ export function ClusterDetailPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const [editing, setEditing] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'dataproc', 'cluster', region, clusterName, accountId],
@@ -78,6 +82,13 @@ export function ClusterDetailPage() {
               </Button>
             )}
             <Button
+              startIcon={<EditOutlinedIcon />}
+              disabled={busy}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </Button>
+            <Button
               color="error"
               startIcon={<DeleteOutlineIcon />}
               disabled={busy}
@@ -103,6 +114,7 @@ export function ClusterDetailPage() {
 
       {cluster && (
         <>
+          <ClusterEditDialog open={editing} onClose={() => setEditing(false)} cluster={cluster} />
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
             <Chip size="small" label={cluster.status || '—'} color={clusterStateColor(cluster.status)} />
             {cluster.gkeBacked && <Chip size="small" variant="outlined" label="Dataproc on GKE" />}

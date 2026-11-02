@@ -113,3 +113,149 @@ export function buildVirtualClusterConfig(input: GkeClusterInput): Record<string
   }
   return { kubernetesClusterConfig }
 }
+
+/** One editable field of a Dataproc job type body. */
+export interface JobTypeField {
+  key: string
+  label: string
+  hint?: string
+  required?: boolean
+  /** Renders a textarea; the value is split into a string array. */
+  multiline?: boolean
+}
+
+/**
+ * JOB_TYPE_FIELDS is the dataproc.v1 oneof job bodies the core accepts, with
+ * the fields the submit form offers. Only Spark-family jobs run in the
+ * emulator; the others are still selectable because the API accepts them and
+ * the core reports the run outcome.
+ */
+export const JOB_TYPE_FIELDS: Record<string, JobTypeField[]> = {
+  sparkJob: [
+    { key: 'mainClass', label: 'Main class', hint: 'com.example.Main' },
+    { key: 'mainJarFileUri', label: 'Main jar URI', hint: 'gs://bucket/app.jar' },
+    { key: 'jarFileUris', label: 'Additional jars (comma or line separated)' },
+    { key: 'fileUris', label: 'Additional files (comma or line separated)' },
+  ],
+  pysparkJob: [
+    { key: 'mainPythonFileUri', label: 'Main Python file URI', required: true },
+    { key: 'pythonFileUris', label: 'Additional Python files (comma or line separated)' },
+    { key: 'jarFileUris', label: 'Additional jars (comma or line separated)' },
+  ],
+  sparkSqlJob: [
+    { key: 'queryList', label: 'Queries (one per line)', multiline: true, required: true },
+  ],
+  sparkRJob: [{ key: 'mainRFileUri', label: 'Main R file URI', required: true }],
+  hadoopJob: [
+    { key: 'mainClass', label: 'Main class' },
+    { key: 'mainJarFileUri', label: 'Main jar URI' },
+  ],
+  hiveJob: [{ key: 'queryList', label: 'Queries (one per line)', multiline: true }],
+  pigJob: [{ key: 'queryList', label: 'Queries (one per line)', multiline: true }],
+}
+
+/** JOB_TYPE_OPTIONS is the select-order list of job types. */
+export const JOB_TYPE_OPTIONS = Object.keys(JOB_TYPE_FIELDS)
+
+/** splitList splits comma/newline separated input into trimmed values. */
+export function splitList(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+/** splitLines splits newline separated input into trimmed values (no commas:
+ * a SQL query or a job argument may legitimately contain one). */
+export function splitLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+/**
+ * parseKeyValueLines parses `key=value` lines (blank lines and `#` comments
+ * ignored) into an object. Throws on a line without `=`.
+ */
+export function parseKeyValueLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const at = line.indexOf('=')
+    if (at <= 0) throw new Error(`Expected key=value, got "${line}"`)
+    out[line.slice(0, at).trim()] = line.slice(at + 1).trim()
+  }
+  return out
+}
+
+/** JobFormInput is the submit-job form's state. */
+export interface JobFormInput {
+  clusterName: string
+  type: string
+  fields: Record<string, string>
+  args?: string
+  properties?: string
+}
+
+/**
+ * buildJobBody composes the dataproc.v1.Job object the submit endpoint takes:
+ * placement, the selected oneof type body, optional args and properties.
+ */
+export function buildJobBody(input: JobFormInput): Record<string, unknown> {
+  const typeBody: Record<string, unknown> = {}
+  for (const field of JOB_TYPE_FIELDS[input.type] ?? []) {
+    const raw = (input.fields[field.key] ?? '').trim()
+    if (!raw) continue
+    typeBody[field.key] = field.multiline
+      ? splitLines(raw)
+      : /FileUris$/.test(field.key)
+        ? splitList(raw)
+        : raw
+  }
+  if (input.args?.trim()) typeBody.args = input.args.split('\n').map((a) => a.trim()).filter(Boolean)
+  if (input.properties?.trim()) {
+    typeBody.properties = parseKeyValueLines(input.properties)
+  }
+  return {
+    placement: { clusterName: input.clusterName.trim() },
+    [input.type]: typeBody,
+  }
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/**
+ * changedJsonPaths returns the dotted leaf paths whose value differs between
+ * before and after. Arrays and scalars are compared whole, which is what an
+ * update mask needs: a changed worker list is one config.workerConfig path.
+ */
+export function changedJsonPaths(before: unknown, after: unknown, prefix = ''): string[] {
+  if (JSON.stringify(before) === JSON.stringify(after)) return []
+  if (isObject(before) && isObject(after)) {
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+    const out: string[] = []
+    for (const key of keys) {
+      out.push(...changedJsonPaths(before[key], after[key], prefix ? `${prefix}.${key}` : key))
+    }
+    return out
+  }
+  return prefix ? [prefix] : []
+}
+
+/**
+ * buildClusterUpdateMask composes a cluster PATCH mask from the fields the user
+ * touched. An empty result means the form is unchanged, and the caller must not
+ * send the patch: an empty mask applies everything in the core.
+ */
+export function buildClusterUpdateMask(
+  labelsChanged: boolean,
+  beforeConfig: unknown,
+  afterConfig: unknown,
+): string[] {
+  const mask = labelsChanged ? ['labels'] : []
+  mask.push(...changedJsonPaths(beforeConfig ?? {}, afterConfig ?? {}, 'config'))
+  return [...new Set(mask)]
+}

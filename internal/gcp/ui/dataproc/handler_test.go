@@ -28,12 +28,18 @@ type mockProvider struct {
 	template  dpstore.WorkflowTemplate
 	err       error
 
-	gotRegion string
-	gotID     string
-	gotInput  dataproccore.ClusterInput
-	deleted   bool
-	created   bool
-	action    string
+	gotRegion   string
+	gotID       string
+	gotInput    dataproccore.ClusterInput
+	gotMask     []string
+	gotJob      dataproccore.JobInput
+	gotTemplate dataproccore.WorkflowTemplateInput
+	gotVersion  int32
+	gotParams   map[string]string
+	gotOp       dpstore.Operation
+	deleted     bool
+	created     bool
+	action      string
 }
 
 func (m *mockProvider) ListAllClusters(_ context.Context, _ string) ([]dpstore.Cluster, error) {
@@ -72,8 +78,18 @@ func (m *mockProvider) ListAllJobs(_ context.Context, _ string) ([]dpstore.Job, 
 	return m.jobs, m.err
 }
 
+func (m *mockProvider) UpdateCluster(_ context.Context, _, region, name string, in dataproccore.ClusterInput, mask []string) (dpstore.Cluster, error) {
+	m.action, m.gotRegion, m.gotID, m.gotInput, m.gotMask = "update", region, name, in, mask
+	return m.cluster, m.err
+}
+
 func (m *mockProvider) GetJob(_ context.Context, _, region, id string) (dpstore.Job, error) {
 	m.gotRegion, m.gotID = region, id
+	return m.job, m.err
+}
+
+func (m *mockProvider) SubmitJob(_ context.Context, _, region string, in dataproccore.JobInput) (dpstore.Job, error) {
+	m.action, m.gotRegion, m.gotJob = "submit", region, in
 	return m.job, m.err
 }
 
@@ -89,6 +105,26 @@ func (m *mockProvider) ListAllWorkflowTemplates(_ context.Context, _ string) ([]
 func (m *mockProvider) GetWorkflowTemplate(_ context.Context, _, region, id string) (dpstore.WorkflowTemplate, error) {
 	m.gotRegion, m.gotID = region, id
 	return m.template, m.err
+}
+
+func (m *mockProvider) CreateWorkflowTemplate(_ context.Context, _, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error) {
+	m.action, m.gotRegion, m.gotTemplate = "createTemplate", region, in
+	return m.template, m.err
+}
+
+func (m *mockProvider) UpdateWorkflowTemplate(_ context.Context, _, region string, in dataproccore.WorkflowTemplateInput) (dpstore.WorkflowTemplate, error) {
+	m.action, m.gotRegion, m.gotTemplate = "updateTemplate", region, in
+	return m.template, m.err
+}
+
+func (m *mockProvider) DeleteWorkflowTemplate(_ context.Context, _, region, id string, version int32) error {
+	m.action, m.gotRegion, m.gotID, m.gotVersion, m.deleted = "deleteTemplate", region, id, version, true
+	return m.err
+}
+
+func (m *mockProvider) InstantiateWorkflowTemplate(_ context.Context, _, region, id string, version int32, params map[string]string) (dpstore.Operation, error) {
+	m.action, m.gotRegion, m.gotID, m.gotVersion, m.gotParams = "instantiate", region, id, version, params
+	return m.gotOp, m.err
 }
 
 func testCfg() *config.Config {
@@ -561,5 +597,187 @@ func TestListClusters_ProviderErrorMapped(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "nope") {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestUpdateCluster_PassesMaskVerbatim(t *testing.T) {
+	mock := &mockProvider{cluster: cluster("alpha", "us-central1")}
+	body := `{"config":{"workerConfig":{"numInstances":3}},"labels":{"env":"prod"},` +
+		`"updateMask":["config.workerConfig.numInstances","labels"]}`
+	w := doBody(t, mock, http.MethodPatch, "/clusters/us-central1/alpha", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.action != "update" || mock.gotRegion != "us-central1" || mock.gotID != "alpha" {
+		t.Fatalf("update not dispatched: %+v", mock)
+	}
+	want := []string{"config.workerConfig.numInstances", "labels"}
+	if !reflect.DeepEqual(mock.gotMask, want) {
+		t.Fatalf("mask = %v, want %v", mock.gotMask, want)
+	}
+	if len(mock.gotInput.Config) == 0 || !strings.Contains(string(mock.gotInput.Config), "numInstances") {
+		t.Fatalf("config not passed through: %s", mock.gotInput.Config)
+	}
+	if mock.gotInput.Labels["env"] != "prod" {
+		t.Fatalf("labels not passed through: %v", mock.gotInput.Labels)
+	}
+}
+
+func TestUpdateCluster_RequiresConfigOrLabels(t *testing.T) {
+	for _, body := range []string{`{}`, `{"updateMask":["labels"]}`} {
+		w := doBody(t, &mockProvider{}, http.MethodPatch, "/clusters/us-central1/alpha", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestSubmitJob_Dispatches(t *testing.T) {
+	mock := &mockProvider{job: jobStore("j1", "us-central1", "alpha", "sparkJob")}
+	body := `{"region":"us-central1","job":{"reference":{"jobId":"j1"},` +
+		`"placement":{"clusterName":"alpha"},"sparkJob":{"mainClass":"com.example.Main"}}}`
+	w := doBody(t, mock, http.MethodPost, "/jobs", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.action != "submit" || mock.gotRegion != "us-central1" {
+		t.Fatalf("submit not dispatched: %+v", mock)
+	}
+	if mock.gotJob.JobID != "j1" || mock.gotJob.PlacementClusterName != "alpha" || mock.gotJob.Type != "sparkJob" {
+		t.Fatalf("job input = %+v", mock.gotJob)
+	}
+	var got Job
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.TypeJob == nil || !strings.Contains(string(got.TypeJob), "mainClass") {
+		t.Fatalf("typeJob not rendered: %s", got.TypeJob)
+	}
+}
+
+func TestSubmitJob_RequiresRegionAndJob(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"job":{"sparkJob":{}}}`,
+		`{"region":"us-central1"}`,
+		`{"region":"us-central1","job":"spark"}`,
+	} {
+		w := doBody(t, &mockProvider{}, http.MethodPost, "/jobs", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestCreateWorkflowTemplate(t *testing.T) {
+	mock := &mockProvider{template: templateStore("wf1", "us-central1")}
+	body := `{"region":"us-central1","id":"wf1","definition":{` +
+		`"placement":{"managedCluster":{"clusterName":"alpha"}},"jobs":[{"stepId":"a"}]}}`
+	w := doBody(t, mock, http.MethodPost, "/workflow-templates", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if mock.action != "createTemplate" || mock.gotTemplate.ID != "wf1" {
+		t.Fatalf("create not dispatched: %+v", mock)
+	}
+	if mock.gotTemplate.Definition["jobs"] == nil {
+		t.Fatalf("definition not passed through: %+v", mock.gotTemplate.Definition)
+	}
+	var got WorkflowTemplate
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Definition == nil || !strings.Contains(string(got.Definition), "stepId") {
+		t.Fatalf("definition not rendered: %s", got.Definition)
+	}
+}
+
+func TestCreateWorkflowTemplate_RequiresRegionAndID(t *testing.T) {
+	for _, body := range []string{`{}`, `{"region":"us-central1"}`, `{"id":"wf1"}`} {
+		w := doBody(t, &mockProvider{}, http.MethodPost, "/workflow-templates", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestUpdateWorkflowTemplate_PassesVersion(t *testing.T) {
+	mock := &mockProvider{template: templateStore("wf1", "us-central1")}
+	body := `{"version":3,"definition":{"placement":{"managedCluster":{"clusterName":"alpha"}},` +
+		`"jobs":[{"stepId":"a"}]}}`
+	w := doBody(t, mock, http.MethodPut, "/workflow-templates/us-central1/wf1", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.action != "updateTemplate" || mock.gotRegion != "us-central1" {
+		t.Fatalf("update not dispatched: %+v", mock)
+	}
+	if mock.gotTemplate.ID != "wf1" || mock.gotTemplate.Version != 3 {
+		t.Fatalf("template input = %+v", mock.gotTemplate)
+	}
+}
+
+func TestUpdateWorkflowTemplate_RejectsMismatchedID(t *testing.T) {
+	body := `{"id":"other","version":3,"definition":{"placement":{}}}`
+	w := doBody(t, &mockProvider{}, http.MethodPut, "/workflow-templates/us-central1/wf1", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestWorkflowTemplateConflictReSurfaces(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("Aborted", "workflow template version mismatch", http.StatusConflict)}
+	body := `{"version":1,"definition":{"placement":{"managedCluster":{"clusterName":"a"}},"jobs":[{"stepId":"a"}]}}`
+	w := doBody(t, mock, http.MethodPut, "/workflow-templates/us-central1/wf1", body)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "version mismatch") {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestDeleteWorkflowTemplate_VersionQuery(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodDelete, "/workflow-templates/us-central1/wf1?version=3")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if !mock.deleted || mock.gotID != "wf1" || mock.gotVersion != 3 {
+		t.Fatalf("delete not dispatched: %+v", mock)
+	}
+
+	w = do(t, &mockProvider{}, http.MethodDelete, "/workflow-templates/us-central1/wf1?version=x")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad version status = %d, want 400", w.Code)
+	}
+}
+
+func TestInstantiateWorkflowTemplate(t *testing.T) {
+	mock := &mockProvider{gotOp: dpstore.Operation{ID: "op-1", ProjectID: "test-project", Region: "us-central1"}}
+	body := `{"version":3,"parameters":{"date":"2026-01-01"}}`
+	w := doBody(t, mock, http.MethodPost, "/workflow-templates/us-central1/wf1/instantiate", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.action != "instantiate" || mock.gotID != "wf1" || mock.gotVersion != 3 {
+		t.Fatalf("instantiate not dispatched: %+v", mock)
+	}
+	if mock.gotParams["date"] != "2026-01-01" {
+		t.Fatalf("parameters = %v", mock.gotParams)
+	}
+	if !strings.Contains(w.Body.String(), "projects/test-project/regions/us-central1/operations/op-1") {
+		t.Fatalf("operation not rendered: %s", w.Body.String())
+	}
+}
+
+func TestInstantiateWorkflowTemplate_EmptyBody(t *testing.T) {
+	mock := &mockProvider{gotOp: dpstore.Operation{ID: "op-1", ProjectID: "test-project", Region: "us-central1"}}
+	w := doBody(t, mock, http.MethodPost, "/workflow-templates/us-central1/wf1/instantiate", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.gotParams != nil {
+		t.Fatalf("parameters = %v, want nil", mock.gotParams)
 	}
 }

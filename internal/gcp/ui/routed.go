@@ -644,6 +644,12 @@ func (p routedKMS) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 	}, nr)
 }
 
+func (p routedKMS) CryptoKeyUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "KMS.CryptoKeyUpdate", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.CryptoKeyUpdate(ctx, nr)
+	}, nr)
+}
+
 func (p routedKMS) CryptoKeyVersionCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "KMS.CryptoKeyVersionCreate", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		return p.ProviderInterface.CryptoKeyVersionCreate(ctx, nr)
