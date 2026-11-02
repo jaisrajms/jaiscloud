@@ -76,6 +76,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/identity"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/provider/bigquery/discoverydoc"
 	"jaiscloud/internal/gcp/queryengine"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/gcp/wire"
@@ -125,6 +126,7 @@ func (p *Provider) Reset(ctx context.Context) {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
+		"BigQuery.GetDiscovery":            p.GetDiscovery,
 		"BigQuery.CreateDataset":           p.CreateDataset,
 		"BigQuery.GetDataset":              p.GetDataset,
 		"BigQuery.ListDatasets":            p.ListDatasets,
@@ -1629,6 +1631,38 @@ func (p *Provider) GetServiceAccount(ctx context.Context, nr *model.NormalizedRe
 		"kind":  kindPrefix + "getServiceAccountResponse",
 		"email": fmt.Sprintf("bq-%s@gcp-sa-bigquery.iam.gserviceaccount.com", projectOf(nr)),
 	}), nil
+}
+
+// GetDiscovery serves the BigQuery v2 Discovery document. The standalone bq CLI
+// builds its whole client from this document, so serving it is what makes bq
+// usable against the emulator at all: bq (google-cloud-sdk >= 469) fetches
+// {--api}/$discovery/rest?version=v2 and older SDKs probe the legacy
+// /discovery/v1/apis/bigquery/v2/rest path.
+//
+// rootUrl/baseUrl are rewritten to the origin the client called (the codec
+// captures it in wire.BaseURLKey), so the built client addresses the emulator
+// instead of bigquery.googleapis.com. servicePath stays "bigquery/v2/": clients
+// resolve method paths against rootUrl+servicePath, and the emulator routes
+// that form.
+func (p *Provider) GetDiscovery(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	version, _ := nr.Params["version"].(string)
+	if version == "" {
+		version = discoverydoc.Version
+	}
+	if version != discoverydoc.Version {
+		return nil, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("unsupported BigQuery discovery version %q: this emulator serves %q", version, discoverydoc.Version),
+			http.StatusBadRequest)
+	}
+	origin, _ := nr.Params[wire.BaseURLKey].(string)
+	if origin == "" {
+		origin = "http://localhost:8080"
+	}
+	doc, err := discoverydoc.Document(origin)
+	if err != nil {
+		return nil, model.NewProviderError("Internal", err.Error(), http.StatusInternalServerError)
+	}
+	return provider.OK(doc), nil
 }
 
 // --- Deferred resources ---

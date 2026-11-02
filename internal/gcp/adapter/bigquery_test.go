@@ -137,6 +137,99 @@ func TestDetectBigQueryUploadPaths(t *testing.T) {
 	}
 }
 
+// TestDetectBigQueryDiscoveryPaths verifies both discovery-document probes the
+// bq CLI and the official SDKs use are claimed by bigquery, and that a
+// discovery probe for a service the emulator does not serve is not silently
+// mis-served as a GCS raw-media object.
+func TestDetectBigQueryDiscoveryPaths(t *testing.T) {
+	for _, p := range []string{
+		"/$discovery/rest?version=v2",
+		"/$discovery/rest",
+		"//$discovery/rest?version=v2",
+		"/discovery/v1/apis/bigquery/v2/rest",
+	} {
+		r := httptest.NewRequest("GET", p, nil)
+		if got, _ := DetectService(r); got != "bigquery" {
+			t.Errorf("DetectService(%s) = %q, want bigquery", p, got)
+		}
+	}
+	// Another service's discovery document is not claimed: it must fall through
+	// to "no service" (a clean 404), not the raw-media bucket "discovery".
+	for _, p := range []string{
+		"/discovery/v1/apis/storage/v1/rest",
+		"/$discovery/rest/extra",
+	} {
+		r := httptest.NewRequest("GET", p, nil)
+		if got, _ := DetectService(r); got != "" {
+			t.Errorf("DetectService(%s) = %q, want no service", p, got)
+		}
+	}
+}
+
+// TestBigQueryCodecDecodeDiscovery covers the discovery decode: both paths
+// resolve to GetDiscovery, the version defaults to v2, the request origin is
+// captured, and a non-GET probe is rejected.
+func TestBigQueryCodecDecodeDiscovery(t *testing.T) {
+	codec := &BigQueryCodec{Service: "bigquery"}
+	cases := []struct {
+		path, version string
+	}{
+		{"/$discovery/rest?version=v2", "v2"},
+		{"/$discovery/rest", "v2"},
+		{"/discovery/v1/apis/bigquery/v2/rest", "v2"},
+		{"/$discovery/rest?version=v9", "v9"}, // rejected by the provider, not the codec
+	}
+	for _, tc := range cases {
+		r := httptest.NewRequest("GET", "http://bq.local"+tc.path, nil)
+		nr, err := codec.Decode(r, nil)
+		if err != nil {
+			t.Fatalf("decode %s: %v", tc.path, err)
+		}
+		if nr.Action != "GetDiscovery" {
+			t.Errorf("%s action = %q, want GetDiscovery", tc.path, nr.Action)
+		}
+		if nr.Service != "bigquery" {
+			t.Errorf("%s service = %q, want bigquery", tc.path, nr.Service)
+		}
+		if got := nr.Params["version"]; got != tc.version {
+			t.Errorf("%s version = %v, want %s", tc.path, got, tc.version)
+		}
+		if got := nr.Params[wire.BaseURLKey]; got != "http://bq.local" {
+			t.Errorf("%s baseURL = %v, want http://bq.local", tc.path, got)
+		}
+	}
+
+	r := httptest.NewRequest("POST", "http://bq.local/$discovery/rest", nil)
+	if _, err := codec.Decode(r, nil); err == nil {
+		t.Fatal("POST discovery probe: want 405, got nil")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 405 {
+		t.Fatalf("POST discovery probe: want ProviderError 405, got %v", err)
+	}
+}
+
+// TestBigQueryCodecEncodeDiscoveryHeaders pins the cache policy of the
+// discovery response: Content-Type JSON and no client-side caching.
+func TestBigQueryCodecEncodeDiscoveryHeaders(t *testing.T) {
+	codec := &BigQueryCodec{Service: "bigquery"}
+	nr := &model.NormalizedRequest{Service: "bigquery", Action: "GetDiscovery"}
+	status, headers, body := codec.Encode(nr, &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{"name": "bigquery"},
+	})
+	if status != 200 {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if got := headers.Get("Content-Type"); got != "application/json; charset=UTF-8" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := headers.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if !strings.Contains(string(body), `"name":"bigquery"`) {
+		t.Errorf("body = %s", body)
+	}
+}
+
 // TestBigQueryCodecDecodeUpload covers the media-upload decode paths.
 func TestBigQueryCodecDecodeUpload(t *testing.T) {
 	codec := &BigQueryCodec{Service: "bigquery"}

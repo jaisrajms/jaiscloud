@@ -65,6 +65,8 @@ packages:
     min_percent: 76.36
   - package: internal/gcp/provider/bigquery
     min_percent: 77.68
+  - package: internal/gcp/provider/bigquery/discoverydoc
+    min_percent: 81.25
   - package: internal/gcp/provider/clouddns
     min_percent: 73.78
   - package: internal/gcp/provider/cloudsql

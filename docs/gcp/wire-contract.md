@@ -160,6 +160,14 @@ commit.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 586.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §5).
+- **`bq` CLI** — the emulator serves the BigQuery v2 Discovery document at
+  `/$discovery/rest?version=v2` (and the legacy `/discovery/v1/apis/bigquery/v2/rest`
+  probe older SDKs use), with `rootUrl`/`baseUrl` rewritten to the caller's origin and
+  `servicePath` kept as `bigquery/v2/`. `bq --api <endpoint> --project_id=local` therefore
+  builds its client against the emulator and works for `ls`, `mk --table` and
+  `show --schema` (verified with google-cloud-sdk 591.0.0). The document is the vendored
+  real v2 snapshot, embedded in the binary and pinned byte-identical to
+  `tests/gcpconformance/discovery/bigquery.json.gz` by a test.
 - **Conformance harnesses** — REST wire-conformance (**clean: 0 divergences, 0 high-severity**),
   gRPC message-level, REST↔gRPC cross-transport parity (14 dual services; reads each resource over
   both transports and diffs the normalized bodies), gcloud CLI, and the fidelity-matrix drift check.

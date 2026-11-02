@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1174**
+Cells: **1175**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 995 |
+| ga | 996 |
 | limited | 123 |
 | preview | 14 |
 | unsupported | 42 |
@@ -21,7 +21,7 @@ Cells: **1174**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 552 | 105 | 14 | 12 |
+| rest | 553 | 105 | 14 | 12 |
 | grpc | 443 | 18 | 0 | 30 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,12 +32,12 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 639 | 44 |
+| rest | 639 | 45 |
 | grpc | 443 | 48 |
 
 ## bigquery
 
-_25 cell(s): ga=0 limited=22 preview=0 unsupported=3_
+_26 cell(s): ga=1 limited=22 preview=0 unsupported=3_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -48,6 +48,7 @@ _25 cell(s): ga=0 limited=22 preview=0 unsupported=3_
 | BigQuery.DeleteJob | rest | limited | no | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.DeleteTable | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.GetDataset | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
+| BigQuery.GetDiscovery | rest | ga | no | the BigQuery v2 Discovery document itself (not a Discovery API operation): the vendored v2 snapshot served verbatim, with rootUrl/baseUrl rewritten to the caller's origin, at both /$discovery/rest?version=v2 and the legacy /discovery/v1/apis/bigquery/v2/rest; the bq CLI (SDK 591) builds its client from it and creates/lists datasets and tables end to end |
 | BigQuery.GetJob | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.GetQueryResults | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.GetServiceAccount | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
