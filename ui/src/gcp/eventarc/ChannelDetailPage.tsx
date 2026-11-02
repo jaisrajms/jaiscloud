@@ -21,10 +21,12 @@ import {
   getChannel,
   getChannelIam,
   putChannelIam,
+  testChannelIam,
   type EventarcChannel,
 } from '../../api/gcp/eventarc'
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
+import { TestPermissionsSection } from '../common/TestPermissionsSection'
 import { ChannelDialog } from './ChannelDialog'
 import { channelStateColor, shortDate } from './util'
 import { GcpPageTitle } from '../common/PageTitle'
@@ -140,6 +142,12 @@ export function ChannelDetailPage() {
             load={() => getChannelIam(location, channelName)}
             save={(policy) => putChannelIam(location, channelName, policy)}
             defaultRole="roles/eventarc.admin"
+          />
+
+          <Divider sx={{ my: 3 }} />
+          <TestPermissionsSection
+            defaultPermissions={['eventarc.channels.get', 'eventarc.channels.update']}
+            run={(permissions) => testChannelIam(location, channelName, permissions)}
           />
 
           <ChannelDialog open={editOpen} onClose={() => setEditOpen(false)} channel={channel} />

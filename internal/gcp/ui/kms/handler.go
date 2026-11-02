@@ -8,6 +8,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	kmscore "jaiscloud/internal/gcp/service/kms"
 	"jaiscloud/internal/gcp/ui/uihelper"
 	"jaiscloud/internal/model"
 )
@@ -132,6 +133,25 @@ func (h *Handler) versionName(w http.ResponseWriter, r *http.Request) (string, b
 }
 
 // ─── Key rings ───────────────────────────────────────────────────────────────
+
+// GET /keyRings — the location-less console aggregate.
+func (h *Handler) ListAllKeyRings(w http.ResponseWriter, r *http.Request) {
+	rings, err := h.provider.ListAllKeyRings(r.Context(), h.account(r))
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	out := make([]KeyRing, 0, len(rings))
+	for _, ring := range rings {
+		out = append(out, KeyRing{
+			Name:       kmscore.KeyRingName(h.account(r), ring.Location, ring.ID),
+			KeyRingID:  ring.ID,
+			Location:   ring.Location,
+			CreateTime: ring.CreateTime.UTC().Format(time.RFC3339),
+		})
+	}
+	uihelper.WriteJSON(w, ListKeyRingsResponse{KeyRings: out, Total: len(out)})
+}
 
 // GET /locations/{location}/keyRings
 func (h *Handler) ListKeyRings(w http.ResponseWriter, r *http.Request) {

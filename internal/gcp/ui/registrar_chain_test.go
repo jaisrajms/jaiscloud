@@ -22,6 +22,7 @@ import (
 	loggingui "jaiscloud/internal/gcp/ui/logging"
 	monitoringui "jaiscloud/internal/gcp/ui/monitoring"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
+	runui "jaiscloud/internal/gcp/ui/run"
 	secretmanagerui "jaiscloud/internal/gcp/ui/secretmanager"
 	storageui "jaiscloud/internal/gcp/ui/storage"
 	"jaiscloud/internal/provider"
@@ -42,7 +43,7 @@ func TestWithPluginChainWrapsEveryTypedService(t *testing.T) {
 		scheduler: schedulercore.NewService(schedstore.NewMemoryStore()),
 		tasks:     tasks.NewService(tasksstore.NewMemoryStore(), store.NewMemoryResourceStore()),
 		workflows: wf, functions: fn, eventarc: ea, dataproc: dp, managedkafka: mk,
-		run:             runcore.NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore()),
+		run:             runui.NewProvider(runcore.NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore())),
 		datastore:       datastorecore.NewService(dsstore.NewMemoryStore(), "proj"),
 		resourcemanager: rm,
 	}

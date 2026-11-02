@@ -125,6 +125,14 @@ func renderTask(t tasksstore.Task) Task {
 		out.HTTPMethod = t.HTTP.HTTPMethod
 		out.HTTPHeaders = t.HTTP.Headers
 		out.HTTPBody = string(t.HTTP.Body)
+		if t.HTTP.OAuthToken != nil {
+			out.AuthServiceAccount = t.HTTP.OAuthToken.ServiceAccountEmail
+			out.AuthScope = t.HTTP.OAuthToken.Scope
+		}
+		if t.HTTP.OidcToken != nil {
+			out.AuthServiceAccount = t.HTTP.OidcToken.ServiceAccountEmail
+			out.AuthAudience = t.HTTP.OidcToken.Audience
+		}
 	case t.AppEngine != nil:
 		out.AppEngineURI = t.AppEngine.RelativeURI
 		out.AppEngineMethod = t.AppEngine.HTTPMethod
@@ -149,6 +157,21 @@ func taskFromInput(in TaskInput) (tasksstore.Task, error) {
 			HTTPMethod: in.HTTPMethod,
 			Headers:    in.HTTPHeaders,
 			Body:       []byte(in.HTTPBody),
+		}
+		switch in.Auth {
+		case "oauth":
+			t.HTTP.OAuthToken = &tasksstore.OAuthToken{
+				ServiceAccountEmail: in.AuthServiceAccount,
+				Scope:               in.AuthScope,
+			}
+		case "oidc":
+			t.HTTP.OidcToken = &tasksstore.OidcToken{
+				ServiceAccountEmail: in.AuthServiceAccount,
+				Audience:            in.AuthAudience,
+			}
+		case "":
+		default:
+			return tasksstore.Task{}, invalidArgument("unknown auth " + in.Auth)
 		}
 	case string(tasksstore.TargetAppEngine):
 		t.Target = tasksstore.TargetAppEngine
@@ -426,6 +449,65 @@ func (h *Handler) RunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uihelper.WriteJSON(w, renderTask(t))
+}
+
+// POST /queues/{location}/{queue}/tasks/batch
+func (h *Handler) BatchTasks(w http.ResponseWriter, r *http.Request) {
+	location, queue, ok := h.targetQueue(w, r)
+	if !ok {
+		return
+	}
+	var req BatchTasksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Create) == 0 && len(req.Delete) == 0 {
+		uihelper.UIError(w, "InvalidArgument", "create or delete is required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	resp := BatchTasksResponse{}
+	for _, in := range req.Create {
+		task, err := taskFromInput(in)
+		if err != nil {
+			uihelper.WriteError(w, err)
+			return
+		}
+		created, err := h.provider.CreateTask(r.Context(), project, location, queue, task)
+		if err != nil {
+			uihelper.WriteError(w, err)
+			return
+		}
+		resp.Created = append(resp.Created, renderTask(created))
+	}
+	for _, name := range req.Delete {
+		if err := h.provider.DeleteTask(r.Context(), project, location, queue, name); err != nil {
+			uihelper.WriteError(w, err)
+			return
+		}
+		resp.Deleted = append(resp.Deleted, name)
+	}
+	uihelper.WriteJSON(w, resp)
+}
+
+// POST /queues/{location}/{queue}/iam/testIamPermissions
+func (h *Handler) TestQueueIam(w http.ResponseWriter, r *http.Request) {
+	location, queue, ok := h.targetQueue(w, r)
+	if !ok {
+		return
+	}
+	var req QueueTestIamPermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	perms, err := h.provider.QueueTestIamPermissions(r.Context(), h.account(r), location, queue, req.Permissions)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, QueueTestIamPermissionsResponse{Permissions: perms})
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

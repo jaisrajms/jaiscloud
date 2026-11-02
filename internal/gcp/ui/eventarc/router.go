@@ -18,6 +18,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Delete("/triggers/{location}/{trigger}", h.DeleteTrigger)
 	r.Get("/triggers/{location}/{trigger}/iam", h.GetTriggerIam)
 	r.Put("/triggers/{location}/{trigger}/iam", h.SetTriggerIam)
+	r.Post("/triggers/{location}/{trigger}/iam/testIamPermissions", h.TestTriggerIam)
 
 	r.Get("/channels", h.ListChannels)
 	r.Post("/channels", h.CreateChannel)
@@ -26,6 +27,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Delete("/channels/{location}/{channel}", h.DeleteChannel)
 	r.Get("/channels/{location}/{channel}/iam", h.GetChannelIam)
 	r.Put("/channels/{location}/{channel}/iam", h.SetChannelIam)
+	r.Post("/channels/{location}/{channel}/iam/testIamPermissions", h.TestChannelIam)
 
 	return r
 }

@@ -569,6 +569,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Tier:     coreui.TierFull,
 			Children: []coreui.ServiceChild{
 				{Label: "Metrics explorer", Path: "/gcp/monitoring/metrics"},
+				{Label: "Monitored resources", Path: "/gcp/monitoring/resources"},
 				{Label: "Alerting", Path: "/gcp/monitoring/alerting"},
 				{Label: "Notification channels", Path: "/gcp/monitoring/channels"},
 				{Label: "SLOs", Path: "/gcp/monitoring/slo"},

@@ -63,6 +63,12 @@ func (m *mockProvider) DisableVersion(_ context.Context, nr *model.NormalizedReq
 func (m *mockProvider) EnableVersion(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) EnableManagedRotation(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) RotateSecret(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 func (m *mockProvider) GetIamPolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
@@ -311,5 +317,63 @@ func TestSecretFromMap_UserManagedCMEK(t *testing.T) {
 	}
 	if got.KmsKeyName != key {
 		t.Fatalf("kmsKeyName = %q, want the second replica's key %q", got.KmsKeyName, key)
+	}
+}
+
+func TestRotateSecret_ReturnsVersion(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"name": "projects/p/secrets/s/versions/2", "state": "ENABLED", "etag": "e",
+	}}}
+	w := do(t, mock, http.MethodPost, "/secrets/s/rotate", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Secret.RotateSecret" || mock.lastNR.Params["name"] != "secrets/s" {
+		t.Fatalf("params = %+v", mock.lastNR.Params)
+	}
+	var v SecretVersion
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if v.VersionID != "2" || v.State != "ENABLED" {
+		t.Fatalf("version = %+v", v)
+	}
+}
+
+func TestEnableManagedRotation_PassesCredentials(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"name": "projects/p/secrets/s/versions/1", "state": "ENABLED",
+	}}}
+	body := `{"instanceId":"inst","username":"app","password":"s3cret"}`
+	w := do(t, mock, http.MethodPost, "/secrets/s/enableManagedRotation", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	b := mock.lastNR.Params["body"].(map[string]any)
+	creds := b["cloudSqlSingleUserCredentials"].(map[string]any)
+	if creds["instanceId"] != "inst" || creds["username"] != "app" || creds["password"] != "s3cret" {
+		t.Fatalf("credentials = %+v", creds)
+	}
+}
+
+func TestEnableManagedRotation_RequiresCredentials(t *testing.T) {
+	for _, body := range []string{`{}`, `{"instanceId":"i"}`, `{"username":"u"}`} {
+		w := do(t, &mockProvider{}, http.MethodPost, "/secrets/s/enableManagedRotation", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestSecretFromMap_ManagedRotationStatus(t *testing.T) {
+	got := secretFromMap(map[string]any{
+		"name": "projects/p/secrets/s",
+		"rotation": map[string]any{
+			"rotationPeriod":        "86400s",
+			"managedRotationStatus": map[string]any{"state": "ACTIVE"},
+		},
+	})
+	if got.ManagedRotationStatus != "ACTIVE" {
+		t.Fatalf("managedRotationStatus = %q", got.ManagedRotationStatus)
 	}
 }

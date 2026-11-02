@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import { Alert, Button, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { deleteService, listServices, type RunService } from '../../api/gcp/run'
@@ -11,6 +12,7 @@ import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
 import { GcpToolbar } from '../common/GcpToolbar'
 import { filterRows } from '../common/pagination'
+import { DeployServiceDialog } from './DeployServiceDialog'
 
 function target(service: RunService) {
   return { region: service.region, service: service.id }
@@ -22,6 +24,7 @@ export function ServicesPage() {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<string[]>([])
   const [filter, setFilter] = useState('')
+  const [deploying, setDeploying] = useState(false)
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'run'] })
 
   const services = useQuery({
@@ -134,7 +137,11 @@ export function ServicesPage() {
         filterPlaceholder="Filter services"
         onRefresh={() => void services.refetch()}
         refreshing={services.isFetching}
-      />
+      >
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDeploying(true)}>
+          Deploy service
+        </Button>
+      </GcpToolbar>
 
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -158,6 +165,8 @@ export function ServicesPage() {
         renderDetail={(service) => <GcpRowDetail row={service} />}
         detailTitle={(service) => service.id}
       />
+
+      <DeployServiceDialog open={deploying} onClose={() => setDeploying(false)} />
     </Stack>
   )
 }

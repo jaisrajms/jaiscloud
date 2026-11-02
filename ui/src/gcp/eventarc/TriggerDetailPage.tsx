@@ -26,10 +26,12 @@ import {
   getTrigger,
   getTriggerIam,
   putTriggerIam,
+  testTriggerIam,
   type EventarcTrigger,
 } from '../../api/gcp/eventarc'
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
+import { TestPermissionsSection } from '../common/TestPermissionsSection'
 import { TriggerDialog } from './TriggerDialog'
 import { destinationLabel, shortDate } from './util'
 import { GcpPageTitle } from '../common/PageTitle'
@@ -181,6 +183,12 @@ export function TriggerDetailPage() {
             load={() => getTriggerIam(location, triggerName)}
             save={(policy) => putTriggerIam(location, triggerName, policy)}
             defaultRole="roles/eventarc.admin"
+          />
+
+          <Divider sx={{ my: 3 }} />
+          <TestPermissionsSection
+            defaultPermissions={['eventarc.triggers.get', 'eventarc.triggers.update']}
+            run={(permissions) => testTriggerIam(location, triggerName, permissions)}
           />
 
           <TriggerDialog open={editOpen} onClose={() => setEditOpen(false)} trigger={trigger} />

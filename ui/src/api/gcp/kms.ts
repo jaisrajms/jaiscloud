@@ -85,6 +85,19 @@ const cryptoKeyVersionPath = (location: string, keyRing: string, key: string, ve
   `${cryptoKeyPath(location, keyRing, key)}/versions/${encodeURIComponent(version)}`
 
 // Key rings.
+/** List every key ring in the project across all locations (console home). */
+export async function listAllKeyRings(): Promise<ListKeyRingsResponse> {
+  const keyRings = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListKeyRingsResponse>(
+        `${BASE}/keyRings`,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.keyRings,
+  )
+  return { keyRings, total: keyRings.length }
+}
+
 /** List every key ring in a location; pass `pageToken` for a single raw page. */
 export async function listKeyRings(
   location: string,

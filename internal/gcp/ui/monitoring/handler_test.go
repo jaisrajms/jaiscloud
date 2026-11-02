@@ -34,6 +34,12 @@ func (m *mockProvider) ListMetricDescriptors(_ context.Context, nr *model.Normal
 func (m *mockProvider) ListTimeSeries(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) ListMonitoredResourceDescriptors(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) GetMonitoredResourceDescriptor(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 func (m *mockProvider) ListAlertPolicies(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
@@ -405,5 +411,26 @@ func TestServiceLevelObjective_PropagatesProviderError(t *testing.T) {
 	}
 	if body["code"] != "NotFound" {
 		t.Fatalf("code = %q, want NotFound", body["code"])
+	}
+}
+
+func TestMonitoredResources_ListAndGet(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"resourceDescriptors": []any{map[string]any{"type": "gce_instance", "displayName": "VM Instance"}},
+	}}}
+	w := do(t, mock, http.MethodGet, "/monitoredResourceDescriptors", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "Monitoring.ListMonitoredResourceDescriptors" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+
+	w = do(t, mock, http.MethodGet, "/monitoredResourceDescriptors/gce_instance", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "projects/test-project/monitoredResourceDescriptors/gce_instance" {
+		t.Fatalf("name = %v", got)
 	}
 }

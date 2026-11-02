@@ -222,6 +222,54 @@ func (p routedStorage) ObjectsRestore(ctx context.Context, nr *model.NormalizedR
 	}, nr)
 }
 
+func (p routedStorage) ObjectsCopy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.ObjectsCopy", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ObjectsCopy(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) ObjectsRewrite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.ObjectsRewrite", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ObjectsRewrite(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.ObjectsMove", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ObjectsMove(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) ObjectsCompose(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.ObjectsCompose", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ObjectsCompose(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) NotificationsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.NotificationsList", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.NotificationsList(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) NotificationsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.NotificationsInsert", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.NotificationsInsert(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) NotificationsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.NotificationsGet", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.NotificationsGet(ctx, nr)
+	}, nr)
+}
+
+func (p routedStorage) NotificationsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Storage.NotificationsDelete", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.NotificationsDelete(ctx, nr)
+	}, nr)
+}
+
 func (p routedStorage) BucketsGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "Storage.BucketsGetIamPolicy", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		return p.ProviderInterface.BucketsGetIamPolicy(ctx, nr)
@@ -810,6 +858,18 @@ func (p routedSecret) EnableVersion(ctx context.Context, nr *model.NormalizedReq
 	}, nr)
 }
 
+func (p routedSecret) EnableManagedRotation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Secret.EnableManagedRotation", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.EnableManagedRotation(ctx, nr)
+	}, nr)
+}
+
+func (p routedSecret) RotateSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Secret.RotateSecret", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.RotateSecret(ctx, nr)
+	}, nr)
+}
+
 func (p routedSecret) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "Secret.GetIamPolicy", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		return p.ProviderInterface.GetIamPolicy(ctx, nr)
@@ -959,6 +1019,18 @@ func routeMonitoring(reg *provider.Registry, p monitoringui.ProviderInterface) m
 func (p routedMonitoring) ListMetricDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "Monitoring.ListMetricDescriptors", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		return p.ProviderInterface.ListMetricDescriptors(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) ListMonitoredResourceDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.ListMonitoredResourceDescriptors", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.ListMonitoredResourceDescriptors(ctx, nr)
+	}, nr)
+}
+
+func (p routedMonitoring) GetMonitoredResourceDescriptor(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "Monitoring.GetMonitoredResourceDescriptor", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.GetMonitoredResourceDescriptor(ctx, nr)
 	}, nr)
 }
 

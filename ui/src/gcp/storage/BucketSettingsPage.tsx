@@ -44,6 +44,7 @@ import { useAccount } from '../../context/AccountContext'
 import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpTabs } from '../common/GcpTabs'
+import { NotificationsSection } from './NotificationsSection'
 
 /** Bucket configuration: versioning, lifecycle, retention/holds, permissions. */
 export function BucketSettingsPage() {
@@ -75,6 +76,7 @@ export function BucketSettingsPage() {
           { label: 'Lifecycle', value: 1 },
           { label: 'Retention & holds', value: 2 },
           { label: 'Permissions', value: 3 },
+          { label: 'Notifications', value: 4 },
         ]}
       />
 
@@ -82,6 +84,7 @@ export function BucketSettingsPage() {
       {tab === 1 && <LifecycleTab bucket={bucket} />}
       {tab === 2 && <RetentionTab bucket={bucket} />}
       {tab === 3 && <PermissionsTab bucket={bucket} />}
+      {tab === 4 && <NotificationsSection bucket={bucket} />}
     </Box>
   )
 }

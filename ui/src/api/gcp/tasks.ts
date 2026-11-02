@@ -47,6 +47,9 @@ export interface CloudTask {
   httpMethod?: string
   httpHeaders?: Record<string, string>
   httpBody?: string
+  authServiceAccount?: string
+  authScope?: string
+  authAudience?: string
   appEngineUri?: string
   appEngineMethod?: string
   scheduleTime?: string
@@ -70,6 +73,11 @@ export interface TaskInput {
   httpMethod: string
   httpHeaders?: Record<string, string>
   httpBody: string
+  /** "" (none), "oauth" or "oidc"; OAuth uses authScope, OIDC authAudience. */
+  auth?: string
+  authServiceAccount?: string
+  authScope?: string
+  authAudience?: string
   appEngineUri: string
   appEngineMethod: string
   scheduleTime: string
@@ -130,3 +138,23 @@ export const deleteTask = (location: string, queue: string, task: string) =>
 
 export const runTask = (location: string, queue: string, task: string) =>
   api.post<CloudTask>(`${taskPath(location, queue, task)}/run`)
+
+export interface BatchTasksInput {
+  create?: TaskInput[]
+  delete?: string[]
+}
+
+export interface BatchTasksResponse {
+  created?: CloudTask[]
+  deleted?: string[]
+}
+
+/** Batch create/delete tasks. The console loops the typed core; the wire LRO
+ * wrapper is a REST-provider concern. */
+export const batchTasks = (location: string, queue: string, body: BatchTasksInput) =>
+  api.post<BatchTasksResponse>(`${queuePath(location, queue)}/tasks/batch`, body)
+
+export const testQueueIam = (location: string, queue: string, permissions: string[]) =>
+  api.post<{ permissions: string[] }>(`${queuePath(location, queue)}/iam/testIamPermissions`, {
+    permissions,
+  })

@@ -27,6 +27,13 @@ export interface EventarcTrigger {
   eventDataContentType?: string
   transportPubsubTopic?: string
   transportPubsubSubscription?: string
+  gkeCluster?: string
+  gkeLocation?: string
+  gkeNamespace?: string
+  gkeService?: string
+  gkePath?: string
+  httpEndpointUri?: string
+  maxAttempts?: number
   /** The verbatim stored trigger body (drives the edit form's JSON view). */
   config?: Record<string, unknown>
 }
@@ -52,6 +59,13 @@ export interface TriggerInput {
   eventDataContentType: string
   eventFilters: EventFilter[]
   transportPubsubTopic: string
+  gkeCluster?: string
+  gkeLocation?: string
+  gkeNamespace?: string
+  gkeService?: string
+  gkePath?: string
+  httpEndpointUri?: string
+  maxAttempts?: number
   labels?: Record<string, string>
   config?: Record<string, unknown>
 }
@@ -136,3 +150,15 @@ export const getChannelIam = (location: string, channel: string) =>
 
 export const putChannelIam = (location: string, channel: string, policy: IamPolicy) =>
   api.put<IamPolicy>(`${channelPath(location, channel)}/iam`, policy)
+
+export const testTriggerIam = (location: string, trigger: string, permissions: string[]) =>
+  api.post<{ permissions: string[] }>(
+    `${BASE}/triggers/${encodeURIComponent(location)}/${encodeURIComponent(trigger)}/iam/testIamPermissions`,
+    { permissions },
+  )
+
+export const testChannelIam = (location: string, channel: string, permissions: string[]) =>
+  api.post<{ permissions: string[] }>(
+    `${BASE}/channels/${encodeURIComponent(location)}/${encodeURIComponent(channel)}/iam/testIamPermissions`,
+    { permissions },
+  )

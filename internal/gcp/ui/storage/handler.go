@@ -11,6 +11,7 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
 	"jaiscloud/internal/gcp/wire"
+	"jaiscloud/internal/model"
 )
 
 // Handler serves Cloud Storage UI API requests by calling the GCS provider.
@@ -758,4 +759,296 @@ func (h *Handler) decodeACLBody(w http.ResponseWriter, r *http.Request) (map[str
 		return nil, false
 	}
 	return map[string]any{"entity": req.Entity, "role": req.Role}, true
+}
+
+// ─── Bucket notifications ────────────────────────────────────────────────────
+
+// notificationFromMap flattens a storage#notification response.
+func notificationFromMap(m map[string]any) Notification {
+	return Notification{
+		ID:               str(m, "id"),
+		Topic:            str(m, "topic"),
+		PayloadFormat:    str(m, "payload_format"),
+		EventTypes:       stringSlice(m["event_types"]),
+		ObjectNamePrefix: str(m, "object_name_prefix"),
+		CustomAttributes: stringMap(m["custom_attributes"]),
+	}
+}
+
+func stringSlice(v any) []string {
+	raw, _ := v.([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func stringMap(v any) map[string]string {
+	m, _ := v.(map[string]any)
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, item := range m {
+		if s, ok := item.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+// GET /buckets/{bucket}/notifications
+func (h *Handler) ListNotifications(w http.ResponseWriter, r *http.Request) {
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.NotificationsList", "global", h.account(r))
+	nr.Params["bucket"] = bucket
+	resp, err := h.provider.NotificationsList(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	raw := uihelper.AsSlice(resp.Data["items"])
+	items := make([]Notification, 0, len(raw))
+	for _, item := range raw {
+		if m, ok := item.(map[string]any); ok {
+			items = append(items, notificationFromMap(m))
+		}
+	}
+	uihelper.WriteJSON(w, ListNotificationsResponse{Items: items, Total: len(items)})
+}
+
+// POST /buckets/{bucket}/notifications
+func (h *Handler) CreateNotification(w http.ResponseWriter, r *http.Request) {
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
+	var req NotificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Topic == "" {
+		uihelper.UIError(w, "BadRequest", "topic is required", http.StatusBadRequest)
+		return
+	}
+	body := map[string]any{"topic": req.Topic}
+	if req.PayloadFormat != "" {
+		body["payload_format"] = req.PayloadFormat
+	}
+	if len(req.EventTypes) > 0 {
+		body["event_types"] = uihelper.StringsToAny(req.EventTypes)
+	}
+	if req.ObjectNamePrefix != "" {
+		body["object_name_prefix"] = req.ObjectNamePrefix
+	}
+	if len(req.CustomAttributes) > 0 {
+		body["custom_attributes"] = uihelper.StringMapToAny(req.CustomAttributes)
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.NotificationsInsert", "global", h.account(r))
+	nr.Params["bucket"] = bucket
+	nr.Params["body"] = body
+	resp, err := h.provider.NotificationsInsert(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, notificationFromMap(resp.Data))
+}
+
+// GET /buckets/{bucket}/notifications/{notification}
+func (h *Handler) GetNotification(w http.ResponseWriter, r *http.Request) {
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
+	notification, ok := uihelper.Segment(r, "notification")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid notification id", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.NotificationsGet", "global", h.account(r))
+	nr.Params["bucket"] = bucket
+	nr.Params["notification"] = notification
+	resp, err := h.provider.NotificationsGet(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, notificationFromMap(resp.Data))
+}
+
+// DELETE /buckets/{bucket}/notifications/{notification}
+func (h *Handler) DeleteNotification(w http.ResponseWriter, r *http.Request) {
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
+	notification, ok := uihelper.Segment(r, "notification")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid notification id", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.NotificationsDelete", "global", h.account(r))
+	nr.Params["bucket"] = bucket
+	nr.Params["notification"] = notification
+	if _, err := h.provider.NotificationsDelete(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Object transfer ─────────────────────────────────────────────────────────
+
+// rewriteFromMap flattens a storage#rewriteResponse.
+func rewriteFromMap(m map[string]any) RewriteResponse {
+	out := RewriteResponse{
+		Done:                boolAt(m, "done"),
+		TotalBytesRewritten: str(m, "totalBytesRewritten"),
+		ObjectSize:          str(m, "objectSize"),
+		RewriteToken:        str(m, "rewriteToken"),
+	}
+	if res, ok := m["resource"].(map[string]any); ok {
+		out.Resource = objectFromMap(res)
+	}
+	return out
+}
+
+// transferRequest decodes a copy/rewrite/move body and maps it onto the
+// provider's NormalizedRequest shape (the source bucket comes from the path).
+func (h *Handler) transferRequest(w http.ResponseWriter, r *http.Request, action string) (*model.NormalizedRequest, bool) {
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return nil, false
+	}
+	var req TransferObjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return nil, false
+	}
+	if req.SourceObject == "" || req.DestinationObject == "" {
+		uihelper.UIError(w, "BadRequest", "sourceObject and destinationObject are required", http.StatusBadRequest)
+		return nil, false
+	}
+	dst := req.DestinationBucket
+	if dst == "" {
+		dst = bucket
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "storage", action, "global", h.account(r))
+	nr.Params["sourceBucket"] = bucket
+	nr.Params["sourceObject"] = req.SourceObject
+	nr.Params["destinationBucket"] = dst
+	nr.Params["destinationObject"] = req.DestinationObject
+	if req.IfGenerationMatch != "" {
+		nr.Params["ifGenerationMatch"] = req.IfGenerationMatch
+	}
+	if req.IfSourceGenerationMatch != "" {
+		nr.Params["ifSourceGenerationMatch"] = req.IfSourceGenerationMatch
+	}
+	if req.RewriteToken != "" {
+		nr.Params["rewriteToken"] = req.RewriteToken
+	}
+	if req.Body != nil {
+		nr.Params["body"] = req.Body
+	}
+	return nr, true
+}
+
+// POST /buckets/{bucket}/objects/copy
+func (h *Handler) CopyObject(w http.ResponseWriter, r *http.Request) {
+	nr, ok := h.transferRequest(w, r, "Storage.ObjectsCopy")
+	if !ok {
+		return
+	}
+	resp, err := h.provider.ObjectsCopy(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, objectFromMap(resp.Data))
+}
+
+// POST /buckets/{bucket}/objects/rewrite
+func (h *Handler) RewriteObject(w http.ResponseWriter, r *http.Request) {
+	nr, ok := h.transferRequest(w, r, "Storage.ObjectsRewrite")
+	if !ok {
+		return
+	}
+	resp, err := h.provider.ObjectsRewrite(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, rewriteFromMap(resp.Data))
+}
+
+// POST /buckets/{bucket}/objects/move
+func (h *Handler) MoveObject(w http.ResponseWriter, r *http.Request) {
+	nr, ok := h.transferRequest(w, r, "Storage.ObjectsMove")
+	if !ok {
+		return
+	}
+	resp, err := h.provider.ObjectsMove(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, objectFromMap(resp.Data))
+}
+
+// POST /buckets/{bucket}/objects/compose
+func (h *Handler) ComposeObject(w http.ResponseWriter, r *http.Request) {
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
+	var req ComposeObjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.DestinationObject == "" || len(req.SourceObjects) == 0 {
+		uihelper.UIError(w, "BadRequest", "destinationObject and sourceObjects are required", http.StatusBadRequest)
+		return
+	}
+	if req.DestinationBucket != "" && req.DestinationBucket != bucket {
+		uihelper.UIError(w, "BadRequest", "compose sources and destination must share a bucket", http.StatusBadRequest)
+		return
+	}
+	sources := make([]any, 0, len(req.SourceObjects))
+	for _, src := range req.SourceObjects {
+		if src.Name == "" {
+			uihelper.UIError(w, "BadRequest", "source object name is required", http.StatusBadRequest)
+			return
+		}
+		m := map[string]any{"name": src.Name}
+		if src.Generation != "" {
+			m["generation"] = src.Generation
+		}
+		sources = append(sources, m)
+	}
+	body := map[string]any{"sourceObjects": sources}
+	if req.Destination != nil {
+		body["destination"] = req.Destination
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.ObjectsCompose", "global", h.account(r))
+	nr.Params["bucket"] = bucket
+	nr.Params["object"] = req.DestinationObject
+	nr.Params["body"] = body
+	if req.IfGenerationMatch != "" {
+		nr.Params["ifGenerationMatch"] = req.IfGenerationMatch
+	}
+	resp, err := h.provider.ObjectsCompose(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, objectFromMap(resp.Data))
 }

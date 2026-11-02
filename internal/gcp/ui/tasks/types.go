@@ -56,22 +56,25 @@ type TaskStatus struct {
 // Task is the console rendering of a Cloud Tasks task. Target fields are only
 // populated for the target kind in use.
 type Task struct {
-	Name              string            `json:"name"`
-	Location          string            `json:"location"`
-	Queue             string            `json:"queue"`
-	Target            string            `json:"target,omitempty"`
-	HTTPURL           string            `json:"httpUrl,omitempty"`
-	HTTPMethod        string            `json:"httpMethod,omitempty"`
-	HTTPHeaders       map[string]string `json:"httpHeaders,omitempty"`
-	HTTPBody          string            `json:"httpBody,omitempty"`
-	AppEngineURI      string            `json:"appEngineUri,omitempty"`
-	AppEngineMethod   string            `json:"appEngineMethod,omitempty"`
-	ScheduleTime      string            `json:"scheduleTime,omitempty"`
-	CreateTime        string            `json:"createTime,omitempty"`
-	DispatchDeadline  string            `json:"dispatchDeadline,omitempty"`
-	DispatchCount     int32             `json:"dispatchCount"`
-	ResponseCount     int32             `json:"responseCount"`
-	LastAttemptStatus *TaskStatus       `json:"lastAttemptStatus,omitempty"`
+	Name               string            `json:"name"`
+	Location           string            `json:"location"`
+	Queue              string            `json:"queue"`
+	Target             string            `json:"target,omitempty"`
+	HTTPURL            string            `json:"httpUrl,omitempty"`
+	HTTPMethod         string            `json:"httpMethod,omitempty"`
+	HTTPHeaders        map[string]string `json:"httpHeaders,omitempty"`
+	HTTPBody           string            `json:"httpBody,omitempty"`
+	AuthServiceAccount string            `json:"authServiceAccount,omitempty"`
+	AuthScope          string            `json:"authScope,omitempty"`
+	AuthAudience       string            `json:"authAudience,omitempty"`
+	AppEngineURI       string            `json:"appEngineUri,omitempty"`
+	AppEngineMethod    string            `json:"appEngineMethod,omitempty"`
+	ScheduleTime       string            `json:"scheduleTime,omitempty"`
+	CreateTime         string            `json:"createTime,omitempty"`
+	DispatchDeadline   string            `json:"dispatchDeadline,omitempty"`
+	DispatchCount      int32             `json:"dispatchCount"`
+	ResponseCount      int32             `json:"responseCount"`
+	LastAttemptStatus  *TaskStatus       `json:"lastAttemptStatus,omitempty"`
 }
 
 // ListTasksResponse is the response for GET /queues/{location}/{queue}/tasks.
@@ -82,14 +85,44 @@ type ListTasksResponse struct {
 
 // TaskInput is the create-task form body.
 type TaskInput struct {
-	Name             string            `json:"name"`
-	Target           string            `json:"target"`
-	HTTPURL          string            `json:"httpUrl"`
-	HTTPMethod       string            `json:"httpMethod"`
-	HTTPHeaders      map[string]string `json:"httpHeaders"`
-	HTTPBody         string            `json:"httpBody"`
-	AppEngineURI     string            `json:"appEngineUri"`
-	AppEngineMethod  string            `json:"appEngineMethod"`
-	ScheduleTime     string            `json:"scheduleTime"`
-	DispatchDeadline string            `json:"dispatchDeadline"`
+	Name        string            `json:"name"`
+	Target      string            `json:"target"`
+	HTTPURL     string            `json:"httpUrl"`
+	HTTPMethod  string            `json:"httpMethod"`
+	HTTPHeaders map[string]string `json:"httpHeaders"`
+	HTTPBody    string            `json:"httpBody"`
+	// Auth selects the HTTP target's credentials: "" (none), "oauth" or
+	// "oidc". OAuth uses AuthScope, OIDC uses AuthAudience.
+	Auth               string `json:"auth,omitempty"`
+	AuthServiceAccount string `json:"authServiceAccount,omitempty"`
+	AuthScope          string `json:"authScope,omitempty"`
+	AuthAudience       string `json:"authAudience,omitempty"`
+	AppEngineURI       string `json:"appEngineUri"`
+	AppEngineMethod    string `json:"appEngineMethod"`
+	ScheduleTime       string `json:"scheduleTime"`
+	DispatchDeadline   string `json:"dispatchDeadline"`
+}
+
+// BatchTasksRequest is the body for POST /queues/{location}/{queue}/tasks/batch.
+// Creates and deletes run as a synchronous console loop; the wire LRO
+// envelope is a REST-provider concern.
+type BatchTasksRequest struct {
+	Create []TaskInput `json:"create,omitempty"`
+	Delete []string    `json:"delete,omitempty"`
+}
+
+// BatchTasksResponse is the outcome of a batch.
+type BatchTasksResponse struct {
+	Created []Task   `json:"created,omitempty"`
+	Deleted []string `json:"deleted,omitempty"`
+}
+
+// QueueTestIamPermissionsRequest is the body for POST .../iam/testIamPermissions.
+type QueueTestIamPermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+// QueueTestIamPermissionsResponse is the response for testIamPermissions.
+type QueueTestIamPermissionsResponse struct {
+	Permissions []string `json:"permissions"`
 }

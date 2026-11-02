@@ -12,7 +12,8 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	h := NewHandler(p, cfg)
 	r := chi.NewRouter()
 
-	// Key rings.
+	// Key rings. /keyRings is the location-less console aggregate.
+	r.Get("/keyRings", h.ListAllKeyRings)
 	r.Get("/locations/{location}/keyRings", h.ListKeyRings)
 	r.Post("/locations/{location}/keyRings", h.CreateKeyRing)
 	r.Get("/locations/{location}/keyRings/{keyRing}", h.GetKeyRing)

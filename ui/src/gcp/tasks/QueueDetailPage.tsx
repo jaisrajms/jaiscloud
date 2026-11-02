@@ -16,6 +16,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -37,12 +38,14 @@ import {
   pauseQueue,
   purgeQueue,
   putQueueIam,
+  testQueueIam,
   resumeQueue,
   runTask,
 } from '../../api/gcp/tasks'
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { QueueDialog } from './QueueDialog'
+import { BatchTasksDialog } from './BatchTasksDialog'
 import { TaskDialog } from './TaskDialog'
 import { queueStateColor, rateLabel, shortDate, taskTargetLabel } from './util'
 import { GcpPageTitle } from '../common/PageTitle'
@@ -69,6 +72,9 @@ export function QueueDetailPage() {
   const navigate = useNavigate()
   const [editOpen, setEditOpen] = useState(false)
   const [taskOpen, setTaskOpen] = useState(false)
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [permsText, setPermsText] = useState('cloudtasks.queues.get\ncloudtasks.tasks.create')
+  const [granted, setGranted] = useState<string[] | null>(null)
 
   const key = ['gcp', 'tasks', 'queue', location, queueName, accountId]
 
@@ -110,6 +116,19 @@ export function QueueDetailPage() {
   const actionError = remove.error ?? pause.error ?? resume.error ?? purge.error
   const taskError = removeTask.error ?? runTaskMutation.error
   const taskBusy = removeTask.isPending || runTaskMutation.isPending
+
+  const testIam = useMutation({
+    mutationFn: () =>
+      testQueueIam(
+        location,
+        queueName,
+        permsText
+          .split('\n')
+          .map((p) => p.trim())
+          .filter(Boolean),
+      ),
+    onSuccess: (resp) => setGranted(resp.permissions),
+  })
 
   return (
     <Box>
@@ -194,9 +213,14 @@ export function QueueDetailPage() {
 
           <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
             <Typography variant="subtitle1">Tasks</Typography>
-            <Button size="small" startIcon={<AddIcon />} onClick={() => setTaskOpen(true)}>
-              Create task
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button size="small" onClick={() => setBatchOpen(true)}>
+                Batch
+              </Button>
+              <Button size="small" startIcon={<AddIcon />} onClick={() => setTaskOpen(true)}>
+                Create task
+              </Button>
+            </Stack>
           </Stack>
           {tasks.isError && <Alert severity="error">Failed to load tasks.</Alert>}
           <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
@@ -281,10 +305,52 @@ export function QueueDetailPage() {
             defaultRole="roles/cloudtasks.enqueuer"
           />
 
+          <Divider sx={{ my: 3 }} />
+          <Typography variant="subtitle1" sx={{ mb: 1 }}>
+            Test IAM permissions
+          </Typography>
+          <Stack spacing={1} sx={{ maxWidth: 640 }}>
+            {testIam.isError && (
+              <Alert severity="error">{(testIam.error as Error).message}</Alert>
+            )}
+            <TextField
+              label="Permissions (one per line)"
+              value={permsText}
+              onChange={(e) => setPermsText(e.target.value)}
+              multiline
+              minRows={2}
+              fullWidth
+            />
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+              <Button
+                variant="outlined"
+                disabled={testIam.isPending}
+                onClick={() => {
+                  setGranted(null)
+                  testIam.mutate()
+                }}
+              >
+                Test
+              </Button>
+              {granted && (
+                <Typography variant="body2">
+                  Granted:{' '}
+                  {granted.length > 0 ? granted.join(', ') : 'none'}
+                </Typography>
+              )}
+            </Stack>
+          </Stack>
+
           <QueueDialog open={editOpen} onClose={() => setEditOpen(false)} queue={queue} />
           <TaskDialog
             open={taskOpen}
             onClose={() => setTaskOpen(false)}
+            location={location}
+            queue={queueName}
+          />
+          <BatchTasksDialog
+            open={batchOpen}
+            onClose={() => setBatchOpen(false)}
             location={location}
             queue={queueName}
           />

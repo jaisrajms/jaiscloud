@@ -27,7 +27,14 @@ type mockProvider struct {
 	gotRegion   string
 	gotService  string
 	gotRevision string
+	gotBody     map[string]any
+	gotMask     string
+	gotIamBody  map[string]any
+	gotPerms    []string
+	iam         map[string]any
 	deleted     bool
+	created     bool
+	updated     bool
 }
 
 func (m *mockProvider) ListAllServices(_ context.Context, _ string) ([]runstore.Service, error) {
@@ -55,6 +62,39 @@ func (m *mockProvider) DeleteService(_ context.Context, _, region, service strin
 	return runstore.Operation{}, m.err
 }
 
+func (m *mockProvider) CreateService(_ context.Context, _, region, id string, body map[string]any, _ bool) (runstore.Service, error) {
+	m.gotRegion, m.gotService, m.gotBody = region, id, body
+	m.created = true
+	return m.service, m.err
+}
+
+func (m *mockProvider) UpdateService(_ context.Context, _, region, id string, body map[string]any, mask string, _, _ bool) (runstore.Service, error) {
+	m.gotRegion, m.gotService, m.gotBody, m.gotMask = region, id, body, mask
+	m.updated = true
+	return m.service, m.err
+}
+
+func (m *mockProvider) ServiceGetIamPolicy(_ context.Context, _, region, service string) (map[string]any, error) {
+	m.gotRegion, m.gotService = region, service
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.iam, nil
+}
+
+func (m *mockProvider) ServiceSetIamPolicy(_ context.Context, _, region, service string, body map[string]any) (map[string]any, error) {
+	m.gotRegion, m.gotService, m.gotIamBody = region, service, body
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.iam, nil
+}
+
+func (m *mockProvider) ServiceTestIamPermissions(_ context.Context, _, region, service string, perms []string) ([]string, error) {
+	m.gotRegion, m.gotService, m.gotPerms = region, service, perms
+	return perms, m.err
+}
+
 func testCfg() *config.Config {
 	return &config.Config{
 		Port:      8080,
@@ -70,6 +110,15 @@ func do(t *testing.T, mock *mockProvider, method, path string) *httptest.Respons
 	t.Helper()
 	router := BuildRouter(mock, testCfg())
 	r := httptest.NewRequest(method, path, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	return w
+}
+
+func doBody(t *testing.T, mock *mockProvider, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	router := BuildRouter(mock, testCfg())
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, r)
 	return w
@@ -187,5 +236,99 @@ func TestListServices_ProviderErrorMapped(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "nope") {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestCreateService_PassesDeployBody(t *testing.T) {
+	mock := &mockProvider{service: svc("web", "us-central1")}
+	body := `{"region":"us-central1","id":"web","body":{"template":{"containers":[{"image":"nginx:latest"}]}}}`
+	w := doBody(t, mock, http.MethodPost, "/services", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if !mock.created || mock.gotRegion != "us-central1" || mock.gotService != "web" {
+		t.Fatalf("create not dispatched: %+v", mock)
+	}
+	containers, _ := mock.gotBody["template"].(map[string]any)["containers"].([]any)
+	if len(containers) != 1 {
+		t.Fatalf("body = %+v", mock.gotBody)
+	}
+}
+
+func TestCreateService_RequiresBody(t *testing.T) {
+	for _, body := range []string{`{}`, `{"region":"us-central1","id":"web"}`} {
+		w := doBody(t, &mockProvider{}, http.MethodPost, "/services", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestUpdateService_JoinsMask(t *testing.T) {
+	mock := &mockProvider{service: svc("web", "us-central1")}
+	body := `{"body":{"template":{"containers":[{"image":"nginx:2"}]}},` +
+		`"updateMask":["template.containers","traffic"]}`
+	w := doBody(t, mock, http.MethodPatch, "/services/us-central1/web", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if !mock.updated || mock.gotMask != "template.containers,traffic" {
+		t.Fatalf("update not dispatched with mask: %+v", mock)
+	}
+}
+
+func TestServiceIam_Triple(t *testing.T) {
+	mock := &mockProvider{iam: map[string]any{"etag": "ACAB", "bindings": []any{}}}
+	w := do(t, mock, http.MethodGet, "/services/us-central1/web/iam")
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	body := `{"policy":{"bindings":[{"role":"roles/run.viewer","members":["user:a@example.com"]}]}}`
+	w = doBody(t, mock, http.MethodPut, "/services/us-central1/web/iam", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("put status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	pol, _ := mock.gotIamBody["policy"].(map[string]any)
+	if len(pol["bindings"].([]any)) != 1 {
+		t.Fatalf("policy body = %+v", mock.gotIamBody)
+	}
+
+	w = doBody(t, mock, http.MethodPost, "/services/us-central1/web/iam/testIamPermissions",
+		`{"permissions":["run.services.get","run.services.update"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("test status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp TestIamPermissionsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Permissions) != 2 || resp.Permissions[0] != "run.services.get" {
+		t.Fatalf("permissions = %+v", resp.Permissions)
+	}
+}
+
+func TestDeployAndIam_ErrorPaths(t *testing.T) {
+	boom := model.NewProviderError("InvalidArgument", "bad body", http.StatusBadRequest)
+	cases := []struct {
+		name, method, path, body string
+	}{
+		{"create invalid json", http.MethodPost, "/services", `{`},
+		{"create provider error", http.MethodPost, "/services", `{"region":"us-central1","id":"web","body":{}}`},
+		{"update invalid json", http.MethodPatch, "/services/us-central1/web", `{`},
+		{"update missing body", http.MethodPatch, "/services/us-central1/web", `{}`},
+		{"update provider error", http.MethodPatch, "/services/us-central1/web", `{"body":{}}`},
+		{"get iam provider error", http.MethodGet, "/services/us-central1/web/iam", ""},
+		{"set iam invalid json", http.MethodPut, "/services/us-central1/web/iam", `{`},
+		{"set iam provider error", http.MethodPut, "/services/us-central1/web/iam", `{"policy":{}}`},
+		{"test iam invalid json", http.MethodPost, "/services/us-central1/web/iam/testIamPermissions", `{`},
+		{"test iam provider error", http.MethodPost, "/services/us-central1/web/iam/testIamPermissions", `{"permissions":["a"]}`},
+	}
+	for _, tc := range cases {
+		mock := &mockProvider{err: boom}
+		w := doBody(t, mock, tc.method, tc.path, tc.body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400: %s", tc.name, w.Code, w.Body.String())
+		}
 	}
 }

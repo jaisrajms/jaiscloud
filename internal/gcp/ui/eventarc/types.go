@@ -39,7 +39,16 @@ type Trigger struct {
 	EventDataContentType        string            `json:"eventDataContentType,omitempty"`
 	TransportPubsubTopic        string            `json:"transportPubsubTopic,omitempty"`
 	TransportPubsubSubscription string            `json:"transportPubsubSubscription,omitempty"`
-	Config                      json.RawMessage   `json:"config,omitempty"`
+	// Structured views of the destination kinds the JSON escape hatch used to
+	// be the only way to edit.
+	GKECluster      string          `json:"gkeCluster,omitempty"`
+	GKELocation     string          `json:"gkeLocation,omitempty"`
+	GKENamespace    string          `json:"gkeNamespace,omitempty"`
+	GKEService      string          `json:"gkeService,omitempty"`
+	GKEPath         string          `json:"gkePath,omitempty"`
+	HTTPEndpointURI string          `json:"httpEndpointUri,omitempty"`
+	MaxAttempts     int32           `json:"maxAttempts,omitempty"`
+	Config          json.RawMessage `json:"config,omitempty"`
 }
 
 // ListTriggersResponse is the response for GET /triggers.
@@ -67,7 +76,17 @@ type TriggerInput struct {
 	EventFilters         []EventFilter     `json:"eventFilters,omitempty"`
 	TransportPubsubTopic string            `json:"transportPubsubTopic,omitempty"`
 	Labels               map[string]string `json:"labels,omitempty"`
-	Config               json.RawMessage   `json:"config,omitempty"`
+	// GKE destination (DestinationType "gke").
+	GKECluster   string `json:"gkeCluster,omitempty"`
+	GKELocation  string `json:"gkeLocation,omitempty"`
+	GKENamespace string `json:"gkeNamespace,omitempty"`
+	GKEService   string `json:"gkeService,omitempty"`
+	GKEPath      string `json:"gkePath,omitempty"`
+	// HTTP endpoint destination (DestinationType "httpEndpoint").
+	HTTPEndpointURI string `json:"httpEndpointUri,omitempty"`
+	// RetryPolicy.maxAttempts (the only documented value is 1).
+	MaxAttempts int32           `json:"maxAttempts,omitempty"`
+	Config      json.RawMessage `json:"config,omitempty"`
 }
 
 // Channel is the console rendering of an Eventarc channel, flattened across
@@ -103,4 +122,14 @@ type ChannelInput struct {
 	CryptoKeyName string            `json:"cryptoKeyName,omitempty"`
 	Labels        map[string]string `json:"labels,omitempty"`
 	Config        json.RawMessage   `json:"config,omitempty"`
+}
+
+// TestIamPermissionsRequest is the body for .../iam/testIamPermissions.
+type TestIamPermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+// TestIamPermissionsResponse is the response for testIamPermissions.
+type TestIamPermissionsResponse struct {
+	Permissions []string `json:"permissions"`
 }

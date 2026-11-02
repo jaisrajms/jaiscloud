@@ -29,6 +29,7 @@ type ProviderInterface interface {
 	// Trigger IAM.
 	TriggerGetIamPolicy(ctx context.Context, project, location, id string) (policy.Policy, error)
 	TriggerSetIamPolicy(ctx context.Context, project, location, id string, body map[string]any) (policy.Policy, error)
+	TriggerTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error)
 
 	// ListChannelsByProject lists every channel in a project across all
 	// locations, sorted by location then id. It backs the location-optional
@@ -44,6 +45,7 @@ type ProviderInterface interface {
 	// Channel IAM.
 	ChannelGetIamPolicy(ctx context.Context, project, location, id string) (policy.Policy, error)
 	ChannelSetIamPolicy(ctx context.Context, project, location, id string, body map[string]any) (policy.Policy, error)
+	ChannelTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error)
 }
 
 // Provider adapts the transport-neutral Eventarc core onto ProviderInterface,
@@ -113,6 +115,11 @@ func (p *Provider) TriggerSetIamPolicy(ctx context.Context, project, location, i
 	return p.svc.TriggerSetIamPolicy(ctx, project, location, id, body)
 }
 
+// TriggerTestIamPermissions implements ProviderInterface.
+func (p *Provider) TriggerTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error) {
+	return p.svc.TriggerTestIamPermissions(ctx, project, location, id, permissions)
+}
+
 // ListChannelsByProject implements ProviderInterface.
 func (p *Provider) ListChannelsByProject(ctx context.Context, project string) ([]eventarcstore.Channel, error) {
 	return p.svc.ListChannelsByProject(ctx, project)
@@ -159,6 +166,11 @@ func (p *Provider) ChannelSetIamPolicy(ctx context.Context, project, location, i
 	return p.svc.ChannelSetIamPolicy(ctx, project, location, id, body)
 }
 
+// ChannelTestIamPermissions implements ProviderInterface.
+func (p *Provider) ChannelTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error) {
+	return p.svc.ChannelTestIamPermissions(ctx, project, location, id, permissions)
+}
+
 // buildTriggerConfig renders the structured form fields into the Trigger body
 // the core expects, or returns the JSON escape hatch verbatim when set.
 func buildTriggerConfig(in TriggerInput) (json.RawMessage, error) {
@@ -186,9 +198,31 @@ func buildTriggerConfig(in TriggerInput) (json.RawMessage, error) {
 				cloudRun["region"] = in.DestinationRegion
 			}
 			body["destination"] = map[string]any{"cloudRun": cloudRun}
+		case "gke":
+			if in.GKECluster == "" || in.GKELocation == "" || in.GKENamespace == "" || in.GKEService == "" {
+				return nil, invalidArgument("gke destination requires cluster, location, namespace and service")
+			}
+			gke := map[string]any{
+				"cluster":   in.GKECluster,
+				"location":  in.GKELocation,
+				"namespace": in.GKENamespace,
+				"service":   in.GKEService,
+			}
+			if in.GKEPath != "" {
+				gke["path"] = in.GKEPath
+			}
+			body["destination"] = map[string]any{"gke": gke}
+		case "httpEndpoint":
+			if in.HTTPEndpointURI == "" {
+				return nil, invalidArgument("httpEndpoint destination requires a uri")
+			}
+			body["destination"] = map[string]any{"httpEndpoint": map[string]any{"uri": in.HTTPEndpointURI}}
 		default:
 			return nil, invalidArgument("unsupported destinationType " + in.DestinationType + "; use the JSON config body")
 		}
+	}
+	if in.MaxAttempts > 0 {
+		body["retryPolicy"] = map[string]any{"maxAttempts": in.MaxAttempts}
 	}
 	if in.ServiceAccount != "" {
 		body["serviceAccount"] = in.ServiceAccount

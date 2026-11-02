@@ -132,6 +132,26 @@ func (s *PostgresStore) ListKeyRings(ctx context.Context, projectID, location st
 	return result, rows.Err()
 }
 
+// ListKeyRingsByProject lists every key ring in a project across all locations.
+func (s *PostgresStore) ListKeyRingsByProject(ctx context.Context, projectID string) ([]KeyRing, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT location, keyring_id, create_time FROM jc_kms_keyrings WHERE project_id=$1 ORDER BY location, keyring_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []KeyRing
+	for rows.Next() {
+		var kr KeyRing
+		if err := rows.Scan(&kr.Location, &kr.ID, &kr.CreateTime); err != nil {
+			return nil, err
+		}
+		result = append(result, kr)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error {
 	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, Version{}, true)
 }

@@ -25,6 +25,16 @@ type ProviderInterface interface {
 	ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ObjectsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ObjectsRestore(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	ObjectsCopy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	ObjectsRewrite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	ObjectsMove(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	ObjectsCompose(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
+	// Bucket notification configs (storage.notifications.*).
+	NotificationsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	NotificationsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	NotificationsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	NotificationsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
 	// Bucket IAM + ACL.
 	BucketsGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)

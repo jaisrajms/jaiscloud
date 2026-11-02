@@ -49,16 +49,17 @@ func secretFromMap(m map[string]any) Secret {
 	name := uihelper.Str(m, "name")
 	rotation := uihelper.MapAt(m, "rotation")
 	return Secret{
-		Name:             name,
-		SecretID:         afterSegment(name, "/secrets/"),
-		CreateTime:       uihelper.Str(m, "createTime"),
-		Etag:             uihelper.Str(m, "etag"),
-		Labels:           uihelper.StringMapAt(m, "labels"),
-		Annotations:      uihelper.StringMapAt(m, "annotations"),
-		Topics:           topicsFromMap(m),
-		RotationPeriod:   uihelper.Str(rotation, "rotationPeriod"),
-		NextRotationTime: uihelper.Str(rotation, "nextRotationTime"),
-		KmsKeyName:       kmsKeyNameFromMap(m),
+		Name:                  name,
+		SecretID:              afterSegment(name, "/secrets/"),
+		CreateTime:            uihelper.Str(m, "createTime"),
+		Etag:                  uihelper.Str(m, "etag"),
+		Labels:                uihelper.StringMapAt(m, "labels"),
+		Annotations:           uihelper.StringMapAt(m, "annotations"),
+		Topics:                topicsFromMap(m),
+		RotationPeriod:        uihelper.Str(rotation, "rotationPeriod"),
+		NextRotationTime:      uihelper.Str(rotation, "nextRotationTime"),
+		ManagedRotationStatus: uihelper.Str(uihelper.MapAt(rotation, "managedRotationStatus"), "state"),
+		KmsKeyName:            kmsKeyNameFromMap(m),
 	}
 }
 
@@ -494,4 +495,50 @@ func (h *Handler) setVersionState(w http.ResponseWriter, r *http.Request, disabl
 		return
 	}
 	uihelper.WriteJSON(w, versionFromMap(resp.Data))
+}
+
+// POST /secrets/{secret}/rotate
+func (h *Handler) RotateSecret(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.secretName(w, r)
+	if !ok {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "secretmanager", "Secret.RotateSecret", "global", h.account(r))
+	nr.Params["name"] = name
+	resp, err := h.provider.RotateSecret(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, versionFromMap(resp.Data))
+}
+
+// POST /secrets/{secret}/enableManagedRotation
+func (h *Handler) EnableManagedRotation(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.secretName(w, r)
+	if !ok {
+		return
+	}
+	var req EnableManagedRotationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.InstanceID == "" || req.Username == "" {
+		uihelper.UIError(w, "BadRequest", "instanceId and username are required", http.StatusBadRequest)
+		return
+	}
+	creds := map[string]any{"instanceId": req.InstanceID, "username": req.Username}
+	if req.Password != "" {
+		creds["password"] = req.Password
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "secretmanager", "Secret.EnableManagedRotation", "global", h.account(r))
+	nr.Params["name"] = name
+	nr.Params["body"] = map[string]any{"cloudSqlSingleUserCredentials": creds}
+	resp, err := h.provider.EnableManagedRotation(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, versionFromMap(resp.Data))
 }

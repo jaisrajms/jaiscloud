@@ -13,6 +13,8 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 
 	// Metrics explorer.
 	r.Get("/metricDescriptors", h.ListMetricDescriptors)
+	r.Get("/monitoredResourceDescriptors", h.ListMonitoredResources)
+	r.Get("/monitoredResourceDescriptors/{type}", h.GetMonitoredResource)
 	r.Get("/timeSeries", h.ListTimeSeries)
 
 	// Alerting.

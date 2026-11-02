@@ -1,6 +1,7 @@
 package runui
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -169,4 +170,102 @@ func (h *Handler) target(w http.ResponseWriter, r *http.Request) (string, string
 		return "", "", false
 	}
 	return region, service, true
+}
+
+// ─── Deploy and IAM ──────────────────────────────────────────────────────────
+
+// POST /services
+func (h *Handler) CreateService(w http.ResponseWriter, r *http.Request) {
+	var req DeployServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Region == "" || req.ID == "" || req.Body == nil {
+		uihelper.UIError(w, "BadRequest", "region, id and body are required", http.StatusBadRequest)
+		return
+	}
+	svc, err := h.provider.CreateService(r.Context(), h.account(r), req.Region, req.ID, req.Body, req.ValidateOnly)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, runcore.ServiceJSON(svc))
+}
+
+// PATCH /services/{region}/{service}
+func (h *Handler) UpdateService(w http.ResponseWriter, r *http.Request) {
+	region, service, ok := h.target(w, r)
+	if !ok {
+		return
+	}
+	var req UpdateServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Body == nil {
+		uihelper.UIError(w, "BadRequest", "body is required", http.StatusBadRequest)
+		return
+	}
+	svc, err := h.provider.UpdateService(r.Context(), h.account(r), region, service, req.Body,
+		strings.Join(req.UpdateMask, ","), req.ValidateOnly, req.AllowMissing)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, runcore.ServiceJSON(svc))
+}
+
+// GET /services/{region}/{service}/iam
+func (h *Handler) GetServiceIam(w http.ResponseWriter, r *http.Request) {
+	region, service, ok := h.target(w, r)
+	if !ok {
+		return
+	}
+	pol, err := h.provider.ServiceGetIamPolicy(r.Context(), h.account(r), region, service)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, pol)
+}
+
+// PUT /services/{region}/{service}/iam
+func (h *Handler) SetServiceIam(w http.ResponseWriter, r *http.Request) {
+	region, service, ok := h.target(w, r)
+	if !ok {
+		return
+	}
+	var req SetIamPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	pol, err := h.provider.ServiceSetIamPolicy(r.Context(), h.account(r), region, service,
+		map[string]any{"policy": uihelper.IamPolicyBody(req.Policy)})
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, pol)
+}
+
+// POST /services/{region}/{service}/iam/testIamPermissions
+func (h *Handler) TestServiceIam(w http.ResponseWriter, r *http.Request) {
+	region, service, ok := h.target(w, r)
+	if !ok {
+		return
+	}
+	var req TestIamPermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	perms, err := h.provider.ServiceTestIamPermissions(r.Context(), h.account(r), region, service, req.Permissions)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, TestIamPermissionsResponse{Permissions: perms})
 }

@@ -11,13 +11,15 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 )
 
 type mockProvider struct {
-	resp   *model.ProviderResponse
-	err    error
-	lastNR *model.NormalizedRequest
+	resp     *model.ProviderResponse
+	err      error
+	lastNR   *model.NormalizedRequest
+	keyRings []kmsstore.KeyRing
 }
 
 func (m *mockProvider) reply(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -36,6 +38,9 @@ func (m *mockProvider) KeyRingList(_ context.Context, nr *model.NormalizedReques
 }
 func (m *mockProvider) KeyRingGet(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
+}
+func (m *mockProvider) ListAllKeyRings(_ context.Context, _ string) ([]kmsstore.KeyRing, error) {
+	return m.keyRings, m.err
 }
 func (m *mockProvider) CryptoKeyCreate(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
@@ -498,5 +503,24 @@ func TestUpdateCryptoKey_ProviderErrorMapped(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "at least 24h") {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestListAllKeyRings_FlattensAcrossLocations(t *testing.T) {
+	mock := &mockProvider{keyRings: []kmsstore.KeyRing{
+		{Location: "europe-west1", ID: "a"},
+		{Location: "global", ID: "z"},
+	}}
+	w := do(t, mock, http.MethodGet, "/keyRings", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp ListKeyRingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 || resp.KeyRings[0].Name != "projects/test-project/locations/europe-west1/keyRings/a" ||
+		resp.KeyRings[1].KeyRingID != "z" {
+		t.Fatalf("response = %+v", resp)
 	}
 }

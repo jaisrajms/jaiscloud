@@ -168,3 +168,93 @@ func (p typedRun) DeleteService(ctx context.Context, project, location, id strin
 	}
 	return decodeRunOperation(data), nil
 }
+
+func (p typedRun) CreateService(ctx context.Context, project, location, id string, body map[string]any, validateOnly bool) (runstore.Service, error) {
+	params := map[string]any{"project": project, "location": location, "serviceId": id, "body": body}
+	if validateOnly {
+		params["validateOnly"] = true
+	}
+	data, covered, err := p.c.do(ctx, "Run.CreateService", project, location, params, nil)
+	if !covered {
+		return p.ProviderInterface.CreateService(ctx, project, location, id, body, validateOnly)
+	}
+	if err != nil {
+		return runstore.Service{}, err
+	}
+	if validateOnly {
+		return runstore.Service{}, nil
+	}
+	if op := decodeRunOperation(data); op.Service != nil {
+		return *op.Service, nil
+	}
+	return p.GetService(ctx, project, location, id)
+}
+
+func (p typedRun) UpdateService(ctx context.Context, project, location, id string, body map[string]any, mask string, validateOnly, allowMissing bool) (runstore.Service, error) {
+	params := map[string]any{"project": project, "location": location, "service": id, "body": body}
+	if mask != "" {
+		params["updateMask"] = mask
+	}
+	if validateOnly {
+		params["validateOnly"] = true
+	}
+	if allowMissing {
+		params["allowMissing"] = true
+	}
+	data, covered, err := p.c.do(ctx, "Run.UpdateService", project, location, params, nil)
+	if !covered {
+		return p.ProviderInterface.UpdateService(ctx, project, location, id, body, mask, validateOnly, allowMissing)
+	}
+	if err != nil {
+		return runstore.Service{}, err
+	}
+	if validateOnly {
+		return runstore.Service{}, nil
+	}
+	if op := decodeRunOperation(data); op.Service != nil {
+		return *op.Service, nil
+	}
+	return p.GetService(ctx, project, location, id)
+}
+
+func (p typedRun) ServiceGetIamPolicy(ctx context.Context, project, location, id string) (map[string]any, error) {
+	data, covered, err := p.c.do(ctx, "Run.GetIamPolicy", project, location,
+		map[string]any{"project": project, "location": location, "service": id}, nil)
+	if !covered {
+		return p.ProviderInterface.ServiceGetIamPolicy(ctx, project, location, id)
+	}
+	return data, err
+}
+
+func (p typedRun) ServiceSetIamPolicy(ctx context.Context, project, location, id string, body map[string]any) (map[string]any, error) {
+	data, covered, err := p.c.do(ctx, "Run.SetIamPolicy", project, location,
+		map[string]any{"project": project, "location": location, "service": id, "body": body}, nil)
+	if !covered {
+		return p.ProviderInterface.ServiceSetIamPolicy(ctx, project, location, id, body)
+	}
+	return data, err
+}
+
+func (p typedRun) ServiceTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error) {
+	perms := make([]any, 0, len(permissions))
+	for _, perm := range permissions {
+		perms = append(perms, perm)
+	}
+	data, covered, err := p.c.do(ctx, "Run.TestIamPermissions", project, location,
+		map[string]any{"project": project, "location": location, "service": id,
+			"body": map[string]any{"permissions": perms}}, nil)
+	if !covered {
+		return p.ProviderInterface.ServiceTestIamPermissions(ctx, project, location, id, permissions)
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := data["permissions"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}

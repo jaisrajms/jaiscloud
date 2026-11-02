@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { RESOURCE_SUMMARY_SOURCES, resourceCount, summarySourcesFor } from './resourceSummary'
+import {
+  RESOURCE_SUMMARY_SOURCES,
+  resourceCount,
+  summaryRowsFor,
+  summarySourcesFor,
+} from './resourceSummary'
 
 describe('resourceCount', () => {
   it('prefers an explicit total', () => {
@@ -40,6 +45,24 @@ describe('summarySourcesFor', () => {
   })
 
   it('returns nothing when no wired service has a primary list', () => {
-    expect(summarySourcesFor(['kms', 'unknown'])).toEqual([])
+    expect(summarySourcesFor(['unknown'])).toEqual([])
+  })
+})
+
+describe('kms and secondary collections', () => {
+  it('counts key rings through the location-less aggregate', () => {
+    const kms = summarySourcesFor(['kms'])
+    expect(kms).toHaveLength(1)
+    expect(kms[0]!.label).toBe('Key rings')
+    expect(kms[0]!.path).toBe('/gcp/kms/keyrings')
+  })
+
+  it('flattens extras into their own tiles', () => {
+    const rows = summaryRowsFor(['pubsub', 'eventarc', 'monitoring'])
+    const labels = rows.map((row) => row.label)
+    expect(labels).toEqual(
+      expect.arrayContaining(['Topics', 'Subscriptions', 'Triggers', 'Channels', 'Alerting policies', 'Metric descriptors']),
+    )
+    for (const row of rows) expect(typeof row.list).toBe('function')
   })
 })

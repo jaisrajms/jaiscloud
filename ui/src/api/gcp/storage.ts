@@ -253,3 +253,112 @@ export const restoreObject = (bucket: string, name: string, generation: string) 
     name,
     generation,
   })
+
+/** The documented GCS notification event types (OBJECT_INITIALIZE is
+ * zonal-bucket-only but the provider accepts the documented set). */
+export const NOTIFICATION_EVENT_TYPES = [
+  'OBJECT_FINALIZE',
+  'OBJECT_INITIALIZE',
+  'OBJECT_METADATA_UPDATE',
+  'OBJECT_DELETE',
+  'OBJECT_ARCHIVE',
+] as const
+
+export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number]
+
+export interface NotificationConfig {
+  id?: string
+  topic: string
+  payloadFormat?: string
+  eventTypes?: string[]
+  objectNamePrefix?: string
+  customAttributes?: Record<string, string>
+}
+
+export interface ListNotificationsResponse {
+  items: NotificationConfig[]
+  total: number
+}
+
+export interface NotificationInput {
+  topic: string
+  payloadFormat?: string
+  eventTypes?: string[]
+  objectNamePrefix?: string
+  customAttributes?: Record<string, string>
+}
+
+export const listNotifications = (bucket: string) =>
+  api.get<ListNotificationsResponse>(`${BASE}/buckets/${encodeURIComponent(bucket)}/notifications`)
+
+export const createNotification = (bucket: string, body: NotificationInput) =>
+  api.post<NotificationConfig>(`${BASE}/buckets/${encodeURIComponent(bucket)}/notifications`, body)
+
+export const deleteNotification = (bucket: string, id: string) =>
+  api.delete<void>(
+    `${BASE}/buckets/${encodeURIComponent(bucket)}/notifications/${encodeURIComponent(id)}`,
+  )
+
+/** Body for copy, rewrite and move; the bucket argument is the source bucket. */
+export interface TransferObjectInput {
+  sourceObject: string
+  destinationBucket?: string
+  destinationObject: string
+  ifGenerationMatch?: string
+  ifSourceGenerationMatch?: string
+  body?: Record<string, unknown>
+}
+
+export interface RewriteResponse {
+  done: boolean
+  totalBytesRewritten?: string
+  objectSize?: string
+  rewriteToken?: string
+  resource?: GCSObject
+}
+
+export const copyObject = (bucket: string, body: TransferObjectInput) =>
+  api.post<GCSObject>(`${BASE}/buckets/${encodeURIComponent(bucket)}/objects/copy`, body)
+
+export const rewriteObject = (bucket: string, body: TransferObjectInput & { rewriteToken?: string }) =>
+  api.post<RewriteResponse>(`${BASE}/buckets/${encodeURIComponent(bucket)}/objects/rewrite`, body)
+
+/**
+ * rewriteObjectFully follows rewriteToken until the rewrite reports done. The
+ * provider currently completes in one call, but a plugin may serve the paged
+ * form, so the console loops instead of assuming a single shot.
+ */
+export async function rewriteObjectFully(
+  bucket: string,
+  body: TransferObjectInput,
+  onProgress?: (progress: RewriteResponse) => void,
+  // Injectable for tests; the default is the real endpoint.
+  rewrite: typeof rewriteObject = rewriteObject,
+): Promise<RewriteResponse> {
+  let token = ''
+  for (;;) {
+    const result = await rewrite(bucket, { ...body, rewriteToken: token || undefined })
+    onProgress?.(result)
+    if (result.done || !result.rewriteToken) return result
+    token = result.rewriteToken
+  }
+}
+
+export const moveObject = (bucket: string, body: TransferObjectInput) =>
+  api.post<GCSObject>(`${BASE}/buckets/${encodeURIComponent(bucket)}/objects/move`, body)
+
+export interface ComposeSource {
+  name: string
+  generation?: string
+}
+
+export interface ComposeObjectInput {
+  destinationBucket?: string
+  destinationObject: string
+  sourceObjects: ComposeSource[]
+  destination?: Record<string, unknown>
+  ifGenerationMatch?: string
+}
+
+export const composeObject = (bucket: string, body: ComposeObjectInput) =>
+  api.post<GCSObject>(`${BASE}/buckets/${encodeURIComponent(bucket)}/objects/compose`, body)

@@ -74,6 +74,14 @@ func (m *mockProvider) TriggerSetIamPolicy(_ context.Context, project, location,
 	m.gotProject, m.gotLocation, m.gotID, m.gotIamBody = project, location, id, body
 	return m.pol, m.err
 }
+func (m *mockProvider) TriggerTestIamPermissions(_ context.Context, project, location, id string, permissions []string) ([]string, error) {
+	m.gotProject, m.gotLocation, m.gotID = project, location, id
+	return permissions, m.err
+}
+func (m *mockProvider) ChannelTestIamPermissions(_ context.Context, project, location, id string, permissions []string) ([]string, error) {
+	m.gotProject, m.gotLocation, m.gotID = project, location, id
+	return permissions, m.err
+}
 
 func (m *mockProvider) ListChannelsByProject(_ context.Context, project string) ([]eventarcstore.Channel, error) {
 	m.gotProject = project
@@ -491,5 +499,25 @@ func TestChannelIam_RoundTrip(t *testing.T) {
 	}
 	if mock.gotIamBody == nil {
 		t.Fatal("iam body not forwarded")
+	}
+}
+
+func TestTriggerAndChannelTestIamPermissions(t *testing.T) {
+	for _, path := range []string{
+		"/triggers/us-central1/t1/iam/testIamPermissions",
+		"/channels/us-central1/c1/iam/testIamPermissions",
+	} {
+		mock := &mockProvider{}
+		w := do(t, mock, http.MethodPost, path, `{"permissions":["eventarc.triggers.get"]}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200: %s", path, w.Code, w.Body.String())
+		}
+		var resp TestIamPermissionsResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(resp.Permissions) != 1 || resp.Permissions[0] != "eventarc.triggers.get" {
+			t.Fatalf("%s permissions = %+v", path, resp.Permissions)
+		}
 	}
 }

@@ -35,7 +35,7 @@ import {
 import { rememberRecentService, useRecentServices } from './chrome/recentServices'
 import { useProjectDiscovery } from './chrome/useProjectDiscovery'
 import { activeBannerProject } from './home/activity'
-import { resourceCount, summarySourcesFor } from './home/resourceSummary'
+import { resourceCount, summaryRowsFor } from './home/resourceSummary'
 
 const DISMISSED_BANNER_KEY = 'jaiscloud-activity-banner-dismissed'
 
@@ -134,7 +134,7 @@ export function GcpHome() {
 
   const byId = useMemo(() => new Map(services.map((service) => [service.id, service])), [services])
   const sources = useMemo(
-    () => summarySourcesFor(services.map((service) => service.id)),
+    () => summaryRowsFor(services.map((service) => service.id)),
     [services],
   )
   const counts = useQueries({
@@ -311,7 +311,7 @@ export function GcpHome() {
             const count = query?.data == null ? undefined : resourceCount(query.data, source.arrayKey)
             return (
               <HomeTile
-                key={source.service}
+                key={`${source.service}:${source.label}`}
                 id={source.service}
                 title={source.label}
                 subtitle={byId.get(source.service)?.label}

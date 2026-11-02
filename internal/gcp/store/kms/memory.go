@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,6 +91,30 @@ func (s *MemoryStore) ListKeyRings(_ context.Context, projectID, location string
 		result = append(result, kr)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+// ListKeyRingsByProject lists every key ring in a project across all locations,
+// sorted by location then id.
+func (s *MemoryStore) ListKeyRingsByProject(_ context.Context, projectID string) ([]KeyRing, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []KeyRing
+	for key, m := range s.keyrings {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, kr := range m {
+			result = append(result, kr)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result, nil
 }
 

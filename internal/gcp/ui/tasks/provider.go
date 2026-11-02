@@ -29,6 +29,7 @@ type ProviderInterface interface {
 	// Queue IAM.
 	QueueGetIamPolicy(ctx context.Context, project, location, queue string) (policy.Policy, error)
 	QueueSetIamPolicy(ctx context.Context, project, location, queue string, body map[string]any) (policy.Policy, error)
+	QueueTestIamPermissions(ctx context.Context, project, location, queue string, permissions []string) ([]string, error)
 
 	// Task CRUD + run.
 	ListTasks(ctx context.Context, project, location, queue string) ([]tasksstore.Task, error)

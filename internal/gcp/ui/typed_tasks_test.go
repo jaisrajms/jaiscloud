@@ -54,6 +54,9 @@ func TestTasksConsolePassthroughMatchesDirect(t *testing.T) {
 	if pol, err := p.QueueGetIamPolicy(ctx, "proj", "us-central1", "q1"); err != nil {
 		t.Fatalf("QueueGetIamPolicy = %+v, %v", pol, err)
 	}
+	if perms, err := p.QueueTestIamPermissions(ctx, "proj", "us-central1", "q1", []string{"cloudtasks.queues.get"}); err != nil || len(perms) != 1 {
+		t.Fatalf("QueueTestIamPermissions = %+v, %v", perms, err)
+	}
 
 	task, err := p.CreateTask(ctx, "proj", "us-central1", "q1", tasksstore.Task{Target: tasksstore.TargetHTTP, HTTP: &tasksstore.HttpRequest{URL: "https://example.com/t", HTTPMethod: "POST"}})
 	if err != nil || task.Name == "" || task.Queue != "q1" {
@@ -83,7 +86,7 @@ func TestTasksConsolePassthroughMatchesDirect(t *testing.T) {
 			t.Errorf("%s: plugin saw origin %q, want ui", s.key, s.origin)
 		}
 	}
-	if len(seen) != 13 {
+	if len(seen) != 14 {
 		t.Fatalf("the plugin saw only %d calls", len(seen))
 	}
 }
