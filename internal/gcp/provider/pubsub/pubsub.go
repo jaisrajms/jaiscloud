@@ -750,10 +750,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 	var sub map[string]any
 	json.Unmarshal(e.Data, &sub)
 	if detached, _ := sub["detached"].(bool); detached {
-		return nil, &model.ProviderError{
-			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-			Message: "subscription " + s + " is detached",
-		}
+		return nil, model.NewProviderError("FailedPrecondition", "subscription "+s+" is detached", 400).WithStatus("FAILED_PRECONDITION")
 	}
 	filterExpr, _ := sub["filter"].(string)
 	filter, _ := pubsubfilter.Compile(filterExpr)

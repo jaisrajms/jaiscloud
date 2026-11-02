@@ -71,12 +71,7 @@ var errKeyNotEnabled = errors.New("kms: key version not enabled")
 // CryptoKeyVersion cannot encrypt: real GCP refuses the write/version instead
 // of silently falling back to Google-managed encryption.
 func keyNotEnabled(kmsKeyName string) error {
-	return &model.ProviderError{
-		Code:       "FailedPrecondition",
-		HTTPStatus: 400,
-		Status:     "FAILED_PRECONDITION",
-		Message:    fmt.Sprintf("The KMS key %s is not enabled", kmsKeyName),
-	}
+	return model.NewProviderError("FailedPrecondition", fmt.Sprintf("The KMS key %s is not enabled", kmsKeyName), 400).WithStatus("FAILED_PRECONDITION")
 }
 
 // kmsKeyInvalid is the INVALID_ARGUMENT answer Wrap/Unwrap have always given

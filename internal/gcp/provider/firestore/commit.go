@@ -113,7 +113,7 @@ func (n *jsonInt) UnmarshalJSON(b []byte) error {
 // newPreconditionErr returns a FAILED_PRECONDITION error at HTTP 400 (missing
 // composite index / failed precondition).
 func newPreconditionErr(msg string) error {
-	return &model.ProviderError{Code: "FailedPrecondition", Message: msg, HTTPStatus: 400, Status: "FAILED_PRECONDITION"}
+	return model.NewProviderError("FailedPrecondition", msg, 400).WithStatus("FAILED_PRECONDITION")
 }
 
 // updateMissingMessage / alreadyExistsMessage are the canonical Firestore
@@ -138,7 +138,7 @@ func newAlreadyExistsErr(name string) error {
 
 // newAbortedErr returns an ABORTED error at HTTP 409 (transaction contention).
 func newAbortedErr(msg string) error {
-	return &model.ProviderError{Code: "Aborted", Message: msg, HTTPStatus: 409, Status: "ABORTED"}
+	return model.NewProviderError("Aborted", msg, 409).WithStatus("ABORTED")
 }
 
 // mapCommitError maps store commit errors to Firestore RPC statuses. Existence

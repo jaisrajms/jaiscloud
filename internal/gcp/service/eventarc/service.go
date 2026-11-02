@@ -216,12 +216,7 @@ func mapErr(err error) error {
 // with the ABORTED google.rpc status (the exact status is unverified against
 // real Eventarc; ABORTED matches the sibling shared-IAM OCC contract).
 func abortedEtagMismatch() error {
-	return &model.ProviderError{
-		Code:       "Aborted",
-		Message:    "etag mismatch: optimistic concurrency control failed",
-		HTTPStatus: 409,
-		Status:     "ABORTED",
-	}
+	return model.NewProviderError("Aborted", "etag mismatch: optimistic concurrency control failed", 409).WithStatus("ABORTED")
 }
 
 // checkEtag enforces the request-supplied etag precondition against the stored

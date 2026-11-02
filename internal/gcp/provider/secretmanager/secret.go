@@ -1193,7 +1193,7 @@ func managedRotationEnabled(s secretmanagerstore.Secret) bool {
 }
 
 func managedRotationErr(msg string) error {
-	return &model.ProviderError{Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION", Message: msg}
+	return model.NewProviderError("FailedPrecondition", msg, 400).WithStatus("FAILED_PRECONDITION")
 }
 
 // EnableManagedRotation (secrets:enableManagedRotation) validates the Cloud SQL
@@ -1354,10 +1354,7 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	v = p.finalizeScheduledDestroy(ctx, nr, secret, v)
 	if v.State != "ENABLED" {
-		return nil, &model.ProviderError{
-			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-			Message: "secret version " + v.VersionID + " is " + v.State + ", not ENABLED",
-		}
+		return nil, model.NewProviderError("FailedPrecondition", "secret version "+v.VersionID+" is "+v.State+", not ENABLED", 400).WithStatus("FAILED_PRECONDITION")
 	}
 
 	// Unwrap through the primary wrap, falling back to another replica's when
@@ -1531,10 +1528,7 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 		}
 		// DESTROYED is terminal: a version may not leave this state once entered.
 		if v.State == "DESTROYED" {
-			return secretmanagerstore.Version{}, &model.ProviderError{
-				Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-				Message: "secret version " + v.VersionID + " is DESTROYED",
-			}
+			return secretmanagerstore.Version{}, model.NewProviderError("FailedPrecondition", "secret version "+v.VersionID+" is DESTROYED", 400).WithStatus("FAILED_PRECONDITION")
 		}
 		now := clock.Now()
 		if state == "DESTROYED" {

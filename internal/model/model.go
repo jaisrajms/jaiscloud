@@ -193,6 +193,22 @@ func (e *ProviderError) WithData(data map[string]any) *ProviderError {
 	return e
 }
 
+// WithStatus overrides the codec-derived google.rpc status string, for the
+// cases where the HTTP status alone does not imply it (e.g. ABORTED on 409,
+// FAILED_PRECONDITION on 400). Returns the receiver for chaining.
+func (e *ProviderError) WithStatus(status string) *ProviderError {
+	e.Status = status
+	return e
+}
+
+// WithDetails attaches structured google.rpc detail protos (rendered into the
+// REST error "details" array and the gRPC status details). Returns the
+// receiver for chaining.
+func (e *ProviderError) WithDetails(details []ErrorDetail) *ProviderError {
+	e.Details = details
+	return e
+}
+
 func NewProviderError(code, message string, httpStatus int) *ProviderError {
 	return &ProviderError{Code: code, Message: message, HTTPStatus: httpStatus}
 }

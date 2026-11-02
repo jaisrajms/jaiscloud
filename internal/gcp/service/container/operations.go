@@ -154,24 +154,14 @@ func (s *Service) settleOperation(op containerstore.Operation) containerstore.Op
 // overlaps an operation already running on the same target: HTTP 400 with
 // google.rpc status FAILED_PRECONDITION, naming the blocking operation.
 func incompatibleOperation(opName string) error {
-	return &model.ProviderError{
-		Code:       "FailedPrecondition",
-		Message:    "Cluster is running incompatible operation " + opName,
-		HTTPStatus: 400,
-		Status:     "FAILED_PRECONDITION",
-	}
+	return model.NewProviderError("FailedPrecondition", "Cluster is running incompatible operation "+opName, 400).WithStatus("FAILED_PRECONDITION")
 }
 
 // concurrentOperationsExceeded is the concurrent-operations quota rejection
 // (RESOURCE_EXHAUSTED / HTTP 429), worded like the Google quota failure it
 // stands in for.
 func concurrentOperationsExceeded(project, location string) error {
-	return &model.ProviderError{
-		Code: "ResourceExhausted",
-		Message: fmt.Sprintf("Quota exceeded for quota metric 'Concurrent operations' and "+
-			"limit 'Concurrent operations per project' of service 'container.googleapis.com' "+
-			"for consumer 'project:%s' in location '%s'.", project, location),
-		HTTPStatus: 429,
-		Status:     "RESOURCE_EXHAUSTED",
-	}
+	return model.NewProviderError("ResourceExhausted", fmt.Sprintf("Quota exceeded for quota metric 'Concurrent operations' and "+
+		"limit 'Concurrent operations per project' of service 'container.googleapis.com' "+
+		"for consumer 'project:%s' in location '%s'.", project, location), 429).WithStatus("RESOURCE_EXHAUSTED")
 }

@@ -30,6 +30,7 @@ func TestRules(t *testing.T) {
 		"jaiscloud/example/suppressfile",
 		"jaiscloud/example/app",
 		"jaiscloud/example/registered",
+		"jaiscloud/example/providererror",
 	)
 }
 

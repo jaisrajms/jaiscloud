@@ -151,12 +151,7 @@ type saRef struct {
 // would be a fiction.
 func saLookupError(nr *model.NormalizedRequest, name, notFoundMessage string) error {
 	if nr.AccountID == "-" {
-		return &model.ProviderError{
-			Code:       "PermissionDenied",
-			Message:    "Permission denied on resource 'projects/-/" + name + "' (or it may not exist).",
-			HTTPStatus: 403,
-			Status:     "PERMISSION_DENIED",
-		}
+		return model.NewProviderError("PermissionDenied", "Permission denied on resource 'projects/-/"+name+"' (or it may not exist).", 403).WithStatus("PERMISSION_DENIED")
 	}
 	return model.NewProviderError("NotFound", notFoundMessage, 404)
 }

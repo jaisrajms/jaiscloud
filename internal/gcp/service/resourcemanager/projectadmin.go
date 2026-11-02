@@ -15,12 +15,7 @@ import (
 // produces. It mirrors the shared IAM-policy etag-OCC error (internal/gcp/policy)
 // so the gRPC mapping is intentional (Aborted) rather than incidental via
 // httpToCode(409), and the REST envelope reports "ABORTED".
-var errProjectEtagMismatch = &model.ProviderError{
-	Code:       "Aborted",
-	Message:    "etag mismatch: optimistic concurrency control failed",
-	HTTPStatus: 409,
-	Status:     "ABORTED",
-}
+var errProjectEtagMismatch = model.NewProviderError("Aborted", "etag mismatch: optimistic concurrency control failed", 409).WithStatus("ABORTED")
 
 // UpdateProjectInput carries the caller-supplied fields of a project metadata
 // update. UpdateMask is the set of mutable field paths to apply (the proto

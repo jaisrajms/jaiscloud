@@ -287,12 +287,7 @@ func (s *Service) DeleteJob(ctx context.Context, project, region, jobID string) 
 		return mapErr(err)
 	}
 	if !jobTerminal(j.Status.State) {
-		return &model.ProviderError{
-			Code:       "FailedPrecondition",
-			Message:    "job is active and cannot be deleted",
-			HTTPStatus: 400,
-			Status:     "FAILED_PRECONDITION",
-		}
+		return model.NewProviderError("FailedPrecondition", "job is active and cannot be deleted", 400).WithStatus("FAILED_PRECONDITION")
 	}
 	if err := s.store.DeleteJob(ctx, project, region, jobID); err != nil {
 		return mapErr(err)

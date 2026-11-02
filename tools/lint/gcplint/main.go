@@ -8,11 +8,14 @@
 //	clock                — time.Now()/time.Since()/time.Until() instead of internal/clock
 //	clock-realnow        — a clock.Now() driving a wall-clock wait/deadline instead of clock.RealNow()
 //	resource-prefix      — a literal "projects/…"/"organizations/…"/"folders/…" used to build a
-//	                       resource name instead of internal/gcp/resource.ResourceID
-//	store-sentinel       — == / != against store.ErrNotFound / store.ErrAlreadyExists
+//	                       resource name (concatenation, constructor argument, assigned const,
+//	                       or strings.Builder write) instead of internal/gcp/resource.ResourceID
+//	store-sentinel       — == / != or a switch case against store.ErrNotFound / store.ErrAlreadyExists
+//	provider-error-ctor  — a direct &model.ProviderError{...} outside internal/model
+//	                       instead of model.NewProviderError(...) (+ .WithStatus/.WithDetails)
 //	unsafe-assert        — a .(string) type assertion not in comma-ok form
-//	reset-registration   — a mutating provider/service type that implements Reset(context.Context)
-//	                       but is never passed to RegisterResetter/RegisterSnapshotter
+//	reset-registration   — a mutating provider/service core that has no Reset(context.Context)
+//	                       hook, or has one and is never passed to RegisterResetter/RegisterSnapshotter
 //	aws-import           — a file under internal/gcp importing internal/aws
 //
 // Usage:

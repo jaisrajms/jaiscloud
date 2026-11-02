@@ -31,3 +31,21 @@ internal/gcp/service/functions/locations.go:unsafe-assert       # LocationJSON a
 internal/gcp/workflows/expr/eval.go:unsafe-assert               # r is already typed string by the enclosing type switch
 internal/gcp/transport/grpc/functions/transcode.go:unsafe-assert # FunctionJSON always sets "name"
 internal/gcp/ui/uihelper/uihelper.go:unsafe-assert              # middleware always sets the region/account context keys
+
+# reset-registration — thin cores whose only state is a store that is itself
+# registered (see the RegisterResetter list in cmd/jaiscloud-gcp/main.go).
+internal/gcp/provider/pubsub/pubsub.go:reset-registration        # state is the registered message store + resource store
+internal/gcp/provider/iam/iam.go:reset-registration              # stateless handler over the registered resource store
+internal/gcp/provider/memorystore/memorystore.go:reset-registration # stateless handler over the registered resource store
+internal/gcp/provider/clouddns/clouddns.go:reset-registration    # stateless handler over the registered resource store
+internal/gcp/provider/secretmanager/secret.go:reset-registration # state is the registered secret store + resource store
+internal/gcp/service/kms/service.go:reset-registration           # state is the registered KMS key store + resource store
+internal/gcp/service/logging/core.go:reset-registration          # state is the registered log-entry store + resource store
+internal/gcp/service/monitoring/service.go:reset-registration    # state is the registered monitoring store + resource store
+internal/gcp/service/serviceusage/service.go:reset-registration  # state is the registered resource store; operations settle lazily
+internal/gcp/service/workflows/service.go:reset-registration     # state is the registered workflow store
+internal/gcp/service/workflowexecutions/service.go:reset-registration # state is the registered workflow store + engine
+internal/gcp/service/scheduler/engine.go:reset-registration      # Engine is owned by the registered scheduler Service, whose Reset clears it
+
+# resource-prefix — a validation pattern, not a constructed resource name.
+internal/gcp/service/dataproc/gke.go:resource-prefix             # real-GCP regex pattern quoted in an InvalidArgument message

@@ -79,12 +79,11 @@ func MetricDescriptorName(project, typ string) string {
 // where {type} may itself contain slashes (e.g.
 // "custom.googleapis.com/invoice/paid/amount").
 func SplitMetricDescriptorName(name string) (project, typ string, ok bool) {
-	const prefix = "projects/"
 	const marker = "metricDescriptors/"
-	if !strings.HasPrefix(name, prefix) {
+	if !strings.HasPrefix(name, resource.ProjectPrefix) {
 		return "", "", false
 	}
-	rest := strings.TrimPrefix(name, prefix)
+	rest := strings.TrimPrefix(name, resource.ProjectPrefix)
 	project, after, found := strings.Cut(rest, "/")
 	if !found || !strings.HasPrefix(after, marker) {
 		return "", "", false

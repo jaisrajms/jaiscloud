@@ -4511,7 +4511,7 @@ func (p *Provider) appendChunk(sess *uploadSession, media []byte) error {
 // KB 2840945.
 func offsetGapError(start, length int64) *model.ProviderError {
 	msg := fmt.Sprintf("Invalid request.  According to the Content-Range header, the upload offset is %d byte(s), which exceeds already uploaded size of %d byte(s).", start, length)
-	return (&model.ProviderError{Code: "InvalidRequest", Message: msg, HTTPStatus: 503, Status: gcperr.Unavailable}).WithData(map[string]any{"errorFormat": "plain"})
+	return (model.NewProviderError("InvalidRequest", msg, 503).WithStatus(gcperr.Unavailable)).WithData(map[string]any{"errorFormat": "plain"})
 }
 
 // spillSession flushes the in-memory buffer to a temp file and switches the
