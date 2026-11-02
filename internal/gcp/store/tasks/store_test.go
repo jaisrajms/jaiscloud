@@ -143,7 +143,11 @@ func TestMemorySnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
 	_ = s.CreateQueue(ctx, "p", "l", Queue{Name: "q1"})
-	_ = s.CreateTask(ctx, "p", "l", "q1", Task{Name: "t1", Target: TargetHTTP})
+	_ = s.CreateTask(ctx, "p", "l", "q1", Task{
+		Name: "t1", Target: TargetHTTP,
+		RetryConfig: &RetryConfig{MaxAttempts: 7},
+	})
+	_ = s.SetCmekConfig(ctx, "p", "l", CmekConfig{KmsKey: "projects/p/locations/global/keyRings/r/cryptoKeys/k"})
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
 		t.Fatalf("Snapshot: %v", err)
@@ -152,8 +156,19 @@ func TestMemorySnapshotRestore(t *testing.T) {
 	if err := dst.Restore(ctx, &buf); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if _, err := dst.GetTask(ctx, "p", "l", "q1", "t1"); err != nil {
+	tk, err := dst.GetTask(ctx, "p", "l", "q1", "t1")
+	if err != nil {
 		t.Fatalf("restored task: %v", err)
+	}
+	if tk.RetryConfig == nil || tk.RetryConfig.MaxAttempts != 7 {
+		t.Fatalf("restored task retryConfig = %+v", tk.RetryConfig)
+	}
+	cfg, err := dst.GetCmekConfig(ctx, "p", "l")
+	if err != nil {
+		t.Fatalf("restored cmek config: %v", err)
+	}
+	if cfg.KmsKey != "projects/p/locations/global/keyRings/r/cryptoKeys/k" {
+		t.Fatalf("restored cmek config = %+v", cfg)
 	}
 }
 

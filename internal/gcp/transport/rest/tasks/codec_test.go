@@ -29,11 +29,15 @@ func TestCodecRoutesQueuesAndTasks(t *testing.T) {
 		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1:testIamPermissions", "QueuesTestIamPermissions", true, false},
 		{http.MethodGet, "/v2/projects/p/locations/l/queues/q1/tasks", "TasksList", true, false},
 		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1/tasks", "TasksCreate", true, false},
+		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1/tasks:buffer", "TasksBuffer", true, false},
 		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1/tasks:batchCreate", "TasksBatchCreate", true, false},
 		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1/tasks:batchDelete", "TasksBatchDelete", true, false},
 		{http.MethodGet, "/v2/projects/p/locations/l/queues/q1/tasks/t1", "TasksGet", true, true},
 		{http.MethodDelete, "/v2/projects/p/locations/l/queues/q1/tasks/t1", "TasksDelete", true, true},
 		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1/tasks/t1:run", "TasksRun", true, true},
+		{http.MethodPost, "/v2/projects/p/locations/l/queues/q1/tasks/t1:buffer", "TasksBuffer", true, true},
+		{http.MethodGet, "/v2/projects/p/locations/l/cmekConfig", "GetCmekConfig", false, false},
+		{http.MethodPatch, "/v2/projects/p/locations/l/cmekConfig", "UpdateCmekConfig", false, false},
 	}
 	codec := NewCodec()
 	for _, tc := range cases {
@@ -68,6 +72,13 @@ func TestCodecRejectsUnknown(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, p, nil)
 		if _, err := codec.Decode(r, nil); err == nil {
 			t.Fatalf("expected error for %s", p)
+		}
+	}
+	// The CMEK config accepts only GET and PATCH; any other verb keeps the 404.
+	for _, m := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
+		r := httptest.NewRequest(m, "/v2/projects/p/locations/l/cmekConfig", nil)
+		if _, err := codec.Decode(r, nil); err == nil {
+			t.Fatalf("expected error for %s cmekConfig", m)
 		}
 	}
 }
@@ -105,6 +116,11 @@ func TestTaskFromBodyRoundTrip(t *testing.T) {
 			"body":       "aGk=",
 		},
 		"dispatchDeadline": "30s",
+		"retryConfig": map[string]any{
+			"maxAttempts": float64(3),
+			"minBackoff":  "2s",
+			"maxBackoff":  "1m",
+		},
 	})
 	if err != nil {
 		t.Fatalf("taskFromBody: %v", err)
@@ -114,5 +130,23 @@ func TestTaskFromBodyRoundTrip(t *testing.T) {
 	}
 	if tk.DispatchDeadline.String() != "30s" {
 		t.Fatalf("dispatchDeadline = %v", tk.DispatchDeadline)
+	}
+	if tk.RetryConfig == nil || tk.RetryConfig.MaxAttempts != 3 || tk.RetryConfig.MinBackoff.String() != "2s" || tk.RetryConfig.MaxBackoff.String() != "1m0s" {
+		t.Fatalf("retryConfig = %+v", tk.RetryConfig)
+	}
+	// The task-level retryConfig is emitted back on the wire (a full override,
+	// so its own values are reported, never a merge with the queue's).
+	out := taskToJSON(tk)
+	rc, ok := out["retryConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("taskToJSON omitted retryConfig: %v", out)
+	}
+	if rc["maxAttempts"] != int32(3) || rc["minBackoff"] != "2s" || rc["maxBackoff"] != "60s" {
+		t.Fatalf("encoded retryConfig = %v", rc)
+	}
+	// An absent task-level config means "inherit the queue", so it is omitted.
+	tk.RetryConfig = nil
+	if _, ok := taskToJSON(tk)["retryConfig"]; ok {
+		t.Fatalf("taskToJSON emitted an absent retryConfig")
 	}
 }

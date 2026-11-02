@@ -4,11 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	core "jaiscloud/internal/gcp/service/tasks"
@@ -138,6 +140,118 @@ func TestGRPCQueueIAM(t *testing.T) {
 	resp, err := s.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{Resource: q.GetName(), Permissions: []string{"cloudtasks.queues.get"}})
 	if err != nil || len(resp.GetPermissions()) != 1 {
 		t.Fatalf("TestIamPermissions = %+v, %v", resp, err)
+	}
+}
+
+// TestGRPCCmekConfig covers locations.getCmekConfig/updateCmekConfig over gRPC,
+// the same core the REST transport uses.
+func TestGRPCCmekConfig(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	name := parent + "/cmekConfig"
+
+	got, err := s.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetCmekConfig: %v", err)
+	}
+	if got.GetName() != name || got.GetKmsKey() != "" {
+		t.Fatalf("GetCmekConfig(default) = %+v", got)
+	}
+
+	key := "projects/p/locations/global/keyRings/ring/cryptoKeys/key"
+	upd, err := s.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: name, KmsKey: key},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCmekConfig: %v", err)
+	}
+	if upd.GetKmsKey() != key || upd.GetName() != name {
+		t.Fatalf("UpdateCmekConfig = %+v", upd)
+	}
+
+	if _, err := s.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: name, KmsKey: "bad"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("UpdateCmekConfig(bad key) code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	// Empty kmsKey clears the config.
+	if _, err := s.UpdateCmekConfig(ctx, &cloudtaskspb.UpdateCmekConfigRequest{
+		CmekConfig: &cloudtaskspb.CmekConfig{Name: name},
+	}); err != nil {
+		t.Fatalf("UpdateCmekConfig(clear): %v", err)
+	}
+	if got, err := s.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: name}); err != nil || got.GetKmsKey() != "" {
+		t.Fatalf("GetCmekConfig after clear = %+v, %v", got, err)
+	}
+
+	if _, err := s.GetCmekConfig(ctx, &cloudtaskspb.GetCmekConfigRequest{Name: "projects/p/locations/l/queues/q1"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("GetCmekConfig(bad name) code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestGRPCTaskRetryConfigRoundTrip pins the task-level retryConfig on the gRPC
+// wire: it is stored and echoed, and an absent config stays absent.
+func TestGRPCTaskRetryConfigRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	tk, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: q.GetName(),
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{Url: "http://example.test/hook", HttpMethod: cloudtaskspb.HttpMethod_POST},
+			},
+			RetryConfig: &cloudtaskspb.RetryConfig{
+				MaxAttempts: 3,
+				MinBackoff:  durationpb.New(2 * time.Second),
+				MaxBackoff:  durationpb.New(time.Minute),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if rc := tk.GetRetryConfig(); rc.GetMaxAttempts() != 3 || rc.GetMinBackoff().AsDuration() != 2*time.Second || rc.GetMaxBackoff().AsDuration() != time.Minute {
+		t.Fatalf("created task retryConfig = %+v", rc)
+	}
+	got, err := s.GetTask(ctx, &cloudtaskspb.GetTaskRequest{Name: tk.GetName()})
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if rc := got.GetRetryConfig(); rc.GetMaxAttempts() != 3 {
+		t.Fatalf("GetTask retryConfig = %+v", rc)
+	}
+
+	// An absent task-level config means "inherit the queue", so it is omitted
+	// rather than defaulted to the queue's values.
+	plain, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: q.GetName(),
+		Task: &cloudtaskspb.Task{MessageType: &cloudtaskspb.Task_HttpRequest{
+			HttpRequest: &cloudtaskspb.HttpRequest{Url: "http://example.test/plain", HttpMethod: cloudtaskspb.HttpMethod_POST},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(plain): %v", err)
+	}
+	if plain.GetRetryConfig() != nil {
+		t.Fatalf("plain task retryConfig = %+v, want nil (inherit the queue)", plain.GetRetryConfig())
+	}
+
+	// A task-level maxAttempts below -1 is INVALID_ARGUMENT.
+	if _, err := s.CreateTask(ctx, &cloudtaskspb.CreateTaskRequest{
+		Parent: q.GetName(),
+		Task: &cloudtaskspb.Task{
+			MessageType: &cloudtaskspb.Task_HttpRequest{
+				HttpRequest: &cloudtaskspb.HttpRequest{Url: "http://example.test/bad", HttpMethod: cloudtaskspb.HttpMethod_POST},
+			},
+			RetryConfig: &cloudtaskspb.RetryConfig{MaxAttempts: -5},
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateTask(maxAttempts=-5) code = %v, want InvalidArgument", status.Code(err))
 	}
 }
 

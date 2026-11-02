@@ -173,6 +173,15 @@ func (e *Engine) tick(ctx context.Context, wait bool) {
 		}
 		st := e.stateFor(q)
 		for _, t := range tasks {
+			// Maximum task retention: real Cloud Tasks deletes a task 31 days
+			// after its scheduleTime. The expiry runs on the dispatch tick (not
+			// on read — GetTask/ListTasks stay pure) through the same DeleteTask
+			// path a successful delivery uses, and before the due check so an
+			// expired-but-overdue task is never dispatched.
+			if !t.ScheduleTime.IsZero() && now.Sub(t.ScheduleTime) > maxTaskRetention {
+				_ = e.store.DeleteTask(ctx, t.ProjectID, t.Location, t.Queue, t.Name)
+				continue
+			}
 			if t.ScheduleTime.IsZero() || t.ScheduleTime.After(now) {
 				continue
 			}
@@ -236,6 +245,12 @@ func queueLimits(q tasksstore.Queue) (rate float64, burst int, maxConc int) {
 	return rate, burst, maxConc
 }
 
+// maxTaskRetention is Cloud Tasks' maximum task retention. A task that has been
+// retained for this long past its scheduleTime is deleted by the dispatch
+// engine, matching the documented 31-day "maximum task retention limit"
+// (https://cloud.google.com/tasks/docs/quotas).
+const maxTaskRetention = 31 * 24 * time.Hour
+
 // attempt delivers one task and records the outcome: success deletes the task
 // (real Cloud Tasks deletes a task once its target answers successfully);
 // failure increments the counters and either reschedules with exponential
@@ -248,7 +263,10 @@ func (e *Engine) attempt(ctx context.Context, t tasksstore.Task, q tasksstore.Qu
 		return
 	}
 	dispatches := t.DispatchCount + 1
-	next, drop := failureSchedule(q, t, now, dispatches)
+	// Resolve the task's effective retry config once per attempt: a task-level
+	// RetryConfig overrides the queue's wholesale, never field by field.
+	rc := effectiveRetryConfig(q, t)
+	next, drop := failureSchedule(rc, t, now, dispatches)
 	if drop {
 		_ = e.store.DeleteTask(ctx, t.ProjectID, t.Location, t.Queue, t.Name)
 		return
@@ -260,6 +278,20 @@ func (e *Engine) attempt(ctx context.Context, t tasksstore.Task, q tasksstore.Qu
 		cur.ScheduleTime = next
 		return cur, nil
 	})
+}
+
+// effectiveRetryConfig returns the retry configuration that governs an attempt.
+// The Discovery document says of Task.retry_config: "If present, this overrides
+// the Queue.retry_config for this task" — a full override, so an absent field on
+// the task inherits the queue, while a present one replaces it entirely (a
+// maxAttempts of 0 on the task means "unspecified" and falls back to the
+// documented default of 100 in failureSchedule/retryBackoff; it does NOT inherit
+// the queue's value).
+func effectiveRetryConfig(q tasksstore.Queue, t tasksstore.Task) *tasksstore.RetryConfig {
+	if t.RetryConfig != nil {
+		return t.RetryConfig
+	}
+	return q.RetryConfig
 }
 
 // runNow forces one synchronous attempt for RunTask. It bypasses pause and rate
@@ -279,6 +311,7 @@ func (e *Engine) runNow(ctx context.Context, t tasksstore.Task) (tasksstore.Task
 	now := clock.Now()
 	status := e.disp.Deliver(ctx, t)
 	attempt := newAttempt(t.ScheduleTime, now, status)
+	rc := effectiveRetryConfig(q, t)
 	updated, err := e.store.UpdateTaskAtomic(ctx, t.ProjectID, t.Location, t.Queue, t.Name, func(cur tasksstore.Task) (tasksstore.Task, error) {
 		if status.Code == 0 {
 			if cur.FirstAttempt == nil {
@@ -291,7 +324,7 @@ func (e *Engine) runNow(ctx context.Context, t tasksstore.Task) (tasksstore.Task
 		}
 		recordAttempt(&cur, attempt, status)
 		cur.DispatchCount++
-		cur.ScheduleTime = now.Add(retryBackoff(q.RetryConfig, t.DispatchCount+1))
+		cur.ScheduleTime = now.Add(retryBackoff(rc, t.DispatchCount+1))
 		return cur, nil
 	})
 	if err != nil {
@@ -341,16 +374,18 @@ func receivedResponse(status tasksstore.Status) bool {
 // failureSchedule decides the next attempt time after a failed dispatch. Cloud
 // Tasks stops retrying only when BOTH maxAttempts and maxRetryDuration are
 // satisfied (or the task succeeds); a maxAttempts of -1 or a maxRetryDuration
-// of 0 is unlimited and never blocks. It returns drop=true to have the caller
-// delete the task.
-func failureSchedule(q tasksstore.Queue, t tasksstore.Task, now time.Time, dispatches int32) (time.Time, bool) {
+// of 0 is unlimited and never blocks. rc is the attempt's effective retry
+// config (the task's override when present, else the queue's); a maxAttempts of
+// 0 means "unspecified" and falls back to the Cloud Tasks default of 100. It
+// returns drop=true to have the caller delete the task.
+func failureSchedule(rc *tasksstore.RetryConfig, t tasksstore.Task, now time.Time, dispatches int32) (time.Time, bool) {
 	maxAttempts := int32(100)
 	maxRetryDuration := time.Duration(0)
-	if q.RetryConfig != nil {
-		if q.RetryConfig.MaxAttempts != 0 {
-			maxAttempts = q.RetryConfig.MaxAttempts
+	if rc != nil {
+		if rc.MaxAttempts != 0 {
+			maxAttempts = rc.MaxAttempts
 		}
-		maxRetryDuration = q.RetryConfig.MaxRetryDuration
+		maxRetryDuration = rc.MaxRetryDuration
 	}
 	attemptsReached := maxAttempts >= 0 && dispatches >= maxAttempts
 	durationReached := true
@@ -361,7 +396,7 @@ func failureSchedule(q tasksstore.Queue, t tasksstore.Task, now time.Time, dispa
 	if attemptsReached && durationReached {
 		return time.Time{}, true
 	}
-	return now.Add(retryBackoff(q.RetryConfig, dispatches)), false
+	return now.Add(retryBackoff(rc, dispatches)), false
 }
 
 // firstAttemptTime is when the task was first attempted: the recorded first

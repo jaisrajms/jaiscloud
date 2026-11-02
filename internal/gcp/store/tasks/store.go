@@ -75,6 +75,19 @@ type StackdriverLoggingConfig struct {
 	SamplingRatio float64 `json:"samplingRatio,omitempty"`
 }
 
+// CmekConfig is the location-scoped customer-managed encryption key
+// configuration (projects/{project}/locations/{location}/cmekConfig). It is
+// metadata only: the emulator stores task payloads in plaintext, so the key is
+// recorded and echoed but never used to encrypt anything.
+type CmekConfig struct {
+	ProjectID string `json:"projectId,omitempty"`
+	Location  string `json:"location,omitempty"`
+	// KmsKey is the Cloud KMS key resource name
+	// (projects/*/locations/*/keyRings/*/cryptoKeys/*), or "" when no key is
+	// configured (real Cloud Tasks' default).
+	KmsKey string `json:"kmsKey,omitempty"`
+}
+
 // Queue is a Cloud Tasks queue. Name is the queue id (the last path segment);
 // the canonical resource name is derived from ProjectID/Location/Name.
 type Queue struct {
@@ -150,6 +163,12 @@ type Task struct {
 	HTTP      *HttpRequest          `json:"httpRequest,omitempty"`
 	AppEngine *AppEngineHttpRequest `json:"appEngineHttpRequest,omitempty"`
 
+	// RetryConfig is the optional task-level retry configuration. Per the
+	// Discovery document, "If present, this overrides the Queue.retry_config
+	// for this task" — a full override, never a field merge. A nil value means
+	// the queue's config governs.
+	RetryConfig *RetryConfig `json:"retryConfig,omitempty"`
+
 	ScheduleTime     time.Time     `json:"scheduleTime,omitempty"`
 	CreateTime       time.Time     `json:"createTime,omitempty"`
 	DispatchDeadline time.Duration `json:"dispatchDeadline,omitempty"`
@@ -194,6 +213,16 @@ type Store interface {
 	// It is used both by PurgeQueue and by queue delete (cascade); it does not
 	// fail when the queue is empty.
 	DeleteTasks(ctx context.Context, projectID, location, queue string) (int, error)
+
+	// GetCmekConfig returns the location's CMEK config. An unconfigured
+	// location returns a zero KmsKey (real Cloud Tasks: "By default there is
+	// no kms_key configured") rather than an error.
+	GetCmekConfig(ctx context.Context, projectID, location string) (CmekConfig, error)
+	// SetCmekConfig upserts the location's CMEK config.
+	SetCmekConfig(ctx context.Context, projectID, location string, cfg CmekConfig) error
+	// DeleteCmekConfig clears the location's CMEK config (the service calls it
+	// when an update sets kmsKey to "").
+	DeleteCmekConfig(ctx context.Context, projectID, location string) error
 
 	Reset(ctx context.Context)
 }

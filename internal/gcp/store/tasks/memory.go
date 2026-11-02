@@ -12,6 +12,7 @@ type MemoryStore struct {
 	mu     sync.RWMutex
 	queues map[string]map[string]Queue // projectID+"/"+location → queue name → queue
 	tasks  map[string]map[string]Task  // projectID+"/"+location+"/"+queue → task name → task
+	cmek   map[string]CmekConfig       // projectID+"/"+location → CMEK config
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -19,6 +20,7 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		queues: make(map[string]map[string]Queue),
 		tasks:  make(map[string]map[string]Task),
+		cmek:   make(map[string]CmekConfig),
 	}
 }
 
@@ -231,9 +233,36 @@ func (s *MemoryStore) DeleteTasks(_ context.Context, projectID, location, queue 
 	return n, nil
 }
 
+func (s *MemoryStore) GetCmekConfig(_ context.Context, projectID, location string) (CmekConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg, ok := s.cmek[queueScope(projectID, location)]
+	if !ok {
+		return CmekConfig{ProjectID: projectID, Location: location}, nil
+	}
+	return cfg, nil
+}
+
+func (s *MemoryStore) SetCmekConfig(_ context.Context, projectID, location string, cfg CmekConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg.ProjectID = projectID
+	cfg.Location = location
+	s.cmek[queueScope(projectID, location)] = cfg
+	return nil
+}
+
+func (s *MemoryStore) DeleteCmekConfig(_ context.Context, projectID, location string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cmek, queueScope(projectID, location))
+	return nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queues = make(map[string]map[string]Queue)
 	s.tasks = make(map[string]map[string]Task)
+	s.cmek = make(map[string]CmekConfig)
 }

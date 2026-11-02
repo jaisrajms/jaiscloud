@@ -454,6 +454,11 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// A Cloud Tasks CMEK config is location-scoped and has no id: callers pass
+	// the location as the name.
+	"tasks-cmek": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/locations/%s/cmekConfig", p, n)
+	},
 	// Cloud Resource Manager — a project's canonical v3 resource name is
 	// "projects/{project}". The v1 REST API has no resource name (it identifies
 	// a project by projectId), so callers pass the project id as the closure
