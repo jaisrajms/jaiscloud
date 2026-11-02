@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 504,
-  "passed": 504,
+  "total": 508,
+  "passed": 508,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 504,
-    "passed": 504,
+    "checks": 508,
+    "passed": 508,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -170,8 +170,8 @@
     },
     {
       "service": "tasks",
-      "total": 16,
-      "passed": 16,
+      "total": 20,
+      "passed": 20,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2202,6 +2202,20 @@
     },
     {
       "service": "tasks",
+      "rpc": "BatchCreateTasks",
+      "method": "BatchCreateTasks",
+      "status": "pass",
+      "key_field": "done operation carrying both created tasks"
+    },
+    {
+      "service": "tasks",
+      "rpc": "BatchDeleteTasks",
+      "method": "BatchDeleteTasks",
+      "status": "pass",
+      "key_field": "done operation; tasks gone"
+    },
+    {
+      "service": "tasks",
       "rpc": "GetTask",
       "method": "GetTask",
       "status": "pass",
@@ -2227,6 +2241,20 @@
       "method": "RunTask",
       "status": "pass",
       "key_field": "dispatched task returned; success deletes it"
+    },
+    {
+      "service": "tasks",
+      "rpc": "GetCmekConfig",
+      "method": "GetCmekConfig",
+      "status": "pass",
+      "key_field": "default config: name set, kmsKey empty"
+    },
+    {
+      "service": "tasks",
+      "rpc": "UpdateCmekConfig",
+      "method": "UpdateCmekConfig",
+      "status": "pass",
+      "key_field": "kmsKey round-trip"
     },
     {
       "service": "resourcemanager",

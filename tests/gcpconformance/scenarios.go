@@ -1567,15 +1567,25 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "scheduler", Method: "DELETE", Path: "/v1/" + schedName},
 	)
 
-	// ─── Cloud Tasks: pause → resume ──────────────────────────────────────────
+	// ─── Cloud Tasks: pause → resume, buffer, CMEK config ────────────────────
 	// Cloud Tasks names the queue in the body (there is no queueId parameter).
+	// tasks:buffer is REST-only and, because the emulator models no queue-level
+	// httpTarget, carries the full task; the CMEK config lives at the
+	// location scope.
 	tasksBase := "/v2/projects/" + p + "/locations/us-central1/queues"
 	tasksName := "projects/" + p + "/locations/us-central1/queues/conf-queue-" + suffix
+	tasksCmek := "projects/" + p + "/locations/us-central1/cmekConfig"
+	tasksKMSKey := "projects/" + p + "/locations/global/keyRings/conf/cryptoKeys/tasks"
 	sc = append(sc,
 		Scenario{Service: "tasks", Method: "POST", Path: tasksBase,
 			Body: fmt.Sprintf(`{"name":%q}`, tasksName)},
 		Scenario{Service: "tasks", Method: "POST", Path: "/v2/" + tasksName + ":pause"},
 		Scenario{Service: "tasks", Method: "POST", Path: "/v2/" + tasksName + ":resume"},
+		Scenario{Service: "tasks", Method: "POST", Path: "/v2/" + tasksName + "/tasks/conf-buffered-" + suffix + ":buffer",
+			Body: `{"task":{"httpRequest":{"url":"http://example.com/buffered","httpMethod":"POST"}}}`},
+		Scenario{Service: "tasks", Method: "PATCH", Path: "/v2/" + tasksCmek + "?updateMask=kmsKey",
+			Body: fmt.Sprintf(`{"kmsKey":%q}`, tasksKMSKey)},
+		Scenario{Service: "tasks", Method: "GET", Path: "/v2/" + tasksCmek},
 		Scenario{Service: "tasks", Method: "DELETE", Path: "/v2/" + tasksName},
 	)
 

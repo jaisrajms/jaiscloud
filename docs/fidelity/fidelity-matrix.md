@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1175**
+Cells: **1182**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 996 |
+| ga | 1003 |
 | limited | 123 |
 | preview | 14 |
 | unsupported | 42 |
@@ -21,8 +21,8 @@ Cells: **1175**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 553 | 105 | 14 | 12 |
-| grpc | 443 | 18 | 0 | 30 |
+| rest | 556 | 105 | 14 | 12 |
+| grpc | 447 | 18 | 0 | 30 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -32,8 +32,8 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 639 | 45 |
-| grpc | 443 | 48 |
+| rest | 642 | 45 |
+| grpc | 447 | 48 |
 
 ## bigquery
 
@@ -1351,14 +1351,17 @@ _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 
 ## tasks
 
-_34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
+_41 cell(s): ga=41 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
+| BatchCreateTasks | grpc | ga | yes | — |
+| BatchDeleteTasks | grpc | ga | yes | — |
 | CreateQueue | grpc | ga | yes | — |
 | CreateTask | grpc | ga | yes | — |
 | DeleteQueue | grpc | ga | yes | — |
 | DeleteTask | grpc | ga | yes | — |
+| GetCmekConfig | grpc | ga | yes | — |
 | GetIamPolicy | grpc | ga | yes | — |
 | GetQueue | grpc | ga | yes | — |
 | GetTask | grpc | ga | yes | — |
@@ -1369,6 +1372,7 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 | ResumeQueue | grpc | ga | yes | — |
 | RunTask | grpc | ga | yes | — |
 | SetIamPolicy | grpc | ga | yes | — |
+| Tasks.GetCmekConfig | rest | ga | yes | — |
 | Tasks.QueuesCreate | rest | ga | yes | — |
 | Tasks.QueuesDelete | rest | ga | yes | — |
 | Tasks.QueuesGet | rest | ga | yes | — |
@@ -1382,12 +1386,15 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 | Tasks.QueuesTestIamPermissions | rest | ga | yes | — |
 | Tasks.TasksBatchCreate | rest | ga | yes | — |
 | Tasks.TasksBatchDelete | rest | ga | yes | — |
+| Tasks.TasksBuffer | rest | ga | yes | — |
 | Tasks.TasksCreate | rest | ga | yes | — |
 | Tasks.TasksDelete | rest | ga | yes | — |
 | Tasks.TasksGet | rest | ga | yes | — |
 | Tasks.TasksList | rest | ga | yes | — |
 | Tasks.TasksRun | rest | ga | yes | — |
+| Tasks.UpdateCmekConfig | rest | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
+| UpdateCmekConfig | grpc | ga | yes | — |
 | UpdateQueue | grpc | ga | yes | — |
 
 ## workflowexecutions
