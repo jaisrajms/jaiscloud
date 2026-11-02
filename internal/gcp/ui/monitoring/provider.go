@@ -13,6 +13,10 @@ type ProviderInterface interface {
 	ListMetricDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ListTimeSeries(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
+	// Monitored resource descriptors (the monitored-resource catalog).
+	ListMonitoredResourceDescriptors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	GetMonitoredResourceDescriptor(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
 	// Alerting.
 	ListAlertPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	GetAlertPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)

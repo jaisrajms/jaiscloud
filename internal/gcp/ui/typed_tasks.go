@@ -181,6 +181,30 @@ func (p typedTasks) QueueSetIamPolicy(ctx context.Context, project, location, qu
 	return decodePolicy(data)
 }
 
+func (p typedTasks) QueueTestIamPermissions(ctx context.Context, project, location, queue string, permissions []string) ([]string, error) {
+	perms := make([]any, 0, len(permissions))
+	for _, perm := range permissions {
+		perms = append(perms, perm)
+	}
+	data, covered, err := p.c.do(ctx, "Tasks.QueuesTestIamPermissions", project, location,
+		map[string]any{"project": project, "location": location, "queue": queue,
+			"body": map[string]any{"permissions": perms}}, nil)
+	if !covered {
+		return p.ProviderInterface.QueueTestIamPermissions(ctx, project, location, queue, permissions)
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := data["permissions"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
 func (p typedTasks) ListTasks(ctx context.Context, project, location, queue string) ([]tasksstore.Task, error) {
 	rows, covered, err := p.c.doList(ctx, "Tasks.TasksList", project, location, map[string]any{"project": project, "location": location, "queue": queue}, nil, "tasks")
 	if !covered {

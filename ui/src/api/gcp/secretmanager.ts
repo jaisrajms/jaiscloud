@@ -15,6 +15,8 @@ export interface Secret {
   topics?: string[]
   rotationPeriod?: string
   nextRotationTime?: string
+  /** Output-only state of Cloud SQL managed rotation (ACTIVE once enabled). */
+  managedRotationStatus?: string
   kmsKeyName?: string
 }
 
@@ -138,6 +140,20 @@ export const addSecretVersion = (secret: string, payload: string) =>
 
 export const getSecretVersion = (secret: string, version: string) =>
   api.get<SecretVersion>(versionPath(secret, version))
+
+/** POST /secrets/{secret}/rotate — requires managed rotation to be enabled. */
+export const rotateSecret = (secret: string) =>
+  api.post<SecretVersion>(`${secretPath(secret)}/rotate`)
+
+export interface EnableManagedRotationRequest {
+  instanceId: string
+  username: string
+  password?: string
+}
+
+/** POST /secrets/{secret}/enableManagedRotation — Cloud SQL single user. */
+export const enableManagedRotation = (secret: string, body: EnableManagedRotationRequest) =>
+  api.post<SecretVersion>(`${secretPath(secret)}/enableManagedRotation`, body)
 
 export const accessSecretVersion = (secret: string, version: string) =>
   api.get<AccessSecretVersionResponse>(`${versionPath(secret, version)}/access`)

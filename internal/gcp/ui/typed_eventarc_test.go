@@ -50,13 +50,19 @@ func TestEventarcConsolePassthroughMatchesDirect(t *testing.T) {
 	if pol, err := p.ChannelGetIamPolicy(ctx, "proj", "us-central1", "ch1"); err != nil {
 		t.Fatalf("ChannelGetIamPolicy = %+v, %v", pol, err)
 	}
+	if perms, err := p.ChannelTestIamPermissions(ctx, "proj", "us-central1", "ch1", []string{"eventarc.channels.get"}); err != nil || len(perms) != 1 {
+		t.Fatalf("ChannelTestIamPermissions = %+v, %v", perms, err)
+	}
+	if _, err := p.TriggerTestIamPermissions(ctx, "proj", "us-central1", "nope", []string{"eventarc.triggers.get"}); err == nil {
+		t.Fatal("TriggerTestIamPermissions on an unknown trigger returned nil error")
+	}
 	if err := p.DeleteChannel(ctx, "proj", "us-central1", "ch1"); err != nil {
 		t.Fatalf("DeleteChannel: %v", err)
 	}
 	if list, err := p.ListTriggersByProject(ctx, "proj"); err != nil || len(list) != 0 {
 		t.Fatalf("ListTriggersByProject = %+v, %v", list, err)
 	}
-	if len(seen) != 6 {
+	if len(seen) != 8 {
 		t.Fatalf("the plugin saw %d calls (%v), want 6", len(seen), seen)
 	}
 }
@@ -161,6 +167,9 @@ func TestEventarcConsoleTriggerCallsStayDirectWithoutAPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := p.TriggerGetIamPolicy(ctx, "proj", "us-central1", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.TriggerTestIamPermissions(ctx, "proj", "us-central1", "t1", []string{"eventarc.triggers.get"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.DeleteTrigger(ctx, "proj", "us-central1", "t1"); err != nil {

@@ -84,6 +84,20 @@ func renderTrigger(project string, t eventarcstore.Trigger) Trigger {
 					out.Destination = uihelper.Str(cm, "service")
 					out.DestinationRegion = uihelper.Str(cm, "region")
 				}
+			case "gke":
+				if gm := uihelper.MapAt(dest, "gke"); gm != nil {
+					out.GKECluster = uihelper.Str(gm, "cluster")
+					out.GKELocation = uihelper.Str(gm, "location")
+					out.GKENamespace = uihelper.Str(gm, "namespace")
+					out.GKEService = uihelper.Str(gm, "service")
+					out.GKEPath = uihelper.Str(gm, "path")
+					out.Destination = out.GKEService
+				}
+			case "httpEndpoint":
+				if hm := uihelper.MapAt(dest, "httpEndpoint"); hm != nil {
+					out.HTTPEndpointURI = uihelper.Str(hm, "uri")
+					out.Destination = out.HTTPEndpointURI
+				}
 			default:
 				if b, err := json.Marshal(v); err == nil {
 					out.Destination = string(b)
@@ -102,6 +116,11 @@ func renderTrigger(project string, t eventarcstore.Trigger) Trigger {
 			Operator:  uihelper.Str(fm, "operator"),
 			Value:     uihelper.Str(fm, "value"),
 		})
+	}
+	if rp := uihelper.MapAt(m, "retryPolicy"); rp != nil {
+		if n, ok := rp["maxAttempts"].(float64); ok {
+			out.MaxAttempts = int32(n)
+		}
 	}
 	if tr := uihelper.MapAt(m, "transport"); tr != nil {
 		if ps := uihelper.MapAt(tr, "pubsub"); ps != nil {
@@ -250,6 +269,17 @@ func (h *Handler) SetTriggerIam(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, policy.ToMap(pol))
 }
 
+// POST /triggers/{location}/{trigger}/iam/testIamPermissions
+func (h *Handler) TestTriggerIam(w http.ResponseWriter, r *http.Request) {
+	location, name, ok := h.targetTrigger(w, r)
+	if !ok {
+		return
+	}
+	h.testIam(w, r, func(req TestIamPermissionsRequest) ([]string, error) {
+		return h.provider.TriggerTestIamPermissions(r.Context(), h.account(r), location, name, req.Permissions)
+	})
+}
+
 // ─── Channels ────────────────────────────────────────────────────────────────
 
 // GET /channels
@@ -364,6 +394,33 @@ func (h *Handler) SetChannelIam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uihelper.WriteJSON(w, policy.ToMap(pol))
+}
+
+// POST /channels/{location}/{channel}/iam/testIamPermissions
+func (h *Handler) TestChannelIam(w http.ResponseWriter, r *http.Request) {
+	location, name, ok := h.targetChannel(w, r)
+	if !ok {
+		return
+	}
+	h.testIam(w, r, func(req TestIamPermissionsRequest) ([]string, error) {
+		return h.provider.ChannelTestIamPermissions(r.Context(), h.account(r), location, name, req.Permissions)
+	})
+}
+
+// testIam decodes the permissions body, runs the provider call and writes the
+// granted subset.
+func (h *Handler) testIam(w http.ResponseWriter, r *http.Request, run func(TestIamPermissionsRequest) ([]string, error)) {
+	var req TestIamPermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	perms, err := run(req)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, TestIamPermissionsResponse{Permissions: perms})
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

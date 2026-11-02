@@ -3,6 +3,7 @@ package kmsui
 import (
 	"context"
 
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 )
 
@@ -11,6 +12,9 @@ type ProviderInterface interface {
 	KeyRingCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	KeyRingList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	KeyRingGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	// ListAllKeyRings is the location-less console aggregate (KMS's wire API is
+	// location-scoped, so it stays on the built-in, not the registry).
+	ListAllKeyRings(ctx context.Context, project string) ([]kmsstore.KeyRing, error)
 
 	CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	CryptoKeyList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)

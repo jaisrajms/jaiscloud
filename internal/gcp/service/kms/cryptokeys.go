@@ -177,6 +177,12 @@ func (s *Service) ListKeyRings(ctx context.Context, project, location string) ([
 	return s.keys.ListKeyRings(ctx, project, location)
 }
 
+// ListAllKeyRings lists every key ring in a project across all locations. It
+// backs the location-less console home summary.
+func (s *Service) ListAllKeyRings(ctx context.Context, project string) ([]kmsstore.KeyRing, error) {
+	return s.keys.ListKeyRingsByProject(ctx, project)
+}
+
 // ─── CryptoKeys ───────────────────────────────────────────────────────────────
 
 // CreateCryptoKey creates a crypto key and its implicit primary version.

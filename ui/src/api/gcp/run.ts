@@ -53,3 +53,57 @@ export const getRevision = (region: string, service: string, revision: string) =
   api.get<RunRevision>(
     `${BASE}/services/${encodeURIComponent(region)}/${encodeURIComponent(service)}/revisions/${encodeURIComponent(revision)}`,
   )
+
+/** Body for POST /services. */
+export interface DeployServiceInput {
+  region: string
+  id: string
+  body: Record<string, unknown>
+  validateOnly?: boolean
+}
+
+/** Body for PATCH /services/{region}/{service}. */
+export interface UpdateServiceInput {
+  body: Record<string, unknown>
+  updateMask?: string[]
+  validateOnly?: boolean
+  allowMissing?: boolean
+}
+
+export const deployService = (input: DeployServiceInput) =>
+  api.post<RunServiceDetail>(`${BASE}/services`, input)
+
+export const updateService = (region: string, service: string, input: UpdateServiceInput) =>
+  api.patch<RunServiceDetail>(
+    `${BASE}/services/${encodeURIComponent(region)}/${encodeURIComponent(service)}`,
+    input,
+  )
+
+export interface IamBindingLike {
+  role: string
+  members: string[]
+  condition?: Record<string, unknown>
+}
+
+export interface IamPolicyLike {
+  bindings?: IamBindingLike[]
+  etag?: string
+  version?: number
+}
+
+export const getServiceIam = (region: string, service: string) =>
+  api.get<IamPolicyLike>(
+    `${BASE}/services/${encodeURIComponent(region)}/${encodeURIComponent(service)}/iam`,
+  )
+
+export const putServiceIam = (region: string, service: string, policy: IamPolicyLike) =>
+  api.put<IamPolicyLike>(
+    `${BASE}/services/${encodeURIComponent(region)}/${encodeURIComponent(service)}/iam`,
+    { policy },
+  )
+
+export const testServiceIam = (region: string, service: string, permissions: string[]) =>
+  api.post<{ permissions: string[] }>(
+    `${BASE}/services/${encodeURIComponent(region)}/${encodeURIComponent(service)}/iam/testIamPermissions`,
+    { permissions },
+  )

@@ -30,6 +30,11 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/buckets/{bucket}/acl", h.ListBucketACL)
 	r.Post("/buckets/{bucket}/acl", h.InsertBucketACL)
 
+	r.Get("/buckets/{bucket}/notifications", h.ListNotifications)
+	r.Post("/buckets/{bucket}/notifications", h.CreateNotification)
+	r.Get("/buckets/{bucket}/notifications/{notification}", h.GetNotification)
+	r.Delete("/buckets/{bucket}/notifications/{notification}", h.DeleteNotification)
+
 	r.Get("/buckets/{bucket}/objects", h.ListObjects)
 	r.Put("/buckets/{bucket}/objects", h.UploadObject)
 	r.Patch("/buckets/{bucket}/objects", h.PatchObject)
@@ -37,6 +42,10 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/buckets/{bucket}/objects/metadata", h.GetObject)
 	r.Get("/buckets/{bucket}/objects/download", h.DownloadObject)
 	r.Post("/buckets/{bucket}/objects/restore", h.RestoreObject)
+	r.Post("/buckets/{bucket}/objects/copy", h.CopyObject)
+	r.Post("/buckets/{bucket}/objects/rewrite", h.RewriteObject)
+	r.Post("/buckets/{bucket}/objects/move", h.MoveObject)
+	r.Post("/buckets/{bucket}/objects/compose", h.ComposeObject)
 	r.Get("/buckets/{bucket}/objects/iam", h.GetObjectIam)
 	r.Put("/buckets/{bucket}/objects/iam", h.PutObjectIam)
 	r.Get("/buckets/{bucket}/objects/acl", h.ListObjectACL)

@@ -23,6 +23,10 @@ type ProviderInterface interface {
 	DisableVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	EnableVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
+	// Managed rotation (Cloud SQL single-user credentials).
+	EnableManagedRotation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	RotateSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
 	GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	TestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)

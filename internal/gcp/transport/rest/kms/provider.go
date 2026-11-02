@@ -84,6 +84,12 @@ func resourceName(nr *model.NormalizedRequest) (string, error) {
 	return n, nil
 }
 
+// ListAllKeyRings is a console-only aggregate over the project's key rings
+// (Cloud KMS's wire API is location-scoped). It is not a registry route.
+func (p *Provider) ListAllKeyRings(ctx context.Context, project string) ([]kmsstore.KeyRing, error) {
+	return p.core.ListAllKeyRings(ctx, project)
+}
+
 // ─── KeyRings ─────────────────────────────────────────────────────────────────
 
 func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

@@ -33,6 +33,7 @@ type mockProvider struct {
 	gotCreate   tasksstore.Queue
 	gotTaskIn   tasksstore.Task
 	gotIamBody  map[string]any
+	gotPerms    []string
 	gotMask     []string
 	deleted     bool
 	action      string
@@ -116,6 +117,11 @@ func (m *mockProvider) CreateTask(_ context.Context, _, location, queue string, 
 func (m *mockProvider) DeleteTask(_ context.Context, _, location, queue, name string) error {
 	m.gotLocation, m.gotQueue, m.gotTask, m.deleted = location, queue, name, true
 	return m.err
+}
+
+func (m *mockProvider) QueueTestIamPermissions(_ context.Context, _, location, queue string, perms []string) ([]string, error) {
+	m.gotLocation, m.gotQueue, m.gotPerms = location, queue, perms
+	return perms, m.err
 }
 
 func (m *mockProvider) RunTask(_ context.Context, _, location, queue, name string) (tasksstore.Task, error) {
@@ -451,5 +457,120 @@ func TestListQueues_ProviderErrorMapped(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "nope") {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestBatchTasks_CreatesAndDeletes(t *testing.T) {
+	mock := &mockProvider{task: tasksstore.Task{Name: "tasks/t1", Location: "us-central1", Queue: "q1"}}
+	body := `{"create":[{"name":"tasks/t1","httpUrl":"https://example.com","httpMethod":"POST"}],"delete":["tasks/t9"]}`
+	w := do(t, mock, http.MethodPost, "/queues/us-central1/q1/tasks/batch", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp BatchTasksResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Created) != 1 || resp.Created[0].Name != "tasks/t1" || len(resp.Deleted) != 1 || resp.Deleted[0] != "tasks/t9" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestBatchTasks_RequiresWork(t *testing.T) {
+	w := do(t, &mockProvider{}, http.MethodPost, "/queues/us-central1/q1/tasks/batch", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestTaskFromInput_Tokens(t *testing.T) {
+	oauth, err := taskFromInput(TaskInput{
+		Target: "http", HTTPURL: "https://example.com",
+		Auth: "oauth", AuthServiceAccount: "sa@p.iam.gserviceaccount.com", AuthScope: "https://www.googleapis.com/auth/cloud-platform",
+	})
+	if err != nil {
+		t.Fatalf("oauth: %v", err)
+	}
+	if oauth.HTTP.OAuthToken == nil || oauth.HTTP.OidcToken != nil ||
+		oauth.HTTP.OAuthToken.ServiceAccountEmail != "sa@p.iam.gserviceaccount.com" {
+		t.Fatalf("oauth token = %+v", oauth.HTTP)
+	}
+	oidc, err := taskFromInput(TaskInput{
+		Target: "http", HTTPURL: "https://example.com",
+		Auth: "oidc", AuthServiceAccount: "sa@p.iam.gserviceaccount.com", AuthAudience: "https://svc.example",
+	})
+	if err != nil {
+		t.Fatalf("oidc: %v", err)
+	}
+	if oidc.HTTP.OidcToken == nil || oidc.HTTP.OidcToken.Audience != "https://svc.example" {
+		t.Fatalf("oidc token = %+v", oidc.HTTP)
+	}
+	if _, err := taskFromInput(TaskInput{Target: "http", Auth: "mtls"}); err == nil {
+		t.Fatal("unknown auth accepted")
+	}
+}
+
+func TestQueueIamTestPermissions(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/queues/us-central1/q1/iam/testIamPermissions",
+		`{"permissions":["cloudtasks.queues.get"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if len(mock.gotPerms) != 1 || mock.gotPerms[0] != "cloudtasks.queues.get" {
+		t.Fatalf("permissions = %+v", mock.gotPerms)
+	}
+}
+
+func TestBatchTasks_ErrorPaths(t *testing.T) {
+	boom := model.NewProviderError("InvalidArgument", "bad task", http.StatusBadRequest)
+	for _, body := range []string{`{`, `{"create":[{"target":"http","auth":"mtls"}]}`} {
+		w := do(t, &mockProvider{}, http.MethodPost, "/queues/us-central1/q1/tasks/batch", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+	for _, body := range []string{
+		`{"create":[{"target":"http","httpUrl":"https://x"}]}`,
+		`{"delete":["tasks/t1"]}`,
+	} {
+		w := do(t, &mockProvider{err: boom}, http.MethodPost, "/queues/us-central1/q1/tasks/batch", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestQueueIamTestPermissions_ErrorPaths(t *testing.T) {
+	w := do(t, &mockProvider{}, http.MethodPost, "/queues/us-central1/q1/iam/testIamPermissions", `{`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON status = %d, want 400", w.Code)
+	}
+	boom := model.NewProviderError("InvalidArgument", "bad", http.StatusBadRequest)
+	w = do(t, &mockProvider{err: boom}, http.MethodPost, "/queues/us-central1/q1/iam/testIamPermissions",
+		`{"permissions":["a"]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("provider error status = %d, want 400", w.Code)
+	}
+}
+
+func TestRenderTask_Tokens(t *testing.T) {
+	oauth := renderTask(tasksstore.Task{
+		Target: tasksstore.TargetHTTP,
+		HTTP: &tasksstore.HttpRequest{
+			OAuthToken: &tasksstore.OAuthToken{ServiceAccountEmail: "sa@p.iam.gserviceaccount.com", Scope: "s"},
+		},
+	})
+	if oauth.AuthServiceAccount != "sa@p.iam.gserviceaccount.com" || oauth.AuthScope != "s" {
+		t.Fatalf("oauth render = %+v", oauth)
+	}
+	oidc := renderTask(tasksstore.Task{
+		Target: tasksstore.TargetHTTP,
+		HTTP: &tasksstore.HttpRequest{
+			OidcToken: &tasksstore.OidcToken{ServiceAccountEmail: "sa@p.iam.gserviceaccount.com", Audience: "aud"},
+		},
+	})
+	if oidc.AuthServiceAccount != "sa@p.iam.gserviceaccount.com" || oidc.AuthAudience != "aud" {
+		t.Fatalf("oidc render = %+v", oidc)
 	}
 }

@@ -295,3 +295,34 @@ func TestMemoryStoreConcurrentCreateVersion(t *testing.T) {
 		t.Fatalf("expected %d total versions, got %d", n+1, len(all))
 	}
 }
+
+func TestMemoryListKeyRingsByProject(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, kr := range []struct {
+		project, location, id string
+	}{
+		{"p1", "europe-west1", "b"},
+		{"p1", "global", "z"},
+		{"p1", "europe-west1", "a"},
+		{"p2", "global", "other"},
+	} {
+		if err := s.CreateKeyRing(ctx, kr.project, kr.location, kr.id, KeyRing{Location: kr.location, ID: kr.id, CreateTime: now}); err != nil {
+			t.Fatalf("CreateKeyRing: %v", err)
+		}
+	}
+	got, err := s.ListKeyRingsByProject(ctx, "p1")
+	if err != nil {
+		t.Fatalf("ListKeyRingsByProject: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d key rings, want 3: %+v", len(got), got)
+	}
+	want := [][2]string{{"europe-west1", "a"}, {"europe-west1", "b"}, {"global", "z"}}
+	for i, w := range want {
+		if got[i].Location != w[0] || got[i].ID != w[1] {
+			t.Fatalf("row %d = %s/%s, want %s/%s", i, got[i].Location, got[i].ID, w[0], w[1])
+		}
+	}
+}

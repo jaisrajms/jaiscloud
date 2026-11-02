@@ -143,6 +143,7 @@ import (
 	functionsui "jaiscloud/internal/gcp/ui/functions"
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
 	projectsui "jaiscloud/internal/gcp/ui/projects"
+	runui "jaiscloud/internal/gcp/ui/run"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/k8shelpers"
@@ -1671,7 +1672,7 @@ func startCmd() *cobra.Command {
 					CloudRun:          cloudRunExec,
 					CloudRunSource:    cloudRunSrc,
 				}
-				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithRegistry(reg).WithPluginChain(pluginChain, restBuiltins).WithServiceModes(serviceModes)
+				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runui.NewProvider(runCore), schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithRegistry(reg).WithPluginChain(pluginChain, restBuiltins).WithServiceModes(serviceModes)
 				uiServer, uiErr = coreui.New(gcpRegistrar, adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)

@@ -39,6 +39,10 @@ function emptyInput(): TaskInput {
     httpBody: '',
     appEngineUri: '',
     appEngineMethod: 'POST',
+    auth: '',
+    authServiceAccount: '',
+    authScope: '',
+    authAudience: '',
     scheduleTime: '',
     dispatchDeadline: '10m',
   }
@@ -129,6 +133,45 @@ export function TaskDialog({ open, onClose, location, queue, onSaved }: TaskDial
                 language="json"
                 minRows={2}
               />
+              <TextField
+                select
+                label="Authentication"
+                value={input.auth ?? ''}
+                onChange={(e) => set('auth', e.target.value)}
+                fullWidth
+              >
+                <MenuItem value="">None</MenuItem>
+                <MenuItem value="oauth">OAuth token</MenuItem>
+                <MenuItem value="oidc">OIDC token</MenuItem>
+              </TextField>
+              {input.auth ? (
+                <>
+                  <TextField
+                    label="Service account email"
+                    value={input.authServiceAccount ?? ''}
+                    onChange={(e) => set('authServiceAccount', e.target.value)}
+                    placeholder="sa@project.iam.gserviceaccount.com"
+                    fullWidth
+                  />
+                  {input.auth === 'oauth' ? (
+                    <TextField
+                      label="OAuth scope"
+                      value={input.authScope ?? ''}
+                      onChange={(e) => set('authScope', e.target.value)}
+                      placeholder="https://www.googleapis.com/auth/cloud-platform"
+                      fullWidth
+                    />
+                  ) : (
+                    <TextField
+                      label="OIDC audience"
+                      value={input.authAudience ?? ''}
+                      onChange={(e) => set('authAudience', e.target.value)}
+                      placeholder="https://service.example.com"
+                      fullWidth
+                    />
+                  )}
+                </>
+              ) : null}
             </>
           )}
 

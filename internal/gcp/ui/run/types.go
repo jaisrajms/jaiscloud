@@ -7,6 +7,8 @@
 // list row, so a service name never has to be disambiguated by hand.
 package runui
 
+import "jaiscloud/internal/gcp/ui/uihelper"
+
 // Service is the UI summary of a Cloud Run service, flattened across locations
 // for the list page.
 type Service struct {
@@ -34,4 +36,39 @@ type ListServicesResponse struct {
 type ListRevisionsResponse struct {
 	Revisions []map[string]any `json:"revisions"`
 	Total     int              `json:"total"`
+}
+
+// DeployServiceRequest is the body for POST /services. The console is
+// region-optional, so the location travels in the body with the service id and
+// the google.cloud.run.v2.Service object.
+type DeployServiceRequest struct {
+	Region       string         `json:"region"`
+	ID           string         `json:"id"`
+	Body         map[string]any `json:"body"`
+	ValidateOnly bool           `json:"validateOnly,omitempty"`
+}
+
+// UpdateServiceRequest is the body for PATCH /services/{region}/{service}.
+// UpdateMask carries the camelCase field paths the user touched; the handler
+// joins them into the comma-separated form the core expects.
+type UpdateServiceRequest struct {
+	Body         map[string]any `json:"body"`
+	UpdateMask   []string       `json:"updateMask,omitempty"`
+	ValidateOnly bool           `json:"validateOnly,omitempty"`
+	AllowMissing bool           `json:"allowMissing,omitempty"`
+}
+
+// SetIamPolicyRequest is the body for PUT .../iam.
+type SetIamPolicyRequest struct {
+	Policy uihelper.IamPolicy `json:"policy"`
+}
+
+// TestIamPermissionsRequest is the body for .../iam/testIamPermissions.
+type TestIamPermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+// TestIamPermissionsResponse is the response for testIamPermissions.
+type TestIamPermissionsResponse struct {
+	Permissions []string `json:"permissions"`
 }

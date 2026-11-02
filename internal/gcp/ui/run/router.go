@@ -12,8 +12,13 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r := chi.NewRouter()
 
 	r.Get("/services", h.ListServices)
+	r.Post("/services", h.CreateService)
 	r.Get("/services/{region}/{service}", h.GetService)
+	r.Patch("/services/{region}/{service}", h.UpdateService)
 	r.Delete("/services/{region}/{service}", h.DeleteService)
+	r.Get("/services/{region}/{service}/iam", h.GetServiceIam)
+	r.Put("/services/{region}/{service}/iam", h.SetServiceIam)
+	r.Post("/services/{region}/{service}/iam/testIamPermissions", h.TestServiceIam)
 	r.Get("/services/{region}/{service}/revisions", h.ListRevisions)
 	r.Get("/services/{region}/{service}/revisions/{revision}", h.GetRevision)
 

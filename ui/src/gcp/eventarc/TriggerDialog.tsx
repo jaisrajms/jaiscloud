@@ -30,7 +30,7 @@ import {
 } from '../../api/gcp/eventarc'
 import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
-const DESTINATION_TYPES = ['cloudFunction', 'cloudRun', 'workflow']
+const DESTINATION_TYPES = ['cloudFunction', 'cloudRun', 'workflow', 'gke', 'httpEndpoint']
 
 export interface TriggerDialogProps {
   open: boolean
@@ -69,6 +69,13 @@ function emptyInput(): TriggerInput {
     eventDataContentType: '',
     eventFilters: [defaultFilter()],
     transportPubsubTopic: '',
+    gkeCluster: '',
+    gkeLocation: '',
+    gkeNamespace: '',
+    gkeService: '',
+    gkePath: '',
+    httpEndpointUri: '',
+    maxAttempts: 0,
   }
 }
 
@@ -153,6 +160,9 @@ export function TriggerDialog({ open, onClose, trigger, onSaved }: TriggerDialog
   const structuredValid =
     Boolean(input.name && input.location && input.destinationType && input.destination) &&
     (input.destinationType !== 'cloudRun' || Boolean(input.destinationRegion)) &&
+    (input.destinationType !== 'gke' ||
+      Boolean(input.gkeCluster && input.gkeLocation && input.gkeNamespace && input.gkeService)) &&
+    (input.destinationType !== 'httpEndpoint' || Boolean(input.httpEndpointUri)) &&
     input.eventFilters.some((f) => f.attribute === 'type' && f.value !== '')
   const canSave = (rawMode ? rawText.trim().length > 0 : structuredValid) && !save.isPending
 
@@ -225,11 +235,66 @@ export function TriggerDialog({ open, onClose, trigger, onSaved }: TriggerDialog
                   ))}
                 </Select>
               </FormControl>
+              {input.destinationType !== 'gke' && input.destinationType !== 'httpEndpoint' && (
+                <TextField
+                  label="Destination"
+                  value={input.destination}
+                  onChange={(e) => set('destination', e.target.value)}
+                  placeholder={destinationPlaceholder(input.destinationType)}
+                  fullWidth
+                />
+              )}
+              {input.destinationType === 'gke' && (
+                <>
+                  <TextField
+                    label="GKE cluster"
+                    value={input.gkeCluster ?? ''}
+                    onChange={(e) => set('gkeCluster', e.target.value)}
+                    fullWidth
+                  />
+                  <TextField
+                    label="GKE cluster location"
+                    value={input.gkeLocation ?? ''}
+                    onChange={(e) => set('gkeLocation', e.target.value)}
+                    placeholder="us-central1"
+                    fullWidth
+                  />
+                  <TextField
+                    label="Kubernetes namespace"
+                    value={input.gkeNamespace ?? ''}
+                    onChange={(e) => set('gkeNamespace', e.target.value)}
+                    fullWidth
+                  />
+                  <TextField
+                    label="GKE service"
+                    value={input.gkeService ?? ''}
+                    onChange={(e) => set('gkeService', e.target.value)}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Path (optional)"
+                    value={input.gkePath ?? ''}
+                    onChange={(e) => set('gkePath', e.target.value)}
+                    placeholder="/route"
+                    fullWidth
+                  />
+                </>
+              )}
+              {input.destinationType === 'httpEndpoint' && (
+                <TextField
+                  label="HTTP endpoint URI"
+                  value={input.httpEndpointUri ?? ''}
+                  onChange={(e) => set('httpEndpointUri', e.target.value)}
+                  placeholder="http://10.0.0.1:8080/route"
+                  fullWidth
+                />
+              )}
               <TextField
-                label="Destination"
-                value={input.destination}
-                onChange={(e) => set('destination', e.target.value)}
-                placeholder={destinationPlaceholder(input.destinationType)}
+                label="Max delivery attempts (0 = default)"
+                type="number"
+                value={input.maxAttempts ?? 0}
+                onChange={(e) => set('maxAttempts', Number(e.target.value))}
+                helperText="Eventarc documents 1 as the only retry value."
                 fullWidth
               />
               {input.destinationType === 'cloudRun' && (

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import {
@@ -20,11 +21,14 @@ import {
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
-import { deleteService, getService, listRevisions } from '../../api/gcp/run'
+import { deleteService, getService, getServiceIam, listRevisions, putServiceIam } from '../../api/gcp/run'
 import { useAccount } from '../../context/AccountContext'
 import { firstImage, lastSegment, shortDate, templateContainers } from './util'
+import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { GcpPageTitle } from '../common/PageTitle'
+import { DeployServiceDialog } from './DeployServiceDialog'
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -50,6 +54,7 @@ export function ServiceDetailPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const [editing, setEditing] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'run', 'service', region, service, accountId],
@@ -91,6 +96,9 @@ export function ServiceDetailPage() {
             {region} · project {accountId || '—'}
           </Typography>
         </Box>
+        <Button startIcon={<EditOutlinedIcon />} onClick={() => setEditing(true)}>
+          Edit
+        </Button>
         <Button
           color="error"
           startIcon={<DeleteOutlineIcon />}
@@ -140,6 +148,16 @@ export function ServiceDetailPage() {
           </Stack>
           <Divider sx={{ mt: 2 }} />
         </Box>
+      )}
+
+      {detail.data && (
+        <DeployServiceDialog
+          open={editing}
+          onClose={() => setEditing(false)}
+          service={detail.data}
+          region={region}
+          serviceID={service}
+        />
       )}
 
       <Typography variant="h6" sx={{ mb: 1 }}>
@@ -193,6 +211,15 @@ export function ServiceDetailPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <Divider sx={{ my: 3 }} />
+      <IamPolicyPanel
+        title="Service IAM"
+        queryKey={['gcp', 'run', 'iam', region, service, accountId]}
+        load={() => getServiceIam(region, service)}
+        save={(policy) => putServiceIam(region, service, policy)}
+        defaultRole="roles/run.viewer"
+      />
     </Box>
   )
 }

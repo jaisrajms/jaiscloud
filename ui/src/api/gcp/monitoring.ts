@@ -419,3 +419,50 @@ export const updateServiceLevelObjective = (
 
 export const deleteServiceLevelObjective = (service: string, slo: string) =>
   api.delete<void>(sloPath(service, slo))
+
+/** One entry of the monitored-resource catalog. */
+export interface MonitoredResourceDescriptor {
+  name?: string
+  type?: string
+  displayName?: string
+  description?: string
+  launchStage?: string
+  labels?: { key?: string; description?: string }[]
+}
+
+export interface ListMonitoredResourceDescriptorsResponse {
+  resourceDescriptors?: MonitoredResourceDescriptor[]
+  nextPageToken?: string
+}
+
+/** List the project's monitored-resource descriptors, following pages. */
+export async function listMonitoredResourceDescriptors(params?: {
+  filter?: string
+  pageToken?: string
+}): Promise<{ resourceDescriptors: MonitoredResourceDescriptor[] }> {
+  const query = (pageToken?: string) => ({
+    ...(params?.filter ? { filter: params.filter } : {}),
+    ...(pageToken ? { pageToken } : {}),
+  })
+  if (params?.pageToken) {
+    const page = await api.get<ListMonitoredResourceDescriptorsResponse>(
+      `${BASE}/monitoredResourceDescriptors`,
+      query(params.pageToken),
+    )
+    return { resourceDescriptors: page.resourceDescriptors ?? [] }
+  }
+  const resourceDescriptors = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListMonitoredResourceDescriptorsResponse>(
+        `${BASE}/monitoredResourceDescriptors`,
+        query(pageToken),
+      ),
+    (page) => page.resourceDescriptors ?? [],
+  )
+  return { resourceDescriptors }
+}
+
+export const getMonitoredResourceDescriptor = (type: string) =>
+  api.get<MonitoredResourceDescriptor>(
+    `${BASE}/monitoredResourceDescriptors/${encodeURIComponent(type)}`,
+  )

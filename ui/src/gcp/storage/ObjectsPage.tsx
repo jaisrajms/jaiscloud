@@ -11,15 +11,19 @@ import {
   FormControlLabel,
   IconButton,
   Link,
+  Menu,
+  MenuItem,
   Stack,
   Switch,
   Typography,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import AddIcon from '@mui/icons-material/Add'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import DownloadIcon from '@mui/icons-material/Download'
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined'
+import MoreVertIcon from '@mui/icons-material/MoreVert'
 import RestoreIcon from '@mui/icons-material/Restore'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { Link as RouterLink, useParams, useSearchParams } from 'react-router-dom'
@@ -40,6 +44,7 @@ import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpToolbar } from '../common/GcpToolbar'
 import { filterRows } from '../common/pagination'
+import { ObjectTransferDialog, type TransferMode } from './ObjectTransferDialog'
 
 function formatSize(value?: string): string {
   if (!value) return '—'
@@ -69,6 +74,9 @@ export function ObjectsPage() {
   const [detail, setDetail] = useState<{ name: string; generation?: string } | null>(null)
   const [filter, setFilter] = useState('')
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  const [transfer, setTransfer] = useState<{ mode: TransferMode; source?: string } | null>(null)
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
+  const [menuObject, setMenuObject] = useState<string | null>(null)
 
   const objects = useQuery({
     queryKey: ['gcp', 'storage', 'objects', accountId, bucket, prefix, versions],
@@ -206,6 +214,16 @@ export function ObjectsPage() {
             )}
             <IconButton
               size="small"
+              aria-label={`More actions for ${object.name}`}
+              onClick={(e) => {
+                setMenuAnchor(e.currentTarget)
+                setMenuObject(object.name)
+              }}
+            >
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+            <IconButton
+              size="small"
               aria-label={`Delete ${object.name}`}
               onClick={() => remove.mutate({ name: object.name, generation: object.generation })}
             >
@@ -232,6 +250,9 @@ export function ObjectsPage() {
               startIcon={<SettingsOutlinedIcon />}
             >
               Settings
+            </Button>
+            <Button startIcon={<AddIcon />} onClick={() => setTransfer({ mode: 'compose' })}>
+              Compose
             </Button>
             <Button
               variant="contained"
@@ -290,6 +311,30 @@ export function ObjectsPage() {
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed. The object may be held or retention-protected.
         </Alert>
+      )}
+
+      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
+        {(['copy', 'rewrite', 'move'] as TransferMode[]).map((mode) => (
+          <MenuItem
+            key={mode}
+            onClick={() => {
+              setTransfer({ mode, source: menuObject ?? undefined })
+              setMenuAnchor(null)
+            }}
+          >
+            {mode === 'copy' ? 'Copy to…' : mode === 'rewrite' ? 'Rewrite to…' : 'Move to…'}
+          </MenuItem>
+        ))}
+      </Menu>
+
+      {transfer && (
+        <ObjectTransferDialog
+          open
+          onClose={() => setTransfer(null)}
+          bucket={bucket}
+          mode={transfer.mode}
+          sourceObject={transfer.source}
+        />
       )}
 
       <GcpDataTable

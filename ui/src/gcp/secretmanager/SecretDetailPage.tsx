@@ -31,11 +31,13 @@ import {
   deleteSecret,
   destroySecretVersion,
   disableSecretVersion,
+  enableManagedRotation,
   enableSecretVersion,
   getSecret,
   getSecretIam,
   listSecretVersions,
   putSecretIam,
+  rotateSecret,
   type SecretVersion,
 } from '../../api/gcp/secretmanager'
 import { useAccount } from '../../context/AccountContext'
@@ -56,6 +58,10 @@ export function SecretDetailPage() {
   const [addOpen, setAddOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [revealed, setRevealed] = useState<{ version: string; value: string } | null>(null)
+  const [managedOpen, setManagedOpen] = useState(false)
+  const [instanceID, setInstanceID] = useState('')
+  const [dbUser, setDBUser] = useState('')
+  const [dbPassword, setDBPassword] = useState('')
 
   const detail = useQuery({
     queryKey: ['gcp', 'secretmanager', 'secret', secret, accountId],
@@ -89,6 +95,27 @@ export function SecretDetailPage() {
     mutationFn: (version: SecretVersion) =>
       destroySecretVersion(secret, version.versionId || ''),
     onSuccess: invalidate,
+  })
+
+  const rotate = useMutation({
+    mutationFn: () => rotateSecret(secret),
+    onSuccess: invalidate,
+  })
+
+  const enableManaged = useMutation({
+    mutationFn: () =>
+      enableManagedRotation(secret, {
+        instanceId: instanceID.trim(),
+        username: dbUser.trim(),
+        password: dbPassword.trim() || undefined,
+      }),
+    onSuccess: () => {
+      invalidate()
+      setManagedOpen(false)
+      setInstanceID('')
+      setDBUser('')
+      setDBPassword('')
+    },
   })
 
   const reveal = useMutation({
@@ -136,7 +163,38 @@ export function SecretDetailPage() {
             <Typography variant="body2" color="text.secondary">
               Rotation: {detail.data.rotationPeriod || '—'}
               {detail.data.nextRotationTime ? ` (next ${detail.data.nextRotationTime})` : ''}
+              {detail.data.managedRotationStatus
+                ? ` · managed rotation ${detail.data.managedRotationStatus}`
+                : ''}
             </Typography>
+            <Stack direction="row" spacing={1} sx={{ pt: 1, flexWrap: 'wrap', rowGap: 1 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={rotate.isPending || detail.data.managedRotationStatus !== 'ACTIVE'}
+                onClick={() => rotate.mutate()}
+              >
+                Rotate now
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={Boolean(detail.data.managedRotationStatus)}
+                onClick={() => setManagedOpen(true)}
+              >
+                Enable managed rotation
+              </Button>
+            </Stack>
+            {(rotate.isError || enableManaged.isError) && (
+              <Alert severity="error">
+                {((rotate.error ?? enableManaged.error) as Error).message}
+              </Alert>
+            )}
+            {rotate.data && (
+              <Alert severity="success">
+                Rotated to version {rotate.data.versionId} ({rotate.data.state}).
+              </Alert>
+            )}
             <Typography variant="body2" color="text.secondary">
               Event topics: {detail.data.topics && detail.data.topics.length > 0 ? detail.data.topics.join(', ') : '—'}
             </Typography>
@@ -260,6 +318,47 @@ export function SecretDetailPage() {
         nextRotationTime={detail.data?.nextRotationTime}
         onClose={() => setEditOpen(false)}
       />
+
+      <Dialog open={managedOpen} onClose={() => setManagedOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Enable Cloud SQL managed rotation</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {enableManaged.isError && (
+              <Alert severity="error">{(enableManaged.error as Error).message}</Alert>
+            )}
+            <TextField
+              autoFocus
+              label="Cloud SQL instance"
+              value={instanceID}
+              onChange={(e) => setInstanceID(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Database user"
+              value={dbUser}
+              onChange={(e) => setDBUser(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Password (leave empty to generate)"
+              type="password"
+              value={dbPassword}
+              onChange={(e) => setDBPassword(e.target.value)}
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setManagedOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={enableManaged.isPending || !instanceID.trim() || !dbUser.trim()}
+            onClick={() => enableManaged.mutate()}
+          >
+            Enable
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={Boolean(revealed)} onClose={() => setRevealed(null)} fullWidth maxWidth="sm">
         <DialogTitle>Version {revealed?.version} payload</DialogTitle>

@@ -74,6 +74,38 @@ func (h *Handler) ListMetricDescriptors(w http.ResponseWriter, r *http.Request) 
 	uihelper.WriteJSON(w, resp.Data)
 }
 
+// GET /monitoredResourceDescriptors lists the monitored-resource catalog.
+func (h *Handler) ListMonitoredResources(w http.ResponseWriter, r *http.Request) {
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.ListMonitoredResourceDescriptors", "global", h.account(r))
+	uihelper.PageParams(r, nr.Params)
+	if f := r.URL.Query().Get("filter"); f != "" {
+		nr.Params["filter"] = f
+	}
+	resp, err := h.provider.ListMonitoredResourceDescriptors(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// GET /monitoredResourceDescriptors/{type} reads one descriptor by its type.
+func (h *Handler) GetMonitoredResource(w http.ResponseWriter, r *http.Request) {
+	typ := uihelper.PathParam(r, "type")
+	if typ == "" {
+		uihelper.UIError(w, "BadRequest", "invalid resource type", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.GetMonitoredResourceDescriptor", "global", h.account(r))
+	nr.Params["name"] = h.scope(r) + "/monitoredResourceDescriptors/" + url.PathEscape(typ)
+	resp, err := h.provider.GetMonitoredResourceDescriptor(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
 // GET /timeSeries lists time series matching the filter and interval.
 func (h *Handler) ListTimeSeries(w http.ResponseWriter, r *http.Request) {
 	nr := uihelper.NR(r.Context(), h.cfg, "monitoring", "Monitoring.ListTimeSeries", "global", h.account(r))

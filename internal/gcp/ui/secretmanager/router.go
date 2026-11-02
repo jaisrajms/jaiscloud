@@ -24,6 +24,9 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Post("/secrets/{secret}/iam/testIamPermissions", h.TestIamPermissions)
 
 	// Versions.
+	r.Post("/secrets/{secret}/rotate", h.RotateSecret)
+	r.Post("/secrets/{secret}/enableManagedRotation", h.EnableManagedRotation)
+
 	r.Get("/secrets/{secret}/versions", h.ListVersions)
 	r.Post("/secrets/{secret}/versions", h.AddVersion)
 	r.Get("/secrets/{secret}/versions/{version}", h.GetVersion)

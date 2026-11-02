@@ -1,8 +1,7 @@
 // Package secretmanagerui serves the Secret Manager UI API. Handlers call the
 // Secret Manager provider directly (in-process) and reshape its
-// Discovery-shaped response maps for the console. Scope is secrets, versions
-// and IAM policy; managed rotation execution and replication metadata are
-// deferred (see the console-UI wave plan).
+// Discovery-shaped response maps for the console. Scope is secrets, versions,
+// IAM policy and Cloud SQL managed rotation (enable + rotate).
 package secretmanagerui
 
 import "jaiscloud/internal/gcp/ui/uihelper"
@@ -18,7 +17,10 @@ type Secret struct {
 	Topics           []string          `json:"topics,omitempty"`
 	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
 	NextRotationTime string            `json:"nextRotationTime,omitempty"`
-	KmsKeyName       string            `json:"kmsKeyName,omitempty"`
+	// ManagedRotationStatus is the output-only state of Cloud SQL managed
+	// rotation (ACTIVE once enabled), empty when it is not configured.
+	ManagedRotationStatus string `json:"managedRotationStatus,omitempty"`
+	KmsKeyName            string `json:"kmsKeyName,omitempty"`
 }
 
 // ListSecretsResponse is the response for GET /secrets.
@@ -36,7 +38,10 @@ type CreateSecretRequest struct {
 	Topics           []string          `json:"topics,omitempty"`
 	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
 	NextRotationTime string            `json:"nextRotationTime,omitempty"`
-	KmsKeyName       string            `json:"kmsKeyName,omitempty"`
+	// ManagedRotationStatus is the output-only state of Cloud SQL managed
+	// rotation (ACTIVE once enabled), empty when it is not configured.
+	ManagedRotationStatus string `json:"managedRotationStatus,omitempty"`
+	KmsKeyName            string `json:"kmsKeyName,omitempty"`
 }
 
 // UpdateSecretRequest is the body for PATCH /secrets/{secret}. Absent fields
@@ -104,4 +109,13 @@ type TestIamPermissionsRequest struct {
 // TestIamPermissionsResponse is the response for testIamPermissions.
 type TestIamPermissionsResponse struct {
 	Permissions []string `json:"permissions"`
+}
+
+// EnableManagedRotationRequest is the body for
+// POST /secrets/{secret}/enableManagedRotation. The provider stores the
+// credentials and generates a password when Password is empty.
+type EnableManagedRotationRequest struct {
+	InstanceID string `json:"instanceId"`
+	Username   string `json:"username"`
+	Password   string `json:"password,omitempty"`
 }

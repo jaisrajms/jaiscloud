@@ -201,6 +201,23 @@ func (p typedEventarc) TriggerSetIamPolicy(ctx context.Context, project, locatio
 
 // ---- channels ----------------------------------------------------------------
 
+func (p typedEventarc) TriggerTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error) {
+	perms := make([]any, 0, len(permissions))
+	for _, perm := range permissions {
+		perms = append(perms, perm)
+	}
+	data, covered, err := p.c.do(ctx, "Eventarc.TriggerTestIamPermissions", project, location,
+		map[string]any{"project": project, "location": location, "name": triggerName(project, location, id),
+			"body": map[string]any{"permissions": perms}}, nil)
+	if !covered {
+		return p.ProviderInterface.TriggerTestIamPermissions(ctx, project, location, id, permissions)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return permissionStrings(data), nil
+}
+
 func (p typedEventarc) ListChannelsByProject(ctx context.Context, project string) ([]eventarcstore.Channel, error) {
 	all := func(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		cs, err := p.ProviderInterface.ListChannelsByProject(ctx, project)
@@ -296,6 +313,34 @@ func (p typedEventarc) ChannelGetIamPolicy(ctx context.Context, project, locatio
 		return policy.Policy{}, err
 	}
 	return decodePolicy(data)
+}
+
+func (p typedEventarc) ChannelTestIamPermissions(ctx context.Context, project, location, id string, permissions []string) ([]string, error) {
+	perms := make([]any, 0, len(permissions))
+	for _, perm := range permissions {
+		perms = append(perms, perm)
+	}
+	data, covered, err := p.c.do(ctx, "Eventarc.ChannelTestIamPermissions", project, location,
+		map[string]any{"project": project, "location": location, "name": channelName(project, location, id),
+			"body": map[string]any{"permissions": perms}}, nil)
+	if !covered {
+		return p.ProviderInterface.ChannelTestIamPermissions(ctx, project, location, id, permissions)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return permissionStrings(data), nil
+}
+
+func permissionStrings(m map[string]any) []string {
+	raw, _ := m["permissions"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (p typedEventarc) ChannelSetIamPolicy(ctx context.Context, project, location, id string, body map[string]any) (policy.Policy, error) {

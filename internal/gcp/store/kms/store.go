@@ -96,6 +96,9 @@ type Store interface {
 	CreateKeyRing(ctx context.Context, projectID, location, id string, kr KeyRing) error
 	GetKeyRing(ctx context.Context, projectID, location, id string) (KeyRing, error)
 	ListKeyRings(ctx context.Context, projectID, location string) ([]KeyRing, error)
+	// ListKeyRingsByProject lists every key ring in a project across all
+	// locations, sorted by location then id. It backs the console home summary.
+	ListKeyRingsByProject(ctx context.Context, projectID string) ([]KeyRing, error)
 
 	CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error
 	// CreateCryptoKeyWithVersion also stores ck and, when withInitialVersion is

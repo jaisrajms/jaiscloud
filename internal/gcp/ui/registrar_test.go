@@ -353,8 +353,8 @@ func TestRegistrar_MonitoringAdvertised(t *testing.T) {
 	if got.ID != "monitoring" || got.RootPath != "/gcp/monitoring/metrics" || got.Tier != "full" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
-	if len(got.Children) != 4 {
-		t.Fatalf("children = %+v, want metrics + alerting + channels + SLOs", got.Children)
+	if len(got.Children) != 5 {
+		t.Fatalf("children = %+v, want metrics + monitored resources + alerting + channels + SLOs", got.Children)
 	}
 }
 
