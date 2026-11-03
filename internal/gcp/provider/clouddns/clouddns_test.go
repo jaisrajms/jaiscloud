@@ -117,7 +117,10 @@ func TestManagedZoneAlreadyExistsAndNotFound(t *testing.T) {
 	}
 }
 
-func TestManagedZonePatch(t *testing.T) {
+// TestManagedZonePatchReturnsOperation covers the dns/v1 contract for
+// managedZones.patch: it returns a dns#operation (not the zone), the operation
+// is already done, and the next managedZones.get shows the change.
+func TestManagedZonePatchReturnsOperation(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
 	mustCreateZone(t, p, "zone-a")
@@ -129,15 +132,148 @@ func TestManagedZonePatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("patch: %v", err)
 	}
-	if resp.Data["description"] != "patched" {
-		t.Errorf("description = %v", resp.Data["description"])
+	if resp.Data["kind"] != kindOperation {
+		t.Errorf("kind = %v, want %v", resp.Data["kind"], kindOperation)
 	}
-	labels, _ := resp.Data["labels"].(map[string]any)
+	opID, _ := resp.Data["id"].(string)
+	if opID == "" {
+		t.Fatal("operation id is empty")
+	}
+	if resp.Data["type"] != "update" {
+		t.Errorf("type = %v, want update", resp.Data["type"])
+	}
+	if resp.Data["status"] != "done" {
+		t.Errorf("status = %v, want done", resp.Data["status"])
+	}
+	if ts, _ := resp.Data["startTime"].(string); ts == "" {
+		t.Error("startTime is empty")
+	}
+	zc, _ := resp.Data["zoneContext"].(map[string]any)
+	oldVal, _ := zc["oldValue"].(map[string]any)
+	newVal, _ := zc["newValue"].(map[string]any)
+	if oldVal["description"] != "test zone" {
+		t.Errorf("zoneContext.oldValue.description = %v, want test zone", oldVal["description"])
+	}
+	if newVal["description"] != "patched" {
+		t.Errorf("zoneContext.newValue.description = %v, want patched", newVal["description"])
+	}
+	if newVal["dnsName"] != "example.com." {
+		t.Errorf("dnsName must be preserved, got %v", newVal["dnsName"])
+	}
+	labels, _ := newVal["labels"].(map[string]any)
 	if labels["tier"] != "gold" {
-		t.Errorf("labels = %v", resp.Data["labels"])
+		t.Errorf("labels = %v, want tier=gold", newVal["labels"])
 	}
-	if resp.Data["dnsName"] != "example.com." {
-		t.Errorf("dnsName must be preserved, got %v", resp.Data["dnsName"])
+
+	// The operation polls as done, and the zone is updated once it is.
+	got, err := p.GetManagedZoneOperation(ctx, newNR(map[string]any{"managedZone": "zone-a", "operation": opID}))
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if got.Data["status"] != "done" || got.Data["id"] != opID {
+		t.Errorf("polled operation = %v, want done %s", got.Data, opID)
+	}
+	zone, err := p.GetManagedZone(ctx, newNR(map[string]any{"managedZone": "zone-a"}))
+	if err != nil {
+		t.Fatalf("get zone: %v", err)
+	}
+	if zone.Data["description"] != "patched" {
+		t.Errorf("zone description = %v, want patched", zone.Data["description"])
+	}
+	if zl, _ := zone.Data["labels"].(map[string]any); zl["tier"] != "gold" {
+		t.Errorf("zone labels = %v, want tier=gold", zone.Data["labels"])
+	}
+}
+
+// TestManagedZoneUpdateReturnsOperation covers managedZones.update (PUT): same
+// merge semantics, also a dns#operation.
+func TestManagedZoneUpdateReturnsOperation(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateZone(t, p, "zone-a")
+
+	resp, err := p.UpdateManagedZone(ctx, newNR(map[string]any{
+		"managedZone": "zone-a",
+		"body":        map[string]any{"description": "replaced", "visibility": "private"},
+	}))
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if resp.Data["kind"] != kindOperation || resp.Data["type"] != "update" {
+		t.Fatalf("update response = %v, want a dns#operation", resp.Data)
+	}
+	zone, err := p.GetManagedZone(ctx, newNR(map[string]any{"managedZone": "zone-a"}))
+	if err != nil {
+		t.Fatalf("get zone: %v", err)
+	}
+	if zone.Data["description"] != "replaced" || zone.Data["visibility"] != "private" {
+		t.Errorf("zone = %v, want description=replaced visibility=private", zone.Data)
+	}
+}
+
+// TestManagedZoneOperationGetList covers managedZoneOperations.get/list, the
+// clientOperationId binding, and the unknown-operation NotFound.
+func TestManagedZoneOperationGetList(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateZone(t, p, "zone-a")
+
+	for _, id := range []string{"op-b", "op-a"} {
+		if _, err := p.PatchManagedZone(ctx, newNR(map[string]any{
+			"managedZone":       "zone-a",
+			"clientOperationId": id,
+			"body":              map[string]any{"description": "patch " + id},
+		})); err != nil {
+			t.Fatalf("patch(%s): %v", id, err)
+		}
+	}
+	// A clientOperationId is unique within the zone's operations collection.
+	if _, err := p.PatchManagedZone(ctx, newNR(map[string]any{
+		"managedZone":       "zone-a",
+		"clientOperationId": "op-a",
+		"body":              map[string]any{"description": "dup"},
+	})); !isCode(err, "AlreadyExists") {
+		t.Fatalf("duplicate clientOperationId err = %v, want AlreadyExists", err)
+	}
+
+	// Get by the client-supplied id.
+	got, err := p.GetManagedZoneOperation(ctx, newNR(map[string]any{"managedZone": "zone-a", "operation": "op-a"}))
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if got.Data["id"] != "op-a" || got.Data["status"] != "done" {
+		t.Errorf("operation = %v, want done op-a", got.Data)
+	}
+	if _, err := p.GetManagedZoneOperation(ctx, newNR(map[string]any{"managedZone": "zone-a", "operation": "missing"})); !isCode(err, "NotFound") {
+		t.Fatalf("unknown operation err = %v, want NotFound", err)
+	}
+
+	// List, sorted by id.
+	list, err := p.ListManagedZoneOperations(ctx, newNR(map[string]any{"managedZone": "zone-a", "sortBy": "id"}))
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if list.Data["kind"] != kindOperationList {
+		t.Errorf("list kind = %v, want %v", list.Data["kind"], kindOperationList)
+	}
+	ops, _ := list.Data["operations"].([]any)
+	if len(ops) != 2 {
+		t.Fatalf("operations = %v, want 2", ops)
+	}
+	for i, want := range []string{"op-a", "op-b"} {
+		op, _ := ops[i].(map[string]any)
+		if op["id"] != want {
+			t.Errorf("operations[%d].id = %v, want %s", i, op["id"], want)
+		}
+	}
+
+	// An unsupported sortBy is InvalidArgument rather than a mis-sorted page.
+	if _, err := p.ListManagedZoneOperations(ctx, newNR(map[string]any{"managedZone": "zone-a", "sortBy": "description"})); !isCode(err, "InvalidArgument") {
+		t.Fatalf("bad sortBy err = %v, want InvalidArgument", err)
+	}
+	// The operations collection of a missing zone is NotFound.
+	if _, err := p.ListManagedZoneOperations(ctx, newNR(map[string]any{"managedZone": "missing"})); !isCode(err, "NotFound") {
+		t.Fatalf("missing zone err = %v, want NotFound", err)
 	}
 }
 

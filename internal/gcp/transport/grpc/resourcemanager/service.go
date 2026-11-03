@@ -61,11 +61,13 @@ func (s *Service) GetProject(ctx context.Context, req *resourcemanagerpb.GetProj
 	return projectToProto(p), nil
 }
 
-// ListProjects returns a page of projects. The emulator does not model an
-// org/folder hierarchy, so the required parent is ignored and every project is
-// listed (recorded as a deferral).
+// ListProjects returns the page of direct child projects of the required
+// organization/folder parent, in the documented ascending display_name order.
+// A missing or malformed parent is InvalidArgument, as the proto marks the
+// field Required; only projects recorded under that parent are listed (the
+// emulator keeps the parent reference but no folder hierarchy).
 func (s *Service) ListProjects(ctx context.Context, req *resourcemanagerpb.ListProjectsRequest) (*resourcemanagerpb.ListProjectsResponse, error) {
-	page, next, err := s.core.ListProjects(ctx, int(req.GetPageSize()), req.GetPageToken(), req.GetShowDeleted(), "")
+	page, next, err := s.core.ListProjectsUnderParent(ctx, req.GetParent(), int(req.GetPageSize()), req.GetPageToken(), req.GetShowDeleted())
 	if err != nil {
 		return nil, mapError(err)
 	}

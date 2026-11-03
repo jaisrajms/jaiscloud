@@ -524,6 +524,16 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "clouddns", Method: "POST", Path: dnsBase + "/" + zone + "/rrsets",
 			Body: fmt.Sprintf(`{"name":%q,"type":"A","ttl":300,"rrdatas":["1.2.3.4"]}`, "www."+dnsName)},
 		Scenario{Service: "clouddns", Method: "GET", Path: dnsBase + "/" + zone + "/rrsets"},
+		// managedZones.patch returns a dns#operation (not the zone); the
+		// official clients poll managedZoneOperations.get until it is done, so
+		// record the patch, its operation poll and the collection listing.
+		Scenario{Service: "clouddns", Method: "PATCH", Path: dnsBase + "/" + zone,
+			Body: `{"description":"conformance patch"}`,
+			Save: map[string]string{"dnsOperation": "id"}},
+		Scenario{Service: "clouddns", Method: "GET", Path: dnsBase + "/" + zone + "/operations/${dnsOperation}"},
+		Scenario{Service: "clouddns", Method: "PUT", Path: dnsBase + "/" + zone,
+			Body: fmt.Sprintf(`{"name":%q,"dnsName":%q,"description":"conformance replace"}`, zone, dnsName)},
+		Scenario{Service: "clouddns", Method: "GET", Path: dnsBase + "/" + zone + "/operations"},
 		Scenario{Service: "clouddns", Method: "GET", Path: dnsBase + "/missing-" + suffix},
 		Scenario{Service: "clouddns", Method: "DELETE", Path: dnsBase + "/" + zone},
 	)
