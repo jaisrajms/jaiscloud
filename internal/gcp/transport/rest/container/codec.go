@@ -47,7 +47,9 @@ func (c *Codec) ServiceName() string { return ServiceName }
 
 // Decode parses a GKE v1 path into a NormalizedRequest. Params carry project,
 // location, cluster/nodePool/operation (item paths), body (POST/PUT), plus any
-// query parameters (pageSize, pageToken).
+// query parameters. The list handlers read no paging parameter: GKE's
+// Discovery document declares none on clusters/nodePools/operations.list, so a
+// stray pageSize/pageToken reaches Params and is ignored, as real GKE does.
 func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1

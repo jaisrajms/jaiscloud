@@ -374,7 +374,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `setResourceLabels`/`startIpRotation`/`completeIpRotation`), served over both the REST surface and
   the native gRPC `google.container.v1.ClusterManager` transport. Every mutating call returns a GKE
   `Operation` (correct `operationType`, and `DONE` by default) and the recorded fields are echoed on
-  read-back. GKE's concurrent-operation rules sit behind an opt-in simulated in-flight window
+  read-back. The three list methods (`clusters`, `nodePools`, `operations`) return the complete
+  collection: the Discovery document declares no `pageSize`/`pageToken` on them and their response
+  schemas carry no `nextPageToken`, so a stray paging parameter is accepted and ignored, as real GKE
+  ignores it, and REST and gRPC return the same shape. GKE's concurrent-operation rules sit behind an opt-in simulated in-flight window
   (`JAISCLOUD_GKE_OPERATION_WINDOW`; unset keeps every operation instant-`DONE`): while a window is
   open the returned operation is `RUNNING` with no `endTime` and settles to `DONE` one window after
   it started, a mutating call that overlaps an operation still running on its target is the 400
