@@ -2,8 +2,6 @@ package bigquery
 
 import (
 	"bufio"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -36,7 +34,11 @@ import (
 // rather than a silent no-op), so the BigQuery provider never imports the
 // storage provider.
 type SourceReader interface {
-	FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error)
+	// OpenObject opens the plaintext of bucket/object as a stream, or returns
+	// gcs.ErrNoSuchObject when the object (or its bytes) is absent. A load
+	// streams the object into a spool one source at a time, so a large object is
+	// never held whole by the load pipeline.
+	OpenObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
 	// ListObjectNames returns the live object names in bucket whose name has the
 	// given prefix, sorted ascending. An absent bucket yields no names (the
 	// memory backend reports gcs.ErrNoSuchBucket; the Postgres backend an empty
@@ -84,16 +86,14 @@ type loadRecords struct {
 }
 
 // loadSource is one decoded source file: its gs:// URI (empty for an uploaded
-// media body) and the plaintext bytes.
-type loadSource struct {
-	uri  string
-	data []byte
-}
+// media body) and the spool holding its plaintext bytes.
+// (declared in load_source.go)
 
 // runLoad evaluates a configuration.load job whose source is one or more gs://
 // objects: it resolves each URI (a single object or a single-`*` wildcard)
 // through the injected GCS reader and delegates the decode/coercion/write to
-// executeLoad.
+// executeLoad. Each object is streamed into its own spool one at a time, so a
+// wildcard/list source peaks at one object, not the sum of them.
 func (p *Provider) runLoad(ctx context.Context, project string, load map[string]any, now time.Time) (stats map[string]any, jobErr map[string]any, err error) {
 	if p.sourceReader == nil {
 		return nil, nil, model.NewProviderError("Unimplemented", "load jobs are not enabled (no GCS source reader configured)", 501)
@@ -143,8 +143,11 @@ func (p *Provider) runLoad(ctx context.Context, project string, load map[string]
 	}
 
 	sources := make([]loadSource, 0, len(refs))
+	// A source opened by this call is always closed: a spool spills to a temp
+	// file, and a failed load must leave nothing behind. Close is idempotent.
+	defer func() { closeLoadSources(sources) }()
 	for _, rf := range refs {
-		data, ferr := p.sourceReader.FetchObjectBytes(ctx, rf.bucket, rf.object)
+		spool, ferr := p.spoolObject(ctx, rf.bucket, rf.object)
 		if ferr != nil {
 			// A missing object is a job-level notFound (real BigQuery accepts the
 			// job then fails it); any other read failure is a real server error.
@@ -153,9 +156,24 @@ func (p *Provider) runLoad(ctx context.Context, project string, load map[string]
 			}
 			return nil, nil, model.NewProviderError("Internal", "failed to read source "+gsURI(rf.bucket, rf.object)+": "+ferr.Error(), 500)
 		}
-		sources = append(sources, loadSource{uri: gsURI(rf.bucket, rf.object), data: data})
+		sources = append(sources, loadSource{uri: gsURI(rf.bucket, rf.object), src: spool})
 	}
 	return p.executeLoad(ctx, project, load, sources, strconv.Itoa(len(sources)), now)
+}
+
+// spoolObject streams one gs:// object into a spool.
+func (p *Provider) spoolObject(ctx context.Context, bucket, object string) (*loadSpool, error) {
+	rc, err := p.sourceReader.OpenObject(ctx, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	spool := newLoadSpool()
+	if err := spool.appendReader(rc, 0); err != nil {
+		spool.Close()
+		return nil, err
+	}
+	return spool, nil
 }
 
 // zeroLoadStats is the statistics.load map for a job that failed before (or
@@ -169,7 +187,7 @@ func zeroLoadStats() map[string]any {
 // statistics.load.inputFiles value the caller reports ("0" for a media upload,
 // which names no sourceUris).
 func (p *Provider) runLoadData(ctx context.Context, project string, load map[string]any, data []byte, inputFiles string, now time.Time) (stats map[string]any, jobErr map[string]any, err error) {
-	return p.executeLoad(ctx, project, load, []loadSource{{data: data}}, inputFiles, now)
+	return p.executeLoad(ctx, project, load, []loadSource{{src: spoolBytes(data)}}, inputFiles, now)
 }
 
 // executeLoad resolves the destination schema, decodes/coerces every source,
@@ -268,8 +286,8 @@ func (p *Provider) executeLoad(ctx context.Context, project string, load map[str
 	var bad []string
 	totalBytes := int64(0)
 	for _, src := range sources {
-		totalBytes += int64(len(src.data))
-		recs, derr := decodeLoadRecords(format, load, fields, src.data)
+		totalBytes += src.src.Size()
+		recs, derr := decodeLoadRecords(format, load, fields, src.src)
 		if derr != nil {
 			return nil, nil, derr
 		}
@@ -437,58 +455,42 @@ func validateLoadOptions(load map[string]any) error {
 	return nil
 }
 
-// decodeLoadRecords decodes the source bytes into schema-coerced rows plus the
-// list of records that failed. A non-nil error is a request-level failure (an
-// unusable delimiter, an unreadable stream), never a per-record failure.
-func decodeLoadRecords(format string, load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
+// decodeLoadRecords decodes one source into schema-coerced rows plus the list of
+// records that failed. The source is read through its spool, so a plain-text
+// payload is never materialised whole (and a gzip payload is decompressed as a
+// stream). A non-nil error is a request-level failure (an unusable delimiter, an
+// unreadable stream), never a per-record failure.
+func decodeLoadRecords(format string, load map[string]any, fields []schemaField, src *loadSpool) (*loadRecords, error) {
 	switch format {
 	case loadFormatNDJSON:
-		dec, err := decompressCSVOrJSON(data)
+		rd, err := openTextSource(src)
 		if err != nil {
 			return nil, err
 		}
-		return decodeNDJSON(load, fields, dec)
+		defer rd.Close()
+		return decodeNDJSON(load, fields, rd)
 	case loadFormatCSV:
-		dec, err := decompressCSVOrJSON(data)
+		rd, err := openTextSource(src)
 		if err != nil {
 			return nil, err
 		}
-		return decodeCSV(load, fields, dec)
+		defer rd.Close()
+		return decodeCSV(load, fields, rd)
 	case loadFormatParquet:
-		return decodeParquet(load, fields, data)
+		return decodeParquet(load, fields, src)
 	case loadFormatAvro:
-		return decodeAvro(load, fields, data)
+		return decodeAvro(load, fields, src)
 	}
 	return nil, model.NewProviderError("Unimplemented", "unsupported sourceFormat "+format, 501)
-}
-
-// decompressCSVOrJSON transparently decompresses a gzip-wrapped CSV/JSON
-// source. Real BigQuery has no `compression` field on JobConfigurationLoad — it
-// auto-detects gzip — so the emulator detects the gzip magic bytes rather than
-// requiring an option.
-func decompressCSVOrJSON(data []byte) ([]byte, error) {
-	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
-		return data, nil
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, invalidArgument("failed to read gzip source: " + err.Error())
-	}
-	defer zr.Close()
-	out, err := io.ReadAll(zr)
-	if err != nil {
-		return nil, invalidArgument("failed to decompress gzip source: " + err.Error())
-	}
-	return out, nil
 }
 
 // decodeNDJSON reads one JSON object per line. A malformed line, a missing
 // REQUIRED field or an unknown field (unless ignoreUnknownValues) is a bad
 // record. Numbers decode as json.Number so INTEGERs beyond 2^53 survive.
-func decodeNDJSON(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
+func decodeNDJSON(load map[string]any, fields []schemaField, r io.Reader) (*loadRecords, error) {
 	ignoreUnknown := boolValue(load, "ignoreUnknownValues")
 	res := &loadRecords{}
-	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLoadLineBytes)
 	line := 0
 	for sc.Scan() {
@@ -519,8 +521,8 @@ func decodeNDJSON(load map[string]any, fields []schemaField, data []byte) (*load
 
 // newRawCSVReader builds the csv.Reader for a CSV load with only the
 // fieldDelimiter applied (skipLeadingRows is handled by the caller).
-func newRawCSVReader(load map[string]any, data []byte) (*csv.Reader, error) {
-	r := csv.NewReader(bytes.NewReader(data))
+func newRawCSVReader(load map[string]any, r0 io.Reader) (*csv.Reader, error) {
+	r := csv.NewReader(r0)
 	r.FieldsPerRecord = -1
 	if d := strValue(load, "fieldDelimiter"); d != "" {
 		runes := []rune(d)
@@ -534,8 +536,8 @@ func newRawCSVReader(load map[string]any, data []byte) (*csv.Reader, error) {
 
 // newCSVReader builds the csv.Reader for a CSV load: it applies fieldDelimiter
 // and skips skipLeadingRows header/leading records.
-func newCSVReader(load map[string]any, data []byte) (*csv.Reader, int, error) {
-	r, err := newRawCSVReader(load, data)
+func newCSVReader(load map[string]any, r0 io.Reader) (*csv.Reader, int, error) {
+	r, err := newRawCSVReader(load, r0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -557,8 +559,8 @@ func newCSVReader(load map[string]any, data []byte) (*csv.Reader, int, error) {
 // decodeCSV reads comma-separated (or fieldDelimiter-separated) records mapped
 // positionally onto the schema fields. Nested/repeated fields, jagged rows and
 // a non-default quote are rejected — the standard library cannot express them.
-func decodeCSV(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
-	r, skip, err := newCSVReader(load, data)
+func decodeCSV(load map[string]any, fields []schemaField, rd io.Reader) (*loadRecords, error) {
+	r, skip, err := newCSVReader(load, rd)
 	if err != nil {
 		return nil, err
 	}
@@ -1030,12 +1032,14 @@ func intOption(m map[string]any, key string) (int, error) {
 // describeSource derives a BigQuery schema from the first source file of a
 // self-describing format (Parquet/Avro).
 func describeSource(format string, load map[string]any, sources []loadSource) ([]schemaField, error) {
-	if len(sources) == 0 {
+	if len(sources) == 0 || sources[0].src == nil {
 		return nil, invalidArgument("no load source to read a schema from")
 	}
+	first := sources[0].src
 	switch format {
 	case loadFormatParquet:
-		f, err := parquet.OpenFile(bytes.NewReader(sources[0].data), int64(len(sources[0].data)))
+		ra, size := first.ReaderAt()
+		f, err := parquet.OpenFile(ra, size)
 		if err != nil {
 			return nil, invalidArgument("failed to read Parquet source: " + err.Error())
 		}
@@ -1045,7 +1049,7 @@ func describeSource(format string, load map[string]any, sources []loadSource) ([
 		}
 		return nodesSchema(nodes), nil
 	case loadFormatAvro:
-		schema, err := avroSourceSchema(sources[0].data)
+		schema, err := avroSourceSchema(first)
 		if err != nil {
 			return nil, err
 		}
@@ -1101,21 +1105,26 @@ func nodesSchema(nodes []*pqNode) []schemaField {
 // useAvroLogicalTypes controls whether the date/time/timestamp logical types
 // become BigQuery DATE/TIME/TIMESTAMP/DATETIME (true) or stay their raw integer
 // base type (false) — matching the Discovery default of false.
-func decodeAvro(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
+func decodeAvro(load map[string]any, fields []schemaField, src *loadSpool) (*loadRecords, error) {
 	mapper, err := newAvroMapper(load)
 	if err != nil {
 		return nil, err
 	}
 	// Validate the embedded schema's shapes first so an unsupported field fails
 	// loud even when an explicit schema was supplied.
-	schema, serr := avroSourceSchema(data)
+	schema, serr := avroSourceSchema(src)
 	if serr != nil {
 		return nil, serr
 	}
 	if _, aerr := mapper.fields(schema); aerr != nil {
 		return nil, aerr
 	}
-	dec, err := ocf.NewDecoder(bytes.NewReader(data))
+	rc, err := src.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	dec, err := ocf.NewDecoder(rc)
 	if err != nil {
 		return nil, invalidArgument("failed to read Avro source: " + err.Error())
 	}
@@ -1158,8 +1167,14 @@ func decodeAvro(load map[string]any, fields []schemaField, data []byte) (*loadRe
 }
 
 // avroSourceSchema parses the writer schema embedded in an Avro container file.
-func avroSourceSchema(data []byte) (avro.Schema, error) {
-	dec, err := ocf.NewDecoder(bytes.NewReader(data))
+// It reads only the container header from the spool.
+func avroSourceSchema(src *loadSpool) (avro.Schema, error) {
+	rc, err := src.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	dec, err := ocf.NewDecoder(rc)
 	if err != nil {
 		return nil, invalidArgument("failed to read Avro source: " + err.Error())
 	}
@@ -1784,11 +1799,11 @@ func autodetectNDJSON(load map[string]any, sources []loadSource) ([]schemaField,
 	byName := map[string]*columnInfer{}
 	rows := 0
 	for _, src := range sources {
-		data, err := decompressCSVOrJSON(src.data)
+		rd, err := openTextSource(src.src)
 		if err != nil {
 			return nil, err
 		}
-		sc := bufio.NewScanner(bytes.NewReader(data))
+		sc := bufio.NewScanner(rd)
 		sc.Buffer(make([]byte, 0, 64*1024), maxLoadLineBytes)
 		for sc.Scan() && rows < autodetectSampleRows {
 			text := strings.TrimSpace(sc.Text())
@@ -1834,8 +1849,10 @@ func autodetectNDJSON(load map[string]any, sources []loadSource) ([]schemaField,
 			}
 		}
 		if err := sc.Err(); err != nil {
+			rd.Close()
 			return nil, invalidArgument("failed to read source: " + err.Error())
 		}
+		rd.Close()
 		if rows >= autodetectSampleRows {
 			break
 		}
@@ -1912,12 +1929,13 @@ func autodetectCSV(load map[string]any, sources []loadSource) ([]schemaField, er
 	var cols []*columnInfer
 	rows := 0
 	for _, src := range sources {
-		data, err := decompressCSVOrJSON(src.data)
+		rd, err := openTextSource(src.src)
 		if err != nil {
 			return nil, err
 		}
-		r, err := newRawCSVReader(load, data)
+		r, err := newRawCSVReader(load, rd)
 		if err != nil {
+			rd.Close()
 			return nil, err
 		}
 		// Consume the leading rows; when a header is declared (skip > 0) the
@@ -1928,6 +1946,7 @@ func autodetectCSV(load map[string]any, sources []loadSource) ([]schemaField, er
 				break
 			}
 			if rerr != nil {
+				rd.Close()
 				return nil, invalidArgument("failed to read CSV source: " + rerr.Error())
 			}
 			if i == 0 && len(cols) == 0 {
@@ -1943,6 +1962,7 @@ func autodetectCSV(load map[string]any, sources []loadSource) ([]schemaField, er
 				break
 			}
 			if rerr != nil {
+				rd.Close()
 				return nil, invalidArgument("failed to read CSV source: " + rerr.Error())
 			}
 			if len(cols) == 0 {
@@ -1959,6 +1979,7 @@ func autodetectCSV(load map[string]any, sources []loadSource) ([]schemaField, er
 			}
 			rows++
 		}
+		rd.Close()
 		if rows >= autodetectSampleRows {
 			break
 		}

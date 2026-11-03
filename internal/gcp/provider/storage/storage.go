@@ -3045,14 +3045,21 @@ func (p *Provider) decryptObjectWithKey(ctx context.Context, project string, met
 	return kmsstore.DecryptData(cseKey, ciphertext, nil)
 }
 
-// FetchObjectBytes returns the plaintext bytes of the live generation of
-// bucket/object. It is the server-side object read used by other emulated
-// services (Cloud Functions source-archive resolution) that hold a plain
-// gs://bucket/object reference rather than a request. Unlike ObjectsGetMedia it
-// has no NormalizedRequest, so a customer-supplied encryption key cannot be
-// supplied: a CSEK-encrypted object is rejected. gcs.ErrNoSuchObject is
-// returned when the object (or its bytes) is absent.
-func (p *Provider) FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error) {
+// OpenObject opens the plaintext of the live generation of bucket/object as a
+// stream. It is the server-side object read used by other emulated services
+// (BigQuery gs:// load sources) that hold a plain gs://bucket/object reference
+// rather than a request: the caller streams it into its own bounded buffer and
+// closes the reader.
+//
+// Unlike ObjectsGetMedia it has no NormalizedRequest, so a customer-supplied
+// encryption key cannot be supplied: a CSEK-encrypted object is rejected.
+// gcs.ErrNoSuchObject is returned when the object (or its bytes) is absent.
+//
+// Envelope encryption is whole-object AES-GCM (TODO(streaming-AEAD)), so the
+// plaintext is decrypted to one buffer before it is handed over as a reader; the
+// stream boundary keeps the load pipeline from holding more than this one
+// object.
+func (p *Provider) OpenObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
 		return nil, err
@@ -3069,7 +3076,23 @@ func (p *Provider) FetchObjectBytes(ctx context.Context, bucket, object string) 
 	if err != nil {
 		return nil, err
 	}
-	return p.decryptObjectWithKey(ctx, "", meta, ciphertext, nil)
+	plain, err := p.decryptObjectWithKey(ctx, "", meta, ciphertext, nil)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(plain)), nil
+}
+
+// FetchObjectBytes returns the plaintext bytes of the live generation of
+// bucket/object. It is OpenObject drained to a slice, for the callers that need
+// the bytes whole (Cloud Functions source-archive resolution).
+func (p *Provider) FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error) {
+	rc, err := p.OpenObject(ctx, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 // ListObjectNames returns the names of the live objects in bucket whose name has

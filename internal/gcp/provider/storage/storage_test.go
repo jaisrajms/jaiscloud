@@ -2565,6 +2565,50 @@ func TestFetchObjectBytesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOpenObjectStreams is the streaming form of the server-side read: the
+// BigQuery load pipeline consumes a gs:// source through it incrementally.
+func TestOpenObjectStreams(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	want := bytes.Repeat([]byte("row\n"), 4096)
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "src/rows.csv"
+	nr.Params[wire.MediaKey] = want
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert object: %v", err)
+	}
+
+	rc, err := p.OpenObject(ctx, "bkt", "src/rows.csv")
+	if err != nil {
+		t.Fatalf("OpenObject: %v", err)
+	}
+	defer rc.Close()
+	// Read it in bounded slices: the reader is consumed incrementally, so the
+	// caller never needs the object whole.
+	var got []byte
+	buf := make([]byte, 1024)
+	for {
+		n, rerr := rc.Read(buf)
+		got = append(got, buf[:n]...)
+		if rerr != nil {
+			break
+		}
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("OpenObject streamed %d bytes, want %d", len(got), len(want))
+	}
+	if _, err := p.OpenObject(ctx, "bkt", "missing.csv"); !errors.Is(err, gcs.ErrNoSuchObject) {
+		t.Fatalf("missing object err = %v, want gcs.ErrNoSuchObject", err)
+	}
+}
+
 // TestPutObjectBytesRoundTrip verifies the server-side object write used by
 // other emulated services (e.g. Dataproc driver output): the bucket is created
 // lazily, the bytes round-trip through the encryption + blob path, and an

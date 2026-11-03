@@ -56,8 +56,9 @@ import (
 // exact representation (a DECIMAL stays an unscaled integer plus its scale and
 // is rendered as an exact decimal string; the generic map decode used to return
 // a lossy float64/*big.Float).
-func decodeParquet(load map[string]any, fields []schemaField, data []byte) (*loadRecords, error) {
-	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+func decodeParquet(load map[string]any, fields []schemaField, src *loadSpool) (*loadRecords, error) {
+	ra, size := src.ReaderAt()
+	f, err := parquet.OpenFile(ra, size)
 	if err != nil {
 		return nil, invalidArgument("failed to read Parquet source: " + err.Error())
 	}
