@@ -333,7 +333,7 @@ func (p *Provider) executeLoad(ctx context.Context, project string, load map[str
 
 	out := make([]bqstore.Row, 0, len(rows))
 	for _, obj := range rows {
-		raw, merr := json.Marshal(obj)
+		raw, merr := encodeRowForStore(obj)
 		if merr != nil {
 			return nil, nil, model.NewProviderError("Internal", "failed to encode loaded row", 500)
 		}
@@ -712,8 +712,9 @@ func coerceValue(f schemaField, v any) (any, error) {
 // numbers and the native Go numeric types produced by the Parquet/Avro decoders
 // are accepted for INTEGER/FLOAT; time.Time values are rendered for the temporal
 // types; []byte is base64-encoded for BYTES; every other scalar renders to its
-// canonical string for the string-like types. Non-finite floats are rejected —
-// the JSON store cannot represent them.
+// canonical string for the string-like types. Non-finite floats are accepted for
+// FLOAT (BigQuery stores NaN/Infinity) and encoded as their wire string when the
+// row is written.
 func coerceScalar(f schemaField, v any) (any, error) {
 	typ := strings.ToUpper(f.Type)
 	if s, ok := v.(string); ok {
@@ -726,10 +727,10 @@ func coerceScalar(f schemaField, v any) (any, error) {
 		}
 		return nil, fmt.Errorf("field %q: value is not an INTEGER", f.Name)
 	case "FLOAT", "FLOAT64":
-		if fl, ok := float64Value(v); ok && !math.IsNaN(fl) && !math.IsInf(fl, 0) {
+		if fl, ok := float64Value(v); ok {
 			return fl, nil
 		}
-		return nil, fmt.Errorf("field %q: value is not a finite FLOAT", f.Name)
+		return nil, fmt.Errorf("field %q: value is not a FLOAT", f.Name)
 	case "BOOLEAN", "BOOL":
 		if b, ok := v.(bool); ok {
 			return b, nil
@@ -765,8 +766,8 @@ func coerceScalarString(f schemaField, typ, s string) (any, error) {
 		return n, nil
 	case "FLOAT", "FLOAT64":
 		fl, err := strconv.ParseFloat(trimmed, 64)
-		if err != nil || math.IsNaN(fl) || math.IsInf(fl, 0) {
-			return nil, fmt.Errorf("field %q: %q is not a finite FLOAT", f.Name, s)
+		if err != nil {
+			return nil, fmt.Errorf("field %q: %q is not a FLOAT", f.Name, s)
 		}
 		return fl, nil
 	case "BOOLEAN", "BOOL":

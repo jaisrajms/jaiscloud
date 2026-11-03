@@ -40,7 +40,9 @@
 //     checks).
 //   - tabledata.list renders every TableCell the way the client SDKs parse it:
 //     primitive values as strings, REPEATED as {"v": [<cell>...]},
-//     RECORD/STRUCT as {"v": {"f": [...]}}, and NULL as {"v": null}.
+//     RECORD/STRUCT as {"v": {"f": [...]}}, and NULL as {"v": null}. A
+//     non-finite FLOAT64 renders as BigQuery's "NaN"/"Infinity"/"-Infinity"
+//     strings (in tabledata.list and jobs.query alike).
 //   - List methods emit the Discovery summary subsets: datasets.list uses
 //     DatasetList.datasets, tables.list uses TableList.tables, and jobs.list
 //     uses JobList.jobs (ListFormatJob, which omits etag).
@@ -50,8 +52,8 @@
 //     unset maxResults imposes no row limit (only the engine's scan guard
 //     applies), so the complete bounded result set is returned in one page;
 //     getQueryResults likewise returns the whole set when maxResults is unset.
-//     getQueryResults re-executes the stored query (BQ6: the store stays the
-//     single source of truth, so a write between pages is visible).
+//     getQueryResults serves the result snapshot captured when the job ran
+//     (BQ6), so a write between pages is not visible.
 //   - projects.getServiceAccount returns a synthetic
 //     bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com email rather than a
 //     real service account.
@@ -846,7 +848,7 @@ func (p *Provider) InsertAll(ctx context.Context, nr *model.NormalizedRequest) (
 			rowErrs = append(rowErrs, rowErrors{index: pr.index, errs: errs})
 			continue
 		}
-		data, _ := json.Marshal(pr.json)
+		data, _ := encodeRowForStore(pr.json)
 		validRows = append(validRows, bqstore.Row{InsertID: pr.insertID, Data: data})
 		validIndexes = append(validIndexes, pr.index)
 	}
@@ -905,8 +907,9 @@ func isRecordType(t string) bool {
 
 // scalarCellString renders a primitive cell value as the string the BigQuery
 // wire format uses: integers and floats as decimal text, booleans as
-// "true"/"false". Client SDKs parse every primitive cell as a string (the Java
-// FieldValue parser rejects raw JSON numbers and booleans).
+// "true"/"false". A non-finite FLOAT64 renders as BigQuery's "NaN"/"Infinity"/
+// "-Infinity" string. Client SDKs parse every primitive cell as a string (the
+// Java FieldValue parser rejects raw JSON numbers and booleans).
 func scalarCellString(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -917,6 +920,9 @@ func scalarCellString(v any) string {
 		}
 		return "false"
 	case float64:
+		if s, ok := nonFiniteSentinel(x); ok {
+			return s
+		}
 		return strconv.FormatFloat(x, 'f', -1, 64)
 	default:
 		// Nested object/array values only reach here on a schema-less table;

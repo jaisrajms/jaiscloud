@@ -1,7 +1,6 @@
 package bigquery
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -44,15 +43,12 @@ func (c storeCatalog) Table(ctx context.Context, project, dataset, table string)
 	if err != nil {
 		return queryengine.Table{}, err
 	}
+	schema := parseSchemaFields(t.Schema)
 	out := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
-		m := map[string]any{}
-		if len(r.Data) > 0 {
-			dec := json.NewDecoder(bytes.NewReader(r.Data))
-			dec.UseNumber()
-			if err := dec.Decode(&m); err != nil {
-				return queryengine.Table{}, err
-			}
+		m, err := decodeStoredRow(r.Data, schema)
+		if err != nil {
+			return queryengine.Table{}, err
 		}
 		out = append(out, m)
 	}
@@ -105,7 +101,7 @@ func (c storeCatalog) CreateTable(ctx context.Context, t queryengine.Table) erro
 	}
 	rows := make([]bqstore.Row, len(t.Rows))
 	for i, r := range t.Rows {
-		data, err := json.Marshal(r)
+		data, err := encodeRowForStore(r)
 		if err != nil {
 			return err
 		}
@@ -173,7 +169,7 @@ func (c storeCatalog) DropDataset(ctx context.Context, project, dataset string) 
 func (c storeCatalog) ReplaceRows(ctx context.Context, project, dataset, table string, rows []map[string]any) error {
 	st := make([]bqstore.Row, len(rows))
 	for i, r := range rows {
-		data, err := json.Marshal(r)
+		data, err := encodeRowForStore(r)
 		if err != nil {
 			return err
 		}

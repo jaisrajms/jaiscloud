@@ -328,8 +328,10 @@ func runSnapshotRoundTrip(t *testing.T, s snapshotStore, fresh func() snapshotSt
 	defer s.Reset(ctx)
 
 	_ = s.CreateDataset(ctx, "p", Dataset{DatasetID: "d", Labels: map[string]string{"k": "v"}, Config: []byte(`{"friendlyName":"F"}`)})
-	_ = s.CreateTable(ctx, "p", "d", Table{TableID: "t", Schema: []byte(`{"fields":[{"name":"a","type":"STRING"}]}`), Labels: map[string]string{"x": "y"}})
-	_, _ = s.InsertRows(ctx, "p", "d", "t", []Row{{InsertID: "i1", Data: []byte(`{"a":"hi"}`)}})
+	_ = s.CreateTable(ctx, "p", "d", Table{TableID: "t", Schema: []byte(`{"fields":[{"name":"a","type":"STRING"},{"name":"f","type":"FLOAT"}]}`), Labels: map[string]string{"x": "y"}})
+	// The FLOAT value is BigQuery's non-finite sentinel string (NF20): the
+	// snapshot must preserve the stored row byte-for-byte in value terms.
+	_, _ = s.InsertRows(ctx, "p", "d", "t", []Row{{InsertID: "i1", Data: []byte(`{"a":"hi","f":"NaN"}`)}})
 	_ = s.CreateJob(ctx, "p", Job{JobID: "j", Config: []byte(`{"configuration":{"query":{"query":"SELECT 1"}}}`)})
 
 	srcTable, err := s.GetTable(ctx, "p", "d", "t")
@@ -353,7 +355,7 @@ func runSnapshotRoundTrip(t *testing.T, s snapshotStore, fresh func() snapshotSt
 		t.Fatalf("dataset lost after restore: %v %+v", err, got)
 	}
 	gotTable, err := s2.GetTable(ctx, "p", "d", "t")
-	if err != nil || gotTable.NumRows != 1 || !jsonEqual(gotTable.Schema, []byte(`{"fields":[{"name":"a","type":"STRING"}]}`)) {
+	if err != nil || gotTable.NumRows != 1 || !jsonEqual(gotTable.Schema, []byte(`{"fields":[{"name":"a","type":"STRING"},{"name":"f","type":"FLOAT"}]}`)) {
 		t.Fatalf("table lost after restore: %v %+v", err, gotTable)
 	}
 	// Timestamps survive the round trip (snapshot/export must not reset them).
@@ -362,7 +364,7 @@ func runSnapshotRoundTrip(t *testing.T, s snapshotStore, fresh func() snapshotSt
 			srcTable.CreateTime, srcTable.UpdateTime, gotTable.CreateTime, gotTable.UpdateTime)
 	}
 	gotRows, err := s2.ListRows(ctx, "p", "d", "t")
-	if err != nil || len(gotRows) != 1 || !jsonEqual(gotRows[0].Data, []byte(`{"a":"hi"}`)) {
+	if err != nil || len(gotRows) != 1 || !jsonEqual(gotRows[0].Data, []byte(`{"a":"hi","f":"NaN"}`)) {
 		t.Fatalf("rows lost after restore: %v %+v", err, gotRows)
 	}
 	gotJob, err := s2.GetJob(ctx, "p", "j")
