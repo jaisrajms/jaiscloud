@@ -143,6 +143,59 @@ func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken stri
 	return page, next, nil
 }
 
+// ListProjectsUnderParent is the v3 Projects.ListProjects read: the direct
+// child projects of an organization or folder, sorted by the ascending lexical
+// order of their display name (the proto's documented ordering) with the
+// project id as the tie-break so the cursor is stable.
+//
+// parent is Required by the proto and must be "organizations/{org_id}" or
+// "folders/{folder_id}"; a missing or malformed parent is InvalidArgument. Only
+// projects whose stored parent reference equals parent are returned — the
+// emulator keeps the parent reference but no folder hierarchy, so descendants
+// of a folder's child folders are not listed (matching "Only children of this
+// parent resource are listed; descendants are not listed"). A project with no
+// recorded parent (the synthesized default/extra projects, and ids the caller
+// never created) therefore belongs to no listed parent; SearchProjects is the
+// unscoped read. DELETE_REQUESTED projects are omitted unless showDeleted is
+// set, as on the v1 surface.
+func (s *Service) ListProjectsUnderParent(ctx context.Context, parent string, pageSize int, pageToken string, showDeleted bool) ([]Project, string, error) {
+	p := strings.TrimSpace(parent)
+	if p == "" {
+		return nil, "", invalidArgument(`parent is required; it must be "organizations/{organization_id}" or "folders/{folder_id}"`)
+	}
+	if !isProjectParent(p) {
+		return nil, "", invalidArgument(fmt.Sprintf(
+			`Invalid parent %q. It must be "organizations/{organization_id}" or "folders/{folder_id}".`, parent))
+	}
+	byID, err := s.collectProjects(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]Project, 0, len(byID))
+	for _, proj := range byID {
+		if proj.Parent != p {
+			continue
+		}
+		if !showDeleted && proj.State == StateDeleteRequested {
+			continue
+		}
+		out = append(out, proj)
+	}
+	params := map[string]any{"pageSize": pageSize}
+	if pageToken != "" {
+		params["pageToken"] = pageToken
+	}
+	page, next, err := paging.Page(out, func(proj Project) string {
+		// The display name is not unique; the id suffix keeps the cursor
+		// unambiguous while ordering stays display-name first.
+		return proj.DisplayName + "\x00" + proj.ProjectID
+	}, params)
+	if err != nil {
+		return nil, "", err
+	}
+	return page, next, nil
+}
+
 // collectProjects builds the project set the read surfaces page over: every
 // registry entry unioned with the configured default + extra projects
 // (deduplicated by id, a persisted entry winning over the synthesized ACTIVE

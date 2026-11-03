@@ -126,7 +126,7 @@ func TestProjectLifecycleRoundTrip(t *testing.T) {
 	s := newGRPCService()
 
 	op, err := s.CreateProject(ctx, &resourcemanagerpb.CreateProjectRequest{
-		Project: &resourcemanagerpb.Project{ProjectId: "grpc-proj-1234", DisplayName: "Grpc Proj"},
+		Project: &resourcemanagerpb.Project{ProjectId: "grpc-proj-1234", DisplayName: "Grpc Proj", Parent: "organizations/123"},
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -153,13 +153,29 @@ func TestProjectLifecycleRoundTrip(t *testing.T) {
 		t.Errorf("displayName = %q, want Grpc Proj", got.GetDisplayName())
 	}
 
-	// ListProjects ignores the required parent and returns the created project.
+	// ListProjects returns the direct children of the required parent.
 	list, err := s.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{Parent: "organizations/123"})
 	if err != nil {
 		t.Fatalf("ListProjects: %v", err)
 	}
-	if len(list.GetProjects()) == 0 {
-		t.Fatal("ListProjects returned no projects")
+	if !protoHasProject(list, "grpc-proj-1234") {
+		t.Fatalf("ListProjects = %v, want the created project", list.GetProjects())
+	}
+	// A different parent does not list it: only children are returned.
+	other, err := s.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{Parent: "folders/456"})
+	if err != nil {
+		t.Fatalf("ListProjects(other parent): %v", err)
+	}
+	if protoHasProject(other, "grpc-proj-1234") {
+		t.Error("a project must only be listed under its own parent")
+	}
+	// The parent is Required: omitting it is InvalidArgument, not an
+	// unfiltered listing.
+	if _, err := s.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("missing parent err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{Parent: "projects/grpc-proj-1234"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("malformed parent err = %v, want InvalidArgument", err)
 	}
 
 	// A duplicate create is AlreadyExists.
@@ -185,8 +201,9 @@ func TestProjectLifecycleRoundTrip(t *testing.T) {
 		t.Fatalf("second DeleteProject must be idempotent: %v", err)
 	}
 
-	// The project is hidden from the default list, then restored by undelete.
-	list, err = s.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{})
+	// The project is hidden from the parent's default listing, then restored by
+	// undelete.
+	list, err = s.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{Parent: "organizations/123"})
 	if err != nil {
 		t.Fatalf("ListProjects after delete: %v", err)
 	}

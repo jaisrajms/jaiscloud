@@ -9,7 +9,9 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
@@ -71,6 +73,12 @@ func rmCreatedProjectName(cfg Config) string {
 	return "projects/" + rmCreatedProjectID(cfg)
 }
 
+// rmParent is the organization parent the lifecycle probes create projects
+// under. The v3 ListProjects parent is Required and lists only the direct
+// children of the named organization/folder, so create and list must agree on
+// it.
+const rmParent = "organizations/123"
+
 // Check 1: CreateProject registers the project and returns a done operation.
 func checkRMCreateProject(ctx context.Context, cfg Config) error {
 	client, err := newResourceManagerClient(ctx, cfg)
@@ -81,7 +89,7 @@ func checkRMCreateProject(ctx context.Context, cfg Config) error {
 
 	id := rmCreatedProjectID(cfg)
 	op, err := client.CreateProject(ctx, &resourcemanagerpb.CreateProjectRequest{
-		Project: &resourcemanagerpb.Project{ProjectId: id, DisplayName: "Conformance Project"},
+		Project: &resourcemanagerpb.Project{ProjectId: id, DisplayName: "Conformance Project", Parent: rmParent},
 	})
 	if err != nil {
 		return fmt.Errorf("CreateProject: %w", err)
@@ -99,8 +107,8 @@ func checkRMCreateProject(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 3: ListProjects includes the created project. The required parent is
-// ignored by the emulator (no org/folder hierarchy is modelled).
+// Check 3: ListProjects returns the created project under its required parent,
+// in ascending display_name order.
 func checkRMListProjects(ctx context.Context, cfg Config) error {
 	client, err := newResourceManagerClient(ctx, cfg)
 	if err != nil {
@@ -109,7 +117,7 @@ func checkRMListProjects(ctx context.Context, cfg Config) error {
 	defer client.Close()
 
 	want := rmCreatedProjectID(cfg)
-	it := client.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{Parent: "projects/" + cfg.Project})
+	it := client.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{Parent: rmParent})
 	for {
 		p, err := it.Next()
 		if err == iterator.Done {
@@ -119,9 +127,15 @@ func checkRMListProjects(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("ListProjects: %w", err)
 		}
 		if p.GetProjectId() == want {
-			return nil
+			break
 		}
 	}
+	// The parent is Required by the proto: a request without one is
+	// InvalidArgument, not an unfiltered listing.
+	if _, err := client.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{}).Next(); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("ListProjects without parent = %v, want InvalidArgument", err)
+	}
+	return nil
 }
 
 // Check 4: DeleteProject marks the project DELETE_REQUESTED.

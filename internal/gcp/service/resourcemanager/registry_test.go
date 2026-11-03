@@ -252,6 +252,136 @@ func TestListProjectsPagination(t *testing.T) {
 	}
 }
 
+func TestListProjectsUnderParentFiltersByParentAndType(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newRegistryService(WithKnownProjects("", nil))
+	for _, in := range []CreateProjectInput{
+		{ProjectID: "org-child-one", DisplayName: "Org One", Parent: "organizations/123"},
+		{ProjectID: "org-child-two", DisplayName: "Org Two", Parent: "organizations/123"},
+		{ProjectID: "folder-child-1", DisplayName: "Folder One", Parent: "folders/456"},
+		{ProjectID: "other-org-child", DisplayName: "Other Org", Parent: "organizations/999"},
+	} {
+		if _, _, err := s.CreateProject(ctx, in); err != nil {
+			t.Fatalf("create(%s): %v", in.ProjectID, err)
+		}
+	}
+	// A project with no recorded parent belongs to no listed parent.
+	if _, _, err := s.CreateProject(ctx, CreateProjectInput{ProjectID: "parentless-1"}); err != nil {
+		t.Fatalf("create(parentless): %v", err)
+	}
+
+	for _, tc := range []struct {
+		parent string
+		want   []string
+	}{
+		{"organizations/123", []string{"org-child-one", "org-child-two"}},
+		{"folders/456", []string{"folder-child-1"}},
+		{"organizations/999", []string{"other-org-child"}},
+		{"folders/111", nil},
+	} {
+		page, next, err := s.ListProjectsUnderParent(ctx, tc.parent, 0, "", false)
+		if err != nil {
+			t.Fatalf("list(%s): %v", tc.parent, err)
+		}
+		if next != "" {
+			t.Errorf("list(%s) nextPageToken = %q, want empty", tc.parent, next)
+		}
+		if ids := projectIDs(page); !equalStrings(ids, tc.want) {
+			t.Errorf("list(%s) = %v, want %v", tc.parent, ids, tc.want)
+		}
+	}
+}
+
+func TestListProjectsUnderParentValidation(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newRegistryService()
+	for _, parent := range []string{
+		"",
+		"  ",
+		"projects/my-project", // not a v3 parent
+		"organizations/",      // missing id
+		"organizations/abc",   // non-numeric id
+		"folders/12/34",       // extra segment
+		"organization/123",    // wrong collection name
+		"/organizations/123",  // leading slash
+	} {
+		_, _, err := s.ListProjectsUnderParent(ctx, parent, 0, "", false)
+		if got := codeOf(t, err); got != "InvalidArgument" {
+			t.Errorf("list(%q) code = %q, want InvalidArgument", parent, got)
+		}
+	}
+}
+
+func TestListProjectsUnderParentOrdersByDisplayNameAcrossPages(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newRegistryService(WithKnownProjects("", nil))
+	// Ids and display names are deliberately in opposite orders, and two
+	// display names repeat (the id is the tie-break), so an id-ordered page or
+	// an unstable cursor is caught.
+	for _, in := range []CreateProjectInput{
+		{ProjectID: "aaa-project", DisplayName: "Zulu", Parent: "organizations/123"},
+		{ProjectID: "bbb-project", DisplayName: "Alpha", Parent: "organizations/123"},
+		{ProjectID: "ccc-project", DisplayName: "Mike", Parent: "organizations/123"},
+		{ProjectID: "ddd-project", DisplayName: "Mike", Parent: "organizations/123"},
+		{ProjectID: "eee-project", DisplayName: "Bravo", Parent: "organizations/123"},
+	} {
+		if _, _, err := s.CreateProject(ctx, in); err != nil {
+			t.Fatalf("create(%s): %v", in.ProjectID, err)
+		}
+	}
+
+	var got []string
+	names := make([]string, 0, 5)
+	token := ""
+	for page := 0; page < 10; page++ {
+		items, next, err := s.ListProjectsUnderParent(ctx, "organizations/123", 2, token, false)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		for _, p := range items {
+			got = append(got, p.ProjectID)
+			names = append(names, p.DisplayName)
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+	wantIDs := []string{"bbb-project", "eee-project", "ccc-project", "ddd-project", "aaa-project"}
+	if !equalStrings(got, wantIDs) {
+		t.Errorf("paged ids = %v, want %v", got, wantIDs)
+	}
+	wantNames := []string{"Alpha", "Bravo", "Mike", "Mike", "Zulu"}
+	if !equalStrings(names, wantNames) {
+		t.Errorf("paged display names = %v, want %v", names, wantNames)
+	}
+}
+
+func TestListProjectsUnderParentShowDeleted(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newRegistryService(WithKnownProjects("", nil))
+	if _, _, err := s.CreateProject(ctx, CreateProjectInput{ProjectID: "deleted-child", Parent: "folders/456"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := s.DeleteProject(ctx, "deleted-child"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	page, _, err := s.ListProjectsUnderParent(ctx, "folders/456", 0, "", false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(page) != 0 {
+		t.Errorf("default list = %v, want no projects", projectIDs(page))
+	}
+	page, _, err = s.ListProjectsUnderParent(ctx, "folders/456", 0, "", true)
+	if err != nil {
+		t.Fatalf("list showDeleted: %v", err)
+	}
+	if ids := projectIDs(page); !equalStrings(ids, []string{"deleted-child"}) {
+		t.Errorf("showDeleted list = %v, want [deleted-child]", ids)
+	}
+}
+
 func TestResetClearsRegistry(t *testing.T) {
 	ctx := context.Background()
 	s, res := newRegistryService(WithKnownProjects("", nil))

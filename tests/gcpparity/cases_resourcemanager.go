@@ -91,7 +91,7 @@ func resourceManagerScenario() Scenario {
 		}
 		defer c.Close()
 		it := c.ListProjects(ctx, &resourcemanagerpb.ListProjectsRequest{
-			Parent:      "projects/" + e.Cfg.Project,
+			Parent:      "organizations/123",
 			ShowDeleted: true,
 		})
 		out := &resourcemanagerpb.ListProjectsResponse{}
