@@ -97,9 +97,10 @@ type Provider struct {
 	sourceReader SourceReader
 
 	// mu guards uploads, the in-progress resumable load-job upload sessions
-	// (load_table_from_file with an unknown size). Sessions are in-memory only:
-	// a load source is decoded from a whole buffer (see BQF3), so a session is
-	// bounded and cleared on Reset.
+	// (load_table_from_file with an unknown size). A session accumulates into a
+	// spool that spills to a temp file past loadSpillThreshold, so a large upload
+	// is bounded on disk rather than heap; every session's spool is released on
+	// completion, failure, TTL expiry and Reset.
 	mu      sync.Mutex
 	uploads map[string]*loadUploadSession
 	// queryMu serializes SQL execution spans. DML is a read-modify-write of
@@ -120,11 +121,17 @@ func New(s bqstore.Store, opts ...Option) *Provider {
 }
 
 // Reset wipes the store and any in-progress resumable load-job upload sessions.
+// A session holds a spool that may be file-backed, so its temp file is removed
+// here too.
 func (p *Provider) Reset(ctx context.Context) {
 	p.store.Reset(ctx)
 	p.mu.Lock()
+	sessions := p.uploads
 	p.uploads = map[string]*loadUploadSession{}
 	p.mu.Unlock()
+	for _, s := range sessions {
+		s.src.Close()
+	}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -1134,9 +1141,14 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 	// documented subset fail loud (400/501); a data-level failure is reported in
 	// the job's status.errorResult like real BigQuery.
 	if l := mapValue(mapValue(body, "configuration"), "load"); l != nil {
-		source, uploaded, err := p.loadSourceBytes(nr)
+		source, uploaded, err := p.loadSourceSpool(nr)
 		if err != nil {
 			return nil, err
+		}
+		if source != nil {
+			// A spool may be file-backed; the load is done when executeLoad
+			// returns, so the temp file goes with it (failure included).
+			defer source.Close()
 		}
 		var loadStats, jobErr map[string]any
 		if uploaded {
@@ -1179,25 +1191,28 @@ func attachLoadStats(body map[string]any, loadStats, jobErr map[string]any, now 
 	}
 }
 
-// loadSourceBytes returns the uploaded file bytes carried on the request for a
-// media (multipart) load job, and whether they were present. It reads either the
-// buffered wire.MediaKey or the streamed wire.StreamKey, applying the size cap.
-func (p *Provider) loadSourceBytes(nr *model.NormalizedRequest) ([]byte, bool, error) {
+// loadSourceSpool spools the uploaded file bytes carried on the request for a
+// media (multipart) load job, and reports whether they were present. It reads
+// either the buffered wire.MediaKey or the streamed wire.StreamKey, spilling to
+// a temp file past loadSpillThreshold so a large upload is not held whole on the
+// heap, and applies the size cap. The caller closes the spool.
+func (p *Provider) loadSourceSpool(nr *model.NormalizedRequest) (*loadSpool, bool, error) {
 	if b, ok := nr.Params[wire.MediaKey].([]byte); ok {
-		if len(b) > maxLoadUploadBytes {
+		if int64(len(b)) > maxLoadUploadBytes {
 			return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
 		}
-		return b, true, nil
+		return spoolBytes(b), true, nil
 	}
 	if rd, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
-		data, err := io.ReadAll(io.LimitReader(rd, maxLoadUploadBytes+1))
-		if err != nil {
+		spool := newLoadSpool()
+		if err := spool.appendReader(rd, maxLoadUploadBytes); err != nil {
+			spool.Close()
+			if errors.Is(err, errLoadSourceTooLarge) {
+				return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+			}
 			return nil, true, invalidArgument("failed to read uploaded load source: " + err.Error())
 		}
-		if len(data) > maxLoadUploadBytes {
-			return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
-		}
-		return data, true, nil
+		return spool, true, nil
 	}
 	return nil, false, nil
 }
@@ -1209,26 +1224,32 @@ const (
 	maxLoadUploadSessions = 100
 	// loadUploadSessionTTL bounds how long an inactive session is kept.
 	loadUploadSessionTTL = time.Hour
-	// maxLoadUploadBytes caps an uploaded load source. A load source is decoded
-	// from a whole buffer (BQF3), so the upload is bounded rather than spilled.
+	// maxLoadUploadBytes caps the bytes a load source may supply (a gs:// object
+	// is uncapped). A session accumulates into a spool — memory up to
+	// loadSpillThreshold, then a temp file — so the cap bounds disk, not heap.
 	maxLoadUploadBytes = 256 << 20 // 256 MiB
 )
 
 // loadUploadSession holds the state of an in-progress resumable load-job upload:
-// the Job resource supplied at session start plus the accumulated file bytes.
+// the Job resource supplied at session start plus the accumulated source bytes.
+// mu serialises chunks of one session, so the byte copy never runs under the
+// provider lock (chunks are sequential by contract; a misordered chunk is a
+// 400).
 type loadUploadSession struct {
+	mu         sync.Mutex
 	project    string
 	body       map[string]any
-	data       []byte
+	src        *loadSpool
 	lastAccess time.Time
 }
 
-// sweepLoadUploads drops sessions idle past loadUploadSessionTTL. The caller must
-// hold p.mu.
+// sweepLoadUploads drops sessions idle past loadUploadSessionTTL, releasing their
+// spools (and any temp file). The caller must hold p.mu.
 func (p *Provider) sweepLoadUploads(now time.Time) {
 	for id, s := range p.uploads {
 		if now.Sub(s.lastAccess) > loadUploadSessionTTL {
 			delete(p.uploads, id)
+			s.src.Close()
 		}
 	}
 }
@@ -1264,7 +1285,7 @@ func (p *Provider) InsertJobResumableStart(ctx context.Context, nr *model.Normal
 		p.mu.Unlock()
 		return nil, model.NewProviderError("ResourceExhausted", "too many concurrent load-upload sessions", 429)
 	}
-	p.uploads[id] = &loadUploadSession{project: projectOf(nr), body: body, lastAccess: now}
+	p.uploads[id] = &loadUploadSession{project: projectOf(nr), body: body, src: newLoadSpool(), lastAccess: now}
 	p.mu.Unlock()
 
 	base, _ := nr.Params[wire.BaseURLKey].(string)
@@ -1278,10 +1299,14 @@ func (p *Provider) InsertJobResumableStart(ctx context.Context, nr *model.Normal
 // InsertJobResumable appends a chunk to a load-upload session. An incomplete
 // chunk answers 308 with a Range header (bytes=0-N) — the only resume-incomplete
 // shape google-resumable-media accepts. The chunk that completes the source runs
-// the load and returns the completed Job.
+// the load and returns the completed Job. The session accumulates into a spool
+// (memory up to the spill threshold, then a temp file), so a large upload is not
+// held whole on the heap; the spool is released when the session completes,
+// fails, expires or is reset.
 func (p *Provider) InsertJobResumable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	uploadID, _ := nr.Params["upload_id"].(string)
 	media, _ := nr.Params[wire.MediaKey].([]byte)
+	stream, _ := nr.Params[wire.StreamKey].(io.Reader)
 	cr, _ := nr.Params["contentRange"].(string)
 	project := projectOf(nr)
 
@@ -1291,35 +1316,62 @@ func (p *Provider) InsertJobResumable(ctx context.Context, nr *model.NormalizedR
 		p.mu.Unlock()
 		return nil, model.NewProviderError("NotFound", "unknown upload_id", 404)
 	}
+	p.mu.Unlock()
+
 	start, total, hasTotal, perr := parseContentRange(cr)
 	if perr != nil {
-		p.mu.Unlock()
 		return nil, invalidArgument(perr.Error())
 	}
-	received := len(sess.data)
+
+	// The session lock is held for the byte copy only, never with p.mu: a chunk
+	// body can be large (and may spill to disk).
+	sess.mu.Lock()
+	received := sess.src.Size()
 	// A "bytes */N" status query carries no payload; otherwise the chunk must
 	// begin exactly where the previous one ended (concurrent/misordered chunks
 	// are not modeled — the client is sequential).
-	if start >= 0 && start != int64(received) {
-		p.mu.Unlock()
+	if start >= 0 && start != received {
+		sess.mu.Unlock()
 		return nil, invalidArgument(fmt.Sprintf("Content-Range start %d does not match the %d bytes received", start, received))
 	}
-	if received+len(media) > maxLoadUploadBytes {
-		p.mu.Unlock()
-		return nil, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
-	}
 	if start >= 0 {
-		sess.data = append(sess.data, media...)
+		var aerr error
+		switch {
+		case stream != nil:
+			aerr = sess.src.appendReader(stream, maxLoadUploadBytes)
+		case media != nil:
+			if received+int64(len(media)) > maxLoadUploadBytes {
+				aerr = errLoadSourceTooLarge
+			} else {
+				_, aerr = sess.src.Write(media)
+			}
+		}
+		if aerr != nil {
+			sess.mu.Unlock()
+			if errors.Is(aerr, errLoadSourceTooLarge) {
+				return nil, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+			}
+			return nil, invalidArgument("failed to read uploaded load source: " + aerr.Error())
+		}
 	}
-	received = len(sess.data)
-	sess.lastAccess = clock.RealNow()
-	done := hasTotal && received == int(total)
+	received = sess.src.Size()
+	done := hasTotal && received == total
 	body := sess.body
-	data := sess.data
+	src := sess.src
+	sess.mu.Unlock()
+
 	if done {
+		p.mu.Lock()
 		delete(p.uploads, uploadID)
+		p.mu.Unlock()
+		// The session's bytes are consumed here; the temp file goes with them
+		// whether the load succeeds or fails.
+		defer src.Close()
+	} else {
+		p.mu.Lock()
+		sess.lastAccess = clock.RealNow()
+		p.mu.Unlock()
 	}
-	p.mu.Unlock()
 
 	if !done {
 		// google-resumable-media requires a Range header on every 308 and parses
@@ -1333,7 +1385,7 @@ func (p *Provider) InsertJobResumable(ctx context.Context, nr *model.NormalizedR
 	}
 
 	now := clock.Now().UTC()
-	loadStats, jobErr, err := p.runLoadData(ctx, project, mapValue(mapValue(body, "configuration"), "load"), data, "0", now)
+	loadStats, jobErr, err := p.runLoadData(ctx, project, mapValue(mapValue(body, "configuration"), "load"), src, "0", now)
 	if err != nil {
 		return nil, err
 	}

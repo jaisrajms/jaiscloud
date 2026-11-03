@@ -43,8 +43,10 @@ func isStatus(err error, code int) bool {
 	return errors.As(err, &pe) && pe.HTTPStatus == code
 }
 
-// FetchObjectBytes returns the live bytes of bucket/object, or gcs.ErrNoSuchObject.
-func (st *Storage) FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error) {
+// OpenObject opens the live bytes of bucket/object as a stream, or
+// gcs.ErrNoSuchObject. It is the streaming form of FetchObjectBytes, used by the
+// BigQuery load pipeline so a source is consumed incrementally.
+func (st *Storage) OpenObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	resp, err := st.call(ctx, "ObjectsGetMedia", "", map[string]any{"bucket": bucket, "object": object})
 	if err != nil {
 		if isStatus(err, 404) {
@@ -55,6 +57,15 @@ func (st *Storage) FetchObjectBytes(ctx context.Context, bucket, object string) 
 	rc, ok := resp.Data["_stream"].(io.ReadCloser)
 	if !ok {
 		return nil, fmt.Errorf("storage: the answer for %s/%s carries no object bytes", bucket, object)
+	}
+	return rc, nil
+}
+
+// FetchObjectBytes returns the live bytes of bucket/object, or gcs.ErrNoSuchObject.
+func (st *Storage) FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error) {
+	rc, err := st.OpenObject(ctx, bucket, object)
+	if err != nil {
+		return nil, err
 	}
 	defer rc.Close()
 	return io.ReadAll(rc)

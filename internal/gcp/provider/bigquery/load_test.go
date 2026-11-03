@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"testing"
@@ -15,13 +16,16 @@ import (
 )
 
 // fakeSourceReader serves gs:// objects from an in-memory map. It stands in for
-// the GCS provider's FetchObjectBytes.
+// the GCS provider's OpenObject.
 type fakeSourceReader struct {
 	objects map[string][]byte
 	err     error
+	// maxRead, when non-zero, records the largest single Read the load pipeline
+	// issued against any object (a streaming assertion).
+	maxRead *int
 }
 
-func (f *fakeSourceReader) FetchObjectBytes(_ context.Context, bucket, object string) ([]byte, error) {
+func (f *fakeSourceReader) OpenObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -29,7 +33,25 @@ func (f *fakeSourceReader) FetchObjectBytes(_ context.Context, bucket, object st
 	if !ok {
 		return nil, gcs.ErrNoSuchObject
 	}
-	return b, nil
+	var r io.Reader = bytes.NewReader(b)
+	if f.maxRead != nil {
+		r = &maxReadReader{r: bytes.NewReader(b), max: f.maxRead}
+	}
+	return io.NopCloser(r), nil
+}
+
+// maxReadReader records the largest single Read against an object.
+type maxReadReader struct {
+	r   io.Reader
+	max *int
+}
+
+func (m *maxReadReader) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	if n > *m.max {
+		*m.max = n
+	}
+	return n, err
 }
 
 func (f *fakeSourceReader) ListObjectNames(_ context.Context, bucket, prefix string) ([]string, error) {

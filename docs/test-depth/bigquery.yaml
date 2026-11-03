@@ -24,4 +24,4 @@ classes:
   p5:
     state: present
     suites: [sdk-bigquery]
-    note: "gs:// load boundary - multi-object wildcard source, gzip NEWLINE_DELIMITED_JSON with an autodetected FLOAT schema, a 2000-row load, and a bounded large-result query (totalRows + all rows)"
+    note: "gs:// load boundary - multi-object wildcard source, gzip NEWLINE_DELIMITED_JSON with an autodetected FLOAT schema, a 2000-row load, a bounded large-result query (totalRows + all rows), and streaming sources (a large gs:// object and a chunked resumable upload both decoded through a spool that spills to a temp file past a threshold, with the temp file removed afterwards)"

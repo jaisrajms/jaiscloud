@@ -159,10 +159,15 @@ func (c *BigQueryCodec) decodeUpload(r *http.Request, body []byte, nr *model.Nor
 		}
 	case "resumable":
 		if id, _ := nr.Params["upload_id"].(string); id != "" {
-			// A chunk upload. The gateway buffers the chunk body (resumable is
-			// not in the streaming-upload detection), so the bytes arrive whole.
+			// A chunk upload. The body is raw file bytes: when the gateway streams
+			// it (isBigQueryStreamingUpload) the provider spools it to a temp file
+			// past a threshold; a buffered body arrives whole.
 			nr.Action = "InsertJobResumable"
-			nr.Params[wire.MediaKey] = body
+			if body != nil {
+				nr.Params[wire.MediaKey] = body
+			} else {
+				nr.Params[wire.StreamKey] = r.Body
+			}
 			if cr := r.Header.Get("Content-Range"); cr != "" {
 				nr.Params["contentRange"] = cr
 			}

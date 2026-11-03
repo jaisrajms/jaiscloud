@@ -3,6 +3,7 @@ package gcp
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -341,5 +342,67 @@ func TestBigQueryCodecEncodeResumable(t *testing.T) {
 	})
 	if status != 308 || headers.Get("Range") != "bytes=0-7" {
 		t.Fatalf("incomplete chunk = %d range=%q", status, headers.Get("Range"))
+	}
+}
+
+// TestBigQueryCodecDecodeUploadStreaming covers the streamed forms: the gateway
+// leaves the body unread for a multipart/related upload and a resumable chunk
+// (isBigQueryStreamingUpload), so the codec must surface the media as
+// wire.StreamKey rather than a buffered slice.
+func TestBigQueryCodecDecodeUploadStreaming(t *testing.T) {
+	codec := &BigQueryCodec{Service: "bigquery"}
+
+	const boundary = "b1"
+	jobJSON := `{"jobReference":{"projectId":"p","jobId":"j1"},"configuration":{"load":{"destinationTable":{"datasetId":"d","tableId":"t"},"sourceFormat":"CSV"}}}`
+	body := "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + jobJSON +
+		"\r\n--" + boundary + "\r\nContent-Type: */*\r\n\r\n1,alice\r\n--" + boundary + "--\r\n"
+	r := httptest.NewRequest("POST", "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=multipart", strings.NewReader(body))
+	r.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
+	nr, err := codec.Decode(r, nil) // nil body == gateway streamed the request
+	if err != nil {
+		t.Fatalf("streamed multipart decode: %v", err)
+	}
+	if nr.Action != "InsertJob" {
+		t.Fatalf("action = %q, want InsertJob", nr.Action)
+	}
+	if nr.Params["body"] == nil {
+		t.Fatal("streamed multipart did not decode the job resource")
+	}
+	media, ok := nr.Params[wire.StreamKey].(io.Reader)
+	if !ok {
+		t.Fatalf("streamed multipart media not surfaced as a stream: %T", nr.Params[wire.StreamKey])
+	}
+	got, err := io.ReadAll(media)
+	if err != nil {
+		t.Fatalf("read media: %v", err)
+	}
+	if string(got) != "1,alice" {
+		t.Fatalf("streamed media = %q, want %q", got, "1,alice")
+	}
+
+	// A resumable chunk arrives the same way.
+	chunk := []byte("1,alice\n")
+	r = httptest.NewRequest("PUT", "http://bq.local/upload/bigquery/v2/projects/p/jobs?uploadType=resumable&upload_id=abc", bytes.NewReader(chunk))
+	r.Header.Set("Content-Range", "bytes 0-7/8")
+	nr, err = codec.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("streamed resumable chunk decode: %v", err)
+	}
+	if nr.Action != "InsertJobResumable" {
+		t.Fatalf("action = %q, want InsertJobResumable", nr.Action)
+	}
+	stream, ok := nr.Params[wire.StreamKey].(io.Reader)
+	if !ok {
+		t.Fatalf("streamed chunk not surfaced as a stream: %T", nr.Params[wire.StreamKey])
+	}
+	got, err = io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("read chunk: %v", err)
+	}
+	if !bytes.Equal(got, chunk) {
+		t.Fatalf("streamed chunk = %q, want %q", got, chunk)
+	}
+	if nr.Params[wire.MediaKey] != nil {
+		t.Error("a streamed chunk must not also carry a buffered media slice")
 	}
 }

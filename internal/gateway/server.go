@@ -250,6 +250,28 @@ func isGCSStreamingUpload(r *http.Request) bool {
 	return false
 }
 
+// isBigQueryStreamingUpload returns true for the BigQuery jobs.insert media
+// endpoints whose body is raw file bytes rather than a JSON resource: a
+// multipart/related upload (the JSON job resource part is small and read first;
+// the media part is streamed) and a resumable chunk (a session is identified by
+// upload_id; the provider spools the accumulated bytes to a temp file past a
+// threshold). The resumable *initiate* carries the job resource and stays
+// buffered. Detection is purely from path/query, so no body is read first.
+func isBigQueryStreamingUpload(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/upload/bigquery/v2/projects/") &&
+		!strings.HasPrefix(r.URL.Path, "/resumable/upload/bigquery/v2/projects/") {
+		return false
+	}
+	q := r.URL.Query()
+	switch q.Get("uploadType") {
+	case "multipart":
+		return true
+	case "resumable":
+		return q.Get("upload_id") != ""
+	}
+	return false
+}
+
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	// P2-6: CORS preflight — intercept before DetectAndDecode since OPTIONS
 	// requests have no SigV4 auth and would fail service detection.
@@ -286,7 +308,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	streaming := isS3StreamingUpload(r) || isGCSStreamingUpload(r)
+	streaming := isS3StreamingUpload(r) || isGCSStreamingUpload(r) || isBigQueryStreamingUpload(r)
 
 	// For streaming S3 uploads we intentionally leave r.Body unread here so
 	// the provider can stream directly from it. Always drain+close on exit so
