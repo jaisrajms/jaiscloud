@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
@@ -264,6 +265,98 @@ func TestRESTTimeSeriesLabelFilterAndAggregation(t *testing.T) {
 	ob.Set("orderBy", "metric.type")
 	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+ob.Encode(), nil); err == nil {
 		t.Fatal("orderBy should be rejected over REST")
+	}
+}
+
+// TestRESTTimeSeriesAlignmentGridAndFilterContract covers NF7 (the aligned grid
+// is anchored on interval.endTime), NF6 (the 104-week alignment-period cap) and
+// NF8 (a filter must constrain exactly one metric.type) over the REST transport.
+func TestRESTTimeSeriesAlignmentGridAndFilterContract(t *testing.T) {
+	c, p := newTestProvider(t)
+	const tstype = "custom.googleapis.com/rest/anchor"
+
+	ivEnd := "2026-01-01T02:22:30Z"
+	points := make([]any, 0, 13)
+	for i := 0; i <= 12; i++ {
+		at := time.Date(2026, 1, 1, 2, 10, 30, 0, time.UTC).Add(time.Duration(i) * time.Minute)
+		points = append(points, map[string]any{
+			"interval": map[string]any{"endTime": at.Format(time.RFC3339)},
+			"value":    map[string]any{"doubleValue": float64(i)},
+		})
+	}
+	if _, err := call(t, c, p, http.MethodPost, "/v3/projects/test/timeSeries", map[string]any{
+		"timeSeries": []any{map[string]any{
+			"metric":   map[string]any{"type": tstype},
+			"resource": map[string]any{"type": "global"},
+			"points":   points,
+		}},
+	}); err != nil {
+		t.Fatalf("create timeSeries: %v", err)
+	}
+
+	q := url.Values{}
+	q.Set("filter", `metric.type = "`+tstype+`"`)
+	q.Set("interval.startTime", "2026-01-01T02:10:00Z")
+	q.Set("interval.endTime", ivEnd)
+	q.Set("aggregation.alignmentPeriod", "300s")
+	q.Set("aggregation.perSeriesAligner", "ALIGN_MEAN")
+	resp, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+q.Encode(), nil)
+	if err != nil {
+		t.Fatalf("aggregated list: %v", err)
+	}
+	series, _ := wireData(t, resp)["timeSeries"].([]any)
+	if len(series) != 1 {
+		t.Fatalf("aggregated series = %d, want 1", len(series))
+	}
+	pts := series[0].(map[string]any)["points"].([]any) // newest first
+	wantEnds := []string{"2026-01-01T02:22:30Z", "2026-01-01T02:17:30Z", "2026-01-01T02:12:30Z"}
+	wantVals := []float64{10, 5, 1}
+	if len(pts) != len(wantEnds) {
+		t.Fatalf("aligned points = %d, want %d: %+v", len(pts), len(wantEnds), pts)
+	}
+	for i := range wantEnds {
+		pt := pts[i].(map[string]any)
+		if got := pt["interval"].(map[string]any)["endTime"]; got != wantEnds[i] {
+			t.Errorf("point %d end = %v, want %s", i, got, wantEnds[i])
+		}
+		if got := pt["value"].(map[string]any)["doubleValue"]; got != wantVals[i] {
+			t.Errorf("point %d value = %v, want %v", i, got, wantVals[i])
+		}
+	}
+
+	// NF6: an alignment period above 104 weeks is rejected with the cached
+	// server message.
+	long := url.Values{}
+	long.Set("filter", `metric.type = "`+tstype+`"`)
+	long.Set("aggregation.alignmentPeriod", "63504000s") // 105 weeks
+	long.Set("aggregation.perSeriesAligner", "ALIGN_MEAN")
+	_, err = call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+long.Encode(), nil)
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.HTTPStatus != 400 || perr.Code != "InvalidArgument" {
+		t.Fatalf("long alignment period err = %v, want 400 InvalidArgument", err)
+	}
+	if want := "The alignment window must not exceed 17472h"; perr.Message != want {
+		t.Errorf("long alignment period message = %q, want %q", perr.Message, want)
+	}
+
+	// NF8: a filter with no metric.type clause is rejected with the server
+	// message.
+	noType := url.Values{}
+	noType.Set("filter", `resource.type = "global"`)
+	_, err = call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+noType.Encode(), nil)
+	perr, ok = err.(*model.ProviderError)
+	if !ok || perr.HTTPStatus != 400 {
+		t.Fatalf("filter without metric.type err = %v, want 400", err)
+	}
+	if want := "The provided filter matches more than one metric. TimeSeries data are limited to a single metric per request."; perr.Message != want {
+		t.Errorf("filter without metric.type message = %q, want %q", perr.Message, want)
+	}
+
+	// A starts_with prefix on metric.type stays accepted.
+	prefix := url.Values{}
+	prefix.Set("filter", `metric.type = starts_with("custom.googleapis.com/rest/anchor")`)
+	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+prefix.Encode(), nil); err != nil {
+		t.Fatalf("starts_with metric.type should be accepted over REST: %v", err)
 	}
 }
 

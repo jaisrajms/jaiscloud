@@ -1,8 +1,11 @@
 package monitoring
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	"jaiscloud/internal/model"
 
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 )
@@ -34,7 +37,7 @@ func TestApplyAggregationIntervalAndMetricKind(t *testing.T) {
 	out, err := applyAggregation([]monitoringstore.TimeSeries{delta}, &Aggregation{
 		AlignmentPeriod:  time.Minute,
 		PerSeriesAligner: AlignMean,
-	})
+	}, time.Time{})
 	if err != nil {
 		t.Fatalf("applyAggregation: %v", err)
 	}
@@ -64,7 +67,7 @@ func TestApplyAggregationSumReduce(t *testing.T) {
 		PerSeriesAligner:   AlignSum,
 		CrossSeriesReducer: ReduceSum,
 	}
-	out, err := applyAggregation(series, agg)
+	out, err := applyAggregation(series, agg, time.Time{})
 	if err != nil {
 		t.Fatalf("applyAggregation: %v", err)
 	}
@@ -99,7 +102,7 @@ func TestApplyAggregationGroupByKeepsLabel(t *testing.T) {
 		CrossSeriesReducer: ReduceSum,
 		GroupByFields:      []string{"metric.labels.env"},
 	}
-	out, err := applyAggregation(series, agg)
+	out, err := applyAggregation(series, agg, time.Time{})
 	if err != nil {
 		t.Fatalf("applyAggregation: %v", err)
 	}
@@ -126,7 +129,7 @@ func TestApplyAggregationCountType(t *testing.T) {
 			pointAt(end.Add(-30*time.Second), 5), pointAt(end.Add(-20*time.Second), 7)),
 	}
 	agg := &Aggregation{AlignmentPeriod: time.Hour, PerSeriesAligner: AlignCount}
-	out, err := applyAggregation(series, agg)
+	out, err := applyAggregation(series, agg, time.Time{})
 	if err != nil {
 		t.Fatalf("applyAggregation: %v", err)
 	}
@@ -141,9 +144,11 @@ func TestApplyAggregationCountType(t *testing.T) {
 	}
 }
 
-// TestApplyAggregationEpochGrid pins the epoch-aligned bucketing: a point lands
-// in the half-open `(start, end]` window with the first period boundary at or
-// after its end time, independently of the request interval.
+// TestApplyAggregationEpochGrid pins the legacy epoch-aligned bucketing used
+// when an aggregation runs without a request interval end: a point lands in the
+// half-open `(start, end]` window with the first epoch period boundary at or
+// after its end time. With an interval end the grid is anchored on it instead
+// (see TestAlignmentGridAnchorsOnIntervalEnd).
 func TestApplyAggregationEpochGrid(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	series := []monitoringstore.TimeSeries{
@@ -155,7 +160,7 @@ func TestApplyAggregationEpochGrid(t *testing.T) {
 			pointAt(base.Add(12*time.Minute+30*time.Second), 5), // -> 00:15
 		),
 	}
-	out, err := applyAggregation(series, &Aggregation{AlignmentPeriod: 5 * time.Minute, PerSeriesAligner: AlignSum})
+	out, err := applyAggregation(series, &Aggregation{AlignmentPeriod: 5 * time.Minute, PerSeriesAligner: AlignSum}, time.Time{})
 	if err != nil {
 		t.Fatalf("applyAggregation: %v", err)
 	}
@@ -194,19 +199,19 @@ func TestApplyAggregationValidation(t *testing.T) {
 	// alignment_period below the 60s minimum is rejected.
 	if _, err := applyAggregation(series, &Aggregation{
 		AlignmentPeriod: 30 * time.Second, PerSeriesAligner: AlignSum,
-	}); err == nil {
+	}, time.Time{}); err == nil {
 		t.Fatal("short alignment_period should be rejected")
 	}
 	// A reducer requires an aligner.
 	if _, err := applyAggregation(series, &Aggregation{
 		AlignmentPeriod: time.Hour, CrossSeriesReducer: ReduceSum,
-	}); err == nil {
+	}, time.Time{}); err == nil {
 		t.Fatal("reducer without aligner should be rejected")
 	}
 	// Unknown aligner/reducer are rejected.
 	if _, err := applyAggregation(series, &Aggregation{
 		AlignmentPeriod: time.Hour, PerSeriesAligner: "ALIGN_PERCENTILE_99",
-	}); err == nil {
+	}, time.Time{}); err == nil {
 		t.Fatal("unsupported aligner should be rejected")
 	}
 	// Non-numeric values cannot be aggregated.
@@ -217,11 +222,11 @@ func TestApplyAggregationValidation(t *testing.T) {
 	}}
 	if _, err := applyAggregation(bad, &Aggregation{
 		AlignmentPeriod: time.Hour, PerSeriesAligner: AlignSum,
-	}); err == nil {
+	}, time.Time{}); err == nil {
 		t.Fatal("string values should not aggregate")
 	}
 	// ALIGN_NONE / REDUCE_NONE is a no-op.
-	out, err := applyAggregation(series, &Aggregation{PerSeriesAligner: AlignNone, CrossSeriesReducer: ReduceNone})
+	out, err := applyAggregation(series, &Aggregation{PerSeriesAligner: AlignNone, CrossSeriesReducer: ReduceNone}, time.Time{})
 	if err != nil {
 		t.Fatalf("no-op aggregation: %v", err)
 	}
@@ -232,8 +237,40 @@ func TestApplyAggregationValidation(t *testing.T) {
 	if _, err := applyAggregation(series, &Aggregation{
 		AlignmentPeriod: time.Hour, PerSeriesAligner: AlignSum, CrossSeriesReducer: ReduceSum,
 		GroupByFields: []string{"metadata.system_labels.foo"},
-	}); err == nil {
+	}, time.Time{}); err == nil {
 		t.Fatal("unsupported group_by field should be rejected")
+	}
+}
+
+// TestAlignmentPeriodUpperBound covers NF6: real Cloud Monitoring caps
+// alignmentPeriod at 104 weeks, answering 400 INVALID_ARGUMENT with this exact
+// message above it and 200 at exactly 104 weeks.
+func TestAlignmentPeriodUpperBound(t *testing.T) {
+	end := time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC)
+	series := []monitoringstore.TimeSeries{
+		testSeries("custom.googleapis.com/agg", "env", "a", pointAt(end.Add(-time.Second), 5)),
+	}
+	_, err := applyAggregation(series, &Aggregation{
+		AlignmentPeriod: 17472*time.Hour + time.Second, PerSeriesAligner: AlignMean,
+	}, time.Time{})
+	if err == nil {
+		t.Fatal("alignment_period above 104 weeks should be rejected")
+	}
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) {
+		t.Fatalf("alignment_period overflow err = %v, want a ProviderError", err)
+	}
+	if perr.HTTPStatus != 400 || perr.Code != "InvalidArgument" {
+		t.Fatalf("alignment_period overflow = %d/%s, want 400/InvalidArgument", perr.HTTPStatus, perr.Code)
+	}
+	if want := "The alignment window must not exceed 17472h"; perr.Message != want {
+		t.Fatalf("alignment_period overflow message = %q, want %q", perr.Message, want)
+	}
+	// Exactly 104 weeks is still accepted.
+	if _, err := applyAggregation(series, &Aggregation{
+		AlignmentPeriod: 17472 * time.Hour, PerSeriesAligner: AlignMean,
+	}, time.Time{}); err != nil {
+		t.Fatalf("alignment_period of exactly 104 weeks should be accepted: %v", err)
 	}
 }
 
@@ -255,6 +292,168 @@ func TestCeilToPeriod(t *testing.T) {
 	for _, c := range cases {
 		if got := ceilToPeriod(c.t, c.d); !got.Equal(c.want) {
 			t.Errorf("%s: ceilToPeriod(%s,%s) = %s, want %s", c.name, c.t, c.d, got, c.want)
+		}
+	}
+}
+
+// TestAlignmentGridAnchorsOnIntervalEnd covers NF7 with the recorded real-GCP
+// probe table (§1b of the no-fix audit plan): the newest aligned bucket ends
+// exactly at interval.endTime, the buckets are counted back by the period, no
+// bucket end exceeds the interval end, and a bucket with no data is not emitted.
+func TestAlignmentGridAnchorsOnIntervalEnd(t *testing.T) {
+	at := func(h, m, s int) time.Time { return time.Date(2026, 1, 1, h, m, s, 0, time.UTC) }
+	cases := []struct {
+		name   string
+		end    time.Time
+		period time.Duration
+		want   []time.Time
+	}{
+		{
+			name: "interval end on an epoch boundary",
+			end:  at(2, 20, 0), period: 5 * time.Minute,
+			want: []time.Time{at(2, 15, 0), at(2, 20, 0)},
+		},
+		{
+			name: "interval end not on the epoch grid",
+			end:  at(2, 19, 59), period: 5 * time.Minute,
+			want: []time.Time{at(2, 14, 59), at(2, 19, 59)},
+		},
+		{
+			name: "02:22:30Z with 300s (epoch bucketing would give :15/:20)",
+			end:  at(2, 22, 30), period: 5 * time.Minute,
+			want: []time.Time{at(2, 12, 30), at(2, 17, 30), at(2, 22, 30)},
+		},
+		{
+			name: "02:24:40Z with 180s",
+			end:  at(2, 24, 40), period: 3 * time.Minute,
+			want: []time.Time{at(2, 12, 40), at(2, 15, 40), at(2, 18, 40), at(2, 21, 40), at(2, 24, 40)},
+		},
+		{
+			name: "02:24:40Z with 420s",
+			end:  at(2, 24, 40), period: 7 * time.Minute,
+			want: []time.Time{at(2, 17, 40), at(2, 24, 40)},
+		},
+		{
+			name: "02:32:00Z with 300s has no bucket beyond the interval end",
+			end:  at(2, 32, 0), period: 5 * time.Minute,
+			want: []time.Time{at(2, 12, 0), at(2, 17, 0), at(2, 22, 0), at(2, 27, 0), at(2, 32, 0)},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// One point 30s before each expected bucket end, so every window
+			// carries exactly one value and no empty bucket can appear.
+			pts := make([]monitoringstore.Point, 0, len(c.want))
+			for i := len(c.want) - 1; i >= 0; i-- {
+				pts = append(pts, pointAt(c.want[i].Add(-30*time.Second), float64(i)))
+			}
+			out, err := applyAggregation(
+				[]monitoringstore.TimeSeries{testSeries("custom.googleapis.com/grid", "env", "a", pts...)},
+				&Aggregation{AlignmentPeriod: c.period, PerSeriesAligner: AlignSum}, c.end)
+			if err != nil {
+				t.Fatalf("applyAggregation: %v", err)
+			}
+			if len(out) != 1 {
+				t.Fatalf("aligned series = %d, want 1", len(out))
+			}
+			got := out[0].Points
+			if len(got) != len(c.want) {
+				t.Fatalf("aligned points = %d, want %d: %+v", len(got), len(c.want), got)
+			}
+			for i, want := range c.want {
+				if !got[i].EndTime.Equal(want) {
+					t.Errorf("point %d end = %s, want %s", i, got[i].EndTime, want)
+				}
+				if got[i].EndTime.After(c.end) {
+					t.Errorf("point %d end = %s is after the interval end %s", i, got[i].EndTime, c.end)
+				}
+				if d := got[i].EndTime.Sub(got[i].StartTime); d != c.period {
+					t.Errorf("point %d interval width = %s, want %s", i, d, c.period)
+				}
+			}
+			if last := got[len(got)-1].EndTime; !last.Equal(c.end) {
+				t.Errorf("newest bucket end = %s, want the interval end %s", last, c.end)
+			}
+		})
+	}
+}
+
+// TestAlignmentGridBoundaryPoint pins the half-open window rule on the
+// end-anchored grid: a point exactly on a bucket boundary stays in the window
+// that boundary closes.
+func TestAlignmentGridBoundaryPoint(t *testing.T) {
+	end := time.Date(2026, 1, 1, 2, 22, 30, 0, time.UTC)
+	boundary := end.Add(-5 * time.Minute) // 02:17:30
+	series := []monitoringstore.TimeSeries{
+		testSeries("custom.googleapis.com/grid", "env", "a",
+			pointAt(boundary, 1),
+			pointAt(boundary.Add(time.Second), 2),
+			pointAt(end.Add(-time.Second), 4),
+		),
+	}
+	out, err := applyAggregation(series, &Aggregation{AlignmentPeriod: 5 * time.Minute, PerSeriesAligner: AlignSum}, end)
+	if err != nil {
+		t.Fatalf("applyAggregation: %v", err)
+	}
+	pts := out[0].Points
+	if len(pts) != 2 {
+		t.Fatalf("aligned points = %d, want 2: %+v", len(pts), pts)
+	}
+	if !pts[0].EndTime.Equal(boundary) || *pts[0].Value.DoubleValue != 1 {
+		t.Fatalf("boundary bucket = %s/%v, want %s/1 (the boundary point closes that window)",
+			pts[0].EndTime, *pts[0].Value.DoubleValue, boundary)
+	}
+	if !pts[1].EndTime.Equal(end) || *pts[1].Value.DoubleValue != 6 {
+		t.Fatalf("last bucket = %s/%v, want %s/6", pts[1].EndTime, *pts[1].Value.DoubleValue, end)
+	}
+}
+
+// TestAlignmentGridCrossSeriesReduction reduces two series over the
+// end-anchored grid: buckets sharing an end collapse, and no bucket lands after
+// the interval end.
+func TestAlignmentGridCrossSeriesReduction(t *testing.T) {
+	end := time.Date(2026, 1, 1, 2, 22, 30, 0, time.UTC)
+	series := []monitoringstore.TimeSeries{
+		testSeries("custom.googleapis.com/agg", "env", "a",
+			pointAt(end.Add(-12*time.Minute), 2),               // 02:10:30 -> bucket 02:12:30
+			pointAt(end.Add(-6*time.Minute-30*time.Second), 1), // 02:16:00 -> bucket 02:17:30
+		),
+		testSeries("custom.googleapis.com/agg", "env", "b",
+			pointAt(end.Add(-11*time.Minute), 4), // 02:11:30 -> bucket 02:12:30
+			pointAt(end.Add(-6*time.Minute), 1),  // 02:16:30 -> bucket 02:17:30
+		),
+	}
+	out, err := applyAggregation(series, &Aggregation{
+		AlignmentPeriod:    5 * time.Minute,
+		PerSeriesAligner:   AlignSum,
+		CrossSeriesReducer: ReduceSum,
+	}, end)
+	if err != nil {
+		t.Fatalf("applyAggregation: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("reduced series = %d, want 1", len(out))
+	}
+	pts := out[0].Points
+	if len(pts) != 2 {
+		t.Fatalf("reduced points = %d, want 2: %+v", len(pts), pts)
+	}
+	want := []struct {
+		end time.Time
+		v   float64
+	}{
+		{end.Add(-10 * time.Minute), 6}, // 02:12:30
+		{end.Add(-5 * time.Minute), 2},  // 02:17:30
+	}
+	for i, w := range want {
+		if !pts[i].EndTime.Equal(w.end) {
+			t.Errorf("reduced point %d end = %s, want %s", i, pts[i].EndTime, w.end)
+		}
+		if got := *pts[i].Value.DoubleValue; got != w.v {
+			t.Errorf("reduced point %d value = %v, want %v", i, got, w.v)
+		}
+		if pts[i].EndTime.After(end) {
+			t.Errorf("reduced point %d end = %s is after the interval end %s", i, pts[i].EndTime, end)
 		}
 	}
 }
