@@ -56,6 +56,9 @@ const (
 	// rtNotification is the generic-store resource type for per-bucket Cloud
 	// Pub/Sub notification configurations (GCS notificationConfigs).
 	rtNotification = "gcs_notification"
+	// rtNotificationSeq holds a bucket's notification-ID high-water mark, so
+	// ids stay monotonic per bucket even after the highest config is deleted.
+	rtNotificationSeq = "gcs_notification_seq"
 )
 
 // EventPublisher publishes one Cloud Pub/Sub message on behalf of another
@@ -87,6 +90,13 @@ type notificationConfig struct {
 	ObjectNamePrefix string            `json:"object_name_prefix,omitempty"`
 	CustomAttributes map[string]string `json:"custom_attributes,omitempty"`
 	Etag             string            `json:"etag,omitempty"`
+}
+
+// notificationSeq is the persisted per-bucket notification-ID high-water mark.
+// It lives beside the notification entries in the generic resource store, so
+// it snapshots/restores with them (memory) and persists across restarts (--dsn).
+type notificationSeq struct {
+	LastID int `json:"last_id"`
 }
 
 // blobsNamespace is the BlobStore namespace ("bucket") used for GCS object bytes.
@@ -1016,12 +1026,14 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
-	// Real GCS drops a bucket's notification configs with the bucket.
+	// Real GCS drops a bucket's notification configs with the bucket. The
+	// notification-ID high-water mark goes too: a recreated bucket starts over.
 	if entries, err := p.listBucketNotifications(ctx, project, name); err == nil {
 		for _, e := range entries {
 			_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotification, e.ID)
 		}
 	}
+	_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotificationSeq, name)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -1206,8 +1218,14 @@ func (p *Provider) notificationTarget(ctx context.Context, nr *model.NormalizedR
 	return bucket, id, nil
 }
 
-// nextNotificationID allocates the next notification ID for a bucket (the
-// emulator's analogue of GCS's per-bucket increasing numeric IDs).
+// nextNotificationID allocates the next notification ID for a bucket. Real GCS
+// ids are monotonic per bucket and never reused — deleting the highest config
+// does not make its id available again — so allocation reads and advances a
+// persisted high-water mark (rtNotificationSeq) instead of scanning the configs
+// that happen to exist now. The scan below only seeds the mark past ids written
+// before it existed, so an upgrade never renumbers or reuses an existing id.
+// The mark is dropped with the bucket (see BucketsDelete): a recreated bucket
+// is a new bucket and starts at 1, as in real GCS.
 func (p *Provider) nextNotificationID(ctx context.Context, account, bucket string) (string, error) {
 	entries, err := p.listBucketNotifications(ctx, account, bucket)
 	if err != nil {
@@ -1219,7 +1237,30 @@ func (p *Provider) nextNotificationID(ctx context.Context, account, bucket strin
 			max = n
 		}
 	}
-	return strconv.Itoa(max + 1), nil
+	next := 0
+	_, err = p.resources.UpsertAtomic(ctx, account, store.GlobalRegion, rtNotificationSeq, bucket,
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			last := 0
+			if exists {
+				var seq notificationSeq
+				if json.Unmarshal(current.Data, &seq) == nil {
+					last = seq.LastID
+				}
+			}
+			if max > last {
+				last = max // pre-mark entries: never allocate at or below one
+			}
+			next = last + 1
+			data, err := json.Marshal(notificationSeq{LastID: next})
+			if err != nil {
+				return store.ResourceEntry{}, err
+			}
+			return store.ResourceEntry{Type: rtNotificationSeq, ID: bucket, Data: data}, nil
+		})
+	if err != nil {
+		return "", err
+	}
+	return strconv.Itoa(next), nil
 }
 
 // listBucketNotifications returns the notification entries for one bucket,
