@@ -187,9 +187,17 @@ var bodyOverrides = map[string]map[string]any{
 	"dataproc.projects.regions.clusters.create": {
 		"config": map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
 	},
+	// dataproc.v1.ManagedCluster marks config Required, and instantiation
+	// creates the managed cluster through the same core path as
+	// clusters.create, so a placement without one is InvalidArgument. The
+	// instantiate probes below are also what stage the cluster named "probe"
+	// the two jobs probes (which cannot create a cluster) submit to.
 	"dataproc.projects.regions.workflowTemplates.create": {
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "probe"}},
-		"jobs":      []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
+		"placement": map[string]any{"managedCluster": map[string]any{
+			"clusterName": "probe",
+			"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+		}},
+		"jobs": []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
 	},
 	"dataproc.projects.regions.jobs.submit": {
 		"job": map[string]any{"placement": map[string]any{"clusterName": "probe"}, "hadoopJob": map[string]any{"mainClass": "probe"}},
@@ -217,12 +225,18 @@ var bodyOverrides = map[string]map[string]any{
 	},
 
 	"dataproc.projects.regions.workflowTemplates.update": {
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "probe"}},
-		"jobs":      []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
+		"placement": map[string]any{"managedCluster": map[string]any{
+			"clusterName": "probe",
+			"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+		}},
+		"jobs": []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
 	},
 	"dataproc.projects.regions.workflowTemplates.instantiateInline": {
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "probe"}},
-		"jobs":      []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
+		"placement": map[string]any{"managedCluster": map[string]any{
+			"clusterName": "probe",
+			"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+		}},
+		"jobs": []any{map[string]any{"stepId": "s1", "hadoopJob": map[string]any{}}},
 	},
 
 	"managedkafka.projects.locations.clusters.acls.addAclEntry": {

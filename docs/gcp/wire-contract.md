@@ -524,7 +524,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   [`dataproc-aggregate-validation-errors.md`](dataproc-aggregate-validation-errors.md); a request
   with one failure keeps its bare message), while existence/ownership answers (an unknown Metastore
   service, a namespace already owned on the GKE cluster, a duplicate cluster name) remain their own
-  responses; a `config`-shaped cluster created with neither `networkUri` nor `subnetworkUri` reads
+  responses; a workflow template's `managedCluster` is created through that same create path — its
+  `config` is Required, so a placement without one is the create's own `InvalidArgument`, an
+  invalid config/placement is rejected the same way, and an existing cluster is reused untouched
+  (DPG64) — the cluster name is used verbatim, where real GCP treats it as a prefix and appends a
+  random suffix; a `config`-shaped cluster created with neither `networkUri` nor `subnetworkUri` reads
   back the project's `default` network and no `subnetworkUri`
   ([`dataproc-gce-network-default.md`](dataproc-gce-network-default.md), DPG47) —
   `kubernetesSoftwareConfig` is optional (a present one must carry a non-empty `componentVersion.SPARK`);

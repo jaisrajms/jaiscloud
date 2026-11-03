@@ -14,7 +14,13 @@ func wfTemplateProto(id string) *dataprocpb.WorkflowTemplate {
 		Id: id,
 		Placement: &dataprocpb.WorkflowTemplatePlacement{
 			Placement: &dataprocpb.WorkflowTemplatePlacement_ManagedCluster{
-				ManagedCluster: &dataprocpb.ManagedCluster{ClusterName: "c"},
+				// ManagedCluster.config is Required (dataproc.v1): a placement
+				// without one is rejected exactly as clusters.create rejects a
+				// create carrying no config.
+				ManagedCluster: &dataprocpb.ManagedCluster{
+					ClusterName: "c",
+					Config:      &dataprocpb.ClusterConfig{GceClusterConfig: &dataprocpb.GceClusterConfig{ZoneUri: "us-central1-a"}},
+				},
 			},
 		},
 		Jobs: []*dataprocpb.OrderedJob{{
@@ -71,6 +77,27 @@ func TestWorkflowTemplateGRPCRoundTrip(t *testing.T) {
 	_, err = s.GetWorkflowTemplate(ctx, &dataprocpb.GetWorkflowTemplateRequest{Name: created.GetName()})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+}
+
+// TestInstantiateInlineWorkflowGRPCRejectsConfiglessManagedCluster proves the
+// gRPC adapter surfaces the create core's managedCluster rejection as
+// InvalidArgument: ManagedCluster.config is Required (dataproc.v1), so a
+// placement without one is the same rejection a config-less create gets.
+func TestInstantiateInlineWorkflowGRPCRejectsConfiglessManagedCluster(t *testing.T) {
+	s := newTestService()
+	tmpl := wfTemplateProto("ignored")
+	tmpl.Placement = &dataprocpb.WorkflowTemplatePlacement{
+		Placement: &dataprocpb.WorkflowTemplatePlacement_ManagedCluster{
+			ManagedCluster: &dataprocpb.ManagedCluster{ClusterName: "wf-grpc-bad"},
+		},
+	}
+	_, err := s.InstantiateInlineWorkflowTemplate(context.Background(), &dataprocpb.InstantiateInlineWorkflowTemplateRequest{
+		Parent:   "projects/proj/regions/us-central1",
+		Template: tmpl,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("instantiate without managedCluster.config = %v, want InvalidArgument", err)
 	}
 }
 

@@ -1789,11 +1789,18 @@ func checkDPDeleteWorkflowTemplate(ctx context.Context, cfg Config) error {
 }
 
 // managedClusterPlacement builds a workflow placement that owns a managed
-// cluster of the given name.
+// cluster of the given name. ManagedCluster.config is Required
+// (dataproc.v1), and the emulator routes the managed cluster through the same
+// create path as clusters.create, so the placement must carry one.
 func managedClusterPlacement(cluster string) *dataprocpb.WorkflowTemplatePlacement {
 	return &dataprocpb.WorkflowTemplatePlacement{
 		Placement: &dataprocpb.WorkflowTemplatePlacement_ManagedCluster{
-			ManagedCluster: &dataprocpb.ManagedCluster{ClusterName: cluster},
+			ManagedCluster: &dataprocpb.ManagedCluster{
+				ClusterName: cluster,
+				Config: &dataprocpb.ClusterConfig{
+					GceClusterConfig: &dataprocpb.GceClusterConfig{ZoneUri: "us-central1-a"},
+				},
+			},
 		},
 	}
 }
