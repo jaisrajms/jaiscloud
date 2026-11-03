@@ -68,8 +68,12 @@ func TestSDKIAMWildcardProject(t *testing.T) {
 
 	listed, err := svc.Projects.ServiceAccounts.Keys.List(wild).Do()
 	require.NoError(t, err)
-	require.Len(t, listed.Keys, 1)
-	require.Equal(t, key.Name, listed.Keys[0].Name)
+	require.Len(t, listed.Keys, 2, "the created key plus the account's Google-managed key")
+	var listedNames []string
+	for _, k := range listed.Keys {
+		listedNames = append(listedNames, k.Name)
+	}
+	require.Contains(t, listedNames, key.Name)
 
 	wildKey := wild + "/keys/" + keyID
 	gotKey, err := svc.Projects.ServiceAccounts.Keys.Get(wildKey).Do()

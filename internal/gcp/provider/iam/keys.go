@@ -12,6 +12,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/serviceaccount"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -44,9 +45,32 @@ func parseKeyName(name string) (email, keyID string) {
 }
 
 // nonExpiringKeyTime is the validBeforeTime the API reports for a key that does
-// not expire: user-managed keys never do, and the emulator's Google-managed
-// key pair is not rotated either.
+// not expire: a user-managed key never does.
 const nonExpiringKeyTime = "9999-12-31T23:59:59Z"
+
+// systemManagedKeyLifetime is the validity window real IAM reports for a
+// Google-managed key: validBeforeTime is exactly 730 days after validAfterTime.
+// A key created at 2026-11-03T03:23:54Z is valid until 2028-11-02T03:23:54Z
+// (real-GCP probe, decision gate 2026-11-02). The window is two calendar years
+// in days, so a leap day inside it lands on the date real GCP reports rather
+// than on the anniversary AddDate would give.
+const systemManagedKeyLifetime = 730 * 24 * time.Hour
+
+// keyValidBefore renders a key's validBeforeTime. A user-managed key never
+// expires, so it reports nonExpiringKeyTime. A Google-managed key's window is
+// derived from the stored validAfterTime (the instant the pair was created), so
+// a pair materialised by the legacy lazy path after an upgrade reports the same
+// two-year window as one created together with its account.
+func keyValidBefore(m serviceAccountKeyMeta) string {
+	if m.Type() != serviceaccount.KeyTypeSystemManaged {
+		return nonExpiringKeyTime
+	}
+	after, err := time.Parse(time.RFC3339Nano, m.ValidAfter)
+	if err != nil {
+		return nonExpiringKeyTime
+	}
+	return timestamp.Canonical(after.Add(systemManagedKeyLifetime))
+}
 
 // keyBaseMap renders the ServiceAccountKey fields every method returns.
 //
@@ -65,7 +89,7 @@ func keyBaseMap(nr *model.NormalizedRequest, account string, m serviceAccountKey
 		"keyOrigin":       m.Origin(),
 		"keyType":         m.Type(),
 		"validAfterTime":  m.ValidAfter,
-		"validBeforeTime": nonExpiringKeyTime,
+		"validBeforeTime": keyValidBefore(m),
 		"disabled":        m.Disabled,
 	}
 	if m.DisableTime != "" {
@@ -82,9 +106,14 @@ func keyListMap(nr *model.NormalizedRequest, account string, m serviceAccountKey
 }
 
 // keyGetMap renders a keys.get resource: publicKeyData is populated there (and
-// only there) from the stored private key's public half.
+// only there) from the stored private key's public half. A Google-managed key is
+// the exception: it has no downloadable public key, so real IAM answers keys.get
+// on it with the metadata only (probe 2026-11-02 — 200, same body as keys.list).
 func keyGetMap(nr *model.NormalizedRequest, account string, m serviceAccountKeyMeta) map[string]any {
 	out := keyBaseMap(nr, account, m)
+	if m.Type() == serviceaccount.KeyTypeSystemManaged {
+		return out
+	}
 	if pub, ok := m.PublicKeyData(); ok {
 		out["publicKeyData"] = pub
 	}
@@ -193,6 +222,18 @@ func (p *Provider) requireWildcardServiceAccount(ctx context.Context, nr *model.
 		return nil
 	}
 	return p.requireServiceAccount(ctx, nr, ref)
+}
+
+// rejectManagedKeyMutation answers the documented miss for a Google-managed key:
+// real IAM addresses such a key from keys.list only, so delete/disable/enable on
+// its id are 404 NOT_FOUND even though keys.get on the same id answers 200
+// (decision-gate probe 2026-11-02). A key a client creates or uploads is
+// unaffected — its type is USER_MANAGED.
+func rejectManagedKeyMutation(m *serviceAccountKeyMeta) error {
+	if m.Type() != serviceaccount.KeyTypeSystemManaged {
+		return nil
+	}
+	return model.NewProviderError("NotFound", "key not found", 404)
 }
 
 func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -343,7 +384,11 @@ func (p *Provider) ServiceAccountKeyDelete(ctx context.Context, nr *model.Normal
 	if err := p.requireWildcardServiceAccount(ctx, nr, ref); err != nil {
 		return nil, err
 	}
-	if _, err := p.loadKey(ctx, ref.Account, ref.Email, keyID); err != nil {
+	m, err := p.loadKey(ctx, ref.Account, ref.Email, keyID)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectManagedKeyMutation(m); err != nil {
 		return nil, err
 	}
 	if err := p.resources.Delete(ctx, ref.Account, store.GlobalRegion, rtServiceAccountKey, keyID); err != nil {
@@ -371,6 +416,9 @@ func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedReque
 	}
 	m, err := p.loadKey(ctx, ref.Account, ref.Email, keyID)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectManagedKeyMutation(m); err != nil {
 		return nil, err
 	}
 	m.Disabled = disabled

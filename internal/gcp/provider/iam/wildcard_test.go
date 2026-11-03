@@ -207,8 +207,8 @@ func TestServiceAccountKeysWildcardProject(t *testing.T) {
 		t.Fatalf("wildcard keys.list: %v", err)
 	}
 	items, _ := listed.Data["keys"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("wildcard keys.list returned %d keys, want 1", len(items))
+	if len(items) != 2 {
+		t.Fatalf("wildcard keys.list returned %d keys, want 2 (the account's Google-managed key plus the created one)", len(items))
 	}
 	for _, item := range items {
 		key, _ := item.(map[string]any)

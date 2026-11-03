@@ -326,3 +326,65 @@ func TestServiceAccountLifecycleOverGRPC(t *testing.T) {
 		t.Errorf("restored email = %q, want %q", restored.GetRestoredAccount().GetEmail(), sa.GetEmail())
 	}
 }
+
+// TestManagedKeyOverGRPC covers NF15 on the admin gRPC surface: the
+// Google-managed pair exists as soon as the account does, its window is the
+// two years real IAM reports, keys.get carries no publicKeyData, and
+// delete/disable/enable answer NotFound.
+func TestManagedKeyOverGRPC(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	sa, err := svc.CreateServiceAccount(ctx, &adminpb.CreateServiceAccountRequest{
+		Name: "projects/proj", AccountId: "managed",
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+
+	list, err := svc.ListServiceAccountKeys(ctx, &adminpb.ListServiceAccountKeysRequest{Name: sa.GetName()})
+	if err != nil {
+		t.Fatalf("ListServiceAccountKeys: %v", err)
+	}
+	if len(list.GetKeys()) != 1 {
+		t.Fatalf("ListServiceAccountKeys = %d keys, want the one Google-managed key", len(list.GetKeys()))
+	}
+	managed := list.GetKeys()[0]
+	if managed.GetKeyType() != adminpb.ListServiceAccountKeysRequest_SYSTEM_MANAGED {
+		t.Errorf("keyType = %v, want SYSTEM_MANAGED", managed.GetKeyType())
+	}
+	if managed.GetKeyOrigin() != adminpb.ServiceAccountKeyOrigin_GOOGLE_PROVIDED {
+		t.Errorf("keyOrigin = %v, want GOOGLE_PROVIDED", managed.GetKeyOrigin())
+	}
+	if managed.GetKeyAlgorithm() != adminpb.ServiceAccountKeyAlgorithm_KEY_ALG_RSA_2048 {
+		t.Errorf("keyAlgorithm = %v, want KEY_ALG_RSA_2048", managed.GetKeyAlgorithm())
+	}
+	if got := managed.GetValidBeforeTime().AsTime().Sub(managed.GetValidAfterTime().AsTime()); got != 730*24*time.Hour {
+		t.Errorf("validity window = %v, want 730 days", got)
+	}
+
+	got, err := svc.GetServiceAccountKey(ctx, &adminpb.GetServiceAccountKeyRequest{Name: managed.GetName()})
+	if err != nil {
+		t.Fatalf("GetServiceAccountKey: %v", err)
+	}
+	if len(got.GetPublicKeyData()) != 0 {
+		t.Errorf("keys.get returned %d bytes of publicKeyData for a Google-managed key", len(got.GetPublicKeyData()))
+	}
+
+	signed, err := svc.SignBlob(ctx, &adminpb.SignBlobRequest{Name: sa.GetName(), BytesToSign: []byte("hello")})
+	if err != nil {
+		t.Fatalf("SignBlob: %v", err)
+	}
+	if !strings.HasSuffix(managed.GetName(), "/keys/"+signed.GetKeyId()) {
+		t.Errorf("SignBlob keyId %q is not the listed Google-managed key %q", signed.GetKeyId(), managed.GetName())
+	}
+
+	if _, err := svc.DeleteServiceAccountKey(ctx, &adminpb.DeleteServiceAccountKeyRequest{Name: managed.GetName()}); status.Code(err) != codes.NotFound {
+		t.Errorf("DeleteServiceAccountKey code = %v, want NotFound", status.Code(err))
+	}
+	if _, err := svc.DisableServiceAccountKey(ctx, &adminpb.DisableServiceAccountKeyRequest{Name: managed.GetName()}); status.Code(err) != codes.NotFound {
+		t.Errorf("DisableServiceAccountKey code = %v, want NotFound", status.Code(err))
+	}
+	if _, err := svc.EnableServiceAccountKey(ctx, &adminpb.EnableServiceAccountKeyRequest{Name: managed.GetName()}); status.Code(err) != codes.NotFound {
+		t.Errorf("EnableServiceAccountKey code = %v, want NotFound", status.Code(err))
+	}
+}
