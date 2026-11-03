@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -214,6 +215,98 @@ func TestGCSSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("import: got HTTP %d: %s", code, body)
 	}
 	assertState(http.StatusOK, "after import")
+}
+
+// TestGCSNotificationIDsPersistAcrossRestart pins J32 on the --dsn path: the
+// per-bucket notification-ID high-water mark is durable, so deleting the
+// highest id and restarting the process never lets a later config reuse an id.
+func TestGCSNotificationIDsPersistAcrossRestart(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping persistence test")
+	}
+
+	port := persistPort()
+	host := fmt.Sprintf("http://localhost:%d", port)
+	blobDir := t.TempDir()
+
+	bucket := fmt.Sprintf("notif-bucket-%d", time.Now().UnixNano())
+	topic := fmt.Sprintf("notif-topic-%d", time.Now().UnixNano())
+	topicName := "projects/proj/topics/" + topic
+
+	insert := func() int {
+		code, body := doRequest(t, host, "POST", "/storage/v1/b/"+bucket+"/notificationConfigs",
+			fmt.Sprintf(`{"topic":%q}`, topicName), "application/json")
+		if code != http.StatusOK {
+			t.Fatalf("insert notification: got HTTP %d: %s", code, body)
+		}
+		var cfg struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(body), &cfg); err != nil || cfg.ID == "" {
+			t.Fatalf("insert notification response missing id: %q (%v)", body, err)
+		}
+		n, err := strconv.Atoi(cfg.ID)
+		if err != nil {
+			t.Fatalf("notification id %q is not numeric: %v", cfg.ID, err)
+		}
+		return n
+	}
+	del := func(id int) {
+		code, body := doRequest(t, host, "DELETE",
+			fmt.Sprintf("/storage/v1/b/%s/notificationConfigs/%d", bucket, id), "", "")
+		if code != http.StatusNoContent {
+			t.Fatalf("delete notification %d: got HTTP %d: %s", id, code, body)
+		}
+	}
+
+	proc1 := startGCPProcess(t, port, dsn, blobDir)
+	waitForHealth(t, host)
+
+	if code, body := doRequest(t, host, "POST", "/storage/v1/b?project=proj",
+		`{"name":"`+bucket+`"}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create bucket: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "PUT", "/v1/projects/proj/topics/"+topic,
+		fmt.Sprintf(`{"name":%q}`, topicName), "application/json"); code != http.StatusOK {
+		t.Fatalf("create topic: got HTTP %d: %s", code, body)
+	}
+
+	a, b, c := insert(), insert(), insert()
+	if !(a < b && b < c) {
+		t.Fatalf("ids are not increasing: %d, %d, %d", a, b, c)
+	}
+	del(c)
+
+	// ── Restart against the same backend ───────────────────────────────────────
+	stopProcess(t, proc1)
+	proc2 := startGCPProcess(t, port, dsn, blobDir)
+	defer stopProcess(t, proc2)
+	waitForHealth(t, host)
+
+	d := insert()
+	if d <= c {
+		t.Fatalf("restart reset the high-water mark: id %d is not above deleted highest %d", d, c)
+	}
+	del(a)
+	del(b)
+	del(d)
+	e := insert()
+	if e <= d {
+		t.Fatalf("id after deleting all configs went backwards: got %d, previous %d", e, d)
+	}
+
+	// Deleting the bucket drops the mark too: a recreated bucket starts at 1.
+	if code, body := doRequest(t, host, "DELETE", "/storage/v1/b/"+bucket, "", ""); code != http.StatusNoContent {
+		t.Fatalf("delete bucket: got HTTP %d: %s", code, body)
+	}
+	if code, body := doRequest(t, host, "POST", "/storage/v1/b?project=proj",
+		`{"name":"`+bucket+`"}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("recreate bucket: got HTTP %d: %s", code, body)
+	}
+	if got := insert(); got != 1 {
+		t.Fatalf("recreated bucket's first notification id = %d, want 1", got)
+	}
 }
 
 func stopProcess(t *testing.T, cmd *exec.Cmd) {

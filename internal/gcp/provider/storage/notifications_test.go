@@ -1,15 +1,21 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
 
+	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/store/gcs"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/store"
 )
 
 // fakePublisher records the events the storage provider fans out.
@@ -519,5 +525,180 @@ func TestNotificationCRUDBumpsBucketMetageneration(t *testing.T) {
 	deleteN, _ := strconv.Atoi(gcs.BucketMetageneration(afterDelete))
 	if deleteN <= insertN {
 		t.Fatalf("expected metageneration to increase on delete: %d -> %d", insertN, deleteN)
+	}
+}
+
+// insertNotification creates a notification config with a valid topic and
+// returns its generated id.
+func insertNotification(t *testing.T, p *Provider, bucket string) string {
+	t.Helper()
+	nr := notificationParams(bucket)
+	nr.Params["body"] = map[string]any{"topic": "projects/proj/topics/events"}
+	resp, err := p.NotificationsInsert(context.Background(), nr)
+	if err != nil {
+		t.Fatalf("insert notification: %v", err)
+	}
+	id, _ := resp.Data["id"].(string)
+	if id == "" {
+		t.Fatal("expected a generated notification id")
+	}
+	return id
+}
+
+func deleteNotification(t *testing.T, p *Provider, bucket, id string) {
+	t.Helper()
+	nr := notificationParams(bucket)
+	nr.Params["notification"] = id
+	if _, err := p.NotificationsDelete(context.Background(), nr); err != nil {
+		t.Fatalf("delete notification %s: %v", id, err)
+	}
+}
+
+func listNotificationIDs(t *testing.T, p *Provider, bucket string) []string {
+	t.Helper()
+	resp, err := p.NotificationsList(context.Background(), notificationParams(bucket))
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	items, _ := resp.Data["items"].([]any)
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		id, _ := m["id"].(string)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func idNum(t *testing.T, id string) int {
+	t.Helper()
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		t.Fatalf("notification id %q is not numeric: %v", id, err)
+	}
+	return n
+}
+
+// TestNotificationIDsMonotonicAfterDelete pins the J32 fix: notification ids
+// are monotonic per bucket, so deleting the highest id does not let the next
+// config reuse it (real GCS never reuses an id for a bucket's lifetime).
+func TestNotificationIDsMonotonicAfterDelete(t *testing.T) {
+	p := newTestProvider()
+	createBucket(t, p, "mono-bucket")
+
+	a := idNum(t, insertNotification(t, p, "mono-bucket"))
+	b := idNum(t, insertNotification(t, p, "mono-bucket"))
+	c := idNum(t, insertNotification(t, p, "mono-bucket"))
+	if !(a < b && b < c) {
+		t.Fatalf("ids are not increasing: %d, %d, %d", a, b, c)
+	}
+
+	deleteNotification(t, p, "mono-bucket", strconv.Itoa(c))
+	d := idNum(t, insertNotification(t, p, "mono-bucket"))
+	if d <= c {
+		t.Fatalf("id after deleting the highest reused or went backwards: got %d, deleted %d", d, c)
+	}
+
+	// Delete every remaining config; the mark must keep advancing.
+	for _, id := range listNotificationIDs(t, p, "mono-bucket") {
+		deleteNotification(t, p, "mono-bucket", id)
+	}
+	if ids := listNotificationIDs(t, p, "mono-bucket"); len(ids) != 0 {
+		t.Fatalf("expected no notifications, got %v", ids)
+	}
+	e := idNum(t, insertNotification(t, p, "mono-bucket"))
+	if e <= d {
+		t.Fatalf("id after deleting all configs went backwards: got %d, previous %d", e, d)
+	}
+}
+
+// TestNotificationIDsSeedPastExistingConfigs covers configs written before the
+// high-water mark existed: allocation must start above them, never renumber
+// them, and never reuse an id.
+func TestNotificationIDsSeedPastExistingConfigs(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "legacy-bucket")
+
+	cfg := notificationConfig{Kind: "storage#notification", ID: "7", Topic: "projects/proj/topics/events"}
+	data, _ := json.Marshal(cfg)
+	if err := p.resources.Create(ctx, "proj", store.GlobalRegion, store.ResourceEntry{
+		Type: rtNotification, ID: notificationKey("legacy-bucket", "7"), Data: data,
+	}); err != nil {
+		t.Fatalf("seed legacy config: %v", err)
+	}
+
+	if got := insertNotification(t, p, "legacy-bucket"); got != "8" {
+		t.Fatalf("id after a pre-mark config = %q, want 8", got)
+	}
+	ids := listNotificationIDs(t, p, "legacy-bucket")
+	sort.Strings(ids)
+	if len(ids) != 2 || ids[0] != "7" || ids[1] != "8" {
+		t.Fatalf("existing id was renumbered or reused: %v", ids)
+	}
+}
+
+// TestNotificationIDsRestartOnBucketRecreate pins that deleting a bucket drops
+// its high-water mark: a recreated bucket is a new bucket and starts at 1.
+func TestNotificationIDsRestartOnBucketRecreate(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "recreate-bucket")
+	insertNotification(t, p, "recreate-bucket")
+	insertNotification(t, p, "recreate-bucket")
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "recreate-bucket"
+	if _, err := p.BucketsDelete(ctx, nr); err != nil {
+		t.Fatalf("delete bucket: %v", err)
+	}
+	createBucket(t, p, "recreate-bucket")
+	if got := insertNotification(t, p, "recreate-bucket"); got != "1" {
+		t.Fatalf("recreated bucket's first notification id = %q, want 1", got)
+	}
+}
+
+// TestNotificationIDsSurviveSnapshotRestore proves the high-water mark is part
+// of the snapshot: a restore does not reset it, and restored ids are unchanged.
+func TestNotificationIDsSurviveSnapshotRestore(t *testing.T) {
+	ctx := context.Background()
+	objects := gcs.NewMemoryObjectStore()
+	resources := store.NewMemoryResourceStore()
+	blobs := blobfs.NewMemoryBlobStore()
+	enc := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	p := New(objects, resources, blobs, enc)
+
+	createBucket(t, p, "snap-bucket")
+	a := insertNotification(t, p, "snap-bucket")
+	b := insertNotification(t, p, "snap-bucket")
+	c := insertNotification(t, p, "snap-bucket")
+	deleteNotification(t, p, "snap-bucket", c)
+
+	var objBuf, resBuf bytes.Buffer
+	if err := objects.Snapshot(ctx, &objBuf); err != nil {
+		t.Fatalf("snapshot objects: %v", err)
+	}
+	if err := resources.Snapshot(ctx, &resBuf); err != nil {
+		t.Fatalf("snapshot resources: %v", err)
+	}
+
+	objects2 := gcs.NewMemoryObjectStore()
+	resources2 := store.NewMemoryResourceStore()
+	if err := objects2.Restore(ctx, &objBuf); err != nil {
+		t.Fatalf("restore objects: %v", err)
+	}
+	if err := resources2.Restore(ctx, &resBuf); err != nil {
+		t.Fatalf("restore resources: %v", err)
+	}
+	p2 := New(objects2, resources2, blobs, enc)
+
+	ids := listNotificationIDs(t, p2, "snap-bucket")
+	sort.Strings(ids)
+	if len(ids) != 2 || ids[0] != a || ids[1] != b {
+		t.Fatalf("restore renumbered existing ids: got %v, want [%s %s]", ids, a, b)
+	}
+	d := idNum(t, insertNotification(t, p2, "snap-bucket"))
+	if d <= idNum(t, c) {
+		t.Fatalf("restored mark reset: next id %d is not above deleted highest %s", d, c)
 	}
 }
