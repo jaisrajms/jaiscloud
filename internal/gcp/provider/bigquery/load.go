@@ -182,12 +182,12 @@ func zeroLoadStats() map[string]any {
 	return map[string]any{"inputFiles": "0", "inputFileBytes": "0", "outputRows": "0", "badRecords": "0"}
 }
 
-// runLoadData evaluates a configuration.load job against an in-memory source —
-// the file bytes supplied as an uploaded media body. inputFiles is the
+// runLoadData evaluates a configuration.load job against a source held in a
+// spool — the file bytes supplied as an uploaded media body. inputFiles is the
 // statistics.load.inputFiles value the caller reports ("0" for a media upload,
-// which names no sourceUris).
-func (p *Provider) runLoadData(ctx context.Context, project string, load map[string]any, data []byte, inputFiles string, now time.Time) (stats map[string]any, jobErr map[string]any, err error) {
-	return p.executeLoad(ctx, project, load, []loadSource{{src: spoolBytes(data)}}, inputFiles, now)
+// which names no sourceUris). The caller owns and closes the spool.
+func (p *Provider) runLoadData(ctx context.Context, project string, load map[string]any, src *loadSpool, inputFiles string, now time.Time) (stats map[string]any, jobErr map[string]any, err error) {
+	return p.executeLoad(ctx, project, load, []loadSource{{src: src}}, inputFiles, now)
 }
 
 // executeLoad resolves the destination schema, decodes/coerces every source,
