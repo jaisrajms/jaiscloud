@@ -2,6 +2,7 @@ package hms
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -379,6 +380,53 @@ func (s *MemoryStore) RenameTable(_ context.Context, srcDB, srcName, dstDB, dstN
 		}
 	}
 	return t, nil
+}
+
+// MoveTable re-keys a table and its partitions onto dstDB under the store lock.
+// Every rewrite runs before anything is mutated, so a rejected closure leaves
+// the catalog exactly as it was.
+func (s *MemoryStore) MoveTable(_ context.Context, srcDB, tableName, dstDB string, rewrite func(json.RawMessage) (json.RawMessage, error)) (Table, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	src, ok := s.tables[srcDB][tableName]
+	if !ok {
+		return Table{}, ErrTableNotFound
+	}
+	if _, ok := s.databases[dstDB]; !ok {
+		return Table{}, ErrDatabaseNotFound
+	}
+	if _, exists := s.tables[dstDB][tableName]; exists {
+		return Table{}, ErrTableExists
+	}
+	raw, err := rewrite(src.TableJSON)
+	if err != nil {
+		return Table{}, err
+	}
+	moved := make(map[string]Partition, len(s.partitions[srcDB][tableName]))
+	for key, p := range s.partitions[srcDB][tableName] {
+		praw, err := rewrite(p.PartJSON)
+		if err != nil {
+			return Table{}, err
+		}
+		p.DBName, p.TableName, p.PartJSON = dstDB, tableName, praw
+		moved[key] = p
+	}
+
+	delete(s.tables[srcDB], tableName)
+	if s.tables[dstDB] == nil {
+		s.tables[dstDB] = make(map[string]Table)
+	}
+	next := Table{DBName: dstDB, TableName: tableName, TableJSON: raw}
+	s.tables[dstDB][tableName] = next
+
+	delete(s.partitions[srcDB], tableName)
+	if len(moved) > 0 {
+		if s.partitions[dstDB] == nil {
+			s.partitions[dstDB] = make(map[string]map[string]Partition)
+		}
+		s.partitions[dstDB][tableName] = moved
+	}
+	return next, nil
 }
 
 // --- Locks ---

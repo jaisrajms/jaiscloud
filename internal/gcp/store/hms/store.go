@@ -140,6 +140,15 @@ type Store interface {
 	// Missing source -> ErrTableNotFound; existing destination ->
 	// ErrTableExists; missing destination database -> ErrDatabaseNotFound.
 	RenameTable(ctx context.Context, srcDB, srcName, dstDB, dstName string, t Table) (Table, error)
+	// MoveTable atomically moves a table to another database, keeping its name.
+	// The table record and every partition under it are re-keyed (Hive preserves
+	// partition metadata across a move) and rewrite is applied to the stored JSON
+	// of both, so the Hive structs the serving plane returns carry the new
+	// database identity. rewrite runs inside the same lock/transaction, so an
+	// error from it leaves the catalog unchanged. Missing source ->
+	// ErrTableNotFound; existing destination ->
+	// ErrTableExists; missing destination database -> ErrDatabaseNotFound.
+	MoveTable(ctx context.Context, srcDB, tableName, dstDB string, rewrite func(json.RawMessage) (json.RawMessage, error)) (Table, error)
 
 	// CreatePartition adds a partition to an existing table. Missing table ->
 	// ErrTableNotFound; duplicate (dbName, tableName, values) ->

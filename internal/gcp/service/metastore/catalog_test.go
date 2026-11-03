@@ -9,12 +9,18 @@ import (
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 )
 
-// fakeCatalogHost records the serving-plane catalog lifecycle calls.
+// fakeCatalogHost records the serving-plane catalog lifecycle calls, and hands
+// back the catalog admin surface the admin/DR operations drive (nil unless a
+// test installs one, which the core reports as a failed precondition).
 type fakeCatalogHost struct {
 	mu     sync.Mutex
 	opened map[string]int
 	closed []string
 	fail   error
+	admin  CatalogAdmin
+	// catalogErr is the error Catalog reports, for a deployment that serves no
+	// catalog for the Service.
+	catalogErr error
 }
 
 func newFakeCatalogHost() *fakeCatalogHost {
@@ -36,6 +42,15 @@ func (f *fakeCatalogHost) CloseCatalog(_ context.Context, id string) {
 	defer f.mu.Unlock()
 	delete(f.opened, id)
 	f.closed = append(f.closed, id)
+}
+
+func (f *fakeCatalogHost) Catalog(_ context.Context, _ string) (CatalogAdmin, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.catalogErr != nil {
+		return nil, f.catalogErr
+	}
+	return f.admin, nil
 }
 
 // TestPerServiceCatalogs covers the control-plane half of NF32: a Service owns a

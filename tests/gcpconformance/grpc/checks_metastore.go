@@ -48,7 +48,65 @@ func metastoreBaseChecks() []Check {
 		{Service: "metastore", RPC: "GetBackup", Method: "GetBackup", KeyField: "name/state round-trip", Run: checkMSGetBackup},
 		{Service: "metastore", RPC: "ListBackups", Method: "ListBackups", KeyField: "created backup present", Run: checkMSListBackups},
 		{Service: "metastore", RPC: "DeleteBackup", Method: "DeleteBackup", KeyField: "LRO done + NotFound after", Run: checkMSDeleteBackup},
+		// The two catalog mutations are served; their happy path (which needs a
+		// table seeded through the Hive Thrift plane) is covered end-to-end by
+		// internal/gcp/hms/catalog_admin_test.go and the transport tests, so the
+		// probes below pin the wire contract the official client observes: the
+		// RPC is dispatched to the core (never Unimplemented), validates its
+		// request, and reports a missing catalog resource as NOT_FOUND.
+		{Service: "metastore", RPC: "MoveTableToDatabase", Method: "MoveTableToDatabase", KeyField: "request validation + NOT_FOUND for an unknown table (RPC served)", Run: checkMSMoveTableToDatabase},
+		{Service: "metastore", RPC: "AlterMetadataResourceLocation", Method: "AlterMetadataResourceLocation", KeyField: "request validation + NOT_FOUND for an unknown database (RPC served)", Run: checkMSAlterMetadataResourceLocation},
 	}
+}
+
+// checkMSMoveTableToDatabase verifies the RPC is served with the proto contract:
+// a missing argument is INVALID_ARGUMENT and a table the Service's catalog does
+// not hold is NOT_FOUND (neither is UNIMPLEMENTED).
+func checkMSMoveTableToDatabase(ctx context.Context, cfg Config) error {
+	client, err := newMetastoreClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+	name, err := ensureMetastoreService(ctx, client, cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := client.MoveTableToDatabase(ctx, &metastorepb.MoveTableToDatabaseRequest{
+		Service: name, DbName: "default", TableName: "no-such-table-" + cfg.Suffix, DestinationDbName: "default",
+	}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("unknown table: code = %v (%v), want NotFound", status.Code(err), err)
+	}
+	if _, err := client.MoveTableToDatabase(ctx, &metastorepb.MoveTableToDatabaseRequest{Service: name}); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("missing arguments: code = %v (%v), want InvalidArgument", status.Code(err), err)
+	}
+	return nil
+}
+
+// checkMSAlterMetadataResourceLocation verifies the RPC is served with the proto
+// contract: a malformed resource name is INVALID_ARGUMENT and a database the
+// Service's catalog does not hold is NOT_FOUND (neither is UNIMPLEMENTED).
+func checkMSAlterMetadataResourceLocation(ctx context.Context, cfg Config) error {
+	client, err := newMetastoreClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+	name, err := ensureMetastoreService(ctx, client, cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := client.AlterMetadataResourceLocation(ctx, &metastorepb.AlterMetadataResourceLocationRequest{
+		Service: name, ResourceName: "databases/no-such-db-" + cfg.Suffix, LocationUri: "gs://bucket/warehouse/new",
+	}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("unknown database: code = %v (%v), want NotFound", status.Code(err), err)
+	}
+	if _, err := client.AlterMetadataResourceLocation(ctx, &metastorepb.AlterMetadataResourceLocationRequest{
+		Service: name, ResourceName: "not-a-resource-name", LocationUri: "gs://bucket/warehouse/new",
+	}); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("malformed resourceName: code = %v (%v), want InvalidArgument", status.Code(err), err)
+	}
+	return nil
 }
 
 const metastoreLocation = "us-central1"

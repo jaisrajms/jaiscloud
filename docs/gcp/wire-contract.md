@@ -319,7 +319,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   methods (exchange, drop-by-request, get_partition_values, get_partitions_by_expr, event marking)
   are explicit unsupported stubs. The gRPC control plane
   (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`
-  proto; the five deferred control-plane RPCs are explicit `unsupported` stubs (see below).
+  proto. The catalog admin/DR operations `moveTableToDatabase` and `alterLocation` are served on both
+  transports over the Service's own catalog: a move re-keys the table and its partitions onto the
+  destination database (name, Hive struct and storage location preserved; no data is copied), and an
+  alter re-points the addressed database/table/partition's location and leaves its children's
+  locations alone. `exportMetadata`, `restoreService` and `queryMetadata` stay explicit `unsupported`
+  stubs (see below): each needs a metadata dump/restore or SQL plane over the Hive metastore RDBMS
+  schema the emulator does not store, so serving one would fabricate a result.
   `Federation` CRUD is served over both transports (the separate
   `google.cloud.metastore.v1.DataprocMetastoreFederation` gRPC service and the REST
   `federations` resource), and the `google.iam.v1.IAMPolicy` mixin is served at the
@@ -534,10 +540,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (requests are unhandled). Artifact Registry is engine-bearing (registry proxy) and is deliberately
   not emulated.
 - **Explicit `Unimplemented` stubs (graded `unsupported` in the matrix)** — Dataproc Metastore
-  `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`
-  (admin/DR operations off the Spark job path with no AWS Glue analogue — backend-RDBMS SQL + a Cloud
-  Storage result manifest, a metadata-dump/restore format, and catalog mutations better served through
-  the Hive Thrift `alter_table` path; see the README Known Limitations);
+  `ExportMetadata`/`RestoreService`/`QueryMetadata` (admin/DR operations off the Spark job path with no
+  AWS Glue analogue: a metadata-dump/restore format over the Hive metastore backend RDBMS schema and
+  read-only SQL over that same schema plus a Cloud Storage result manifest are not modelled; see the
+  README Known Limitations — Metastore's other two admin/DR operations, `moveTableToDatabase` and
+  `alterLocation`, ARE served against the Service's own catalog);
   Dataproc `DiagnoseCluster` (no cluster node/agent/log plane to collect from — the
   diagnostic bundle would be fabricated);
   Firestore Admin `ExportDocuments`/

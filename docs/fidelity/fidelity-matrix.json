@@ -3,22 +3,22 @@
   "summary": {
     "total": 1207,
     "by_state": {
-      "ga": 1005,
+      "ga": 1009,
       "limited": 146,
       "preview": 14,
-      "unsupported": 42
+      "unsupported": 38
     },
     "by_transport": {
       "grpc": {
-        "ga": 448,
+        "ga": 450,
         "limited": 23,
-        "unsupported": 30
+        "unsupported": 28
       },
       "rest": {
-        "ga": 557,
+        "ga": 559,
         "limited": 123,
         "preview": 14,
-        "unsupported": 12
+        "unsupported": 10
       }
     },
     "by_service": {
@@ -89,8 +89,8 @@
         "limited": 13
       },
       "metastore": {
-        "ga": 50,
-        "unsupported": 10
+        "ga": 54,
+        "unsupported": 6
       },
       "monitoring": {
         "ga": 73,
@@ -133,11 +133,11 @@
     },
     "evidence": {
       "verified": {
-        "grpc": 453,
+        "grpc": 455,
         "rest": 661
       },
       "unverified": {
-        "grpc": 48,
+        "grpc": 46,
         "rest": 45
       }
     },
@@ -10745,13 +10745,13 @@
       "service": "metastore",
       "operation": "AlterMetadataResourceLocation",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub",
-      "verified": false,
+      "state": "ga",
+      "verified": true,
       "evidence": [
+        "grpc-checks=AlterMetadataResourceLocation",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)",
-        "verified=false (grpc)"
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
       ]
     },
     {
@@ -10857,7 +10857,7 @@
       "operation": "ExportMetadata",
       "transport": "grpc",
       "state": "unsupported",
-      "reason": "Hive Thrift metadata export is not modelled; explicit Unimplemented stub",
+      "reason": "a metastore metadata dump (MySQL dump or Avro files of the Hive metastore RDBMS schema) is not modelled; explicit Unimplemented stub",
       "verified": false,
       "evidence": [
         "mutating",
@@ -10975,8 +10975,7 @@
       "service": "metastore",
       "operation": "Metastore.AlterMetadataResourceLocation",
       "transport": "rest",
-      "state": "unsupported",
-      "reason": "explicit Unimplemented stub",
+      "state": "ga",
       "discovery": "metastore.projects.locations.services.alterLocation",
       "verified": false,
       "evidence": [
@@ -11327,8 +11326,7 @@
       "service": "metastore",
       "operation": "Metastore.MoveTableToDatabase",
       "transport": "rest",
-      "state": "unsupported",
-      "reason": "explicit Unimplemented stub",
+      "state": "ga",
       "discovery": "metastore.projects.locations.services.moveTableToDatabase",
       "verified": false,
       "evidence": [
@@ -11480,14 +11478,14 @@
       "service": "metastore",
       "operation": "MoveTableToDatabase",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub",
-      "verified": false,
+      "state": "ga",
+      "verified": true,
       "evidence": [
+        "grpc-checks=MoveTableToDatabase",
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)",
-        "verified=false (grpc)"
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
       ]
     },
     {
@@ -11495,7 +11493,7 @@
       "operation": "QueryMetadata",
       "transport": "grpc",
       "state": "unsupported",
-      "reason": "the gRPC metadata query plane is not modelled; explicit Unimplemented stub",
+      "reason": "read-only SQL over the Hive metastore RDBMS schema is not modelled; explicit Unimplemented stub",
       "verified": false,
       "evidence": [
         "postgres=yes",
@@ -11508,7 +11506,7 @@
       "operation": "RestoreService",
       "transport": "grpc",
       "state": "unsupported",
-      "reason": "Hive Thrift metadata restore is not modelled; explicit Unimplemented stub",
+      "reason": "the emulator stores no metadata dump to restore from; explicit Unimplemented stub",
       "verified": false,
       "evidence": [
         "mutating",

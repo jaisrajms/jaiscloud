@@ -341,6 +341,111 @@ func (s *PostgresStore) renameTableOnce(ctx context.Context, srcDB, srcName, dst
 	return t, nil
 }
 
+// MoveTable re-keys a table and its partitions onto dstDB in one Serializable
+// transaction: the table row is locked, every partition's JSON is rewritten
+// before the re-key (which the partitions FK cascades), and a rejected rewrite
+// rolls the whole move back.
+func (s *PostgresStore) MoveTable(ctx context.Context, srcDB, tableName, dstDB string, rewrite func(json.RawMessage) (json.RawMessage, error)) (Table, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.moveTableOnce(ctx, srcDB, tableName, dstDB, rewrite)
+	})
+}
+
+func (s *PostgresStore) moveTableOnce(ctx context.Context, srcDB, tableName, dstDB string, rewrite func(json.RawMessage) (json.RawMessage, error)) (Table, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Table{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	src, err := scanTable(tx.QueryRow(ctx, `
+		SELECT `+tableColumns+` FROM jc_hms_tables
+		WHERE catalog=$1 AND db_name=$2 AND table_name=$3 FOR UPDATE
+	`, s.catalog, srcDB, tableName))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Table{}, ErrTableNotFound
+	}
+	if err != nil {
+		return Table{}, err
+	}
+
+	var one int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_databases WHERE catalog=$1 AND name=$2`, s.catalog, dstDB).Scan(&one); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Table{}, ErrDatabaseNotFound
+		}
+		return Table{}, err
+	}
+	err = tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3`, s.catalog, dstDB, tableName).Scan(&one)
+	if err == nil {
+		return Table{}, ErrTableExists
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Table{}, err
+	}
+
+	// Rewrite each partition's stored struct while it is still keyed under the
+	// source database; the table re-key below cascades the key columns.
+	rows, err := tx.Query(ctx, `
+		SELECT part_key, part_json FROM jc_hms_partitions
+		WHERE catalog=$1 AND db_name=$2 AND table_name=$3 FOR UPDATE
+	`, s.catalog, srcDB, tableName)
+	if err != nil {
+		return Table{}, err
+	}
+	type partJSON struct {
+		key string
+		raw json.RawMessage
+	}
+	var parts []partJSON
+	for rows.Next() {
+		var key string
+		var raw []byte
+		if err := rows.Scan(&key, &raw); err != nil {
+			rows.Close()
+			return Table{}, err
+		}
+		parts = append(parts, partJSON{key: key, raw: raw})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return Table{}, err
+	}
+	for _, p := range parts {
+		next, err := rewrite(p.raw)
+		if err != nil {
+			return Table{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE jc_hms_partitions SET part_json=$5
+			WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4
+		`, s.catalog, srcDB, tableName, p.key, jsonObj(json.RawMessage(next))); err != nil {
+			return Table{}, err
+		}
+	}
+
+	raw, err := rewrite(src.TableJSON)
+	if err != nil {
+		return Table{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_hms_tables SET db_name=$2, table_json=$3
+		WHERE catalog=$1 AND db_name=$4 AND table_name=$5
+	`, s.catalog, dstDB, jsonObj(json.RawMessage(raw)), srcDB, tableName); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return Table{}, ErrTableExists
+		}
+		return Table{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Table{}, err
+	}
+	return Table{DBName: dstDB, TableName: tableName, TableJSON: raw}, nil
+}
+
 // --- Partitions ---
 
 // tableExists reports whether (dbName, tableName) is a stored table.

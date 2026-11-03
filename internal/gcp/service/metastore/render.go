@@ -25,6 +25,9 @@ const (
 	backupTypeURL         = "type.googleapis.com/google.cloud.metastore.v1.Backup"
 	metadataImportTypeURL = "type.googleapis.com/google.cloud.metastore.v1.MetadataImport"
 	federationTypeURL     = "type.googleapis.com/google.cloud.metastore.v1.Federation"
+	// The admin/DR operations return their (empty) method response message.
+	moveTableResponseTypeURL     = "type.googleapis.com/google.cloud.metastore.v1.MoveTableToDatabaseResponse"
+	alterLocationResponseTypeURL = "type.googleapis.com/google.cloud.metastore.v1.AlterMetadataResourceLocationResponse"
 )
 
 // Exported aliases of the Any type URLs above. The gRPC transport reads the
@@ -35,6 +38,10 @@ const (
 	BackupTypeURL         = backupTypeURL
 	MetadataImportTypeURL = metadataImportTypeURL
 	FederationTypeURL     = federationTypeURL
+	// MoveTableResponseTypeURL / AlterLocationResponseTypeURL identify the
+	// method-response messages the two admin/DR operations carry.
+	MoveTableResponseTypeURL     = moveTableResponseTypeURL
+	AlterLocationResponseTypeURL = alterLocationResponseTypeURL
 )
 
 // randomHex returns n random hexadecimal characters. It is used only for

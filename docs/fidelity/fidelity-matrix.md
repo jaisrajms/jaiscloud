@@ -12,17 +12,17 @@ Cells: **1207**
 
 | state | count |
 | --- | --- |
-| ga | 1005 |
+| ga | 1009 |
 | limited | 146 |
 | preview | 14 |
-| unsupported | 42 |
+| unsupported | 38 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 557 | 123 | 14 | 12 |
-| grpc | 448 | 23 | 0 | 30 |
+| rest | 559 | 123 | 14 | 10 |
+| grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -33,7 +33,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | transport | verified | unverified |
 | --- | --- | --- |
 | rest | 661 | 45 |
-| grpc | 453 | 48 |
+| grpc | 455 | 46 |
 
 ## bigquery
 
@@ -942,11 +942,11 @@ _13 cell(s): ga=0 limited=13 preview=0 unsupported=0_
 
 ## metastore
 
-_60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
+_60 cell(s): ga=54 limited=0 preview=0 unsupported=6_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
-| AlterMetadataResourceLocation | grpc | unsupported | no | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
+| AlterMetadataResourceLocation | grpc | ga | yes | — |
 | CreateBackup | grpc | ga | yes | — |
 | CreateFederation | grpc | ga | yes | — |
 | CreateMetadataImport | grpc | ga | yes | — |
@@ -954,7 +954,7 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 | DeleteBackup | grpc | ga | yes | — |
 | DeleteFederation | grpc | ga | yes | — |
 | DeleteService | grpc | ga | yes | — |
-| ExportMetadata | grpc | unsupported | no | Hive Thrift metadata export is not modelled; explicit Unimplemented stub |
+| ExportMetadata | grpc | unsupported | no | a metastore metadata dump (MySQL dump or Avro files of the Hive metastore RDBMS schema) is not modelled; explicit Unimplemented stub |
 | GetBackup | grpc | ga | yes | — |
 | GetFederation | grpc | ga | yes | — |
 | GetMetadataImport | grpc | ga | yes | — |
@@ -963,7 +963,7 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 | ListFederations | grpc | ga | yes | — |
 | ListMetadataImports | grpc | ga | yes | — |
 | ListServices | grpc | ga | yes | — |
-| Metastore.AlterMetadataResourceLocation | rest | unsupported | no | explicit Unimplemented stub |
+| Metastore.AlterMetadataResourceLocation | rest | ga | no | — |
 | Metastore.BackupGetIamPolicy | rest | ga | yes | — |
 | Metastore.BackupSetIamPolicy | rest | ga | yes | — |
 | Metastore.CreateBackup | rest | ga | yes | — |
@@ -989,7 +989,7 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 | Metastore.ListMetadataImports | rest | ga | yes | — |
 | Metastore.ListOperations | rest | ga | yes | — |
 | Metastore.ListServices | rest | ga | yes | — |
-| Metastore.MoveTableToDatabase | rest | unsupported | no | explicit Unimplemented stub |
+| Metastore.MoveTableToDatabase | rest | ga | no | — |
 | Metastore.QueryMetadata | rest | unsupported | no | explicit Unimplemented stub |
 | Metastore.RestoreService | rest | unsupported | no | explicit Unimplemented stub |
 | Metastore.ServiceGetIamPolicy | rest | ga | yes | — |
@@ -1000,9 +1000,9 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 | Metastore.UpdateFederation | rest | ga | yes | — |
 | Metastore.UpdateMetadataImport | rest | ga | yes | — |
 | Metastore.UpdateService | rest | ga | yes | — |
-| MoveTableToDatabase | grpc | unsupported | no | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
-| QueryMetadata | grpc | unsupported | no | the gRPC metadata query plane is not modelled; explicit Unimplemented stub |
-| RestoreService | grpc | unsupported | no | Hive Thrift metadata restore is not modelled; explicit Unimplemented stub |
+| MoveTableToDatabase | grpc | ga | yes | — |
+| QueryMetadata | grpc | unsupported | no | read-only SQL over the Hive metastore RDBMS schema is not modelled; explicit Unimplemented stub |
+| RestoreService | grpc | unsupported | no | the emulator stores no metadata dump to restore from; explicit Unimplemented stub |
 | UpdateFederation | grpc | ga | yes | — |
 | UpdateMetadataImport | grpc | ga | yes | — |
 | UpdateService | grpc | ga | yes | — |
