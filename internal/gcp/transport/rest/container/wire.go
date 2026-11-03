@@ -353,6 +353,62 @@ func nodeConfigToJSON(c *containerstore.NodeConfig) map[string]any {
 	if c.Spot {
 		out["spot"] = true
 	}
+	if len(c.Accelerators) > 0 {
+		// Discovery types AcceleratorConfig.acceleratorCount as int64, which the
+		// JSON surface spells as a string.
+		accels := make([]any, 0, len(c.Accelerators))
+		for _, a := range c.Accelerators {
+			entry := map[string]any{
+				"acceleratorCount": strconv.FormatInt(a.AcceleratorCount, 10),
+				"acceleratorType":  a.AcceleratorType,
+			}
+			if a.GpuPartitionSize != "" {
+				entry["gpuPartitionSize"] = a.GpuPartitionSize
+			}
+			accels = append(accels, entry)
+		}
+		out["accelerators"] = accels
+	}
+	if c.BootDiskKmsKey != "" {
+		out["bootDiskKmsKey"] = c.BootDiskKmsKey
+	}
+	return out
+}
+
+// serverConfigToJSON renders the core's ServerConfig as the GKE JSON shape.
+// Every member Discovery documents is rendered; empty ones are omitted rather
+// than emitted as null.
+func serverConfigToJSON(cfg core.ServerConfig) map[string]any {
+	out := map[string]any{}
+	if cfg.DefaultClusterVersion != "" {
+		out["defaultClusterVersion"] = cfg.DefaultClusterVersion
+	}
+	if len(cfg.ValidMasterVersions) > 0 {
+		out["validMasterVersions"] = cfg.ValidMasterVersions
+	}
+	if len(cfg.ValidNodeVersions) > 0 {
+		out["validNodeVersions"] = cfg.ValidNodeVersions
+	}
+	if cfg.DefaultImageType != "" {
+		out["defaultImageType"] = cfg.DefaultImageType
+	}
+	if len(cfg.ValidImageTypes) > 0 {
+		out["validImageTypes"] = cfg.ValidImageTypes
+	}
+	if len(cfg.Channels) > 0 {
+		channels := make([]any, 0, len(cfg.Channels))
+		for _, ch := range cfg.Channels {
+			entry := map[string]any{
+				"channel":        ch.Channel,
+				"defaultVersion": ch.DefaultVersion,
+			}
+			if len(ch.ValidVersions) > 0 {
+				entry["validVersions"] = ch.ValidVersions
+			}
+			channels = append(channels, entry)
+		}
+		out["channels"] = channels
+	}
 	return out
 }
 
@@ -483,8 +539,36 @@ func nodeConfigFromMap(m map[string]any) *containerstore.NodeConfig {
 		LocalSsdCount:  int32From(m, "localSsdCount"),
 		Preemptible:    boolVal(m, "preemptible"),
 		Spot:           boolVal(m, "spot"),
+		Accelerators:   acceleratorsFrom(m["accelerators"]),
+		BootDiskKmsKey: str(m, "bootDiskKmsKey"),
 	}
 	return c
+}
+
+// acceleratorsFrom decodes NodeConfig.accelerators. acceleratorCount is an int64
+// on the wire (a JSON string), read tolerantly as a number too.
+func acceleratorsFrom(v any) []containerstore.AcceleratorConfig {
+	arr, _ := v.([]any)
+	if len(arr) == 0 {
+		return nil
+	}
+	out := make([]containerstore.AcceleratorConfig, 0, len(arr))
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok {
+			// A malformed entry is still an entry: keep it so the core's
+			// validation answers InvalidArgument rather than silently dropping
+			// the accelerator the caller asked for.
+			out = append(out, containerstore.AcceleratorConfig{})
+			continue
+		}
+		out = append(out, containerstore.AcceleratorConfig{
+			AcceleratorCount: int64From(m["acceleratorCount"]),
+			AcceleratorType:  str(m, "acceleratorType"),
+			GpuPartitionSize: str(m, "gpuPartitionSize"),
+		})
+	}
+	return out
 }
 
 func nodePoolAutoscalingFromMap(m map[string]any) *containerstore.NodePoolAutoscaling {

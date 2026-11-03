@@ -1005,6 +1005,9 @@ func Scenarios(suffix string) []Scenario {
 	gkeLegacyName := gkeBase + "/clusters/" + gkeLegacy
 	gkeConflictInc := "conf-gke-conflict-inc-" + suffix
 	gkeConflictNC := "conf-gke-conflict-nc-" + suffix
+	gkeGPU := "conf-gke-gpu-" + suffix
+	gkeGPUName := gkeBase + "/clusters/" + gkeGPU
+	gkeBadKms := "conf-gke-badkms-" + suffix
 	sc = append(sc,
 		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
 			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1}}`, gkeCluster),
@@ -1085,6 +1088,22 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
 			Body: fmt.Sprintf(`{"cluster":{"name":%q,"nodeConfig":{"machineType":"e2-micro"},"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`,
 				gkeConflictNC)},
+		// GetServerConfig: the documented catalog on the locations path, and on
+		// the legacy zones path (container.projects.zones.getServerconfig).
+		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/serverConfig"},
+		Scenario{Service: "container", Method: "GET", Path: "/container/v1/projects/" + p + "/zones/us-central1-a/serverconfig"},
+		// NodeConfig.accelerators + bootDiskKmsKey (DPG25) round-trip on a pool
+		// that is created inline and read back, then a malformed CMEK key is the
+		// InvalidArgument envelope.
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"nodePools":[{"name":"gpu-pool","initialNodeCount":1,"config":{"machineType":"n1-standard-1","accelerators":[{"acceleratorCount":"1","acceleratorType":"nvidia-tesla-t4","gpuPartitionSize":"1g.5gb"}],"bootDiskKmsKey":"projects/%s/locations/global/keyRings/conf/cryptoKeys/boot"}}]}}`,
+				gkeGPU, p)},
+		Scenario{Service: "container", Method: "GET", Path: gkeGPUName},
+		Scenario{Service: "container", Method: "GET", Path: gkeGPUName + "/nodePools/gpu-pool"},
+		Scenario{Service: "container", Method: "DELETE", Path: gkeGPUName},
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1,"nodeConfig":{"bootDiskKmsKey":"not-a-key"}}}`,
+				gkeBadKms)},
 	)
 
 	// ─── Cloud Run Admin v2 (run.googleapis.com) ──────────────────────────────

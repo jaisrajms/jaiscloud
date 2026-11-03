@@ -36,6 +36,7 @@ func containerChecks() []Check {
 		{Service: "container", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkContainerListClusters},
 		{Service: "container", RPC: "GetOperation", Method: "GetOperation", KeyField: "operation name/type round-trip", Run: checkContainerGetOperation},
 		{Service: "container", RPC: "ListOperations", Method: "ListOperations", KeyField: "created operation present", Run: checkContainerListOperations},
+		{Service: "container", RPC: "GetServerConfig", Method: "GetServerConfig", KeyField: "defaultClusterVersion/validImageTypes/channels + legacy project_id/zone", Run: checkGetServerConfig},
 		{Service: "container", RPC: "DeleteCluster", Method: "DeleteCluster", KeyField: "DELETE_CLUSTER DONE + NotFound after", Run: checkContainerDeleteCluster},
 	}
 }
@@ -1207,4 +1208,74 @@ func checkContainerDeleteCluster(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("GetCluster after delete code = %v, want NotFound", status.Code(err))
 	}
 	return nil
+}
+
+// checkGetServerConfig pins the server-config catalog through the official
+// client: Discovery's ServerConfig members are all populated, the advertised
+// default image is the first valid image type, the channels are the enum's
+// non-deprecated values, and the deprecated project_id + zone addressing
+// resolves to the same catalog as the canonical name.
+func checkGetServerConfig(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	got, err := client.GetServerConfig(ctx, &containerpb.GetServerConfigRequest{Name: containerParent(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetServerConfig: %w", err)
+	}
+	if got.GetDefaultClusterVersion() == "" {
+		return fmt.Errorf("GetServerConfig: empty defaultClusterVersion")
+	}
+	if !containsString(got.GetValidMasterVersions(), got.GetDefaultClusterVersion()) {
+		return fmt.Errorf("GetServerConfig: defaultClusterVersion %q not in validMasterVersions %v",
+			got.GetDefaultClusterVersion(), got.GetValidMasterVersions())
+	}
+	if !containsString(got.GetValidNodeVersions(), got.GetDefaultClusterVersion()) {
+		return fmt.Errorf("GetServerConfig: defaultClusterVersion %q not in validNodeVersions %v",
+			got.GetDefaultClusterVersion(), got.GetValidNodeVersions())
+	}
+	if got.GetDefaultImageType() == "" || !containsString(got.GetValidImageTypes(), got.GetDefaultImageType()) {
+		return fmt.Errorf("GetServerConfig: defaultImageType %q not in validImageTypes %v",
+			got.GetDefaultImageType(), got.GetValidImageTypes())
+	}
+	wantChannels := []containerpb.ReleaseChannel_Channel{
+		containerpb.ReleaseChannel_RAPID,
+		containerpb.ReleaseChannel_REGULAR,
+		containerpb.ReleaseChannel_STABLE,
+		containerpb.ReleaseChannel_EXTENDED,
+	}
+	if len(got.GetChannels()) != len(wantChannels) {
+		return fmt.Errorf("GetServerConfig: channels = %v", got.GetChannels())
+	}
+	for i, ch := range got.GetChannels() {
+		if ch.GetChannel() != wantChannels[i] || ch.GetDefaultVersion() == "" {
+			return fmt.Errorf("GetServerConfig: channels[%d] = %v/%q", i, ch.GetChannel(), ch.GetDefaultVersion())
+		}
+	}
+
+	// The deprecated legacy addressing answers the same catalog.
+	legacy, err := client.GetServerConfig(ctx, &containerpb.GetServerConfigRequest{
+		ProjectId: cfg.Project, Zone: containerLocation,
+	})
+	if err != nil {
+		return fmt.Errorf("GetServerConfig(legacy): %w", err)
+	}
+	if legacy.GetDefaultClusterVersion() != got.GetDefaultClusterVersion() {
+		return fmt.Errorf("GetServerConfig(legacy) defaultClusterVersion = %q, want %q",
+			legacy.GetDefaultClusterVersion(), got.GetDefaultClusterVersion())
+	}
+	return nil
+}
+
+// containsString reports whether an ordered list contains want.
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

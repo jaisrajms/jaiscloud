@@ -44,6 +44,12 @@ func containerFoldOperation(raw json.RawMessage) (json.RawMessage, error) {
 	return containerOperationID.ReplaceAll(raw, []byte("operation-<id>")), nil
 }
 
+// containerKmsKey is a boot-disk CMEK key name in the documented form. It is not
+// a resource the emulator stores, so both transports send the identical value.
+func containerKmsKey(e *Env) string {
+	return "projects/" + e.Cfg.Project + "/locations/global/keyRings/parity/cryptoKeys/boot"
+}
+
 // containerScenario compares the GKE v1 (ClusterManager) surface over REST and
 // gRPC. GKE mutations return the container-specific google.container.v1.Operation
 // (not google.longrunning), which the core materializes already DONE, so no LRO
@@ -88,12 +94,23 @@ func containerScenario() Scenario {
 				Name:             clusterName(e),
 				InitialNodeCount: 1,
 				ResourceLabels:   map[string]string{"parity": "true"},
+				// NodeConfig.accelerators + bootDiskKmsKey (DPG25): every cluster
+				// read in this scenario then compares the two transports' echo of
+				// both fields.
+				NodeConfig: &containerpb.NodeConfig{
+					MachineType:    "n1-standard-1",
+					Accelerators:   []*containerpb.AcceleratorConfig{{AcceleratorCount: 1, AcceleratorType: "nvidia-tesla-t4"}},
+					BootDiskKmsKey: containerKmsKey(e),
+				},
 			},
 		})
 	}
 	createClusterREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
 		return e.Rest(ctx, "POST", restLoc(e)+"/clusters",
-			`{"cluster":{"name":"`+clusterName(e)+`","initialNodeCount":1,"resourceLabels":{"parity":"true"}}}`)
+			`{"cluster":{"name":"`+clusterName(e)+`","initialNodeCount":1,"resourceLabels":{"parity":"true"},`+
+				`"nodeConfig":{"machineType":"n1-standard-1",`+
+				`"accelerators":[{"acceleratorCount":"1","acceleratorType":"nvidia-tesla-t4"}],`+
+				`"bootDiskKmsKey":"`+containerKmsKey(e)+`"}}}`)
 	}
 	deleteClusterREST := func(ctx context.Context, e *Env) error {
 		return e.RestDelete(ctx, restCluster(e))
@@ -235,6 +252,23 @@ func containerScenario() Scenario {
 			},
 			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
 				return e.Rest(ctx, "GET", restLoc(e)+"/operations", "")
+			},
+		},
+		{
+			// getServerConfig is a derived catalog on both transports; the REST
+			// encoder and the proto render must agree field for field (including
+			// the channel enum names and the int64-free version lists).
+			Op: "GetServerConfig",
+			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+				c, err := newClient(ctx, e)
+				if err != nil {
+					return nil, err
+				}
+				defer c.Close()
+				return c.GetServerConfig(ctx, &containerpb.GetServerConfigRequest{Name: parent(e)})
+			},
+			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+				return e.Rest(ctx, "GET", restLoc(e)+"/serverConfig", "")
 			},
 		},
 		{

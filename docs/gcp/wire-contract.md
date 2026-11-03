@@ -439,10 +439,24 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   kept, so a Shared-VPC host project is not rewritten into the cluster's), `shieldedNodes.enabled` (GKE's default `true`, honouring a create-time `false`),
   `defaultMaxPodsConstraint.maxPodsPerNode` (`"110"`, honouring a create-time value) and the
   `logging.googleapis.com/kubernetes`/`monitoring.googleapis.com/kubernetes` service defaults —
-  while `masterAuth.clusterCaCertificate` stays empty because the mock mints no CA. There is **no
-  real Kubernetes control plane** behind it, so `Autopilot` compatibility,
-  `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
-  `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys`, `getServerConfig` and
+  while `masterAuth.clusterCaCertificate` stays empty because the mock mints no CA.
+  `nodeConfig.accelerators` (`acceleratorCount`/`acceleratorType`/`gpuPartitionSize`) and
+  `nodeConfig.bootDiskKmsKey` are stored and echoed as sent on create, node-pool create and update;
+  a `bootDiskKmsKey` that is not the documented
+  `projects/{p}/locations/{l}/keyRings/{r}/cryptoKeys/{k}` form, or an accelerator entry with no
+  type or a non-positive count, is `400` (the form is the only thing enforced: the emulator has no
+  GPU catalog to validate an accelerator type against, and no GPU or disk behind the fields).
+  `getServerConfig` is served on both transports as a **derived** catalog — the one Kubernetes
+  version the mock supports (`1.30.5-gke.1014001`) as `defaultClusterVersion`, the only entry in
+  `validMasterVersions`/`validNodeVersions`, `defaultImageType` `COS_CONTAINERD` with its
+  `validImageTypes` peers, and the `RAPID`/`REGULAR`/`STABLE`/`EXTENDED` channel entries — on the
+  locations path and the legacy `zones/{zone}/serverconfig` path. Discovery's `ServerConfig` has no
+  `masterAuthorizedNetworksConfig` member (that is a `Cluster` field, echoed on the cluster), and the
+  container API documents no `projects.locations.get`/`list` method (neither Discovery nor the
+  `google.container.v1.ClusterManager` proto declares one; only `getServerConfig` is
+  location-scoped), so neither is synthesized. There is **no real Kubernetes control plane** behind
+  it, so `Autopilot` compatibility, `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
+  `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys` and
   `listUsableSubnetworks` remain explicit `Unimplemented` stubs, and there is no Artifact
   Registry/OCI pull path. GKE shares the canonical
   `/v1/projects/{p}/locations/{l}/clusters` path with Managed Kafka on the single emulator origin, so

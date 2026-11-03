@@ -286,7 +286,27 @@ func nodeConfigFromProto(c *containerpb.NodeConfig) *containerstore.NodeConfig {
 		LocalSsdCount:  c.GetLocalSsdCount(),
 		Preemptible:    c.GetPreemptible(),
 		Spot:           c.GetSpot(),
+		Accelerators:   acceleratorsFromProto(c.GetAccelerators()),
+		BootDiskKmsKey: c.GetBootDiskKmsKey(),
 	}
+}
+
+// acceleratorsFromProto decodes NodeConfig.accelerators. The GPU-sharing and
+// driver-installation sub-messages are not modelled (the mock has no GPU to share
+// or driver to install), so they are not carried.
+func acceleratorsFromProto(in []*containerpb.AcceleratorConfig) []containerstore.AcceleratorConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]containerstore.AcceleratorConfig, 0, len(in))
+	for _, a := range in {
+		out = append(out, containerstore.AcceleratorConfig{
+			AcceleratorCount: a.GetAcceleratorCount(),
+			AcceleratorType:  a.GetAcceleratorType(),
+			GpuPartitionSize: a.GetGpuPartitionSize(),
+		})
+	}
+	return out
 }
 
 // nodePoolAutoscalingFromProto builds the core's autoscaling subset.
@@ -319,6 +339,60 @@ func nodeConfigToProto(c *containerstore.NodeConfig) *containerpb.NodeConfig {
 		LocalSsdCount:  c.LocalSsdCount,
 		Preemptible:    c.Preemptible,
 		Spot:           c.Spot,
+		Accelerators:   acceleratorsToProto(c.Accelerators),
+		BootDiskKmsKey: c.BootDiskKmsKey,
+	}
+}
+
+// acceleratorsToProto renders the stored accelerator list as the proto shape.
+func acceleratorsToProto(in []containerstore.AcceleratorConfig) []*containerpb.AcceleratorConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*containerpb.AcceleratorConfig, 0, len(in))
+	for _, a := range in {
+		out = append(out, &containerpb.AcceleratorConfig{
+			AcceleratorCount: a.AcceleratorCount,
+			AcceleratorType:  a.AcceleratorType,
+			GpuPartitionSize: a.GpuPartitionSize,
+		})
+	}
+	return out
+}
+
+// serverConfigToProto renders the core's ServerConfig as the proto response.
+func serverConfigToProto(cfg core.ServerConfig) *containerpb.ServerConfig {
+	out := &containerpb.ServerConfig{
+		DefaultClusterVersion: cfg.DefaultClusterVersion,
+		ValidMasterVersions:   cfg.ValidMasterVersions,
+		ValidNodeVersions:     cfg.ValidNodeVersions,
+		DefaultImageType:      cfg.DefaultImageType,
+		ValidImageTypes:       cfg.ValidImageTypes,
+	}
+	for _, ch := range cfg.Channels {
+		out.Channels = append(out.Channels, &containerpb.ServerConfig_ReleaseChannelConfig{
+			Channel:        releaseChannelToProto(ch.Channel),
+			DefaultVersion: ch.DefaultVersion,
+			ValidVersions:  ch.ValidVersions,
+		})
+	}
+	return out
+}
+
+// releaseChannelToProto maps a stored channel name to the proto enum. An unknown
+// name is UNSPECIFIED rather than a wrong channel.
+func releaseChannelToProto(ch string) containerpb.ReleaseChannel_Channel {
+	switch ch {
+	case "RAPID":
+		return containerpb.ReleaseChannel_RAPID
+	case "REGULAR":
+		return containerpb.ReleaseChannel_REGULAR
+	case "STABLE":
+		return containerpb.ReleaseChannel_STABLE
+	case "EXTENDED":
+		return containerpb.ReleaseChannel_EXTENDED
+	default:
+		return containerpb.ReleaseChannel_UNSPECIFIED
 	}
 }
 

@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1195**
+Cells: **1196**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1003 |
+| ga | 1005 |
 | limited | 135 |
 | preview | 14 |
-| unsupported | 43 |
+| unsupported | 42 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 556 | 112 | 14 | 12 |
-| grpc | 447 | 23 | 0 | 31 |
+| rest | 557 | 112 | 14 | 12 |
+| grpc | 448 | 23 | 0 | 30 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -32,8 +32,8 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 649 | 45 |
-| grpc | 452 | 49 |
+| rest | 650 | 45 |
+| grpc | 453 | 48 |
 
 ## bigquery
 
@@ -166,7 +166,7 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
 ## container
 
-_66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
+_67 cell(s): ga=60 limited=0 preview=0 unsupported=7_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -184,6 +184,7 @@ _66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
 | Container.GetCluster | rest | ga | yes | — |
 | Container.GetNodePool | rest | ga | yes | — |
 | Container.GetOperation | rest | ga | yes | — |
+| Container.GetServerConfig | rest | ga | yes | — |
 | Container.ListClusters | rest | ga | yes | — |
 | Container.ListNodePools | rest | ga | yes | — |
 | Container.ListOperations | rest | ga | yes | — |
@@ -214,7 +215,7 @@ _66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
 | GetJSONWebKeys | grpc | unsupported | no | cluster signing JWKS are not modelled; explicit Unimplemented stub |
 | GetNodePool | grpc | ga | yes | — |
 | GetOperation | grpc | ga | yes | — |
-| GetServerConfig | grpc | unsupported | no | server config (valid versions/channels) is not modelled; explicit Unimplemented stub |
+| GetServerConfig | grpc | ga | yes | — |
 | ListClusters | grpc | ga | yes | — |
 | ListNodePools | grpc | ga | yes | — |
 | ListOperations | grpc | ga | yes | — |

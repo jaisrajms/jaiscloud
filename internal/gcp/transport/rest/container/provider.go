@@ -51,6 +51,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Container.UpdateMaster":            p.UpdateMaster,
 		"Container.StartIPRotation":         p.StartIPRotation,
 		"Container.CompleteIPRotation":      p.CompleteIPRotation,
+		"Container.GetServerConfig":         p.GetServerConfig,
 	}
 }
 
@@ -361,6 +362,17 @@ func (p *Provider) CompleteIPRotation(ctx context.Context, nr *model.NormalizedR
 		return nil, err
 	}
 	return provider.OK(operationToJSON(op)), nil
+}
+
+// GetServerConfig serves projects.locations.getServerConfig (and the legacy
+// projects.zones.getServerconfig the codec routes here): a derived catalog, not
+// stored state, so it answers on any project/location the caller names.
+func (p *Provider) GetServerConfig(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	cfg, err := p.core.GetServerConfig(strParam(nr, "project"), strParam(nr, "location"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serverConfigToJSON(cfg)), nil
 }
 
 func clusterUpdateFromMap(m map[string]any) core.ClusterUpdate {

@@ -96,6 +96,7 @@ func NodePoolWithReadDefaults(p containerstore.NodePool) containerstore.NodePool
 	if p.Config != nil {
 		cfg = *p.Config
 		cfg.OauthScopes = append([]string(nil), p.Config.OauthScopes...)
+		cfg.Accelerators = append([]containerstore.AcceleratorConfig(nil), p.Config.Accelerators...)
 	}
 	if cfg.MachineType == "" {
 		cfg.MachineType = DefaultNodeMachineType

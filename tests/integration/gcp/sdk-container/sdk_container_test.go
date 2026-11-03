@@ -622,3 +622,85 @@ func TestSDKContainerClusterNestedMessagesOnCreate(t *testing.T) {
 	require.NotNil(t, got.DefaultMaxPodsConstraint)
 	require.EqualValues(t, 64, got.DefaultMaxPodsConstraint.MaxPodsPerNode)
 }
+
+// TestSDKContainerGetServerConfig covers the service-config read through the
+// official apiary client on both documented paths: the canonical
+// projects.locations.getServerConfig and the deprecated
+// projects.zones.getServerconfig. The catalog is derived, so it advertises the
+// one Kubernetes version the emulator's clusters report and the node image its
+// pools default to (NF30).
+func TestSDKContainerGetServerConfig(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	cfg, err := svc.Projects.Locations.GetServerConfig(parent()).Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, cfg.DefaultClusterVersion)
+	require.Contains(t, cfg.ValidMasterVersions, cfg.DefaultClusterVersion)
+	require.Contains(t, cfg.ValidNodeVersions, cfg.DefaultClusterVersion)
+	require.Equal(t, "COS_CONTAINERD", cfg.DefaultImageType)
+	require.Contains(t, cfg.ValidImageTypes, cfg.DefaultImageType)
+	require.Len(t, cfg.Channels, 4)
+	require.Equal(t, "RAPID", cfg.Channels[0].Channel)
+	require.Equal(t, cfg.DefaultClusterVersion, cfg.Channels[0].DefaultVersion)
+
+	// The same catalog answers the deprecated zone-scoped path.
+	legacy, err := svc.Projects.Zones.GetServerconfig(projectID(), locationID()+"-a").Do()
+	require.NoError(t, err)
+	require.Equal(t, cfg.DefaultClusterVersion, legacy.DefaultClusterVersion)
+	require.Equal(t, cfg.ValidImageTypes, legacy.ValidImageTypes)
+}
+
+// TestSDKContainerNodeConfigAcceleratorsAndKmsKey pins the DPG25 round-trip on
+// the wire: NodeConfig.accelerators (acceleratorCount is an int64 string) and
+// bootDiskKmsKey are stored and echoed on the default pool and the node-pool
+// read, and a malformed CMEK key is a 400.
+func TestSDKContainerNodeConfigAcceleratorsAndKmsKey(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	kmsKey := fmt.Sprintf("projects/%s/locations/global/keyRings/ring/cryptoKeys/boot", projectID())
+
+	id := unique("cg")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:             id,
+			InitialNodeCount: 1,
+			NodeConfig: &container.NodeConfig{
+				MachineType: "n1-standard-1",
+				Accelerators: []*container.AcceleratorConfig{{
+					AcceleratorCount: 1,
+					AcceleratorType:  "nvidia-tesla-t4",
+					GpuPartitionSize: "1g.5gb",
+				}},
+				BootDiskKmsKey: kmsKey,
+			},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.NodeConfig, "cluster read must echo nodeConfig")
+	require.Equal(t, kmsKey, got.NodeConfig.BootDiskKmsKey)
+	require.Len(t, got.NodeConfig.Accelerators, 1)
+	require.EqualValues(t, 1, got.NodeConfig.Accelerators[0].AcceleratorCount)
+	require.Equal(t, "nvidia-tesla-t4", got.NodeConfig.Accelerators[0].AcceleratorType)
+	require.Equal(t, "1g.5gb", got.NodeConfig.Accelerators[0].GpuPartitionSize)
+
+	// The generated default-pool carries the same config.
+	pool, err := svc.Projects.Locations.Clusters.NodePools.Get(nodePoolName(id, "default-pool")).Do()
+	require.NoError(t, err)
+	require.Equal(t, kmsKey, pool.Config.BootDiskKmsKey)
+	require.Len(t, pool.Config.Accelerators, 1)
+
+	// A malformed CMEK key is rejected before anything is stored.
+	bad := unique("cb")
+	_, err = svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:             bad,
+			InitialNodeCount: 1,
+			NodeConfig:       &container.NodeConfig{BootDiskKmsKey: "not-a-key"},
+		},
+	}).Do()
+	requireAPIError(t, err, http.StatusBadRequest)
+}

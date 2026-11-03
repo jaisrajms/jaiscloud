@@ -44,9 +44,9 @@ type GKECluster struct {
 }
 
 // GKENodePoolSpec is the pool shape the Dataproc core asks the provisioner for.
-// It carries only what GkeNodePoolConfig expresses: the input-only
-// accelerators/bootDiskKmsKey/gpuPartitionSize fields are accepted on the wire
-// and never reflected (DPG25).
+// It carries what GkeNodePoolConfig expresses, including the accelerators and
+// boot-disk CMEK key that are materialized on the pool and verified field by
+// field like every other specified one.
 type GKENodePoolSpec struct {
 	Name           string
 	MachineType    string
@@ -55,6 +55,10 @@ type GKENodePoolSpec struct {
 	Spot           bool
 	MinCpuPlatform string
 	ServiceAccount string
+	// Accelerators and BootDiskKmsKey are the GkeNodePoolConfig.config fields the
+	// GKE pool carries (DPG25).
+	Accelerators   []GKENodePoolAccelerator
+	BootDiskKmsKey string
 	Autoscaling    *GKENodePoolAutoscaling
 	Locations      []string
 	// Labels are the auto labels Dataproc applies to a pool it creates
@@ -82,6 +86,14 @@ type GKENodePoolDefaults struct {
 type GKENodePoolAutoscaling struct {
 	MinNodeCount int32
 	MaxNodeCount int32
+}
+
+// GKENodePoolAccelerator is one entry of GkeNodePoolConfig.config.accelerators
+// (google.container.v1.AcceleratorConfig).
+type GKENodePoolAccelerator struct {
+	AcceleratorType  string
+	AcceleratorCount int64
+	GpuPartitionSize string
 }
 
 // GKENodePoolMismatchError reports that an existing pool disagrees with the
@@ -165,6 +177,8 @@ type gkeNodePoolConfig struct {
 	spot           bool
 	minCpuPlatform string
 	serviceAccount string
+	accelerators   []GKENodePoolAccelerator
+	bootDiskKmsKey string
 	autoscaling    *GKENodePoolAutoscaling
 	locations      []string
 }
@@ -361,8 +375,9 @@ func parseGKEPoolTarget(m map[string]any, target string, i int) (gkePoolTarget, 
 }
 
 // parseGKENodePoolConfig parses GkeNodePoolConfig and enforces the scalar rules
-// (autoscaler bounds). The accelerators/bootDiskKmsKey/gpuPartitionSize fields
-// are accepted and dropped: the emulated pool has no GPU or CMEK model (DPG25).
+// (autoscaler bounds). The accelerators and bootDiskKmsKey fields are parsed and
+// carried to the pool; the GKE core validates their form when the pool is
+// created, so a malformed value fails the create the way a real one does.
 // Bounds faults are collected so both a non-positive maximum and a min/max
 // inversion are reported together.
 func parseGKENodePoolConfig(m map[string]any, pool string) (*gkeNodePoolConfig, validationErrors) {
@@ -375,6 +390,8 @@ func parseGKENodePoolConfig(m map[string]any, pool string) (*gkeNodePoolConfig, 
 		cfg.spot = bodyBool(inner, "spot")
 		cfg.minCpuPlatform = bodyString(inner, "minCpuPlatform")
 		cfg.serviceAccount = bodyString(inner, "serviceAccount")
+		cfg.bootDiskKmsKey = bodyString(inner, "bootDiskKmsKey")
+		cfg.accelerators = parseGKENodePoolAccelerators(inner["accelerators"])
 	}
 	if as, ok := m["autoscaling"].(map[string]any); ok {
 		a := &GKENodePoolAutoscaling{
@@ -391,6 +408,24 @@ func parseGKENodePoolConfig(m map[string]any, pool string) (*gkeNodePoolConfig, 
 		cfg.autoscaling = a
 	}
 	return cfg, errs
+}
+
+// parseGKENodePoolAccelerators parses GkeNodePoolConfig.config.accelerators.
+func parseGKENodePoolAccelerators(v any) []GKENodePoolAccelerator {
+	arr, _ := v.([]any)
+	if len(arr) == 0 {
+		return nil
+	}
+	out := make([]GKENodePoolAccelerator, 0, len(arr))
+	for _, e := range arr {
+		m, _ := e.(map[string]any)
+		out = append(out, GKENodePoolAccelerator{
+			AcceleratorType:  bodyString(m, "acceleratorType"),
+			AcceleratorCount: bodyInt64(m, "acceleratorCount"),
+			GpuPartitionSize: bodyString(m, "gpuPartitionSize"),
+		})
+	}
+	return out
 }
 
 // validateGKEPoolTargets enforces the cross-pool role rules: at least one
@@ -591,6 +626,8 @@ func gkeNodePoolSpec(p gkePoolTarget, cluster, clusterUUID, region string, label
 	spec.Spot = p.config.spot
 	spec.MinCpuPlatform = p.config.minCpuPlatform
 	spec.ServiceAccount = p.config.serviceAccount
+	spec.Accelerators = p.config.accelerators
+	spec.BootDiskKmsKey = p.config.bootDiskKmsKey
 	spec.Autoscaling = p.config.autoscaling
 	spec.Locations = p.config.locations
 	return spec

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 513,
-  "passed": 513,
+  "total": 514,
+  "passed": 514,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 513,
-    "passed": 513,
+    "checks": 514,
+    "passed": 514,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "container",
-      "total": 34,
-      "passed": 34,
+      "total": 35,
+      "passed": 35,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3291,6 +3291,13 @@
       "method": "ListOperations",
       "status": "pass",
       "key_field": "created operation present"
+    },
+    {
+      "service": "container",
+      "rpc": "GetServerConfig",
+      "method": "GetServerConfig",
+      "status": "pass",
+      "key_field": "defaultClusterVersion/validImageTypes/channels + legacy project_id/zone"
     },
     {
       "service": "container",

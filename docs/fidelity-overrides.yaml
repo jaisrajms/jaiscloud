@@ -337,10 +337,11 @@ operations:
     reason: "the BigQuery v2 Discovery document itself (not a Discovery API operation): the vendored v2 snapshot served verbatim, with rootUrl/baseUrl rewritten to the caller's origin, at both /$discovery/rest?version=v2 and the legacy /discovery/v1/apis/bigquery/v2/rest; the bq CLI (SDK 591) builds its client from it and creates/lists datasets and tables end to end"
 
   # GKE ClusterManager is a metadata control plane (no real Kubernetes control
-  # plane; docs/gcp/wire-contract.md §5): cluster CRUD, operations, node-pool CRUD, and the
-  # update/setter/rotation RPCs are all served and verified by the official
-  # container client. Only the operations that need a real control plane or node
-  # lifecycle remain explicit Unimplemented stubs.
+  # plane; docs/gcp/wire-contract.md §5): cluster CRUD, operations, node-pool CRUD,
+  # the update/setter/rotation RPCs and getServerConfig (the derived version/image
+  # catalog) are all served and verified by the official container client. Only the
+  # operations that need a real control plane or node lifecycle remain explicit
+  # Unimplemented stubs.
   - service: container
     operation: CheckAutopilotCompatibility
     state: unsupported
@@ -365,10 +366,6 @@ operations:
     operation: GetJSONWebKeys
     state: unsupported
     reason: "cluster signing JWKS are not modelled; explicit Unimplemented stub"
-  - service: container
-    operation: GetServerConfig
-    state: unsupported
-    reason: "server config (valid versions/channels) is not modelled; explicit Unimplemented stub"
   - service: container
     operation: ListUsableSubnetworks
     state: unsupported

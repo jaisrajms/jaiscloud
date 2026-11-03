@@ -82,6 +82,14 @@ type NodePool struct {
 	UpgradeSettings  *NodePoolUpgradeSettings `json:"upgradeSettings,omitempty"`
 }
 
+// AcceleratorConfig is one entry of NodeConfig.accelerators: the persisted
+// subset of google.container.v1.AcceleratorConfig.
+type AcceleratorConfig struct {
+	AcceleratorCount int64  `json:"acceleratorCount,omitempty"`
+	AcceleratorType  string `json:"acceleratorType,omitempty"`
+	GpuPartitionSize string `json:"gpuPartitionSize,omitempty"`
+}
+
 // NodeConfig is the persisted subset of google.container.v1.NodeConfig.
 type NodeConfig struct {
 	MachineType    string            `json:"machineType,omitempty"`
@@ -98,6 +106,11 @@ type NodeConfig struct {
 	LocalSsdCount  int32             `json:"localSsdCount,omitempty"`
 	Preemptible    bool              `json:"preemptible,omitempty"`
 	Spot           bool              `json:"spot,omitempty"`
+	// Accelerators are the hardware accelerators attached to each node, and
+	// BootDiskKmsKey is the CMEK key encrypting the boot disk. Both are stored
+	// and echoed as sent: the mock has no GPU or disk behind them.
+	Accelerators   []AcceleratorConfig `json:"accelerators,omitempty"`
+	BootDiskKmsKey string              `json:"bootDiskKmsKey,omitempty"`
 }
 
 // NodePoolAutoscaling is the persisted subset of

@@ -75,6 +75,9 @@ func materializeNodePool(project, location, cluster string, p containerstore.Nod
 	if !validNodePoolName.MatchString(p.Name) {
 		return p, invalidArgument("invalid node pool name: " + p.Name)
 	}
+	if err := validateNodeConfig(p.Config); err != nil {
+		return p, err
+	}
 	p.Status = containerstore.StatusRunning
 	p.SelfLink = NodePoolName(project, location, cluster, p.Name)
 	if p.Version == "" {
@@ -175,6 +178,9 @@ func (s *Service) DeleteNodePool(ctx context.Context, project, location, cluster
 // UpdateNodePool applies the provided (non-empty) fields of a node pool and
 // returns the UPGRADE_NODES operation. Fields left unset are preserved.
 func (s *Service) UpdateNodePool(ctx context.Context, project, location, cluster string, update containerstore.NodePool) (containerstore.Operation, error) {
+	if err := validateNodeConfig(update.Config); err != nil {
+		return containerstore.Operation{}, err
+	}
 	release, err := s.acquireOperation(ctx, project, location,
 		ClusterName(project, location, cluster), NodePoolName(project, location, cluster, update.Name))
 	if err != nil {
@@ -341,6 +347,12 @@ func mergeNodeConfig(dst *containerstore.NodePool, src *containerstore.NodeConfi
 	}
 	if src.Spot {
 		c.Spot = true
+	}
+	if len(src.Accelerators) > 0 {
+		c.Accelerators = append([]containerstore.AcceleratorConfig(nil), src.Accelerators...)
+	}
+	if src.BootDiskKmsKey != "" {
+		c.BootDiskKmsKey = src.BootDiskKmsKey
 	}
 }
 
