@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"sort"
 )
 
 // --- Memory store ---
@@ -51,6 +52,29 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	}
 	if snap.Operations == nil {
 		snap.Operations = map[string]map[string]Operation{}
+	}
+	// A snapshot taken before per-Service catalogs has no ports; assign them so
+	// every restored service has a working endpoint on the serving plane.
+	all := make([]Service, 0)
+	for _, byName := range snap.Services {
+		for _, svc := range byName {
+			all = append(all, svc)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].ProjectID != all[j].ProjectID {
+			return all[i].ProjectID < all[j].ProjectID
+		}
+		if all[i].Location != all[j].Location {
+			return all[i].Location < all[j].Location
+		}
+		return all[i].Name < all[j].Name
+	})
+	AssignMissingPorts(all, DefaultServicePort)
+	for _, svc := range all {
+		if byName := snap.Services[serviceScope(svc.ProjectID, svc.Location)]; byName != nil {
+			byName[svc.Name] = svc
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,7 +130,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	operations := make([]operationRow, 0)
 
 	srows, err := s.pool.Query(ctx, `
-		SELECT project_id, location, service_name, config, labels, state, state_history, create_time, update_time
+		SELECT project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time
 		FROM jc_metastore_services ORDER BY project_id, location, service_name
 	`)
 	if err != nil {
@@ -116,7 +140,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var r serviceRow
 		var config, labels, history []byte
 		if err := srows.Scan(&r.ProjectID, &r.Service.Location, &r.Service.Name, &config, &labels, &r.Service.State, &history,
-			&r.Service.CreateTime, &r.Service.UpdateTime); err != nil {
+			&r.Service.Port, &r.Service.CreateTime, &r.Service.UpdateTime); err != nil {
 			srows.Close()
 			return err
 		}
@@ -256,6 +280,13 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
+	// A snapshot taken before per-Service catalogs has no ports; assign them so
+	// every restored service has a working endpoint on the serving plane.
+	restored := make([]Service, 0, len(snap.Services))
+	for _, r := range snap.Services {
+		restored = append(restored, r.Service)
+	}
+	AssignMissingPorts(restored, DefaultServicePort)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -266,15 +297,16 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			return err
 		}
 	}
-	for _, r := range snap.Services {
+	for i, r := range snap.Services {
 		labels, _ := json.Marshal(r.Service.Labels)
 		history, _ := json.Marshal(r.Service.StateHistory)
+		svc := restored[i]
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_metastore_services
-				(project_id, location, service_name, config, labels, state, state_history, create_time, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		`, r.ProjectID, r.Service.Location, r.Service.Name, nullableJSONRaw(r.Service.Config, "{}"), nullableJSONRaw(labels, "{}"),
-			r.Service.State, nullableJSONRaw(history, "[]"), r.Service.CreateTime, r.Service.UpdateTime); err != nil {
+				(project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		`, r.ProjectID, svc.Location, svc.Name, nullableJSONRaw(svc.Config, "{}"), nullableJSONRaw(labels, "{}"),
+			svc.State, nullableJSONRaw(history, "[]"), svc.Port, svc.CreateTime, svc.UpdateTime); err != nil {
 			return err
 		}
 	}

@@ -60,18 +60,26 @@ func TestValidateMetastoreService(t *testing.T) {
 	}
 }
 
-// TestMetastoreEndpoint covers the pure endpoint derivation, including the
-// defaulted short forms and the synthesized URI shape.
+// TestMetastoreEndpoint covers the endpoint derivation, including the defaulted
+// short forms and the Service's own catalog port.
 func TestMetastoreEndpoint(t *testing.T) {
+	ctx := context.Background()
 	s := newCore()
-	want := "thrift://hms.us-central1.metastore.jaiscloud.local:9083"
+	created, _, err := s.CreateService(ctx, "proj", "us-central1", "hms", nil)
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	if created.Port != 9084 {
+		t.Fatalf("first service port = %d, want 9084 (base 9083 + 1)", created.Port)
+	}
+	want := "thrift://hms.us-central1.metastore.jaiscloud.local:9084"
 	for _, ref := range []string{
 		"projects/proj/locations/us-central1/services/hms",
 		"locations/us-central1/services/hms",
 		"services/hms",
 		"hms",
 	} {
-		got, err := s.MetastoreEndpoint(ref, "proj", "us-central1")
+		got, err := s.MetastoreEndpoint(ctx, ref, "proj", "us-central1")
 		if err != nil {
 			t.Errorf("MetastoreEndpoint(%q) error: %v", ref, err)
 			continue
@@ -81,7 +89,7 @@ func TestMetastoreEndpoint(t *testing.T) {
 		}
 	}
 
-	if _, err := s.MetastoreEndpoint("projects/proj/locations/us-central1/services/hms/backups/b", "proj", "us-central1"); !isCode(err, "InvalidArgument") {
+	if _, err := s.MetastoreEndpoint(ctx, "projects/proj/locations/us-central1/services/hms/backups/b", "proj", "us-central1"); !isCode(err, "InvalidArgument") {
 		t.Errorf("backup ref = %v, want InvalidArgument", err)
 	}
 }

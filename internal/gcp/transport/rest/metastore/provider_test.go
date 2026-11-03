@@ -65,7 +65,9 @@ func TestServiceCRUDAndLROShape(t *testing.T) {
 	if created["tier"] != "DEVELOPER" {
 		t.Errorf("tier = %v, want DEVELOPER", created["tier"])
 	}
-	if created["endpointUri"] != "thrift://svc1.us-central1.metastore.jaiscloud.local:9083" {
+	// The Service owns a catalog listener on its own port (base 9083 + 1 for the
+	// first Service), so the endpoint is a real routing address.
+	if created["endpointUri"] != "thrift://svc1.us-central1.metastore.jaiscloud.local:9084" {
 		t.Errorf("endpointUri = %v", created["endpointUri"])
 	}
 	labels, _ := created["labels"].(map[string]any)
@@ -411,8 +413,8 @@ func TestServiceDefaultsOnReadBack(t *testing.T) {
 	if got.Data["tier"] != "ENTERPRISE" {
 		t.Errorf("tier = %v, want ENTERPRISE (client value preserved)", got.Data["tier"])
 	}
-	if got.Data["port"] != 9083 {
-		t.Errorf("port = %v, want 9083", got.Data["port"])
+	if got.Data["port"] != 9084 {
+		t.Errorf("port = %v, want 9084 (the Service's own catalog listener)", got.Data["port"])
 	}
 	if got.Data["releaseChannel"] != "STABLE" {
 		t.Errorf("releaseChannel = %v, want STABLE", got.Data["releaseChannel"])

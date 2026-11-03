@@ -487,7 +487,21 @@ func startCmd() *cobra.Command {
 			// provider and the gRPC adapter below, so both transports run against
 			// one store and cannot drift. It is built before Dataproc because the
 			// Dataproc core resolves a cluster's metastore attachment through it.
-			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus), metastorecore.WithResources(stores.resources))
+			// Every Dataproc Metastore Service owns a Hive Metastore in real
+			// GCP. The emulator models that with one catalog per Service served
+			// on its own Thrift listener: hmsFleet binds and closes those
+			// listeners as Services are created and deleted, and stores.hms
+			// partitions the Hive store by Service identity. Each Service's
+			// endpointUri/port is that listener, so a Dataproc job attached to a
+			// Service reads exactly its own catalog.
+			hmsBasePort, _ := cmd.Flags().GetInt("hms-port")
+			hmsFleet := hms.NewFleet(stores.hms)
+			metastoreCore := metastorecore.NewService(stores.metastore,
+				metastorecore.WithLROMode(lroMode),
+				metastorecore.WithEventBus(eventBus),
+				metastorecore.WithResources(stores.resources),
+				metastorecore.WithHMSPort(hmsBasePort),
+				metastorecore.WithCatalogHost(hmsCatalogHost{fleet: hmsFleet, catalogs: stores.hms}))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
@@ -1270,6 +1284,10 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.metastore)
 			adminHandler.RegisterResetter(stores.iceberg)
 			adminHandler.RegisterResetter(stores.hms)
+			// The fleet owns the per-Service catalog listeners; a reset clears
+			// the control plane, so those catalogs no longer exist.
+			adminHandler.RegisterResetter(hmsFleet)
+			adminHandler.RegisterPostRestoreHook(hmsCatalogSync{fleet: hmsFleet, store: stores.metastore})
 			adminHandler.RegisterResetter(stores.bigquery)
 			// The BigQuery provider holds in-progress resumable load-job upload
 			// sessions in memory; register it so /_jaiscloud/reset clears them
@@ -1594,24 +1612,28 @@ func startCmd() *cobra.Command {
 				defer gserv.Stop()
 			}
 
-			// Serve the Hive Metastore (Thrift) serving plane on its own TCP
-			// listener. Thrift is a binary protocol over raw TCP — it does not
-			// flow through the HTTP gateway or the gRPC server. The catalog is
-			// single-global (accepted divergence, MP4): all control-plane
-			// Services share it, matching the AWS Glue Data Catalog's
-			// one-catalog-per-account+region model; the per-Service endpoint_uri
-			// emitted by the control plane is cosmetic. Only started when
-			// metastore is enabled.
+			// Serve the Hive Metastore (Thrift) serving plane. Thrift is a binary
+			// protocol over raw TCP — it does not flow through the HTTP gateway or
+			// the gRPC server. The base port serves the legacy global catalog (a
+			// client that names no Service, as the pre-per-Service tests and
+			// local Iceberg setups do); every Dataproc Metastore Service also
+			// gets its own listener — its own catalog — via hmsFleet, rebound
+			// here on startup so persisted Services work after a restart. Only
+			// started when metastore is enabled.
 			if serviceEnabled("metastore") {
-				hmsPort, _ := cmd.Flags().GetInt("hms-port")
-				hmsServer := hms.NewServer(fmt.Sprintf(":%d", hmsPort), stores.hms)
+				legacy := hms.NewServer(fmt.Sprintf(":%d", hmsBasePort), stores.hms.Catalog(hmsstore.LegacyCatalogID))
 				go func() {
-					slog.Info("hive metastore (thrift) server starting", "hms_port", hmsPort)
-					if err := hmsServer.Serve(); err != nil {
+					slog.Info("hive metastore (thrift) server starting", "hms_port", hmsBasePort, "catalog", "legacy")
+					if err := legacy.Serve(); err != nil {
 						slog.Error("hive metastore server error", "err", err)
 					}
 				}()
-				defer hmsServer.Stop()
+				defer legacy.Stop()
+
+				if err := openHMSCatalogs(context.Background(), hmsFleet, stores.metastore); err != nil {
+					slog.Error("hive metastore catalogs: list services", "err", err)
+				}
+				defer hmsFleet.Stop()
 			}
 
 			// Optional UI portal on --ui-port (default 4567), served alongside
@@ -1714,7 +1736,7 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Bool("gcp-metadata", false, "Enable the GCP metadata-server emulator")
 	cmd.Flags().String("kms-master-key", "", "32-byte hex KEK for KMS envelope encryption")
 	cmd.Flags().Int("grpc-port", 8081, "gRPC (h2c) listen port")
-	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
+	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) base port: serves the legacy shared catalog; each Dataproc Metastore Service gets its own catalog on the next free port above it")
 	cmd.Flags().String("transports", "rest,grpc", "GCP wire transports to expose: rest,grpc,both,none")
 	cmd.Flags().String("transport-overrides", "", "Per-service transport overrides, e.g. storage=grpc,pubsub=rest,memorystore=none")
 	cmd.Flags().StringSlice("plugin", nil, `Out-of-process plugin to load (repeatable): http://host:port.
@@ -1798,6 +1820,63 @@ func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, dat
 	return err
 }
 
+// hmsCatalogHost connects the Metastore control plane to the Hive serving plane.
+// Creating a Service opens its own catalog listener on the Service's assigned
+// port; deleting one closes the listener and drops the catalog, exactly as a
+// Service deletion removes its Hive Metastore in real GCP.
+type hmsCatalogHost struct {
+	fleet    *hms.Fleet
+	catalogs hmsstore.Catalogs
+}
+
+func (h hmsCatalogHost) OpenCatalog(_ context.Context, id string, port int) error {
+	if err := h.fleet.Open(id, port); err != nil {
+		slog.Warn("hive metastore catalog listen failed", "catalog", id, "port", port, "err", err)
+		return err
+	}
+	return nil
+}
+
+func (h hmsCatalogHost) CloseCatalog(ctx context.Context, id string) {
+	h.fleet.Close(id)
+	h.catalogs.DropCatalog(ctx, id)
+}
+
+// hmsCatalogSync rebinds the per-Service catalog listeners from the Metastore
+// store after a snapshot import. An import resets the state first, which stops
+// the listeners; the restored Services keep their persisted ports, so rebinding
+// them restores the exact endpoints the snapshot describes.
+type hmsCatalogSync struct {
+	fleet *hms.Fleet
+	store metastorestore.Store
+}
+
+func (h hmsCatalogSync) Name() string { return "hms-catalogs" }
+
+func (h hmsCatalogSync) OnRestore(ctx context.Context) error {
+	return openHMSCatalogs(ctx, h.fleet, h.store)
+}
+
+// openHMSCatalogs binds one catalog listener per stored Service. It runs at
+// startup (so persisted Services work after a restart) and after a snapshot
+// import. A port that cannot be bound is logged: the control-plane record stays
+// valid, its endpoint is simply unreachable until the port frees up.
+func openHMSCatalogs(ctx context.Context, fleet *hms.Fleet, store metastorestore.Store) error {
+	services, err := store.ListAllServices(ctx)
+	if err != nil {
+		return err
+	}
+	for _, svc := range services {
+		id := metastorecore.CatalogID(svc.ProjectID, svc.Location, svc.Name)
+		if err := fleet.Open(id, svc.Port); err != nil {
+			slog.Error("hive metastore catalog listen failed", "catalog", id, "port", svc.Port, "err", err)
+			continue
+		}
+		slog.Info("hive metastore catalog listening", "catalog", id, "port", svc.Port)
+	}
+	return nil
+}
+
 // stores bundles the per-mode store backends constructed by initStores.
 type stores struct {
 	objects      gcs.ObjectStore
@@ -1812,7 +1891,7 @@ type stores struct {
 	managedkafka managedkafkastore.Store
 	metastore    metastorestore.Store
 	iceberg      icebergstore.Store
-	hms          hmsstore.Store
+	hms          hmsstore.Catalogs
 	bigquery     bigquerystore.Store
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
@@ -1854,7 +1933,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			managedkafka: managedkafkastore.NewPostgresStore(pg.Pool()),
 			metastore:    metastorestore.NewPostgresStore(pg.Pool()),
 			iceberg:      icebergstore.NewPostgresStore(pg.Pool()),
-			hms:          hmsstore.NewPostgresStore(pg.Pool()),
+			hms:          hmsstore.NewPostgresCatalogs(pg.Pool()),
 			bigquery:     bigquerystore.NewPostgresStore(pg.Pool()),
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
@@ -1882,7 +1961,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			managedkafka: managedkafkastore.NewMemoryStore(),
 			metastore:    metastorestore.NewMemoryStore(),
 			iceberg:      icebergstore.NewMemoryStore(),
-			hms:          hmsstore.NewMemoryStore(),
+			hms:          hmsstore.NewMemoryCatalogs(nil),
 			bigquery:     bigquerystore.NewMemoryStore(),
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
@@ -1913,7 +1992,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		managedkafka: managedkafkastore.NewMemoryStore(),
 		metastore:    metastorestore.NewMemoryStore(),
 		iceberg:      icebergstore.NewMemoryStore(),
-		hms:          hmsstore.NewMemoryStore(),
+		hms:          hmsstore.NewMemoryCatalogs(nil),
 		bigquery:     bigquerystore.NewMemoryStore(),
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),

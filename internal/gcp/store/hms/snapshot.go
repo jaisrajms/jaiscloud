@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Snapshot/restore covers only catalog metadata (databases + tables +
 // partitions). Locks are transient concurrency state — like the GCS generation
 // counter — and are deliberately excluded so a periodic snapshot never persists
-// a held lock.
+// a held lock. A single Store's snapshot is one catalog's flat state; the
+// multi-catalog [Catalogs] envelope wraps one of those per catalog id (see
+// catalogs.go).
 
 // --- Memory store ---
 
@@ -60,7 +64,7 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 	var n int
 	for _, tbl := range []string{"jc_hms_databases", "jc_hms_tables", "jc_hms_partitions"} {
-		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+tbl).Scan(&n); err != nil {
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+tbl+` WHERE catalog=$1`, s.catalog).Scan(&n); err != nil {
 			return false, err
 		}
 		if n > 0 {
@@ -93,8 +97,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 
 	drows, err := s.pool.Query(ctx, `
 		SELECT name, location_uri, parameters, description, owner
-		FROM jc_hms_databases ORDER BY name
-	`)
+		FROM jc_hms_databases WHERE catalog=$1 ORDER BY name
+	`, s.catalog)
 	if err != nil {
 		return err
 	}
@@ -115,8 +119,9 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	trows, err := s.pool.Query(ctx, `
-		SELECT db_name, table_name, table_json FROM jc_hms_tables ORDER BY db_name, table_name
-	`)
+		SELECT db_name, table_name, table_json FROM jc_hms_tables
+		WHERE catalog=$1 ORDER BY db_name, table_name
+	`, s.catalog)
 	if err != nil {
 		return err
 	}
@@ -135,8 +140,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 
 	prows, err := s.pool.Query(ctx, `
 		SELECT db_name, table_name, values_json, part_json
-		FROM jc_hms_partitions ORDER BY db_name, table_name, part_key
-	`)
+		FROM jc_hms_partitions WHERE catalog=$1 ORDER BY db_name, table_name, part_key
+	`, s.catalog)
 	if err != nil {
 		return err
 	}
@@ -167,24 +172,27 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	})
 }
 
+// postgresSnapshot is the flat (single-catalog) Postgres snapshot document.
+type postgresSnapshot struct {
+	Databases []struct {
+		Name     string   `json:"name"`
+		Database Database `json:"database"`
+	} `json:"databases"`
+	Tables []struct {
+		DBName    string `json:"dbName"`
+		TableName string `json:"tableName"`
+		TableJSON []byte `json:"table"`
+	} `json:"tables"`
+	Partitions []struct {
+		DBName    string   `json:"dbName"`
+		TableName string   `json:"tableName"`
+		Values    []string `json:"values"`
+		PartJSON  []byte   `json:"partition"`
+	} `json:"partitions"`
+}
+
 func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
-	var snap struct {
-		Databases []struct {
-			Name     string   `json:"name"`
-			Database Database `json:"database"`
-		} `json:"databases"`
-		Tables []struct {
-			DBName    string `json:"dbName"`
-			TableName string `json:"tableName"`
-			TableJSON []byte `json:"table"`
-		} `json:"tables"`
-		Partitions []struct {
-			DBName    string   `json:"dbName"`
-			TableName string   `json:"tableName"`
-			Values    []string `json:"values"`
-			PartJSON  []byte   `json:"partition"`
-		} `json:"partitions"`
-	}
+	var snap postgresSnapshot
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
@@ -194,23 +202,32 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	}
 	defer tx.Rollback(ctx)
 	for _, tbl := range []string{"jc_hms_partitions", "jc_hms_tables", "jc_hms_databases"} {
-		if _, err := tx.Exec(ctx, `DELETE FROM `+tbl); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+tbl+` WHERE catalog=$1`, s.catalog); err != nil {
 			return err
 		}
 	}
+	if err := restorePostgresCatalogRows(ctx, tx, s.catalog, snap); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// restorePostgresCatalogRows inserts one catalog's rows inside tx, leaving the
+// caller in charge of clearing the catalog first and committing.
+func restorePostgresCatalogRows(ctx context.Context, tx pgx.Tx, catalog string, snap postgresSnapshot) error {
 	for _, dr := range snap.Databases {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_hms_databases (name, location_uri, parameters, description, owner)
-			VALUES ($1,$2,$3,$4,$5)
-		`, dr.Database.Name, dr.Database.LocationURI, jsonObj(dr.Database.Parameters), dr.Database.Description, dr.Database.Owner); err != nil {
+			INSERT INTO jc_hms_databases (catalog, name, location_uri, parameters, description, owner)
+			VALUES ($1,$2,$3,$4,$5,$6)
+		`, catalog, dr.Database.Name, dr.Database.LocationURI, jsonObj(dr.Database.Parameters), dr.Database.Description, dr.Database.Owner); err != nil {
 			return err
 		}
 	}
 	for _, tr := range snap.Tables {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_hms_tables (db_name, table_name, table_json)
-			VALUES ($1,$2,$3)
-		`, tr.DBName, tr.TableName, jsonObj(json.RawMessage(tr.TableJSON))); err != nil {
+			INSERT INTO jc_hms_tables (catalog, db_name, table_name, table_json)
+			VALUES ($1,$2,$3,$4)
+		`, catalog, tr.DBName, tr.TableName, jsonObj(json.RawMessage(tr.TableJSON))); err != nil {
 			return err
 		}
 	}
@@ -220,11 +237,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			values = []string{}
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_hms_partitions (db_name, table_name, part_key, values_json, part_json)
-			VALUES ($1,$2,$3,$4,$5)
-		`, pr.DBName, pr.TableName, PartitionKey(values), jsonObj(values), jsonObj(json.RawMessage(pr.PartJSON))); err != nil {
+			INSERT INTO jc_hms_partitions (catalog, db_name, table_name, part_key, values_json, part_json)
+			VALUES ($1,$2,$3,$4,$5,$6)
+		`, catalog, pr.DBName, pr.TableName, PartitionKey(values), jsonObj(values), jsonObj(json.RawMessage(pr.PartJSON))); err != nil {
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }

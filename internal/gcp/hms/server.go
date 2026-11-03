@@ -16,8 +16,10 @@ import (
 // speaking TBinaryProtocol over a non-framed TSocket (no TFramedTransport —
 // that is TCLIService/HiveServer2, a different protocol). It parallels the
 // gRPC listener in internal/gcp/grpc: a separate port, its own accept loop, and
-// the same store/lock discipline shared with the control plane. The catalog is
-// single-global (F6) — databases/tables are keyed by name only.
+// the same store/lock discipline shared with the control plane. One Server
+// serves one catalog (see Fleet for the per-Service listeners): the Thrift
+// protocol carries no service identity, so the catalog a connection belongs to
+// is the listener it connected to.
 type Server struct {
 	addr    string
 	store   hmsstore.Store
@@ -146,9 +148,25 @@ func (s *Server) methodTable() map[string]methodHandler {
 	}
 }
 
-// Serve listens on the configured address and blocks serving until Stop or the
-// process exits. Each connection is handled in its own goroutine.
+// Serve listens on the configured address (if not already listening) and
+// blocks serving until Stop or the process exits. Each connection is handled in
+// its own goroutine.
 func (s *Server) Serve() error {
+	if err := s.Listen(); err != nil {
+		return err
+	}
+	return s.accept()
+}
+
+// Listen binds the configured address without serving, so a caller (the catalog
+// fleet) can allocate a port synchronously and surface a bind failure to the
+// control plane that asked for it. Serve calls it when it has not been called.
+func (s *Server) Listen() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sock != nil {
+		return nil
+	}
 	sock, err := thrift.NewTServerSocket(s.addr)
 	if err != nil {
 		return fmt.Errorf("hms thrift listen on %s: %w", s.addr, err)
@@ -156,10 +174,18 @@ func (s *Server) Serve() error {
 	if err := sock.Listen(); err != nil {
 		return fmt.Errorf("hms thrift listen on %s: %w", s.addr, err)
 	}
-	s.mu.Lock()
 	s.sock = sock
-	s.mu.Unlock()
+	return nil
+}
 
+// accept runs the accept loop over the bound socket.
+func (s *Server) accept() error {
+	s.mu.Lock()
+	sock := s.sock
+	s.mu.Unlock()
+	if sock == nil {
+		return fmt.Errorf("hms thrift server is not listening")
+	}
 	for {
 		transport, err := sock.Accept()
 		if err != nil {

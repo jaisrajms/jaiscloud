@@ -2,12 +2,14 @@
 // GCP analogue of the AWS Glue table-metadata store, but for the Hive
 // Metastore protocol (hive_metastore.thrift) rather than Glue's REST surface.
 //
-// The serving plane is a single global catalog: databases and tables are keyed
-// by name only, not by projects/{p}/locations/{l}/services/{s}; the per-Service
-// endpoint_uri emitted by the control plane is cosmetic. Databases are
-// decomposed columns; tables are stored as the full, round-trippable Hive
-// Table JSON blob. Locks are the minimal jc_hms_locks state machine that backs
-// Iceberg's lock/check_lock/unlock flow.
+// A Store is one catalog: databases and tables are keyed by name within it.
+// Catalogs (catalogs.go) supplies the per-Service partition: each Dataproc
+// Metastore Service owns its own catalog, identified by the Service's resource
+// name, and the legacy global catalog (LegacyCatalogID) serves the base port.
+// Databases are decomposed columns; tables are stored as the full,
+// round-trippable Hive Table JSON blob. Locks are the minimal jc_hms_locks state
+// machine that backs Iceberg's lock/check_lock/unlock flow, scoped per catalog
+// so one Service's commit cannot block another's.
 package hms
 
 import (

@@ -37,7 +37,7 @@ func (f *fakeMetastoreResolver) ValidateMetastoreService(_ context.Context, ref,
 	return f.err
 }
 
-func (f *fakeMetastoreResolver) MetastoreEndpoint(ref, _, _ string) (string, error) {
+func (f *fakeMetastoreResolver) MetastoreEndpoint(_ context.Context, ref, _, _ string) (string, error) {
 	f.endpointN++
 	f.lastRef = ref
 	if f.err != nil {
@@ -213,22 +213,26 @@ func TestUpdateCluster_MetastoreValidation(t *testing.T) {
 }
 
 // TestClusterMetastoreEndpointOverride verifies the deployment override
-// replaces the synthesized endpoint and that no attachment yields "".
+// replaces the endpoint's host but keeps the Service's own catalog port, and
+// that no attachment yields "".
 func TestClusterMetastoreEndpointOverride(t *testing.T) {
-	r := &fakeMetastoreResolver{endpoint: metastoreEP}
+	ctx := context.Background()
+	r := &fakeMetastoreResolver{endpoint: "thrift://hms.us-central1.metastore.jaiscloud.local:9085"}
 	p := NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
 		WithMetastoreResolver(r), WithHMSEndpointOverride("host.docker.internal:9083"))
 	c := dataprocstore.Cluster{ProjectID: "proj", Region: "us-central1", Config: []byte(gceMetastoreConfig)}
-	got, err := p.clusterMetastoreEndpoint("proj", "us-central1", c)
+	got, err := p.clusterMetastoreEndpoint(ctx, "proj", "us-central1", c)
 	if err != nil {
 		t.Fatalf("clusterMetastoreEndpoint: %v", err)
 	}
-	if got != "thrift://host.docker.internal:9083" {
-		t.Fatalf("override = %q", got)
+	// The override supplies the reachable host; the port stays the Service's
+	// catalog port, which is what selects its catalog on the serving plane.
+	if got != "thrift://host.docker.internal:9085" {
+		t.Fatalf("override = %q, want thrift://host.docker.internal:9085", got)
 	}
 
 	noAttach := dataprocstore.Cluster{ProjectID: "proj", Region: "us-central1", Config: []byte(`{"gceClusterConfig":{}}`)}
-	got, err = p.clusterMetastoreEndpoint("proj", "us-central1", noAttach)
+	got, err = p.clusterMetastoreEndpoint(ctx, "proj", "us-central1", noAttach)
 	if err != nil || got != "" {
 		t.Fatalf("no attachment = %q, %v", got, err)
 	}
@@ -334,4 +338,95 @@ func TestSubmitJob_CallerMetastoreConfWins(t *testing.T) {
 	}
 
 	fw.Add(succeededDriverPod("driver-hms-caller", jobName))
+}
+
+// perServiceMetastoreResolver maps a metastore reference to the endpoint of
+// that Service's own catalog, like the real resolver deriving a port per
+// Service.
+type perServiceMetastoreResolver struct {
+	endpoints map[string]string
+}
+
+func (p *perServiceMetastoreResolver) ValidateMetastoreService(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (p *perServiceMetastoreResolver) MetastoreEndpoint(_ context.Context, ref, _, _ string) (string, error) {
+	if ep, ok := p.endpoints[ref]; ok {
+		return ep, nil
+	}
+	return "", model.NewProviderError("NotFound", "no such metastore service: "+ref, 404)
+}
+
+// TestSubmitJob_PerServiceCatalog verifies the acceptance point of NF32 for
+// Dataproc: two clusters attached to two Services each get their own Service's
+// catalog endpoint injected, so a job on each reads its own catalog.
+func TestSubmitJob_PerServiceCatalog(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	refA := "projects/proj/locations/us-central1/services/hms-a"
+	refB := "projects/proj/locations/us-central1/services/hms-b"
+	epA := "thrift://hms-a.us-central1.metastore.jaiscloud.local:9084"
+	epB := "thrift://hms-b.us-central1.metastore.jaiscloud.local:9085"
+	r := &perServiceMetastoreResolver{endpoints: map[string]string{refA: epA, refB: epB}}
+	p := NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithK8s(client, "jaiscloud", nil),
+		WithSparkImage("spark:test"),
+		WithMetastoreResolver(r),
+	)
+	t.Cleanup(func() { p.Shutdown(context.Background()) })
+	ctx := context.Background()
+
+	for _, c := range []struct{ name, ref string }{{"c-a", refA}, {"c-b", refB}} {
+		cfg := `{"gceClusterConfig":{},"metastoreConfig":{"dataprocMetastoreService":"` + c.ref + `"}}`
+		if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", c.name, ClusterInput{Config: []byte(cfg)}); err != nil {
+			t.Fatalf("CreateCluster %s: %v", c.name, err)
+		}
+	}
+	fw := prependPodWatch(t, client)
+
+	// Submit both concurrently: SubmitJob holds the job's execution path open
+	// until the driver pod reaches a terminal state, which this test drives
+	// afterwards.
+	errs := make(chan error, 2)
+	for _, c := range []struct{ name, jobID string }{{"c-a", "j-a"}, {"c-b", "j-b"}} {
+		go func(name, jobID string) {
+			_, err := p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
+				"reference":  map[string]any{"jobId": jobID},
+				"placement":  map[string]any{"clusterName": name},
+				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+			}))
+			errs <- err
+		}(c.name, c.jobID)
+	}
+
+	uris := map[string]string{}
+	require.Eventually(t, func() bool {
+		jobs, err := client.BatchV1().Jobs("").List(ctx, metav1.ListOptions{})
+		if err != nil || len(jobs.Items) < 2 {
+			return false
+		}
+		for _, item := range jobs.Items {
+			args := item.Spec.Template.Spec.Containers[0].Args
+			if len(args) == 0 {
+				return false
+			}
+			confs := sparkConfMap(args)
+			uris[item.Name] = confs["spark.hadoop.hive.metastore.uris"]
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "both spark-submit jobs were not created")
+
+	seen := map[string]bool{}
+	for _, uri := range uris {
+		seen[uri] = true
+	}
+	if !seen[epA] || !seen[epB] {
+		t.Fatalf("injected metastore uris = %v, want both %q and %q (one per Service)", uris, epA, epB)
+	}
+
+	// Drain both drivers so runJob returns.
+	jobs, _ := client.BatchV1().Jobs("").List(ctx, metav1.ListOptions{})
+	for _, item := range jobs.Items {
+		fw.Add(succeededDriverPod("driver-"+item.Name, item.Name))
+	}
 }

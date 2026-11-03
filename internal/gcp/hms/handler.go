@@ -220,8 +220,8 @@ func (s *Server) getTable(ctx context.Context, args *Struct) (*Struct, error) {
 // getTableReq implements get_table_req(GetTableRequest) -> GetTableResult: the
 // request-struct form of get_table that Hive 2.3+ clients (including the Go
 // hms-client-go client) use. dbName/tblName come from the nested request's
-// fields 1/2; catName (field 4) is ignored because the serving plane is a single
-// global catalog. The reply wraps the Table in GetTableResult.table, i.e. result
+// fields 1/2; catName (field 4) is ignored because the catalog is selected by
+// the listener (each Service has its own), not by the request. The reply wraps the Table in GetTableResult.table, i.e. result
 // field 0 holds a struct whose field 1 is the table.
 func (s *Server) getTableReq(ctx context.Context, args *Struct) (*Struct, error) {
 	req := args.Struct(1)
@@ -288,7 +288,7 @@ func (s *Server) getTableObjectsByName(ctx context.Context, args *Struct) (*Stru
 // getTableObjectsByNameReq implements get_table_objects_by_name_req(
 // GetTablesRequest) -> GetTablesResult: the request-struct form of
 // get_table_objects_by_name (tblNames at field 2; optional catName at field 4,
-// ignored). The reply wraps the table list in GetTablesResult.tables, i.e.
+// ignored: the listener selects the catalog). The reply wraps the table list in GetTablesResult.tables, i.e.
 // result field 0 holds a struct whose field 1 is the list.
 func (s *Server) getTableObjectsByNameReq(ctx context.Context, args *Struct) (*Struct, error) {
 	req := args.Struct(1)

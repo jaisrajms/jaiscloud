@@ -54,7 +54,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	// reference was validated when the cluster was created; here it is only
 	// formatted, so the job inherits the attachment fixed at cluster creation
 	// (matching real Dataproc, which does not re-check the metastore per job).
-	metastoreEndpoint, err := s.clusterMetastoreEndpoint(project, region, cluster)
+	metastoreEndpoint, err := s.clusterMetastoreEndpoint(ctx, project, region, cluster)
 	if err != nil {
 		return dpstore.Job{}, err
 	}

@@ -3,6 +3,8 @@ package metastore
 import (
 	"context"
 	"strings"
+
+	metastorestore "jaiscloud/internal/gcp/store/metastore"
 )
 
 // Metastore attachment resolution. These methods let a consumer of a Dataproc
@@ -43,16 +45,20 @@ func ResolveServiceRef(ref, defaultProject, defaultLocation string) (project, lo
 	return parseServiceRef(ref, defaultProject, defaultLocation)
 }
 
-// MetastoreEndpoint formats the thrift endpoint for ref without touching the
-// store. It is the pure counterpart of ValidateMetastoreService, used at job
-// submission so the attachment validated when the cluster was created is
-// honored at execution without re-checking the control plane.
-func (s *Service) MetastoreEndpoint(ref, defaultProject, defaultLocation string) (string, error) {
-	_, location, service, err := parseServiceRef(ref, defaultProject, defaultLocation)
+// MetastoreEndpoint formats the thrift endpoint for ref at job submission time.
+// It reads the Service only for its assigned catalog port (the port is what
+// selects the catalog on the serving plane) and does not re-validate the
+// attachment: the reference was validated when the cluster was created.
+func (s *Service) MetastoreEndpoint(ctx context.Context, ref, defaultProject, defaultLocation string) (string, error) {
+	project, location, service, err := parseServiceRef(ref, defaultProject, defaultLocation)
 	if err != nil {
 		return "", err
 	}
-	return endpointURI(service, location), nil
+	port := metastorestore.DefaultServicePort
+	if svc, err := s.store.GetService(ctx, project, location, service); err == nil {
+		port = endpointPort(svc.Port)
+	}
+	return endpointURI(service, location, port), nil
 }
 
 // parseServiceRef parses a dataproc.v1.MetastoreConfig.dataprocMetastoreService

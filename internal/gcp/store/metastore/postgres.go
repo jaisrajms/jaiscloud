@@ -38,10 +38,10 @@ func (s *PostgresStore) CreateService(ctx context.Context, projectID, location s
 	history, _ := json.Marshal(svc.StateHistory)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_metastore_services
-			(project_id, location, service_name, config, labels, state, state_history, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			(project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 	`, projectID, location, svc.Name, nullableJSONRaw(svc.Config, "{}"), nullableJSONRaw(labels, "{}"), svc.State,
-		nullableJSONRaw(history, "[]"), svc.CreateTime, svc.UpdateTime)
+		nullableJSONRaw(history, "[]"), svc.Port, svc.CreateTime, svc.UpdateTime)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -55,7 +55,7 @@ func (s *PostgresStore) CreateService(ctx context.Context, projectID, location s
 func scanService(row pgx.Row) (Service, error) {
 	var svc Service
 	var config, labels, history []byte
-	err := row.Scan(&svc.ProjectID, &svc.Location, &svc.Name, &config, &labels, &svc.State, &history, &svc.CreateTime, &svc.UpdateTime)
+	err := row.Scan(&svc.ProjectID, &svc.Location, &svc.Name, &config, &labels, &svc.State, &history, &svc.Port, &svc.CreateTime, &svc.UpdateTime)
 	if err != nil {
 		return Service{}, err
 	}
@@ -67,7 +67,7 @@ func scanService(row pgx.Row) (Service, error) {
 
 func (s *PostgresStore) GetService(ctx context.Context, projectID, location, name string) (Service, error) {
 	svc, err := scanService(s.pool.QueryRow(ctx, `
-		SELECT project_id, location, service_name, config, labels, state, state_history, create_time, update_time
+		SELECT project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time
 		FROM jc_metastore_services WHERE project_id=$1 AND location=$2 AND service_name=$3
 	`, projectID, location, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -111,7 +111,7 @@ func (s *PostgresStore) updateServiceAtomicOnce(ctx context.Context, projectID, 
 	defer tx.Rollback(ctx)
 
 	svc, err := scanService(tx.QueryRow(ctx, `
-		SELECT project_id, location, service_name, config, labels, state, state_history, create_time, update_time
+		SELECT project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time
 		FROM jc_metastore_services WHERE project_id=$1 AND location=$2 AND service_name=$3 FOR UPDATE
 	`, projectID, location, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -164,7 +164,7 @@ func (s *PostgresStore) DeleteService(ctx context.Context, projectID, location, 
 
 func (s *PostgresStore) ListServices(ctx context.Context, projectID, location string) ([]Service, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, location, service_name, config, labels, state, state_history, create_time, update_time
+		SELECT project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time
 		FROM jc_metastore_services WHERE project_id=$1 AND location=$2 ORDER BY service_name
 	`, projectID, location)
 	if err != nil {
@@ -180,6 +180,28 @@ func (s *PostgresStore) ListServices(ctx context.Context, projectID, location st
 		result = append(result, svc)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, rows.Err()
+}
+
+// ListAllServices returns every stored service across projects and locations,
+// ordered by canonical resource name.
+func (s *PostgresStore) ListAllServices(ctx context.Context) ([]Service, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, service_name, config, labels, state, state_history, port, create_time, update_time
+		FROM jc_metastore_services ORDER BY project_id, location, service_name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Service
+	for rows.Next() {
+		svc, err := scanService(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, svc)
+	}
 	return result, rows.Err()
 }
 
