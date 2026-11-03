@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 508,
-  "passed": 508,
+  "total": 513,
+  "passed": 513,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 508,
-    "passed": 508,
+    "checks": 513,
+    "passed": 513,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -107,8 +107,8 @@
     },
     {
       "service": "monitoring",
-      "total": 34,
-      "passed": 34,
+      "total": 39,
+      "passed": 39,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1947,6 +1947,41 @@
       "method": "DeleteService",
       "status": "pass",
       "key_field": "service absent after delete"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateUptimeCheckConfig",
+      "method": "CreateUptimeCheckConfig",
+      "status": "pass",
+      "key_field": "uptimeCheckConfig.name/display_name/http_check"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetUptimeCheckConfig",
+      "method": "GetUptimeCheckConfig",
+      "status": "pass",
+      "key_field": "uptimeCheckConfig echoed as declared"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListUptimeCheckConfigs",
+      "method": "ListUptimeCheckConfigs",
+      "status": "pass",
+      "key_field": "uptimeCheckConfigs[] contains config"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "UpdateUptimeCheckConfig",
+      "method": "UpdateUptimeCheckConfig",
+      "status": "pass",
+      "key_field": "masked http_check.path applied, siblings kept"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "DeleteUptimeCheckConfig",
+      "method": "DeleteUptimeCheckConfig",
+      "status": "pass",
+      "key_field": "config absent after delete"
     },
     {
       "service": "workflowexecutions",

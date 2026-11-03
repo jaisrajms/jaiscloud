@@ -70,6 +70,36 @@ func SplitDashboardParent(parent string) (project string, ok bool) {
 	return parts[1], true
 }
 
+// UptimeCheckConfigName is the Cloud Monitoring v3 resource name for an uptime
+// check configuration ("projects/{p}/uptimeCheckConfigs/{id}").
+func UptimeCheckConfigName(project, id string) string {
+	return resource.ResourceID(project)("monitoring-uptime-check", id)
+}
+
+// SplitUptimeCheckConfigName parses
+// "projects/{p}/uptimeCheckConfigs/{id}". The Discovery document declares both
+// segments non-empty (name pattern
+// "^projects/[^/]+/uptimeCheckConfigs/[^/]+$"), so anything else is not an
+// uptime check configuration name.
+func SplitUptimeCheckConfigName(name string) (project, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "uptimeCheckConfigs" || parts[1] == "" || parts[3] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
+// SplitUptimeCheckConfigParent parses the uptimeCheckConfigs collection parent,
+// which the Discovery document constrains to "projects/[PROJECT_ID_OR_NUMBER]"
+// (pattern "^projects/[^/]+$").
+func SplitUptimeCheckConfigParent(parent string) (project string, ok bool) {
+	parts := strings.Split(parent, "/")
+	if len(parts) != 2 || parts[0] != "projects" || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
 // MetricDescriptorName is the Cloud Monitoring resource name for a metric type.
 func MetricDescriptorName(project, typ string) string {
 	return resource.ResourceID(project)("metric-descriptor", typ)

@@ -104,6 +104,7 @@ var grpcWireService = map[string]string{
 	"google.monitoring.v3.AlertPolicyService":               "monitoring",
 	"google.monitoring.v3.NotificationChannelService":       "monitoring",
 	"google.monitoring.v3.ServiceMonitoringService":         "monitoring",
+	"google.monitoring.v3.UptimeCheckService":               "monitoring",
 	"google.cloud.secretmanager.v1.SecretManagerService":    "secretmanager",
 	"google.cloud.workflows.executions.v1.Executions":       "workflowexecutions",
 	"google.cloud.workflows.v1.Workflows":                   "workflows",
@@ -154,6 +155,7 @@ func EnumerateGRPC() []GRPCService {
 	monitoringpb.RegisterAlertPolicyServiceServer(reg, &grpcmonitoring.Service{})
 	monitoringpb.RegisterNotificationChannelServiceServer(reg, &grpcmonitoring.Service{})
 	monitoringpb.RegisterServiceMonitoringServiceServer(reg, &grpcmonitoring.Service{})
+	monitoringpb.RegisterUptimeCheckServiceServer(reg, &grpcmonitoring.Service{})
 	grpcstoragepb.RegisterStorageServer(reg, &grpcstorage.Service{})
 	secretmanagerpb.RegisterSecretManagerServiceServer(reg, &grpcsecretmanager.Service{})
 	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})

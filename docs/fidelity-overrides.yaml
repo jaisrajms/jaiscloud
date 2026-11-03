@@ -115,6 +115,68 @@ operations:
     operation: DiagnoseCluster
     state: unsupported
     reason: "explicit Unimplemented stub"
+  # Cloud Monitoring uptime checks (NF28). The configuration is a declarative
+  # control plane: it validates against the Discovery schema, stores in the
+  # shared resource store and echoes back verbatim over both transports
+  # (create/get/list/patch/delete + the documented update_mask semantics), which
+  # is what google_monitoring_uptime_check_config needs. The check itself is
+  # never run — there is no egress probe plane — so the cells are `limited`
+  # rather than `ga`: no checker state or probe result is produced, and a
+  # delete referenced by an alert policy is not refused.
+  - service: monitoring
+    operation: Monitoring.ListUptimeCheckConfigs
+    state: limited
+    reason: &uptimeReason >-
+      declarative uptime-check configuration only: stored, validated and echoed
+      (create/get/list/patch/delete, update_mask semantics); the emulator has no
+      egress probe plane, so no checker state or probe result exists
+  - service: monitoring
+    operation: Monitoring.GetUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: Monitoring.CreateUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: Monitoring.UpdateUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: Monitoring.DeleteUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  # Same core over gRPC (UptimeCheckService). The probe-derived checker address
+  # list is the one part that is not served: it is an explicit Unimplemented
+  # stub, so that cell is `unsupported` while its five siblings are `limited`.
+  - service: monitoring
+    operation: ListUptimeCheckConfigs
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: GetUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: CreateUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: UpdateUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: DeleteUptimeCheckConfig
+    state: limited
+    reason: *uptimeReason
+  - service: monitoring
+    operation: ListUptimeCheckIps
+    state: unsupported
+    reason: >-
+      probe-derived: the static checker address list belongs to GCP's global
+      egress probe plane, which the emulator does not have; explicit
+      Unimplemented stub (the declarative uptimeCheckConfigs CRUD beside it is
+      served)
   # Cloud Functions v2 ListRuntimes is implemented over the shared runtime
   # catalog on both transports (REST GET /v2/.../runtimes + gRPC ListRuntimes),
   # verified by the official gRPC client conformance suite, so it needs no

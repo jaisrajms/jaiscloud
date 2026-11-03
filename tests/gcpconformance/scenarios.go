@@ -939,6 +939,25 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "monitoring", Method: "DELETE", Path: monBase + "/metricDescriptors/" + mType},
 	)
 
+	// ─── Cloud Monitoring uptime checks (declarative, REST) ───────────────────
+	// The configuration is stored and echoed, never probed (NF28): create with a
+	// caller-chosen name, read it back, list the collection, patch it with the
+	// Discovery document's updateMask contract, then delete it and prove the
+	// NotFound envelope. The probe-derived uptimeCheckIps list is deliberately
+	// exercised nowhere — it stays a 501.
+	uptimeName := "projects/" + p + "/uptimeCheckConfigs/conf-uptime-" + suffix
+	sc = append(sc,
+		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/uptimeCheckConfigs",
+			Body: fmt.Sprintf(`{"name":%q,"displayName":"Conf Uptime %s","monitoredResource":{"type":"uptime_url","labels":{"host":"shop.example.com","project_id":%q}},"httpCheck":{"path":"/healthz","port":443,"useSsl":true,"requestMethod":"GET"},"timeout":"10s","period":"300s","selectedRegions":["USA","EUROPE","ASIA_PACIFIC"],"userLabels":{"team":"conf"}}`, uptimeName, suffix, p),
+			Save: map[string]string{"uptimeName": "name"}},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v3/${uptimeName}"},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/uptimeCheckConfigs"},
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v3/${uptimeName}?updateMask=displayName,httpCheck.path",
+			Body: `{"displayName":"Conf Uptime updated","httpCheck":{"path":"/ready"}}`},
+		Scenario{Service: "monitoring", Method: "DELETE", Path: "/v3/${uptimeName}"},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v3/${uptimeName}"},
+	)
+
 	// ─── Cloud Monitoring v1 dashboards (REST-only) ───────────────────────────
 	// The v1 Discovery document (a secondary version of the monitoring snapshot,
 	// merged under the same service key) declares projects.dashboards. A

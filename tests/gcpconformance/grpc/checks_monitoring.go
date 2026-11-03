@@ -23,10 +23,14 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// monitoringChecks covers the Cloud Monitoring v3 gRPC surface — all 34 RPCs of
+// monitoringChecks covers the Cloud Monitoring v3 gRPC surface — the 34 RPCs of
 // google.monitoring.v3.MetricService (9), AlertPolicyService (5),
-// NotificationChannelService (10) and ServiceMonitoringService (10) — via the
-// official cloud.google.com/go/monitoring/apiv3/v2 clients.
+// NotificationChannelService (10) and ServiceMonitoringService (10), plus the
+// five declarative RPCs of UptimeCheckService (create/get/list/update/delete of
+// uptimeCheckConfigs) — via the official
+// cloud.google.com/go/monitoring/apiv3/v2 clients. UptimeCheckService's
+// ListUptimeCheckIps is the probe-derived surface and is deliberately not
+// probed here: it is an explicit Unimplemented stub.
 //
 // Checks run in registry order and share state through the emulator: the metric
 // descriptor created first is read/listed by the following probes and deleted
@@ -80,6 +84,13 @@ func monitoringChecks() []Check {
 		{Service: "monitoring", RPC: "UpdateServiceLevelObjective", Method: "UpdateServiceLevelObjective", KeyField: "masked goal applied", Run: checkMonitoringUpdateServiceLevelObjective},
 		{Service: "monitoring", RPC: "DeleteServiceLevelObjective", Method: "DeleteServiceLevelObjective", KeyField: "slo absent after delete", Run: checkMonitoringDeleteServiceLevelObjective},
 		{Service: "monitoring", RPC: "DeleteService", Method: "DeleteService", KeyField: "service absent after delete", Run: checkMonitoringDeleteService},
+
+		// ── UptimeCheckService (declarative configuration only) ──────────────
+		{Service: "monitoring", RPC: "CreateUptimeCheckConfig", Method: "CreateUptimeCheckConfig", KeyField: "uptimeCheckConfig.name/display_name/http_check", Run: checkMonitoringCreateUptimeCheckConfig},
+		{Service: "monitoring", RPC: "GetUptimeCheckConfig", Method: "GetUptimeCheckConfig", KeyField: "uptimeCheckConfig echoed as declared", Run: checkMonitoringGetUptimeCheckConfig},
+		{Service: "monitoring", RPC: "ListUptimeCheckConfigs", Method: "ListUptimeCheckConfigs", KeyField: "uptimeCheckConfigs[] contains config", Run: checkMonitoringListUptimeCheckConfigs},
+		{Service: "monitoring", RPC: "UpdateUptimeCheckConfig", Method: "UpdateUptimeCheckConfig", KeyField: "masked http_check.path applied, siblings kept", Run: checkMonitoringUpdateUptimeCheckConfig},
+		{Service: "monitoring", RPC: "DeleteUptimeCheckConfig", Method: "DeleteUptimeCheckConfig", KeyField: "config absent after delete", Run: checkMonitoringDeleteUptimeCheckConfig},
 	}
 }
 
@@ -109,6 +120,10 @@ func newMonitoringServiceClient(ctx context.Context, cfg Config) (*monitoring.Se
 	return monitoring.NewServiceMonitoringClient(ctx, monitoringOptions(cfg)...)
 }
 
+func newMonitoringUptimeCheckClient(ctx context.Context, cfg Config) (*monitoring.UptimeCheckClient, error) {
+	return monitoring.NewUptimeCheckClient(ctx, monitoringOptions(cfg)...)
+}
+
 // ─── naming helpers ───────────────────────────────────────────────────────────
 
 func monitoringParent(cfg Config) string { return "projects/" + cfg.Project }
@@ -132,6 +147,12 @@ func monitoringMetricTypeName(cfg Config) string {
 func monitoringPolicyDisplay(cfg Config) string { return cfg.ResourceName("gcpc-grpc-policy") }
 
 func monitoringChannelDisplay(cfg Config) string { return cfg.ResourceName("gcpc-grpc-channel") }
+
+func monitoringUptimeCheckName(cfg Config) string {
+	return monitoringParent(cfg) + "/uptimeCheckConfigs/" + cfg.ResourceName("gcpc-grpc-uptime")
+}
+
+func monitoringUptimeCheckDisplay(cfg Config) string { return cfg.ResourceName("gcpc-grpc-uptime") }
 
 // ─── MetricService checks ─────────────────────────────────────────────────────
 
@@ -1147,6 +1168,177 @@ func checkMonitoringDeleteService(ctx context.Context, cfg Config) error {
 	}
 	if _, err := sc.GetService(ctx, &monitoringpb.GetServiceRequest{Name: monitoringServiceName(cfg)}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetService after delete = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// ─── UptimeCheckService checks ────────────────────────────────────────────────
+
+// uptimeCheckConfig returns the declaration every probe in this sequence uses.
+// It is a plain HTTPS check on an uptime_url resource — the shape Terraform's
+// google_monitoring_uptime_check_config sends.
+func uptimeCheckConfig(cfg Config) *monitoringpb.UptimeCheckConfig {
+	return &monitoringpb.UptimeCheckConfig{
+		Name:        monitoringUptimeCheckName(cfg),
+		DisplayName: monitoringUptimeCheckDisplay(cfg),
+		Resource: &monitoringpb.UptimeCheckConfig_MonitoredResource{
+			MonitoredResource: &monitoredrespb.MonitoredResource{
+				Type:   "uptime_url",
+				Labels: map[string]string{"host": "shop.example.com", "project_id": cfg.Project},
+			},
+		},
+		CheckRequestType: &monitoringpb.UptimeCheckConfig_HttpCheck_{
+			HttpCheck: &monitoringpb.UptimeCheckConfig_HttpCheck{
+				Path:    "/healthz",
+				Port:    443,
+				UseSsl:  true,
+				Headers: map[string]string{"user-agent": "gcpc"},
+			},
+		},
+		Timeout:         durationpb.New(10 * time.Second),
+		Period:          durationpb.New(300 * time.Second),
+		SelectedRegions: []monitoringpb.UptimeCheckRegion{monitoringpb.UptimeCheckRegion_USA, monitoringpb.UptimeCheckRegion_EUROPE},
+		UserLabels:      map[string]string{"team": cfg.ResourceName("gcpc")},
+	}
+}
+
+// Check 35: CreateUptimeCheckConfig stores the declaration and returns the
+// project-scoped name with every declared field echoed.
+func checkMonitoringCreateUptimeCheckConfig(ctx context.Context, cfg Config) error {
+	uc, err := newMonitoringUptimeCheckClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer uc.Close()
+
+	created, err := uc.CreateUptimeCheckConfig(ctx, &monitoringpb.CreateUptimeCheckConfigRequest{
+		Parent:            monitoringParent(cfg),
+		UptimeCheckConfig: uptimeCheckConfig(cfg),
+	})
+	if err != nil {
+		return fmt.Errorf("CreateUptimeCheckConfig: %w", err)
+	}
+	if got, want := created.GetName(), monitoringUptimeCheckName(cfg); got != want {
+		return fmt.Errorf("name = %q, want %q", got, want)
+	}
+	if created.GetDisplayName() != monitoringUptimeCheckDisplay(cfg) {
+		return fmt.Errorf("display_name = %q, want %q", created.GetDisplayName(), monitoringUptimeCheckDisplay(cfg))
+	}
+	if created.GetHttpCheck().GetPath() != "/healthz" || !created.GetHttpCheck().GetUseSsl() {
+		return fmt.Errorf("http_check = %+v, want the declared /healthz + use_ssl", created.GetHttpCheck())
+	}
+	if created.GetTimeout().AsDuration() != 10*time.Second || created.GetPeriod().AsDuration() != 300*time.Second {
+		return fmt.Errorf("timeout/period = %v/%v, want 10s/300s", created.GetTimeout(), created.GetPeriod())
+	}
+	if len(created.GetSelectedRegions()) != 2 {
+		return fmt.Errorf("selected_regions = %v, want USA + EUROPE", created.GetSelectedRegions())
+	}
+	if created.GetUserLabels()["team"] == "" {
+		return fmt.Errorf("user_labels = %v, want the declared team", created.GetUserLabels())
+	}
+	return nil
+}
+
+// Check 36: GetUptimeCheckConfig returns the stored declaration.
+func checkMonitoringGetUptimeCheckConfig(ctx context.Context, cfg Config) error {
+	uc, err := newMonitoringUptimeCheckClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer uc.Close()
+
+	got, err := uc.GetUptimeCheckConfig(ctx, &monitoringpb.GetUptimeCheckConfigRequest{Name: monitoringUptimeCheckName(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetUptimeCheckConfig: %w", err)
+	}
+	if got.GetDisplayName() != monitoringUptimeCheckDisplay(cfg) || got.GetMonitoredResource().GetType() != "uptime_url" {
+		return fmt.Errorf("config = %+v, want the declared display_name + uptime_url resource", got)
+	}
+	if got.GetMonitoredResource().GetLabels()["host"] != "shop.example.com" {
+		return fmt.Errorf("monitored_resource.labels = %v, want the declared host", got.GetMonitoredResource().GetLabels())
+	}
+	return nil
+}
+
+// Check 37: ListUptimeCheckConfigs pages over the project's configurations and
+// contains the one this sequence created.
+func checkMonitoringListUptimeCheckConfigs(ctx context.Context, cfg Config) error {
+	uc, err := newMonitoringUptimeCheckClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer uc.Close()
+
+	it := uc.ListUptimeCheckConfigs(ctx, &monitoringpb.ListUptimeCheckConfigsRequest{Parent: monitoringParent(cfg)})
+	found := false
+	for {
+		item, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("ListUptimeCheckConfigs: %w", err)
+		}
+		if item.GetName() == monitoringUptimeCheckName(cfg) {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("ListUptimeCheckConfigs did not return %q", monitoringUptimeCheckName(cfg))
+	}
+	return nil
+}
+
+// Check 38: UpdateUptimeCheckConfig applies only the masked paths — the nested
+// http_check.path changes and the sibling http_check fields survive.
+func checkMonitoringUpdateUptimeCheckConfig(ctx context.Context, cfg Config) error {
+	uc, err := newMonitoringUptimeCheckClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer uc.Close()
+
+	updated, err := uc.UpdateUptimeCheckConfig(ctx, &monitoringpb.UpdateUptimeCheckConfigRequest{
+		UptimeCheckConfig: &monitoringpb.UptimeCheckConfig{
+			Name:        monitoringUptimeCheckName(cfg),
+			DisplayName: monitoringUptimeCheckDisplay(cfg) + "-v2",
+			CheckRequestType: &monitoringpb.UptimeCheckConfig_HttpCheck_{
+				HttpCheck: &monitoringpb.UptimeCheckConfig_HttpCheck{Path: "/ready"},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name", "http_check.path"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateUptimeCheckConfig: %w", err)
+	}
+	if want := monitoringUptimeCheckDisplay(cfg) + "-v2"; updated.GetDisplayName() != want {
+		return fmt.Errorf("display_name = %q, want %q", updated.GetDisplayName(), want)
+	}
+	if updated.GetHttpCheck().GetPath() != "/ready" {
+		return fmt.Errorf("http_check.path = %q, want /ready", updated.GetHttpCheck().GetPath())
+	}
+	if !updated.GetHttpCheck().GetUseSsl() || updated.GetHttpCheck().GetPort() != 443 {
+		return fmt.Errorf("http_check = %+v, want the unmasked use_ssl/port preserved", updated.GetHttpCheck())
+	}
+	if updated.GetPeriod().AsDuration() != 300*time.Second {
+		return fmt.Errorf("period = %v, want the unmasked 300s preserved", updated.GetPeriod())
+	}
+	return nil
+}
+
+// Check 39: DeleteUptimeCheckConfig removes the configuration.
+func checkMonitoringDeleteUptimeCheckConfig(ctx context.Context, cfg Config) error {
+	uc, err := newMonitoringUptimeCheckClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer uc.Close()
+
+	if err := uc.DeleteUptimeCheckConfig(ctx, &monitoringpb.DeleteUptimeCheckConfigRequest{Name: monitoringUptimeCheckName(cfg)}); err != nil {
+		return fmt.Errorf("DeleteUptimeCheckConfig: %w", err)
+	}
+	if _, err := uc.GetUptimeCheckConfig(ctx, &monitoringpb.GetUptimeCheckConfigRequest{Name: monitoringUptimeCheckName(cfg)}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetUptimeCheckConfig after delete = %v, want NotFound", err)
 	}
 	return nil
 }

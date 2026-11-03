@@ -25,13 +25,15 @@ import (
 
 // Service implements monitoringpb.MetricServiceServer,
 // monitoringpb.AlertPolicyServiceServer,
-// monitoringpb.NotificationChannelServiceServer, and
-// monitoringpb.ServiceMonitoringServiceServer over the shared core.
+// monitoringpb.NotificationChannelServiceServer,
+// monitoringpb.ServiceMonitoringServiceServer, and
+// monitoringpb.UptimeCheckServiceServer over the shared core.
 type Service struct {
 	monitoringpb.UnimplementedMetricServiceServer
 	monitoringpb.UnimplementedAlertPolicyServiceServer
 	monitoringpb.UnimplementedNotificationChannelServiceServer
 	monitoringpb.UnimplementedServiceMonitoringServiceServer
+	monitoringpb.UnimplementedUptimeCheckServiceServer
 
 	core        *core.Service
 	defaultProj string

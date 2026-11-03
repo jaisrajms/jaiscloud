@@ -1,22 +1,22 @@
 {
   "version": 1,
   "summary": {
-    "total": 1184,
+    "total": 1195,
     "by_state": {
       "ga": 1003,
-      "limited": 125,
+      "limited": 135,
       "preview": 14,
-      "unsupported": 42
+      "unsupported": 43
     },
     "by_transport": {
       "grpc": {
         "ga": 447,
-        "limited": 18,
-        "unsupported": 30
+        "limited": 23,
+        "unsupported": 31
       },
       "rest": {
         "ga": 556,
-        "limited": 107,
+        "limited": 112,
         "preview": 14,
         "unsupported": 12
       }
@@ -93,7 +93,9 @@
         "unsupported": 10
       },
       "monitoring": {
-        "ga": 73
+        "ga": 73,
+        "limited": 10,
+        "unsupported": 1
       },
       "operations": {
         "ga": 5
@@ -131,11 +133,11 @@
     },
     "evidence": {
       "verified": {
-        "grpc": 447,
-        "rest": 644
+        "grpc": 452,
+        "rest": 649
       },
       "unverified": {
-        "grpc": 48,
+        "grpc": 49,
         "rest": 45
       }
     },
@@ -11483,6 +11485,21 @@
     },
     {
       "service": "monitoring",
+      "operation": "CreateUptimeCheckConfig",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=CreateUptimeCheckConfig",
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "DeleteAlertPolicy",
       "transport": "grpc",
       "state": "ga",
@@ -11545,6 +11562,21 @@
       "verified": true,
       "evidence": [
         "grpc-checks=DeleteServiceLevelObjective",
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "DeleteUptimeCheckConfig",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=DeleteUptimeCheckConfig",
         "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)",
@@ -11657,6 +11689,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "GetUptimeCheckConfig",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=GetUptimeCheckConfig",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "ListAlertPolicies",
       "transport": "grpc",
       "state": "ga",
@@ -11757,6 +11803,33 @@
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)",
         "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "ListUptimeCheckConfigs",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=ListUptimeCheckConfigs",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "ListUptimeCheckIps",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "probe-derived: the static checker address list belongs to GCP's global egress probe plane, which the emulator does not have; explicit Unimplemented stub (the declarative uptimeCheckConfigs CRUD beside it is served)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)",
+        "verified=false (grpc)"
       ]
     },
     {
@@ -11873,6 +11946,21 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.CreateUptimeCheckConfig",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "discovery": "monitoring.projects.uptimeCheckConfigs.create",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.uptimeCheckConfigs.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.DeleteAlertPolicy",
       "transport": "rest",
       "state": "ga",
@@ -11950,6 +12038,21 @@
       "verified": true,
       "evidence": [
         "discovery=monitoring.services.serviceLevelObjectives.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.DeleteUptimeCheckConfig",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "discovery": "monitoring.projects.uptimeCheckConfigs.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.uptimeCheckConfigs.delete",
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
@@ -12074,6 +12177,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.GetUptimeCheckConfig",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "discovery": "monitoring.projects.uptimeCheckConfigs.get",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.uptimeCheckConfigs.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.ListAlertPolicies",
       "transport": "rest",
       "state": "ga",
@@ -12191,6 +12308,20 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.ListUptimeCheckConfigs",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "discovery": "monitoring.projects.uptimeCheckConfigs.list",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.uptimeCheckConfigs.list",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.SendNotificationChannelVerificationCode",
       "transport": "rest",
       "state": "ga",
@@ -12274,6 +12405,21 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.UpdateUptimeCheckConfig",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "discovery": "monitoring.projects.uptimeCheckConfigs.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=monitoring.projects.uptimeCheckConfigs.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.VerifyNotificationChannel",
       "transport": "rest",
       "state": "ga",
@@ -12348,6 +12494,21 @@
       "verified": true,
       "evidence": [
         "grpc-checks=UpdateServiceLevelObjective",
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "UpdateUptimeCheckConfig",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists",
+      "verified": true,
+      "evidence": [
+        "grpc-checks=UpdateUptimeCheckConfig",
         "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)",
