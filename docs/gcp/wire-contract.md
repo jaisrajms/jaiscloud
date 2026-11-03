@@ -330,7 +330,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `POST /_jaiscloud/scheduler-tick`, to fire deterministically). `httpTarget` delivery performs the
   documented HTTP request (method/headers/body, `X-CloudScheduler*` headers) and `pubsubTarget`
   reuses the Pub/Sub publish path (fan-out to subscriptions). `appEngineHttpTarget` is stored and
-  echoed but never delivered (no App Engine router) — its attempts are recorded as `Unimplemented`.
+  echoed but never delivered (no App Engine router) — its attempts are recorded as `Unimplemented`
+  and are terminal: the job is attempted once, the status is recorded, no retries are consumed and
+  the job waits for its next cron slot.
   English-like schedules ("every 5 minutes") are not parsed (unix-cron plus `@` descriptors only);
   `oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token, not a real Google token.
 - **Cloud Tasks** — the v2 control plane plus a dispatch engine: queue CRUD plus
@@ -348,7 +350,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   for 31 days past its `scheduleTime` (the maximum task retention), on the dispatch tick and before
   the due check; reads never delete. `RunTask` / REST `:run` forces a synchronous attempt that
   bypasses pause and rate limits. `appEngineHttpRequest` is never delivered (no App Engine router) —
-  its attempts are recorded as `Unimplemented`. **`tasks:buffer` is REST-only**: the REST Discovery
+  the task is attempted once, that attempt is recorded as `Unimplemented`, and the task is deleted
+  immediately instead of retried, so the failure is terminal and never a silent drop after a retry
+  storm. **`tasks:buffer` is REST-only**: the REST Discovery
   document declares it, but the `google.cloud.tasks.v2.CloudTasks` proto declares no `BufferTask`
   RPC (the generated clients have no such method), so the gRPC server does not expose one. Because
   the emulator models no queue-level `httpTarget` (the field real Cloud Tasks resolves a buffered

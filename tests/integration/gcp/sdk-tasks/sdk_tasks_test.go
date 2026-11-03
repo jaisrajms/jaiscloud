@@ -13,7 +13,8 @@
 //
 // Documented emulator deviations this suite pins (real GCP differs):
 //   - appEngineHttpRequest tasks are stored and echoed but never delivered (no
-//     App Engine router); an attempt is recorded as Unimplemented (code 12).
+//     App Engine router); one attempt is recorded as Unimplemented (code 12)
+//     and the task is deleted (terminal — no retries are consumed).
 //   - batchCreate/batchDelete are served synchronously: the emulator performs
 //     the work inline and returns a done=true google.longrunning.Operation
 //     (real GCP returns an in-flight operation that is polled). The response
@@ -571,8 +572,9 @@ func TestSDKTasksRateLimits(t *testing.T) {
 }
 
 // TestSDKTasksAppEngineDeviation pins the documented appEngineHttpRequest
-// behavior: the task is stored and echoed, but an attempt is recorded as
-// Unimplemented and the task is retained (no App Engine router).
+// contract: the task is stored and echoed, but the emulator has no App Engine
+// router, so the attempt is terminal — RunTask records one Unimplemented
+// attempt and deletes the task instead of scheduling a retry.
 func TestSDKTasksAppEngineDeviation(t *testing.T) {
 	resetState(t)
 	svc := newService(t)
@@ -607,9 +609,9 @@ func TestSDKTasksAppEngineDeviation(t *testing.T) {
 	require.NotNil(t, ran.LastAttempt.ResponseStatus)
 	require.EqualValues(t, 12, ran.LastAttempt.ResponseStatus.Code, "gRPC Unimplemented")
 
-	got, err := svc.Projects.Locations.Queues.Tasks.Get(taskName).Do()
-	require.NoError(t, err, "the un-deliverable task is retained")
-	require.EqualValues(t, 1, got.DispatchCount)
+	_, err = svc.Projects.Locations.Queues.Tasks.Get(taskName).Do()
+	require.Equal(t, 404, apiErr(t, err).Code,
+		"the un-deliverable task is deleted after its single attempt (terminal, no retry)")
 }
 
 // TestSDKTasksErrors pins the documented error contracts.

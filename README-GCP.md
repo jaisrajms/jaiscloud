@@ -432,7 +432,9 @@ honoring `retryConfig.retryCount`/`minBackoffDuration`/`maxBackoffDuration`, the
 cron schedule.
 
 Limitations: `appEngineHttpTarget` is stored and echoed but **never delivered** (the emulator has no
-App Engine router) — its attempts are recorded as `Unimplemented`; English-like schedules ("every 5
+App Engine router) — the attempt is recorded as `Unimplemented` and is terminal: the job is attempted
+once, no retries are consumed, and it waits for its next cron slot (it is never retried into a
+silent drop); English-like schedules ("every 5
 minutes") are not parsed (unix-cron plus `@` descriptors only; anything else is `InvalidArgument`);
 `oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token rather than a real Google
 token; and `updateCmekConfig` is not implemented.
@@ -476,7 +478,9 @@ and a 2xx response deletes the task while a failure retries with exponential bac
 attempt, bypassing the queue's paused state and rate limits.
 
 Limitations: `appEngineHttpRequest` is stored and echoed but never delivered (no App Engine
-router) — its attempts are recorded as `Unimplemented` failures. A task-level `retryConfig`
+router) — the task is attempted once, the attempt is recorded as an `Unimplemented` failure, and the
+task is deleted immediately rather than retried (terminal: no retry budget is consumed, and the
+failure is never a silent drop after a retry storm). A task-level `retryConfig`
 overrides the queue's wholesale, and a task is deleted 31 days after its `scheduleTime` (the
 maximum task retention) by the dispatch tick. REST-only `tasks:buffer` accepts a full task (the
 emulator models no queue-level `httpTarget`, so a body-only buffer request is `INVALID_ARGUMENT`);

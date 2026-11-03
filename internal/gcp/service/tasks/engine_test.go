@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -377,21 +378,142 @@ func TestEngineMaxRetryDurationMeasuredFromFirstAttempt(t *testing.T) {
 	}
 }
 
+// countingDispatcher records how many attempts it was asked to deliver and
+// answers with a fixed status.
+type countingDispatcher struct {
+	calls  int32
+	status tasksstore.Status
+}
+
+func (d *countingDispatcher) Deliver(_ context.Context, _ tasksstore.Task) tasksstore.Status {
+	atomic.AddInt32(&d.calls, 1)
+	return d.status
+}
+
+func (d *countingDispatcher) count() int32 { return atomic.LoadInt32(&d.calls) }
+
+// attemptSpyStore captures the task snapshots the engine persists and counts
+// deletes, so a test can inspect the recorded attempt of a task the engine has
+// since deleted.
+type attemptSpyStore struct {
+	tasksstore.Store
+	mu       sync.Mutex
+	recorded []tasksstore.Task
+	deletes  int
+}
+
+func (s *attemptSpyStore) UpdateTaskAtomic(ctx context.Context, projectID, location, queue, name string, mutate func(tasksstore.Task) (tasksstore.Task, error)) (tasksstore.Task, error) {
+	out, err := s.Store.UpdateTaskAtomic(ctx, projectID, location, queue, name, mutate)
+	if err == nil {
+		s.mu.Lock()
+		s.recorded = append(s.recorded, out)
+		s.mu.Unlock()
+	}
+	return out, err
+}
+
+func (s *attemptSpyStore) DeleteTask(ctx context.Context, projectID, location, queue, name string) error {
+	s.mu.Lock()
+	s.deletes++
+	s.mu.Unlock()
+	return s.Store.DeleteTask(ctx, projectID, location, queue, name)
+}
+
+func (s *attemptSpyStore) lastRecorded() (tasksstore.Task, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.recorded) == 0 {
+		return tasksstore.Task{}, s.deletes
+	}
+	return s.recorded[len(s.recorded)-1], s.deletes
+}
+
 func TestEngineAppEngineRecordsFailure(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	withFixedClock(t, at)
 	ctx := context.Background()
-	core, engine, _ := newEngineCore(t)
 
-	mustQueue(t, core, tasksstore.Queue{Name: "q1"})
+	mem := tasksstore.NewMemoryStore()
+	spy := &attemptSpyStore{Store: mem}
+	disp := &countingDispatcher{status: tasksstore.Status{
+		Code:    int32(codes.Unimplemented),
+		Message: "appEngineHttpRequest is not delivered by the emulator (no App Engine router)",
+	}}
+	engine := NewEngine(spy, disp)
+	core := NewService(mem, store.NewMemoryResourceStore())
+	core.SetEngine(engine)
+
+	// A retryable config so the old schedule-a-retry behaviour would be visible.
+	mustQueue(t, core, tasksstore.Queue{Name: "q1", RetryConfig: &tasksstore.RetryConfig{
+		MaxAttempts: 100, MinBackoff: time.Second, MaxBackoff: time.Hour,
+	}})
 	tk := mustTask(t, core, "q1", tasksstore.Task{Name: "t1", Target: tasksstore.TargetAppEngine, AppEngine: &tasksstore.AppEngineHttpRequest{RelativeURI: "/do", HTTPMethod: "POST"}})
 
 	engine.TickNow(ctx)
-	got, err := core.GetTask(ctx, "p", "l", "q1", tk.Name)
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
+
+	if got := disp.count(); got != 1 {
+		t.Fatalf("deliveries = %d, want exactly 1 (terminal, no retry)", got)
 	}
-	if got.LastAttempt == nil || got.LastAttempt.ResponseStatus == nil || got.LastAttempt.ResponseStatus.Code != int32(codes.Unimplemented) {
-		t.Fatalf("appEngine attempt = %+v", got.LastAttempt)
+	rec, deletes := spy.lastRecorded()
+	if rec.LastAttempt == nil || rec.LastAttempt.ResponseStatus == nil || rec.LastAttempt.ResponseStatus.Code != int32(codes.Unimplemented) {
+		t.Fatalf("recorded attempt = %+v, want an Unimplemented status", rec.LastAttempt)
+	}
+	if rec.DispatchCount != 1 {
+		t.Fatalf("recorded dispatchCount = %d, want 1", rec.DispatchCount)
+	}
+	if deletes != 1 {
+		t.Fatalf("deletes = %d, want 1", deletes)
+	}
+	if _, err := core.GetTask(ctx, "p", "l", "q1", tk.Name); err == nil {
+		t.Fatalf("undeliverable appEngine task survived; want it deleted after one attempt")
+	}
+
+	// Nothing is left to retry: a later tick must not deliver again.
+	engine.TickNow(ctx)
+	if got := disp.count(); got != 1 {
+		t.Fatalf("deliveries after a second tick = %d, want 1", got)
+	}
+}
+
+func TestRunnerAppEngineUnimplemented(t *testing.T) {
+	status := NewRunner().Deliver(context.Background(), tasksstore.Task{
+		Target:    tasksstore.TargetAppEngine,
+		AppEngine: &tasksstore.AppEngineHttpRequest{RelativeURI: "/do", HTTPMethod: "POST"},
+	})
+	if codes.Code(status.Code) != codes.Unimplemented {
+		t.Fatalf("Deliver status = %+v, want Unimplemented", status)
+	}
+}
+
+func TestEngineRunTaskAppEngineIsTerminal(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	withFixedClock(t, at)
+	ctx := context.Background()
+
+	mem := tasksstore.NewMemoryStore()
+	disp := &countingDispatcher{status: tasksstore.Status{Code: int32(codes.Unimplemented), Message: "no App Engine router"}}
+	engine := NewEngine(mem, disp)
+	core := NewService(mem, store.NewMemoryResourceStore())
+	core.SetEngine(engine)
+
+	mustQueue(t, core, tasksstore.Queue{Name: "q1", RetryConfig: &tasksstore.RetryConfig{MaxAttempts: 100, MinBackoff: time.Second}})
+	tk := mustTask(t, core, "q1", tasksstore.Task{Name: "t1", Target: tasksstore.TargetAppEngine, AppEngine: &tasksstore.AppEngineHttpRequest{RelativeURI: "/do", HTTPMethod: "POST"}})
+
+	ran, err := core.RunTask(ctx, "p", "l", "q1", tk.Name)
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("deliveries = %d, want 1", got)
+	}
+	if ran.DispatchCount != 1 || ran.LastAttempt == nil || ran.LastAttempt.ResponseStatus == nil ||
+		ran.LastAttempt.ResponseStatus.Code != int32(codes.Unimplemented) {
+		t.Fatalf("RunTask snapshot = %+v, want one recorded Unimplemented attempt", ran)
+	}
+	if !ran.ScheduleTime.Equal(tk.ScheduleTime) {
+		t.Fatalf("RunTask rescheduled the task to %v; a permanent failure must not schedule a backoff", ran.ScheduleTime)
+	}
+	if _, err := core.GetTask(ctx, "p", "l", "q1", tk.Name); err == nil {
+		t.Fatalf("RunTask did not delete the undeliverable appEngine task")
 	}
 }
