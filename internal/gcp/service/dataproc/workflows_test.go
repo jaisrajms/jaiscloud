@@ -24,9 +24,18 @@ func pollWorkflowDone(t *testing.T, p *Service, project, region, opID string) ma
 	return nil
 }
 
+// managedClusterDef builds a ManagedCluster placement carrying the
+// ClusterConfig the proto marks Required (dataproc.v1.ManagedCluster.config).
+func managedClusterDef(name string) map[string]any {
+	return map[string]any{
+		"clusterName": name,
+		"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+	}
+}
+
 func inlineTemplateDef(jobType string) map[string]any {
 	return map[string]any{
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-managed"}},
+		"placement": map[string]any{"managedCluster": managedClusterDef("wf-managed")},
 		"jobs": []any{
 			map[string]any{"stepId": "a", jobType: map[string]any{"mainPythonFileUri": "gs://bucket/main.py"}},
 		},
@@ -68,7 +77,7 @@ func TestInstantiateWorkflow_ByID_WithParameters(t *testing.T) {
 	ctx := context.Background()
 	def := map[string]any{
 		"id":        "wf",
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-params"}},
+		"placement": map[string]any{"managedCluster": managedClusterDef("wf-params")},
 		"parameters": []any{
 			map[string]any{"name": "bucket", "fields": []any{"jobs[*].pysparkJob.mainPythonFileUri"}},
 		},
@@ -106,7 +115,7 @@ func TestInstantiateWorkflow_DAGOrder(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	def := map[string]any{
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-dag"}},
+		"placement": map[string]any{"managedCluster": managedClusterDef("wf-dag")},
 		"jobs": []any{
 			map[string]any{"stepId": "b", "prerequisiteStepIds": []any{"a"}, "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/b.py"}},
 			map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}},
@@ -132,7 +141,7 @@ func TestInstantiateWorkflow_UnsupportedJobFails(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	def := map[string]any{
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-fail"}},
+		"placement": map[string]any{"managedCluster": managedClusterDef("wf-fail")},
 		"jobs": []any{
 			map[string]any{"stepId": "a", "hadoopJob": map[string]any{"mainClass": "com.example.Main"}},
 		},

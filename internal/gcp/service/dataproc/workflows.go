@@ -247,40 +247,11 @@ func (s *Service) advanceWorkflowOperation(ctx context.Context, op dpstore.Opera
 }
 
 // resolveWorkflowCluster resolves a placement to a concrete cluster. A
-// managedCluster is created (RUNNING, workflow-owned) if absent; a
-// clusterSelector matches an existing cluster's labels.
+// managedCluster is created if absent (workflow-owned); a clusterSelector
+// matches an existing cluster's labels.
 func (s *Service) resolveWorkflowCluster(ctx context.Context, project, region string, placement map[string]any) (string, bool, error) {
 	if mc, ok := placement["managedCluster"].(map[string]any); ok {
-		name := bodyString(mc, "clusterName")
-		if name == "" {
-			return "", false, invalidArgument("managedCluster.clusterName is required")
-		}
-		if _, err := s.store.GetCluster(ctx, project, region, name); err == nil {
-			return name, false, nil
-		} else if !errors.Is(err, dpstore.ErrNoSuchCluster) {
-			return "", false, err
-		}
-		now := clock.Now().UTC()
-		ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, "")
-		c := dpstore.Cluster{
-			ProjectID:      project,
-			Region:         region,
-			Name:           name,
-			Labels:         stringMap(mc["labels"]),
-			Status:         dpstore.ClusterStatus{State: "RUNNING", StateStartTime: now},
-			ClusterUUID:    randomHex(16),
-			CreateTime:     now,
-			UpdateTime:     now,
-			Namespace:      ns,
-			NamespaceOwned: nsOwned,
-		}
-		if err := s.store.CreateCluster(ctx, project, region, c); err != nil && !errors.Is(err, dpstore.ErrAlreadyExists) {
-			s.rollbackNamespace(ctx, ns, nsOwned)
-			return "", false, err
-		} else if err == nil {
-			s.registerNamespacePatcher(ns)
-		}
-		return name, true, nil
+		return s.resolveWorkflowManagedCluster(ctx, project, region, mc)
 	}
 	if cs, ok := placement["clusterSelector"].(map[string]any); ok {
 		want := stringMap(cs["clusterLabels"])
@@ -296,6 +267,55 @@ func (s *Service) resolveWorkflowCluster(ctx context.Context, project, region st
 		return "", false, model.NewProviderError("FailedPrecondition", "no cluster matches the workflow placement", 400)
 	}
 	return "", false, invalidArgument("workflow placement must set managedCluster or clusterSelector")
+}
+
+// resolveWorkflowManagedCluster resolves a WorkflowTemplatePlacement's
+// managedCluster, creating the cluster when it does not exist yet. The create
+// goes through Service.CreateCluster — the same core entry point clusters.create
+// uses from both transports — so a workflow-managed cluster gets the same
+// required-config rule, validation, defaults, namespace provisioning/ownership
+// and rollback as a direct create instead of writing a placement-less record
+// straight to the store.
+//
+// dataproc.v1.ManagedCluster carries only clusterName, labels and config, and
+// marks config Required; a placement without one is therefore rejected with the
+// create path's own "exactly one of config or virtualClusterConfig" message. A
+// cluster that already exists is reused untouched and is not owned by the
+// workflow; the returned flag reports whether this workflow created it (and so
+// must delete it when the workflow ends).
+func (s *Service) resolveWorkflowManagedCluster(ctx context.Context, project, region string, mc map[string]any) (string, bool, error) {
+	name := bodyString(mc, "clusterName")
+	if name == "" {
+		return "", false, invalidArgument("managedCluster.clusterName is required")
+	}
+	// Create if absent, reuse if present. The pre-check keeps the reuse path free
+	// of create-side effects; the create's own duplicate check closes the race.
+	if _, err := s.store.GetCluster(ctx, project, region, name); err == nil {
+		return name, false, nil
+	} else if !errors.Is(err, dpstore.ErrNoSuchCluster) {
+		return "", false, err
+	}
+	// Only the proto's config field is a cluster placement. Feeding the whole
+	// managedCluster to ClusterInputFromMap would also honor a
+	// virtualClusterConfig that ManagedCluster does not define.
+	in := ClusterInput{Labels: bodyStringMap(mc, "labels")}
+	if cfg, ok := mc["config"].(map[string]any); ok {
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			return "", false, invalidArgument("managedCluster.config is malformed")
+		}
+		in.Config = data
+	}
+	if _, _, err := s.CreateCluster(ctx, project, region, name, in); err != nil {
+		// Losing the create's duplicate check to a concurrent create means the
+		// cluster exists — the reuse case.
+		var pe *model.ProviderError
+		if errors.As(err, &pe) && pe.Code == "AlreadyExists" {
+			return name, false, nil
+		}
+		return "", false, err
+	}
+	return name, true, nil
 }
 
 // workflowJobInput builds the job core's JobInput from a workflow step and the

@@ -108,12 +108,35 @@ func TestWorkflowTemplateRESTSurface(t *testing.T) {
 	}
 }
 
+// TestInstantiateInlineWorkflowRESTRejectsConfiglessManagedCluster proves the
+// REST adapter surfaces the create core's managedCluster rejection unchanged: a
+// placement without the Required config is the same 400 InvalidArgument a
+// config-less clusters.create returns.
+func TestInstantiateInlineWorkflowRESTRejectsConfiglessManagedCluster(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, err := p.InstantiateInlineWorkflowTemplate(ctx, testNR(map[string]any{"region": "us-central1", "body": map[string]any{
+		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-rest-bad"}},
+		"jobs":      []any{map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}}},
+	}}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+	if _, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "wf-rest-bad"})); err == nil {
+		t.Fatal("a rejected managedCluster must not persist a cluster")
+	}
+}
+
 func TestInstantiateInlineWorkflowREST(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	nr := testNR(map[string]any{"region": "us-central1", "body": map[string]any{
-		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-rest"}},
-		"jobs":      []any{map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}}},
+		"placement": map[string]any{"managedCluster": map[string]any{
+			"clusterName": "wf-rest",
+			"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+		}},
+		"jobs": []any{map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}}},
 	}})
 	resp, err := p.InstantiateInlineWorkflowTemplate(ctx, nr)
 	if err != nil {
