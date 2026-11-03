@@ -8,9 +8,10 @@
 // tabledata.insertAll stores streamed rows that tabledata.list reads back;
 // tabledata.list honors startIndex as an offset into the row set but does not
 // echo it in the response (startIndex is a request-only parameter in the
-// Discovery TableDataList schema). routines/models/rowAccessPolicies are
-// deferred and route to an explicit Unimplemented (501) rather than the
-// codec's 404.
+// Discovery TableDataList schema). Dataset-scoped routines and table-scoped row
+// access policies are stored CRUD resources (their wire bodies round-trip,
+// including an updateMask/etag-guarded update); models stay an explicit
+// Unimplemented (501) because the emulator runs no model training.
 //
 // jobs.insert also accepts a configuration.load job: one or more gs:// source
 // objects (a single object, a single-'*' wildcard, or a list; resolved through
@@ -128,32 +129,43 @@ func (p *Provider) Reset(ctx context.Context) {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"BigQuery.GetDiscovery":            p.GetDiscovery,
-		"BigQuery.CreateDataset":           p.CreateDataset,
-		"BigQuery.GetDataset":              p.GetDataset,
-		"BigQuery.ListDatasets":            p.ListDatasets,
-		"BigQuery.UpdateDataset":           p.UpdateDataset,
-		"BigQuery.DeleteDataset":           p.DeleteDataset,
-		"BigQuery.CreateTable":             p.CreateTable,
-		"BigQuery.GetTable":                p.GetTable,
-		"BigQuery.ListTables":              p.ListTables,
-		"BigQuery.UpdateTable":             p.UpdateTable,
-		"BigQuery.DeleteTable":             p.DeleteTable,
-		"BigQuery.InsertAll":               p.InsertAll,
-		"BigQuery.ListRows":                p.ListRows,
-		"BigQuery.InsertJob":               p.InsertJob,
-		"BigQuery.InsertJobResumableStart": p.InsertJobResumableStart,
-		"BigQuery.InsertJobResumable":      p.InsertJobResumable,
-		"BigQuery.GetJob":                  p.GetJob,
-		"BigQuery.ListJobs":                p.ListJobs,
-		"BigQuery.DeleteJob":               p.DeleteJob,
-		"BigQuery.CancelJob":               p.CancelJob,
-		"BigQuery.Query":                   p.Query,
-		"BigQuery.GetQueryResults":         p.GetQueryResults,
-		"BigQuery.GetServiceAccount":       p.GetServiceAccount,
-		"BigQuery.Routines":                p.Routines,
-		"BigQuery.Models":                  p.Models,
-		"BigQuery.RowAccessPolicies":       p.RowAccessPolicies,
+		"BigQuery.GetDiscovery":                 p.GetDiscovery,
+		"BigQuery.CreateDataset":                p.CreateDataset,
+		"BigQuery.GetDataset":                   p.GetDataset,
+		"BigQuery.ListDatasets":                 p.ListDatasets,
+		"BigQuery.UpdateDataset":                p.UpdateDataset,
+		"BigQuery.DeleteDataset":                p.DeleteDataset,
+		"BigQuery.CreateTable":                  p.CreateTable,
+		"BigQuery.GetTable":                     p.GetTable,
+		"BigQuery.ListTables":                   p.ListTables,
+		"BigQuery.UpdateTable":                  p.UpdateTable,
+		"BigQuery.DeleteTable":                  p.DeleteTable,
+		"BigQuery.InsertAll":                    p.InsertAll,
+		"BigQuery.ListRows":                     p.ListRows,
+		"BigQuery.InsertJob":                    p.InsertJob,
+		"BigQuery.InsertJobResumableStart":      p.InsertJobResumableStart,
+		"BigQuery.InsertJobResumable":           p.InsertJobResumable,
+		"BigQuery.GetJob":                       p.GetJob,
+		"BigQuery.ListJobs":                     p.ListJobs,
+		"BigQuery.DeleteJob":                    p.DeleteJob,
+		"BigQuery.CancelJob":                    p.CancelJob,
+		"BigQuery.Query":                        p.Query,
+		"BigQuery.GetQueryResults":              p.GetQueryResults,
+		"BigQuery.GetServiceAccount":            p.GetServiceAccount,
+		"BigQuery.InsertRoutine":                p.InsertRoutine,
+		"BigQuery.GetRoutine":                   p.GetRoutine,
+		"BigQuery.ListRoutines":                 p.ListRoutines,
+		"BigQuery.UpdateRoutine":                p.UpdateRoutine,
+		"BigQuery.DeleteRoutine":                p.DeleteRoutine,
+		"BigQuery.RoutinesIam":                  p.RoutinesIam,
+		"BigQuery.Models":                       p.Models,
+		"BigQuery.InsertRowAccessPolicy":        p.InsertRowAccessPolicy,
+		"BigQuery.GetRowAccessPolicy":           p.GetRowAccessPolicy,
+		"BigQuery.ListRowAccessPolicies":        p.ListRowAccessPolicies,
+		"BigQuery.UpdateRowAccessPolicy":        p.UpdateRowAccessPolicy,
+		"BigQuery.DeleteRowAccessPolicy":        p.DeleteRowAccessPolicy,
+		"BigQuery.BatchDeleteRowAccessPolicies": p.BatchDeleteRowAccessPolicies,
+		"BigQuery.RowAccessPoliciesIam":         p.RowAccessPoliciesIam,
 	}
 }
 
@@ -257,6 +269,10 @@ func mapErr(err error) error {
 		return model.NewProviderError("NotFound", "table not found", 404)
 	case errors.Is(err, bqstore.ErrNoSuchJob):
 		return model.NewProviderError("NotFound", "job not found", 404)
+	case errors.Is(err, bqstore.ErrNoSuchRoutine):
+		return model.NewProviderError("NotFound", "routine not found", 404)
+	case errors.Is(err, bqstore.ErrNoSuchRowAccessPolicy):
+		return model.NewProviderError("NotFound", "row access policy not found", 404)
 	case errors.Is(err, bqstore.ErrAlreadyExists):
 		return model.NewProviderError("AlreadyExists", "resource already exists", 409)
 	}
@@ -1680,17 +1696,27 @@ func unimplementedResource(resource string) error {
 	return model.NewProviderError("Unimplemented", resource+" is not implemented by this emulator", 501)
 }
 
-// Routines handles the deferred dataset-scoped routines surface.
-func (p *Provider) Routines(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, unimplementedResource("routines")
+// RoutinesIam answers routines.getIamPolicy/setIamPolicy/testIamPermissions.
+// BigQuery IAM is not enforced (nor stored) anywhere in the emulator, so a
+// fabricated policy would be a lie; the resource CRUD itself is served.
+func (p *Provider) RoutinesIam(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, unimplementedResource("routine IAM")
 }
 
-// Models handles the deferred dataset-scoped models surface.
+// Models handles the dataset-scoped models surface. It stays an explicit 501:
+// a Model is the output of a model-training run (trainingRuns, featureColumns,
+// hparamTrials, and the model artifact itself), and the emulator executes no
+// training, so stored-and-echoed models would be hollow records the official
+// clients cannot use. This is the recorded decision that closes the NF31
+// models half; routines and rowAccessPolicies are implemented.
 func (p *Provider) Models(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, unimplementedResource("models")
+	return nil, unimplementedResource("models (there is no model-training execution to produce one)")
 }
 
-// RowAccessPolicies handles the deferred table-scoped rowAccessPolicies surface.
-func (p *Provider) RowAccessPolicies(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, unimplementedResource("rowAccessPolicies")
+// RowAccessPoliciesIam answers
+// rowAccessPolicies.getIamPolicy/setIamPolicy/testIamPermissions. Row-level
+// access is enforced through IAM, which the emulator does not model; the
+// policy resource CRUD and filter predicate round-trip are served.
+func (p *Provider) RowAccessPoliciesIam(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, unimplementedResource("row access policy IAM")
 }

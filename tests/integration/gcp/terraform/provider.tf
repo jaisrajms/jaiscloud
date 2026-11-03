@@ -53,6 +53,18 @@ variable "container_endpoint" {
   default     = "http://container.localhost:8080/container/"
 }
 
+variable "routine_body" {
+  type        = string
+  description = "BigQuery routine SQL body; changing it drives an in-place routines.update."
+  default     = "x * 2"
+}
+
+variable "row_access_policy_predicate" {
+  type        = string
+  description = "BigQuery row access policy filter predicate; changing it drives an in-place rowAccessPolicies.update."
+  default     = "region = \"EU\""
+}
+
 provider "google" {
   project = var.project
   region  = var.region
@@ -66,6 +78,11 @@ provider "google" {
   sql_custom_endpoint            = "${var.endpoint}/sql/v1beta4/"
   kms_custom_endpoint            = "${var.endpoint}/v1/"
   pubsub_custom_endpoint         = "${var.endpoint}/v1/"
+
+  # BigQuery (datasets/tables in the fixture, plus the NF31 routine and row
+  # access policy). The provider uses the custom endpoint as the whole base
+  # path, so it must carry the /bigquery/v2/ service path the emulator routes.
+  big_query_custom_endpoint = "${var.endpoint}/bigquery/v2/"
 
   # Service Usage + the Cloud Resource Manager v1 project lookup that
   # google_project_service performs on every read, and project-level IAM for

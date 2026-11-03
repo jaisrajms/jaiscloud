@@ -251,12 +251,12 @@ resource "google_dataproc_metastore_federation" "compat" {
 }
 
 resource "google_dataproc_metastore_database_iam_member" "compat" {
-  project     = var.project
-  location    = var.region
-  service_id  = "jaiscloud-tf-metastore"
-  database    = "default"
-  role        = "roles/metastore.admin"
-  member      = "serviceAccount:${google_service_account.compat.email}"
+  project    = var.project
+  location   = var.region
+  service_id = "jaiscloud-tf-metastore"
+  database   = "default"
+  role       = "roles/metastore.admin"
+  member     = "serviceAccount:${google_service_account.compat.email}"
 }
 
 # ── GKE: the Dataproc-on-GKE prerequisite ─────────────────────────────────────
@@ -424,4 +424,74 @@ output "dataproc_gke_cluster_name" {
 
 output "dataproc_gce_cluster_name" {
   value = google_dataproc_cluster.gce.name
+}
+
+output "bigquery_dataset_id" {
+  value = google_bigquery_dataset.compat.dataset_id
+}
+
+output "bigquery_table_id" {
+  value = google_bigquery_table.compat.table_id
+}
+
+output "bigquery_routine_id" {
+  value = google_bigquery_routine.compat.routine_id
+}
+
+output "bigquery_row_access_policy_id" {
+  value = google_bigquery_row_access_policy.compat.policy_id
+}
+
+# ── BigQuery: dataset-scoped routine + table-scoped row access policy (NF31) ──
+# routines.* and rowAccessPolicies.* are declared resource CRUD; both are stored
+# and echoed over the existing BigQuery store (memory and --dsn). The two
+# variables drive the in-place update assertions run.sh makes after the first
+# apply.
+resource "google_bigquery_dataset" "compat" {
+  dataset_id = "jaiscloud_tf_bq"
+  location   = "US"
+}
+
+resource "google_bigquery_table" "compat" {
+  dataset_id = google_bigquery_dataset.compat.dataset_id
+  table_id   = "jaiscloud_tf_table"
+
+  schema = jsonencode([
+    {
+      name = "region"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "amount"
+      type = "INT64"
+      mode = "NULLABLE"
+    },
+  ])
+}
+
+resource "google_bigquery_routine" "compat" {
+  dataset_id      = google_bigquery_dataset.compat.dataset_id
+  routine_id      = "jaiscloud_tf_routine"
+  routine_type    = "SCALAR_FUNCTION"
+  language        = "SQL"
+  definition_body = var.routine_body
+  description     = "jaiscloud terraform compatibility routine"
+
+  arguments {
+    name          = "x"
+    argument_kind = "FIXED_TYPE"
+    mode          = "IN"
+    data_type     = jsonencode({ typeKind = "INT64" })
+  }
+
+  return_type = jsonencode({ typeKind = "INT64" })
+}
+
+resource "google_bigquery_row_access_policy" "compat" {
+  dataset_id       = google_bigquery_dataset.compat.dataset_id
+  table_id         = google_bigquery_table.compat.table_id
+  policy_id        = "jaiscloud_tf_policy"
+  filter_predicate = var.row_access_policy_predicate
+  grantees         = ["user:compat@example.com"]
 }

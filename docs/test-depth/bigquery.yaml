@@ -16,11 +16,11 @@ classes:
   p3:
     state: present
     suites: [sdk-bigquery]
-    note: "duplicate dataset/table 409, unknown dataset/table/job 404, subset rejection (legacy SQL/UNNEST/wildcard table/SAFE.) 400, jobs.insert without jobId 400, negative maxResults 400 on every list/read method"
+    note: "duplicate dataset/table/routine/row-access-policy 409, unknown dataset/table/job/routine/policy 404 (and the models.* 501), subset rejection (legacy SQL/UNNEST/wildcard table/SAFE.) 400, jobs.insert without jobId 400, negative maxResults 400 on every list/read method"
   p4:
     state: present
     suites: [sdk-bigquery]
-    note: "datasets/tables/jobs listing by maxResults+pageToken (cross-page stability), tabledata.list by maxResults+startIndex, and jobs.query/getQueryResults result-set paging (pageToken + startIndex)"
+    note: "datasets/tables/jobs/routines listing by maxResults+pageToken (cross-page stability), rowAccessPolicies.list by pageSize+pageToken, tabledata.list by maxResults+startIndex, and jobs.query/getQueryResults result-set paging (pageToken + startIndex)"
   p5:
     state: present
     suites: [sdk-bigquery]

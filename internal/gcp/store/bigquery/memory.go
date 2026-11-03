@@ -12,10 +12,12 @@ import (
 // MemoryStore is an in-memory Store.
 type MemoryStore struct {
 	mu       sync.RWMutex
-	datasets map[string]Dataset // projectID+"/"+datasetID → dataset
-	tables   map[string]Table   // projectID+"/"+datasetID+"/"+tableID → table
-	jobs     map[string]Job     // projectID+"/"+jobID → job
-	rows     map[string][]Row   // projectID+"/"+datasetID+"/"+tableID → rows (seq order)
+	datasets map[string]Dataset         // projectID+"/"+datasetID → dataset
+	tables   map[string]Table           // projectID+"/"+datasetID+"/"+tableID → table
+	jobs     map[string]Job             // projectID+"/"+jobID → job
+	routines map[string]Routine         // projectID+"/"+datasetID+"/"+routineID → routine
+	policies map[string]RowAccessPolicy // projectID+"/"+datasetID+"/"+tableID+"/"+policyID → policy
+	rows     map[string][]Row           // projectID+"/"+datasetID+"/"+tableID → rows (seq order)
 	dedup    *insertDedupTracker
 }
 
@@ -25,6 +27,8 @@ func NewMemoryStore() *MemoryStore {
 		datasets: make(map[string]Dataset),
 		tables:   make(map[string]Table),
 		jobs:     make(map[string]Job),
+		routines: make(map[string]Routine),
+		policies: make(map[string]RowAccessPolicy),
 		rows:     make(map[string][]Row),
 		dedup:    newInsertDedupTracker(),
 	}
@@ -37,6 +41,14 @@ func tableScope(projectID, datasetID, tableID string) string {
 }
 
 func jobScope(projectID, jobID string) string { return projectID + "/" + jobID }
+
+func routineScope(projectID, datasetID, routineID string) string {
+	return projectID + "/" + datasetID + "/" + routineID
+}
+
+func rowAccessPolicyScope(projectID, datasetID, tableID, policyID string) string {
+	return projectID + "/" + datasetID + "/" + tableID + "/" + policyID
+}
 
 func (s *MemoryStore) CreateDataset(_ context.Context, projectID string, d Dataset) error {
 	s.mu.Lock()
@@ -107,6 +119,16 @@ func (s *MemoryStore) DeleteDataset(_ context.Context, projectID, datasetID stri
 	for k := range s.tables {
 		if strings.HasPrefix(k, prefix) {
 			delete(s.tables, k)
+		}
+	}
+	for k := range s.routines {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.routines, k)
+		}
+	}
+	for k := range s.policies {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.policies, k)
 		}
 	}
 	for k := range s.rows {
@@ -234,6 +256,12 @@ func (s *MemoryStore) DeleteTable(_ context.Context, projectID, datasetID, table
 	}
 	delete(s.tables, key)
 	delete(s.rows, key)
+	prefix := key + "/"
+	for k := range s.policies {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.policies, k)
+		}
+	}
 	s.dedup.forget(key)
 	return nil
 }
@@ -377,12 +405,166 @@ func (s *MemoryStore) ListRows(_ context.Context, projectID, datasetID, tableID 
 	return result, nil
 }
 
+// --- Routines ---
+
+func (s *MemoryStore) CreateRoutine(_ context.Context, projectID, datasetID string, r Routine) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := routineScope(projectID, datasetID, r.RoutineID)
+	if _, ok := s.routines[key]; ok {
+		return ErrAlreadyExists
+	}
+	if r.CreateTime.IsZero() {
+		r.CreateTime = clock.Now()
+	}
+	if r.UpdateTime.IsZero() {
+		r.UpdateTime = r.CreateTime
+	}
+	r.ProjectID = projectID
+	r.DatasetID = datasetID
+	s.routines[key] = r
+	return nil
+}
+
+func (s *MemoryStore) GetRoutine(_ context.Context, projectID, datasetID, routineID string) (Routine, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.routines[routineScope(projectID, datasetID, routineID)]
+	if !ok {
+		return Routine{}, ErrNoSuchRoutine
+	}
+	return r, nil
+}
+
+func (s *MemoryStore) UpdateRoutineAtomic(_ context.Context, projectID, datasetID, routineID string, mutate func(Routine) (Routine, error)) (Routine, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := routineScope(projectID, datasetID, routineID)
+	current, ok := s.routines[key]
+	if !ok {
+		return Routine{}, ErrNoSuchRoutine
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Routine{}, err
+	}
+	next.ProjectID = projectID
+	next.DatasetID = datasetID
+	next.RoutineID = routineID
+	s.routines[key] = next
+	return next, nil
+}
+
+func (s *MemoryStore) DeleteRoutine(_ context.Context, projectID, datasetID, routineID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := routineScope(projectID, datasetID, routineID)
+	if _, ok := s.routines[key]; !ok {
+		return ErrNoSuchRoutine
+	}
+	delete(s.routines, key)
+	return nil
+}
+
+func (s *MemoryStore) ListRoutines(_ context.Context, projectID, datasetID string) ([]Routine, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/" + datasetID + "/"
+	result := make([]Routine, 0, len(s.routines))
+	for k, r := range s.routines {
+		if strings.HasPrefix(k, prefix) {
+			result = append(result, r)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].RoutineID < result[j].RoutineID })
+	return result, nil
+}
+
+// --- Row access policies ---
+
+func (s *MemoryStore) CreateRowAccessPolicy(_ context.Context, projectID, datasetID, tableID string, p RowAccessPolicy) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := rowAccessPolicyScope(projectID, datasetID, tableID, p.PolicyID)
+	if _, ok := s.policies[key]; ok {
+		return ErrAlreadyExists
+	}
+	if p.CreateTime.IsZero() {
+		p.CreateTime = clock.Now()
+	}
+	if p.UpdateTime.IsZero() {
+		p.UpdateTime = p.CreateTime
+	}
+	p.ProjectID = projectID
+	p.DatasetID = datasetID
+	p.TableID = tableID
+	s.policies[key] = p
+	return nil
+}
+
+func (s *MemoryStore) GetRowAccessPolicy(_ context.Context, projectID, datasetID, tableID, policyID string) (RowAccessPolicy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.policies[rowAccessPolicyScope(projectID, datasetID, tableID, policyID)]
+	if !ok {
+		return RowAccessPolicy{}, ErrNoSuchRowAccessPolicy
+	}
+	return p, nil
+}
+
+func (s *MemoryStore) UpdateRowAccessPolicyAtomic(_ context.Context, projectID, datasetID, tableID, policyID string, mutate func(RowAccessPolicy) (RowAccessPolicy, error)) (RowAccessPolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := rowAccessPolicyScope(projectID, datasetID, tableID, policyID)
+	current, ok := s.policies[key]
+	if !ok {
+		return RowAccessPolicy{}, ErrNoSuchRowAccessPolicy
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return RowAccessPolicy{}, err
+	}
+	next.ProjectID = projectID
+	next.DatasetID = datasetID
+	next.TableID = tableID
+	next.PolicyID = policyID
+	s.policies[key] = next
+	return next, nil
+}
+
+func (s *MemoryStore) DeleteRowAccessPolicy(_ context.Context, projectID, datasetID, tableID, policyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := rowAccessPolicyScope(projectID, datasetID, tableID, policyID)
+	if _, ok := s.policies[key]; !ok {
+		return ErrNoSuchRowAccessPolicy
+	}
+	delete(s.policies, key)
+	return nil
+}
+
+func (s *MemoryStore) ListRowAccessPolicies(_ context.Context, projectID, datasetID, tableID string) ([]RowAccessPolicy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/" + datasetID + "/" + tableID + "/"
+	result := make([]RowAccessPolicy, 0, len(s.policies))
+	for k, p := range s.policies {
+		if strings.HasPrefix(k, prefix) {
+			result = append(result, p)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].PolicyID < result[j].PolicyID })
+	return result, nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.datasets = make(map[string]Dataset)
 	s.tables = make(map[string]Table)
 	s.jobs = make(map[string]Job)
+	s.routines = make(map[string]Routine)
+	s.policies = make(map[string]RowAccessPolicy)
 	s.rows = make(map[string][]Row)
 	s.dedup.reset()
 }

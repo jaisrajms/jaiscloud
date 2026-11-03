@@ -121,7 +121,9 @@ subset, plus the encoding to the Discovery result shape. Results:
   A separate, larger scope (not in BQ1–BQ4); needed only if Spark/Storage-API
   support is prioritized.
 - **Full GoogleSQL** — arrays/structs/geography/scripting are deferred by design.
-- **`routines`/`models`/`rowAccessPolicies`** — remain documented `501`.
+- **`models`** — remains a documented `501` (no model-training execution).
+  `routines`/`rowAccessPolicies` are stored CRUD resources over the same
+  metadata store (never executed/enforced), not part of the SQL engine.
 - **Real DB data planes for other services** (Cloud SQL/Memorystore) — a
   different problem (wire protocol + real server), not helped by this engine.
 - **Authz, real LRO timing, quotas** — unchanged accepted risks (`docs/gcp/wire-contract.md` §8).

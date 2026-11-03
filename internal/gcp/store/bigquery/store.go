@@ -1,10 +1,12 @@
 // Package bigquery provides the BigQuery store. Resources are project-scoped
 // and mirror the REST surface: datasets (projects/{project}/datasets/{id}),
 // tables (…/datasets/{id}/tables/{tid}), jobs (projects/{project}/jobs/{id}),
-// and streamed rows (jc_bq_rows). The emulator is metadata-only: a table's
-// request body is stored verbatim as JSONB, its schema and labels extracted
-// as structured JSONB, and tabledata.insertAll rows are stored as ordered
-// JSONB objects so tabledata.list can read them back. Jobs are never executed.
+// dataset-scoped routines (…/routines/{rid}), table-scoped row access policies
+// (…/tables/{tid}/rowAccessPolicies/{pid}), and streamed rows (jc_bq_rows). The
+// emulator is metadata-only: a table's request body is stored verbatim as
+// JSONB, its schema and labels extracted as structured JSONB, and
+// tabledata.insertAll rows are stored as ordered JSONB objects so
+// tabledata.list can read them back. Jobs are never executed.
 package bigquery
 
 import (
@@ -15,10 +17,12 @@ import (
 )
 
 var (
-	ErrNoSuchDataset = errors.New("NoSuchDataset")
-	ErrNoSuchTable   = errors.New("NoSuchTable")
-	ErrNoSuchJob     = errors.New("NoSuchJob")
-	ErrAlreadyExists = errors.New("AlreadyExists")
+	ErrNoSuchDataset         = errors.New("NoSuchDataset")
+	ErrNoSuchTable           = errors.New("NoSuchTable")
+	ErrNoSuchJob             = errors.New("NoSuchJob")
+	ErrNoSuchRoutine         = errors.New("NoSuchRoutine")
+	ErrNoSuchRowAccessPolicy = errors.New("NoSuchRowAccessPolicy")
+	ErrAlreadyExists         = errors.New("AlreadyExists")
 )
 
 // Dataset is a logical BigQuery dataset. Config holds the wire request body
@@ -68,6 +72,32 @@ type Row struct {
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 
+// Routine is a dataset-scoped BigQuery routine (a UDF or stored procedure).
+// Config holds the wire Routine resource verbatim; the emulator never executes
+// the body.
+type Routine struct {
+	ProjectID  string          `json:"projectId"`
+	DatasetID  string          `json:"datasetId"`
+	RoutineID  string          `json:"routineId"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	CreateTime time.Time       `json:"createTime"`
+	UpdateTime time.Time       `json:"updateTime"`
+}
+
+// RowAccessPolicy is a table-scoped BigQuery row access policy. Config holds
+// the wire RowAccessPolicy resource verbatim (its filterPredicate and the
+// input-only grantees list); the emulator stores and echoes it but never
+// enforces the predicate, because there is no row-level IAM plane.
+type RowAccessPolicy struct {
+	ProjectID  string          `json:"projectId"`
+	DatasetID  string          `json:"datasetId"`
+	TableID    string          `json:"tableId"`
+	PolicyID   string          `json:"policyId"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	CreateTime time.Time       `json:"createTime"`
+	UpdateTime time.Time       `json:"updateTime"`
+}
+
 // Store is the BigQuery store.
 type Store interface {
 	CreateDataset(ctx context.Context, projectID string, d Dataset) error
@@ -104,6 +134,30 @@ type Store interface {
 	GetJob(ctx context.Context, projectID, jobID string) (Job, error)
 	DeleteJob(ctx context.Context, projectID, jobID string) error
 	ListJobs(ctx context.Context, projectID string) ([]Job, error)
+
+	// Routines are dataset-scoped (…/datasets/{id}/routines/{rid}) and are
+	// deleted with their dataset.
+	CreateRoutine(ctx context.Context, projectID, datasetID string, r Routine) error
+	GetRoutine(ctx context.Context, projectID, datasetID, routineID string) (Routine, error)
+	// UpdateRoutineAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current routine and returns the version to persist, or an
+	// error to abort without writing. routines.update replaces the resource, but
+	// a request carrying updateMask merges only the masked fields, so the merge
+	// must be atomic with respect to concurrent updates on the same routine.
+	UpdateRoutineAtomic(ctx context.Context, projectID, datasetID, routineID string, mutate func(Routine) (Routine, error)) (Routine, error)
+	DeleteRoutine(ctx context.Context, projectID, datasetID, routineID string) error
+	ListRoutines(ctx context.Context, projectID, datasetID string) ([]Routine, error)
+
+	// RowAccessPolicies are table-scoped
+	// (…/datasets/{id}/tables/{tid}/rowAccessPolicies/{pid}) and are deleted
+	// with their table or dataset.
+	CreateRowAccessPolicy(ctx context.Context, projectID, datasetID, tableID string, policy RowAccessPolicy) error
+	GetRowAccessPolicy(ctx context.Context, projectID, datasetID, tableID, policyID string) (RowAccessPolicy, error)
+	// UpdateRowAccessPolicyAtomic performs a locked get-mutate-set cycle, for
+	// the same reason as UpdateRoutineAtomic (an update may carry updateMask).
+	UpdateRowAccessPolicyAtomic(ctx context.Context, projectID, datasetID, tableID, policyID string, mutate func(RowAccessPolicy) (RowAccessPolicy, error)) (RowAccessPolicy, error)
+	DeleteRowAccessPolicy(ctx context.Context, projectID, datasetID, tableID, policyID string) error
+	ListRowAccessPolicies(ctx context.Context, projectID, datasetID, tableID string) ([]RowAccessPolicy, error)
 
 	// InsertRows appends rows to a table. Rows whose non-empty InsertID was
 	// already recorded for this table within the best-effort dedup window are

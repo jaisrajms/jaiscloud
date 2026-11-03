@@ -558,6 +558,8 @@ func Scenarios(suffix string) []Scenario {
 	bqParquetBucket := "conf-parquet-" + suffix
 	bqAvroTbl := "conf_avrotbl_" + suffix
 	bqAvroBucket := "conf-avro-" + suffix
+	bqRoutine := "conf_routine_" + suffix
+	bqPolicy := "conf_policy_" + suffix
 	bqUploadJSON := fmt.Sprintf(
 		`{"jobReference":{"projectId":%q,"jobId":%q},"configuration":{"load":{"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceFormat":"CSV","writeDisposition":"WRITE_APPEND"}}}`,
 		p, bqUploadJob, p, ds, bqUploadTbl)
@@ -580,6 +582,34 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/insertAll",
 			Body: `{"rows":[{"insertId":"1","json":{"id":"1"}}]}`},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/data"},
+
+		// Dataset-scoped routines (NF31): resource CRUD. Routine has no `kind`
+		// member, and creationTime/lastModifiedTime are int64 epoch millis.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/routines",
+			Body: fmt.Sprintf(`{"routineReference":{"projectId":%q,"datasetId":%q,"routineId":%q},"routineType":"SCALAR_FUNCTION","language":"SQL","definitionBody":"x * 2","description":"conformance routine","arguments":[{"name":"x","argumentKind":"FIXED_TYPE","mode":"IN","dataType":{"typeKind":"INT64"}}],"returnType":{"typeKind":"INT64"}}`, p, ds, bqRoutine)},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/routines/" + bqRoutine},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/routines"},
+		Scenario{Service: "bigquery", Method: "PUT", Path: bqBase + "/datasets/" + ds + "/routines/" + bqRoutine,
+			Body: fmt.Sprintf(`{"routineReference":{"projectId":%q,"datasetId":%q,"routineId":%q},"routineType":"SCALAR_FUNCTION","language":"SQL","definitionBody":"x * 3","description":"updated conformance routine"}`, p, ds, bqRoutine)},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/routines/" + bqRoutine},
+
+		// Table-scoped row access policies (NF31): resource CRUD plus
+		// rowAccessPolicies:batchDelete. grantees is input-only (never echoed),
+		// and creationTime/lastModifiedTime are google-datetime strings.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies",
+			Body: fmt.Sprintf(`{"rowAccessPolicyReference":{"projectId":%q,"datasetId":%q,"tableId":%q,"policyId":%q},"filterPredicate":"id = 1","grantees":["user:conformance@example.com"]}`, p, ds, tbl, bqPolicy)},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies",
+			Body: fmt.Sprintf(`{"rowAccessPolicyReference":{"projectId":%q,"datasetId":%q,"tableId":%q,"policyId":%q},"filterPredicate":"id = 2"}`, p, ds, tbl, bqPolicy+"_2")},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies/" + bqPolicy},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies"},
+		Scenario{Service: "bigquery", Method: "PUT", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies/" + bqPolicy,
+			Body: fmt.Sprintf(`{"rowAccessPolicyReference":{"projectId":%q,"datasetId":%q,"tableId":%q,"policyId":%q},"filterPredicate":"id = 3"}`, p, ds, tbl, bqPolicy)},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies:batchDelete",
+			Body: fmt.Sprintf(`{"policyIds":[%q,%q]}`, bqPolicy, bqPolicy+"_2")},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies",
+			Body: fmt.Sprintf(`{"rowAccessPolicyReference":{"projectId":%q,"datasetId":%q,"tableId":%q,"policyId":%q},"filterPredicate":"id = 4"}`, p, ds, tbl, bqPolicy+"_3")},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/rowAccessPolicies/" + bqPolicy + "_3"},
+
 		// Load job (BQL1): stage a CSV row in the emulated GCS, then jobs.insert a
 		// configuration.load that reads it back through the same gs:// path the
 		// official clients use. (CSV rather than NDJSON: the wire harness parses

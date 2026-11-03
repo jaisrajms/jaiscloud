@@ -22,6 +22,9 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets, plus a
   Compute-Engine `cluster_config` cluster)
 - GKE (`google_container_cluster`, the Dataproc-on-GKE prerequisite)
+- BigQuery (dataset + table, plus the NF31 dataset-scoped routine and
+  table-scoped row access policy; the suite asserts create/get/list, an
+  in-place update of both, and the read-after-delete)
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
 - Service Usage (`/v1/projects/{project}/services`)

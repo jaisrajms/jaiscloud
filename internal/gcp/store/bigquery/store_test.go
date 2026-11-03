@@ -187,6 +187,66 @@ func runStoreTests(t *testing.T, s snapshotStore) {
 		t.Fatalf("list jobs: %v %d", err, len(jobList))
 	}
 
+	// Routines (dataset-scoped CRUD; deleted with the dataset).
+	if _, err := s.GetRoutine(ctx, "proj", "Sales", "nope"); err != ErrNoSuchRoutine {
+		t.Fatalf("expected ErrNoSuchRoutine, got %v", err)
+	}
+	rt := Routine{RoutineID: "add_one", Config: []byte(`{"routineType":"SCALAR_FUNCTION","language":"SQL","definitionBody":"x + 1"}`)}
+	if err := s.CreateRoutine(ctx, "proj", "Sales", rt); err != nil {
+		t.Fatalf("create routine: %v", err)
+	}
+	if err := s.CreateRoutine(ctx, "proj", "Sales", rt); err != ErrAlreadyExists {
+		t.Fatalf("expected routine ErrAlreadyExists, got %v", err)
+	}
+	gotRoutine, err := s.GetRoutine(ctx, "proj", "Sales", "add_one")
+	if err != nil || !jsonEqual(gotRoutine.Config, rt.Config) {
+		t.Fatalf("routine config not verbatim: %v %s", err, gotRoutine.Config)
+	}
+	updated, err := s.UpdateRoutineAtomic(ctx, "proj", "Sales", "add_one", func(cur Routine) (Routine, error) {
+		cur.Config = []byte(`{"routineType":"SCALAR_FUNCTION","language":"SQL","definitionBody":"x + 2"}`)
+		return cur, nil
+	})
+	if err != nil || !jsonEqual(updated.Config, []byte(`{"routineType":"SCALAR_FUNCTION","language":"SQL","definitionBody":"x + 2"}`)) {
+		t.Fatalf("routine update = %+v err=%v", updated, err)
+	}
+	if _, err := s.UpdateRoutineAtomic(ctx, "proj", "Sales", "nope", func(cur Routine) (Routine, error) { return cur, nil }); err != ErrNoSuchRoutine {
+		t.Fatalf("expected ErrNoSuchRoutine on atomic update, got %v", err)
+	}
+	routineList, err := s.ListRoutines(ctx, "proj", "Sales")
+	if err != nil || len(routineList) != 1 {
+		t.Fatalf("list routines: %v %d", err, len(routineList))
+	}
+
+	// Row access policies (table-scoped CRUD; deleted with the table).
+	if _, err := s.GetRowAccessPolicy(ctx, "proj", "Sales", "Orders", "nope"); err != ErrNoSuchRowAccessPolicy {
+		t.Fatalf("expected ErrNoSuchRowAccessPolicy, got %v", err)
+	}
+	pol := RowAccessPolicy{PolicyID: "eu_only", Config: []byte(`{"filterPredicate":"region = \"EU\""}`)}
+	if err := s.CreateRowAccessPolicy(ctx, "proj", "Sales", "Orders", pol); err != nil {
+		t.Fatalf("create row access policy: %v", err)
+	}
+	if err := s.CreateRowAccessPolicy(ctx, "proj", "Sales", "Orders", pol); err != ErrAlreadyExists {
+		t.Fatalf("expected policy ErrAlreadyExists, got %v", err)
+	}
+	gotPolicy, err := s.GetRowAccessPolicy(ctx, "proj", "Sales", "Orders", "eu_only")
+	if err != nil || !jsonEqual(gotPolicy.Config, pol.Config) {
+		t.Fatalf("policy config not verbatim: %v %s", err, gotPolicy.Config)
+	}
+	gotPolicy, err = s.UpdateRowAccessPolicyAtomic(ctx, "proj", "Sales", "Orders", "eu_only", func(cur RowAccessPolicy) (RowAccessPolicy, error) {
+		cur.Config = []byte(`{"filterPredicate":"region = \"US\""}`)
+		return cur, nil
+	})
+	if err != nil || !jsonEqual(gotPolicy.Config, []byte(`{"filterPredicate":"region = \"US\""}`)) {
+		t.Fatalf("policy update = %+v err=%v", gotPolicy, err)
+	}
+	if _, err := s.UpdateRowAccessPolicyAtomic(ctx, "proj", "Sales", "Orders", "nope", func(cur RowAccessPolicy) (RowAccessPolicy, error) { return cur, nil }); err != ErrNoSuchRowAccessPolicy {
+		t.Fatalf("expected ErrNoSuchRowAccessPolicy on atomic update, got %v", err)
+	}
+	policyList, err := s.ListRowAccessPolicies(ctx, "proj", "Sales", "Orders")
+	if err != nil || len(policyList) != 1 {
+		t.Fatalf("list policies: %v %d", err, len(policyList))
+	}
+
 	// Lists + deletes cascade.
 	dsList, err := s.ListDatasets(ctx, "proj")
 	if err != nil || len(dsList) != 1 {
@@ -205,11 +265,22 @@ func runStoreTests(t *testing.T, s snapshotStore) {
 	if _, err := s.GetTable(ctx, "proj", "Sales", "Orders"); err != ErrNoSuchTable {
 		t.Fatalf("expected ErrNoSuchTable after delete, got %v", err)
 	}
+	// Deleting the table cascades its row access policies.
+	if _, err := s.GetRowAccessPolicy(ctx, "proj", "Sales", "Orders", "eu_only"); err != ErrNoSuchRowAccessPolicy {
+		t.Fatalf("expected policy deleted with its table, got %v", err)
+	}
+	if err := s.DeleteRoutine(ctx, "proj", "Sales", "nope"); err != ErrNoSuchRoutine {
+		t.Fatalf("expected ErrNoSuchRoutine on delete, got %v", err)
+	}
 	if err := s.DeleteDataset(ctx, "proj", "Sales"); err != nil {
 		t.Fatalf("delete dataset: %v", err)
 	}
 	if _, err := s.GetDataset(ctx, "proj", "Sales"); err != ErrNoSuchDataset {
 		t.Fatalf("expected ErrNoSuchDataset after delete, got %v", err)
+	}
+	// Deleting the dataset cascades its routines.
+	if _, err := s.GetRoutine(ctx, "proj", "Sales", "add_one"); err != ErrNoSuchRoutine {
+		t.Fatalf("expected routine deleted with its dataset, got %v", err)
 	}
 
 	// Timestamp parity (BQ12): zero CreateTime/UpdateTime are defaulted on
@@ -241,12 +312,24 @@ func runStoreTimestampTests(t *testing.T, s Store) {
 	if err != nil || !d.CreateTime.Equal(t0) || !d.UpdateTime.Equal(t0) {
 		t.Fatalf("dataset timestamps not defaulted to clock: %+v err=%v", d, err)
 	}
+	if err := s.CreateRoutine(ctx, "proj", "TsDs", Routine{RoutineID: "TsR"}); err != nil {
+		t.Fatalf("create ts routine: %v", err)
+	}
+	if r, err := s.GetRoutine(ctx, "proj", "TsDs", "TsR"); err != nil || !r.CreateTime.Equal(t0) || !r.UpdateTime.Equal(t0) {
+		t.Fatalf("routine timestamps not defaulted to clock: %+v err=%v", r, err)
+	}
 	if err := s.CreateTable(ctx, "proj", "TsDs", Table{TableID: "Ts"}); err != nil {
 		t.Fatalf("create ts table: %v", err)
 	}
 	tb, err := s.GetTable(ctx, "proj", "TsDs", "Ts")
 	if err != nil || !tb.CreateTime.Equal(t0) || !tb.UpdateTime.Equal(t0) {
 		t.Fatalf("table timestamps not defaulted to clock: %+v err=%v", tb, err)
+	}
+	if err := s.CreateRowAccessPolicy(ctx, "proj", "TsDs", "Ts", RowAccessPolicy{PolicyID: "TsPol"}); err != nil {
+		t.Fatalf("create ts policy: %v", err)
+	}
+	if pol, err := s.GetRowAccessPolicy(ctx, "proj", "TsDs", "Ts", "TsPol"); err != nil || !pol.CreateTime.Equal(t0) || !pol.UpdateTime.Equal(t0) {
+		t.Fatalf("policy timestamps not defaulted to clock: %+v err=%v", pol, err)
 	}
 	if err := s.CreateJob(ctx, "proj", Job{JobID: "TsJ"}); err != nil {
 		t.Fatalf("create ts job: %v", err)
@@ -333,10 +416,20 @@ func runSnapshotRoundTrip(t *testing.T, s snapshotStore, fresh func() snapshotSt
 	// snapshot must preserve the stored row byte-for-byte in value terms.
 	_, _ = s.InsertRows(ctx, "p", "d", "t", []Row{{InsertID: "i1", Data: []byte(`{"a":"hi","f":"NaN"}`)}})
 	_ = s.CreateJob(ctx, "p", Job{JobID: "j", Config: []byte(`{"configuration":{"query":{"query":"SELECT 1"}}}`)})
+	_ = s.CreateRoutine(ctx, "p", "d", Routine{RoutineID: "r", Config: []byte(`{"routineType":"SCALAR_FUNCTION","language":"SQL"}`)})
+	_ = s.CreateRowAccessPolicy(ctx, "p", "d", "t", RowAccessPolicy{PolicyID: "pol", Config: []byte(`{"filterPredicate":"region = \"EU\""}`)})
 
 	srcTable, err := s.GetTable(ctx, "p", "d", "t")
 	if err != nil {
 		t.Fatalf("get source table: %v", err)
+	}
+	srcRoutine, err := s.GetRoutine(ctx, "p", "d", "r")
+	if err != nil {
+		t.Fatalf("get source routine: %v", err)
+	}
+	srcPolicy, err := s.GetRowAccessPolicy(ctx, "p", "d", "t", "pol")
+	if err != nil {
+		t.Fatalf("get source policy: %v", err)
 	}
 
 	var buf bytes.Buffer
@@ -370,5 +463,21 @@ func runSnapshotRoundTrip(t *testing.T, s snapshotStore, fresh func() snapshotSt
 	gotJob, err := s2.GetJob(ctx, "p", "j")
 	if err != nil || !jsonEqual(gotJob.Config, []byte(`{"configuration":{"query":{"query":"SELECT 1"}}}`)) {
 		t.Fatalf("job lost after restore: %v %+v", err, gotJob)
+	}
+	gotRoutine, err := s2.GetRoutine(ctx, "p", "d", "r")
+	if err != nil || !jsonEqual(gotRoutine.Config, []byte(`{"routineType":"SCALAR_FUNCTION","language":"SQL"}`)) {
+		t.Fatalf("routine lost after restore: %v %+v", err, gotRoutine)
+	}
+	if !gotRoutine.CreateTime.Equal(srcRoutine.CreateTime) || !gotRoutine.UpdateTime.Equal(srcRoutine.UpdateTime) {
+		t.Fatalf("routine timestamps changed across snapshot/restore: src=%v/%v got=%v/%v",
+			srcRoutine.CreateTime, srcRoutine.UpdateTime, gotRoutine.CreateTime, gotRoutine.UpdateTime)
+	}
+	gotPolicy, err := s2.GetRowAccessPolicy(ctx, "p", "d", "t", "pol")
+	if err != nil || !jsonEqual(gotPolicy.Config, []byte(`{"filterPredicate":"region = \"EU\""}`)) {
+		t.Fatalf("row access policy lost after restore: %v %+v", err, gotPolicy)
+	}
+	if !gotPolicy.CreateTime.Equal(srcPolicy.CreateTime) || !gotPolicy.UpdateTime.Equal(srcPolicy.UpdateTime) {
+		t.Fatalf("policy timestamps changed across snapshot/restore: src=%v/%v got=%v/%v",
+			srcPolicy.CreateTime, srcPolicy.UpdateTime, gotPolicy.CreateTime, gotPolicy.UpdateTime)
 	}
 }
