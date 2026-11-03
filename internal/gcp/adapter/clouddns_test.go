@@ -25,6 +25,8 @@ func TestCloudDNSCodecDecode(t *testing.T) {
 		{"GET", "/dns/v1/projects/p/managedZones/z/changes", "ChangeList"},
 		{"POST", "/dns/v1/projects/p/managedZones/z/changes", "ChangeCreate"},
 		{"GET", "/dns/v1/projects/p/managedZones/z/changes/c1", "ChangeGet"},
+		{"GET", "/dns/v1/projects/p/managedZones/z/operations", "ManagedZoneOperationList"},
+		{"GET", "/dns/v1/projects/p/managedZones/z/operations/op1", "ManagedZoneOperationGet"},
 		// Deferred surfaces fail loud rather than 404-ing.
 		{"POST", "/dns/v1/projects/p/managedZones/z:getIamPolicy", "Unimplemented"},
 		{"GET", "/dns/v1/projects/p/managedZones/z/dnsKeys", "Unimplemented"},
@@ -85,6 +87,18 @@ func TestCloudDNSCodecParams(t *testing.T) {
 	}
 	if nr.Params["changeId"] != "c1" {
 		t.Errorf("changeId = %v", nr.Params["changeId"])
+	}
+
+	// Operation id under the zone's operations collection.
+	nr, err = codec.Decode(httptest.NewRequest("GET", "/dns/v1/projects/p/managedZones/z/operations/op1", nil), nil)
+	if err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+	if nr.Params["operation"] != "op1" {
+		t.Errorf("operation = %v", nr.Params["operation"])
+	}
+	if nr.Params["managedZone"] != "z" {
+		t.Errorf("managedZone = %v", nr.Params["managedZone"])
 	}
 }
 

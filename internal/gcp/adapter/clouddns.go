@@ -15,10 +15,10 @@ import (
 // services, Cloud DNS's method paths embed the "dns/v1/" service prefix, so the
 // API is identified by the "/dns/v1/" path prefix and decoded here. Resources
 // live under /dns/v1/projects/{project}[/managedZones[/{zone}[/rrsets[/{name}/{type}]|
-// /changes[/{id}]]]]. The {project} resource itself (projects.get) carries no
-// further segments. DNSSEC keys, policies, response policies, and the IAM
-// custom methods resolve to an Unimplemented action so the provider fails loud
-// with 501 rather than the codec 404-ing them.
+// /changes[/{id}]|/operations[/{operation}]]]]. The {project} resource itself
+// (projects.get) carries no further segments. DNSSEC keys, policies, response
+// policies, and the IAM custom methods resolve to an Unimplemented action so the
+// provider fails loud with 501 rather than the codec 404-ing them.
 type CloudDNSCodec struct {
 	Service string
 }
@@ -162,8 +162,22 @@ func managedZoneAction(rest []string, method string, nr *model.NormalizedRequest
 				return "ChangeGet"
 			}
 		}
-	case "dnsKeys", "operations":
+	case "dnsKeys":
 		return "Unimplemented"
+	case "operations":
+		// managedZoneOperations.get/list: a managed-zone mutation's operation is
+		// polled under the zone's operations collection.
+		switch len(rest) {
+		case 2:
+			if method == http.MethodGet {
+				return "ManagedZoneOperationList"
+			}
+		case 3:
+			nr.Params["operation"] = rest[2]
+			if method == http.MethodGet {
+				return "ManagedZoneOperationGet"
+			}
+		}
 	}
 	return ""
 }

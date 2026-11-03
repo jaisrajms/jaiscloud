@@ -38,6 +38,7 @@ const (
 	rtManagedZone = "gcp_dns_managed_zone"
 	rtRRSet       = "gcp_dns_rrset"
 	rtChange      = "gcp_dns_change"
+	rtOperation   = "gcp_dns_operation"
 )
 
 // Kind constants for the GCP wire envelope.
@@ -48,6 +49,8 @@ const (
 	kindResourceRecordList = "dns#resourceRecordSetsListResponse"
 	kindChange             = "dns#change"
 	kindChangeList         = "dns#changesListResponse"
+	kindOperation          = "dns#operation"
+	kindOperationList      = "dns#managedZoneOperationsListResponse"
 )
 
 // Provider handles Cloud DNS managed zones, resource record sets, and changes.
@@ -79,6 +82,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudDNS.ChangeCreate": p.CreateChange,
 		"CloudDNS.ChangeGet":    p.GetChange,
 		"CloudDNS.ChangeList":   p.ListChanges,
+
+		"CloudDNS.ManagedZoneOperationGet":  p.GetManagedZoneOperation,
+		"CloudDNS.ManagedZoneOperationList": p.ListManagedZoneOperations,
 
 		"CloudDNS.ProjectGet":    p.GetProject,
 		"CloudDNS.Unimplemented": p.Unimplemented,
@@ -149,6 +155,37 @@ type storedRRSet struct {
 type storedChange struct {
 	Zone   string `json:"zone"`
 	Change Change `json:"change"`
+}
+
+// Operation is the dns#operation representation: the audit record a successful
+// managed-zone mutation (managedZones.patch/update) produces. The Discovery
+// document declares the status enum pending|done and the type insert|update|
+// delete; the emulator applies the mutation and records the operation done, so
+// an official client's poll of operations.get settles on the first call. The
+// zoneContext carries the pre- and post-operation ManagedZone, which is where
+// real GCP exposes what the operation changed.
+type Operation struct {
+	Kind        string                       `json:"kind,omitempty"`
+	ID          string                       `json:"id,omitempty"`
+	Type        string                       `json:"type,omitempty"`
+	Status      string                       `json:"status,omitempty"`
+	StartTime   string                       `json:"startTime,omitempty"`
+	User        string                       `json:"user,omitempty"`
+	ZoneContext *OperationManagedZoneContext `json:"zoneContext,omitempty"`
+}
+
+// OperationManagedZoneContext is the dns#operationManagedZoneContext shape: the
+// managed zone before and after the operation.
+type OperationManagedZoneContext struct {
+	OldValue *ManagedZone `json:"oldValue,omitempty"`
+	NewValue *ManagedZone `json:"newValue,omitempty"`
+}
+
+// storedOperation scopes an operation record to its managed zone, which is the
+// collection operations.get/list address it through.
+type storedOperation struct {
+	Zone      string    `json:"zone"`
+	Operation Operation `json:"operation"`
 }
 
 // ─── ManagedZone operations ───────────────────────────────────────────────────
@@ -225,26 +262,35 @@ func (p *Provider) ListManagedZones(ctx context.Context, nr *model.NormalizedReq
 	return provider.OK(p.pageManagedZones(nr, zones, size)), nil
 }
 
+// PatchManagedZone applies a partial update and returns the dns#operation the
+// Discovery document declares for managedZones.patch.
 func (p *Provider) PatchManagedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.applyManagedZoneUpdate(ctx, nr)
 }
 
+// UpdateManagedZone applies a full update and returns the dns#operation the
+// Discovery document declares for managedZones.update.
 func (p *Provider) UpdateManagedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.applyManagedZoneUpdate(ctx, nr)
 }
 
 // applyManagedZoneUpdate merges the mutable managed-zone fields (description,
 // visibility, labels) from the request body. Both the PATCH and PUT wire
-// methods share these merge semantics; dnsName is immutable and ignored.
+// methods share these merge semantics; dnsName is immutable and ignored. The
+// mutation is applied and its operation recorded done in one call, so the
+// returned dns#operation settles immediately and the next managedZones.get
+// shows the new values — the sequence an official client's
+// patch-then-poll-operations.get performs.
 func (p *Provider) applyManagedZoneUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr, "managedZone")
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing managedZone", 400)
 	}
-	mz, err := p.loadManagedZone(ctx, nr, name)
+	old, err := p.loadManagedZone(ctx, nr, name)
 	if err != nil {
 		return nil, err
 	}
+	mz := old
 	body, _ := nr.Params["body"].(map[string]any)
 	if body != nil {
 		if v, ok := body["description"].(string); ok {
@@ -267,7 +313,147 @@ func (p *Provider) applyManagedZoneUpdate(ctx context.Context, nr *model.Normali
 	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtManagedZone, ID: mz.Name, Data: data}); err != nil {
 		return nil, storeError(err, "managed zone")
 	}
-	return provider.OK(toMap(withZoneDefaults(mz))), nil
+	op, err := p.newManagedZoneOperation(ctx, nr, mz.Name, old, mz)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(op)), nil
+}
+
+// ─── ManagedZone operation operations ─────────────────────────────────────────
+
+// newManagedZoneOperation records the dns#operation for a committed managed-zone
+// mutation: type "update", status "done" (the mutation has already been
+// applied), with the pre- and post-operation zone in zoneContext. The id is the
+// caller's clientOperationId when supplied (it must be unique within the zone's
+// operations collection), otherwise a generated one.
+func (p *Provider) newManagedZoneOperation(ctx context.Context, nr *model.NormalizedRequest, zone string, old, updated ManagedZone) (Operation, error) {
+	id := strParam(nr, "clientOperationId")
+	if id != "" {
+		if len(id) > 63 || strings.ContainsAny(id, "/") {
+			return Operation{}, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("clientOperationId %q must be at most 63 characters and must not contain '/'", id), 400)
+		}
+		if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtOperation, operationID(zone, id)); err == nil {
+			return Operation{}, model.NewProviderError("AlreadyExists",
+				fmt.Sprintf("operation %q already exists", id), 409)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return Operation{}, err
+		}
+	} else {
+		id = newChangeID()
+	}
+
+	oldZone := withZoneDefaults(old)
+	newZone := withZoneDefaults(updated)
+	op := Operation{
+		Kind:      kindOperation,
+		ID:        id,
+		Type:      "update",
+		Status:    "done",
+		StartTime: formatTimestamp(clock.Now()),
+		ZoneContext: &OperationManagedZoneContext{
+			OldValue: &oldZone,
+			NewValue: &newZone,
+		},
+	}
+	data, err := json.Marshal(storedOperation{Zone: zone, Operation: op})
+	if err != nil {
+		return Operation{}, err
+	}
+	entry := store.ResourceEntry{Type: rtOperation, ID: operationID(zone, id), Data: data}
+	if err := p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, entry); err != nil {
+		return Operation{}, err
+	}
+	return op, nil
+}
+
+// GetManagedZoneOperation fetches a recorded managed-zone operation
+// (managedZoneOperations.get). An unknown id in the zone is NotFound.
+func (p *Provider) GetManagedZoneOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	zone := strParam(nr, "managedZone")
+	id := strParam(nr, "operation")
+	if zone == "" || id == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing managedZone or operation", 400)
+	}
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtOperation, operationID(zone, id))
+	if err != nil {
+		return nil, storeError(err, "operation")
+	}
+	var s storedOperation
+	if err := json.Unmarshal(e.Data, &s); err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(s.Operation)), nil
+}
+
+// ListManagedZoneOperations enumerates a zone's recorded operations
+// (managedZoneOperations.list), sorted by the documented sortBy criterion
+// (startTime, the default, or id).
+func (p *Provider) ListManagedZoneOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bound, err := bindPageSize(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	zone := strParam(nr, "managedZone")
+	if zone == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing managedZone", 400)
+	}
+	sortBy, err := resolveOperationSortBy(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.loadManagedZone(ctx, nr, zone); err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtOperation, zone)
+	if err != nil {
+		return nil, err
+	}
+	ops := make([]Operation, 0, len(entries))
+	for _, e := range entries {
+		var s storedOperation
+		if json.Unmarshal(e.Data, &s) == nil && s.Zone == zone {
+			ops = append(ops, s.Operation)
+		}
+	}
+	key := func(op Operation) string { return op.StartTime + "\x00" + op.ID }
+	if sortBy == "id" {
+		key = func(op Operation) string { return op.ID }
+	}
+	page, nextPageToken := paginate(ops, key, nr.Params, size)
+	items := make([]any, 0, len(page))
+	for _, op := range page {
+		items = append(items, toMap(op))
+	}
+	resp := map[string]any{"kind": kindOperationList, "operations": items}
+	if nextPageToken != "" {
+		resp["nextPageToken"] = nextPageToken
+	}
+	return provider.OK(resp), nil
+}
+
+// resolveOperationSortBy validates managedZoneOperations.list's sortBy binding:
+// the Discovery enum's startTime (the default) or id. Values are matched
+// case-insensitively so the enum spelling and the upper-case form both work;
+// anything else is InvalidArgument rather than a silently mis-sorted page.
+func resolveOperationSortBy(params map[string]any) (string, error) {
+	raw, _ := params["sortBy"].(string)
+	if raw == "" {
+		return "startTime", nil
+	}
+	switch strings.ToLower(raw) {
+	case "starttime":
+		return "startTime", nil
+	case "id":
+		return "id", nil
+	}
+	return "", model.NewProviderError("InvalidArgument",
+		fmt.Sprintf("Invalid value for 'sortBy': %q. Supported values are startTime and id.", raw), 400)
 }
 
 func (p *Provider) DeleteManagedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -324,6 +510,14 @@ func (p *Provider) purgeZoneChildren(ctx context.Context, account, zone string) 
 			var s storedChange
 			if json.Unmarshal(e.Data, &s) == nil && s.Zone == zone {
 				_ = p.resources.Delete(ctx, account, store.GlobalRegion, rtChange, e.ID)
+			}
+		}
+	}
+	if entries, err := p.resources.List(ctx, account, store.GlobalRegion, rtOperation, zone); err == nil {
+		for _, e := range entries {
+			var s storedOperation
+			if json.Unmarshal(e.Data, &s) == nil && s.Zone == zone {
+				_ = p.resources.Delete(ctx, account, store.GlobalRegion, rtOperation, e.ID)
 			}
 		}
 	}
@@ -657,6 +851,13 @@ func rrsetID(zone, name, typ string) string {
 }
 
 func changeID(zone, id string) string {
+	return zone + "/" + id
+}
+
+// operationID scopes an operation id to its managed zone: operations.get/list
+// address the operation through the zone's operations collection, so the same
+// operation id can exist in two zones.
+func operationID(zone, id string) string {
 	return zone + "/" + id
 }
 

@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1182**
+Cells: **1184**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
 | ga | 1003 |
-| limited | 123 |
+| limited | 125 |
 | preview | 14 |
 | unsupported | 42 |
 
@@ -21,7 +21,7 @@ Cells: **1182**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 556 | 105 | 14 | 12 |
+| rest | 556 | 107 | 14 | 12 |
 | grpc | 447 | 18 | 0 | 30 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 642 | 45 |
+| rest | 644 | 45 |
 | grpc | 447 | 48 |
 
 ## bigquery
@@ -70,7 +70,7 @@ _26 cell(s): ga=1 limited=22 preview=0 unsupported=3_
 
 ## clouddns
 
-_16 cell(s): ga=0 limited=15 preview=0 unsupported=1_
+_18 cell(s): ga=0 limited=17 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -81,6 +81,8 @@ _16 cell(s): ga=0 limited=15 preview=0 unsupported=1_
 | CloudDNS.ManagedZoneDelete | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZoneOperationGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZoneOperationList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZonePatch | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneUpdate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ProjectGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
