@@ -1,6 +1,9 @@
 package dataproc
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strconv"
+)
 
 // bodyString returns body[key] as a string, or "" when absent.
 func bodyString(body map[string]any, key string) string {
@@ -60,6 +63,27 @@ func bodyInt(body map[string]any, key string) int {
 		return v
 	case int64:
 		return int(v)
+	}
+	return 0
+}
+
+// bodyInt64 returns body[key] as an int64, or 0 when absent. Discovery types the
+// container int64 fields (an accelerator's acceleratorCount) as a JSON string,
+// so a string is parsed as well as a number.
+func bodyInt64(body map[string]any, key string) int64 {
+	if body == nil {
+		return 0
+	}
+	switch v := body[key].(type) {
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case string:
+		n, _ := strconv.ParseInt(v, 10, 64)
+		return n
 	}
 	return 0
 }

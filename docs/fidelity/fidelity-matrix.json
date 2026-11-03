@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 1195,
+    "total": 1196,
     "by_state": {
-      "ga": 1003,
+      "ga": 1005,
       "limited": 135,
       "preview": 14,
-      "unsupported": 43
+      "unsupported": 42
     },
     "by_transport": {
       "grpc": {
-        "ga": 447,
+        "ga": 448,
         "limited": 23,
-        "unsupported": 31
+        "unsupported": 30
       },
       "rest": {
-        "ga": 556,
+        "ga": 557,
         "limited": 112,
         "preview": 14,
         "unsupported": 12
@@ -40,8 +40,8 @@
         "unsupported": 1
       },
       "container": {
-        "ga": 58,
-        "unsupported": 8
+        "ga": 60,
+        "unsupported": 7
       },
       "dataproc": {
         "ga": 46,
@@ -133,11 +133,11 @@
     },
     "evidence": {
       "verified": {
-        "grpc": 452,
-        "rest": 649
+        "grpc": 453,
+        "rest": 650
       },
       "unverified": {
-        "grpc": 49,
+        "grpc": 48,
         "rest": 45
       }
     },
@@ -1696,7 +1696,7 @@
         "discovery=container.projects.locations.clusters.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 29 transcript entries)"
+        "verified=true (rest, 30 transcript entries)"
       ]
     },
     {
@@ -1724,7 +1724,7 @@
         "discovery=container.projects.locations.clusters.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 6 transcript entries)"
       ]
     },
     {
@@ -1751,7 +1751,7 @@
       "evidence": [
         "discovery=container.projects.locations.clusters.get",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 6 transcript entries)"
       ]
     },
     {
@@ -1764,7 +1764,7 @@
       "evidence": [
         "discovery=container.projects.locations.clusters.nodePools.get",
         "postgres=yes",
-        "verified=true (rest, 7 transcript entries)"
+        "verified=true (rest, 8 transcript entries)"
       ]
     },
     {
@@ -1778,6 +1778,19 @@
         "discovery=container.projects.locations.operations.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.GetServerConfig",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "container.projects.locations.getServerConfig",
+      "verified": true,
+      "evidence": [
+        "discovery=container.projects.locations.getServerConfig",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2194,13 +2207,13 @@
       "service": "container",
       "operation": "GetServerConfig",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "server config (valid versions/channels) is not modelled; explicit Unimplemented stub",
-      "verified": false,
+      "state": "ga",
+      "verified": true,
       "evidence": [
+        "grpc-checks=GetServerConfig",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)",
-        "verified=false (grpc)"
+        "transport=grpc (conformance=1/1 pass)",
+        "verified=true (grpc)"
       ]
     },
     {

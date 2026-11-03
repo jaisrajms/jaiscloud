@@ -88,6 +88,8 @@ func nodePoolFromSpec(spec dataproccore.GKENodePoolSpec) containerstore.NodePool
 			MinCpuPlatform: spec.MinCpuPlatform,
 			ServiceAccount: spec.ServiceAccount,
 			Labels:         spec.Labels,
+			Accelerators:   acceleratorsFromSpec(spec.Accelerators),
+			BootDiskKmsKey: spec.BootDiskKmsKey,
 		},
 	}
 	autoscaling := spec.Autoscaling
@@ -137,6 +139,16 @@ func verifyNodePool(spec dataproccore.GKENodePoolSpec, pool containerstore.NodeP
 	if spec.ServiceAccount != "" && spec.ServiceAccount != got.ServiceAccount {
 		return mismatch(spec, "serviceAccount", spec.ServiceAccount, got.ServiceAccount)
 	}
+	if spec.BootDiskKmsKey != "" && spec.BootDiskKmsKey != got.BootDiskKmsKey {
+		return mismatch(spec, "bootDiskKmsKey", spec.BootDiskKmsKey, got.BootDiskKmsKey)
+	}
+	// An accelerator list is compared in full when the caller named one: the
+	// order and the per-entry count/type/partition are all part of the request.
+	if len(spec.Accelerators) > 0 {
+		if want, have := acceleratorsString(acceleratorsFromSpec(spec.Accelerators)), acceleratorsString(got.Accelerators); want != have {
+			return mismatch(spec, "accelerators", want, have)
+		}
+	}
 	if spec.Autoscaling != nil {
 		var min, max int32
 		enabled := false
@@ -158,6 +170,36 @@ func verifyNodePool(spec dataproccore.GKENodePoolSpec, pool containerstore.NodeP
 
 func mismatch(spec dataproccore.GKENodePoolSpec, field, want, got string) error {
 	return &dataproccore.GKENodePoolMismatchError{Pool: spec.Name, Field: field, Want: want, Got: got}
+}
+
+// acceleratorsFromSpec renders the Dataproc-side accelerator list as the GKE
+// store shape.
+func acceleratorsFromSpec(in []dataproccore.GKENodePoolAccelerator) []containerstore.AcceleratorConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]containerstore.AcceleratorConfig, 0, len(in))
+	for _, a := range in {
+		out = append(out, containerstore.AcceleratorConfig{
+			AcceleratorCount: a.AcceleratorCount,
+			AcceleratorType:  a.AcceleratorType,
+			GpuPartitionSize: a.GpuPartitionSize,
+		})
+	}
+	return out
+}
+
+// acceleratorsString renders an accelerator list for a mismatch message.
+func acceleratorsString(in []containerstore.AcceleratorConfig) string {
+	parts := make([]string, 0, len(in))
+	for _, a := range in {
+		s := a.AcceleratorType + " x" + strconv.FormatInt(a.AcceleratorCount, 10)
+		if a.GpuPartitionSize != "" {
+			s += " (" + a.GpuPartitionSize + ")"
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, ",")
 }
 
 // isNotFound reports whether err is the GKE core's NotFound.

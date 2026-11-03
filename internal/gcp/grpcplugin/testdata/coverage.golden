@@ -236,7 +236,7 @@ google.cloud.dataproc.v1.WorkflowTemplateService: 7 mapped, 0 without a registry
   + InstantiateWorkflowTemplate=Dataproc.InstantiateWorkflowTemplate
   + ListWorkflowTemplates=Dataproc.ListWorkflowTemplates
   + UpdateWorkflowTemplate=Dataproc.UpdateWorkflowTemplate
-google.container.v1.ClusterManager: 29 mapped, 8 without a registry key
+google.container.v1.ClusterManager: 30 mapped, 7 without a registry key
   + CancelOperation=Container.CancelOperation
   + CompleteIPRotation=Container.CompleteIPRotation
   + CreateCluster=Container.CreateCluster
@@ -246,6 +246,7 @@ google.container.v1.ClusterManager: 29 mapped, 8 without a registry key
   + GetCluster=Container.GetCluster
   + GetNodePool=Container.GetNodePool
   + GetOperation=Container.GetOperation
+  + GetServerConfig=Container.GetServerConfig
   + ListClusters=Container.ListClusters
   + ListNodePools=Container.ListNodePools
   + ListOperations=Container.ListOperations
@@ -272,7 +273,6 @@ google.container.v1.ClusterManager: 29 mapped, 8 without a registry key
   - FetchClusterUpgradeInfo
   - FetchNodePoolUpgradeInfo
   - GetJSONWebKeys
-  - GetServerConfig
   - ListUsableSubnetworks
 google.cloud.run.v2.Services: 8 mapped, 0 without a registry key
   + CreateService=Run.CreateService

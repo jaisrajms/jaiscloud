@@ -7,6 +7,10 @@
 //	DELETE /v1/projects/{project}/locations/{location}/clusters/{cluster}
 //	GET    /v1/projects/{project}/locations/{location}/operations
 //	GET    /v1/projects/{project}/locations/{location}/operations/{operation}
+//	GET    /v1/projects/{project}/locations/{location}/serverConfig
+//
+// (plus the deprecated zone-scoped spelling of the server config,
+// /v1/projects/{project}/zones/{zone}/serverconfig).
 //
 // GKE shares the canonical /v1/projects/{project}/locations/{location}/clusters
 // path with Managed Kafka on the single emulator origin, so the two are
@@ -62,7 +66,9 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	if pi < 0 || pi+4 >= len(seg) {
 		return nil, model.NewProviderError("InvalidRequest", "missing project or locations resource in path", 404)
 	}
-	if seg[pi+2] != "locations" {
+	// "zones" is the pre-regional spelling of "locations": only the legacy
+	// projects.zones.getServerconfig method is served under it.
+	if seg[pi+2] != "locations" && seg[pi+2] != "zones" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
 
@@ -76,12 +82,29 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Params["body"] = m
 	}
 
-	action, err := routeContainer(seg[pi+4:], r.Method, nr.Params)
+	var action string
+	var err error
+	if seg[pi+2] == "zones" {
+		action, err = routeZones(seg[pi+4:], r.Method)
+	} else {
+		action, err = routeContainer(seg[pi+4:], r.Method, nr.Params)
+	}
 	if err != nil {
 		return nil, err
 	}
 	nr.Action = action
 	return nr, nil
+}
+
+// routeZones maps the path after projects/{p}/zones/{z}. The zone-scoped paths
+// are the deprecated pre-regional spellings; real clients use the
+// projects.locations form, so only getServerconfig — which Discovery still
+// documents as container.projects.zones.getServerconfig — is served.
+func routeZones(rel []string, method string) (string, error) {
+	if len(rel) == 1 && rel[0] == "serverconfig" && method == http.MethodGet {
+		return "GetServerConfig", nil
+	}
+	return "", unsupported()
 }
 
 // routeContainer maps the path segments after projects/{p}/locations/{l} and
@@ -93,6 +116,11 @@ func routeContainer(rel []string, method string, params map[string]any) (string,
 		return routeClusters(rel[1:], method, params)
 	case "operations":
 		return routeOperations(rel[1:], method, params)
+	case "serverConfig":
+		// GET projects/{p}/locations/{l}/serverConfig.
+		if len(rel) == 1 && method == http.MethodGet {
+			return "GetServerConfig", nil
+		}
 	}
 	return "", model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 }

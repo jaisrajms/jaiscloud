@@ -197,6 +197,24 @@ func (s *Service) CancelOperation(ctx context.Context, req *containerpb.CancelOp
 	return &emptypb.Empty{}, nil
 }
 
+// ─── Server config ────────────────────────────────────────────────────────────
+
+// GetServerConfig reports the Kubernetes Engine service configuration. The
+// request carries the canonical name (projects/{p}/locations/{l}) on current
+// clients and the deprecated project_id + zone pair on older ones; both resolve
+// to the same derived catalog.
+func (s *Service) GetServerConfig(ctx context.Context, req *containerpb.GetServerConfigRequest) (*containerpb.ServerConfig, error) {
+	project, location, err := parentRef(req.GetName(), req.GetProjectId(), req.GetZone())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	cfg, err := s.core.GetServerConfig(s.projectFor(ctx, project), location)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return serverConfigToProto(cfg), nil
+}
+
 // ─── Node pools ───────────────────────────────────────────────────────────────
 
 // nodePoolRef resolves the project + location + cluster + node pool a node-pool
