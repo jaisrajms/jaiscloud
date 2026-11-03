@@ -240,7 +240,12 @@ func TestProviderCreateAppliesNodeConfigToDefaultPool(t *testing.T) {
 	}
 }
 
-func TestProviderListPagination(t *testing.T) {
+// TestProviderListsIgnorePaging pins NF17/DC40: clusters.list, nodePools.list
+// and operations.list declare no pageSize/pageToken in the GKE Discovery
+// document, so the REST adapter returns the whole collection whether or not a
+// caller sends them, and never emits nextPageToken. A pageToken is accepted and
+// ignored, not applied as an offset — which is what real GKE does.
+func TestProviderListsIgnorePaging(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t)
 	for _, name := range []string{"a", "b", "c"} {
@@ -248,26 +253,64 @@ func TestProviderListPagination(t *testing.T) {
 			t.Fatalf("create %s: %v", name, err)
 		}
 	}
-	first, err := p.ListClusters(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": "2"}))
-	if err != nil {
-		t.Fatalf("ListClusters page 1: %v", err)
+	for _, name := range []string{"np1", "np2", "np3"} {
+		body := map[string]any{"nodePool": map[string]any{"name": name, "initialNodeCount": float64(1)}}
+		if _, err := p.CreateNodePool(ctx, req(map[string]any{"project": "p", "location": "l", "cluster": "a", "body": body})); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
 	}
-	if got := first.Data["clusters"].([]any); len(got) != 2 {
-		t.Fatalf("page 1 = %v", first.Data["clusters"])
+
+	cases := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{"no paging params", nil},
+		{"pageSize only", map[string]any{"pageSize": "1"}},
+		{"pageSize and pageToken", map[string]any{"pageSize": "1", "pageToken": "1"}},
 	}
-	token, _ := first.Data["nextPageToken"].(string)
-	if token == "" {
-		t.Fatal("missing nextPageToken")
-	}
-	second, err := p.ListClusters(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": "2", "pageToken": token}))
-	if err != nil {
-		t.Fatalf("ListClusters page 2: %v", err)
-	}
-	if got := second.Data["clusters"].([]any); len(got) != 1 {
-		t.Fatalf("page 2 = %v", second.Data["clusters"])
-	}
-	if _, ok := second.Data["nextPageToken"]; ok {
-		t.Fatalf("unexpected nextPageToken on last page: %v", second.Data["nextPageToken"])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clusterReq := map[string]any{"project": "p", "location": "l"}
+			poolReq := map[string]any{"project": "p", "location": "l", "cluster": "a"}
+			for k, v := range tc.extra {
+				clusterReq[k] = v
+				poolReq[k] = v
+			}
+
+			clusters, err := p.ListClusters(ctx, req(clusterReq))
+			if err != nil {
+				t.Fatalf("ListClusters: %v", err)
+			}
+			if got := clusters.Data["clusters"].([]any); len(got) != 3 {
+				t.Fatalf("clusters = %d, want 3", len(got))
+			}
+			if _, ok := clusters.Data["nextPageToken"]; ok {
+				t.Fatalf("clusters carried nextPageToken: %v", clusters.Data["nextPageToken"])
+			}
+
+			pools, err := p.ListNodePools(ctx, req(poolReq))
+			if err != nil {
+				t.Fatalf("ListNodePools: %v", err)
+			}
+			if got := pools.Data["nodePools"].([]any); len(got) != 4 {
+				t.Fatalf("nodePools = %d, want 4 (default-pool + np1..np3)", len(got))
+			}
+			if _, ok := pools.Data["nextPageToken"]; ok {
+				t.Fatalf("nodePools carried nextPageToken: %v", pools.Data["nextPageToken"])
+			}
+
+			ops, err := p.ListOperations(ctx, req(clusterReq))
+			if err != nil {
+				t.Fatalf("ListOperations: %v", err)
+			}
+			// 3 CREATE_CLUSTER + 3 CREATE_NODE_POOL operations.
+			if got := ops.Data["operations"].([]any); len(got) != 6 {
+				t.Fatalf("operations = %d, want 6", len(got))
+			}
+			if _, ok := ops.Data["nextPageToken"]; ok {
+				t.Fatalf("operations carried nextPageToken: %v", ops.Data["nextPageToken"])
+			}
+		})
 	}
 }
 

@@ -2,7 +2,6 @@ package container
 
 import (
 	"context"
-	"strconv"
 
 	core "jaiscloud/internal/gcp/service/container"
 	containerstore "jaiscloud/internal/gcp/store/container"
@@ -82,21 +81,20 @@ func (p *Provider) GetCluster(ctx context.Context, nr *model.NormalizedRequest) 
 	return provider.OK(clusterToJSON(c)), nil
 }
 
+// ListClusters returns the whole collection. clusters.list declares no
+// pageSize/pageToken in the GKE Discovery document and ListClustersResponse has
+// no nextPageToken, so a stray paging parameter is accepted and ignored — which
+// is what real GKE does (DC40 / NF17).
 func (p *Provider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusters, err := p.core.ListClusters(ctx, strParam(nr, "project"), strParam(nr, "location"))
 	if err != nil {
 		return nil, err
 	}
-	page, next := paginate(len(clusters), nr)
-	items := make([]any, 0, len(page))
-	for _, i := range page {
-		items = append(items, clusterToJSON(clusters[i]))
+	items := make([]any, 0, len(clusters))
+	for _, c := range clusters {
+		items = append(items, clusterToJSON(c))
 	}
-	resp := map[string]any{"clusters": items}
-	if next != "" {
-		resp["nextPageToken"] = next
-	}
-	return provider.OK(resp), nil
+	return provider.OK(map[string]any{"clusters": items}), nil
 }
 
 func (p *Provider) DeleteCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -115,21 +113,18 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 	return provider.OK(operationToJSON(op)), nil
 }
 
+// ListOperations returns the whole collection (see ListClusters: operations.list
+// has no paging parameters and ListOperationsResponse no nextPageToken).
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ops, err := p.core.ListOperations(ctx, strParam(nr, "project"), strParam(nr, "location"))
 	if err != nil {
 		return nil, err
 	}
-	page, next := paginate(len(ops), nr)
-	items := make([]any, 0, len(page))
-	for _, i := range page {
-		items = append(items, operationToJSON(ops[i]))
+	items := make([]any, 0, len(ops))
+	for _, op := range ops {
+		items = append(items, operationToJSON(op))
 	}
-	resp := map[string]any{"operations": items}
-	if next != "" {
-		resp["nextPageToken"] = next
-	}
-	return provider.OK(resp), nil
+	return provider.OK(map[string]any{"operations": items}), nil
 }
 
 // ─── Node pools ───────────────────────────────────────────────────────────────
@@ -154,21 +149,18 @@ func (p *Provider) GetNodePool(ctx context.Context, nr *model.NormalizedRequest)
 	return provider.OK(nodePoolToJSON(pool)), nil
 }
 
+// ListNodePools returns the whole collection (see ListClusters: nodePools.list
+// has no paging parameters and ListNodePoolsResponse no nextPageToken).
 func (p *Provider) ListNodePools(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	pools, err := p.core.ListNodePools(ctx, strParam(nr, "project"), strParam(nr, "location"), strParam(nr, "cluster"))
 	if err != nil {
 		return nil, err
 	}
-	page, next := paginate(len(pools), nr)
-	items := make([]any, 0, len(page))
-	for _, i := range page {
-		items = append(items, nodePoolToJSON(pools[i]))
+	items := make([]any, 0, len(pools))
+	for _, pool := range pools {
+		items = append(items, nodePoolToJSON(pool))
 	}
-	resp := map[string]any{"nodePools": items}
-	if next != "" {
-		resp["nextPageToken"] = next
-	}
-	return provider.OK(resp), nil
+	return provider.OK(map[string]any{"nodePools": items}), nil
 }
 
 func (p *Provider) DeleteNodePool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -395,44 +387,4 @@ func clusterUpdateFromMap(m map[string]any) core.ClusterUpdate {
 		out.DesiredShieldedNodes = &containerstore.ShieldedNodes{Enabled: boolFrom(sn["enabled"])}
 	}
 	return out
-}
-
-// paginate applies GKE's pageSize/pageToken (a numeric offset, as the emulator
-// has no opaque cursor store) and returns the selected indices plus the next
-// token ("" when the page is the last).
-//
-// The pageSize parse here is deliberately lenient (unparseable → the 500
-// default) rather than the int32 binding the other bespoke pagers enforce:
-// GKE's Discovery document declares no pageSize/pageToken on clusters.list,
-// nodePools.list or operations.list, so real GKE ignores the parameter
-// entirely. The emulator's pagination on those methods is a deliberate
-// convenience (DC40), and rejecting a stray value would diverge further from
-// the real API than ignoring it.
-func paginate(total int, nr *model.NormalizedRequest) ([]int, string) {
-	pageSize := intFrom(nr.Params["pageSize"])
-	if pageSize <= 0 || pageSize > 500 {
-		pageSize = 500
-	}
-	offset := 0
-	if t := strParam(nr, "pageToken"); t != "" {
-		offset, _ = strconv.Atoi(t)
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > total {
-		offset = total
-	}
-	end := offset + pageSize
-	if end > total {
-		end = total
-	}
-	idxs := make([]int, 0, end-offset)
-	for i := offset; i < end; i++ {
-		idxs = append(idxs, i)
-	}
-	if end < total {
-		return idxs, strconv.Itoa(end)
-	}
-	return idxs, ""
 }
