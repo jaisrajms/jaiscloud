@@ -7,7 +7,8 @@
 // delivered to its httpRequest target with per-queue rate limits and
 // exponential-backoff retries, and RunTask forces a synchronous attempt.
 // appEngineHttpRequest targets are stored and echoed but never delivered (no
-// App Engine router); their attempts are recorded as Unimplemented failures.
+// App Engine router): the attempt is recorded as an Unimplemented failure and the
+// task is deleted immediately, without consuming any retries.
 package tasks
 
 import (

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+
 	"jaiscloud/internal/clock"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
 	"jaiscloud/internal/model"
@@ -367,12 +369,36 @@ func TestEngineFiresPubSub(t *testing.T) {
 	}
 }
 
+// countingSchedDispatcher records deliveries and answers with a fixed status.
+type countingSchedDispatcher struct {
+	mu     sync.Mutex
+	calls  int
+	status schedstore.Status
+}
+
+func (d *countingSchedDispatcher) Deliver(context.Context, schedstore.Job, time.Time) schedstore.Status {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	return d.status
+}
+
+func (d *countingSchedDispatcher) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
 func TestEngineAppEngineRecordsUnimplemented(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fixedClock(t, at)
 	ctx := context.Background()
 	mem := schedstore.NewMemoryStore()
-	engine := NewEngine(mem, NewRunner(nil))
+	disp := &countingSchedDispatcher{status: schedstore.Status{
+		Code:    int32(codes.Unimplemented),
+		Message: "appEngineHttpTarget is not delivered by the emulator (no App Engine router)",
+	}}
+	engine := NewEngine(mem, disp)
 	core := NewService(mem)
 	core.SetEngine(engine)
 
@@ -381,15 +407,37 @@ func TestEngineAppEngineRecordsUnimplemented(t *testing.T) {
 		TimeZone:  "UTC",
 		Target:    schedstore.TargetAppEngine,
 		AppEngine: &schedstore.AppEngineTarget{RelativeURI: "/hook"},
+		// Retries would be available, but a permanent failure must not use them.
+		RetryConfig: &schedstore.RetryConfig{RetryCount: 3, MinBackoffDuration: 5 * time.Second, MaxBackoffDuration: time.Hour},
 	})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	clock.SetGlobalClock(clock.FixedClock{T: created.ScheduleTime})
+	slot := created.ScheduleTime
+	clock.SetGlobalClock(clock.FixedClock{T: slot})
 	engine.TickNow(ctx)
-	got, _ := core.GetJob(ctx, "proj", "us-central1", created.Name)
-	if got.Status == nil || got.Status.Code == 0 {
-		t.Fatalf("appEngine status = %+v, want a recorded failure", got.Status)
+
+	got, err := core.GetJob(ctx, "proj", "us-central1", created.Name)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status == nil || codes.Code(got.Status.Code) != codes.Unimplemented {
+		t.Fatalf("appEngine status = %+v, want a recorded Unimplemented failure", got.Status)
+	}
+	if disp.count() != 1 {
+		t.Fatalf("deliveries = %d, want exactly 1 (no retry)", disp.count())
+	}
+	// The next fire is the next cron slot, not a retry backoff.
+	if want := nextFireFor(created, slot); !got.ScheduleTime.Equal(want) {
+		t.Fatalf("next scheduleTime = %v, want the next cron slot %v", got.ScheduleTime, want)
+	}
+
+	// The backoff window (5s) has passed but the next cron slot has not: the
+	// job must not be attempted again.
+	clock.SetGlobalClock(clock.FixedClock{T: slot.Add(5 * time.Second)})
+	engine.TickNow(ctx)
+	if disp.count() != 1 {
+		t.Fatalf("deliveries after the retry window = %d, want 1 (retries not consumed)", disp.count())
 	}
 }
 

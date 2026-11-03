@@ -174,18 +174,24 @@ func TestEngineTaskExpiresAfterMaxRetention(t *testing.T) {
 	withFixedClock(t, at)
 	ctx := context.Background()
 	core, engine, _ := newEngineCore(t)
-	mustQueue(t, core, tasksstore.Queue{Name: "q1"})
+	mustQueue(t, core, tasksstore.Queue{Name: "q1", RetryConfig: &tasksstore.RetryConfig{
+		MaxAttempts: 100, MinBackoff: time.Second, MaxBackoff: time.Hour,
+	}})
 
-	// App Engine targets are never delivered (recorded as Unimplemented), so a
-	// non-expired task provably survives the tick.
+	// A failing HTTP target keeps a non-expired, due task alive through the tick
+	// (the failed attempt schedules a retry), so the assertion is about
+	// retention only.
+	failing := failingServer(t)
+	defer failing.Close()
+
 	retained := mustTask(t, core, "q1", tasksstore.Task{
-		Name: "retained", Target: tasksstore.TargetAppEngine,
-		AppEngine:    &tasksstore.AppEngineHttpRequest{RelativeURI: "/hook", HTTPMethod: "POST"},
+		Name: "retained", Target: tasksstore.TargetHTTP,
+		HTTP:         &tasksstore.HttpRequest{URL: failing.URL},
 		ScheduleTime: at.Add(-30 * 24 * time.Hour),
 	})
 	expired := mustTask(t, core, "q1", tasksstore.Task{
-		Name: "expired", Target: tasksstore.TargetAppEngine,
-		AppEngine:    &tasksstore.AppEngineHttpRequest{RelativeURI: "/hook", HTTPMethod: "POST"},
+		Name: "expired", Target: tasksstore.TargetHTTP,
+		HTTP:         &tasksstore.HttpRequest{URL: failing.URL},
 		ScheduleTime: at.Add(-maxTaskRetention - time.Second),
 	})
 

@@ -251,14 +251,39 @@ func queueLimits(q tasksstore.Queue) (rate float64, burst int, maxConc int) {
 // (https://cloud.google.com/tasks/docs/quotas).
 const maxTaskRetention = 31 * 24 * time.Hour
 
+// permanentTargetFailure reports whether a failed attempt can never succeed
+// because this emulator lacks the capability the target needs (an App Engine
+// router), as opposed to the target answering with an error. It describes the
+// emulator, not the target's response, and it is the one place that decides a
+// target failure is terminal. The Cloud Scheduler engine has the same predicate
+// over its own status type (appEngineHttpTarget has the same contract); keep the
+// two in step.
+func permanentTargetFailure(status tasksstore.Status) bool {
+	return codes.Code(status.Code) == codes.Unimplemented
+}
+
 // attempt delivers one task and records the outcome: success deletes the task
 // (real Cloud Tasks deletes a task once its target answers successfully);
 // failure increments the counters and either reschedules with exponential
-// backoff or drops the task when its retry limits are exhausted.
+// backoff or drops the task when its retry limits are exhausted. A permanent
+// target failure (see permanentTargetFailure) is terminal: the attempt is
+// recorded once and the task is deleted immediately, exactly as on success, so
+// an undeliverable task never retries and never disappears silently after a
+// long retry storm.
 func (e *Engine) attempt(ctx context.Context, t tasksstore.Task, q tasksstore.Queue) {
 	now := clock.Now()
 	status := e.disp.Deliver(ctx, t)
 	if status.Code == 0 {
+		_ = e.store.DeleteTask(ctx, t.ProjectID, t.Location, t.Queue, t.Name)
+		return
+	}
+	if permanentTargetFailure(status) {
+		attempt := newAttempt(t.ScheduleTime, now, status)
+		_, _ = e.store.UpdateTaskAtomic(ctx, t.ProjectID, t.Location, t.Queue, t.Name, func(cur tasksstore.Task) (tasksstore.Task, error) {
+			recordAttempt(&cur, attempt, status)
+			cur.DispatchCount++
+			return cur, nil
+		})
 		_ = e.store.DeleteTask(ctx, t.ProjectID, t.Location, t.Queue, t.Name)
 		return
 	}
@@ -297,7 +322,10 @@ func effectiveRetryConfig(q tasksstore.Queue, t tasksstore.Task) *tasksstore.Ret
 // runNow forces one synchronous attempt for RunTask. It bypasses pause and rate
 // limits, matching the Cloud Tasks contract: on success the task is deleted and
 // the dispatched snapshot is returned; on failure scheduleTime is reset to now
-// plus the queue's retry backoff and the updated task is returned.
+// plus the queue's retry backoff and the updated task is returned. A permanent
+// target failure (see permanentTargetFailure) is terminal like the tick path:
+// the snapshot carries the recorded status and the task is deleted, with no
+// backoff scheduled.
 func (e *Engine) runNow(ctx context.Context, t tasksstore.Task) (tasksstore.Task, error) {
 	if e.disp == nil {
 		return t, nil
@@ -324,13 +352,17 @@ func (e *Engine) runNow(ctx context.Context, t tasksstore.Task) (tasksstore.Task
 		}
 		recordAttempt(&cur, attempt, status)
 		cur.DispatchCount++
+		if permanentTargetFailure(status) {
+			// Terminal: the caller deletes the task; no backoff is scheduled.
+			return cur, nil
+		}
 		cur.ScheduleTime = now.Add(retryBackoff(rc, t.DispatchCount+1))
 		return cur, nil
 	})
 	if err != nil {
 		return tasksstore.Task{}, mapStoreErr(err)
 	}
-	if status.Code == 0 {
+	if status.Code == 0 || permanentTargetFailure(status) {
 		_ = e.store.DeleteTask(ctx, t.ProjectID, t.Location, t.Queue, t.Name)
 	}
 	return updated, nil

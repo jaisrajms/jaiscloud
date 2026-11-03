@@ -30,8 +30,8 @@ type Publisher interface {
 
 // Runner is the default Dispatcher: it performs the HTTP request for an
 // httpTarget, publishes through the injected Publisher for a pubsubTarget, and
-// records an Unimplemented failure for an appEngineHttpTarget (the emulator has
-// no App Engine router).
+// records a terminal Unimplemented failure for an appEngineHttpTarget (the
+// emulator has no App Engine router).
 type Runner struct {
 	client    *http.Client
 	publisher Publisher
@@ -180,6 +180,17 @@ func retryKey(j schedstore.Job) string {
 	return j.ProjectID + "/" + j.Location + "/" + j.Name
 }
 
+// permanentTargetFailure reports whether a failed attempt can never succeed
+// because this emulator lacks the capability the target needs (an App Engine
+// router), as opposed to the target answering with an error. It describes the
+// emulator, not the target's response, and it is the one place that decides a
+// target failure is terminal. The Cloud Tasks engine has the same predicate over
+// its own status type (appEngineHttpRequest has the same contract); keep the two
+// in step.
+func permanentTargetFailure(status schedstore.Status) bool {
+	return codes.Code(status.Code) == codes.Unimplemented
+}
+
 // fire delivers one attempt and persists the updated output-only fields.
 func (e *Engine) fire(ctx context.Context, j schedstore.Job, now time.Time) {
 	status := e.disp.Deliver(ctx, j, e.scheduledFor(j))
@@ -211,10 +222,22 @@ func (e *Engine) scheduledFor(j schedstore.Job) time.Time {
 }
 
 // nextScheduleTime picks the next fire time after an attempt: a retry with
-// exponential backoff while attempts remain, otherwise the next cron time.
+// exponential backoff while attempts remain, otherwise the next cron time. A
+// permanent target failure (see permanentTargetFailure) skips retrying entirely:
+// the failure is recorded, no retry is consumed, and the job waits for its next
+// cron slot.
 func (e *Engine) nextScheduleTime(j schedstore.Job, now time.Time, status schedstore.Status) time.Time {
 	key := retryKey(j)
 	if status.Code == 0 {
+		e.mu.Lock()
+		delete(e.retry, key)
+		e.mu.Unlock()
+		return nextFireFor(j, now)
+	}
+	if permanentTargetFailure(status) {
+		// The current run is over; drop its retry state without counting this
+		// attempt against retryCount, so the next run starts fresh at the next
+		// cron slot.
 		e.mu.Lock()
 		delete(e.retry, key)
 		e.mu.Unlock()
