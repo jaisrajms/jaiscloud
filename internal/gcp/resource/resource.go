@@ -531,6 +531,11 @@ var formatters = map[string]func(project, name string) string{
 		db, id := wfLoc(n)
 		return fmt.Sprintf("projects/%s/databases/%s/backupSchedules/%s", p, db, id)
 	},
+	// A change stream is database-scoped: callers pass "database/streamId".
+	"firestore-change-stream": func(p, n string) string {
+		db, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/changeStreams/%s", p, db, id)
+	},
 	// A backup is location-scoped: callers pass "location/backupId".
 	"firestore-backup": func(p, n string) string {
 		loc, id := wfLoc(n)

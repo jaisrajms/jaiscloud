@@ -66,6 +66,19 @@ func splitUserCredsPath(name string) (db, id string, isCollection, ok bool) {
 	return "", "", false, false
 }
 
+// splitChangeStreamPath parses
+// "databases/{db}/changeStreams" | "databases/{db}/changeStreams/{id}".
+func splitChangeStreamPath(name string) (db, id string, isCollection, ok bool) {
+	parts := strings.Split(name, "/")
+	switch {
+	case len(parts) == 3 && parts[0] == "databases" && parts[2] == "changeStreams":
+		return parts[1], "", true, true
+	case len(parts) == 4 && parts[0] == "databases" && parts[2] == "changeStreams" && parts[3] != "":
+		return parts[1], parts[3], false, true
+	}
+	return "", "", false, false
+}
+
 // splitFieldPath parses
 // "databases/{db}/collectionGroups/{cg}/fields" (collection) or ".../fields/{fieldPath}".
 func splitFieldPath(name string) (db, cg, fieldPath string, isCollection, ok bool) {
@@ -905,6 +918,124 @@ func (p *Provider) DeleteBackupSchedule(ctx context.Context, nr *model.Normalize
 		return nil, model.NewProviderError("InvalidArgument", "invalid backup schedule resource name", 400)
 	}
 	if err := p.Service.DeleteBackupSchedule(ctx, nr.AccountID, db, id); err != nil {
+		return nil, err
+	}
+	return emptyOK(), nil
+}
+
+// ─── Change stream wire mapping ──────────────────────────────────────────────
+
+// changeStreamMap renders a change stream as its REST resource. start_time is
+// omitted while unset: the emulator records no events, so no recording start
+// can be reported truthfully (see changeStreamDef).
+func changeStreamMap(cs changeStreamDef) map[string]any {
+	m := map[string]any{"name": cs.Name}
+	if !cs.CreateTime.IsZero() {
+		m["createTime"] = restRFC3339(cs.CreateTime)
+	}
+	if !cs.UpdateTime.IsZero() {
+		m["updateTime"] = restRFC3339(cs.UpdateTime)
+	}
+	if !cs.StartTime.IsZero() {
+		m["startTime"] = restRFC3339(cs.StartTime)
+	}
+	if cs.RetentionPeriod > 0 {
+		m["retentionPeriod"] = restDuration(cs.RetentionPeriod)
+	}
+	if cs.Etag != "" {
+		m["etag"] = cs.Etag
+	}
+	if cs.DatabaseScope {
+		m["databaseScope"] = map[string]any{}
+	}
+	if cs.CollectionGroupScope != nil {
+		m["collectionGroupScope"] = map[string]any{
+			"collectionGroupId": cs.CollectionGroupScope.CollectionGroupID,
+		}
+	}
+	return m
+}
+
+// changeStreamFromREST reads a change stream's mutable fields from a body.
+// Server-owned fields (name, times, etag) are ignored on input: they are
+// output-only, and a create-time client etag would defeat the delete
+// precondition.
+func changeStreamFromREST(body map[string]any) changeStreamDef {
+	cs := changeStreamDef{}
+	if s, _ := body["retentionPeriod"].(string); s != "" {
+		cs.RetentionPeriod = parseRestDuration(s)
+	}
+	if _, ok := body["databaseScope"].(map[string]any); ok {
+		cs.DatabaseScope = true
+	}
+	if cg, ok := body["collectionGroupScope"].(map[string]any); ok {
+		id, _ := cg["collectionGroupId"].(string)
+		cs.CollectionGroupScope = &collectionGroupScopeDef{CollectionGroupID: id}
+	}
+	return cs
+}
+
+// ─── Change stream handlers ──────────────────────────────────────────────────
+
+// CreateChangeStream implements projects.databases.changeStreams.create. The id
+// comes from the documented changeStreamId query parameter; a request that
+// instead carries the full resource name in the body is accepted when it names
+// the same parent (the Discovery document's `name` is the resource, not the id).
+func (p *Provider) CreateChangeStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	db, bodyID, isCollection, ok := splitChangeStreamPath(strParam(nr, "name"))
+	if !ok || !isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid database parent path", 400)
+	}
+	id := strParam(nr, "changeStreamId")
+	if id == "" {
+		id = bodyID
+	} else if bodyID != "" && bodyID != id {
+		return nil, model.NewProviderError("InvalidArgument", "changeStreamId does not match the change stream name", 400)
+	}
+	cs, err := p.Service.CreateChangeStreamDef(ctx, nr.AccountID, db, id, changeStreamFromREST(bodyMap(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(changeStreamMap(cs)), nil
+}
+
+// ListChangeStreams implements projects.databases.changeStreams.list.
+func (p *Provider) ListChangeStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	db, _, isCollection, ok := splitChangeStreamPath(strParam(nr, "name"))
+	if !ok || !isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid database parent path", 400)
+	}
+	css, err := p.Service.ListChangeStreams(ctx, nr.AccountID, db)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(css))
+	for _, cs := range css {
+		items = append(items, changeStreamMap(cs))
+	}
+	return provider.OK(map[string]any{"changeStreams": items}), nil
+}
+
+// GetChangeStream implements projects.databases.changeStreams.get.
+func (p *Provider) GetChangeStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	db, id, isCollection, ok := splitChangeStreamPath(strParam(nr, "name"))
+	if !ok || isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid change stream resource name", 400)
+	}
+	cs, err := p.Service.GetChangeStream(ctx, nr.AccountID, db, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(changeStreamMap(cs)), nil
+}
+
+// DeleteChangeStream implements projects.databases.changeStreams.delete.
+func (p *Provider) DeleteChangeStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	db, id, isCollection, ok := splitChangeStreamPath(strParam(nr, "name"))
+	if !ok || isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid change stream resource name", 400)
+	}
+	if err := p.Service.DeleteChangeStream(ctx, nr.AccountID, db, id, strParam(nr, "etag")); err != nil {
 		return nil, err
 	}
 	return emptyOK(), nil

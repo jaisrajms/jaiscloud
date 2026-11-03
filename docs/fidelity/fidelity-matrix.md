@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1207**
+Cells: **1211**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1009 |
+| ga | 1013 |
 | limited | 146 |
 | preview | 14 |
 | unsupported | 38 |
@@ -21,7 +21,7 @@ Cells: **1207**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 559 | 123 | 14 | 10 |
+| rest | 563 | 123 | 14 | 10 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 661 | 45 |
+| rest | 665 | 45 |
 | grpc | 455 | 46 |
 
 ## bigquery
@@ -439,7 +439,7 @@ _103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
-_62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
+_66 cell(s): ga=66 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -456,12 +456,14 @@ _62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
 | Firestore.CancelOperation | rest | ga | yes | — |
 | Firestore.Commit | rest | ga | yes | — |
 | Firestore.CreateBackupSchedule | rest | ga | yes | — |
+| Firestore.CreateChangeStream | rest | ga | yes | — |
 | Firestore.CreateDatabase | rest | ga | yes | — |
 | Firestore.CreateDocument | rest | ga | yes | — |
 | Firestore.CreateIndex | rest | ga | yes | — |
 | Firestore.CreateUserCreds | rest | ga | yes | — |
 | Firestore.DeleteBackup | rest | ga | yes | — |
 | Firestore.DeleteBackupSchedule | rest | ga | yes | — |
+| Firestore.DeleteChangeStream | rest | ga | yes | — |
 | Firestore.DeleteDatabase | rest | ga | yes | — |
 | Firestore.DeleteDocument | rest | ga | yes | — |
 | Firestore.DeleteIndex | rest | ga | yes | — |
@@ -472,6 +474,7 @@ _62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
 | Firestore.ExecutePipeline | rest | ga | yes | — |
 | Firestore.GetBackup | rest | ga | yes | — |
 | Firestore.GetBackupSchedule | rest | ga | yes | — |
+| Firestore.GetChangeStream | rest | ga | yes | — |
 | Firestore.GetDatabase | rest | ga | yes | — |
 | Firestore.GetDocument | rest | ga | yes | — |
 | Firestore.GetField | rest | ga | yes | — |
@@ -480,6 +483,7 @@ _62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
 | Firestore.GetUserCreds | rest | ga | yes | — |
 | Firestore.ListBackupSchedules | rest | ga | yes | — |
 | Firestore.ListBackups | rest | ga | yes | — |
+| Firestore.ListChangeStreams | rest | ga | yes | — |
 | Firestore.ListCollectionIds | rest | ga | yes | — |
 | Firestore.ListDatabases | rest | ga | yes | — |
 | Firestore.ListDocuments | rest | ga | yes | — |

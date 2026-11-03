@@ -1591,6 +1591,16 @@ func Scenarios(suffix string) []Scenario {
 			Save:         map[string]string{"fsBackup": "backups.0.name"}},
 		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsBackup}"},
 		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsBackup}"},
+		// Change streams are a configuration resource on the database: the
+		// create/get/list/delete chain records the stored-and-echoed shape. No
+		// feed is produced, so no read method exists to probe.
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsBase + "/changeStreams?changeStreamId=conf-stream",
+			Body: `{"retentionPeriod":"86400s","collectionGroupScope":{"collectionGroupId":"conf-orders"}}`,
+			Save: map[string]string{"fsChangeStream": "name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: fsBase + "/changeStreams"},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsChangeStream}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsChangeStream}"},
 	)
 
 	// ─── Cloud Logging: folder-scoped views and their IAM policy ──────────────
