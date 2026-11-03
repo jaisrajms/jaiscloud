@@ -422,6 +422,98 @@ func TestListTimeSeriesAggregation(t *testing.T) {
 	}
 }
 
+// TestListTimeSeriesAlignmentAnchorsOnIntervalEnd covers NF7, NF6 and NF8 over
+// gRPC: the aligned grid ends exactly at the requested interval end (the
+// recorded real-GCP probe values), the alignment period is capped at 104 weeks,
+// and a filter without a metric.type clause is rejected with the server message.
+func TestListTimeSeriesAlignmentAnchorsOnIntervalEnd(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	metricType := "custom.googleapis.com/anchor_test"
+	ivEnd := time.Date(2026, 1, 1, 2, 22, 30, 0, time.UTC)
+	pts := make([]*monitoringpb.Point, 0, 13)
+	for i := 0; i <= 12; i++ {
+		pts = append(pts, &monitoringpb.Point{
+			Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(ivEnd.Add(-time.Duration(12-i) * time.Minute))},
+			Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DoubleValue{DoubleValue: float64(i)}},
+		})
+	}
+	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "projects/test",
+		TimeSeries: []*monitoringpb.TimeSeries{{
+			Metric:   &metricpb.Metric{Type: metricType},
+			Resource: &monitoredrespb.MonitoredResource{Type: "global"},
+			Points:   pts,
+		}},
+	}); err != nil {
+		t.Fatalf("create time series: %v", err)
+	}
+
+	request := func(period time.Duration, filter string) *monitoringpb.ListTimeSeriesRequest {
+		return &monitoringpb.ListTimeSeriesRequest{
+			Name:     "projects/test",
+			Filter:   filter,
+			Interval: &monitoringpb.TimeInterval{StartTime: timestamppb.New(ivEnd.Add(-13 * time.Minute)), EndTime: timestamppb.New(ivEnd)},
+			Aggregation: &monitoringpb.Aggregation{
+				AlignmentPeriod:  durationpb.New(period),
+				PerSeriesAligner: monitoringpb.Aggregation_ALIGN_MEAN,
+			},
+			View: monitoringpb.ListTimeSeriesRequest_FULL,
+		}
+	}
+
+	resp, err := mc.ListTimeSeries(ctx, request(5*time.Minute, `metric.type = "`+metricType+`"`))
+	if err != nil {
+		t.Fatalf("aggregated list: %v", err)
+	}
+	if len(resp.GetTimeSeries()) != 1 {
+		t.Fatalf("aggregated series = %d, want 1", len(resp.GetTimeSeries()))
+	}
+	got := resp.GetTimeSeries()[0].GetPoints() // newest first
+	wantEnds := []time.Time{ivEnd, ivEnd.Add(-5 * time.Minute), ivEnd.Add(-10 * time.Minute)}
+	wantVals := []float64{10, 5, 1}
+	if len(got) != len(wantEnds) {
+		t.Fatalf("aligned points = %d, want %d: %+v", len(got), len(wantEnds), got)
+	}
+	for i := range wantEnds {
+		if end := got[i].GetInterval().GetEndTime().AsTime(); !end.Equal(wantEnds[i]) {
+			t.Errorf("point %d end = %s, want %s", i, end, wantEnds[i])
+		}
+		if v := got[i].GetValue().GetDoubleValue(); v != wantVals[i] {
+			t.Errorf("point %d value = %v, want %v", i, v, wantVals[i])
+		}
+	}
+
+	// NF6: above 104 weeks is rejected with the server's message.
+	_, err = mc.ListTimeSeries(ctx, request(17472*time.Hour+time.Second, `metric.type = "`+metricType+`"`))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("long alignment period err = %v, want InvalidArgument", err)
+	}
+	if msg := status.Convert(err).Message(); msg != "The alignment window must not exceed 17472h" {
+		t.Errorf("long alignment period message = %q", msg)
+	}
+
+	// NF8: a filter without a metric.type clause matches more than one metric.
+	noType := request(5*time.Minute, `resource.type = "global"`)
+	noType.Aggregation = nil
+	_, err = mc.ListTimeSeries(ctx, noType)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("filter without metric.type err = %v, want InvalidArgument", err)
+	}
+	if msg := status.Convert(err).Message(); msg != "The provided filter matches more than one metric. TimeSeries data are limited to a single metric per request." {
+		t.Errorf("filter without metric.type message = %q", msg)
+	}
+
+	// A starts_with prefix on metric.type stays accepted (real GCP: 200).
+	prefix := request(5*time.Minute, `metric.type = starts_with("custom.googleapis.com/anchor_test")`)
+	prefix.Aggregation = nil
+	if _, err := mc.ListTimeSeries(ctx, prefix); err != nil {
+		t.Fatalf("starts_with metric.type should be accepted: %v", err)
+	}
+}
+
 func TestListMonitoredResourceDescriptors(t *testing.T) {
 	mc, _, cleanup := testServer(t)
 	defer cleanup()

@@ -29,7 +29,9 @@
 // conditions are evaluated by the background worker; ListTimeSeries supports the
 // metric.type/resource.type and metric.labels.<k>/resource.labels.<k> filter
 // subset (equality and starts_with) plus per-series alignment and cross-series
-// reduction; SendNotificationChannelVerificationCode performs no delivery;
+// reduction, and requires the filter to constrain exactly one metric.type (real
+// Cloud Monitoring rejects a filter that matches more than one metric);
+// SendNotificationChannelVerificationCode performs no delivery;
 // ServiceLevelObjectives are stored and returned as declared (no burn-rate
 // evaluation) and the ListServices/ListServiceLevelObjectives filters support an
 // equality subset; the SLO "view=EXPLICIT" fold is not applied.
@@ -141,6 +143,23 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 	if err != nil {
 		return nil, "", invalidArgument("invalid filter: " + err.Error())
 	}
+	// Real Cloud Monitoring requires exactly one metric type per timeSeries.list
+	// request: a filter that never constrains metric.type is rejected with this
+	// message instead of fanning out across every stored type (NF8, optional
+	// strictness). A starts_with on metric.type stays accepted — real GCP allows
+	// a prefix that resolves to one metric type — and `!=` on metric.type stays
+	// rejected by the parser. This exactly-one rule is timeSeries.list only; the
+	// metric-descriptor filters are unchanged.
+	if f.metricType == "" {
+		return nil, "", invalidArgument("The provided filter matches more than one metric. TimeSeries data are limited to a single metric per request.")
+	}
+	// The alignment grid is anchored on the query interval's end time, so the
+	// newest aligned bucket ends exactly there (NF7). An interval with no end
+	// leaves the aggregation on the legacy Unix-epoch grid.
+	var intervalEnd time.Time
+	if interval != nil {
+		intervalEnd = interval.End
+	}
 	// The Discovery document declares timeSeries.list on the folders scope as
 	// well as projects. The emulator has no folder→project membership, so a
 	// folders parent aggregates the same series store across every project.
@@ -165,13 +184,13 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 		matching = append(matching, ts)
 	}
 	if aggregation != nil {
-		matching, err = applyAggregation(matching, aggregation)
+		matching, err = applyAggregation(matching, aggregation, intervalEnd)
 		if err != nil {
 			return nil, "", err
 		}
 	}
 	if secondaryAggregation != nil {
-		matching, err = applyAggregation(matching, secondaryAggregation)
+		matching, err = applyAggregation(matching, secondaryAggregation, intervalEnd)
 		if err != nil {
 			return nil, "", err
 		}

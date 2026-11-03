@@ -55,6 +55,14 @@ type Aggregation struct {
 // when a per-series aligner is set.
 const minAlignmentPeriod = 60 * time.Second
 
+// maxAlignmentPeriod is the largest alignment period Cloud Monitoring accepts
+// (104 weeks). The Discovery document's alignmentPeriod description documents no
+// bound, so the server's rejection message is the contract: a real query with a
+// 105-week period answered 400 INVALID_ARGUMENT "The alignment window must not
+// exceed 17472h", while exactly 104 weeks answered 200 (NF6, optional strictness
+// — no valid client sends an out-of-range period).
+const maxAlignmentPeriod = 17472 * time.Hour
+
 // normalize fills defaults for the zero value of each enum.
 func (a *Aggregation) normalize() {
 	if a.PerSeriesAligner == "" {
@@ -92,16 +100,22 @@ func (a *Aggregation) validate() error {
 	if a.alignerSet() && a.AlignmentPeriod < minAlignmentPeriod {
 		return invalidArgument("alignment_period must be specified and at least 60 seconds when a per_series_aligner is set")
 	}
+	if a.alignerSet() && a.AlignmentPeriod > maxAlignmentPeriod {
+		// The text is the wire contract: real Cloud Monitoring answers exactly
+		// this message for a period above 104 weeks (see maxAlignmentPeriod).
+		return invalidArgument("The alignment window must not exceed 17472h")
+	}
 	return nil
 }
 
 // applyAggregation aligns each series to AlignmentPeriod buckets on the
-// Unix-epoch period grid and, when a cross-series reducer is set, collapses the
-// resulting series by the group-by fields.
+// alignment grid anchored on intervalEnd (the query interval's end time; zero
+// when the request carried no interval end) and, when a cross-series reducer is
+// set, collapses the resulting series by the group-by fields.
 //
 // Returning the input unchanged when no aggregation is requested keeps the
 // unaggregated path allocation-free.
-func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation) ([]monitoringstore.TimeSeries, error) {
+func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation, intervalEnd time.Time) ([]monitoringstore.TimeSeries, error) {
 	if agg == nil {
 		return series, nil
 	}
@@ -116,7 +130,7 @@ func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation) ([]
 
 	aligned := make([]alignedSeries, 0, len(series))
 	for _, ts := range series {
-		a, err := alignSeries(ts, aggCopy.PerSeriesAligner, aggCopy.AlignmentPeriod)
+		a, err := alignSeries(ts, aggCopy.PerSeriesAligner, aggCopy.AlignmentPeriod, intervalEnd)
 		if err != nil {
 			return nil, err
 		}
@@ -165,12 +179,18 @@ func (a alignedSeries) output() monitoringstore.TimeSeries {
 	return out
 }
 
-// alignSeries buckets ts.Points into AlignmentPeriod windows on the Unix-epoch
-// grid and aligns each bucket. A point belongs to the window ending at the first
-// period boundary at or after its end time, matching Cloud Monitoring's
-// half-open `(start, end]` alignment windows; a point exactly on a boundary
-// stays in that boundary's window. It returns nil for a series with no points.
-func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Duration) (*alignedSeries, error) {
+// alignSeries buckets ts.Points into AlignmentPeriod windows on the alignment
+// grid and aligns each bucket. Real Cloud Monitoring anchors that grid on the
+// query interval's end time: the newest bucket ends exactly at intervalEnd and
+// the buckets are counted back from it by the period, so no bucket end exceeds
+// the interval. A point belongs to the half-open `(start, end]` window that
+// contains its end time, so a point exactly on a boundary stays in that
+// boundary's window. A zero intervalEnd (an aggregation applied without a
+// request interval) falls back to the legacy Unix-epoch grid.
+//
+// A series with no points yields nil, and a bucket with no data is never
+// emitted.
+func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Duration, intervalEnd time.Time) (*alignedSeries, error) {
 	if len(ts.Points) == 0 {
 		return nil, nil
 	}
@@ -178,7 +198,7 @@ func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Dur
 		return nil, invalidArgument("alignment_period must be at least one millisecond")
 	}
 
-	byBucket := map[int64][]float64{}
+	byBucket := map[time.Time][]float64{}
 	for _, pt := range ts.Points {
 		if pt.EndTime.IsZero() {
 			continue
@@ -187,17 +207,16 @@ func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Dur
 		if !ok {
 			return nil, invalidArgument("time series values of this type cannot be aggregated")
 		}
-		end := ceilToPeriod(pt.EndTime, period)
-		key := end.UnixMilli()
-		byBucket[key] = append(byBucket[key], v)
+		end := alignmentBucketEnd(pt.EndTime, period, intervalEnd)
+		byBucket[end] = append(byBucket[end], v)
 	}
 	if len(byBucket) == 0 {
 		return nil, nil
 	}
 
 	buckets := make(map[time.Time]float64, len(byBucket))
-	for ms, vals := range byBucket {
-		buckets[time.UnixMilli(ms).UTC()] = alignValues(vals, aligner)
+	for end, vals := range byBucket {
+		buckets[end] = alignValues(vals, aligner)
 	}
 	return &alignedSeries{
 		src:     ts,
@@ -469,6 +488,35 @@ func sortedBucketTimes(buckets map[time.Time]float64) []time.Time {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
 	return out
+}
+
+// alignmentBucketEnd returns the end of the alignment window containing t.
+//
+// With an intervalEnd (the query interval's end time) the grid is anchored
+// there: Cloud Monitoring ends the newest alignment bucket exactly at the
+// interval end and counts back by the period, so a query interval ending at
+// 02:22:30Z with a 300s period yields buckets ending 02:12:30, 02:17:30 and
+// 02:22:30 — not the epoch-grid 02:15:00/02:20:00. A t exactly on a bucket
+// boundary stays in that boundary's window (the windows are half-open
+// `(start, end]`).
+//
+// A zero intervalEnd means the aggregation ran without a request interval; the
+// legacy Unix-epoch grid is kept for that case because there is no query end to
+// anchor on.
+func alignmentBucketEnd(t time.Time, period time.Duration, intervalEnd time.Time) time.Time {
+	if intervalEnd.IsZero() || period <= 0 {
+		return ceilToPeriod(t, period)
+	}
+	back := intervalEnd.Sub(t)
+	if back <= 0 {
+		// t is at or after the interval end: it belongs to the last bucket,
+		// whose end is the interval end itself.
+		return intervalEnd.UTC()
+	}
+	// The bucket ends are intervalEnd, intervalEnd-period, …; the one
+	// containing t is the greatest of them at or after t.
+	j := int64(back / period)
+	return intervalEnd.Add(-time.Duration(j) * period).UTC()
 }
 
 // ceilToPeriod returns the smallest instant on the Unix-epoch period grid at or

@@ -2,8 +2,11 @@ package monitoring
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"jaiscloud/internal/model"
 
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 )
@@ -168,6 +171,104 @@ func TestListTimeSeriesLabelFilterAndAggregation(t *testing.T) {
 	}
 	if got := *all[0].Points[0].Value.DoubleValue; got != 12 {
 		t.Fatalf("aggregated value = %v, want 12", got)
+	}
+}
+
+// TestListTimeSeriesRequiresOneMetricType covers NF8: real Cloud Monitoring
+// requires exactly one metric type per timeSeries.list request, so a filter with
+// no metric.type clause is rejected with the server's message. A starts_with
+// prefix on metric.type is accepted (real GCP answers 200 when it resolves to
+// one metric type), and `!=` stays rejected.
+func TestListTimeSeriesRequiresOneMetricType(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	end := clockNow()
+	typ := "custom.googleapis.com/nf8"
+	if err := s.CreateTimeSeries(ctx, "proj", []monitoringstore.TimeSeries{
+		testSeries(typ, "env", "a", pointAt(end.Add(-time.Minute), 1)),
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries: %v", err)
+	}
+	iv := &TimeInterval{Start: end.Add(-10 * time.Minute), End: end}
+
+	// A filter with no metric.type clause matches more than one metric.
+	_, _, err := s.ListTimeSeries(ctx, "proj", `resource.type = "global"`, iv, nil, nil, "", false, 0, "")
+	if err == nil {
+		t.Fatal("a filter without metric.type should be rejected")
+	}
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) {
+		t.Fatalf("no metric.type err = %v, want a ProviderError", err)
+	}
+	if perr.HTTPStatus != 400 || perr.Code != "InvalidArgument" {
+		t.Fatalf("no metric.type err = %d/%s, want 400/InvalidArgument", perr.HTTPStatus, perr.Code)
+	}
+	want := "The provided filter matches more than one metric. TimeSeries data are limited to a single metric per request."
+	if perr.Message != want {
+		t.Fatalf("no metric.type message = %q, want %q", perr.Message, want)
+	}
+
+	// A starts_with prefix on metric.type stays accepted.
+	page, _, err := s.ListTimeSeries(ctx, "proj", `metric.type = starts_with("custom.googleapis.com/nf8")`, iv, nil, nil, "", false, 0, "")
+	if err != nil {
+		t.Fatalf("starts_with metric.type should be accepted: %v", err)
+	}
+	if len(page) != 1 {
+		t.Fatalf("starts_with metric.type = %d series, want 1", len(page))
+	}
+
+	// `!=` on metric.type is still rejected.
+	if _, _, err := s.ListTimeSeries(ctx, "proj", `metric.type != "`+typ+`"`, iv, nil, nil, "", false, 0, ""); err == nil {
+		t.Fatal("metric.type != should be rejected")
+	}
+}
+
+// TestListTimeSeriesAggregationAnchorsOnIntervalEnd proves the interval end is
+// threaded from ListTimeSeries into the alignment grid: the newest aligned
+// bucket ends exactly at interval.endTime even when it is not a period multiple.
+func TestListTimeSeriesAggregationAnchorsOnIntervalEnd(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	end := time.Date(2026, 1, 1, 2, 22, 30, 0, time.UTC)
+	typ := "custom.googleapis.com/nf7"
+	pts := make([]monitoringstore.Point, 0, 13)
+	for i := 0; i <= 12; i++ {
+		pts = append(pts, pointAt(end.Add(-time.Duration(12-i)*time.Minute), float64(i)))
+	}
+	if err := s.CreateTimeSeries(ctx, "proj", []monitoringstore.TimeSeries{
+		testSeries(typ, "env", "a", pts...),
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries: %v", err)
+	}
+
+	iv := &TimeInterval{Start: time.Date(2026, 1, 1, 2, 10, 0, 0, time.UTC), End: end}
+	page, _, err := s.ListTimeSeries(ctx, "proj", `metric.type = "`+typ+`"`, iv, &Aggregation{
+		AlignmentPeriod:  5 * time.Minute,
+		PerSeriesAligner: AlignMean,
+	}, nil, "", false, 0, "")
+	if err != nil {
+		t.Fatalf("aggregated ListTimeSeries: %v", err)
+	}
+	if len(page) != 1 {
+		t.Fatalf("aggregated series = %d, want 1", len(page))
+	}
+	got := page[0].Points
+	wantEnds := []time.Time{
+		time.Date(2026, 1, 1, 2, 12, 30, 0, time.UTC),
+		time.Date(2026, 1, 1, 2, 17, 30, 0, time.UTC),
+		time.Date(2026, 1, 1, 2, 22, 30, 0, time.UTC),
+	}
+	wantVals := []float64{1, 5, 10} // the recorded probe values
+	if len(got) != len(wantEnds) {
+		t.Fatalf("aligned points = %d, want %d: %+v", len(got), len(wantEnds), got)
+	}
+	for i := range wantEnds {
+		if !got[i].EndTime.Equal(wantEnds[i]) {
+			t.Errorf("point %d end = %s, want %s", i, got[i].EndTime, wantEnds[i])
+		}
+		if v := *got[i].Value.DoubleValue; v != wantVals[i] {
+			t.Errorf("point %d value = %v, want %v", i, v, wantVals[i])
+		}
 	}
 }
 

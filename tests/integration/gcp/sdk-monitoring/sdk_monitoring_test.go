@@ -27,7 +27,9 @@ import (
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -168,6 +170,98 @@ func TestSDKTimeSeries(t *testing.T) {
 		found++
 	}
 	require.Equal(t, 1, found)
+}
+
+// TestSDKTimeSeriesAlignmentAnchorsOnIntervalEnd covers NF7, NF6 and NF8 through
+// the official client: the aligned grid is anchored on interval.endTime (the
+// recorded real-GCP probe values), an alignment period above 104 weeks is
+// InvalidArgument, and a filter with no metric.type clause is rejected with the
+// server message instead of fanning out across metrics.
+func TestSDKTimeSeriesAlignmentAnchorsOnIntervalEnd(t *testing.T) {
+	ctx := context.Background()
+	mc := newMetricClient(t)
+
+	metricType := "custom.googleapis.com/sdk/anchor/" + unique("ts")
+	ivEnd := time.Date(2026, 1, 1, 2, 22, 30, 0, time.UTC)
+	points := make([]*monitoringpb.Point, 0, 13)
+	for i := 0; i <= 12; i++ {
+		points = append(points, &monitoringpb.Point{
+			Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(ivEnd.Add(-time.Duration(12-i) * time.Minute))},
+			Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DoubleValue{DoubleValue: float64(i)}},
+		})
+	}
+	require.NoError(t, mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "projects/" + projectID,
+		TimeSeries: []*monitoringpb.TimeSeries{{
+			Metric:   &metricpb.Metric{Type: metricType},
+			Resource: &monitoredrespb.MonitoredResource{Type: "global", Labels: map[string]string{"project_id": projectID}},
+			Points:   points,
+		}},
+	}))
+
+	request := func(period time.Duration, filter string) *monitoringpb.ListTimeSeriesRequest {
+		return &monitoringpb.ListTimeSeriesRequest{
+			Name:     "projects/" + projectID,
+			Filter:   filter,
+			Interval: &monitoringpb.TimeInterval{StartTime: timestamppb.New(ivEnd.Add(-13 * time.Minute)), EndTime: timestamppb.New(ivEnd)},
+			Aggregation: &monitoringpb.Aggregation{
+				AlignmentPeriod:  durationpb.New(period),
+				PerSeriesAligner: monitoringpb.Aggregation_ALIGN_MEAN,
+			},
+			View: monitoringpb.ListTimeSeriesRequest_FULL,
+		}
+	}
+
+	// list drains ListTimeSeries; the request error surfaces on the first Next.
+	list := func(req *monitoringpb.ListTimeSeriesRequest) ([]*monitoringpb.TimeSeries, error) {
+		it := mc.ListTimeSeries(ctx, req)
+		var out []*monitoringpb.TimeSeries
+		for {
+			ts, err := it.Next()
+			if err == iterator.Done {
+				return out, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ts)
+		}
+	}
+
+	series, err := list(request(5*time.Minute, fmt.Sprintf(`metric.type = %q`, metricType)))
+	require.NoError(t, err)
+	require.Len(t, series, 1)
+	pts := series[0].GetPoints() // newest first
+	wantEnds := []time.Time{ivEnd, ivEnd.Add(-5 * time.Minute), ivEnd.Add(-10 * time.Minute)}
+	wantVals := []float64{10, 5, 1}
+	require.Len(t, pts, len(wantEnds))
+	for i := range wantEnds {
+		require.Equal(t, wantEnds[i], pts[i].GetInterval().GetEndTime().AsTime(), "point %d end", i)
+		require.Equal(t, wantVals[i], pts[i].GetValue().GetDoubleValue(), "point %d value", i)
+	}
+
+	// NF6: above 104 weeks is rejected with the server's message.
+	_, err = list(request(17472*time.Hour+time.Second, fmt.Sprintf(`metric.type = %q`, metricType)))
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Equal(t, "The alignment window must not exceed 17472h", status.Convert(err).Message())
+
+	// NF8: a filter without metric.type matches more than one metric.
+	noType := request(5*time.Minute, `resource.type = "global"`)
+	noType.Aggregation = nil
+	_, err = list(noType)
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Equal(t,
+		"The provided filter matches more than one metric. TimeSeries data are limited to a single metric per request.",
+		status.Convert(err).Message())
+
+	// A starts_with prefix on metric.type stays accepted.
+	prefix := request(5*time.Minute, `metric.type = starts_with("custom.googleapis.com/sdk/anchor/")`)
+	prefix.Aggregation = nil
+	series, err = list(prefix)
+	require.NoError(t, err)
+	require.NotEmpty(t, series)
 }
 
 // TestSDKAlertPolicy exercises create + get + list + delete of an alert policy.
