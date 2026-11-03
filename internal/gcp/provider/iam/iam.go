@@ -300,6 +300,17 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		}
 		return nil, err
 	}
+	// Real IAM creates the account's Google-managed key pair with the account: an
+	// immediate keys.list returns exactly one SYSTEM_MANAGED/GOOGLE_PROVIDED key
+	// whose validity window starts at creation (decision-gate probe 2026-11-02,
+	// NF15). Accounts persisted before this change keep the lazy path — EnsureKey
+	// on the first signBlob materialises the pair then.
+	//
+	// A keygen failure must not fail a create whose account record has already
+	// landed: the client would retry and see 409 for an account that exists. The
+	// same lazy path repairs a missing pair on first sign, so the failure
+	// degrades to the previous behaviour instead.
+	_, _ = p.ensureKey(ctx, nr.AccountID, email)
 	return provider.OK(saToMap(m)), nil
 }
 

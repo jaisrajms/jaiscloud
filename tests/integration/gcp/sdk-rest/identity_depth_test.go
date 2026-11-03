@@ -168,8 +168,9 @@ func TestSDKIAMDepthListing(t *testing.T) {
 	})
 	require.Subset(t, got, want, "the paged walk must return every created account")
 
-	// keys.list is unpaged by Discovery: one response carries every key, so two
-	// keys prove the response is complete rather than truncated at one.
+	// keys.list is unpaged by Discovery: one response carries every key — the two
+	// user-managed keys and the Google-managed key created with the account — so a
+	// response of more than one key proves it is complete rather than truncated.
 	keyNames := make([]string, 0, 2)
 	for i := 0; i < 2; i++ {
 		key, err := svc.Projects.ServiceAccounts.Keys.Create(want[0], &iam.CreateServiceAccountKeyRequest{}).Do()
@@ -180,12 +181,12 @@ func TestSDKIAMDepthListing(t *testing.T) {
 
 	keys, err := svc.Projects.ServiceAccounts.Keys.List(want[0]).Do()
 	require.NoError(t, err)
-	require.Len(t, keys.Keys, 2, "keys.list returns the account's whole key set in one response")
+	require.Len(t, keys.Keys, 3, "keys.list returns the account's whole key set in one response")
 	var listed []string
 	for _, k := range keys.Keys {
 		listed = append(listed, k.Name)
 	}
-	require.ElementsMatch(t, keyNames, listed)
+	require.Subset(t, listed, keyNames)
 }
 
 // TestSDKResourceManagerDepthListing is resourcemanager p4: projects.list pages

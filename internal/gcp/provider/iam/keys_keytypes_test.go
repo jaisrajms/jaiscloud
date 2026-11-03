@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -183,6 +185,21 @@ func TestServiceAccountKeyListKeyTypesInvalid(t *testing.T) {
 	}
 }
 
+// wantValidBefore is the validBeforeTime a listed key must report: user-managed
+// keys never expire, while a Google-managed key's window is the two-year
+// lifetime from its validAfterTime.
+func wantValidBefore(t *testing.T, m map[string]any) string {
+	t.Helper()
+	if m["keyType"] != "SYSTEM_MANAGED" {
+		return nonExpiringKeyTime
+	}
+	after, err := time.Parse(time.RFC3339Nano, m["validAfterTime"].(string))
+	if err != nil {
+		t.Fatalf("validAfterTime %v: %v", m["validAfterTime"], err)
+	}
+	return timestamp.Canonical(after.Add(systemManagedKeyLifetime))
+}
+
 // TestServiceAccountKeyListResponseShape pins the per-operation field scoping
 // from the Discovery document (already covered by keys_test for its happy path;
 // this asserts the list side precisely).
@@ -199,8 +216,9 @@ func TestServiceAccountKeyListResponseShape(t *testing.T) {
 				t.Errorf("keys.list must not emit %s: %v", field, m[field])
 			}
 		}
-		if m["validBeforeTime"] != nonExpiringKeyTime {
-			t.Errorf("validBeforeTime = %v, want %s", m["validBeforeTime"], nonExpiringKeyTime)
+		wantBefore := wantValidBefore(t, m)
+		if m["validBeforeTime"] != wantBefore {
+			t.Errorf("validBeforeTime = %v, want %s", m["validBeforeTime"], wantBefore)
 		}
 		if m["keyOrigin"] == "" || m["keyType"] == "" {
 			t.Errorf("key must carry keyOrigin/keyType: %v", m)

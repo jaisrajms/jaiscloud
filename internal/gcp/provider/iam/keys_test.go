@@ -171,12 +171,22 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 			sys["keyType"], sys["keyOrigin"])
 	}
 
-	// Delete the key.
-	if _, err := p.ServiceAccountKeyDelete(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyID})); err != nil {
+	// The Google-managed key is not deletable: real IAM addresses it from
+	// keys.list only, so a delete on its id is 404 even though get above is 200.
+	if _, err := p.ServiceAccountKeyDelete(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyID})); err == nil {
+		t.Fatal("expected 404 deleting the Google-managed key")
+	}
+
+	// Delete the user-managed key.
+	if _, err := p.ServiceAccountKeyDelete(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyIDField})); err != nil {
 		t.Fatalf("key delete: %v", err)
 	}
-	if _, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyID})); err == nil {
+	if _, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyIDField})); err == nil {
 		t.Fatal("expected 404 on deleted key")
+	}
+	// The managed key survives its sibling's deletion and still signs.
+	if _, err := p.ServiceAccountSignBlob(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": payload}})); err != nil {
+		t.Fatalf("signBlob after deleting the user-managed key: %v", err)
 	}
 }
 

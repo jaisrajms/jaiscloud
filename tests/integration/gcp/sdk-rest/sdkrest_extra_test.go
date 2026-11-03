@@ -611,13 +611,14 @@ func TestSDKIAMServiceAccountKeyLifecycle(t *testing.T) {
 
 	keys, err := svc.Projects.ServiceAccounts.Keys.List(sa.Name).Do()
 	require.NoError(t, err)
-	require.Len(t, keys.Keys, 1)
+	require.Len(t, keys.Keys, 2, "the created key plus the account's Google-managed key")
 
 	_, err = svc.Projects.ServiceAccounts.Keys.Delete(key.Name).Do()
 	require.NoError(t, err)
 	keys, err = svc.Projects.ServiceAccounts.Keys.List(sa.Name).Do()
 	require.NoError(t, err)
-	require.Empty(t, keys.Keys)
+	require.Len(t, keys.Keys, 1, "only the Google-managed key is left")
+	require.Equal(t, "SYSTEM_MANAGED", keys.Keys[0].KeyType)
 }
 
 // TestSDKIAMSignBlob signs a payload and asserts a non-empty signature + keyId.
