@@ -32,8 +32,9 @@ func (m *Metastore) ValidateMetastoreService(ctx context.Context, ref, defaultPr
 	return err
 }
 
-// MetastoreEndpoint formats the thrift endpoint for ref. It reads no state, so
-// there is no call for a plugin to see.
-func (m *Metastore) MetastoreEndpoint(ref, defaultProject, defaultLocation string) (string, error) {
-	return m.core.MetastoreEndpoint(ref, defaultProject, defaultLocation)
+// MetastoreEndpoint formats the thrift endpoint for ref. The port is the
+// Service's own catalog listener, so this reads the control plane for the
+// assigned port (the reference itself was validated at cluster create).
+func (m *Metastore) MetastoreEndpoint(ctx context.Context, ref, defaultProject, defaultLocation string) (string, error) {
+	return m.core.MetastoreEndpoint(ctx, ref, defaultProject, defaultLocation)
 }

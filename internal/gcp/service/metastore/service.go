@@ -59,6 +59,11 @@ type Service struct {
 	// tracker publishes the one-time "operation settled" event when a lazily
 	// settled operation completes. Nil (no bus) makes it inert.
 	tracker *lro.Tracker
+	// catalogHost is the Hive serving plane (one catalog per Service). Nil
+	// leaves catalogs unmaterialized (unit tests, metastore disabled).
+	catalogHost CatalogHost
+	// hmsPort is the base Hive Metastore port; see WithHMSPort.
+	hmsPort int
 }
 
 // Option configures Service.
@@ -195,6 +200,7 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 		Labels:       labelsFromConfig(cfg),
 		State:        "ACTIVE",
 		StateHistory: []metastorestore.ServiceState{{State: "CREATING", StateStartTime: now}},
+		Port:         s.nextServicePort(ctx),
 		CreateTime:   now,
 		UpdateTime:   now,
 	}
@@ -203,6 +209,13 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 	}
 	if err := s.store.CreateService(ctx, project, location, svc); err != nil {
 		return metastorestore.Service{}, metastorestore.Operation{}, mapErr(err)
+	}
+	// The Service's Hive Metastore is its own catalog (real GCP gives every
+	// Service one). A bind failure is logged by the host rather than failing the
+	// create: the control-plane record is valid, and the endpoint simply is not
+	// reachable until the port frees up.
+	if s.catalogHost != nil {
+		_ = s.catalogHost.OpenCatalog(ctx, CatalogID(project, location, serviceID), svc.Port)
 	}
 	target := ServiceName(project, location, serviceID)
 	op, err := s.storeOperation(ctx, project, location, "create", target, operationResponse(serviceTypeURL, ServiceJSON(svc, project)))
@@ -311,6 +324,11 @@ func (s *Service) DeleteService(ctx context.Context, project, location, serviceI
 	}
 	if err := s.store.DeleteService(ctx, project, location, serviceID); err != nil {
 		return metastorestore.Operation{}, mapErr(err)
+	}
+	// Deleting a Service deletes its Hive Metastore: drop the catalog and
+	// release its port (real Dataproc Metastore behaves the same way).
+	if s.catalogHost != nil {
+		s.catalogHost.CloseCatalog(ctx, CatalogID(project, location, serviceID))
 	}
 	target := ServiceName(project, location, serviceID)
 	op, err := s.storeOperation(ctx, project, location, "delete", target, map[string]any{})

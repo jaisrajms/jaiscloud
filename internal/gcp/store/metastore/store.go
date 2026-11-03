@@ -40,6 +40,12 @@ type ServiceState struct {
 // request body (hiveMetastoreConfig, network, networkConfig, encryptionConfig,
 // databaseType, telemetryConfig, scalingConfig, ...) verbatim as JSON; Labels
 // are the extracted labels map.
+//
+// Port is the Hive Metastore Thrift port assigned to this Service's own
+// catalog. Real Dataproc Metastore gives every Service its own HMS; the
+// emulator models that with one catalog (and one listener) per Service, so the
+// port is a real routing address rather than a cosmetic output. It is output
+// only and assigned once, at create time.
 type Service struct {
 	ProjectID    string            `json:"projectId"`
 	Location     string            `json:"location"`
@@ -48,6 +54,7 @@ type Service struct {
 	Labels       map[string]string `json:"labels,omitempty"`
 	State        string            `json:"state"`
 	StateHistory []ServiceState    `json:"stateHistory,omitempty"`
+	Port         int               `json:"port,omitempty"`
 	CreateTime   time.Time         `json:"createTime"`
 	UpdateTime   time.Time         `json:"updateTime"`
 }
@@ -125,6 +132,11 @@ type Store interface {
 	UpdateServiceAtomic(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error)
 	DeleteService(ctx context.Context, projectID, location, name string) error
 	ListServices(ctx context.Context, projectID, location string) ([]Service, error)
+	// ListAllServices returns every stored service across projects, locations
+	// and federations, sorted by canonical resource name. The Hive serving
+	// plane uses it to bind one catalog listener per Service (including after a
+	// restart) and to allocate each Service's port.
+	ListAllServices(ctx context.Context) ([]Service, error)
 
 	CreateBackup(ctx context.Context, projectID, location, serviceName string, b Backup) error
 	GetBackup(ctx context.Context, projectID, location, serviceName, name string) (Backup, error)
@@ -153,4 +165,39 @@ type Store interface {
 	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
 
 	Reset(ctx context.Context)
+}
+
+// DefaultServicePort is the default base Hive Metastore Thrift port
+// (--hms-port). Per-Service catalogs are served on ports above it.
+const DefaultServicePort = 9083
+
+// AssignMissingPorts gives a port to every service that has none — a row
+// restored from a snapshot taken before per-Service catalogs, or a service the
+// migration could not number. Ports already assigned are kept; new ones
+// continue after the highest assigned port starting at base+1, so the result is
+// collision-free. Callers pass services in a stable (canonical-name) order.
+func AssignMissingPorts(services []Service, base int) {
+	if base <= 0 {
+		base = DefaultServicePort
+	}
+	used := make(map[int]bool, len(services))
+	next := base + 1
+	for _, svc := range services {
+		if svc.Port > 0 {
+			used[svc.Port] = true
+			if svc.Port >= next {
+				next = svc.Port + 1
+			}
+		}
+	}
+	for i := range services {
+		if services[i].Port > 0 {
+			continue
+		}
+		for used[next] {
+			next++
+		}
+		services[i].Port = next
+		used[next] = true
+	}
 }

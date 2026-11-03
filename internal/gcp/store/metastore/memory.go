@@ -117,6 +117,29 @@ func (s *MemoryStore) ListServices(_ context.Context, projectID, location string
 	return result, nil
 }
 
+// ListAllServices returns every stored service across projects and locations,
+// ordered by canonical resource name.
+func (s *MemoryStore) ListAllServices(_ context.Context) ([]Service, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []Service
+	for _, byName := range s.services {
+		for _, svc := range byName {
+			result = append(result, svc)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ProjectID != result[j].ProjectID {
+			return result[i].ProjectID < result[j].ProjectID
+		}
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
 func (s *MemoryStore) CreateBackup(_ context.Context, projectID, location, serviceName string, b Backup) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

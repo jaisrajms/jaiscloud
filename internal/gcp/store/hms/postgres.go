@@ -15,14 +15,19 @@ import (
 )
 
 // PostgresStore implements Store against jc_hms_databases / jc_hms_tables /
-// jc_hms_locks.
+// jc_hms_partitions / jc_hms_locks, scoped to one catalog. Every row carries
+// its catalog id (a Dataproc Metastore service's resource name, or
+// LegacyCatalogID for the shared base-port catalog), so two Services never see
+// each other's databases, tables or locks.
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	catalog string
 }
 
-// NewPostgresStore returns a Postgres-backed store.
+// NewPostgresStore returns a Postgres-backed store for the legacy global
+// catalog. Per-Service stores come from [PostgresCatalogs.Catalog].
 func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
-	return &PostgresStore{pool: pool}
+	return &PostgresStore{pool: pool, catalog: LegacyCatalogID}
 }
 
 func jsonObj(v any) any {
@@ -37,9 +42,9 @@ func jsonObj(v any) any {
 
 func (s *PostgresStore) CreateDatabase(ctx context.Context, db Database) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_hms_databases (name, location_uri, parameters, description, owner)
-		VALUES ($1,$2,$3,$4,$5)
-	`, db.Name, db.LocationURI, jsonObj(db.Parameters), db.Description, db.Owner)
+		INSERT INTO jc_hms_databases (catalog, name, location_uri, parameters, description, owner)
+		VALUES ($1,$2,$3,$4,$5,$6)
+	`, s.catalog, db.Name, db.LocationURI, jsonObj(db.Parameters), db.Description, db.Owner)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -77,8 +82,8 @@ const dbColumns = `name, location_uri, parameters, description, owner`
 
 func (s *PostgresStore) GetDatabase(ctx context.Context, name string) (Database, error) {
 	db, err := scanDatabase(s.pool.QueryRow(ctx, `
-		SELECT `+dbColumns+` FROM jc_hms_databases WHERE name=$1
-	`, name))
+		SELECT `+dbColumns+` FROM jc_hms_databases WHERE catalog=$1 AND name=$2
+	`, s.catalog, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Database{}, ErrDatabaseNotFound
 	}
@@ -86,7 +91,7 @@ func (s *PostgresStore) GetDatabase(ctx context.Context, name string) (Database,
 }
 
 func (s *PostgresStore) ListDatabases(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT name FROM jc_hms_databases ORDER BY name`)
+	rows, err := s.pool.Query(ctx, `SELECT name FROM jc_hms_databases WHERE catalog=$1 ORDER BY name`, s.catalog)
 	if err != nil {
 		return nil, err
 	}
@@ -114,10 +119,10 @@ func (s *PostgresStore) DropDatabase(ctx context.Context, name string, cascade b
 			return err
 		}
 		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, `DELETE FROM jc_hms_tables WHERE db_name=$1`, name); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2`, s.catalog, name); err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM jc_hms_databases WHERE name=$1`, name)
+		tag, err := tx.Exec(ctx, `DELETE FROM jc_hms_databases WHERE catalog=$1 AND name=$2`, s.catalog, name)
 		if err != nil {
 			return err
 		}
@@ -126,7 +131,7 @@ func (s *PostgresStore) DropDatabase(ctx context.Context, name string, cascade b
 		}
 		return tx.Commit(ctx)
 	}
-	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_hms_databases WHERE name=$1`, name)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_hms_databases WHERE catalog=$1 AND name=$2`, s.catalog, name)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -142,9 +147,9 @@ func (s *PostgresStore) DropDatabase(ctx context.Context, name string, cascade b
 
 func (s *PostgresStore) AlterDatabase(ctx context.Context, name string, db Database) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_hms_databases SET location_uri=$2, parameters=$3, description=$4, owner=$5
-		WHERE name=$1
-	`, name, db.LocationURI, jsonObj(db.Parameters), db.Description, db.Owner)
+		UPDATE jc_hms_databases SET location_uri=$3, parameters=$4, description=$5, owner=$6
+		WHERE catalog=$1 AND name=$2
+	`, s.catalog, name, db.LocationURI, jsonObj(db.Parameters), db.Description, db.Owner)
 	if err != nil {
 		return err
 	}
@@ -158,9 +163,9 @@ func (s *PostgresStore) AlterDatabase(ctx context.Context, name string, db Datab
 
 func (s *PostgresStore) CreateTable(ctx context.Context, dbName, tableName string, t Table) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_hms_tables (db_name, table_name, table_json)
-		VALUES ($1,$2,$3)
-	`, dbName, tableName, jsonObj(json.RawMessage(t.TableJSON)))
+		INSERT INTO jc_hms_tables (catalog, db_name, table_name, table_json)
+		VALUES ($1,$2,$3,$4)
+	`, s.catalog, dbName, tableName, jsonObj(json.RawMessage(t.TableJSON)))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -189,8 +194,8 @@ const tableColumns = `db_name, table_name, table_json`
 
 func (s *PostgresStore) GetTable(ctx context.Context, dbName, tableName string) (Table, error) {
 	t, err := scanTable(s.pool.QueryRow(ctx, `
-		SELECT `+tableColumns+` FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2
-	`, dbName, tableName))
+		SELECT `+tableColumns+` FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3
+	`, s.catalog, dbName, tableName))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Table{}, ErrTableNotFound
 	}
@@ -199,8 +204,8 @@ func (s *PostgresStore) GetTable(ctx context.Context, dbName, tableName string) 
 
 func (s *PostgresStore) ListTables(ctx context.Context, dbName string) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT table_name FROM jc_hms_tables WHERE db_name=$1 ORDER BY table_name
-	`, dbName)
+		SELECT table_name FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 ORDER BY table_name
+	`, s.catalog, dbName)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +223,7 @@ func (s *PostgresStore) ListTables(ctx context.Context, dbName string) ([]string
 }
 
 func (s *PostgresStore) DropTable(ctx context.Context, dbName, tableName string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2`, dbName, tableName)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3`, s.catalog, dbName, tableName)
 	if err != nil {
 		return err
 	}
@@ -248,8 +253,8 @@ func (s *PostgresStore) alterTableOnce(ctx context.Context, dbName, tableName st
 	defer tx.Rollback(ctx)
 
 	current, err := scanTable(tx.QueryRow(ctx, `
-		SELECT `+tableColumns+` FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2 FOR UPDATE
-	`, dbName, tableName))
+		SELECT `+tableColumns+` FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3 FOR UPDATE
+	`, s.catalog, dbName, tableName))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Table{}, ErrTableNotFound
 	}
@@ -263,8 +268,8 @@ func (s *PostgresStore) alterTableOnce(ctx context.Context, dbName, tableName st
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_hms_tables SET table_json=$3 WHERE db_name=$1 AND table_name=$2
-	`, dbName, tableName, jsonObj(json.RawMessage(next.TableJSON))); err != nil {
+		UPDATE jc_hms_tables SET table_json=$4 WHERE catalog=$1 AND db_name=$2 AND table_name=$3
+	`, s.catalog, dbName, tableName, jsonObj(json.RawMessage(next.TableJSON))); err != nil {
 		return Table{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -293,21 +298,21 @@ func (s *PostgresStore) renameTableOnce(ctx context.Context, srcDB, srcName, dst
 	defer tx.Rollback(ctx)
 
 	var one int
-	if err := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2 FOR UPDATE`, srcDB, srcName).Scan(&one); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3 FOR UPDATE`, s.catalog, srcDB, srcName).Scan(&one); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Table{}, ErrTableNotFound
 		}
 		return Table{}, err
 	}
 	var dbOne int
-	if err := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_databases WHERE name=$1 FOR UPDATE`, dstDB).Scan(&dbOne); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_databases WHERE catalog=$1 AND name=$2 FOR UPDATE`, s.catalog, dstDB).Scan(&dbOne); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Table{}, ErrDatabaseNotFound
 		}
 		return Table{}, err
 	}
 
-	err = tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2 FOR UPDATE`, dstDB, dstName).Scan(&one)
+	err = tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3 FOR UPDATE`, s.catalog, dstDB, dstName).Scan(&one)
 	if err == nil {
 		return Table{}, ErrTableExists
 	}
@@ -319,9 +324,9 @@ func (s *PostgresStore) renameTableOnce(ctx context.Context, srcDB, srcName, dst
 	// so this preserves partition metadata across the rename (a DELETE+INSERT
 	// would cascade-drop it).
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_hms_tables SET db_name=$1, table_name=$2, table_json=$3
-		WHERE db_name=$4 AND table_name=$5
-	`, dstDB, dstName, jsonObj(json.RawMessage(t.TableJSON)), srcDB, srcName); err != nil {
+		UPDATE jc_hms_tables SET db_name=$2, table_name=$3, table_json=$4
+		WHERE catalog=$1 AND db_name=$5 AND table_name=$6
+	`, s.catalog, dstDB, dstName, jsonObj(json.RawMessage(t.TableJSON)), srcDB, srcName); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return Table{}, ErrTableExists
@@ -342,8 +347,8 @@ func (s *PostgresStore) renameTableOnce(ctx context.Context, srcDB, srcName, dst
 func (s *PostgresStore) tableExists(ctx context.Context, dbName, tableName string) (bool, error) {
 	var one int
 	err := s.pool.QueryRow(ctx,
-		`SELECT 1 FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2`,
-		dbName, tableName).Scan(&one)
+		`SELECT 1 FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3`,
+		s.catalog, dbName, tableName).Scan(&one)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -354,14 +359,14 @@ func (s *PostgresStore) tableExists(ctx context.Context, dbName, tableName strin
 }
 
 const partitionInsertSQL = `
-	INSERT INTO jc_hms_partitions (db_name, table_name, part_key, values_json, part_json)
-	VALUES ($1,$2,$3,$4,$5)
+	INSERT INTO jc_hms_partitions (catalog, db_name, table_name, part_key, values_json, part_json)
+	VALUES ($1,$2,$3,$4,$5,$6)
 `
 
 // partitionInsertSkipSQL is the ifNotExists form: an already-stored partition
 // is left alone (0 rows affected) instead of raising a unique violation.
 const partitionInsertSkipSQL = partitionInsertSQL + `
-	ON CONFLICT (db_name, table_name, part_key) DO NOTHING
+	ON CONFLICT (catalog, db_name, table_name, part_key) DO NOTHING
 `
 
 // partitionWriteErr maps a Postgres partition-insert failure to the store's
@@ -382,7 +387,7 @@ func partitionWriteErr(err error) error {
 
 func (s *PostgresStore) CreatePartition(ctx context.Context, dbName, tableName string, p Partition) error {
 	_, err := s.pool.Exec(ctx, partitionInsertSQL,
-		dbName, tableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
+		s.catalog, dbName, tableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
 	if err != nil {
 		return partitionWriteErr(err)
 	}
@@ -422,7 +427,7 @@ func (s *PostgresStore) addPartitionsOnce(ctx context.Context, parts []Partition
 		}
 		seen[key] = true
 		tag, err := tx.Exec(ctx, query,
-			p.DBName, p.TableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
+			s.catalog, p.DBName, p.TableName, PartitionKey(p.Values), jsonObj(p.Values), jsonObj(json.RawMessage(p.PartJSON)))
 		if err != nil {
 			return nil, partitionWriteErr(err)
 		}
@@ -458,8 +463,8 @@ const partitionColumns = `db_name, table_name, values_json, part_json`
 func (s *PostgresStore) GetPartition(ctx context.Context, dbName, tableName string, values []string) (Partition, error) {
 	p, err := scanPartition(s.pool.QueryRow(ctx, `
 		SELECT `+partitionColumns+` FROM jc_hms_partitions
-		WHERE db_name=$1 AND table_name=$2 AND part_key=$3
-	`, dbName, tableName, PartitionKey(values)))
+		WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4
+	`, s.catalog, dbName, tableName, PartitionKey(values)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		ok, terr := s.tableExists(ctx, dbName, tableName)
 		if terr != nil {
@@ -483,8 +488,8 @@ func (s *PostgresStore) ListPartitions(ctx context.Context, dbName, tableName st
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+partitionColumns+` FROM jc_hms_partitions
-		WHERE db_name=$1 AND table_name=$2
-	`, dbName, tableName)
+		WHERE catalog=$1 AND db_name=$2 AND table_name=$3
+	`, s.catalog, dbName, tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -524,11 +529,11 @@ func (s *PostgresStore) alterPartitionOnce(ctx context.Context, dbName, tableNam
 
 	cur, err := scanPartition(tx.QueryRow(ctx, `
 		SELECT `+partitionColumns+` FROM jc_hms_partitions
-		WHERE db_name=$1 AND table_name=$2 AND part_key=$3 FOR UPDATE
-	`, dbName, tableName, PartitionKey(values)))
+		WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4 FOR UPDATE
+	`, s.catalog, dbName, tableName, PartitionKey(values)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		var one int
-		terr := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2`, dbName, tableName).Scan(&one)
+		terr := tx.QueryRow(ctx, `SELECT 1 FROM jc_hms_tables WHERE catalog=$1 AND db_name=$2 AND table_name=$3`, s.catalog, dbName, tableName).Scan(&one)
 		if errors.Is(terr, pgx.ErrNoRows) {
 			return Partition{}, ErrTableNotFound
 		}
@@ -550,9 +555,9 @@ func (s *PostgresStore) alterPartitionOnce(ctx context.Context, dbName, tableNam
 	next.Values = cur.Values
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_hms_partitions SET part_json=$3, values_json=$4
-		WHERE db_name=$1 AND table_name=$2 AND part_key=$5
-	`, dbName, tableName, jsonObj(json.RawMessage(next.PartJSON)), jsonObj(next.Values), PartitionKey(cur.Values)); err != nil {
+		UPDATE jc_hms_partitions SET part_json=$4, values_json=$5
+		WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$6
+	`, s.catalog, dbName, tableName, jsonObj(json.RawMessage(next.PartJSON)), jsonObj(next.Values), PartitionKey(cur.Values)); err != nil {
 		return Partition{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -563,8 +568,8 @@ func (s *PostgresStore) alterPartitionOnce(ctx context.Context, dbName, tableNam
 
 func (s *PostgresStore) DropPartition(ctx context.Context, dbName, tableName string, values []string) error {
 	tag, err := s.pool.Exec(ctx, `
-		DELETE FROM jc_hms_partitions WHERE db_name=$1 AND table_name=$2 AND part_key=$3
-	`, dbName, tableName, PartitionKey(values))
+		DELETE FROM jc_hms_partitions WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4
+	`, s.catalog, dbName, tableName, PartitionKey(values))
 	if err != nil {
 		return err
 	}
@@ -596,8 +601,8 @@ func (s *PostgresStore) renamePartitionOnce(ctx context.Context, dbName, tableNa
 	oldKey := PartitionKey(oldValues)
 	var one int
 	if err := tx.QueryRow(ctx, `
-		SELECT 1 FROM jc_hms_partitions WHERE db_name=$1 AND table_name=$2 AND part_key=$3 FOR UPDATE
-	`, dbName, tableName, oldKey).Scan(&one); err != nil {
+		SELECT 1 FROM jc_hms_partitions WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4 FOR UPDATE
+	`, s.catalog, dbName, tableName, oldKey).Scan(&one); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Partition{}, ErrPartitionNotFound
 		}
@@ -606,8 +611,8 @@ func (s *PostgresStore) renamePartitionOnce(ctx context.Context, dbName, tableNa
 
 	newKey := PartitionKey(newValues)
 	err = tx.QueryRow(ctx, `
-		SELECT 1 FROM jc_hms_partitions WHERE db_name=$1 AND table_name=$2 AND part_key=$3 FOR UPDATE
-	`, dbName, tableName, newKey).Scan(&one)
+		SELECT 1 FROM jc_hms_partitions WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4 FOR UPDATE
+	`, s.catalog, dbName, tableName, newKey).Scan(&one)
 	if err == nil {
 		return Partition{}, ErrPartitionExists
 	}
@@ -616,14 +621,14 @@ func (s *PostgresStore) renamePartitionOnce(ctx context.Context, dbName, tableNa
 	}
 
 	if _, err := tx.Exec(ctx, `
-		DELETE FROM jc_hms_partitions WHERE db_name=$1 AND table_name=$2 AND part_key=$3
-	`, dbName, tableName, oldKey); err != nil {
+		DELETE FROM jc_hms_partitions WHERE catalog=$1 AND db_name=$2 AND table_name=$3 AND part_key=$4
+	`, s.catalog, dbName, tableName, oldKey); err != nil {
 		return Partition{}, err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_hms_partitions (db_name, table_name, part_key, values_json, part_json)
-		VALUES ($1,$2,$3,$4,$5)
-	`, dbName, tableName, newKey, jsonObj(newValues), jsonObj(json.RawMessage(p.PartJSON))); err != nil {
+		INSERT INTO jc_hms_partitions (catalog, db_name, table_name, part_key, values_json, part_json)
+		VALUES ($1,$2,$3,$4,$5,$6)
+	`, s.catalog, dbName, tableName, newKey, jsonObj(newValues), jsonObj(json.RawMessage(p.PartJSON))); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return Partition{}, ErrPartitionExists
@@ -647,9 +652,9 @@ func (s *PostgresStore) renamePartitionOnce(ctx context.Context, dbName, tableNa
 func (s *PostgresStore) Lock(ctx context.Context, l Lock) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO jc_hms_locks (state, db_name, table_name, user_name, hostname, create_time)
-		VALUES ($1,$2,$3,$4,$5,$6) RETURNING lock_id
-	`, int32(LockStateAcquired), l.DBName, l.TableName, l.User, l.Hostname, clock.Now()).Scan(&id)
+		INSERT INTO jc_hms_locks (catalog, state, db_name, table_name, user_name, hostname, create_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING lock_id
+	`, s.catalog, int32(LockStateAcquired), l.DBName, l.TableName, l.User, l.Hostname, clock.Now()).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -658,7 +663,7 @@ func (s *PostgresStore) Lock(ctx context.Context, l Lock) (int64, error) {
 
 func (s *PostgresStore) CheckLock(ctx context.Context, id int64) (LockState, error) {
 	var state int32
-	err := s.pool.QueryRow(ctx, `SELECT state FROM jc_hms_locks WHERE lock_id=$1`, id).Scan(&state)
+	err := s.pool.QueryRow(ctx, `SELECT state FROM jc_hms_locks WHERE catalog=$1 AND lock_id=$2`, s.catalog, id).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return LockStateNotAcquired, nil
 	}
@@ -669,13 +674,13 @@ func (s *PostgresStore) CheckLock(ctx context.Context, id int64) (LockState, err
 }
 
 func (s *PostgresStore) Unlock(ctx context.Context, id int64) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_hms_locks WHERE lock_id=$1`, id)
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_hms_locks WHERE catalog=$1 AND lock_id=$2`, s.catalog, id)
 	return err
 }
 
 func (s *PostgresStore) Reset(ctx context.Context) {
-	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_partitions`)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_tables`)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_databases`)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_locks`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_partitions WHERE catalog=$1`, s.catalog)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_tables WHERE catalog=$1`, s.catalog)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_databases WHERE catalog=$1`, s.catalog)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_hms_locks WHERE catalog=$1`, s.catalog)
 }

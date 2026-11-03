@@ -1447,9 +1447,10 @@ test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/
 
 # Iceberg-on-Dataproc E2E — external Docker Spark against the emulator's Hive
 # Metastore Thrift listener (:9083) + GCS (:8080). The tests run under the
-# iceberg_e2e tag and require the Thrift listener, which serves a single global
-# catalog. Works against a remote Docker daemon too: SQL is passed via spark-sql
-# -e, not a bind mount.
+# iceberg_e2e tag and use the legacy shared catalog on the base port (each
+# Dataproc Metastore Service also has its own catalog on its own port). Works
+# against a remote Docker daemon too: SQL is passed via spark-sql -e, not a bind
+# mount.
 test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tests — tests/persistent_mode/gcp/iceberg/ (tag: iceberg_e2e)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-iceberg.log 2>&1 & \

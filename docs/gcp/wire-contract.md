@@ -306,10 +306,16 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `SubmitJobAsOperation` completes inline in the default mock executor but cannot be `Wait`-polled
   while a k8s-executor job is still in flight (the generic `google.longrunning.Operations` stub
   does not read the Dataproc store; the REST `operations.get` path does); Metastore's Hive Thrift
-  serving plane (:9083) implements databases/tables/partitions/locks (a single global catalog
-  shared by every control-plane Service — matching the AWS Glue Data Catalog's one catalog per
-  account+region; per-Service isolation is deliberately not modelled),
-  including the Hive-3.x get_table_meta and alter_table_with_cascade paths; the niche partition
+  serving plane implements databases/tables/partitions/locks with one catalog per Service: each
+  Service is assigned its own port at create time and its `port`/`endpointUri` name the listener
+  that serves only its catalog, so two Services (same project or different projects/locations) do
+  not collide on a database name, each owns its `default`, and Iceberg commit locks are per
+  catalog. The Thrift protocol carries no service identity, so the port is the catalog selector.
+  The base `--hms-port` (:9083) keeps serving the legacy shared catalog for clients that name no
+  Service (the AWS Glue Data Catalog analogue: one catalog per account+region), and a pre-NF32
+  snapshot restores into it; deleting a Service closes its listener and drops its catalog; a
+  federation's `endpointUri` names the legacy shared catalog because a federation has no catalog
+  of its own. The Hive-3.x get_table_meta and alter_table_with_cascade paths are served too; the niche partition
   methods (exchange, drop-by-request, get_partition_values, get_partitions_by_expr, event marking)
   are explicit unsupported stubs. The gRPC control plane
   (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`

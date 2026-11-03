@@ -75,12 +75,17 @@ func formatTimestamp(t time.Time) string {
 	return timestamp.Canonical(t)
 }
 
-// endpointURI synthesizes the output-only thrift endpoint (no real per-service
-// Thrift server exists — the single Hive Metastore catalog is global, so the
-// URI is cosmetic and derived from id+location, mirroring the real metastore
-// convention of thrift://{id}.{region}.metastore:9083).
-func endpointURI(id, location string) string {
-	return fmt.Sprintf("thrift://%s.%s.metastore.jaiscloud.local:9083", id, location)
+// endpointURI formats a Service's output-only thrift endpoint. Each Service has
+// its own Hive Metastore catalog served on its own port on the emulator (the
+// Thrift protocol carries no service identity, so the listener is the catalog
+// selector), so the endpoint names both the per-Service host real GCP publishes
+// and the port its catalog actually listens on. A caller that cannot resolve
+// the host replaces it and keeps the port (see the Dataproc attachment path).
+func endpointURI(id, location string, port int) string {
+	if port <= 0 {
+		port = metastorestore.DefaultServicePort
+	}
+	return fmt.Sprintf("thrift://%s.%s.metastore.jaiscloud.local:%d", id, location, port)
 }
 
 // ServiceJSON renders a stored service as the metastore.v1.Service wire map.
@@ -103,14 +108,13 @@ func ServiceJSON(svc metastorestore.Service, project string) map[string]any {
 	out["createTime"] = formatTimestamp(svc.CreateTime)
 	out["updateTime"] = formatTimestamp(svc.UpdateTime)
 	out["state"] = svc.State
-	out["endpointUri"] = endpointURI(svc.Name, svc.Location)
+	out["endpointUri"] = endpointURI(svc.Name, svc.Location, svc.Port)
 	out["uid"] = serviceUID(name)
 	if _, ok := out["tier"]; !ok {
 		out["tier"] = "DEVELOPER"
 	}
-	if _, ok := out["port"]; !ok {
-		out["port"] = 9083
-	}
+	// port is the Service's own catalog listener, not a cosmetic constant.
+	out["port"] = endpointPort(svc.Port)
 	if _, ok := out["releaseChannel"]; !ok {
 		out["releaseChannel"] = "STABLE"
 	}
@@ -126,9 +130,9 @@ func ServiceJSON(svc metastorestore.Service, project string) map[string]any {
 // source of truth for the derived fields: the gRPC transport drives its proto
 // rendering from this map (via protojson), so the two transports cannot drift.
 //
-// The endpointUri is synthesized against the single global Hive Metastore
-// Thrift plane (`:9083`, see internal/gcp/hms): the emulator models no
-// per-federation catalog, so the URI is cosmetic (documented divergence MP4).
+// The endpointUri is synthesized against the legacy global Hive Metastore Thrift
+// plane (`:9083`, see internal/gcp/hms): the emulator models no per-federation
+// catalog, so a federation's URI names the shared base-port catalog.
 func FederationJSON(f metastorestore.Federation, project string) map[string]any {
 	var out map[string]any
 	if len(f.Config) > 0 {
@@ -142,7 +146,7 @@ func FederationJSON(f metastorestore.Federation, project string) map[string]any 
 	out["createTime"] = formatTimestamp(f.CreateTime)
 	out["updateTime"] = formatTimestamp(f.UpdateTime)
 	out["state"] = f.State
-	out["endpointUri"] = endpointURI(f.Name, f.Location)
+	out["endpointUri"] = endpointURI(f.Name, f.Location, metastorestore.DefaultServicePort)
 	out["uid"] = serviceUID(name)
 	if f.Labels != nil {
 		out["labels"] = f.Labels
@@ -287,4 +291,13 @@ func (s *Service) settle(op metastorestore.Operation) metastorestore.Operation {
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
 	s.tracker.EmitOperation("metastore", op.ID, op.ID, op.Verb, op.ProjectID)
 	return op
+}
+
+// endpointPort defaults an unassigned port (a Service restored or read before
+// the port migration ran) to the base Hive Metastore port.
+func endpointPort(port int) int {
+	if port <= 0 {
+		return metastorestore.DefaultServicePort
+	}
+	return port
 }

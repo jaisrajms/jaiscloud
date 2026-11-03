@@ -64,11 +64,36 @@ spec:
               containerPort: 8080
             - name: grpc
               containerPort: 8081
-            # Hive Metastore (Thrift) serving plane. Spark drivers running as
-            # client-mode pods reach it via the Service's `hms` port below; the
-            # synthesized per-service endpoint is not resolvable from pods.
+            # Hive Metastore (Thrift) serving plane. `hms` is the legacy shared
+            # catalog on the base port; `hms-catalog-0`..`hms-catalog-9` are the
+            # per-Service catalogs (each Metastore Service owns one, on its own
+            # port starting at --hms-port + 1). Spark drivers running as
+            # client-mode pods reach them via the Service's matching ports
+            # below; the per-service endpoint hostname is not resolvable from
+            # pods, so JAISCLOUD_DATAPROC_HMS_ENDPOINT supplies a reachable host
+            # and the Service's own port is kept.
             - name: hms
               containerPort: 9083
+            - name: hms-catalog-0
+              containerPort: 9084
+            - name: hms-catalog-1
+              containerPort: 9085
+            - name: hms-catalog-2
+              containerPort: 9086
+            - name: hms-catalog-3
+              containerPort: 9087
+            - name: hms-catalog-4
+              containerPort: 9088
+            - name: hms-catalog-5
+              containerPort: 9089
+            - name: hms-catalog-6
+              containerPort: 9090
+            - name: hms-catalog-7
+              containerPort: 9091
+            - name: hms-catalog-8
+              containerPort: 9092
+            - name: hms-catalog-9
+              containerPort: 9093
           volumeMounts:
             - name: blobs
               mountPath: /data/blobs
@@ -155,3 +180,36 @@ spec:
     - name: hms
       port: 9083
       targetPort: 9083
+    # Per-Service Hive Metastore catalogs: a Metastore Service is assigned the
+    # next port above 9083, so the Service must expose the block. Widen it (and
+    # the container ports above) for more than ten Services.
+    - name: hms-catalog-0
+      port: 9084
+      targetPort: 9084
+    - name: hms-catalog-1
+      port: 9085
+      targetPort: 9085
+    - name: hms-catalog-2
+      port: 9086
+      targetPort: 9086
+    - name: hms-catalog-3
+      port: 9087
+      targetPort: 9087
+    - name: hms-catalog-4
+      port: 9088
+      targetPort: 9088
+    - name: hms-catalog-5
+      port: 9089
+      targetPort: 9089
+    - name: hms-catalog-6
+      port: 9090
+      targetPort: 9090
+    - name: hms-catalog-7
+      port: 9091
+      targetPort: 9091
+    - name: hms-catalog-8
+      port: 9092
+      targetPort: 9092
+    - name: hms-catalog-9
+      port: 9093
+      targetPort: 9093

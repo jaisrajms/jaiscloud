@@ -19,10 +19,12 @@ type MetastoreResolver interface {
 	// and an unknown service is NotFound. It is called when a cluster is
 	// created/updated, mirroring real Dataproc's provisioning-time check.
 	ValidateMetastoreService(ctx context.Context, ref, defaultProject, defaultLocation string) error
-	// MetastoreEndpoint formats the thrift endpoint for ref without a store
-	// lookup. It is called at job submission so the attachment validated at
-	// cluster creation is honored at execution.
-	MetastoreEndpoint(ref, defaultProject, defaultLocation string) (string, error)
+	// MetastoreEndpoint formats the thrift endpoint for ref. It is called at
+	// job submission so the attachment validated at cluster creation is honored
+	// at execution; it reads the Service only for the catalog port its endpoint
+	// routes to (each Service has its own Hive Metastore catalog on the
+	// emulator), not to re-validate the reference.
+	MetastoreEndpoint(ctx context.Context, ref, defaultProject, defaultLocation string) (string, error)
 }
 
 // WithMetastoreResolver wires the Metastore attachment resolver. Nil leaves a
@@ -32,16 +34,19 @@ func WithMetastoreResolver(r MetastoreResolver) Option {
 	return func(s *Service) { s.metastoreResolver = r }
 }
 
-// WithHMSEndpointOverride overrides the thrift endpoint injected into job pods
-// for every metastore-attached cluster. The synthesized per-service endpoint
-// (thrift://<id>.<location>.metastore.jaiscloud.local:9083) is not resolvable
-// from Spark pods, so a deployment sets JAISCLOUD_DATAPROC_HMS_ENDPOINT to the
-// reachable Hive Metastore address. Accepts "host:port" or a "thrift://" URI.
+// WithHMSEndpointOverride sets the reachable Hive Metastore *host* injected into
+// job pods for every metastore-attached cluster. The per-service hostname
+// (thrift://<id>.<location>.metastore.jaiscloud.local:<port>) is not resolvable
+// from Spark pods, so a deployment sets JAISCLOUD_DATAPROC_HMS_ENDPOINT to a
+// host pods can reach. It replaces the host only: the port stays the attached
+// Service's own catalog port, which is what gives each job its Service's catalog
+// (a port in the override is ignored, and is accepted only so host:port
+// deployments keep working). Accepts "host", "host:port" or a "thrift://" URI.
 func WithHMSEndpointOverride(uri string) Option {
 	return func(s *Service) { s.hmsEndpointOverride = normalizeHMSEndpoint(uri) }
 }
 
-// normalizeHMSEndpoint trims an override and defaults a bare host:port to the
+// normalizeHMSEndpoint trims an override and defaults a bare host[:port] to the
 // thrift scheme.
 func normalizeHMSEndpoint(uri string) string {
 	uri = strings.TrimSpace(uri)
@@ -52,6 +57,22 @@ func normalizeHMSEndpoint(uri string) string {
 		return "thrift://" + uri
 	}
 	return uri
+}
+
+// relocateHMSEndpoint replaces endpoint's host with the override's host while
+// keeping endpoint's port, so the injected address is both reachable and routed
+// to the attached Service's catalog.
+func relocateHMSEndpoint(override, endpoint string) string {
+	port := endpoint
+	if i := strings.LastIndex(port, ":"); i >= 0 {
+		port = port[i+1:]
+	}
+	host := strings.TrimPrefix(override, "thrift://")
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.TrimSuffix(host, "/")
+	return "thrift://" + host + ":" + port
 }
 
 // metastoreServiceRefFromInput extracts the dataprocMetastoreService reference
@@ -176,17 +197,17 @@ func (s *Service) validateClusterMetastoreUpdate(ctx context.Context, project, r
 // metastore attachment, honoring the deployment override. It returns "" when
 // the cluster has no attachment or no resolver is wired. It does not re-check
 // the control plane (see the MetastoreResolver contract).
-func (s *Service) clusterMetastoreEndpoint(project, region string, c dpstore.Cluster) (string, error) {
+func (s *Service) clusterMetastoreEndpoint(ctx context.Context, project, region string, c dpstore.Cluster) (string, error) {
 	ref := metastoreServiceRefFromCluster(c)
 	if ref == "" || s.metastoreResolver == nil {
 		return "", nil
 	}
-	ep, err := s.metastoreResolver.MetastoreEndpoint(ref, project, region)
+	ep, err := s.metastoreResolver.MetastoreEndpoint(ctx, ref, project, region)
 	if err != nil {
 		return "", err
 	}
 	if s.hmsEndpointOverride != "" {
-		return s.hmsEndpointOverride, nil
+		return relocateHMSEndpoint(s.hmsEndpointOverride, ep), nil
 	}
 	return ep, nil
 }
