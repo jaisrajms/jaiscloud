@@ -10,10 +10,17 @@
 // internal/gcp/downscope recovers the boundary by the presence of that claim and
 // enforces it. There is no emulator-specific token prefix.
 //
-// The accepted boundary is the documented Cloud Storage subset (a bucket plus an
-// optional object prefix) rather than arbitrary CEL; unsupported resources,
-// permissions and expressions are rejected so a client never believes it has a
-// boundary the emulator does not enforce.
+// The accepted boundary is the documented surface: Credential Access Boundaries
+// apply to Cloud Storage only, and an access-boundary rule's availableResource is
+// a bucket full resource name
+// (//storage.googleapis.com/projects/_/buckets/{bucket}); object- and
+// folder-level restrictions belong in the availability condition, never in
+// availableResource
+// (https://cloud.google.com/iam/docs/downscoping-short-lived-credentials).
+// Other Google Cloud services do not support the feature, so their resource
+// names are rejected instead of being accepted into a boundary the emulator
+// would not enforce — as are permissions and condition expressions outside the
+// documented subset.
 package downscope
 
 import (
@@ -27,8 +34,11 @@ import (
 	"jaiscloud/internal/gcp/identity"
 )
 
-// Supported inRole permissions (the subset google-auth-library uses for Cloud
-// Storage downscoping). Real GCP supports the full IAM role surface.
+// Supported inRole permissions. Each role maps exactly onto the Cloud Storage
+// operations the emulator enforces (read, list, write, delete), so a rule never
+// grants more or less than its role says. Broader documented roles (for example
+// roles/storage.objectUser or roles/storage.objectCreator) stay rejected rather
+// than being approximated; real GCP supports the full IAM role surface.
 const (
 	PermissionLegacyObjectReader = "inRole:roles/storage.legacyObjectReader"
 	PermissionObjectViewer       = "inRole:roles/storage.objectViewer"
@@ -45,12 +55,32 @@ var supportedPermissions = map[string]bool{
 // requested operation.
 var ErrDenied = errors.New("downscoped token does not allow this GCS operation")
 
-// Rule is one access-boundary rule: a bucket (objectPrefix empty means the whole
-// bucket) plus the permissions granted within it.
+// Rule is one access-boundary rule: the Cloud Storage bucket it admits, the
+// derived object prefix (empty means the whole bucket), the permissions granted
+// within it and the availability condition when one was supplied.
+//
+// The JSON names follow the documented Credential Access Boundary rule shape
+// (availableResource / availablePermissions / availabilityCondition), so a
+// downscoped token's access_boundary claim round-trips the boundary the client
+// sent; Bucket and ObjectPrefix are the derived enforcement view and are
+// emulator-internal.
 type Rule struct {
-	Bucket       string   `json:"bucket"`
-	ObjectPrefix string   `json:"objectPrefix,omitempty"`
-	Permissions  []string `json:"permissions"`
+	AvailableResource string   `json:"availableResource,omitempty"`
+	Bucket            string   `json:"bucket,omitempty"`
+	ObjectPrefix      string   `json:"objectPrefix,omitempty"`
+	Permissions       []string `json:"availablePermissions,omitempty"`
+	// AvailabilityCondition is the documented condition that narrowed the rule
+	// to ObjectPrefix. Its title and description carry no enforcement meaning
+	// but are preserved so the boundary round-trips.
+	AvailabilityCondition *AvailabilityCondition `json:"availabilityCondition,omitempty"`
+}
+
+// AvailabilityCondition is the documented availability condition: a CEL
+// expression plus an optional title and description.
+type AvailabilityCondition struct {
+	Expression  string `json:"expression"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // Op classifies a Cloud Storage operation for boundary enforcement.
@@ -83,15 +113,29 @@ type ruleDoc struct {
 	AvailableResource     string   `json:"availableResource"`
 	AvailablePermissions  []string `json:"availablePermissions"`
 	AvailabilityCondition *struct {
-		Expression string `json:"expression"`
+		Expression  string `json:"expression"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
 	} `json:"availabilityCondition"`
 }
 
+const (
+	// maxRules is the documented cap: one Credential Access Boundary contains at
+	// most 10 access boundary rules.
+	maxRules = 10
+	// maxExpressionLength is the documented maximum length of an availability
+	// condition expression.
+	maxExpressionLength = 2048
+)
+
 var (
-	// resourceRE matches a Cloud Storage bucket resource:
-	// //storage.googleapis.com/projects/_/buckets/{bucket}
-	resourceRE = regexp.MustCompile(`^//storage\.googleapis\.com/projects/_/buckets/([^/]+)$`)
-	// resourcePrefixRE matches resource.name.startsWith('<prefix>').
+	// bucketResourceRE matches the documented availableResource for a Cloud
+	// Storage bucket: //storage.googleapis.com/projects/_/buckets/{bucket}. The
+	// project segment is the literal `_`, and object/folder restrictions belong in
+	// the availability condition, not in the resource name.
+	bucketResourceRE = regexp.MustCompile(`^//storage\.googleapis\.com/projects/_/buckets/([^/]+)$`)
+	// resourcePrefixRE matches resource.name.startsWith('<prefix>'), covering the
+	// documented object and hierarchical-namespace folder names.
 	resourcePrefixRE = regexp.MustCompile(`^resource\.name\.startsWith\((.+)\)$`)
 	// listPrefixRE matches
 	// api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('<prefix>').
@@ -113,6 +157,9 @@ func ParseOptions(options string) ([]Rule, error) {
 	if len(ruleNodes) == 0 {
 		return nil, errors.New("accessBoundaryRules is required")
 	}
+	if len(ruleNodes) > maxRules {
+		return nil, fmt.Errorf("accessBoundary can contain at most %d rules", maxRules)
+	}
 
 	rules := make([]Rule, 0, len(ruleNodes))
 	for _, node := range ruleNodes {
@@ -124,26 +171,35 @@ func ParseOptions(options string) ([]Rule, error) {
 		if err != nil {
 			return nil, err
 		}
-		prefix := ""
+		rule := Rule{AvailableResource: node.AvailableResource, Bucket: bucket, Permissions: perms}
 		if node.AvailabilityCondition != nil {
-			expression := strings.TrimSpace(node.AvailabilityCondition.Expression)
-			if expression == "" {
+			condition := &AvailabilityCondition{
+				Expression:  strings.TrimSpace(node.AvailabilityCondition.Expression),
+				Title:       node.AvailabilityCondition.Title,
+				Description: node.AvailabilityCondition.Description,
+			}
+			if condition.Expression == "" {
 				return nil, errors.New("availabilityCondition.expression is required")
 			}
-			prefix, err = parsePrefixExpression(bucket, expression)
+			if len(condition.Expression) > maxExpressionLength {
+				return nil, fmt.Errorf("availabilityCondition.expression must not exceed %d characters", maxExpressionLength)
+			}
+			prefix, err := parsePrefixExpression(bucket, condition.Expression)
 			if err != nil {
 				return nil, err
 			}
+			rule.ObjectPrefix = prefix
+			rule.AvailabilityCondition = condition
 		}
-		rules = append(rules, Rule{Bucket: bucket, ObjectPrefix: prefix, Permissions: perms})
+		rules = append(rules, rule)
 	}
 	return rules, nil
 }
 
 func parseBucket(availableResource string) (string, error) {
-	m := resourceRE.FindStringSubmatch(availableResource)
+	m := bucketResourceRE.FindStringSubmatch(availableResource)
 	if m == nil || m[1] == "" {
-		return "", errors.New("unsupported availableResource")
+		return "", fmt.Errorf("unsupported availableResource %q: Credential Access Boundaries apply to Cloud Storage buckets only (//storage.googleapis.com/projects/_/buckets/{bucket})", availableResource)
 	}
 	return m[1], nil
 }
@@ -232,11 +288,16 @@ func parseSingleExpression(bucket, expression string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		expected := "projects/_/buckets/" + bucket + "/objects/"
-		if !strings.HasPrefix(resourcePrefix, expected) {
-			return "", errors.New("resource.name prefix does not match availableResource bucket")
+		// The documented prefix names an object, or — on a bucket with
+		// hierarchical namespace — a folder. Both map onto the object-name prefix
+		// the GCS provider enforces.
+		for _, collection := range []string{"objects", "folders"} {
+			expected := "projects/_/buckets/" + bucket + "/" + collection + "/"
+			if strings.HasPrefix(resourcePrefix, expected) {
+				return normalizePrefix(resourcePrefix[len(expected):])
+			}
 		}
-		return normalizePrefix(resourcePrefix[len(expected):])
+		return "", errors.New("resource.name prefix does not match availableResource bucket")
 	}
 	if m := listPrefixRE.FindStringSubmatch(expression); m != nil {
 		attribute, err := parseStringArgument(m[1])
