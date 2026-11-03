@@ -14,11 +14,11 @@ classes:
   p3:
     state: present
     suites: [sdk-monitoring]
-    note: "typed gRPC status for not-found and invalid-input negatives"
+    note: "typed gRPC status for not-found and invalid-input negatives; the declarative uptime check answers INVALID_ARGUMENT for a schema-invalid configuration or an unknown update_mask path, NOT_FOUND for an absent one, and UNIMPLEMENTED for the probe-derived ListUptimeCheckIps"
   p4:
     state: present
     suites: [sdk-monitoring]
-    note: "ListTimeSeries with Interval + iterator"
+    note: "ListTimeSeries with Interval + iterator; ListUptimeCheckConfigs with an equality filter and a page-token round-trip"
   p5:
     state: present
     suites: [sdk-monitoring]

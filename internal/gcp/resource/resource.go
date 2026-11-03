@@ -501,6 +501,10 @@ var formatters = map[string]func(project, name string) string{
 	"monitoring-dashboard": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/dashboards/%s", p, n)
 	},
+	// Cloud Monitoring v3 uptime check configurations. Callers pass the check id.
+	"monitoring-uptime-check": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/uptimeCheckConfigs/%s", p, n)
+	},
 	// Firestore Admin control plane (google.firestore.admin.v1).
 	// A database name is "projects/{p}/databases/{db}" (callers pass the
 	// database id).

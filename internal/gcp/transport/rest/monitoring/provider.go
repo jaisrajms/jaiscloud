@@ -70,6 +70,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Monitoring.CreateDashboard":                         p.CreateDashboard,
 		"Monitoring.UpdateDashboard":                         p.UpdateDashboard,
 		"Monitoring.DeleteDashboard":                         p.DeleteDashboard,
+		"Monitoring.ListUptimeCheckConfigs":                  p.ListUptimeCheckConfigs,
+		"Monitoring.GetUptimeCheckConfig":                    p.GetUptimeCheckConfig,
+		"Monitoring.CreateUptimeCheckConfig":                 p.CreateUptimeCheckConfig,
+		"Monitoring.UpdateUptimeCheckConfig":                 p.UpdateUptimeCheckConfig,
+		"Monitoring.DeleteUptimeCheckConfig":                 p.DeleteUptimeCheckConfig,
 	}
 }
 
@@ -692,6 +697,90 @@ func (p *Provider) DeleteDashboard(ctx context.Context, nr *model.NormalizedRequ
 		return nil, invalidArgument("invalid dashboard name: " + strParam(nr, "name"))
 	}
 	if err := p.core.DeleteDashboard(ctx, project, id); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ─── uptime check configurations ──────────────────────────────────────────────
+
+// ListUptimeCheckConfigs lists the project's declarative uptime check
+// configurations. Each configuration is emitted as the stored document; the
+// probe-derived uptimeCheckIps list is a separate, unimplemented surface.
+func (p *Provider) ListUptimeCheckConfigs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, ok := core.SplitUptimeCheckConfigParent(strParam(nr, "parent"))
+	if !ok {
+		return nil, invalidArgument("invalid uptimeCheckConfigs parent: " + strParam(nr, "parent"))
+	}
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListUptimeCheckConfigs(ctx, project,
+		strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(page) > 0 {
+		arr := make([]any, 0, len(page))
+		for _, c := range page {
+			arr = append(arr, c.Document)
+		}
+		out["uptimeCheckConfigs"] = arr
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) GetUptimeCheckConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitUptimeCheckConfigName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid uptime check config name: " + strParam(nr, "name"))
+	}
+	c, err := p.core.GetUptimeCheckConfig(ctx, project, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: c.Document}), nil
+}
+
+func (p *Provider) CreateUptimeCheckConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, ok := core.SplitUptimeCheckConfigParent(strParam(nr, "parent"))
+	if !ok {
+		return nil, invalidArgument("invalid uptimeCheckConfigs parent: " + strParam(nr, "parent"))
+	}
+	c, err := p.core.CreateUptimeCheckConfig(ctx, project, rawBodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: c.Document}), nil
+}
+
+// UpdateUptimeCheckConfig applies a PATCH. The updateMask query parameter is the
+// Discovery document's google-fieldmask binding: the transcoder sends either one
+// comma-separated mask or repeated parameters, and both are accepted.
+func (p *Provider) UpdateUptimeCheckConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitUptimeCheckConfigName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid uptime check config name: " + strParam(nr, "name"))
+	}
+	mask := core.ParseMaskPaths(nr.Params["updateMask"])
+	c, err := p.core.UpdateUptimeCheckConfig(ctx, project, id, rawBodyOf(nr), mask)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: c.Document}), nil
+}
+
+func (p *Provider) DeleteUptimeCheckConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitUptimeCheckConfigName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid uptime check config name: " + strParam(nr, "name"))
+	}
+	if err := p.core.DeleteUptimeCheckConfig(ctx, project, id); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

@@ -216,6 +216,24 @@ check "Dataproc Metastore database IAM grant" \
   "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/services/jaiscloud-tf-metastore/databases/default:getIamPolicy" \
   'roles/metastore.admin' 'jaiscloud-tf-sa@'
 
+# ── Cloud Monitoring: the declarative uptime check ───────────────────────────
+# The emulator stores and echoes the configuration (NF28); the probe-derived
+# uptimeCheckIps list is the only part that stays unimplemented. `apply` above
+# succeeded through create, and the re-plan proves the read did not permadiff.
+UPTIME_ID="$(out uptime_check_id)"
+check "uptime check configuration created" \
+  "$ENDPOINT/v3/projects/$PROJECT/uptimeCheckConfigs/$UPTIME_ID" \
+  "\"name\":\"projects/$PROJECT/uptimeCheckConfigs/$UPTIME_ID\"" \
+  '"displayName":"jaiscloud-tf-uptime"' \
+  '"period":"300s"' '"timeout":"10s"' \
+  '"type":"uptime_url"' '"host":"shop.example.com"' \
+  '"path":"/healthz"' '"useSsl":true' \
+  '"selectedRegions":["USA","EUROPE","ASIA_PACIFIC"]' \
+  '"team":"compat-test"'
+check "uptime check configuration listed" \
+  "$ENDPOINT/v3/projects/$PROJECT/uptimeCheckConfigs" \
+  '"uptimeCheckConfigs"' "uptimeCheckConfigs/$UPTIME_ID"
+
 # ── GKE: the cluster the Dataproc-on-GKE prerequisite rides on ────────────────
 # DPG37: real GKE always renders these nested messages and the provider
 # dereferences four of them unconditionally on read.
@@ -269,6 +287,26 @@ check "Compute-Engine cluster reads back the default instance groups" \
   "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
   '"numInstances":1' '"numInstances":2'
 
+# An in-place update: changing the variable makes the provider PATCH the config
+# with an updateMask. The declaration must change and nothing else.
+echo "== $TF: in-place update of the uptime check"
+tf apply -input=false -auto-approve -no-color "${TF_VARS[@]}" \
+  -var="uptime_display_name=jaiscloud-tf-uptime-v2" >/dev/null
+check "uptime check display name updated in place" \
+  "$ENDPOINT/v3/projects/$PROJECT/uptimeCheckConfigs/$UPTIME_ID" \
+  '"displayName":"jaiscloud-tf-uptime-v2"'
+check "uptime check update preserved the unpatched fields" \
+  "$ENDPOINT/v3/projects/$PROJECT/uptimeCheckConfigs/$UPTIME_ID" \
+  '"path":"/healthz"' '"period":"300s"' '"team":"compat-test"'
+if tf plan -input=false -no-color -detailed-exitcode "${TF_VARS[@]}" \
+  -var="uptime_display_name=jaiscloud-tf-uptime-v2" >/dev/null 2>&1; then
+  printf '  [PASS] re-plan after the uptime check update reports no changes\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] re-plan after the uptime check update reports changes\n'
+  FAIL=$((FAIL + 1))
+fi
+
 echo "== destroy (the virtual cluster only, to prove the pools survive it)"
 tf destroy -input=false -auto-approve -no-color \
   -target=google_dataproc_cluster.gke "${TF_VARS[@]}" >/dev/null
@@ -280,6 +318,18 @@ check "Dataproc node pools survive the virtual-cluster delete" \
 
 echo "== destroy"
 destroy
+
+# Destroy (above) removed the uptime check; a get must now be NotFound (404).
+UPTIME_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+  "$ENDPOINT/v3/projects/$PROJECT/uptimeCheckConfigs/$UPTIME_ID" 2>/dev/null || true)"
+if [[ "$UPTIME_STATUS" == "404" ]]; then
+  printf '  [PASS] uptime check configuration deleted on destroy\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] uptime check get after destroy = HTTP %s, want 404\n' "$UPTIME_STATUS"
+  FAIL=$((FAIL + 1))
+fi
 
 echo "== summary: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

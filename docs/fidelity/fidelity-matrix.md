@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1184**
+Cells: **1195**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
 | ga | 1003 |
-| limited | 125 |
+| limited | 135 |
 | preview | 14 |
-| unsupported | 42 |
+| unsupported | 43 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 556 | 107 | 14 | 12 |
-| grpc | 447 | 18 | 0 | 30 |
+| rest | 556 | 112 | 14 | 12 |
+| grpc | 447 | 23 | 0 | 31 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -32,8 +32,8 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 644 | 45 |
-| grpc | 447 | 48 |
+| rest | 649 | 45 |
+| grpc | 452 | 49 |
 
 ## bigquery
 
@@ -997,7 +997,7 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 
 ## monitoring
 
-_73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
+_84 cell(s): ga=73 limited=10 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -1008,11 +1008,13 @@ _73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 | CreateServiceLevelObjective | grpc | ga | yes | — |
 | CreateServiceTimeSeries | grpc | ga | yes | — |
 | CreateTimeSeries | grpc | ga | yes | — |
+| CreateUptimeCheckConfig | grpc | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | DeleteAlertPolicy | grpc | ga | yes | — |
 | DeleteMetricDescriptor | grpc | ga | yes | — |
 | DeleteNotificationChannel | grpc | ga | yes | — |
 | DeleteService | grpc | ga | yes | — |
 | DeleteServiceLevelObjective | grpc | ga | yes | — |
+| DeleteUptimeCheckConfig | grpc | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | GetAlertPolicy | grpc | ga | yes | — |
 | GetMetricDescriptor | grpc | ga | yes | — |
 | GetMonitoredResourceDescriptor | grpc | ga | yes | — |
@@ -1021,6 +1023,7 @@ _73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 | GetNotificationChannelVerificationCode | grpc | ga | yes | — |
 | GetService | grpc | ga | yes | — |
 | GetServiceLevelObjective | grpc | ga | yes | — |
+| GetUptimeCheckConfig | grpc | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | ListAlertPolicies | grpc | ga | yes | — |
 | ListMetricDescriptors | grpc | ga | yes | — |
 | ListMonitoredResourceDescriptors | grpc | ga | yes | — |
@@ -1029,6 +1032,8 @@ _73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 | ListServiceLevelObjectives | grpc | ga | yes | — |
 | ListServices | grpc | ga | yes | — |
 | ListTimeSeries | grpc | ga | yes | — |
+| ListUptimeCheckConfigs | grpc | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
+| ListUptimeCheckIps | grpc | unsupported | no | probe-derived: the static checker address list belongs to GCP's global egress probe plane, which the emulator does not have; explicit Unimplemented stub (the declarative uptimeCheckConfigs CRUD beside it is served) |
 | Monitoring.CreateAlertPolicy | rest | ga | yes | — |
 | Monitoring.CreateDashboard | rest | ga | yes | — |
 | Monitoring.CreateMetricDescriptor | rest | ga | yes | — |
@@ -1037,12 +1042,14 @@ _73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 | Monitoring.CreateServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.CreateServiceTimeSeries | rest | ga | yes | — |
 | Monitoring.CreateTimeSeries | rest | ga | yes | — |
+| Monitoring.CreateUptimeCheckConfig | rest | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | Monitoring.DeleteAlertPolicy | rest | ga | yes | — |
 | Monitoring.DeleteDashboard | rest | ga | yes | — |
 | Monitoring.DeleteMetricDescriptor | rest | ga | yes | — |
 | Monitoring.DeleteNotificationChannel | rest | ga | yes | — |
 | Monitoring.DeleteService | rest | ga | yes | — |
 | Monitoring.DeleteServiceLevelObjective | rest | ga | yes | — |
+| Monitoring.DeleteUptimeCheckConfig | rest | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | Monitoring.GetAlertPolicy | rest | ga | yes | — |
 | Monitoring.GetDashboard | rest | ga | yes | — |
 | Monitoring.GetMetricDescriptor | rest | ga | yes | — |
@@ -1052,6 +1059,7 @@ _73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 | Monitoring.GetNotificationChannelVerificationCode | rest | ga | yes | — |
 | Monitoring.GetService | rest | ga | yes | — |
 | Monitoring.GetServiceLevelObjective | rest | ga | yes | — |
+| Monitoring.GetUptimeCheckConfig | rest | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | Monitoring.ListAlertPolicies | rest | ga | yes | — |
 | Monitoring.ListDashboards | rest | ga | yes | — |
 | Monitoring.ListMetricDescriptors | rest | ga | yes | — |
@@ -1061,18 +1069,21 @@ _73 cell(s): ga=73 limited=0 preview=0 unsupported=0_
 | Monitoring.ListServiceLevelObjectives | rest | ga | yes | — |
 | Monitoring.ListServices | rest | ga | yes | — |
 | Monitoring.ListTimeSeries | rest | ga | yes | — |
+| Monitoring.ListUptimeCheckConfigs | rest | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | Monitoring.SendNotificationChannelVerificationCode | rest | ga | yes | — |
 | Monitoring.UpdateAlertPolicy | rest | ga | yes | — |
 | Monitoring.UpdateDashboard | rest | ga | yes | — |
 | Monitoring.UpdateNotificationChannel | rest | ga | yes | — |
 | Monitoring.UpdateService | rest | ga | yes | — |
 | Monitoring.UpdateServiceLevelObjective | rest | ga | yes | — |
+| Monitoring.UpdateUptimeCheckConfig | rest | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | Monitoring.VerifyNotificationChannel | rest | ga | yes | — |
 | SendNotificationChannelVerificationCode | grpc | ga | yes | — |
 | UpdateAlertPolicy | grpc | ga | yes | — |
 | UpdateNotificationChannel | grpc | ga | yes | — |
 | UpdateService | grpc | ga | yes | — |
 | UpdateServiceLevelObjective | grpc | ga | yes | — |
+| UpdateUptimeCheckConfig | grpc | limited | yes | declarative uptime-check configuration only: stored, validated and echoed (create/get/list/patch/delete, update_mask semantics); the emulator has no egress probe plane, so no checker state or probe result exists |
 | VerifyNotificationChannel | grpc | ga | yes | — |
 
 ## operations

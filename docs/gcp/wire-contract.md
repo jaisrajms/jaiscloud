@@ -101,7 +101,9 @@ schema by `TestTranscriptsConform`.
   `google.datastore.v1.Datastore`,
   `google.cloud.kms.v1.KeyManagementService`,
   `google.cloud.secretmanager.v1.SecretManagerService`,
-  `google.logging.v2.LoggingServiceV2`/`ConfigServiceV2`, `google.monitoring.v3.*`,
+  `google.logging.v2.LoggingServiceV2`/`ConfigServiceV2`,
+  `google.monitoring.v3.MetricService`/`AlertPolicyService`/`NotificationChannelService`/
+  `ServiceMonitoringService`/`UptimeCheckService`,
   `google.cloud.workflows.executions.v1.Executions`,
   `google.cloud.workflows.v1.Workflows`,
   `google.cloud.managedkafka.v1.ManagedKafka`,
@@ -149,9 +151,9 @@ commit.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **508/508 checks pass** (Cloud Run 15, Container 34,
+- **gRPC** — official `cloud.google.com/go` clients: **513/513 checks pass** (Cloud Run 15, Container 34,
   Dataproc 35, Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 16,
-  IAM Credentials 4, KMS 35, Logging 42, Managed Kafka 21, Metastore 18, Monitoring 34, Operations 10,
+  IAM Credentials 4, KMS 35, Logging 42, Managed Kafka 21, Metastore 18, Monitoring 39, Operations 10,
   Pub/Sub 25, Resource Manager 11, Scheduler 8, Secret Manager 21, Service Usage 6, Storage 24,
   Tasks 20, Workflow Executions 4, Workflows 6) against `:8081`. The IAM probes
   include Eventarc trigger/message-bus IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
@@ -226,11 +228,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   proto descriptors only. The explicit `Unimplemented` stubs are `unsupported` (see the
   `Unimplemented` list below); the rest of the gRPC surface is `ga` and verified with the
   official `cloud.google.com/go` clients against a live emulator. The conformance harness
-  exercises **508** checks over those `ga` proto methods (Cloud Run 15,
+  exercises **513** checks over those `ga` proto methods (Cloud Run 15,
   Container 34, Dataproc 35,
   Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 16, IAM Credentials 4,
   KMS 35, Logging 42,
-  Managed Kafka 21, Metastore 18, Monitoring 34, Operations 10, Pub/Sub 25, Resource Manager 11,
+  Managed Kafka 21, Metastore 18, Monitoring 39, Operations 10, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 21, Service Usage 6, Storage 24, Tasks 20, Workflow Executions 4,
   Workflows 6, the rest one per method). The remaining `limited` cell is Logging `TailLogEntries` (a bounded store-poll with
   no deterministic conformance assertion); Secret Manager's Cloud SQL managed rotation
@@ -318,6 +320,22 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (the first DNS label is `metastore`, as in `metastore.googleapis.com`), so Metastore's
   `GetOperation`/`ListOperations` are served under its canonical endpoint and the
   default host keeps that path on Cloud Workflows.
+- **Cloud Monitoring uptime checks** — the `uptimeCheckConfigs` resource is a
+  declarative control plane: `create`/`get`/`list`/`patch`/`delete` validate the
+  configuration against the Discovery schema (required `display_name`, exactly one
+  root resource, `timeout` 1–60s, `period` ∈ {60s,300s,600s,900s}, the HTTP
+  content-type/request-method rules), store it in the shared resource store
+  (survives `--dsn`/snapshot), and echo it verbatim with the server-assigned
+  `name`, over REST and over gRPC `UptimeCheckService`. `patch` implements the
+  documented `update_mask` semantics (empty mask = full replace; non-empty =
+  merge the listed paths, nested paths merged inside their message, an omitted
+  masked field cleared; an unknown path is `INVALID_ARGUMENT`). No etag exists
+  on `UptimeCheckConfig` in the Discovery schema/proto, so no optimistic
+  concurrency token is issued. The probe-derived half stays loud, `unsupported`:
+  `uptimeCheckIps` (REST `501`, gRPC `UNIMPLEMENTED`) and any checker state / probe
+  result — the emulator has no egress probe plane and fabricates none, and a
+  `delete` of a configuration referenced by an alert policy is not refused
+  (references are not tracked).
 - **Cloud Monitoring alert evaluation** — the background worker evaluates
   `condition_threshold` and `condition_absent`. `condition_matched_log`, MQL, PromQL, and SQL
   conditions are stored but never evaluated (they never fire). For `condition_absent`, a metric
@@ -502,7 +520,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `ImportDocuments`/`RestoreDatabase`/`CloneDatabase`/`BulkDeleteDocuments` (data-plane / disaster
   recovery: they need a GCS export format or a real backup snapshot, so any result would be
   fabricated — the composite-index CRUD and the control plane over databases/fields/backup
-  schedules/backups/user creds are served and verified).
+  schedules/backups/user creds are served and verified);
+  Cloud Monitoring `ListUptimeCheckIps` (the static checker address list belongs to the global
+  egress probe plane the emulator does not have, so the list is not fabricated — the declarative
+  `uptimeCheckConfigs` CRUD beside it is served on both transports).
   These fail loud
   with an explicit `Unimplemented` error rather than a plausible empty response.
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores

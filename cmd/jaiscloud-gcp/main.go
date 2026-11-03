@@ -1085,6 +1085,7 @@ func startCmd() *cobra.Command {
 					monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
 					monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
 					monitoringpb.RegisterServiceMonitoringServiceServer(gserv.GRPC(), monitoringGRPC)
+					monitoringpb.RegisterUptimeCheckServiceServer(gserv.GRPC(), monitoringGRPC)
 				}
 				if transports.GRPCFor("storage") {
 					grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)

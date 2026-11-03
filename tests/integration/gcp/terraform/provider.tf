@@ -35,6 +35,12 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "uptime_display_name" {
+  type        = string
+  description = "Display name of the uptime check configuration; changing it drives an in-place update."
+  default     = "jaiscloud-tf-uptime"
+}
+
 variable "gke_cluster" {
   type        = string
   description = "Name of the GKE cluster the fixture creates as the Dataproc-on-GKE prerequisite."
@@ -71,6 +77,10 @@ provider "google" {
   # federation resource (google_dataproc_metastore_federation) and the
   # database IAM member go through the same v1 custom endpoint.
   dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
+
+  # Cloud Monitoring (declarative uptime check configurations). The provider
+  # appends its own /v3/ path root, so the endpoint is the bare origin.
+  monitoring_custom_endpoint = "${var.endpoint}/"
 
   # Dataproc (clusters incl. the Dataproc-on-GKE virtual cluster). The provider
   # keeps only the scheme+host of a custom endpoint, so the plain v1 root is

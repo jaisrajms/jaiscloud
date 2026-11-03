@@ -63,9 +63,12 @@ func (c *Codec) ServiceName() string { return ServiceName }
 // (404 NOT_FOUND). Dashboards are a v1 API served by this transport (see
 // routeDashboards); a /v3/ dashboards path is not a real v3 collection and
 // stays 404.
+//
+// uptimeCheckIps is the static checker address list: it is probe infrastructure
+// the emulator cannot honor, so it stays loud while the declarative
+// uptimeCheckConfigs resource is served from the core (NF28).
 var knownUnimplemented = []string{
-	"/snoozes", "/uptimeCheckConfigs",
-	"/groups", "/alerts", "/collectdTimeSeries", "uptimeCheckIps",
+	"/snoozes", "/groups", "/alerts", "/collectdTimeSeries", "uptimeCheckIps",
 }
 
 // Decode parses a Cloud Monitoring REST path into a NormalizedRequest. Params
@@ -330,6 +333,43 @@ func route(version, rest, method string, nr *model.NormalizedRequest) (string, b
 			return "UpdateNotificationChannel", true
 		case http.MethodDelete:
 			return "DeleteNotificationChannel", true
+		}
+		return "", false
+
+	// Uptime check configurations (UptimeCheckService). The collection parent is
+	// exactly "projects/{p}" and the item name exactly
+	// "projects/{p}/uptimeCheckConfigs/{id}", per the Discovery document's
+	// patterns. This is the declarative store-and-echo surface; the
+	// probe-derived uptimeCheckIps list is not routed here and stays a 501.
+	case strings.HasSuffix(rest, "/uptimeCheckConfigs"):
+		parent := strings.TrimSuffix(rest, "/uptimeCheckConfigs")
+		project, ok := core.SplitUptimeCheckConfigParent(parent)
+		if !ok {
+			return "", false
+		}
+		nr.Params["parent"] = parent
+		nr.Params["project"] = project
+		switch method {
+		case http.MethodGet:
+			return "ListUptimeCheckConfigs", true
+		case http.MethodPost:
+			return "CreateUptimeCheckConfig", true
+		}
+		return "", false
+	case strings.Contains(rest, "/uptimeCheckConfigs/"):
+		project, _, ok := core.SplitUptimeCheckConfigName(rest)
+		if !ok {
+			return "", false
+		}
+		nr.Params["name"] = rest
+		nr.Params["project"] = project
+		switch method {
+		case http.MethodGet:
+			return "GetUptimeCheckConfig", true
+		case http.MethodPatch:
+			return "UpdateUptimeCheckConfig", true
+		case http.MethodDelete:
+			return "DeleteUptimeCheckConfig", true
 		}
 		return "", false
 	}

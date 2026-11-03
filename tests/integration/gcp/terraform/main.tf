@@ -23,6 +23,38 @@ resource "google_storage_bucket_object" "readme" {
   content_type = "text/plain"
 }
 
+# ── Cloud Monitoring: declarative uptime check ────────────────────────────────
+# The emulator stores and echoes the configuration; it never runs the probe, so
+# nothing here depends on egress. `uptime_display_name` is a variable so the
+# suite can drive the provider's in-place update (PATCH + updateMask) path.
+resource "google_monitoring_uptime_check_config" "compat" {
+  project      = var.project
+  display_name = var.uptime_display_name
+  timeout      = "10s"
+  period       = "300s"
+
+  monitored_resource {
+    type = "uptime_url"
+    labels = {
+      host       = "shop.example.com"
+      project_id = var.project
+    }
+  }
+
+  http_check {
+    path         = "/healthz"
+    port         = 443
+    use_ssl      = true
+    validate_ssl = true
+  }
+
+  selected_regions = ["USA", "EUROPE", "ASIA_PACIFIC"]
+
+  user_labels = {
+    team = "compat-test"
+  }
+}
+
 # ── IAM service account ───────────────────────────────────────────────────────
 resource "google_service_account" "compat" {
   account_id   = "jaiscloud-tf-sa"
@@ -336,6 +368,10 @@ output "bucket_name" {
 
 output "object_name" {
   value = google_storage_bucket_object.readme.name
+}
+
+output "uptime_check_id" {
+  value = google_monitoring_uptime_check_config.compat.uptime_check_id
 }
 
 output "service_account_email" {
