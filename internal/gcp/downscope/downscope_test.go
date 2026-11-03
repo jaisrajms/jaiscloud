@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"jaiscloud/internal/clock"
@@ -11,8 +12,14 @@ import (
 
 // option builds the STS `options` JSON for one rule.
 func option(bucket, expression string, permissions ...string) string {
+	return optionFor("//storage.googleapis.com/projects/_/buckets/"+bucket, expression, permissions...)
+}
+
+// optionFor builds the STS `options` JSON for one rule over an arbitrary
+// availableResource string.
+func optionFor(resource, expression string, permissions ...string) string {
 	rule := map[string]any{
-		"availableResource":    "//storage.googleapis.com/projects/_/buckets/" + bucket,
+		"availableResource":    resource,
 		"availablePermissions": permissions,
 	}
 	if expression != "" {
@@ -21,6 +28,207 @@ func option(bucket, expression string, permissions ...string) string {
 	doc := map[string]any{"accessBoundary": map[string]any{"accessBoundaryRules": []any{rule}}}
 	b, _ := json.Marshal(doc)
 	return string(b)
+}
+
+// TestParseOptionsResourceTypes pins the documented resource surface: Credential
+// Access Boundaries apply to Cloud Storage buckets only, and the accepted
+// availableResource is the bucket full resource name. Object- and folder-level
+// restrictions use the availability condition instead.
+func TestParseOptionsResourceTypes(t *testing.T) {
+	valid := []struct {
+		name     string
+		resource string
+		bucket   string
+	}{
+		{"bucket", "//storage.googleapis.com/projects/_/buckets/my-bucket", "my-bucket"},
+		{"bucket with digits and dots", "//storage.googleapis.com/projects/_/buckets/bkt.2024.data", "bkt.2024.data"},
+		{"bucket with underscores", "//storage.googleapis.com/projects/_/buckets/my_bucket", "my_bucket"},
+	}
+	for _, tc := range valid {
+		t.Run(tc.name, func(t *testing.T) {
+			rules, err := ParseOptions(optionFor(tc.resource, "", PermissionObjectViewer))
+			if err != nil {
+				t.Fatalf("ParseOptions(%q): %v", tc.resource, err)
+			}
+			if len(rules) != 1 || rules[0].Bucket != tc.bucket {
+				t.Fatalf("rules = %+v, want bucket %q", rules, tc.bucket)
+			}
+			if rules[0].AvailableResource != tc.resource {
+				t.Errorf("AvailableResource = %q, want %q", rules[0].AvailableResource, tc.resource)
+			}
+			if rules[0].AvailabilityCondition != nil {
+				t.Errorf("condition = %+v, want nil", rules[0].AvailabilityCondition)
+			}
+		})
+	}
+
+	// Resource names the CAB documentation does not admit. Non-Cloud-Storage
+	// services do not support Credential Access Boundaries, so accepting them
+	// would hand the client a boundary the emulator does not enforce.
+	invalid := []struct {
+		name     string
+		resource string
+	}{
+		{"bigquery dataset", "//bigquery.googleapis.com/projects/p/datasets/d"},
+		{"bigquery table", "//bigquery.googleapis.com/projects/p/datasets/d/tables/t"},
+		{"spanner database", "//spanner.googleapis.com/projects/p/instances/i/databases/d"},
+		{"kms crypto key", "//cloudkms.googleapis.com/projects/p/locations/global/keyRings/r/cryptoKeys/k"},
+		{"cloudresourcemanager project", "//cloudresourcemanager.googleapis.com/projects/p"},
+		{"compute zone", "//compute.googleapis.com/projects/p/zones/z"},
+		{"object resource", "//storage.googleapis.com/projects/_/buckets/b/objects/o"},
+		{"non-underscore project segment", "//storage.googleapis.com/projects/my-project/buckets/b"},
+		{"missing scheme", "storage.googleapis.com/projects/_/buckets/b"},
+		{"empty bucket", "//storage.googleapis.com/projects/_/buckets/"},
+		{"trailing slash", "//storage.googleapis.com/projects/_/buckets/b/"},
+		{"empty", ""},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseOptions(optionFor(tc.resource, "", PermissionObjectViewer))
+			if err == nil {
+				t.Fatalf("ParseOptions(%q) succeeded, want an error", tc.resource)
+			}
+			if !strings.Contains(err.Error(), "Cloud Storage buckets only") {
+				t.Errorf("error = %v, want the documented Cloud Storage resource message", err)
+			}
+		})
+	}
+}
+
+// TestParseOptionsDocumentedLimits covers the documented boundary caps: at most
+// 10 access boundary rules and at most 2048 characters in an availability
+// condition expression.
+func TestParseOptionsDocumentedLimits(t *testing.T) {
+	rule := map[string]any{
+		"availableResource":    "//storage.googleapis.com/projects/_/buckets/bkt",
+		"availablePermissions": []string{PermissionObjectViewer},
+	}
+	build := func(n int) string {
+		rules := make([]any, n)
+		for i := range rules {
+			rules[i] = rule
+		}
+		doc := map[string]any{"accessBoundary": map[string]any{"accessBoundaryRules": rules}}
+		b, _ := json.Marshal(doc)
+		return string(b)
+	}
+	if rules, err := ParseOptions(build(maxRules)); err != nil || len(rules) != maxRules {
+		t.Fatalf("ParseOptions(%d rules) = %d rules, %v; want %d rules", maxRules, len(rules), err, maxRules)
+	}
+	if _, err := ParseOptions(build(maxRules + 1)); err == nil {
+		t.Fatalf("ParseOptions(%d rules) succeeded, want an error", maxRules+1)
+	}
+
+	expression := func(extra int) string {
+		const head = "resource.name.startsWith('projects/_/buckets/bkt/objects/"
+		const tail = "')"
+		pad := maxExpressionLength - len(head) - len(tail) + extra
+		return head + strings.Repeat("a", pad) + tail
+	}
+	atLimit := expression(0)
+	if len(atLimit) != maxExpressionLength {
+		t.Fatalf("test expression is %d characters, want %d", len(atLimit), maxExpressionLength)
+	}
+	wantPrefix := strings.Repeat("a", maxExpressionLength-len("resource.name.startsWith('projects/_/buckets/bkt/objects/")-len("')")) + "/"
+	if rules, err := ParseOptions(option("bkt", atLimit, PermissionObjectViewer)); err != nil {
+		t.Fatalf("ParseOptions(%d-character expression): %v", maxExpressionLength, err)
+	} else if rules[0].ObjectPrefix != wantPrefix {
+		t.Errorf("objectPrefix length = %d, want %d", len(rules[0].ObjectPrefix), len(wantPrefix))
+	}
+	if _, err := ParseOptions(option("bkt", expression(1), PermissionObjectViewer)); err == nil {
+		t.Fatalf("ParseOptions(%d-character expression) succeeded, want an error", maxExpressionLength+1)
+	}
+}
+
+// TestParseOptionsConditionRoundTrip parses the documented object-prefix example
+// and checks that the condition — expression, title and description — survives
+// the minted token's access_boundary claim in the documented JSON shape.
+func TestParseOptionsConditionRoundTrip(t *testing.T) {
+	const expression = "resource.name.startsWith('projects/_/buckets/example-bucket/objects/customer-a/invoices/') || api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('customer-a/invoices/')"
+	const options = `{"accessBoundary":{"accessBoundaryRules":[{
+		"availablePermissions":["inRole:roles/storage.objectViewer"],
+		"availableResource":"//storage.googleapis.com/projects/_/buckets/example-bucket",
+		"availabilityCondition":{
+			"expression":"` + expression + `",
+			"title":"Customer A invoices",
+			"description":"Read and list Customer A invoices only"
+		}}]}}`
+
+	rules, err := ParseOptions(options)
+	if err != nil {
+		t.Fatalf("ParseOptions: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("got %d rules, want 1", len(rules))
+	}
+	rule := rules[0]
+	if rule.Bucket != "example-bucket" || rule.ObjectPrefix != "customer-a/invoices/" {
+		t.Errorf("rule = %+v, want bucket example-bucket prefix customer-a/invoices/", rule)
+	}
+	wantCondition := AvailabilityCondition{
+		Expression:  expression,
+		Title:       "Customer A invoices",
+		Description: "Read and list Customer A invoices only",
+	}
+	if rule.AvailabilityCondition == nil || *rule.AvailabilityCondition != wantCondition {
+		t.Fatalf("condition = %+v, want %+v", rule.AvailabilityCondition, wantCondition)
+	}
+
+	// The minted token carries the boundary, and the claim round-trips the
+	// documented rule fields.
+	auth := "Bearer " + token(t, rules)
+	got, downscoped := RulesFromAuthorization(auth)
+	if !downscoped || len(got) != 1 {
+		t.Fatalf("RulesFromAuthorization = %+v, %v", got, downscoped)
+	}
+	if got[0].AvailabilityCondition == nil || *got[0].AvailabilityCondition != wantCondition {
+		t.Fatalf("round-tripped condition = %+v, want %+v", got[0].AvailabilityCondition, wantCondition)
+	}
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal rule: %v", err)
+	}
+	var claim map[string]any
+	if err := json.Unmarshal(raw, &claim); err != nil {
+		t.Fatalf("unmarshal rule: %v", err)
+	}
+	for _, key := range []string{"availableResource", "availablePermissions", "availabilityCondition"} {
+		if _, ok := claim[key]; !ok {
+			t.Errorf("claim rule is missing the documented %q field: %s", key, raw)
+		}
+	}
+	condition, ok := claim["availabilityCondition"].(map[string]any)
+	if !ok {
+		t.Fatalf("availabilityCondition is not an object: %s", raw)
+	}
+	for _, key := range []string{"expression", "title", "description"} {
+		if _, ok := condition[key]; !ok {
+			t.Errorf("availabilityCondition is missing %q: %s", key, raw)
+		}
+	}
+
+	if err := Allowed(auth, ReadObject, "example-bucket", "customer-a/invoices/2024-01.pdf"); err != nil {
+		t.Errorf("read inside the condition: %v", err)
+	}
+	if err := Allowed(auth, ReadObject, "example-bucket", "customer-b/2024-01.pdf"); !errors.Is(err, ErrDenied) {
+		t.Errorf("read outside the condition = %v, want ErrDenied", err)
+	}
+}
+
+// TestParseOptionsFolderCondition covers the documented hierarchical-namespace
+// folder form, which names a folder in resource.name and maps onto the object
+// prefix the GCS provider enforces.
+func TestParseOptionsFolderCondition(t *testing.T) {
+	expression := "resource.name.startsWith('projects/_/buckets/example-bucket/objects/example-folder')" +
+		" || resource.name.startsWith('projects/_/buckets/example-bucket/folders/example-folder')" +
+		" || api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('example-folder/')"
+	rules, err := ParseOptions(option("example-bucket", expression, PermissionObjectViewer))
+	if err != nil {
+		t.Fatalf("ParseOptions(folder condition): %v", err)
+	}
+	if rules[0].ObjectPrefix != "example-folder/" {
+		t.Errorf("objectPrefix = %q, want example-folder/", rules[0].ObjectPrefix)
+	}
 }
 
 func TestParseOptionsBucketWide(t *testing.T) {
