@@ -1,6 +1,7 @@
 package bigquery
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -513,19 +514,129 @@ func TestLoadCustomNullMarkerEmptyIntIsBad(t *testing.T) {
 	}
 }
 
-func TestLoadNonFiniteFloatIsBadRecord(t *testing.T) {
+// TestLoadNonFiniteFloats covers NF20: BigQuery accepts NaN, +Infinity and
+// -Infinity for a FLOAT64 column. The JSON row store cannot represent an IEEE
+// non-finite value, so the load persists BigQuery's wire strings and the read
+// paths (tabledata.list and jobs.query) round-trip them.
+func TestLoadNonFiniteFloats(t *testing.T) {
+	cases := []struct {
+		name, format string
+		data         []byte
+	}{
+		{
+			name:   "ndjson",
+			format: "NEWLINE_DELIMITED_JSON",
+			data: []byte(`{"id":1,"amount":"NaN"}` + "\n" +
+				`{"id":2,"amount":"Infinity"}` + "\n" +
+				`{"id":3,"amount":"-Infinity"}` + "\n"),
+		},
+		{
+			name:   "csv",
+			format: "CSV",
+			data:   []byte("1,NaN\n2,Infinity\n3,-Infinity\n"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			p, _ := newLoadProvider(tc.data)
+			seedLoadTable(t, p, "ds", "t", []any{
+				map[string]any{"name": "id", "type": "INTEGER", "mode": "REQUIRED"},
+				map[string]any{"name": "amount", "type": "FLOAT"},
+			})
+			resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{"sourceFormat": tc.format})))
+			if err != nil {
+				t.Fatalf("insert load job: %v", err)
+			}
+			if er := jobErrorResult(resp); er != nil {
+				t.Fatalf("non-finite FLOAT64 must load, got %v", er)
+			}
+			if ls := loadStats(t, resp); ls["outputRows"] != "3" || ls["badRecords"] != "0" {
+				t.Fatalf("unexpected load stats: %v", ls)
+			}
+
+			want := []string{"NaN", "Infinity", "-Infinity"}
+
+			// tabledata.list renders BigQuery's string encoding.
+			rows, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "ds", "tableId": "t"}))
+			if err != nil {
+				t.Fatalf("list rows: %v", err)
+			}
+			list := rows.Data["rows"].([]any)
+			if len(list) != len(want) {
+				t.Fatalf("tabledata.list rows = %d, want %d", len(list), len(want))
+			}
+			for i, w := range want {
+				cells := list[i].(map[string]any)["f"].([]any)
+				if got := cells[1].(map[string]any)["v"]; got != w {
+					t.Fatalf("row %d amount = %v, want %q", i, got, w)
+				}
+			}
+
+			// A SELECT over the hydrated rows round-trips the same values.
+			data := queryOK(t, p, "SELECT id, amount FROM `proj.ds.t` ORDER BY id")
+			sel, _ := data["rows"].([]any)
+			if len(sel) != len(want) {
+				t.Fatalf("select rows = %d, want %d", len(sel), len(want))
+			}
+			for i, w := range want {
+				cells := sel[i].(map[string]any)["f"].([]any)
+				if got := cells[1].(map[string]any)["v"]; got != w {
+					t.Fatalf("select row %d amount = %v, want %q", i, got, w)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadNonFiniteIntoIntIsBadRecord pins that the new FLOAT64 acceptance does
+// not loosen another type: "NaN" into an INTEGER column is still a bad record.
+func TestLoadNonFiniteIntoIntIsBadRecord(t *testing.T) {
 	ctx := context.Background()
-	p, _ := newLoadProvider([]byte("1,NaN\n"))
+	p, _ := newLoadProvider([]byte("NaN\n"))
+	seedLoadTable(t, p, "ds", "t", []any{
+		map[string]any{"name": "n", "type": "INTEGER"},
+	})
+	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{"sourceFormat": "CSV"})))
+	if err != nil {
+		t.Fatalf("a bad record must not 500 the request: %v", err)
+	}
+	if er := jobErrorResult(resp); er == nil || er["reason"] != "invalid" {
+		t.Fatalf("expected invalid job error, got %v", resp.Data["status"])
+	}
+}
+
+// TestNonFiniteFloatsSurviveSnapshot proves the sentinel-encoded rows survive
+// snapshot/restore and still round-trip through the query engine afterwards.
+func TestNonFiniteFloatsSurviveSnapshot(t *testing.T) {
+	ctx := context.Background()
+	s := bqstore.NewMemoryStore()
+	p := New(s)
 	seedLoadTable(t, p, "ds", "t", []any{
 		map[string]any{"name": "id", "type": "INTEGER", "mode": "REQUIRED"},
 		map[string]any{"name": "amount", "type": "FLOAT"},
 	})
-	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{"sourceFormat": "CSV"})))
+	// Load from a gs:// source so the row passes through the store encoding.
+	p.sourceReader = &fakeSourceReader{objects: map[string][]byte{"bucket/data": []byte("{\"id\":1,\"amount\":\"NaN\"}\n")}}
+	resp, err := p.InsertJob(ctx, loadNR("ds", "t", loadCfg("ds", "t", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON"})))
 	if err != nil {
-		t.Fatalf("a non-finite float must not 500 the request: %v", err)
+		t.Fatalf("insert load job: %v", err)
 	}
-	if er := jobErrorResult(resp); er == nil || er["reason"] != "invalid" {
-		t.Fatalf("expected invalid job error, got %v", resp.Data["status"])
+	if er := jobErrorResult(resp); er != nil {
+		t.Fatalf("load: %v", er)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s2 := bqstore.NewMemoryStore()
+	if err := s2.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	p2 := New(s2)
+	if got := selectInt(t, p2, "SELECT amount FROM `proj.ds.t`"); got != "NaN" {
+		t.Fatalf("restored amount = %q, want NaN", got)
 	}
 }
 

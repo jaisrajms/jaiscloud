@@ -121,12 +121,28 @@ func sqlParityFingerprint(t *testing.T, s bqstore.Store) string {
 	query("Query(truncate)", "TRUNCATE TABLE `"+qual+dst+"`", false)
 	getTable("GetTable(dst,post-truncate)", dst)
 	query("Query(empty)", "SELECT id FROM `"+qual+src+"` WHERE id > 1000", false)
+	// Non-finite FLOAT64 values (NF20) round-trip identically in both modes:
+	// insertAll carries BigQuery's string encoding, and tabledata/query render it.
+	rec.at("InsertAll(src,nonfinite)")(p.InsertAll(ctx, nr(map[string]any{
+		"datasetId": ds,
+		"tableId":   src,
+		"body": map[string]any{"rows": []any{
+			map[string]any{"insertId": "nf1", "json": map[string]any{"id": 5, "name": "nan", "amount": "NaN"}},
+			map[string]any{"insertId": "nf2", "json": map[string]any{"id": 6, "name": "inf", "amount": "Infinity"}},
+			map[string]any{"insertId": "nf3", "json": map[string]any{"id": 7, "name": "ninf", "amount": "-Infinity"}},
+		}},
+	})))
+	query("Query(nonfinite)", "SELECT id, amount FROM `"+qual+src+"` WHERE id >= 5 ORDER BY id", false)
 	query("Query(fail-loud)", "SELECT * FROM UNNEST([1, 2, 3])", false)
 	query("Query(missing-table)", "SELECT * FROM `"+qual+"nope`", false)
 	query("Query(dry-run)", "CREATE SCHEMA `proj.parity_ds2`", true)
 	query("Query(create-schema)", "CREATE SCHEMA `proj.parity_ds2`", false)
 	query("Query(drop-schema)", "DROP SCHEMA `proj.parity_ds2`", false)
 	query("Query(drop-table)", "DROP TABLE `"+qual+dst+"`", false)
+	// BQ12: a dry-run CREATE SCHEMA on an existing dataset is validated, and
+	// IF NOT EXISTS still succeeds.
+	query("Query(dry-run-existing-schema)", "CREATE SCHEMA `proj.parity_ds`", true)
+	query("Query(dry-run-existing-schema-if-not-exists)", "CREATE SCHEMA IF NOT EXISTS `proj.parity_ds`", true)
 
 	data, err := json.Marshal(rec.steps)
 	if err != nil {
@@ -212,7 +228,9 @@ func TestSQLParityMemory(t *testing.T) {
 		"GetTable(src)", "ListRows(src)",
 		"Query(select)", "Query(aggregate)", "Query(ctas)", "Query(insert)",
 		"Query(update)", "Query(delete)", "Query(truncate)", "Query(empty)",
+		"InsertAll(src,nonfinite)", "Query(nonfinite)",
 		"Query(dry-run)", "Query(create-schema)", "Query(drop-schema)", "Query(drop-table)",
+		"Query(dry-run-existing-schema-if-not-exists)",
 	}
 	for _, op := range mustSucceed {
 		s, ok := byOp[op]
@@ -227,7 +245,7 @@ func TestSQLParityMemory(t *testing.T) {
 		}
 	}
 
-	mustFail := []string{"Query(fail-loud)", "Query(missing-table)"}
+	mustFail := []string{"Query(fail-loud)", "Query(missing-table)", "Query(dry-run-existing-schema)"}
 	for _, op := range mustFail {
 		s, ok := byOp[op]
 		if !ok {
@@ -235,6 +253,24 @@ func TestSQLParityMemory(t *testing.T) {
 		}
 		if s.Err == "" {
 			t.Errorf("%s: expected an error, got data %v", op, s.Data)
+		}
+	}
+
+	// The non-finite FLOAT64 rows render as BigQuery's string encoding in both
+	// backends (NF20), not as null or a JSON number.
+	nfData, _ := byOp["Query(nonfinite)"].Data.(map[string]any)
+	nfRows, _ := nfData["rows"].([]any)
+	wantNonFinite := []string{"NaN", "Infinity", "-Infinity"}
+	if len(nfRows) != len(wantNonFinite) {
+		t.Fatalf("non-finite query rows = %d, want %d", len(nfRows), len(wantNonFinite))
+	}
+	for i, w := range wantNonFinite {
+		cells, _ := nfRows[i].(map[string]any)["f"].([]any)
+		if len(cells) < 2 {
+			t.Fatalf("non-finite row %d cells = %v", i, cells)
+		}
+		if got := cells[1].(map[string]any)["v"]; got != w {
+			t.Errorf("non-finite row %d amount = %v, want %q", i, got, w)
 		}
 	}
 }

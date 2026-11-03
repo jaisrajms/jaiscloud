@@ -147,6 +147,16 @@ func (h *hydrator) executeCreateTable(toks []token) (Result, error) {
 		return Result{}, unsupported("CREATE TABLE requires a column list or an AS query")
 	}
 	if h.dryRun {
+		// Validate the target as the real statement would, without creating
+		// anything: the dataset must exist and the table must be new (unless
+		// OR REPLACE / IF NOT EXISTS says otherwise).
+		exists, err := h.w.DatasetExists(h.ctx, project, dataset)
+		if err != nil {
+			return Result{}, err
+		}
+		if !exists {
+			return Result{}, &DatasetNotFoundError{Project: project, Dataset: dataset}
+		}
 		if _, err := h.cat.Table(h.ctx, project, dataset, table); err == nil && !orReplace && !ifNotExists {
 			return Result{}, ErrTableExists
 		}
@@ -189,6 +199,16 @@ func (h *hydrator) executeCreateSchema(toks []token) (Result, error) {
 		return Result{}, unsupported("unsupported CREATE SCHEMA clause")
 	}
 	if h.dryRun {
+		// A dry run validates the target exactly as the real statement would,
+		// without creating anything: BigQuery rejects CREATE SCHEMA on an
+		// existing dataset unless IF NOT EXISTS is given (AlreadyExists).
+		exists, err := h.w.DatasetExists(h.ctx, project, dataset)
+		if err != nil {
+			return Result{}, err
+		}
+		if exists && !ifNotExists {
+			return Result{}, ErrDatasetExists
+		}
 		return Result{StatementType: StatementCreateSchema}, nil
 	}
 	if err := h.w.CreateDataset(h.ctx, project, dataset); err != nil {
@@ -266,6 +286,26 @@ func (h *hydrator) executeDropSchema(toks []token) (Result, error) {
 		}
 	}
 	if h.dryRun {
+		// Validate the target (and the RESTRICT rule) without dropping.
+		exists, err := h.w.DatasetExists(h.ctx, project, dataset)
+		if err != nil {
+			return Result{}, err
+		}
+		if !exists {
+			if ifExists {
+				return Result{StatementType: StatementDropSchema}, nil
+			}
+			return Result{}, &DatasetNotFoundError{Project: project, Dataset: dataset}
+		}
+		if !cascade {
+			tables, err := h.w.ListTables(h.ctx, project, dataset)
+			if err != nil {
+				return Result{}, err
+			}
+			if len(tables) > 0 {
+				return Result{}, unsupported("dataset " + dataset + " is not empty; use DROP SCHEMA ... CASCADE")
+			}
+		}
 		return Result{StatementType: StatementDropSchema}, nil
 	}
 	if !cascade {

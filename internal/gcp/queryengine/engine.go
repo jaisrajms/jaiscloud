@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,11 @@ import (
 // maxHydratedRows bounds the number of rows loaded into query scratch so a
 // single query cannot exhaust the process. Exceeding it fails loud.
 const maxHydratedRows = 1_000_000
+
+// nonFiniteNaNText is BigQuery's string encoding of a NaN FLOAT64. SQLite has
+// no NaN value (it stores a bound NaN as NULL), so the scratch engine keeps NaN
+// as this text and normalizeValue parses it back to float64 NaN.
+const nonFiniteNaNText = "NaN"
 
 // Execute translates and runs one BigQuery-subset SELECT over the tables
 // resolved through cat. DDL/DML require a Mutator and use ExecuteStatement.
@@ -383,6 +389,12 @@ func toSQLite(f Field, v any) any {
 		case int64:
 			return float64(x)
 		case float64:
+			// SQLite stores a bound NaN as NULL, losing it; bind BigQuery's
+			// "NaN" sentinel text so the value survives the scratch round-trip
+			// (normalizeValue parses it back). +/-Inf is storable as a REAL.
+			if math.IsNaN(x) {
+				return nonFiniteNaNText
+			}
 			return x
 		case json.Number:
 			if fv, err := x.Float64(); err == nil {
@@ -390,6 +402,9 @@ func toSQLite(f Field, v any) any {
 			}
 		case string:
 			if fv, err := strconv.ParseFloat(x, 64); err == nil {
+				if math.IsNaN(fv) {
+					return nonFiniteNaNText
+				}
 				return fv
 			}
 		}
