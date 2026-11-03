@@ -6,6 +6,11 @@
 // RestoreDatabase, CloneDatabase, BulkDeleteDocuments) are inherited from
 // adminpb.UnimplementedFirestoreAdminServer and fail loud with Unimplemented.
 //
+// Change streams (projects.databases.changeStreams.{create,get,list,delete}) are
+// deliberately absent: the admin v1 Discovery document declares them, but this
+// proto service declares no ChangeStream RPC, so there is no gRPC method to
+// implement. They are served REST-only by the provider/firestore REST adapter.
+//
 // The transport-agnostic domain logic lives in the shared
 // provider/firestore.Service, so this gRPC surface and the REST adapter
 // (projects.databases.collectionGroups.indexes) share one resource store and

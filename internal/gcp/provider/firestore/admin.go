@@ -35,6 +35,7 @@ const (
 	rtUserCreds      = "firestore_user_creds"
 	rtBackupSchedule = "firestore_backup_schedule"
 	rtBackup         = "firestore_backup"
+	rtChangeStream   = "firestore_change_stream"
 )
 
 // defaultDatabaseID is the implicit database every Firestore project has.
@@ -185,6 +186,33 @@ type backupDef struct {
 	SizeBytes     int64     `json:"sizeBytes,omitempty"`
 }
 
+// changeStreamDef is the persisted google.firestore.admin.v1.ChangeStream.
+//
+// The emulator stores and echoes the *configuration* of a change stream; it
+// produces no change feed. Real Firestore records every matching mutation into
+// a per-stream event log that a consumer reads back with a resume token, but
+// the admin v1 Discovery document declares no read method for the stream (only
+// create/get/list/delete), so there is no wire surface on which a feed could be
+// observed — and none is fabricated. start_time is therefore never set: it
+// documents when recording started, and no recording starts here.
+//
+// Exactly one of DatabaseScope / CollectionGroupScope is set (the proto oneof).
+type changeStreamDef struct {
+	Name                 string                   `json:"name,omitempty"`
+	CreateTime           time.Time                `json:"createTime,omitempty"`
+	UpdateTime           time.Time                `json:"updateTime,omitempty"`
+	StartTime            time.Time                `json:"startTime,omitempty"`
+	RetentionPeriod      time.Duration            `json:"retentionPeriod,omitempty"`
+	Etag                 string                   `json:"etag,omitempty"`
+	DatabaseScope        bool                     `json:"databaseScope,omitempty"`
+	CollectionGroupScope *collectionGroupScopeDef `json:"collectionGroupScope,omitempty"`
+}
+
+// collectionGroupScopeDef mirrors google.firestore.admin.v1.CollectionGroupScope.
+type collectionGroupScopeDef struct {
+	CollectionGroupID string `json:"collectionGroupId,omitempty"`
+}
+
 // ─── resource-name helpers ────────────────────────────────────────────────────
 
 func databaseName(project, db string) string {
@@ -201,6 +229,10 @@ func userCredsName(project, db, id string) string {
 
 func backupScheduleName(project, db, id string) string {
 	return resource.ResourceID(project)("firestore-backup-schedule", db+"/"+id)
+}
+
+func changeStreamName(project, db, id string) string {
+	return resource.ResourceID(project)("firestore-change-stream", db+"/"+id)
 }
 
 func backupName(project, loc, id string) string {
@@ -223,6 +255,10 @@ func userCredsRel(db, id string) string { return "databases/" + db + "/userCreds
 
 func backupScheduleRel(db, id string) string {
 	return "databases/" + db + "/backupSchedules/" + id
+}
+
+func changeStreamRel(db, id string) string {
+	return "databases/" + db + "/changeStreams/" + id
 }
 
 func backupRel(loc, id string) string { return "locations/" + loc + "/backups/" + id }
@@ -1318,6 +1354,141 @@ func (s *Service) DeleteBackupSchedule(ctx context.Context, project, db, id stri
 	if err := s.resources.Delete(ctx, project, store.GlobalRegion, rtBackupSchedule, backupScheduleRel(db, id)); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return gcpNotFound("backup schedule")
+		}
+		return err
+	}
+	return nil
+}
+
+// ─── Change streams ───────────────────────────────────────────────────────────
+//
+// projects.databases.changeStreams (firestore.googleapis.com/v1) is a REST-only
+// admin surface: the Discovery document declares create/get/list/delete, and the
+// google.firestore.admin.v1.FirestoreAdmin gRPC service declares no
+// ChangeStream RPC (the messages exist, the service methods do not), so there is
+// no gRPC twin to serve. The emulator owns the resources in the same
+// transport-neutral Service so the future is not foreclosed.
+
+const (
+	// changeStreamRetentionMin/Max are the documented bounds: the retention
+	// period must be from 1 to 7 days inclusive, in day granularity.
+	changeStreamRetentionMin = 24 * time.Hour
+	changeStreamRetentionMax = 7 * 24 * time.Hour
+)
+
+// changeStreamIDRe is the documented changeStreamId grammar: 4-63 characters,
+// lowercase letters, digits and hyphens, starting with a letter and ending with
+// a letter or a digit.
+var changeStreamIDRe = regexp.MustCompile(`^[a-z][a-z0-9-]{2,61}[a-z0-9]$`)
+
+// ValidateChangeStreamID reports whether id is a legal changeStreamId.
+func ValidateChangeStreamID(id string) error {
+	if !changeStreamIDRe.MatchString(id) {
+		return gcpInvalidArgument("change_stream_id must be 4-63 characters of lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit")
+	}
+	return nil
+}
+
+// validateChangeStream checks the fields the API documents as required:
+// retention_period (1-7 days, whole days) and exactly one scope.
+func validateChangeStream(cs changeStreamDef) error {
+	switch {
+	case cs.RetentionPeriod == 0:
+		return gcpInvalidArgument("retention_period is required")
+	case cs.RetentionPeriod < changeStreamRetentionMin || cs.RetentionPeriod > changeStreamRetentionMax:
+		return gcpInvalidArgument("retention_period must be from 1 to 7 days inclusive")
+	case cs.RetentionPeriod%(24*time.Hour) != 0:
+		return gcpInvalidArgument("retention_period must be a multiple of 24 hours")
+	case cs.DatabaseScope && cs.CollectionGroupScope != nil:
+		return gcpInvalidArgument("at most one of database_scope and collection_group_scope may be set")
+	case !cs.DatabaseScope && cs.CollectionGroupScope == nil:
+		return gcpInvalidArgument("one of database_scope or collection_group_scope is required")
+	case cs.CollectionGroupScope != nil && cs.CollectionGroupScope.CollectionGroupID == "":
+		return gcpInvalidArgument("collection_group_scope.collection_group_id is required")
+	}
+	return nil
+}
+
+// CreateChangeStreamDef creates a change stream record. The documented
+// uniqueness rules apply: one database-scoped change stream per database, and
+// one per collection group.
+func (s *Service) CreateChangeStreamDef(ctx context.Context, project, db, id string, cs changeStreamDef) (changeStreamDef, error) {
+	if err := ValidateChangeStreamID(id); err != nil {
+		return changeStreamDef{}, err
+	}
+	if err := validateChangeStream(cs); err != nil {
+		return changeStreamDef{}, err
+	}
+	existing, err := s.ListChangeStreams(ctx, project, db)
+	if err != nil {
+		return changeStreamDef{}, err
+	}
+	for _, other := range existing {
+		if cs.DatabaseScope && other.DatabaseScope {
+			return changeStreamDef{}, gcpAlreadyExists("a database-scoped change stream")
+		}
+		if cs.CollectionGroupScope != nil && other.CollectionGroupScope != nil &&
+			other.CollectionGroupScope.CollectionGroupID == cs.CollectionGroupScope.CollectionGroupID {
+			return changeStreamDef{}, gcpAlreadyExists("a change stream for collection group " + cs.CollectionGroupScope.CollectionGroupID)
+		}
+	}
+	cs.Name = changeStreamName(project, db, id)
+	now := clock.Now()
+	cs.CreateTime, cs.UpdateTime = now, now
+	cs.Etag = randomHex(16)
+	if err := s.putResource(ctx, project, rtChangeStream, changeStreamRel(db, id), cs, true); err != nil {
+		return changeStreamDef{}, err
+	}
+	return cs, nil
+}
+
+// GetChangeStream returns a change stream record.
+func (s *Service) GetChangeStream(ctx context.Context, project, db, id string) (changeStreamDef, error) {
+	if err := ValidateChangeStreamID(id); err != nil {
+		return changeStreamDef{}, err
+	}
+	var cs changeStreamDef
+	if err := s.getResource(ctx, project, rtChangeStream, changeStreamRel(db, id), &cs); err != nil {
+		return changeStreamDef{}, err
+	}
+	return cs, nil
+}
+
+// ListChangeStreams returns every change stream of a database, ordered by name
+// so the listing is deterministic across store backends.
+func (s *Service) ListChangeStreams(ctx context.Context, project, db string) ([]changeStreamDef, error) {
+	css, err := listResources[changeStreamDef](ctx, s, project, rtChangeStream, "databases/"+db+"/changeStreams/")
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(css, func(i, j int) bool { return css[i].Name < css[j].Name })
+	return css, nil
+}
+
+// DeleteChangeStream removes a change stream record. A non-empty etag is the
+// documented optimistic-concurrency precondition: a stale one fails the
+// deletion with FAILED_PRECONDITION, the same mapping DeleteDatabase uses for
+// the same "request etag blocks the operation" wording (AIP-154's ABORTED
+// applies to etag mismatches on *updates*).
+func (s *Service) DeleteChangeStream(ctx context.Context, project, db, id, etag string) error {
+	if err := ValidateChangeStreamID(id); err != nil {
+		return err
+	}
+	if s.resources == nil {
+		return gcpNotFound("change stream")
+	}
+	if etag != "" {
+		var cur changeStreamDef
+		if err := s.getResource(ctx, project, rtChangeStream, changeStreamRel(db, id), &cur); err != nil {
+			return err
+		}
+		if cur.Etag != etag {
+			return gcpFailedPrecondition("etag mismatch: the change stream was modified")
+		}
+	}
+	if err := s.resources.Delete(ctx, project, store.GlobalRegion, rtChangeStream, changeStreamRel(db, id)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gcpNotFound("change stream")
 		}
 		return err
 	}

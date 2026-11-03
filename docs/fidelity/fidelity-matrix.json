@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1207,
+    "total": 1211,
     "by_state": {
-      "ga": 1009,
+      "ga": 1013,
       "limited": 146,
       "preview": 14,
       "unsupported": 38
@@ -15,7 +15,7 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 559,
+        "ga": 563,
         "limited": 123,
         "preview": 14,
         "unsupported": 10
@@ -54,7 +54,7 @@
         "ga": 103
       },
       "firestore": {
-        "ga": 62
+        "ga": 66
       },
       "firestoreadmin": {
         "ga": 27,
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 661
+        "rest": 665
       },
       "unverified": {
         "grpc": 46,
@@ -5096,6 +5096,20 @@
     },
     {
       "service": "firestore",
+      "operation": "Firestore.CreateChangeStream",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.changeStreams.create",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.changeStreams.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
       "operation": "Firestore.CreateDatabase",
       "transport": "rest",
       "state": "ga",
@@ -5105,7 +5119,7 @@
         "discovery=firestore.projects.databases.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 42 transcript entries)"
+        "verified=true (rest, 46 transcript entries)"
       ]
     },
     {
@@ -5173,6 +5187,20 @@
       "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.backupSchedules.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.DeleteChangeStream",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.changeStreams.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.changeStreams.delete",
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
@@ -5317,6 +5345,19 @@
     },
     {
       "service": "firestore",
+      "operation": "Firestore.GetChangeStream",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.changeStreams.get",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.changeStreams.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
       "operation": "Firestore.GetDatabase",
       "transport": "rest",
       "state": "ga",
@@ -5415,6 +5456,19 @@
       "verified": true,
       "evidence": [
         "discovery=firestore.projects.locations.backups.list",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ListChangeStreams",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.changeStreams.list",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.changeStreams.list",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
       ]

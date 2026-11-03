@@ -292,6 +292,10 @@ func detectResourceType(segs []string) string {
 			// Firestore Admin user creds
 			// (.../databases/{db}/userCreds[/{id}]).
 			return "userCreds"
+		case "changeStreams":
+			// Firestore Admin change streams
+			// (.../databases/{db}/changeStreams[/{id}]).
+			return "changeStreams"
 		case "fields":
 			// Firestore Admin collection-group fields
 			// (.../databases/{db}/collectionGroups/{cg}/fields[/{fieldPath}]).
@@ -1008,6 +1012,19 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "GetUserCreds"
 		case method == http.MethodDelete:
 			return "DeleteUserCreds"
+		}
+	case "changeStreams":
+		// Firestore Admin change streams (projects.databases.changeStreams).
+		// DELETE is declared only on the resource, never on the collection.
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateChangeStream"
+		case isCollection && method == http.MethodGet:
+			return "ListChangeStreams"
+		case !isCollection && method == http.MethodGet:
+			return "GetChangeStream"
+		case !isCollection && method == http.MethodDelete:
+			return "DeleteChangeStream"
 		}
 	case "fields":
 		switch {

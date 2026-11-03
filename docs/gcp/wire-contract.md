@@ -61,11 +61,18 @@ transport, is in the generated matrix — `make gcp-status` prints the same roll
 
 gRPC-only wire services (no REST descriptor of their own): **Firestore Admin,
 Operations (long-running)**. Firestore Admin's REST control plane (databases,
-collection-group fields, backup schedules, backups, user creds) is served under
-the `firestore` service descriptor on `firestore.googleapis.com/v1/…`; the
-distinct `google.firestore.admin.v1.FirestoreAdmin` gRPC wire service has no REST
+collection-group fields, backup schedules, backups, user creds, change streams)
+is served under the `firestore` service descriptor on
+`firestore.googleapis.com/v1/…`; the distinct
+`google.firestore.admin.v1.FirestoreAdmin` gRPC wire service has no REST
 descriptor because REST clients address it through the `firestore` document
-service.
+service. Change streams are **REST-only by upstream design**: the admin v1
+Discovery document declares `projects.databases.changeStreams.{create,get,list,delete}`
+while the `FirestoreAdmin` proto service declares no ChangeStream RPC, so the
+emulator serves those four methods on the `firestore` REST descriptor only (no
+gRPC cell exists to grade). The resource is stored and echoed as configuration;
+no change records are produced, because no read method exists on which a feed
+could be observed.
 
 ### Recorded evidence (`verified`)
 
@@ -551,7 +558,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `ImportDocuments`/`RestoreDatabase`/`CloneDatabase`/`BulkDeleteDocuments` (data-plane / disaster
   recovery: they need a GCS export format or a real backup snapshot, so any result would be
   fabricated — the composite-index CRUD and the control plane over databases/fields/backup
-  schedules/backups/user creds are served and verified);
+  schedules/backups/user creds/change streams are served and verified);
   Cloud Monitoring `ListUptimeCheckIps` (the static checker address list belongs to the global
   egress probe plane the emulator does not have, so the list is not fabricated — the declarative
   `uptimeCheckConfigs` CRUD beside it is served on both transports).

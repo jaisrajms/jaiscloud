@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,6 +380,214 @@ func TestRESTDeleteProtectionBlock(t *testing.T) {
 	}
 	if _, err := p.GetDatabase(ctx, adminNR("databases/prot-db", nil)); err == nil {
 		t.Error("GetDatabase after delete succeeded, want NotFound")
+	}
+}
+
+// ─── Change streams ──────────────────────────────────────────────────────────
+
+// assertProviderCode asserts the wire code a REST handler answers.
+func assertProviderCode(t *testing.T, err error, wantCode string, wantStatus int) {
+	t.Helper()
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
+	}
+	if pe.Code != wantCode || pe.HTTPStatus != wantStatus {
+		t.Fatalf("error = %s/%d (%v), want %s/%d", pe.Code, pe.HTTPStatus, err, wantCode, wantStatus)
+	}
+}
+
+func TestRESTChangeStreamLifecycle(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	base := "databases/(default)/changeStreams"
+
+	created, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+		"changeStreamId": "orders-stream",
+		"body": map[string]any{
+			"retentionPeriod":      "172800s",
+			"collectionGroupScope": map[string]any{"collectionGroupId": "orders"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateChangeStream: %v", err)
+	}
+	if want := "projects/proj/databases/(default)/changeStreams/orders-stream"; created.Data["name"] != want {
+		t.Errorf("name = %v, want %s", created.Data["name"], want)
+	}
+	if created.Data["retentionPeriod"] != "172800s" {
+		t.Errorf("retentionPeriod = %v, want 172800s", created.Data["retentionPeriod"])
+	}
+	if cg, _ := created.Data["collectionGroupScope"].(map[string]any); cg["collectionGroupId"] != "orders" {
+		t.Errorf("collectionGroupScope = %v, want orders", created.Data["collectionGroupScope"])
+	}
+	// Server-owned fields: an etag for the delete precondition, timestamps for
+	// the record's lifetime; start_time is deliberately absent (no feed).
+	for _, field := range []string{"etag", "createTime", "updateTime"} {
+		if v, _ := created.Data[field].(string); v == "" {
+			t.Errorf("%s is empty on create, want a server-assigned value", field)
+		}
+	}
+	if _, ok := created.Data["startTime"]; ok {
+		t.Errorf("startTime = %v, want unset: the emulator records no events", created.Data["startTime"])
+	}
+
+	got, err := p.GetChangeStream(ctx, adminNR(base+"/orders-stream", nil))
+	if err != nil {
+		t.Fatalf("GetChangeStream: %v", err)
+	}
+	if got.Data["name"] != created.Data["name"] || got.Data["etag"] != created.Data["etag"] {
+		t.Errorf("GetChangeStream = %v, want the record created", got.Data)
+	}
+
+	list, err := p.ListChangeStreams(ctx, adminNR(base, nil))
+	if err != nil {
+		t.Fatalf("ListChangeStreams: %v", err)
+	}
+	items, _ := list.Data["changeStreams"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("ListChangeStreams len = %d, want 1", len(items))
+	}
+
+	// A second database-scoped stream is documented as disallowed.
+	if _, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+		"changeStreamId": "db-scope-one",
+		"body":           map[string]any{"retentionPeriod": "86400s", "databaseScope": map[string]any{}},
+	})); err != nil {
+		t.Fatalf("CreateChangeStream(databaseScope): %v", err)
+	}
+	_, err = p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+		"changeStreamId": "db-scope-two",
+		"body":           map[string]any{"retentionPeriod": "86400s", "databaseScope": map[string]any{}},
+	}))
+	assertProviderCode(t, err, "AlreadyExists", 409)
+
+	// Deterministic listing: sorted by name.
+	list, err = p.ListChangeStreams(ctx, adminNR(base, nil))
+	if err != nil {
+		t.Fatalf("ListChangeStreams: %v", err)
+	}
+	items, _ = list.Data["changeStreams"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("ListChangeStreams len = %d, want 2", len(items))
+	}
+	first, _ := items[0].(map[string]any)
+	if first["name"] != "projects/proj/databases/(default)/changeStreams/db-scope-one" {
+		t.Errorf("first list item = %v, want the name-sorted db-scope-one", first["name"])
+	}
+
+	// The delete etag is a precondition.
+	_, err = p.DeleteChangeStream(ctx, adminNR(base+"/orders-stream", map[string]any{"etag": "stale"}))
+	assertDeletePrecondition(t, err, "stale-etag change stream")
+
+	if _, err := p.DeleteChangeStream(ctx, adminNR(base+"/orders-stream", map[string]any{
+		"etag": created.Data["etag"],
+	})); err != nil {
+		t.Fatalf("DeleteChangeStream: %v", err)
+	}
+	if _, err := p.GetChangeStream(ctx, adminNR(base+"/orders-stream", nil)); err == nil {
+		t.Error("GetChangeStream after delete succeeded, want NotFound")
+	} else {
+		assertProviderCode(t, err, "NotFound", 404)
+	}
+	if _, err := p.DeleteChangeStream(ctx, adminNR(base+"/orders-stream", nil)); err == nil {
+		t.Error("DeleteChangeStream after delete succeeded, want NotFound")
+	} else {
+		assertProviderCode(t, err, "NotFound", 404)
+	}
+}
+
+func TestRESTChangeStreamDuplicateID(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+	base := "databases/(default)/changeStreams"
+
+	if _, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+		"changeStreamId": "dup-stream",
+		"body":           map[string]any{"retentionPeriod": "86400s", "databaseScope": map[string]any{}},
+	})); err != nil {
+		t.Fatalf("CreateChangeStream: %v", err)
+	}
+	// Same id again, with a different scope so the per-scope uniqueness rule is
+	// not what fires: the record's existence is.
+	_, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+		"changeStreamId": "dup-stream",
+		"body": map[string]any{
+			"retentionPeriod":      "86400s",
+			"collectionGroupScope": map[string]any{"collectionGroupId": "orders"},
+		},
+	}))
+	assertProviderCode(t, err, "AlreadyExists", 409)
+}
+
+func TestRESTChangeStreamValidation(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+	base := "databases/(default)/changeStreams"
+	valid := map[string]any{"retentionPeriod": "86400s", "databaseScope": map[string]any{}}
+
+	for _, id := range []string{
+		"",                 // required
+		"abc",              // 3 chars, below the 4-char floor
+		"UPPER-case",       // uppercase
+		"-leading-hyphen",  // first character must be a letter
+		"trailing-hyphen-", // last character must be a letter or digit
+		"has_underscore",   // underscore is not in the alphabet
+	} {
+		_, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{"changeStreamId": id, "body": valid}))
+		if id == "" {
+			// An absent changeStreamId with no body name is invalid, not a
+			// generated id: the Discovery document marks it Required.
+			assertProviderCode(t, err, "InvalidArgument", 400)
+			continue
+		}
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+
+	// A 63-character id is the documented maximum and is accepted.
+	longID := "a" + strings.Repeat("b", 61) + "c"
+	if _, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+		"changeStreamId": longID,
+		"body":           valid,
+	})); err != nil {
+		t.Fatalf("CreateChangeStream(63-char id): %v", err)
+	}
+
+	// Retention period: required, 1-7 days, whole days.
+	for _, body := range []map[string]any{
+		{"databaseScope": map[string]any{}},                               // missing
+		{"retentionPeriod": "3600s", "databaseScope": map[string]any{}},   // under a day
+		{"retentionPeriod": "691200s", "databaseScope": map[string]any{}}, // over 7 days
+		{"retentionPeriod": "129600s", "databaseScope": map[string]any{}}, // 1.5 days
+		{"retentionPeriod": "86400s"},                                     // no scope
+		{"retentionPeriod": "86400s", "databaseScope": map[string]any{},
+			"collectionGroupScope": map[string]any{"collectionGroupId": "orders"}}, // both scopes
+		{"retentionPeriod": "86400s",
+			"collectionGroupScope": map[string]any{}}, // empty collection group
+	} {
+		_, err := p.CreateChangeStream(ctx, adminNR(base, map[string]any{
+			"changeStreamId": "validated-" + strconv.Itoa(len(body)),
+			"body":           body,
+		}))
+		if err == nil {
+			t.Errorf("CreateChangeStream(%v) succeeded, want InvalidArgument", body)
+			continue
+		}
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+
+	// A malformed resource name is InvalidArgument on every single-resource verb.
+	for _, name := range []string{
+		"databases/(default)/changeStreams",
+		"databases/(default)/changeStreams/x/extra",
+		"databases/(default)/userCreds/orders-stream",
+	} {
+		if _, err := p.GetChangeStream(ctx, adminNR(name, nil)); err == nil {
+			t.Errorf("GetChangeStream(%q) succeeded, want InvalidArgument", name)
+		} else {
+			assertProviderCode(t, err, "InvalidArgument", 400)
+		}
 	}
 }
 
