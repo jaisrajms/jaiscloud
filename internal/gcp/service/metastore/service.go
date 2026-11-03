@@ -17,10 +17,12 @@
 //
 // This is control-plane only: the emulator never stands up a Hive Thrift /
 // Iceberg metadata endpoint per service (the single global Hive Metastore
-// Thrift plane in internal/gcp/hms is separate). Deferred operations
-// (ExportMetadata, RestoreService, QueryMetadata, MoveTableToDatabase,
-// AlterMetadataResourceLocation) are not modelled here; each transport reports
-// them Unimplemented.
+// Thrift plane in internal/gcp/hms is separate). The admin/DR operations that
+// mutate catalog metadata — MoveTableToDatabase and AlterMetadataResourceLocation
+// — are served here through the CatalogAdmin seam (see controlplane.go);
+// ExportMetadata, RestoreService and QueryMetadata stay explicit Unimplemented
+// failures in both transports, because serving them would require inventing a
+// metadata dump/restore/SQL format this emulator does not store.
 //
 // Federations (google.cloud.metastore.v1.DataprocMetastoreFederation) are
 // modelled here too (see federation.go). The google.iam.v1.IAMPolicy mixin is

@@ -101,9 +101,10 @@ func operationToProto(op metastorestore.Operation, project string, response prot
 
 // operationResponse reconstructs the typed result message for a settled
 // operation from its stored Discovery-shape JSON. A create/update carries the
-// mutated resource tagged with its Any @type; a delete carries an empty body.
-// An unknown @type or an undecodable body falls back to Empty so a poll never
-// fails on a malformed record.
+// mutated resource tagged with its Any @type, the admin/DR mutations carry their
+// (empty) method response, and a delete carries an empty body. An unknown @type
+// or an undecodable body falls back to Empty so a poll never fails on a
+// malformed record.
 func operationResponse(op metastorestore.Operation) proto.Message {
 	if op.Response == "" {
 		return emptyResponse()
@@ -122,6 +123,10 @@ func operationResponse(op metastorestore.Operation) proto.Message {
 		out = &metastorepb.MetadataImport{}
 	case core.FederationTypeURL:
 		out = &metastorepb.Federation{}
+	case core.MoveTableResponseTypeURL:
+		out = &metastorepb.MoveTableToDatabaseResponse{}
+	case core.AlterLocationResponseTypeURL:
+		out = &metastorepb.AlterMetadataResourceLocationResponse{}
 	default:
 		return emptyResponse()
 	}

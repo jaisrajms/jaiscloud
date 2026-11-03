@@ -59,11 +59,19 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Metastore.FederationTestIamPermissions":  p.testIamPermissions,
 		"Metastore.GetOperation":                  p.GetOperation,
 		"Metastore.ListOperations":                p.ListOperations,
-		"Metastore.ExportMetadata":                p.unimplemented("ExportMetadata"),
-		"Metastore.RestoreService":                p.unimplemented("RestoreService"),
-		"Metastore.QueryMetadata":                 p.unimplemented("QueryMetadata"),
-		"Metastore.MoveTableToDatabase":           p.unimplemented("MoveTableToDatabase"),
-		"Metastore.AlterMetadataResourceLocation": p.unimplemented("AlterMetadataResourceLocation"),
+		"Metastore.MoveTableToDatabase":           p.MoveTableToDatabase,
+		"Metastore.AlterMetadataResourceLocation": p.AlterMetadataResourceLocation,
+		// ExportMetadata, RestoreService and QueryMetadata are deliberate
+		// Unimplemented failures (see controlplane.go): a metadata dump, a
+		// restore from one, and read-only SQL over the metastore RDBMS are not
+		// modelled, so each fails loud with a documented reason instead of
+		// fabricating a result.
+		"Metastore.ExportMetadata": p.unimplemented("ExportMetadata",
+			"a metastore metadata dump (MySQL dump or Avro files of the Hive metastore RDBMS schema) is not modelled; no export artifact is written to Cloud Storage"),
+		"Metastore.RestoreService": p.unimplemented("RestoreService",
+			"restoring a metastore from a backup artifact is not modelled; the emulator stores no metadata dump to restore"),
+		"Metastore.QueryMetadata": p.unimplemented("QueryMetadata",
+			"read-only SQL over the Hive metastore RDBMS schema is not modelled (no SQL engine over the catalog and no result manifest in Cloud Storage)"),
 	}
 }
 
@@ -328,6 +336,35 @@ func (p *Provider) testIamPermissions(ctx context.Context, nr *model.NormalizedR
 	return provider.OK(map[string]any{"permissions": perms}), nil
 }
 
+// --- Admin / DR catalog mutations ---
+
+// MoveTableToDatabase moves a table to another database in the Service's own
+// Hive Metastore catalog and returns the done operation (the request body
+// carries dbName/tableName/destinationDbName; the Service comes from the path).
+func (p *Provider) MoveTableToDatabase(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	body := bodyOf(nr)
+	op, err := p.core.MoveTableToDatabase(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"),
+		bodyString(body, "dbName"), bodyString(body, "tableName"), bodyString(body, "destinationDbName"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
+// AlterMetadataResourceLocation re-points a database, table or partition's
+// metadata location and returns the done operation.
+func (p *Provider) AlterMetadataResourceLocation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	body := bodyOf(nr)
+	op, err := p.core.AlterMetadataResourceLocation(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"),
+		bodyString(body, "resourceName"), bodyString(body, "locationUri"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
 // --- Operations ---
 
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -380,10 +417,11 @@ func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedReque
 	return provider.OK(out), nil
 }
 
-// unimplemented returns a handler that fails loud with Unimplemented for the
-// deferred control-plane operations.
-func (p *Provider) unimplemented(name string) provider.HandlerFunc {
+// unimplemented returns a handler that fails loud with Unimplemented for a
+// deferred control-plane operation. reason states why the emulator cannot serve
+// it, so the failure is self-documenting rather than a bare stub.
+func (p *Provider) unimplemented(name, reason string) provider.HandlerFunc {
 	return func(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-		return nil, model.NewProviderError("Unimplemented", name+" is not supported by the emulator", 501)
+		return nil, model.NewProviderError("Unimplemented", name+": "+reason, 501)
 	}
 }

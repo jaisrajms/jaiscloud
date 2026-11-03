@@ -19,6 +19,29 @@ type CatalogHost interface {
 	OpenCatalog(ctx context.Context, id string, port int) error
 	// CloseCatalog drops id's catalog and releases its port.
 	CloseCatalog(ctx context.Context, id string)
+	// Catalog returns id's catalog admin surface, for the admin/DR operations
+	// that mutate catalog metadata directly (moveTableToDatabase,
+	// alterLocation). A deployment that serves no catalog for id returns an
+	// error (or a nil CatalogAdmin), which the caller reports as a failed
+	// precondition rather than as a completed mutation.
+	Catalog(ctx context.Context, id string) (CatalogAdmin, error)
+}
+
+// CatalogAdmin is one Service's Hive Metastore catalog as the control plane
+// mutates it. Every method reports the serving-plane store's sentinel errors
+// (ErrDatabaseNotFound / ErrTableNotFound / ErrPartitionNotFound /
+// ErrTableExists), which the core maps onto its wire errors.
+type CatalogAdmin interface {
+	// MoveTable moves a table to another database in the same catalog, keeping
+	// its name and its partitions.
+	MoveTable(ctx context.Context, db, tableName, destDB string) error
+	// SetDatabaseLocation re-points a database's root directory.
+	SetDatabaseLocation(ctx context.Context, db, locationURI string) error
+	// SetTableLocation re-points a table's storage descriptor location.
+	SetTableLocation(ctx context.Context, db, tableName, locationURI string) error
+	// SetPartitionLocation re-points one partition's storage descriptor
+	// location.
+	SetPartitionLocation(ctx context.Context, db, tableName string, values []string, locationURI string) error
 }
 
 // WithCatalogHost wires the Hive serving plane. Nil is a no-op.

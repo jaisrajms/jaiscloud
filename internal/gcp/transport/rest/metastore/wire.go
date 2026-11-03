@@ -68,6 +68,14 @@ func bodyOf(nr *model.NormalizedRequest) map[string]any {
 	return map[string]any{}
 }
 
+// bodyString returns a top-level string field of the decoded request body ("" when
+// absent or not a string). The custom-method requests carry their arguments in
+// the body, not in the path.
+func bodyString(body map[string]any, key string) string {
+	s, _ := body[key].(string)
+	return s
+}
+
 // rawBodyOf marshals the decoded JSON request body to raw JSON, returning nil
 // for an absent or empty body.
 func rawBodyOf(nr *model.NormalizedRequest) json.RawMessage {

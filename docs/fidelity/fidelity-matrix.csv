@@ -778,7 +778,7 @@ memorystore,Memorystore.ListLocations,rest,limited,true,metadata-only over Resou
 memorystore,Memorystore.RescheduleMaintenance,rest,limited,true,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.UpdateInstance,rest,limited,true,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.UpgradeInstance,rest,limited,true,metadata-only over ResourceStore (no data plane)
-metastore,AlterMetadataResourceLocation,grpc,unsupported,false,the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub
+metastore,AlterMetadataResourceLocation,grpc,ga,true,
 metastore,CreateBackup,grpc,ga,true,
 metastore,CreateFederation,grpc,ga,true,
 metastore,CreateMetadataImport,grpc,ga,true,
@@ -786,7 +786,7 @@ metastore,CreateService,grpc,ga,true,
 metastore,DeleteBackup,grpc,ga,true,
 metastore,DeleteFederation,grpc,ga,true,
 metastore,DeleteService,grpc,ga,true,
-metastore,ExportMetadata,grpc,unsupported,false,Hive Thrift metadata export is not modelled; explicit Unimplemented stub
+metastore,ExportMetadata,grpc,unsupported,false,a metastore metadata dump (MySQL dump or Avro files of the Hive metastore RDBMS schema) is not modelled; explicit Unimplemented stub
 metastore,GetBackup,grpc,ga,true,
 metastore,GetFederation,grpc,ga,true,
 metastore,GetMetadataImport,grpc,ga,true,
@@ -795,7 +795,7 @@ metastore,ListBackups,grpc,ga,true,
 metastore,ListFederations,grpc,ga,true,
 metastore,ListMetadataImports,grpc,ga,true,
 metastore,ListServices,grpc,ga,true,
-metastore,Metastore.AlterMetadataResourceLocation,rest,unsupported,false,explicit Unimplemented stub
+metastore,Metastore.AlterMetadataResourceLocation,rest,ga,false,
 metastore,Metastore.BackupGetIamPolicy,rest,ga,true,
 metastore,Metastore.BackupSetIamPolicy,rest,ga,true,
 metastore,Metastore.CreateBackup,rest,ga,true,
@@ -821,7 +821,7 @@ metastore,Metastore.ListFederations,rest,ga,true,
 metastore,Metastore.ListMetadataImports,rest,ga,true,
 metastore,Metastore.ListOperations,rest,ga,true,
 metastore,Metastore.ListServices,rest,ga,true,
-metastore,Metastore.MoveTableToDatabase,rest,unsupported,false,explicit Unimplemented stub
+metastore,Metastore.MoveTableToDatabase,rest,ga,false,
 metastore,Metastore.QueryMetadata,rest,unsupported,false,explicit Unimplemented stub
 metastore,Metastore.RestoreService,rest,unsupported,false,explicit Unimplemented stub
 metastore,Metastore.ServiceGetIamPolicy,rest,ga,true,
@@ -832,9 +832,9 @@ metastore,Metastore.TableSetIamPolicy,rest,ga,true,
 metastore,Metastore.UpdateFederation,rest,ga,true,
 metastore,Metastore.UpdateMetadataImport,rest,ga,true,
 metastore,Metastore.UpdateService,rest,ga,true,
-metastore,MoveTableToDatabase,grpc,unsupported,false,the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub
-metastore,QueryMetadata,grpc,unsupported,false,the gRPC metadata query plane is not modelled; explicit Unimplemented stub
-metastore,RestoreService,grpc,unsupported,false,Hive Thrift metadata restore is not modelled; explicit Unimplemented stub
+metastore,MoveTableToDatabase,grpc,ga,true,
+metastore,QueryMetadata,grpc,unsupported,false,read-only SQL over the Hive metastore RDBMS schema is not modelled; explicit Unimplemented stub
+metastore,RestoreService,grpc,unsupported,false,the emulator stores no metadata dump to restore from; explicit Unimplemented stub
 metastore,UpdateFederation,grpc,ga,true,
 metastore,UpdateMetadataImport,grpc,ga,true,
 metastore,UpdateService,grpc,ga,true,

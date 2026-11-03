@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
@@ -278,24 +279,34 @@ func TestMetadataImportCRUD(t *testing.T) {
 	}
 }
 
+// TestDeferredRPCsUnimplemented pins the three control-plane RPCs that stay
+// explicit Unimplemented failures, and that the message documents why. The two
+// catalog mutations are served (see controlplane_test.go).
 func TestDeferredRPCsUnimplemented(t *testing.T) {
 	ctx := context.Background()
 	s := newGRPCService()
 
-	if _, err := s.ExportMetadata(ctx, &metastorepb.ExportMetadataRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Errorf("ExportMetadata: code = %v, want Unimplemented", status.Code(err))
-	}
-	if _, err := s.RestoreService(ctx, &metastorepb.RestoreServiceRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Errorf("RestoreService: code = %v, want Unimplemented", status.Code(err))
-	}
-	if _, err := s.QueryMetadata(ctx, &metastorepb.QueryMetadataRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Errorf("QueryMetadata: code = %v, want Unimplemented", status.Code(err))
-	}
-	if _, err := s.MoveTableToDatabase(ctx, &metastorepb.MoveTableToDatabaseRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Errorf("MoveTableToDatabase: code = %v, want Unimplemented", status.Code(err))
-	}
-	if _, err := s.AlterMetadataResourceLocation(ctx, &metastorepb.AlterMetadataResourceLocationRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Errorf("AlterMetadataResourceLocation: code = %v, want Unimplemented", status.Code(err))
+	for name, call := range map[string]func() error{
+		"ExportMetadata": func() error {
+			_, err := s.ExportMetadata(ctx, &metastorepb.ExportMetadataRequest{})
+			return err
+		},
+		"RestoreService": func() error {
+			_, err := s.RestoreService(ctx, &metastorepb.RestoreServiceRequest{})
+			return err
+		},
+		"QueryMetadata": func() error {
+			_, err := s.QueryMetadata(ctx, &metastorepb.QueryMetadataRequest{})
+			return err
+		},
+	} {
+		err := call()
+		if status.Code(err) != codes.Unimplemented {
+			t.Errorf("%s: code = %v, want Unimplemented", name, status.Code(err))
+		}
+		if msg := status.Convert(err).Message(); !strings.Contains(msg, name+": ") {
+			t.Errorf("%s: message %q does not name the operation", name, msg)
+		}
 	}
 }
 

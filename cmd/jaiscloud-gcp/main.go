@@ -1823,7 +1823,9 @@ func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, dat
 // hmsCatalogHost connects the Metastore control plane to the Hive serving plane.
 // Creating a Service opens its own catalog listener on the Service's assigned
 // port; deleting one closes the listener and drops the catalog, exactly as a
-// Service deletion removes its Hive Metastore in real GCP.
+// Service deletion removes its Hive Metastore in real GCP. Catalog hands the
+// control plane the catalog's admin surface for the metadata mutations
+// (moveTableToDatabase / alterLocation) that operate on catalog metadata.
 type hmsCatalogHost struct {
 	fleet    *hms.Fleet
 	catalogs hmsstore.Catalogs
@@ -1840,6 +1842,17 @@ func (h hmsCatalogHost) OpenCatalog(_ context.Context, id string, port int) erro
 func (h hmsCatalogHost) CloseCatalog(ctx context.Context, id string) {
 	h.fleet.Close(id)
 	h.catalogs.DropCatalog(ctx, id)
+}
+
+// Catalog returns the admin surface of id's catalog. The catalog is the same
+// store partition the listener serves, so a mutation made here is visible to the
+// next Thrift client on that endpoint.
+func (h hmsCatalogHost) Catalog(_ context.Context, id string) (metastorecore.CatalogAdmin, error) {
+	store := h.catalogs.Catalog(id)
+	if store == nil {
+		return nil, fmt.Errorf("metastore: no catalog %q", id)
+	}
+	return hms.NewAdmin(store), nil
 }
 
 // hmsCatalogSync rebinds the per-Service catalog listeners from the Metastore

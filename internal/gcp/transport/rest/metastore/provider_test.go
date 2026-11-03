@@ -315,6 +315,10 @@ func TestCreateService_MissingParams(t *testing.T) {
 	}
 }
 
+// TestDeferredOps_Unimplemented pins the three control-plane operations that
+// stay explicit Unimplemented failures: the metadata dump/restore/query plane is
+// not modelled (see controlplane.go). The two catalog mutations are served, and
+// covered by controlplane_test.go.
 func TestDeferredOps_Unimplemented(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -322,12 +326,11 @@ func TestDeferredOps_Unimplemented(t *testing.T) {
 	routes := p.Routes()
 	for _, name := range []string{
 		"Metastore.ExportMetadata", "Metastore.RestoreService", "Metastore.QueryMetadata",
-		"Metastore.MoveTableToDatabase", "Metastore.AlterMetadataResourceLocation",
 	} {
 		_, err := routes[name](ctx, newNR(nil))
 		perr, ok := err.(*model.ProviderError)
-		if !ok || perr.Code != "Unimplemented" {
-			t.Errorf("%s: expected Unimplemented, got %v", name, err)
+		if !ok || perr.Code != "Unimplemented" || perr.HTTPStatus != 501 {
+			t.Errorf("%s: expected Unimplemented/501, got %v", name, err)
 		}
 	}
 }

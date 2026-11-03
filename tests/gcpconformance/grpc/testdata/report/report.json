@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 514,
-  "passed": 514,
+  "total": 516,
+  "passed": 516,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 514,
-    "passed": 514,
+    "checks": 516,
+    "passed": 516,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -100,8 +100,8 @@
     },
     {
       "service": "metastore",
-      "total": 18,
-      "passed": 18,
+      "total": 20,
+      "passed": 20,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2605,6 +2605,20 @@
       "method": "DeleteBackup",
       "status": "pass",
       "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "metastore",
+      "rpc": "MoveTableToDatabase",
+      "method": "MoveTableToDatabase",
+      "status": "pass",
+      "key_field": "request validation + NOT_FOUND for an unknown table (RPC served)"
+    },
+    {
+      "service": "metastore",
+      "rpc": "AlterMetadataResourceLocation",
+      "method": "AlterMetadataResourceLocation",
+      "status": "pass",
+      "key_field": "request validation + NOT_FOUND for an unknown database (RPC served)"
     },
     {
       "service": "metastore",

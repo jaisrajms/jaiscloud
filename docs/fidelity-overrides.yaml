@@ -97,14 +97,6 @@ operations:
     operation: Metastore.QueryMetadata
     state: unsupported
     reason: "explicit Unimplemented stub"
-  - service: metastore
-    operation: Metastore.MoveTableToDatabase
-    state: unsupported
-    reason: "explicit Unimplemented stub"
-  - service: metastore
-    operation: Metastore.AlterMetadataResourceLocation
-    state: unsupported
-    reason: "explicit Unimplemented stub"
   - service: dataproc
     operation: Dataproc.DiagnoseCluster
     state: unsupported
@@ -252,30 +244,24 @@ operations:
   # service's canonical endpoint (not only by direct dispatch); the default host
   # keeps that path on Cloud Workflows.
 
-  # Dataproc Metastore gRPC is control-plane only: the deferred control-plane
-  # RPCs (export/restore/query/move/alter) are gated on a Hive Thrift data plane
-  # the emulator does not model per service, so each is an explicit
-  # Unimplemented stub.
+  # Dataproc Metastore's admin/DR surface: moveTableToDatabase and alterLocation
+  # are served — they mutate the Service's own Hive Metastore catalog, which the
+  # emulator does model — so they need no override. export/restore/query remain
+  # explicit Unimplemented stubs: each needs a metadata dump/restore/SQL plane
+  # over the Hive metastore RDBMS schema that the emulator does not store, so
+  # serving one would fabricate a result.
   - service: metastore
     operation: ExportMetadata
     state: unsupported
-    reason: "Hive Thrift metadata export is not modelled; explicit Unimplemented stub"
+    reason: "a metastore metadata dump (MySQL dump or Avro files of the Hive metastore RDBMS schema) is not modelled; explicit Unimplemented stub"
   - service: metastore
     operation: RestoreService
     state: unsupported
-    reason: "Hive Thrift metadata restore is not modelled; explicit Unimplemented stub"
+    reason: "the emulator stores no metadata dump to restore from; explicit Unimplemented stub"
   - service: metastore
     operation: QueryMetadata
     state: unsupported
-    reason: "the gRPC metadata query plane is not modelled; explicit Unimplemented stub"
-  - service: metastore
-    operation: MoveTableToDatabase
-    state: unsupported
-    reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
-  - service: metastore
-    operation: AlterMetadataResourceLocation
-    state: unsupported
-    reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
+    reason: "read-only SQL over the Hive metastore RDBMS schema is not modelled; explicit Unimplemented stub"
 
   # gRPC methods deliberately left limited: each is gated on a subsystem the
   # emulator does not model, so implementing it would fabricate a wire-divergent

@@ -53,10 +53,10 @@ func NewService(c *core.Service, defaultProj string) *Service {
 // mapError translates a core ProviderError into a gRPC status error.
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
-// unimplemented builds the canonical Unimplemented provider error the deferred
-// control-plane RPCs report.
-func unimplemented(name string) error {
-	return model.NewProviderError("Unimplemented", name+" is not supported by the emulator", 501)
+// unimplemented builds the canonical Unimplemented provider error a deferred
+// control-plane RPC reports. reason documents why the emulator cannot serve it.
+func unimplemented(name, reason string) error {
+	return model.NewProviderError("Unimplemented", name+": "+reason, 501)
 }
 
 // protoConfig marshals a request message to the camelCase JSON body the core
@@ -226,26 +226,52 @@ func (s *Service) DeleteBackup(ctx context.Context, req *metastorepb.DeleteBacku
 	return operationToProto(op, project, emptyResponse())
 }
 
+// ─── Admin / DR catalog mutations ─────────────────────────────────────────────
+
+// MoveTableToDatabase moves a table to another database in the Service's own
+// Hive Metastore catalog, returning the done operation.
+func (s *Service) MoveTableToDatabase(ctx context.Context, req *metastorepb.MoveTableToDatabaseRequest) (*longrunningpb.Operation, error) {
+	project := s.projectFor(ctx, req.GetService())
+	rn := core.ParseName(req.GetService())
+	op, err := s.core.MoveTableToDatabase(ctx, project, rn.Location, rn.Service,
+		req.GetDbName(), req.GetTableName(), req.GetDestinationDbName())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return operationToProto(op, project, &metastorepb.MoveTableToDatabaseResponse{})
+}
+
+// AlterMetadataResourceLocation re-points a database, table or partition's
+// metadata location, returning the done operation.
+func (s *Service) AlterMetadataResourceLocation(ctx context.Context, req *metastorepb.AlterMetadataResourceLocationRequest) (*longrunningpb.Operation, error) {
+	project := s.projectFor(ctx, req.GetService())
+	rn := core.ParseName(req.GetService())
+	op, err := s.core.AlterMetadataResourceLocation(ctx, project, rn.Location, rn.Service,
+		req.GetResourceName(), req.GetLocationUri())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return operationToProto(op, project, &metastorepb.AlterMetadataResourceLocationResponse{})
+}
+
 // ─── Deferred control-plane RPCs ──────────────────────────────────────────────
 
+// The remaining three catalog admin/DR RPCs fail loud with Unimplemented rather
+// than fabricating a result: the emulator stores no metadata dump to export or
+// restore, and runs no SQL engine over the metastore catalog to query.
 func (s *Service) ExportMetadata(_ context.Context, _ *metastorepb.ExportMetadataRequest) (*longrunningpb.Operation, error) {
-	return nil, mapError(unimplemented("ExportMetadata"))
+	return nil, mapError(unimplemented("ExportMetadata",
+		"a metastore metadata dump (MySQL dump or Avro files of the Hive metastore RDBMS schema) is not modelled; no export artifact is written to Cloud Storage"))
 }
 
 func (s *Service) RestoreService(_ context.Context, _ *metastorepb.RestoreServiceRequest) (*longrunningpb.Operation, error) {
-	return nil, mapError(unimplemented("RestoreService"))
+	return nil, mapError(unimplemented("RestoreService",
+		"restoring a metastore from a backup artifact is not modelled; the emulator stores no metadata dump to restore"))
 }
 
 func (s *Service) QueryMetadata(_ context.Context, _ *metastorepb.QueryMetadataRequest) (*longrunningpb.Operation, error) {
-	return nil, mapError(unimplemented("QueryMetadata"))
-}
-
-func (s *Service) MoveTableToDatabase(_ context.Context, _ *metastorepb.MoveTableToDatabaseRequest) (*longrunningpb.Operation, error) {
-	return nil, mapError(unimplemented("MoveTableToDatabase"))
-}
-
-func (s *Service) AlterMetadataResourceLocation(_ context.Context, _ *metastorepb.AlterMetadataResourceLocationRequest) (*longrunningpb.Operation, error) {
-	return nil, mapError(unimplemented("AlterMetadataResourceLocation"))
+	return nil, mapError(unimplemented("QueryMetadata",
+		"read-only SQL over the Hive metastore RDBMS schema is not modelled (no SQL engine over the catalog and no result manifest in Cloud Storage)"))
 }
 
 // ResolveOperation implements the google.longrunning.Operations resolver for

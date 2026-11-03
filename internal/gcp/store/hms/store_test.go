@@ -345,6 +345,89 @@ func runStoreTests(t *testing.T, s Store) {
 	if _, err := s.GetPartition(ctx, "db3", "t", []string{"p"}); err != ErrTableNotFound {
 		t.Fatalf("expected partitions gone with database, got %v", err)
 	}
+
+	// MoveTable re-keys a table and its partitions onto another database in one
+	// atomic step, applying the caller's rewrite to both stored structs.
+	for _, name := range []string{"db4", "db5"} {
+		if err := s.CreateDatabase(ctx, Database{Name: name}); err != nil {
+			t.Fatalf("create database %s: %v", name, err)
+		}
+	}
+	if err := s.CreateTable(ctx, "db4", "t", Table{DBName: "db4", TableName: "t", TableJSON: tblJSON}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreatePartition(ctx, "db4", "t", Partition{DBName: "db4", TableName: "t", Values: []string{"p1"}, PartJSON: partJSON("p1")}); err != nil {
+		t.Fatal(err)
+	}
+	// The rewrite stands in for the serving plane's Hive struct rewrite (here:
+	// drop everything but dbName=db5), so the test can assert it was applied to
+	// both the table and the partition.
+	movedJSON := json.RawMessage(`["o",[[2,["s","db5"]]]]`)
+	stamp := func(json.RawMessage) (json.RawMessage, error) { return movedJSON, nil }
+
+	// A rejected rewrite changes nothing at all.
+	if _, err := s.MoveTable(ctx, "db4", "t", "db5", func(json.RawMessage) (json.RawMessage, error) {
+		return nil, errTestMutate
+	}); err != errTestMutate {
+		t.Fatalf("expected the rewrite error, got %v", err)
+	}
+	if _, err := s.GetTable(ctx, "db4", "t"); err != nil {
+		t.Fatalf("failed move lost the source table: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db4", "t", []string{"p1"}); err != nil {
+		t.Fatalf("failed move lost the source partition: %v", err)
+	}
+	if _, err := s.GetTable(ctx, "db5", "t"); err != ErrTableNotFound {
+		t.Fatalf("failed move created the destination table: %v", err)
+	}
+	if _, err := s.MoveTable(ctx, "db4", "missing", "db5", stamp); err != ErrTableNotFound {
+		t.Fatalf("expected ErrTableNotFound, got %v", err)
+	}
+	if _, err := s.MoveTable(ctx, "db4", "t", "nope", stamp); err != ErrDatabaseNotFound {
+		t.Fatalf("expected ErrDatabaseNotFound, got %v", err)
+	}
+
+	moved, err := s.MoveTable(ctx, "db4", "t", "db5", stamp)
+	if err != nil {
+		t.Fatalf("move table: %v", err)
+	}
+	if moved.DBName != "db5" || moved.TableName != "t" || !sameJSON(moved.TableJSON, movedJSON) {
+		t.Fatalf("moved table = %+v", moved)
+	}
+	if _, err := s.GetTable(ctx, "db4", "t"); err != ErrTableNotFound {
+		t.Fatalf("source table still present after move: %v", err)
+	}
+	p, err := s.GetPartition(ctx, "db5", "t", []string{"p1"})
+	if err != nil {
+		t.Fatalf("partition lost on move: %v", err)
+	}
+	if p.DBName != "db5" || p.TableName != "t" || !sameJSON(p.PartJSON, movedJSON) {
+		t.Fatalf("moved partition = %+v", p)
+	}
+	if _, err := s.GetPartition(ctx, "db4", "t", []string{"p1"}); err != ErrTableNotFound {
+		t.Fatalf("partition still reachable under the source table: %v", err)
+	}
+	// A table of that name already in the destination is a conflict.
+	if err := s.CreateTable(ctx, "db4", "t", Table{DBName: "db4", TableName: "t", TableJSON: tblJSON}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MoveTable(ctx, "db4", "t", "db5", stamp); err != ErrTableExists {
+		t.Fatalf("expected ErrTableExists, got %v", err)
+	}
+}
+
+// sameJSON compares two JSON documents semantically: the column type is JSONB,
+// which rewrites key order and whitespace, so a byte comparison would be a
+// backend-specific assertion rather than a contract one.
+func sameJSON(a, b []byte) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil {
+		return false
+	}
+	if json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
 }
 
 // partJSON builds a minimal but well-formed canonical Partition JSON (the first
