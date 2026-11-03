@@ -6697,7 +6697,7 @@
         "discovery=iam.projects.serviceAccounts.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 24 transcript entries)"
+        "verified=true (rest, 25 transcript entries)"
       ]
     },
     {
@@ -6711,7 +6711,7 @@
         "discovery=iam.projects.serviceAccounts.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 3 transcript entries)"
+        "verified=true (rest, 4 transcript entries)"
       ]
     },
     {

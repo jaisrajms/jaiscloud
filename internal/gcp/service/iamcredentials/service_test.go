@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"hash/crc32"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,30 @@ const (
 )
 
 func newService() *Service { return New(store.NewMemoryResourceStore()) }
+
+// seedAccount registers email as an existing service account in project — the
+// record projects.serviceAccounts.create writes. Every signing method resolves
+// the account through this registry (J67), so a test that signs must create one.
+func seedAccount(t *testing.T, s *Service, project, email string) {
+	t.Helper()
+	data, _ := json.Marshal(serviceaccount.Account{
+		Email:    email,
+		UniqueID: fmt.Sprintf("%021d", crc32.ChecksumIEEE([]byte(email))),
+	})
+	if err := s.resources.Create(context.Background(), project, store.GlobalRegion, store.ResourceEntry{
+		Type: serviceaccount.AccountResourceType, ID: email, Data: data,
+	}); err != nil {
+		t.Fatalf("seed service account %s: %v", email, err)
+	}
+}
+
+// newServiceWithAccount returns a core whose testEmail exists in testProject.
+func newServiceWithAccount(t *testing.T) *Service {
+	t.Helper()
+	s := newService()
+	seedAccount(t, s, testProject, testEmail)
+	return s
+}
 
 // jwtClaims decodes the (unverified) payload of a compact JWS.
 func jwtClaims(t *testing.T, token string) map[string]any {
@@ -45,7 +71,7 @@ func jwtClaims(t *testing.T, token string) map[string]any {
 
 func TestGenerateAccessToken(t *testing.T) {
 	ctx := context.Background()
-	s := newService()
+	s := newServiceWithAccount(t)
 	before := time.Now()
 	token, expires, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour)
 	if err != nil {
@@ -76,7 +102,7 @@ func TestGenerateAccessToken(t *testing.T) {
 }
 
 func TestGenerateAccessTokenDefaultLifetime(t *testing.T) {
-	s := newService()
+	s := newServiceWithAccount(t)
 	token, _, err := s.GenerateAccessToken(context.Background(), "-", testEmail, []string{cloudScope}, 0)
 	if err != nil {
 		t.Fatalf("GenerateAccessToken: %v", err)
@@ -90,7 +116,7 @@ func TestGenerateAccessTokenDefaultLifetime(t *testing.T) {
 }
 
 func TestGenerateAccessTokenValidation(t *testing.T) {
-	s := newService()
+	s := newServiceWithAccount(t)
 	ctx := context.Background()
 	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, nil, time.Hour); err == nil {
 		t.Error("expected an error for empty scopes")
@@ -107,7 +133,7 @@ func TestGenerateAccessTokenValidation(t *testing.T) {
 
 func TestGenerateAccessTokenReusesKey(t *testing.T) {
 	ctx := context.Background()
-	s := newService()
+	s := newServiceWithAccount(t)
 	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour); err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
@@ -118,7 +144,7 @@ func TestGenerateAccessTokenReusesKey(t *testing.T) {
 }
 
 func TestGenerateIDToken(t *testing.T) {
-	s := newService()
+	s := newServiceWithAccount(t)
 	ctx := context.Background()
 	token, err := s.GenerateIDToken(ctx, "-", testEmail, "https://example.com", true)
 	if err != nil {
@@ -149,7 +175,7 @@ func TestGenerateIDToken(t *testing.T) {
 }
 
 func TestSignBlob(t *testing.T) {
-	s := newService()
+	s := newServiceWithAccount(t)
 	ctx := context.Background()
 	keyID, sig, err := s.SignBlob(ctx, "-", testEmail, []byte("hello"))
 	if err != nil {
@@ -180,7 +206,7 @@ func TestSignBlob(t *testing.T) {
 }
 
 func TestSignJWT(t *testing.T) {
-	s := newService()
+	s := newServiceWithAccount(t)
 	ctx := context.Background()
 	keyID, signed, err := s.SignJWT(ctx, "-", testEmail, `{"iss":"test"}`)
 	if err != nil {
@@ -207,6 +233,52 @@ func TestSignJWT(t *testing.T) {
 	ok := time.Now().Add(time.Hour).Unix()
 	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(ok)+`}`); err != nil {
 		t.Errorf("valid exp rejected: %v", err)
+	}
+}
+
+// TestMissingServiceAccountIsNotFound covers J67: every IAM Credentials method
+// requires the account to exist. The wildcard "projects/-" used to resolve only
+// the project from the email and materialise a signing key, so a service account
+// that was never created could still mint tokens and signatures.
+func TestMissingServiceAccountIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newService()
+	missing := "ghost@test-project.iam.gserviceaccount.com"
+
+	calls := map[string]func() error{
+		"GenerateAccessToken": func() error {
+			_, _, err := s.GenerateAccessToken(ctx, "-", missing, []string{cloudScope}, time.Hour)
+			return err
+		},
+		"GenerateIdToken": func() error {
+			_, err := s.GenerateIDToken(ctx, "-", missing, "https://example.com", false)
+			return err
+		},
+		"SignBlob": func() error {
+			_, _, err := s.SignBlob(ctx, "-", missing, []byte("hello"))
+			return err
+		},
+		"SignJwt": func() error {
+			_, _, err := s.SignJWT(ctx, "-", missing, `{"iss":"test"}`)
+			return err
+		},
+	}
+	for name, call := range calls {
+		pe, ok := call().(*model.ProviderError)
+		if !ok {
+			t.Fatalf("%s: error is not a *model.ProviderError", name)
+		}
+		if pe.HTTPStatus != 404 || pe.Code != "NotFound" {
+			t.Errorf("%s = %v (status %d), want 404 NotFound", name, pe, pe.HTTPStatus)
+		}
+	}
+	// A refused request must not leave a key behind for the phantom account.
+	entries, err := s.resources.List(ctx, testProject, store.GlobalRegion, serviceaccount.ResourceType, "")
+	if err != nil {
+		t.Fatalf("list keys: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a refused request materialised %d key(s)", len(entries))
 	}
 }
 

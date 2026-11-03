@@ -268,10 +268,11 @@ func TestServiceAccountSignValidation(t *testing.T) {
 	_, err = p.ServiceAccountSignJwt(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": `{"exp":1}`}}))
 	badRequest("past-exp signJwt", err)
 
-	// The projects/- wildcard signs lazily for an account that does not exist.
+	// The projects/- wildcard resolves the account from the email exactly as the
+	// concrete project path does, so an existing account signs through it.
 	wild := &model.NormalizedRequest{
 		AccountID:  "-",
-		Params:     map[string]any{"name": "serviceAccounts/ghost@proj.iam.gserviceaccount.com", "body": map[string]any{"payload": base64.StdEncoding.EncodeToString([]byte("hi"))}},
+		Params:     map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": base64.StdEncoding.EncodeToString([]byte("hi"))}},
 		ResourceID: resource.ResourceID("proj"),
 	}
 	if _, err := p.ServiceAccountSignBlob(ctx, wild); err != nil {
@@ -280,5 +281,48 @@ func TestServiceAccountSignValidation(t *testing.T) {
 	wild.Params["body"] = map[string]any{"payload": `{"iss":"proj"}`}
 	if _, err := p.ServiceAccountSignJwt(ctx, wild); err != nil {
 		t.Fatalf("wildcard signJwt: %v", err)
+	}
+}
+
+// TestServiceAccountSignRequiresAccount covers J67 for the IAM signBlob/signJwt
+// verbs: the account is resolved through the registry, so a service account that
+// was never created is 404 NOT_FOUND through the wildcard as well as through a
+// concrete project (it used to be signed for lazily).
+func TestServiceAccountSignRequiresAccount(t *testing.T) {
+	ctx := context.Background()
+	p := New(store.NewMemoryResourceStore())
+	ghost := "ghost@proj.iam.gserviceaccount.com"
+	payload := base64.StdEncoding.EncodeToString([]byte("hi"))
+
+	for name, account := range map[string]string{"wildcard": "-", "concrete": "proj"} {
+		for verb, call := range map[string]func(*model.NormalizedRequest) error{
+			"signBlob": func(nr *model.NormalizedRequest) error {
+				_, err := p.ServiceAccountSignBlob(ctx, nr)
+				return err
+			},
+			"signJwt": func(nr *model.NormalizedRequest) error {
+				_, err := p.ServiceAccountSignJwt(ctx, nr)
+				return err
+			},
+		} {
+			nr := &model.NormalizedRequest{
+				AccountID:  account,
+				Params:     map[string]any{"name": "serviceAccounts/" + ghost, "body": map[string]any{"payload": payload}},
+				ResourceID: resource.ResourceID(account),
+			}
+			err := call(nr)
+			pe, ok := err.(*model.ProviderError)
+			if !ok || pe.HTTPStatus != 404 {
+				t.Errorf("%s %s: error = %v, want 404 NotFound", name, verb, err)
+			}
+		}
+	}
+	// A refused request must not materialise a signing key for the phantom.
+	entries, err := p.resources.List(ctx, "proj", store.GlobalRegion, rtServiceAccountKey, "")
+	if err != nil {
+		t.Fatalf("list keys: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a refused request materialised %d key(s)", len(entries))
 	}
 }

@@ -481,13 +481,26 @@ func Scenarios(suffix string) []Scenario {
 	// ─── IAM Service Account Credentials ──────────────────────────────────────
 	// The unique iamcredentials verbs. signBlob/signJwt share their path with
 	// iam and are exercised by the IAM block above.
+	//
+	// Every method requires the target account to exist (J67), so this block
+	// provisions its own account (the IAM block's accounts are deleted by its
+	// own chain) and deletes it at the end.
+	saCred := "conf-saic-" + suffix
+	saCredEmail := saCred + "@" + p + ".iam.gserviceaccount.com"
 	sc = append(sc,
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + saCred,
+			Body: `{"serviceAccount":{"displayName":"Conformance SA credentials"}}`},
 		Scenario{Service: "iamcredentials", Method: "POST",
-			Path: "/v1/projects/-/serviceAccounts/" + saEmail + ":generateAccessToken",
+			Path: "/v1/projects/-/serviceAccounts/" + saCredEmail + ":generateAccessToken",
 			Body: `{"scope":["https://www.googleapis.com/auth/cloud-platform"],"lifetime":"3600s"}`},
 		Scenario{Service: "iamcredentials", Method: "POST",
-			Path: "/v1/projects/-/serviceAccounts/" + saEmail + ":generateIdToken",
+			Path: "/v1/projects/-/serviceAccounts/" + saCredEmail + ":generateIdToken",
 			Body: `{"audience":"https://example.com","includeEmail":true}`},
+		// A missing account is NOT_FOUND instead of a lazily minted credential.
+		Scenario{Service: "iamcredentials", Method: "POST",
+			Path: "/v1/projects/-/serviceAccounts/missing-" + saCredEmail + ":generateAccessToken",
+			Body: `{"scope":["https://www.googleapis.com/auth/cloud-platform"]}`},
+		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saCredEmail},
 	)
 
 	// ─── Cloud DNS ────────────────────────────────────────────────────────────

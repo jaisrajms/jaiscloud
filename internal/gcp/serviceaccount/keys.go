@@ -203,10 +203,13 @@ func createKey(ctx context.Context, resources store.ResourceStore, account, emai
 // creating it on first use. Real GCP maintains that key pair per service
 // account and signs with it; the emulator materialises it lazily so creating a
 // service account does not pay for an RSA keygen, and a key created through
-// keys.create is never reused for signing. It deliberately does not require the
-// service account to exist: impersonation calls address accounts by email and
-// the emulator signs for them lazily (a documented divergence from real GCP,
-// which requires the account to exist).
+// keys.create is never reused for signing.
+//
+// The caller is responsible for requiring the service account to exist: every
+// signing surface resolves the account through the IAM registry first (J67), so
+// EnsureKey only ever materialises a key for a real account. Accounts persisted
+// before the IAM provider created the pair with the account are repaired here on
+// their first sign.
 func EnsureKey(ctx context.Context, resources store.ResourceStore, account, email string) (*Key, error) {
 	entries, err := resources.List(ctx, account, store.GlobalRegion, ResourceType, "")
 	if err != nil {

@@ -3724,28 +3724,28 @@
       "rpc": "GenerateAccessToken",
       "method": "GenerateAccessToken",
       "status": "pass",
-      "key_field": "accessToken is a non-empty opaque token; expireTime is in the future"
+      "key_field": "accessToken is a non-empty opaque token; expireTime is in the future; a missing account is NOT_FOUND"
     },
     {
       "service": "iamcredentials",
       "rpc": "GenerateIdToken",
       "method": "GenerateIdToken",
       "status": "pass",
-      "key_field": "token is a well-formed JWT"
+      "key_field": "token is a well-formed JWT for an existing account"
     },
     {
       "service": "iamcredentials",
       "rpc": "SignBlob",
       "method": "SignBlob",
       "status": "pass",
-      "key_field": "keyId + non-empty signedBlob"
+      "key_field": "keyId + non-empty signedBlob for an existing account"
     },
     {
       "service": "iamcredentials",
       "rpc": "SignJwt",
       "method": "SignJwt",
       "status": "pass",
-      "key_field": "keyId + well-formed signedJwt"
+      "key_field": "keyId + well-formed signedJwt for an existing account"
     }
   ]
 }

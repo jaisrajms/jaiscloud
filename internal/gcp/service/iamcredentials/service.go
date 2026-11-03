@@ -9,6 +9,10 @@
 // internal/gcp/identity can recover the caller identity from it and
 // impersonation flows keep working. Real GCP returns an opaque token; the
 // emulator's is likewise opaque to clients — it carries no recognizable prefix.
+//
+// Every method resolves the service account through the IAM registry first: real
+// GCP requires the account to exist, so a missing one is NOT_FOUND on all four
+// methods (J67). The credential always represents the named account.
 package iamcredentials
 
 import (
@@ -64,13 +68,18 @@ type idTokenClaims struct {
 	EmailVerified bool   `json:"email_verified,omitempty"`
 }
 
-// key resolves the signing key for (account, email). account may be the
-// "projects/-" wildcard; the project embedded in the email is used then.
+// key resolves the signing key for (account, email) after requiring the service
+// account to exist. account may be the "projects/-" wildcard; the project
+// embedded in the email is used then.
 func (s *Service) key(ctx context.Context, account, email string) (*serviceaccount.Key, error) {
 	if email == "" {
 		return nil, serviceaccount.Invalid("service account is required")
 	}
-	return serviceaccount.EnsureKey(ctx, s.resources, serviceaccount.AccountForSA(account, email), email)
+	acc, canonical, err := serviceaccount.LookupAccount(ctx, s.resources, account, email)
+	if err != nil {
+		return nil, err
+	}
+	return serviceaccount.EnsureKey(ctx, s.resources, acc, canonical)
 }
 
 // GenerateAccessToken mints an OAuth2 access token for email. scopes must be
