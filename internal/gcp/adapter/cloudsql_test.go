@@ -98,6 +98,22 @@ func TestCloudSQLCodecParams(t *testing.T) {
 	if _, ok := nr.Params["project"]; ok {
 		t.Errorf("flags must not carry a project, got %v", nr.Params["project"])
 	}
+
+	// ... and its documented filters reach the provider as decoded parameters.
+	nr, err = codec.Decode(httptest.NewRequest("GET",
+		"/sql/v1beta4/flags?databaseVersion=POSTGRES_15&flagScope=SQL_FLAG_SCOPE_CONNECTION_POOL", nil), nil)
+	if err != nil {
+		t.Fatalf("decode flags filters: %v", err)
+	}
+	if nr.Action != "FlagsList" {
+		t.Errorf("action = %q, want FlagsList", nr.Action)
+	}
+	if nr.Params["databaseVersion"] != "POSTGRES_15" {
+		t.Errorf("databaseVersion param = %v", nr.Params["databaseVersion"])
+	}
+	if nr.Params["flagScope"] != "SQL_FLAG_SCOPE_CONNECTION_POOL" {
+		t.Errorf("flagScope param = %v", nr.Params["flagScope"])
+	}
 }
 
 func TestDetectCloudSQLService(t *testing.T) {

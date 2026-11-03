@@ -743,10 +743,46 @@ func (p *Provider) recordOperation(ctx context.Context, nr *model.NormalizedRequ
 // postgresVersions are the PostgreSQL major versions the emulator advertises.
 var postgresVersions = []string{"POSTGRES_15", "POSTGRES_16", "POSTGRES_17", "POSTGRES_18"}
 
-// sqlFlags is a small, stable catalogue of real Cloud SQL database flags. It is
-// static (there is no backend), but the names/types/appliesTo mirror flags real
-// GCP returns so clients that pre-validate settings succeed.
-var sqlFlags = []map[string]any{
+// The SqlFlagScope enum of sql.flags.list's flagScope parameter. A database
+// flag is the default scope; real Cloud SQL returns connection-pool flags only
+// for SQL_FLAG_SCOPE_CONNECTION_POOL and tags each of them with that scope,
+// while a database-scope flag carries no flagScope field at all (probe
+// 2026-11-03: 860 database flags, 10 PostgreSQL connection-pool flags).
+const (
+	sqlFlagScopeUnspecified    = "SQL_FLAG_SCOPE_UNSPECIFIED"
+	sqlFlagScopeDatabase       = "SQL_FLAG_SCOPE_DATABASE"
+	sqlFlagScopeConnectionPool = "SQL_FLAG_SCOPE_CONNECTION_POOL"
+)
+
+// sqlDatabaseVersions is the SqlDatabaseVersion enum the Discovery document
+// attaches to Flag.appliesTo. It is the accepted set for flags.list's
+// databaseVersion parameter: real Cloud SQL answers 400 INVALID_ARGUMENT
+// "Unsupported database version" for anything else, including
+// SQL_DATABASE_VERSION_UNSPECIFIED and a lowercase spelling (probe 2026-11-03),
+// so an unknown value must fail rather than widen the list.
+var sqlDatabaseVersions = []string{
+	"MYSQL_5_1", "MYSQL_5_5", "MYSQL_5_6", "MYSQL_5_7", "MYSQL_8_0",
+	"MYSQL_8_0_18", "MYSQL_8_0_26", "MYSQL_8_0_27", "MYSQL_8_0_28",
+	"MYSQL_8_0_29", "MYSQL_8_0_30", "MYSQL_8_0_31", "MYSQL_8_0_32",
+	"MYSQL_8_0_33", "MYSQL_8_0_34", "MYSQL_8_0_35", "MYSQL_8_0_36",
+	"MYSQL_8_0_37", "MYSQL_8_0_39", "MYSQL_8_0_40", "MYSQL_8_0_41",
+	"MYSQL_8_0_42", "MYSQL_8_0_43", "MYSQL_8_0_44", "MYSQL_8_0_45",
+	"MYSQL_8_0_46", "MYSQL_8_4", "MYSQL_9_7", "SQLSERVER_2017_STANDARD",
+	"SQLSERVER_2017_ENTERPRISE", "SQLSERVER_2017_EXPRESS",
+	"SQLSERVER_2017_WEB", "POSTGRES_9_6", "POSTGRES_10", "POSTGRES_11",
+	"POSTGRES_12", "POSTGRES_13", "POSTGRES_14", "POSTGRES_15", "POSTGRES_16",
+	"POSTGRES_17", "POSTGRES_18", "POSTGRES_19", "POSTGRES_20",
+	"SQLSERVER_2019_STANDARD", "SQLSERVER_2019_ENTERPRISE",
+	"SQLSERVER_2019_EXPRESS", "SQLSERVER_2019_WEB", "SQLSERVER_2022_STANDARD",
+	"SQLSERVER_2022_ENTERPRISE", "SQLSERVER_2022_EXPRESS",
+	"SQLSERVER_2022_WEB", "SQLSERVER_2025_STANDARD",
+	"SQLSERVER_2025_ENTERPRISE", "SQLSERVER_2025_EXPRESS",
+}
+
+// sqlDatabaseFlags is a small, stable catalogue of real Cloud SQL database
+// flags. It is static (there is no backend), but the names/types/appliesTo
+// mirror flags real GCP returns so clients that pre-validate settings succeed.
+var sqlDatabaseFlags = []map[string]any{
 	{"name": "character_set_server", "type": "STRING", "appliesTo": []string{"MYSQL_8_0", "MYSQL_5_7"}, "requiresRestart": false},
 	{"name": "collation_server", "type": "STRING", "appliesTo": []string{"MYSQL_8_0", "MYSQL_5_7"}, "requiresRestart": false},
 	{"name": "default_time_zone", "type": "STRING", "appliesTo": []string{"MYSQL_8_0"}, "requiresRestart": false},
@@ -757,11 +793,112 @@ var sqlFlags = []map[string]any{
 	{"name": "log_min_duration_statement", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "-1", "maxValue": "2147483647", "requiresRestart": false},
 }
 
+// sqlConnectionPoolFlags is the connection-pool scope catalogue: the
+// PostgreSQL flags real Cloud SQL returns for flagScope=SQL_FLAG_SCOPE_CONNECTION_POOL,
+// each tagged with its scope and excluded from the database-scope list.
+var sqlConnectionPoolFlags = []map[string]any{
+	{"name": "client_connection_idle_timeout", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "maxValue": "2147483", "requiresRestart": false, "recommendedIntValue": "0", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "ignore_startup_parameters", "type": "REPEATED_STRING", "appliesTo": postgresVersions, "allowedStringValues": []string{"client_encoding", "datestyle", "timezone", "standard_conforming_strings", "extra_float_digits", "intervalstyle", "timezone_abbreviations", "lc_messages", "lc_monetary", "lc_numeric", "lc_time", "icu_validation_level", "default_text_search_config"}, "requiresRestart": false, "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "max_client_connections", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "1", "maxValue": "262042", "requiresRestart": false, "recommendedIntValue": "5000", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "max_pool_size", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "maxValue": "262042", "requiresRestart": false, "recommendedIntValue": "50", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "max_prepared_statements", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "requiresRestart": false, "recommendedIntValue": "0", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "min_pool_size", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "maxValue": "262042", "requiresRestart": false, "recommendedIntValue": "0", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "pool_mode", "type": "STRING", "appliesTo": postgresVersions, "allowedStringValues": []string{"session", "transaction"}, "requiresRestart": false, "recommendedStringValue": "transaction", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "query_wait_timeout", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "maxValue": "2147483", "requiresRestart": false, "recommendedIntValue": "120", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "server_connection_idle_timeout", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "maxValue": "2147483", "requiresRestart": false, "recommendedIntValue": "600", "flagScope": sqlFlagScopeConnectionPool},
+	{"name": "server_lifetime", "type": "INTEGER", "appliesTo": postgresVersions, "minValue": "0", "requiresRestart": false, "recommendedIntValue": "3600", "flagScope": sqlFlagScopeConnectionPool},
+}
+
+// sqlFlagCatalogue selects the catalogue a flags.list request must be served
+// from and filters it by databaseVersion. It returns a per-request slice of the
+// shared package-level entries (never a mutated catalogue).
+//
+// An absent databaseVersion keeps the whole scope — real Cloud SQL documents
+// "by default, this method returns flags for all database types and versions" —
+// while a value outside the SqlDatabaseVersion enum is INVALID_ARGUMENT.
+func sqlFlagCatalogue(params map[string]any) ([]map[string]any, error) {
+	scope, err := sqlFlagScopeParam(params)
+	if err != nil {
+		return nil, err
+	}
+	catalogue := sqlDatabaseFlags
+	if scope == sqlFlagScopeConnectionPool {
+		catalogue = sqlConnectionPoolFlags
+	}
+	version, err := sqlDatabaseVersionParam(params)
+	if err != nil {
+		return nil, err
+	}
+	if version == "" {
+		return catalogue, nil
+	}
+	out := make([]map[string]any, 0, len(catalogue))
+	for _, f := range catalogue {
+		if sqlFlagAppliesTo(f, version) {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+// sqlFlagScopeParam resolves flagScope. Absent means the documented default
+// (database flags); SQL_FLAG_SCOPE_UNSPECIFIED is its explicit spelling. Any
+// other value outside the enum is INVALID_ARGUMENT, as real Cloud SQL answers.
+func sqlFlagScopeParam(params map[string]any) (string, error) {
+	raw, present := params["flagScope"].(string)
+	if !present {
+		return sqlFlagScopeDatabase, nil
+	}
+	switch raw {
+	case sqlFlagScopeUnspecified, sqlFlagScopeDatabase:
+		return sqlFlagScopeDatabase, nil
+	case sqlFlagScopeConnectionPool:
+		return sqlFlagScopeConnectionPool, nil
+	}
+	return "", model.NewProviderError("InvalidArgument",
+		fmt.Sprintf("Invalid value at 'flag_scope' (type.googleapis.com/google.cloud.sql.v1.SqlFlagScope), %q", raw), 400)
+}
+
+// sqlDatabaseVersionParam resolves databaseVersion. Empty or absent means no
+// version filter.
+func sqlDatabaseVersionParam(params map[string]any) (string, error) {
+	version, _ := params["databaseVersion"].(string)
+	if version == "" {
+		return "", nil
+	}
+	for _, v := range sqlDatabaseVersions {
+		if v == version {
+			return version, nil
+		}
+	}
+	return "", model.NewProviderError("InvalidArgument",
+		"Invalid request: Unsupported database version: "+version+".", 400)
+}
+
+// sqlFlagAppliesTo reports whether a catalogue entry applies to version.
+func sqlFlagAppliesTo(f map[string]any, version string) bool {
+	appliesTo, _ := f["appliesTo"].([]string)
+	for _, v := range appliesTo {
+		if v == version {
+			return true
+		}
+	}
+	return false
+}
+
+// ListFlags serves sql.flags.list. The catalogue is filtered by the documented
+// databaseVersion and flagScope parameters — `gcloud sql flags list
+// --database-version=POSTGRES_15` returns PostgreSQL flags only — and the
+// filtered copy is what pagination touches.
 func (p *Provider) ListFlags(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	catalogue, err := sqlFlagCatalogue(nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	// Build a fresh slice of copies: paginate sorts in place, and the catalogue
 	// is a shared package-level value that concurrent requests must not mutate.
-	flags := make([]map[string]any, 0, len(sqlFlags))
-	for _, f := range sqlFlags {
+	flags := make([]map[string]any, 0, len(catalogue))
+	for _, f := range catalogue {
 		item := cloneMap(f)
 		item["kind"] = "sql#flag"
 		flags = append(flags, item)

@@ -219,6 +219,30 @@ func TestSDKCloudSQL(t *testing.T) {
 	require.Equal(t, "sql#flagsList", flags.Kind)
 	require.NotEmpty(t, flags.Items)
 
+	// NF16/J56: flags.list honours the documented databaseVersion parameter.
+	// The official client sends it as a query parameter, exactly as
+	// `gcloud sql flags list --database-version=POSTGRES_15` does, so a
+	// PostgreSQL request must not come back with MySQL flags.
+	pgFlags, err := svc.Flags.List().DatabaseVersion("POSTGRES_15").Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, pgFlags.Items)
+	for _, f := range pgFlags.Items {
+		require.Contains(t, f.AppliesTo, "POSTGRES_15", "flag %q does not apply to POSTGRES_15", f.Name)
+	}
+	myFlags, err := svc.Flags.List().DatabaseVersion("MYSQL_8_0").Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, myFlags.Items)
+	for _, f := range myFlags.Items {
+		require.Contains(t, f.AppliesTo, "MYSQL_8_0", "flag %q does not apply to MYSQL_8_0", f.Name)
+	}
+
+	// An unknown version is INVALID_ARGUMENT, not a widened list.
+	_, err = svc.Flags.List().DatabaseVersion("POSTGRES_99").Do()
+	var flagErr *googleapi.Error
+	require.ErrorAs(t, err, &flagErr, "unknown databaseVersion")
+	require.Equal(t, 400, flagErr.Code)
+	require.Contains(t, flagErr.Message, "Unsupported database version: POSTGRES_99")
+
 	tiers, err := svc.Tiers.List(project).Do()
 	require.NoError(t, err)
 	require.Equal(t, "sql#tiersList", tiers.Kind)
