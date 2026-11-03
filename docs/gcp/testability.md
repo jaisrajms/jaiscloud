@@ -144,7 +144,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `cloudsql` | rest | 0/24 | 🟡 | Metadata only | Metadata only | No SQL engine or data plane. |
 | `clouddns` | rest | 0/16 | 🟡 | Metadata only | Metadata only | No authoritative DNS server. |
 | `memorystore` | rest | 0/8 | 🟡 | Metadata only | Metadata only | No Redis data plane. |
-| `bigquery` | rest | 0/23 | 🟡 | Shape only | Shape only | A documented Standard SQL subset (`SELECT` + DDL/DML) runs on an in-process pure-Go SQLite engine in both memory and `--dsn` modes; `routines`/`models`/`rowAccessPolicies` are `501` stubs and the full GoogleSQL surface is not modelled. |
+| `bigquery` | rest | 0/37 | 🟡 | Shape only | Shape only | A documented Standard SQL subset (`SELECT` + DDL/DML) runs on an in-process pure-Go SQLite engine in both memory and `--dsn` modes; `routines.*` and `rowAccessPolicies.*` are stored CRUD resources (routine bodies are never executed and policy predicates are never enforced), `models.*` and the routines/rowAccessPolicies IAM methods are `501` stubs, and the full GoogleSQL surface is not modelled. |
 | `iceberg` | rest | 0/14 | 🔴 | None | No | BigLake Iceberg REST catalog; `preview`. |
 
 Tier groups: **Green (21)** `dataproc`, `datastore`, `eventarc`, `firestore`,

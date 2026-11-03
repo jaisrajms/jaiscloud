@@ -20,9 +20,11 @@ import (
 // them identically. tabledata lives as trailing methods on a table path
 // (.../tables/{id}/insertAll and .../tables/{id}/data); jobs.delete is a DELETE
 // on .../jobs/{id}/delete (not a bare DELETE). The dataset-scoped routines and
-// models resources and the table-scoped rowAccessPolicies resource are deferred
-// by the emulator; they resolve to their own action names here so the provider
-// can fail loud with Unimplemented rather than the codec 404-ing them.
+// the table-scoped rowAccessPolicies resources are declared resource CRUD, so
+// each method resolves to its own action; the dataset-scoped models resource is
+// an explicit 501 (models are ML training artifacts the emulator does not
+// model), and the routines/rowAccessPolicies IAM custom methods resolve to an
+// Unimplemented action so the provider fails loud.
 type BigQueryCodec struct {
 	Service string
 }
@@ -68,7 +70,7 @@ func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		nr.Params["body"] = m
 	}
 
-	action, datasetID, tableID, jobID := bigQueryAction(rest, r.Method)
+	action, datasetID, tableID, jobID, routineID, policyID := bigQueryAction(rest, r.Method)
 	if action == "" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported bigquery operation", 404)
 	}
@@ -80,6 +82,12 @@ func (c *BigQueryCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 	}
 	if jobID != "" {
 		nr.Params["jobId"] = jobID
+	}
+	if routineID != "" {
+		nr.Params["routineId"] = routineID
+	}
+	if policyID != "" {
+		nr.Params["policyId"] = policyID
 	}
 	nr.Action = action
 	return nr, nil
@@ -181,110 +189,163 @@ func (c *BigQueryCodec) decodeUpload(r *http.Request, body []byte, nr *model.Nor
 }
 
 // bigQueryAction maps the path segments after projects/{project} (plus the HTTP
-// method) to the provider action name and the dataset/table/job IDs it carries.
-// The apiary Datasets.Update/Tables.Update use PUT on the same resource paths
-// as the PATCH-based Patch methods; both are routed to the merge-equivalent
-// UpdateDataset/UpdateTable handlers (full-replace PUT semantics are out of
-// scope for the emulator).
-func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jobID string) {
+// method) to the provider action name and the dataset/table/job/routine/policy
+// IDs it carries. The apiary Datasets.Update/Tables.Update use PUT on the same
+// resource paths as the PATCH-based Patch methods; both are routed to the
+// merge-equivalent UpdateDataset/UpdateTable handlers (full-replace PUT
+// semantics are out of scope for the emulator). routines and rowAccessPolicies
+// are declared as resource CRUD in the Discovery document (list/get/insert/
+// update/delete, plus rowAccessPolicies:batchDelete); their IAM custom methods
+// resolve to an explicit Unimplemented action so the provider fails loud rather
+// than the codec 404-ing them. models keeps its coarse action: every models
+// method is an explicit 501.
+func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jobID, routineID, policyID string) {
 	if len(seg) == 0 {
-		return "", "", "", ""
+		return "", "", "", "", "", ""
 	}
 	switch seg[0] {
 	case "datasets":
 		switch len(seg) {
 		case 1:
 			if method == http.MethodPost {
-				return "CreateDataset", "", "", ""
+				return "CreateDataset", "", "", "", "", ""
 			}
 			if method == http.MethodGet {
-				return "ListDatasets", "", "", ""
+				return "ListDatasets", "", "", "", "", ""
 			}
 		case 2:
 			switch method {
 			case http.MethodGet:
-				return "GetDataset", seg[1], "", ""
+				return "GetDataset", seg[1], "", "", "", ""
 			case http.MethodPatch:
-				return "UpdateDataset", seg[1], "", ""
+				return "UpdateDataset", seg[1], "", "", "", ""
 			case http.MethodPut:
-				return "UpdateDataset", seg[1], "", ""
+				return "UpdateDataset", seg[1], "", "", "", ""
 			case http.MethodDelete:
-				return "DeleteDataset", seg[1], "", ""
+				return "DeleteDataset", seg[1], "", "", "", ""
 			}
 		case 3:
 			switch seg[2] {
 			case "tables":
 				if method == http.MethodPost {
-					return "CreateTable", seg[1], "", ""
+					return "CreateTable", seg[1], "", "", "", ""
 				}
 				if method == http.MethodGet {
-					return "ListTables", seg[1], "", ""
+					return "ListTables", seg[1], "", "", "", ""
 				}
 			case "routines":
-				return "Routines", seg[1], "", ""
+				if method == http.MethodPost {
+					return "InsertRoutine", seg[1], "", "", "", ""
+				}
+				if method == http.MethodGet {
+					return "ListRoutines", seg[1], "", "", "", ""
+				}
 			case "models":
-				return "Models", seg[1], "", ""
+				return "Models", seg[1], "", "", "", ""
 			}
 		case 4:
 			switch seg[2] {
 			case "tables":
 				switch method {
 				case http.MethodGet:
-					return "GetTable", seg[1], seg[3], ""
+					return "GetTable", seg[1], seg[3], "", "", ""
 				case http.MethodPatch:
-					return "UpdateTable", seg[1], seg[3], ""
+					return "UpdateTable", seg[1], seg[3], "", "", ""
 				case http.MethodPut:
-					return "UpdateTable", seg[1], seg[3], ""
+					return "UpdateTable", seg[1], seg[3], "", "", ""
 				case http.MethodDelete:
-					return "DeleteTable", seg[1], seg[3], ""
+					return "DeleteTable", seg[1], seg[3], "", "", ""
 				}
 			case "routines":
-				return "Routines", seg[1], "", ""
+				if resourceSegment(seg[3]) != seg[3] {
+					// routines.getIamPolicy / setIamPolicy / testIamPermissions.
+					if method == http.MethodPost {
+						return "RoutinesIam", seg[1], "", "", "", ""
+					}
+					return "", "", "", "", "", ""
+				}
+				switch method {
+				case http.MethodGet:
+					return "GetRoutine", seg[1], "", "", seg[3], ""
+				case http.MethodPut:
+					return "UpdateRoutine", seg[1], "", "", seg[3], ""
+				case http.MethodDelete:
+					return "DeleteRoutine", seg[1], "", "", seg[3], ""
+				}
 			case "models":
-				return "Models", seg[1], "", ""
+				return "Models", seg[1], "", "", "", ""
 			}
 		case 5:
 			if seg[2] == "tables" {
 				switch resourceSegment(seg[4]) {
 				case "insertAll":
 					if method == http.MethodPost {
-						return "InsertAll", seg[1], seg[3], ""
+						return "InsertAll", seg[1], seg[3], "", "", ""
 					}
 				case "data":
 					if method == http.MethodGet {
-						return "ListRows", seg[1], seg[3], ""
+						return "ListRows", seg[1], seg[3], "", "", ""
 					}
 				case "rowAccessPolicies":
-					return "RowAccessPolicies", seg[1], seg[3], ""
+					if method == http.MethodPost && seg[4] == "rowAccessPolicies:batchDelete" {
+						return "BatchDeleteRowAccessPolicies", seg[1], seg[3], "", "", ""
+					}
+					if seg[4] != "rowAccessPolicies" {
+						// rowAccessPolicies.getIamPolicy / setIamPolicy /
+						// testIamPermissions on the policy path.
+						if method == http.MethodPost {
+							return "RowAccessPoliciesIam", seg[1], seg[3], "", "", ""
+						}
+						return "", "", "", "", "", ""
+					}
+					switch method {
+					case http.MethodGet:
+						return "ListRowAccessPolicies", seg[1], seg[3], "", "", ""
+					case http.MethodPost:
+						return "InsertRowAccessPolicy", seg[1], seg[3], "", "", ""
+					}
 				}
 			}
 		case 6:
-			if seg[2] == "tables" && resourceSegment(seg[4]) == "rowAccessPolicies" {
-				return "RowAccessPolicies", seg[1], seg[3], ""
+			if seg[2] == "tables" && seg[4] == "rowAccessPolicies" {
+				if resourceSegment(seg[5]) != seg[5] {
+					if method == http.MethodPost {
+						return "RowAccessPoliciesIam", seg[1], seg[3], "", "", ""
+					}
+					return "", "", "", "", "", ""
+				}
+				switch method {
+				case http.MethodGet:
+					return "GetRowAccessPolicy", seg[1], seg[3], "", "", seg[5]
+				case http.MethodPut:
+					return "UpdateRowAccessPolicy", seg[1], seg[3], "", "", seg[5]
+				case http.MethodDelete:
+					return "DeleteRowAccessPolicy", seg[1], seg[3], "", "", seg[5]
+				}
 			}
 		}
 	case "jobs":
 		switch len(seg) {
 		case 1:
 			if method == http.MethodPost {
-				return "InsertJob", "", "", ""
+				return "InsertJob", "", "", "", "", ""
 			}
 			if method == http.MethodGet {
-				return "ListJobs", "", "", ""
+				return "ListJobs", "", "", "", "", ""
 			}
 		case 2:
 			if method == http.MethodGet {
-				return "GetJob", "", "", seg[1]
+				return "GetJob", "", "", seg[1], "", ""
 			}
 		case 3:
 			switch seg[2] {
 			case "delete":
 				if method == http.MethodDelete {
-					return "DeleteJob", "", "", seg[1]
+					return "DeleteJob", "", "", seg[1], "", ""
 				}
 			case "cancel":
 				if method == http.MethodPost {
-					return "CancelJob", "", "", seg[1]
+					return "CancelJob", "", "", seg[1], "", ""
 				}
 			}
 		}
@@ -292,19 +353,19 @@ func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jo
 		switch len(seg) {
 		case 1:
 			if method == http.MethodPost {
-				return "Query", "", "", ""
+				return "Query", "", "", "", "", ""
 			}
 		case 2:
 			if method == http.MethodGet {
-				return "GetQueryResults", "", "", seg[1]
+				return "GetQueryResults", "", "", seg[1], "", ""
 			}
 		}
 	case "serviceAccount":
 		if len(seg) == 1 && method == http.MethodGet {
-			return "GetServiceAccount", "", "", ""
+			return "GetServiceAccount", "", "", "", "", ""
 		}
 	}
-	return "", "", "", ""
+	return "", "", "", "", "", ""
 }
 
 // resourceSegment strips a trailing custom-method suffix (for example
@@ -408,6 +469,8 @@ func bigQueryReason(code string) string {
 		return "duplicate"
 	case "InvalidArgument", "InvalidRequest", "InvalidParameter", "FailedPrecondition":
 		return "invalid"
+	case "PreconditionFailed":
+		return "conditionNotMet"
 	case "InvalidQuery":
 		return "invalidQuery"
 	case "PermissionDenied":

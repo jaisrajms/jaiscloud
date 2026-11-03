@@ -404,7 +404,14 @@ func TestDeferredResourceOps_Unimplemented(t *testing.T) {
 	ctx := context.Background()
 	p := New(bqstore.NewMemoryStore())
 	routes := p.Routes()
-	for _, action := range []string{"BigQuery.Routines", "BigQuery.Models", "BigQuery.RowAccessPolicies"} {
+	// models stay an explicit 501 (there is no model-training execution); the
+	// IAM custom methods on routines and row access policies are the other
+	// deliberately unserved operations (BigQuery IAM is not enforced).
+	for _, action := range []string{
+		"BigQuery.Models",
+		"BigQuery.RoutinesIam",
+		"BigQuery.RowAccessPoliciesIam",
+	} {
 		h, ok := routes[action]
 		if !ok {
 			t.Fatalf("missing route %q", action)

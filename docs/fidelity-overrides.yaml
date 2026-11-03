@@ -305,21 +305,67 @@ operations:
   # (The Discovery probe's `updateMask=labels` selection is the deferred
   # conformance fix, AUD5-2.)
 
-  # BigQuery routines/models/rowAccessPolicies are deliberate 501 stubs (the
-  # SQL engine covers datasets/tables/jobs/rows); the rest of the service is
-  # graded `limited` by the bigquery default override above.
-  - service: bigquery
-    operation: BigQuery.Routines
-    state: unsupported
-    reason: "dataset routines are not modelled; explicit Unimplemented (501) stub"
+  # BigQuery: routines and row access policies are stored CRUD resources over
+  # the same metadata store as datasets/tables (memory and --dsn); models stay
+  # an explicit 501 because a Model is the output of a training run the emulator
+  # does not execute. The rest of the service is graded `limited` by the
+  # bigquery default override above.
   - service: bigquery
     operation: BigQuery.Models
     state: unsupported
-    reason: "models are not modelled; explicit Unimplemented (501) stub"
+    reason: "models are ML training artifacts (trainingRuns/featureColumns/model data); the emulator executes no training, so a stored model would be hollow — explicit Unimplemented (501) stub"
   - service: bigquery
-    operation: BigQuery.RowAccessPolicies
+    operation: BigQuery.RoutinesIam
     state: unsupported
-    reason: "row access policies are not modelled; explicit Unimplemented (501) stub"
+    reason: "routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); BigQuery IAM is not stored or enforced by the emulator — explicit Unimplemented (501) stub, while routines CRUD is served"
+  - service: bigquery
+    operation: BigQuery.RowAccessPoliciesIam
+    state: unsupported
+    reason: "row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); row-level access is IAM-enforced and the emulator has no IAM plane — explicit Unimplemented (501) stub, while the policy resource CRUD is served"
+  - service: bigquery
+    operation: BigQuery.InsertRoutine
+    state: limited
+    reason: "store-and-echo CRUD over the dataset store (memory and --dsn): the wire Routine body round-trips and the computed members (routineReference/etag/creationTime/lastModifiedTime) are derived, but the routine body is never executed and policy tags are not modelled"
+  - service: bigquery
+    operation: BigQuery.GetRoutine
+    state: limited
+    reason: "store-and-echo CRUD over the dataset store (memory and --dsn); the routine body is stored, not executed"
+  - service: bigquery
+    operation: BigQuery.ListRoutines
+    state: limited
+    reason: "store-and-echo CRUD over the dataset store (memory and --dsn); emits the documented summary subset, maxResults/pageToken paging, and ignores filter/readMask"
+  - service: bigquery
+    operation: BigQuery.UpdateRoutine
+    state: limited
+    reason: "PUT replace or updateMask merge over the stored Routine, with the etag precondition (412 conditionNotMet); the body is stored, not executed"
+  - service: bigquery
+    operation: BigQuery.DeleteRoutine
+    state: limited
+    reason: "store-and-echo CRUD over the dataset store (memory and --dsn); deleted with its dataset"
+  - service: bigquery
+    operation: BigQuery.InsertRowAccessPolicy
+    state: limited
+    reason: "store-and-echo CRUD over the table store (memory and --dsn): filterPredicate round-trips, grantees is accepted (input-only, never echoed), policy tags stay out, and the predicate is never enforced (no IAM plane)"
+  - service: bigquery
+    operation: BigQuery.GetRowAccessPolicy
+    state: limited
+    reason: "store-and-echo CRUD over the table store (memory and --dsn); the predicate is stored, not enforced"
+  - service: bigquery
+    operation: BigQuery.ListRowAccessPolicies
+    state: limited
+    reason: "store-and-echo CRUD over the table store (memory and --dsn); pageSize/pageToken paging"
+  - service: bigquery
+    operation: BigQuery.UpdateRowAccessPolicy
+    state: limited
+    reason: "PUT replace or updateMask merge over the stored policy, with the etag precondition (412 conditionNotMet); the predicate is stored, not enforced"
+  - service: bigquery
+    operation: BigQuery.DeleteRowAccessPolicy
+    state: limited
+    reason: "store-and-echo CRUD over the table store (memory and --dsn); the force parameter is accepted and ignored (no IAM bindings to check)"
+  - service: bigquery
+    operation: BigQuery.BatchDeleteRowAccessPolicies
+    state: limited
+    reason: "all-or-nothing batch delete over the table store (memory and --dsn); policyIds are validated before anything is deleted"
 
   # The discovery surface is not an API operation (it is how a client learns the
   # API), so it has no Discovery method of its own to be verified against and

@@ -177,6 +177,11 @@ func (r *parityRecorder) at(op string) func(*model.ProviderResponse, error) {
 	return func(resp *model.ProviderResponse, err error) { r.call(op, resp, err) }
 }
 
+// respond records one provider call under an explicit op name.
+func (r *parityRecorder) respond(op string, resp *model.ProviderResponse, err error) {
+	r.call(op, resp, err)
+}
+
 // maskVolatile replaces randomly generated identifiers so two runs that differ
 // only in job id produce the same fingerprint.
 func maskVolatile(v any) any {

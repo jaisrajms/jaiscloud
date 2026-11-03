@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1196,
+    "total": 1207,
     "by_state": {
       "ga": 1005,
-      "limited": 135,
+      "limited": 146,
       "preview": 14,
       "unsupported": 42
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 557,
-        "limited": 112,
+        "limited": 123,
         "preview": 14,
         "unsupported": 12
       }
@@ -24,7 +24,7 @@
     "by_service": {
       "bigquery": {
         "ga": 1,
-        "limited": 22,
+        "limited": 33,
         "unsupported": 3
       },
       "clouddns": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 453,
-        "rest": 650
+        "rest": 661
       },
       "unverified": {
         "grpc": 48,
@@ -147,6 +147,21 @@
     ]
   },
   "cells": [
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.BatchDeleteRowAccessPolicies",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "all-or-nothing batch delete over the table store (memory and --dsn); policyIds are validated before anything is deleted",
+      "discovery": "bigquery.rowAccessPolicies.batchDelete",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.rowAccessPolicies.batchDelete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
     {
       "service": "bigquery",
       "operation": "BigQuery.CancelJob",
@@ -224,6 +239,36 @@
     },
     {
       "service": "bigquery",
+      "operation": "BigQuery.DeleteRoutine",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the dataset store (memory and --dsn); deleted with its dataset",
+      "discovery": "bigquery.routines.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.routines.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.DeleteRowAccessPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the table store (memory and --dsn); the force parameter is accepted and ignored (no IAM bindings to check)",
+      "discovery": "bigquery.rowAccessPolicies.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.rowAccessPolicies.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
       "operation": "BigQuery.DeleteTable",
       "transport": "rest",
       "state": "limited",
@@ -289,6 +334,34 @@
         "discovery=bigquery.jobs.getQueryResults",
         "postgres=yes",
         "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.GetRoutine",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the dataset store (memory and --dsn); the routine body is stored, not executed",
+      "discovery": "bigquery.routines.get",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.routines.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.GetRowAccessPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the table store (memory and --dsn); the predicate is stored, not enforced",
+      "discovery": "bigquery.rowAccessPolicies.get",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.rowAccessPolicies.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -381,6 +454,36 @@
     },
     {
       "service": "bigquery",
+      "operation": "BigQuery.InsertRoutine",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the dataset store (memory and --dsn): the wire Routine body round-trips and the computed members (routineReference/etag/creationTime/lastModifiedTime) are derived, but the routine body is never executed and policy tags are not modelled",
+      "discovery": "bigquery.routines.insert",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.routines.insert",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.InsertRowAccessPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the table store (memory and --dsn): filterPredicate round-trips, grantees is accepted (input-only, never echoed), policy tags stay out, and the predicate is never enforced (no IAM plane)",
+      "discovery": "bigquery.rowAccessPolicies.insert",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.rowAccessPolicies.insert",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
       "operation": "BigQuery.ListDatasets",
       "transport": "rest",
       "state": "limited",
@@ -403,6 +506,34 @@
       "verified": true,
       "evidence": [
         "discovery=bigquery.jobs.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.ListRoutines",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the dataset store (memory and --dsn); emits the documented summary subset, maxResults/pageToken paging, and ignores filter/readMask",
+      "discovery": "bigquery.routines.list",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.routines.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.ListRowAccessPolicies",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "store-and-echo CRUD over the table store (memory and --dsn); pageSize/pageToken paging",
+      "discovery": "bigquery.rowAccessPolicies.list",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.rowAccessPolicies.list",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -440,7 +571,7 @@
       "operation": "BigQuery.Models",
       "transport": "rest",
       "state": "unsupported",
-      "reason": "models are not modelled; explicit Unimplemented (501) stub",
+      "reason": "models are ML training artifacts (trainingRuns/featureColumns/model data); the emulator executes no training, so a stored model would be hollow — explicit Unimplemented (501) stub",
       "verified": false,
       "evidence": [
         "postgres=yes",
@@ -463,10 +594,10 @@
     },
     {
       "service": "bigquery",
-      "operation": "BigQuery.Routines",
+      "operation": "BigQuery.RoutinesIam",
       "transport": "rest",
       "state": "unsupported",
-      "reason": "dataset routines are not modelled; explicit Unimplemented (501) stub",
+      "reason": "routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); BigQuery IAM is not stored or enforced by the emulator — explicit Unimplemented (501) stub, while routines CRUD is served",
       "verified": false,
       "evidence": [
         "postgres=yes",
@@ -475,10 +606,10 @@
     },
     {
       "service": "bigquery",
-      "operation": "BigQuery.RowAccessPolicies",
+      "operation": "BigQuery.RowAccessPoliciesIam",
       "transport": "rest",
       "state": "unsupported",
-      "reason": "row access policies are not modelled; explicit Unimplemented (501) stub",
+      "reason": "row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); row-level access is IAM-enforced and the emulator has no IAM plane — explicit Unimplemented (501) stub, while the policy resource CRUD is served",
       "verified": false,
       "evidence": [
         "postgres=yes",
@@ -498,6 +629,36 @@
         "mutating",
         "postgres=yes",
         "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.UpdateRoutine",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "PUT replace or updateMask merge over the stored Routine, with the etag precondition (412 conditionNotMet); the body is stored, not executed",
+      "discovery": "bigquery.routines.update",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.routines.update",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.UpdateRowAccessPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "PUT replace or updateMask merge over the stored policy, with the etag precondition (412 conditionNotMet); the predicate is stored, not enforced",
+      "discovery": "bigquery.rowAccessPolicies.update",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.rowAccessPolicies.update",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {

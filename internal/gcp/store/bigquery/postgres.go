@@ -152,6 +152,12 @@ func (s *PostgresStore) DeleteDataset(ctx context.Context, projectID, datasetID 
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_bq_rows WHERE project_id=$1 AND dataset_id=$2`, projectID, datasetID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_bq_row_access_policies WHERE project_id=$1 AND dataset_id=$2`, projectID, datasetID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_bq_routines WHERE project_id=$1 AND dataset_id=$2`, projectID, datasetID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_bq_tables WHERE project_id=$1 AND dataset_id=$2`, projectID, datasetID); err != nil {
 		return err
 	}
@@ -357,6 +363,9 @@ func (s *PostgresStore) DeleteTable(ctx context.Context, projectID, datasetID, t
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_bq_rows WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3`, projectID, datasetID, tableID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_bq_row_access_policies WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3`, projectID, datasetID, tableID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM jc_bq_tables WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3`, projectID, datasetID, tableID)
@@ -593,8 +602,272 @@ func (s *PostgresStore) ListRows(ctx context.Context, projectID, datasetID, tabl
 	return result, rows.Err()
 }
 
+// --- Routines ---
+
+func (s *PostgresStore) CreateRoutine(ctx context.Context, projectID, datasetID string, r Routine) error {
+	if r.CreateTime.IsZero() {
+		r.CreateTime = clock.Now()
+	}
+	if r.UpdateTime.IsZero() {
+		r.UpdateTime = r.CreateTime
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_bq_routines (project_id, dataset_id, routine_id, config, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6)
+	`, projectID, datasetID, r.RoutineID, nullableJSONRaw(r.Config, "{}"), r.CreateTime, r.UpdateTime)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func scanRoutine(row pgx.Row) (Routine, error) {
+	var r Routine
+	var config []byte
+	err := row.Scan(&r.ProjectID, &r.DatasetID, &r.RoutineID, &config, &r.CreateTime, &r.UpdateTime)
+	if err != nil {
+		return Routine{}, err
+	}
+	r.Config = json.RawMessage(config)
+	return r, nil
+}
+
+func (s *PostgresStore) GetRoutine(ctx context.Context, projectID, datasetID, routineID string) (Routine, error) {
+	r, err := scanRoutine(s.pool.QueryRow(ctx, `
+		SELECT project_id, dataset_id, routine_id, config, create_time, update_time
+		FROM jc_bq_routines WHERE project_id=$1 AND dataset_id=$2 AND routine_id=$3
+	`, projectID, datasetID, routineID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Routine{}, ErrNoSuchRoutine
+	}
+	return r, err
+}
+
+// UpdateRoutineAtomic mirrors UpdateTableAtomic: a Serializable transaction with
+// SELECT ... FOR UPDATE row-locks the routine for the duration of mutate.
+func (s *PostgresStore) UpdateRoutineAtomic(ctx context.Context, projectID, datasetID, routineID string, mutate func(Routine) (Routine, error)) (Routine, error) {
+	return storeutil.RetrySerializable(ctx, func() (Routine, error) {
+		return s.updateRoutineAtomicOnce(ctx, projectID, datasetID, routineID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateRoutineAtomicOnce(ctx context.Context, projectID, datasetID, routineID string, mutate func(Routine) (Routine, error)) (Routine, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Routine{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanRoutine(tx.QueryRow(ctx, `
+		SELECT project_id, dataset_id, routine_id, config, create_time, update_time
+		FROM jc_bq_routines WHERE project_id=$1 AND dataset_id=$2 AND routine_id=$3 FOR UPDATE
+	`, projectID, datasetID, routineID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Routine{}, ErrNoSuchRoutine
+	}
+	if err != nil {
+		return Routine{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Routine{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_bq_routines SET config=$4, update_time=$5
+		WHERE project_id=$1 AND dataset_id=$2 AND routine_id=$3
+	`, projectID, datasetID, routineID, nullableJSONRaw(next.Config, "{}"), next.UpdateTime)
+	if err != nil {
+		return Routine{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Routine{}, ErrNoSuchRoutine
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Routine{}, err
+	}
+	next.ProjectID = projectID
+	next.DatasetID = datasetID
+	next.RoutineID = routineID
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteRoutine(ctx context.Context, projectID, datasetID, routineID string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_bq_routines WHERE project_id=$1 AND dataset_id=$2 AND routine_id=$3
+	`, projectID, datasetID, routineID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchRoutine
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListRoutines(ctx context.Context, projectID, datasetID string) ([]Routine, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, dataset_id, routine_id, config, create_time, update_time
+		FROM jc_bq_routines WHERE project_id=$1 AND dataset_id=$2 ORDER BY routine_id
+	`, projectID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Routine
+	for rows.Next() {
+		r, err := scanRoutine(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// --- Row access policies ---
+
+func (s *PostgresStore) CreateRowAccessPolicy(ctx context.Context, projectID, datasetID, tableID string, p RowAccessPolicy) error {
+	if p.CreateTime.IsZero() {
+		p.CreateTime = clock.Now()
+	}
+	if p.UpdateTime.IsZero() {
+		p.UpdateTime = p.CreateTime
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_bq_row_access_policies (project_id, dataset_id, table_id, policy_id, config, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, projectID, datasetID, tableID, p.PolicyID, nullableJSONRaw(p.Config, "{}"), p.CreateTime, p.UpdateTime)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func scanRowAccessPolicy(row pgx.Row) (RowAccessPolicy, error) {
+	var p RowAccessPolicy
+	var config []byte
+	err := row.Scan(&p.ProjectID, &p.DatasetID, &p.TableID, &p.PolicyID, &config, &p.CreateTime, &p.UpdateTime)
+	if err != nil {
+		return RowAccessPolicy{}, err
+	}
+	p.Config = json.RawMessage(config)
+	return p, nil
+}
+
+func (s *PostgresStore) GetRowAccessPolicy(ctx context.Context, projectID, datasetID, tableID, policyID string) (RowAccessPolicy, error) {
+	p, err := scanRowAccessPolicy(s.pool.QueryRow(ctx, `
+		SELECT project_id, dataset_id, table_id, policy_id, config, create_time, update_time
+		FROM jc_bq_row_access_policies
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3 AND policy_id=$4
+	`, projectID, datasetID, tableID, policyID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RowAccessPolicy{}, ErrNoSuchRowAccessPolicy
+	}
+	return p, err
+}
+
+// UpdateRowAccessPolicyAtomic mirrors UpdateTableAtomic: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the policy for the duration
+// of mutate.
+func (s *PostgresStore) UpdateRowAccessPolicyAtomic(ctx context.Context, projectID, datasetID, tableID, policyID string, mutate func(RowAccessPolicy) (RowAccessPolicy, error)) (RowAccessPolicy, error) {
+	return storeutil.RetrySerializable(ctx, func() (RowAccessPolicy, error) {
+		return s.updateRowAccessPolicyAtomicOnce(ctx, projectID, datasetID, tableID, policyID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateRowAccessPolicyAtomicOnce(ctx context.Context, projectID, datasetID, tableID, policyID string, mutate func(RowAccessPolicy) (RowAccessPolicy, error)) (RowAccessPolicy, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return RowAccessPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanRowAccessPolicy(tx.QueryRow(ctx, `
+		SELECT project_id, dataset_id, table_id, policy_id, config, create_time, update_time
+		FROM jc_bq_row_access_policies
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3 AND policy_id=$4 FOR UPDATE
+	`, projectID, datasetID, tableID, policyID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RowAccessPolicy{}, ErrNoSuchRowAccessPolicy
+	}
+	if err != nil {
+		return RowAccessPolicy{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return RowAccessPolicy{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_bq_row_access_policies SET config=$5, update_time=$6
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3 AND policy_id=$4
+	`, projectID, datasetID, tableID, policyID, nullableJSONRaw(next.Config, "{}"), next.UpdateTime)
+	if err != nil {
+		return RowAccessPolicy{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return RowAccessPolicy{}, ErrNoSuchRowAccessPolicy
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RowAccessPolicy{}, err
+	}
+	next.ProjectID = projectID
+	next.DatasetID = datasetID
+	next.TableID = tableID
+	next.PolicyID = policyID
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteRowAccessPolicy(ctx context.Context, projectID, datasetID, tableID, policyID string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_bq_row_access_policies
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3 AND policy_id=$4
+	`, projectID, datasetID, tableID, policyID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchRowAccessPolicy
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListRowAccessPolicies(ctx context.Context, projectID, datasetID, tableID string) ([]RowAccessPolicy, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, dataset_id, table_id, policy_id, config, create_time, update_time
+		FROM jc_bq_row_access_policies
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3 ORDER BY policy_id
+	`, projectID, datasetID, tableID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []RowAccessPolicy
+	for rows.Next() {
+		p, err := scanRowAccessPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_rows`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_row_access_policies`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_routines`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_tables`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_datasets`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_jobs`)

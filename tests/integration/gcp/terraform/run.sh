@@ -82,6 +82,24 @@ check_post() {
 
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
+# check_absent NAME URL SUBSTRING... — GET the URL and require every substring to
+# be absent. Used for input-only fields real GCP never echoes (grantees).
+check_absent() {
+  local name="$1" url="$2"
+  shift 2
+  local body want
+  body="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$url" 2>/dev/null || true)"
+  for want in "$@"; do
+    if [[ "$body" == *"$want"* ]]; then
+      printf '  [FAIL] %s (unexpected: %s)\n' "$name" "$want"
+      FAIL=$((FAIL + 1))
+      return 0
+    fi
+  done
+  printf '  [PASS] %s\n' "$name"
+  PASS=$((PASS + 1))
+}
+
 # The GKE surface needs a host whose first DNS label is "container": the
 # provider keeps only the scheme+host of a custom endpoint, so it cannot send
 # the /container path prefix the emulator also accepts, and the bare
@@ -139,6 +157,10 @@ ENABLED_SERVICE="$(out enabled_service)"
 FED_NAME="$(out metastore_federation_name)"
 GKE_CLUSTER_DP="$(out dataproc_gke_cluster_name)"
 GCE_CLUSTER_DP="$(out dataproc_gce_cluster_name)"
+BQ_DATASET="$(out bigquery_dataset_id)"
+BQ_TABLE="$(out bigquery_table_id)"
+BQ_ROUTINE="$(out bigquery_routine_id)"
+BQ_POLICY="$(out bigquery_row_access_policy_id)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -307,6 +329,58 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ── BigQuery: routine + row access policy (NF31) ─────────────────────────────
+# routines.* and rowAccessPolicies.* are resource CRUD over the BigQuery store.
+# The apply above created them through google_bigquery_routine /
+# google_bigquery_row_access_policy; the update below changes the two variables
+# so the provider issues routines.update and rowAccessPolicies.update in place.
+BQ_BASE="$ENDPOINT/bigquery/v2/projects/$PROJECT/datasets/$BQ_DATASET"
+check "BigQuery routine created" \
+  "$BQ_BASE/routines/$BQ_ROUTINE" \
+  "\"routineReference\":{\"datasetId\":\"$BQ_DATASET\",\"projectId\":\"$PROJECT\",\"routineId\":\"$BQ_ROUTINE\"}" \
+  '"routineType":"SCALAR_FUNCTION"' '"language":"SQL"' \
+  '"definitionBody":"x * 2"'
+check "BigQuery routine listed" \
+  "$BQ_BASE/routines" '"routines"' "\"routineId\":\"$BQ_ROUTINE\""
+check "BigQuery row access policy created" \
+  "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY" \
+  "\"policyId\":\"$BQ_POLICY\"" '"filterPredicate":"region = \"EU\""'
+check "BigQuery row access policy listed" \
+  "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies" \
+  '"rowAccessPolicies"' "\"policyId\":\"$BQ_POLICY\""
+# grantees is input-only in the Discovery schema; real GCP never echoes it.
+check_absent "BigQuery row access policy does not echo grantees" \
+  "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY" 'grantees' 'compat@example.com'
+# creationTime is stable across an update: capture it before the update.
+BQ_ROUTINE_CT="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+  "$BQ_BASE/routines/$BQ_ROUTINE" 2>/dev/null | sed -n 's/.*"creationTime":"\([0-9]*\)".*/\1/p')"
+BQ_POLICY_CT="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+  "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY" 2>/dev/null | sed -n 's/.*"creationTime":"\([^"]*\)".*/\1/p')"
+
+echo "== $TF: in-place update of the BigQuery routine and row access policy"
+TF_VARS_BQ=("${TF_VARS[@]}" -var="routine_body=x * 3" \
+  -var="row_access_policy_predicate=region = \"US\"")
+tf apply -input=false -auto-approve -no-color "${TF_VARS_BQ[@]}" \
+  -var="uptime_display_name=jaiscloud-tf-uptime-v2" >/dev/null
+check "BigQuery routine definition updated in place" \
+  "$BQ_BASE/routines/$BQ_ROUTINE" '"definitionBody":"x * 3"'
+check "BigQuery row access policy predicate updated in place" \
+  "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY" \
+  '"filterPredicate":"region = \"US\""'
+check "BigQuery routine update preserved creationTime" \
+  "$BQ_BASE/routines/$BQ_ROUTINE" "\"creationTime\":\"$BQ_ROUTINE_CT\""
+check "BigQuery row access policy update preserved creationTime" \
+  "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY" \
+  "\"creationTime\":\"$BQ_POLICY_CT\""
+if tf plan -input=false -no-color -detailed-exitcode "${TF_VARS_BQ[@]}" \
+  -var="uptime_display_name=jaiscloud-tf-uptime-v2" >/dev/null 2>&1; then
+  printf '  [PASS] re-plan after the BigQuery updates reports no changes\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] re-plan after the BigQuery updates reports changes\n'
+  FAIL=$((FAIL + 1))
+fi
+
 echo "== destroy (the virtual cluster only, to prove the pools survive it)"
 tf destroy -input=false -auto-approve -no-color \
   -target=google_dataproc_cluster.gke "${TF_VARS[@]}" >/dev/null
@@ -330,6 +404,20 @@ else
   printf '  [FAIL] uptime check get after destroy = HTTP %s, want 404\n' "$UPTIME_STATUS"
   FAIL=$((FAIL + 1))
 fi
+
+# Destroy removed the routine and row access policy too; both gets are 404.
+for pair in "routines/$BQ_ROUTINE" "tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY"; do
+  BQ_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    "$BQ_BASE/$pair" 2>/dev/null || true)"
+  if [[ "$BQ_STATUS" == "404" ]]; then
+    printf '  [PASS] %s deleted on destroy\n' "$pair"
+    PASS=$((PASS + 1))
+  else
+    printf '  [FAIL] %s get after destroy = HTTP %s, want 404\n' "$pair" "$BQ_STATUS"
+    FAIL=$((FAIL + 1))
+  fi
+done
 
 echo "== summary: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

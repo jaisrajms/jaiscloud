@@ -184,7 +184,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 
 ## 5. Explicitly non-`ga` surfaces
 
-- **BigQuery** — 22 cells `limited` + 3 `unsupported`. `jobs.query`/`jobs.insert` (query
+- **BigQuery** — 37 cells: 1 `ga` (the Discovery document), 33 `limited` + 3 `unsupported`.
+  `jobs.query`/`jobs.insert` (query
   configuration) evaluate a documented Standard SQL subset — `SELECT` plus DDL/DML — on an
   in-process pure-Go SQLite engine in both memory and `--dsn` modes
   (`docs/gcp/bigquery-sql-engine.md`); `jobs.insert` also runs `configuration.load` jobs from
@@ -192,7 +193,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   or an uploaded file (multipart/resumable media session, `load_table_from_file`), with the
   schema supplied, embedded in the file, or autodetected; `tabledata.*` reads and writes the
   stored rows;
-  `routines`/`models`/`rowAccessPolicies` are explicit `501` stubs. Simplifications
+  `routines.*` and `rowAccessPolicies.*` are stored CRUD resources (memory and `--dsn`; a
+  routine body is never executed and a row access policy predicate is never enforced), the
+  `models.*` resource and the routines/rowAccessPolicies IAM methods are explicit `501`
+  stubs. Simplifications
   (synchronous DDL/DML jobs, serialized DML spans, atomic CTAS, immutable
   `getQueryResults` snapshots, documented divergences) are the cell reasons.
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (23 + 1 `unsupported` stub),
