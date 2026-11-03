@@ -326,3 +326,52 @@ func TestServiceAccountSignRequiresAccount(t *testing.T) {
 		t.Errorf("a refused request materialised %d key(s)", len(entries))
 	}
 }
+
+// TestServiceAccountSignDelegates covers J68 for the IAM signBlob/signJwt verbs:
+// the IAM Credentials delegation chain they share is validated rather than
+// ignored.
+func TestServiceAccountSignDelegates(t *testing.T) {
+	ctx := context.Background()
+	p := New(store.NewMemoryResourceStore())
+	for _, id := range []string{"sa", "deleg"} {
+		if _, err := p.Create(ctx, newNR(map[string]any{"body": map[string]any{"accountId": id}})); err != nil {
+			t.Fatalf("create SA %s: %v", id, err)
+		}
+	}
+	email := "sa@proj.iam.gserviceaccount.com"
+	delegate := "deleg@proj.iam.gserviceaccount.com"
+	ok := []any{"projects/-/serviceAccounts/" + delegate}
+
+	if _, err := p.ServiceAccountSignBlob(ctx, newNR(map[string]any{
+		"name": "serviceAccounts/" + email, "body": map[string]any{"payload": "aGk=", "delegates": ok},
+	})); err != nil {
+		t.Fatalf("signBlob with a valid chain: %v", err)
+	}
+	if _, err := p.ServiceAccountSignJwt(ctx, newNR(map[string]any{
+		"name": "serviceAccounts/" + email, "body": map[string]any{"payload": `{"iss":"proj"}`, "delegates": ok},
+	})); err != nil {
+		t.Fatalf("signJwt with a valid chain: %v", err)
+	}
+
+	bad := []any{delegate}
+	for verb, call := range map[string]func() error{
+		"signBlob": func() error {
+			_, err := p.ServiceAccountSignBlob(ctx, newNR(map[string]any{
+				"name": "serviceAccounts/" + email, "body": map[string]any{"payload": "aGk=", "delegates": bad},
+			}))
+			return err
+		},
+		"signJwt": func() error {
+			_, err := p.ServiceAccountSignJwt(ctx, newNR(map[string]any{
+				"name": "serviceAccounts/" + email, "body": map[string]any{"payload": `{"iss":"proj"}`, "delegates": bad},
+			}))
+			return err
+		},
+	} {
+		err := call()
+		pe, isProviderErr := err.(*model.ProviderError)
+		if !isProviderErr || pe.HTTPStatus != 400 {
+			t.Errorf("%s with a malformed delegate = %v, want 400 InvalidArgument", verb, err)
+		}
+	}
+}

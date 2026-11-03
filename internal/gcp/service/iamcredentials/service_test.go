@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/gcp/service/resourcemanager"
 	"jaiscloud/internal/gcp/serviceaccount"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -23,6 +24,9 @@ const (
 	testEmail   = "compat@test-project.iam.gserviceaccount.com"
 	testProject = "test-project"
 	cloudScope  = "https://www.googleapis.com/auth/cloud-platform"
+
+	delegateEmail  = "delegate@test-project.iam.gserviceaccount.com"
+	delegate2Email = "delegate2@test-project.iam.gserviceaccount.com"
 )
 
 func newService() *Service { return New(store.NewMemoryResourceStore()) }
@@ -73,7 +77,7 @@ func TestGenerateAccessToken(t *testing.T) {
 	ctx := context.Background()
 	s := newServiceWithAccount(t)
 	before := time.Now()
-	token, expires, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour)
+	token, expires, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("GenerateAccessToken: %v", err)
 	}
@@ -103,7 +107,7 @@ func TestGenerateAccessToken(t *testing.T) {
 
 func TestGenerateAccessTokenDefaultLifetime(t *testing.T) {
 	s := newServiceWithAccount(t)
-	token, _, err := s.GenerateAccessToken(context.Background(), "-", testEmail, []string{cloudScope}, 0)
+	token, _, err := s.GenerateAccessToken(context.Background(), "-", testEmail, []string{cloudScope}, 0, nil)
 	if err != nil {
 		t.Fatalf("GenerateAccessToken: %v", err)
 	}
@@ -118,15 +122,15 @@ func TestGenerateAccessTokenDefaultLifetime(t *testing.T) {
 func TestGenerateAccessTokenValidation(t *testing.T) {
 	s := newServiceWithAccount(t)
 	ctx := context.Background()
-	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, nil, time.Hour); err == nil {
+	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, nil, time.Hour, nil); err == nil {
 		t.Error("expected an error for empty scopes")
 	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 {
 		t.Errorf("empty scopes error = %v, want 400 ProviderError", err)
 	}
-	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, 13*time.Hour); err == nil {
+	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, 13*time.Hour, nil); err == nil {
 		t.Error("expected an error for a lifetime over 12h")
 	}
-	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, -time.Second); err == nil {
+	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, -time.Second, nil); err == nil {
 		t.Error("expected an error for a negative lifetime")
 	}
 }
@@ -134,7 +138,7 @@ func TestGenerateAccessTokenValidation(t *testing.T) {
 func TestGenerateAccessTokenReusesKey(t *testing.T) {
 	ctx := context.Background()
 	s := newServiceWithAccount(t)
-	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour); err != nil {
+	if _, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour, nil); err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
 	// A wildcard request stores the key under the project from the email.
@@ -146,7 +150,10 @@ func TestGenerateAccessTokenReusesKey(t *testing.T) {
 func TestGenerateIDToken(t *testing.T) {
 	s := newServiceWithAccount(t)
 	ctx := context.Background()
-	token, err := s.GenerateIDToken(ctx, "-", testEmail, "https://example.com", true)
+	token, err := s.GenerateIDToken(ctx, "-", testEmail, IDTokenOptions{
+		Audience:     "https://example.com",
+		IncludeEmail: true,
+	})
 	if err != nil {
 		t.Fatalf("GenerateIDToken: %v", err)
 	}
@@ -160,8 +167,11 @@ func TestGenerateIDToken(t *testing.T) {
 	if claims["email"] != testEmail || claims["email_verified"] != true {
 		t.Errorf("email claims = %v", claims)
 	}
+	if _, ok := claims["google"]; ok {
+		t.Errorf("google claim present without organizationNumberIncluded: %v", claims)
+	}
 
-	noEmail, err := s.GenerateIDToken(ctx, "-", testEmail, "https://example.com", false)
+	noEmail, err := s.GenerateIDToken(ctx, "-", testEmail, IDTokenOptions{Audience: "https://example.com"})
 	if err != nil {
 		t.Fatalf("GenerateIDToken: %v", err)
 	}
@@ -169,15 +179,69 @@ func TestGenerateIDToken(t *testing.T) {
 		t.Error("email claim present without includeEmail")
 	}
 
-	if _, err := s.GenerateIDToken(ctx, "-", testEmail, "", false); err == nil {
+	if _, err := s.GenerateIDToken(ctx, "-", testEmail, IDTokenOptions{}); err == nil {
 		t.Error("expected an error for a missing audience")
+	}
+}
+
+// TestGenerateIDTokenOrganizationNumber covers J68's org claim: the documented
+// `google.organization_number` is present (and null for an account outside any
+// organization) only when the request asks for it, and carries the project's
+// organization number when the project registry records one.
+func TestGenerateIDTokenOrganizationNumber(t *testing.T) {
+	ctx := context.Background()
+	s := newServiceWithAccount(t)
+
+	// The project has no registry entry, so it is not associated with an
+	// organization: the documented value is null.
+	token, err := s.GenerateIDToken(ctx, "-", testEmail, IDTokenOptions{
+		Audience:                   "https://example.com",
+		OrganizationNumberIncluded: true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateIDToken: %v", err)
+	}
+	claims := jwtClaims(t, token)
+	google, ok := claims["google"].(map[string]any)
+	if !ok {
+		t.Fatalf("google claim = %v, want an object", claims["google"])
+	}
+	if v, present := google["organization_number"]; !present || v != nil {
+		t.Errorf("google.organization_number = %v (present=%v), want an explicit null", v, present)
+	}
+
+	// A project created under an organization reports that organization's
+	// number.
+	const orgProject = "orgproj01"
+	const orgEmail = "svc@" + orgProject + ".iam.gserviceaccount.com"
+	seedAccount(t, s, orgProject, orgEmail)
+	rm := resourcemanager.NewService(s.resources)
+	if _, _, err := rm.CreateProject(ctx, resourcemanager.CreateProjectInput{
+		ProjectID: orgProject,
+		Parent:    "organizations/123456",
+	}); err != nil {
+		t.Fatalf("create organization project: %v", err)
+	}
+	token, err = s.GenerateIDToken(ctx, "-", orgEmail, IDTokenOptions{
+		Audience:                   "https://example.com",
+		OrganizationNumberIncluded: true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateIDToken for an organization project: %v", err)
+	}
+	google, ok = jwtClaims(t, token)["google"].(map[string]any)
+	if !ok {
+		t.Fatalf("google claim missing for an organization project")
+	}
+	if google["organization_number"] != float64(123456) {
+		t.Errorf("google.organization_number = %v, want 123456", google["organization_number"])
 	}
 }
 
 func TestSignBlob(t *testing.T) {
 	s := newServiceWithAccount(t)
 	ctx := context.Background()
-	keyID, sig, err := s.SignBlob(ctx, "-", testEmail, []byte("hello"))
+	keyID, sig, err := s.SignBlob(ctx, "-", testEmail, []byte("hello"), nil)
 	if err != nil {
 		t.Fatalf("SignBlob: %v", err)
 	}
@@ -200,7 +264,7 @@ func TestSignBlob(t *testing.T) {
 	if err := rsa.VerifyPKCS1v15(priv.(*rsa.PrivateKey).Public().(*rsa.PublicKey), crypto.SHA256, digest[:], sig); err != nil {
 		t.Fatalf("signature does not verify: %v", err)
 	}
-	if _, _, err := s.SignBlob(ctx, "-", testEmail, nil); err == nil {
+	if _, _, err := s.SignBlob(ctx, "-", testEmail, nil, nil); err == nil {
 		t.Error("expected an error for an empty payload")
 	}
 }
@@ -208,7 +272,7 @@ func TestSignBlob(t *testing.T) {
 func TestSignJWT(t *testing.T) {
 	s := newServiceWithAccount(t)
 	ctx := context.Background()
-	keyID, signed, err := s.SignJWT(ctx, "-", testEmail, `{"iss":"test"}`)
+	keyID, signed, err := s.SignJWT(ctx, "-", testEmail, `{"iss":"test"}`, nil)
 	if err != nil {
 		t.Fatalf("SignJWT: %v", err)
 	}
@@ -219,19 +283,19 @@ func TestSignJWT(t *testing.T) {
 		t.Errorf("payload not preserved: %v", signed)
 	}
 
-	if _, _, err := s.SignJWT(ctx, "-", testEmail, "not json"); err == nil {
+	if _, _, err := s.SignJWT(ctx, "-", testEmail, "not json", nil); err == nil {
 		t.Error("expected an error for a non-JSON payload")
 	}
 	past := time.Now().Add(-time.Hour).Unix()
-	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(past)+`}`); err == nil {
+	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(past)+`}`, nil); err == nil {
 		t.Error("expected an error for an exp in the past")
 	}
 	future := time.Now().Add(13 * time.Hour).Unix()
-	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(future)+`}`); err == nil {
+	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(future)+`}`, nil); err == nil {
 		t.Error("expected an error for an exp more than 12h out")
 	}
 	ok := time.Now().Add(time.Hour).Unix()
-	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(ok)+`}`); err != nil {
+	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"exp":`+itoa(ok)+`}`, nil); err != nil {
 		t.Errorf("valid exp rejected: %v", err)
 	}
 }
@@ -247,19 +311,19 @@ func TestMissingServiceAccountIsNotFound(t *testing.T) {
 
 	calls := map[string]func() error{
 		"GenerateAccessToken": func() error {
-			_, _, err := s.GenerateAccessToken(ctx, "-", missing, []string{cloudScope}, time.Hour)
+			_, _, err := s.GenerateAccessToken(ctx, "-", missing, []string{cloudScope}, time.Hour, nil)
 			return err
 		},
 		"GenerateIdToken": func() error {
-			_, err := s.GenerateIDToken(ctx, "-", missing, "https://example.com", false)
+			_, err := s.GenerateIDToken(ctx, "-", missing, IDTokenOptions{Audience: "https://example.com"})
 			return err
 		},
 		"SignBlob": func() error {
-			_, _, err := s.SignBlob(ctx, "-", missing, []byte("hello"))
+			_, _, err := s.SignBlob(ctx, "-", missing, []byte("hello"), nil)
 			return err
 		},
 		"SignJwt": func() error {
-			_, _, err := s.SignJWT(ctx, "-", missing, `{"iss":"test"}`)
+			_, _, err := s.SignJWT(ctx, "-", missing, `{"iss":"test"}`, nil)
 			return err
 		},
 	}
@@ -279,6 +343,69 @@ func TestMissingServiceAccountIsNotFound(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("a refused request materialised %d key(s)", len(entries))
+	}
+}
+
+// TestDelegationChain covers J68: the documented chain is validated instead of
+// being accepted and ignored, and a valid chain still mints a credential that
+// represents the target account (the docs: "The resulting credential only
+// represents the final service account").
+func TestDelegationChain(t *testing.T) {
+	ctx := context.Background()
+	s := newServiceWithAccount(t)
+	seedAccount(t, s, testProject, delegateEmail)
+	seedAccount(t, s, testProject, delegate2Email)
+
+	valid := []string{
+		"projects/-/serviceAccounts/" + delegateEmail,
+		"projects/-/serviceAccounts/" + delegate2Email,
+	}
+	token, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour, valid)
+	if err != nil {
+		t.Fatalf("delegated GenerateAccessToken: %v", err)
+	}
+	claims := jwtClaims(t, token)
+	if claims["email"] != testEmail || claims["sub"] != testEmail {
+		t.Errorf("delegated token identity = %v/%v, want the target %s", claims["email"], claims["sub"], testEmail)
+	}
+	if _, err := s.GenerateIDToken(ctx, "-", testEmail, IDTokenOptions{
+		Audience:  "https://example.com",
+		Delegates: valid,
+	}); err != nil {
+		t.Fatalf("delegated GenerateIDToken: %v", err)
+	}
+	if _, _, err := s.SignBlob(ctx, "-", testEmail, []byte("hello"), valid); err != nil {
+		t.Fatalf("delegated SignBlob: %v", err)
+	}
+	if _, _, err := s.SignJWT(ctx, "-", testEmail, `{"iss":"test"}`, valid); err != nil {
+		t.Fatalf("delegated SignJwt: %v", err)
+	}
+
+	invalid := map[string][]string{
+		"concrete project segment": {"projects/test-project/serviceAccounts/" + delegateEmail},
+		"no resource prefix":       {delegateEmail},
+		"empty entry":              {"projects/-/serviceAccounts/"},
+		"extra name segment":       {"projects/-/serviceAccounts/" + delegateEmail + "/keys"},
+		"target in the chain":      {"projects/-/serviceAccounts/" + delegateEmail, "projects/-/serviceAccounts/" + testEmail},
+		"repeated delegate":        {"projects/-/serviceAccounts/" + delegateEmail, "projects/-/serviceAccounts/" + delegateEmail},
+	}
+	for name, chain := range invalid {
+		err := func() error {
+			_, _, err := s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour, chain)
+			return err
+		}()
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 {
+			t.Errorf("%s: error = %v, want 400 InvalidArgument", name, err)
+		}
+	}
+
+	// A delegate that does not exist is a NOT_FOUND, like the target account.
+	_, _, err = s.GenerateAccessToken(ctx, "-", testEmail, []string{cloudScope}, time.Hour, []string{
+		"projects/-/serviceAccounts/ghost@" + testProject + ".iam.gserviceaccount.com",
+	})
+	if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 404 {
+		t.Errorf("missing delegate = %v, want 404 NotFound", err)
 	}
 }
 

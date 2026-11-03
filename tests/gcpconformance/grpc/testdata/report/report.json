@@ -3724,7 +3724,7 @@
       "rpc": "GenerateAccessToken",
       "method": "GenerateAccessToken",
       "status": "pass",
-      "key_field": "accessToken is a non-empty opaque token; expireTime is in the future; a missing account is NOT_FOUND"
+      "key_field": "accessToken is a non-empty opaque token; expireTime is in the future; a missing account is NOT_FOUND; a delegation chain is validated"
     },
     {
       "service": "iamcredentials",

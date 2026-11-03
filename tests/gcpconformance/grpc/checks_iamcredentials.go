@@ -17,30 +17,40 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-// ensureIamCredentialsServiceAccount creates the run's target service account and
-// returns its email plus a cleanup func. Real GCP requires the account to exist
-// on every IAM Credentials method (J67), so each check provisions it through the
-// IAM Admin API.
-func ensureIamCredentialsServiceAccount(ctx context.Context, cfg Config) (string, func(), error) {
+// iamCredentialsAccounts creates the run's target service account and the
+// intermediate account its delegation chain names, and returns their emails plus
+// a cleanup func. Real GCP requires every account an IAM Credentials method
+// touches to exist (J67), so each check provisions them through the IAM Admin
+// API; the delegate also gives J68's chain a real account to name.
+func iamCredentialsAccounts(ctx context.Context, cfg Config) (target, delegate string, cleanup func(), err error) {
 	client, err := newIAMAdminClient(ctx, cfg)
 	if err != nil {
-		return "", nil, fmt.Errorf("new IAM admin client: %w", err)
+		return "", "", nil, fmt.Errorf("new IAM admin client: %w", err)
 	}
-	accountID := strings.ToLower(cfg.ResourceName("gcpc-ic"))
-	sa, err := client.CreateServiceAccount(ctx, &iamadminpb.CreateServiceAccountRequest{
-		Name:      "projects/" + cfg.Project,
-		AccountId: accountID,
-		ServiceAccount: &iamadminpb.ServiceAccount{
-			DisplayName: "gRPC conformance IAM Credentials",
-		},
-	})
-	if err != nil {
-		client.Close()
-		return "", nil, fmt.Errorf("CreateServiceAccount(%s/%s): %w", cfg.Project, accountID, err)
+	created := make([]string, 0, 2)
+	for _, id := range []string{"gcpc-ic", "gcpc-ic-d"} {
+		accountID := strings.ToLower(cfg.ResourceName(id))
+		sa, cerr := client.CreateServiceAccount(ctx, &iamadminpb.CreateServiceAccountRequest{
+			Name:      "projects/" + cfg.Project,
+			AccountId: accountID,
+			ServiceAccount: &iamadminpb.ServiceAccount{
+				DisplayName: "gRPC conformance IAM Credentials",
+			},
+		})
+		if cerr != nil {
+			client.Close()
+			return "", "", nil, fmt.Errorf("CreateServiceAccount(%s/%s): %w", cfg.Project, accountID, cerr)
+		}
+		created = append(created, sa.GetName())
 	}
-	return sa.GetName()[strings.LastIndex(sa.GetName(), "/")+1:], func() {
+	email := func(name string) string {
+		return name[strings.LastIndex(name, "/")+1:]
+	}
+	return email(created[0]), email(created[1]), func() {
 		defer client.Close()
-		_ = client.DeleteServiceAccount(ctx, &iamadminpb.DeleteServiceAccountRequest{Name: sa.GetName()})
+		for _, name := range created {
+			_ = client.DeleteServiceAccount(ctx, &iamadminpb.DeleteServiceAccountRequest{Name: name})
+		}
 	}, nil
 }
 
@@ -60,7 +70,7 @@ func newIamCredentialsClient(ctx context.Context, cfg Config) (*credentials.IamC
 // and signJwt, which share a REST path with iam — are exercised directly.
 func iamCredentialsChecks() []Check {
 	return []Check{
-		{Service: "iamcredentials", RPC: "GenerateAccessToken", KeyField: "accessToken is a non-empty opaque token; expireTime is in the future; a missing account is NOT_FOUND", Run: checkIamCredentialsGenerateAccessToken},
+		{Service: "iamcredentials", RPC: "GenerateAccessToken", KeyField: "accessToken is a non-empty opaque token; expireTime is in the future; a missing account is NOT_FOUND; a delegation chain is validated", Run: checkIamCredentialsGenerateAccessToken},
 		{Service: "iamcredentials", RPC: "GenerateIdToken", KeyField: "token is a well-formed JWT for an existing account", Run: checkIamCredentialsGenerateIdToken},
 		{Service: "iamcredentials", RPC: "SignBlob", KeyField: "keyId + non-empty signedBlob for an existing account", Run: checkIamCredentialsSignBlob},
 		{Service: "iamcredentials", RPC: "SignJwt", KeyField: "keyId + well-formed signedJwt for an existing account", Run: checkIamCredentialsSignJwt},
@@ -73,7 +83,7 @@ func checkIamCredentialsGenerateAccessToken(ctx context.Context, cfg Config) err
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
-	target, cleanup, err := ensureIamCredentialsServiceAccount(ctx, cfg)
+	target, delegate, cleanup, err := iamCredentialsAccounts(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -106,6 +116,25 @@ func checkIamCredentialsGenerateAccessToken(ctx context.Context, cfg Config) err
 		return fmt.Errorf("GenerateAccessToken expireTime = %v, want a future timestamp", resp.GetExpireTime())
 	}
 
+	// J68: a documented delegation chain naming an existing intermediate account
+	// is accepted, and a malformed entry is INVALID_ARGUMENT.
+	if _, err := client.GenerateAccessToken(ctx, &credentialspb.GenerateAccessTokenRequest{
+		Name:      name,
+		Scope:     []string{"https://www.googleapis.com/auth/cloud-platform"},
+		Lifetime:  durationpb.New(time.Hour),
+		Delegates: []string{"projects/-/serviceAccounts/" + delegate},
+	}); err != nil {
+		return fmt.Errorf("GenerateAccessToken with a delegation chain: %w", err)
+	}
+	_, err = client.GenerateAccessToken(ctx, &credentialspb.GenerateAccessTokenRequest{
+		Name:      name,
+		Scope:     []string{"https://www.googleapis.com/auth/cloud-platform"},
+		Lifetime:  durationpb.New(time.Hour),
+		Delegates: []string{delegate},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("GenerateAccessToken with a malformed delegate = %v, want InvalidArgument", status.Code(err))
+	}
 	return nil
 }
 
@@ -115,7 +144,7 @@ func checkIamCredentialsGenerateIdToken(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
-	target, cleanup, err := ensureIamCredentialsServiceAccount(ctx, cfg)
+	target, _, cleanup, err := iamCredentialsAccounts(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -141,7 +170,7 @@ func checkIamCredentialsSignBlob(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
-	target, cleanup, err := ensureIamCredentialsServiceAccount(ctx, cfg)
+	target, _, cleanup, err := iamCredentialsAccounts(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -166,7 +195,7 @@ func checkIamCredentialsSignJwt(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
-	target, cleanup, err := ensureIamCredentialsServiceAccount(ctx, cfg)
+	target, _, cleanup, err := iamCredentialsAccounts(ctx, cfg)
 	if err != nil {
 		return err
 	}

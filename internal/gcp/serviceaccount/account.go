@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"jaiscloud/internal/model"
@@ -76,4 +77,49 @@ func LookupAccount(ctx context.Context, resources store.ResourceStore, account, 
 		}
 	}
 	return "", "", AccountNotFound()
+}
+
+// delegatePrefix is the documented prefix of a delegation-chain entry
+// (IAM Credentials GenerateAccessToken.delegates and its siblings). The project
+// segment must be the "-" wildcard: the Discovery document states that replacing
+// it with a project id is invalid.
+const delegatePrefix = "projects/-/serviceAccounts/" //gcplint:ignore resource-prefix documented delegate prefix, parsed rather than built
+
+// ValidateDelegates checks the documented delegation chain of an IAM Credentials
+// request against the service-account registry.
+//
+// The documented chain runs caller → delegates[0] → … → target, and the caller
+// and the target are explicitly not part of it. The emulator has no IAM
+// authorization plane — role bindings are stored but never enforced — so the
+// Token Creator grants between consecutive accounts cannot be checked; what is
+// checked is everything the wire contract states structurally: every entry is a
+// "projects/-/serviceAccounts/{ACCOUNT_EMAIL_OR_UNIQUEID}" name, every delegate
+// is a service account that exists, no delegate repeats, and the chain never
+// names the account the credential is for. Real GCP publishes no maximum chain
+// length, so none is imposed.
+//
+// targetEmail is the account the credential is minted for.
+func ValidateDelegates(ctx context.Context, resources store.ResourceStore, targetEmail string, delegates []string) error {
+	if len(delegates) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(delegates))
+	for _, d := range delegates {
+		identifier := strings.TrimPrefix(d, delegatePrefix)
+		if identifier == d || identifier == "" || strings.Contains(identifier, "/") {
+			return Invalid("delegate " + strconv.Quote(d) + " must have the form " + delegatePrefix + "{ACCOUNT_EMAIL_OR_UNIQUEID}")
+		}
+		_, email, err := LookupAccount(ctx, resources, "-", identifier)
+		if err != nil {
+			return err
+		}
+		if email == targetEmail {
+			return Invalid("delegates must not include the service account the credential is for")
+		}
+		if _, dup := seen[email]; dup {
+			return Invalid("delegates must not repeat the service account " + strconv.Quote(email))
+		}
+		seen[email] = struct{}{}
+	}
+	return nil
 }

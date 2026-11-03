@@ -481,11 +481,14 @@ func (p *Provider) ServiceAccountSignBlob(ctx context.Context, nr *model.Normali
 	if err != nil {
 		return nil, err
 	}
+	body, _ := nr.Params["body"].(map[string]any)
+	if err := serviceaccount.ValidateDelegates(ctx, p.resources, ref.Email, requestDelegates(body)); err != nil {
+		return nil, err
+	}
 	m, err := p.ensureKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
 	}
-	body, _ := nr.Params["body"].(map[string]any)
 	// IAM carries the payload under bytesToSign; IAM Credentials uses payload.
 	blob, _ := body["bytesToSign"].(string)
 	if blob == "" {
@@ -545,6 +548,9 @@ func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.Normaliz
 	if err := serviceaccount.ValidateJWTPayload(payloadStr, clock.Now().UTC()); err != nil {
 		return nil, err
 	}
+	if err := serviceaccount.ValidateDelegates(ctx, p.resources, ref.Email, requestDelegates(body)); err != nil {
+		return nil, err
+	}
 	m, err := p.ensureKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
@@ -561,4 +567,18 @@ func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.Normaliz
 		"keyId":     m.KeyID,
 		"signedJwt": signed,
 	}), nil
+}
+
+// requestDelegates reads the documented delegates[] field of a signBlob/signJwt
+// body (IAM Credentials shape). The sign verbs share their path with IAM, which
+// has no delegation chain, so an absent field is the common case.
+func requestDelegates(body map[string]any) []string {
+	raw, _ := body["delegates"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
