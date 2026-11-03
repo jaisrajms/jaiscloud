@@ -127,6 +127,10 @@ func sqlParityFingerprint(t *testing.T, s bqstore.Store) string {
 	query("Query(create-schema)", "CREATE SCHEMA `proj.parity_ds2`", false)
 	query("Query(drop-schema)", "DROP SCHEMA `proj.parity_ds2`", false)
 	query("Query(drop-table)", "DROP TABLE `"+qual+dst+"`", false)
+	// BQ12: a dry-run CREATE SCHEMA on an existing dataset is validated, and
+	// IF NOT EXISTS still succeeds.
+	query("Query(dry-run-existing-schema)", "CREATE SCHEMA `proj.parity_ds`", true)
+	query("Query(dry-run-existing-schema-if-not-exists)", "CREATE SCHEMA IF NOT EXISTS `proj.parity_ds`", true)
 
 	data, err := json.Marshal(rec.steps)
 	if err != nil {
@@ -213,6 +217,7 @@ func TestSQLParityMemory(t *testing.T) {
 		"Query(select)", "Query(aggregate)", "Query(ctas)", "Query(insert)",
 		"Query(update)", "Query(delete)", "Query(truncate)", "Query(empty)",
 		"Query(dry-run)", "Query(create-schema)", "Query(drop-schema)", "Query(drop-table)",
+		"Query(dry-run-existing-schema-if-not-exists)",
 	}
 	for _, op := range mustSucceed {
 		s, ok := byOp[op]
@@ -227,7 +232,7 @@ func TestSQLParityMemory(t *testing.T) {
 		}
 	}
 
-	mustFail := []string{"Query(fail-loud)", "Query(missing-table)"}
+	mustFail := []string{"Query(fail-loud)", "Query(missing-table)", "Query(dry-run-existing-schema)"}
 	for _, op := range mustFail {
 		s, ok := byOp[op]
 		if !ok {

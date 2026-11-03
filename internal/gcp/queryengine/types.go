@@ -66,6 +66,9 @@ type Mutator interface {
 	// ListTables returns the table IDs in a dataset (used to enforce DROP
 	// SCHEMA RESTRICT unless CASCADE is given).
 	ListTables(ctx context.Context, project, dataset string) ([]string, error)
+	// DatasetExists reports whether a dataset exists, so a dry-run
+	// CREATE/DROP SCHEMA validates its target without mutating anything.
+	DatasetExists(ctx context.Context, project, dataset string) (bool, error)
 	// CreateTable creates a table with the given schema and rows (rows may be
 	// empty for a schema-only CREATE TABLE). It returns ErrTableExists when the
 	// table already exists.

@@ -130,6 +130,19 @@ func (c storeCatalog) DropTable(ctx context.Context, project, dataset, table str
 	return nil
 }
 
+// DatasetExists reports whether a dataset exists, for dry-run validation of
+// CREATE/DROP SCHEMA targets (a dry run must not mutate, so it cannot probe by
+// attempting the write).
+func (c storeCatalog) DatasetExists(ctx context.Context, project, dataset string) (bool, error) {
+	if _, err := c.store.GetDataset(ctx, project, dataset); err != nil {
+		if errors.Is(err, bqstore.ErrNoSuchDataset) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func (c storeCatalog) CreateDataset(ctx context.Context, project, dataset string) error {
 	now := clock.Now().UTC()
 	config, _ := json.Marshal(map[string]any{

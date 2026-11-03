@@ -58,6 +58,10 @@ func (m *memMutator) DropTable(_ context.Context, project, dataset, table string
 	return nil
 }
 
+func (m *memMutator) DatasetExists(_ context.Context, project, dataset string) (bool, error) {
+	return m.datasets[project+"\x00"+dataset], nil
+}
+
 func (m *memMutator) CreateDataset(_ context.Context, project, dataset string) error {
 	key := project + "\x00" + dataset
 	if m.datasets[key] {
@@ -290,6 +294,55 @@ func TestExecuteDryRunDoesNotMutate(t *testing.T) {
 	}
 	if got := len(m.tables[scope("p", "ds", "orders")].Rows); got != 3 {
 		t.Fatalf("dry run inserted: rows = %d", got)
+	}
+}
+
+func TestExecuteDryRunValidatesDDLTargets(t *testing.T) {
+	ctx := context.Background()
+	m := seededMutator()
+	dryRun := func(q string) (Result, error) {
+		return ExecuteStatement(ctx, m, Request{
+			Project: "p", Query: q, DefaultProject: "p", DefaultDataset: "ds", DryRun: true,
+		})
+	}
+
+	// CREATE SCHEMA on an existing dataset is AlreadyExists (BQ12), unless
+	// IF NOT EXISTS is given.
+	if _, err := dryRun("CREATE SCHEMA `p.ds`"); !errors.Is(err, ErrDatasetExists) {
+		t.Fatalf("dry-run create existing schema: expected ErrDatasetExists, got %v", err)
+	}
+	if res, err := dryRun("CREATE SCHEMA IF NOT EXISTS `p.ds`"); err != nil || res.StatementType != StatementCreateSchema {
+		t.Fatalf("dry-run create existing schema IF NOT EXISTS = %+v, %v", res, err)
+	}
+
+	// A fresh dataset validates without being created.
+	if _, err := dryRun("CREATE SCHEMA `p.fresh`"); err != nil {
+		t.Fatalf("dry-run create fresh schema: %v", err)
+	}
+	if m.datasets["p\x00fresh"] {
+		t.Fatal("dry run created a dataset")
+	}
+
+	// CREATE TABLE in a missing dataset is NotFound, as the real statement is.
+	if _, err := dryRun("CREATE TABLE `p.gone.t` (a INT64)"); !errors.Is(err, ErrDatasetNotFound) {
+		t.Fatalf("dry-run create table in missing dataset: expected ErrDatasetNotFound, got %v", err)
+	}
+	// DROP SCHEMA of a missing dataset is NotFound unless IF EXISTS.
+	if _, err := dryRun("DROP SCHEMA `p.gone`"); !errors.Is(err, ErrDatasetNotFound) {
+		t.Fatalf("dry-run drop missing schema: expected ErrDatasetNotFound, got %v", err)
+	}
+	if _, err := dryRun("DROP SCHEMA IF EXISTS `p.gone`"); err != nil {
+		t.Fatalf("dry-run drop missing schema IF EXISTS: %v", err)
+	}
+	// DROP SCHEMA RESTRICT is enforced for a non-empty dataset.
+	if _, err := dryRun("DROP SCHEMA `p.ds`"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("dry-run drop non-empty schema: expected UnsupportedError, got %v", err)
+	}
+	if _, err := dryRun("DROP SCHEMA `p.ds` CASCADE"); err != nil {
+		t.Fatalf("dry-run drop non-empty schema CASCADE: %v", err)
+	}
+	if !m.datasets["p\x00ds"] {
+		t.Fatal("dry run dropped a dataset")
 	}
 }
 

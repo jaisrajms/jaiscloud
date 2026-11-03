@@ -242,6 +242,62 @@ func TestQueryDryRunNoMutation(t *testing.T) {
 	}
 }
 
+func TestQueryDryRunCreateSchemaValidatesTarget(t *testing.T) {
+	ctx := context.Background()
+	p := seedDMLProvider(t) // dataset "sales" exists
+
+	dry := func(q string) (*model.ProviderResponse, error) {
+		return p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": q, "dryRun": true}}))
+	}
+
+	// Existing dataset without IF NOT EXISTS fails exactly as a real run would
+	// (BQ12): the dry run validates the target instead of reporting success.
+	_, err := dry("CREATE SCHEMA `proj.sales`")
+	assertProviderErr(t, err, "AlreadyExists", 409)
+	// Nothing was mutated and no job was persisted.
+	list, err := p.ListJobs(ctx, newNR(map[string]any{}))
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if jobs, _ := list.Data["jobs"].([]any); len(jobs) != 0 {
+		t.Fatalf("dry run persisted a job: %v", jobs)
+	}
+
+	// IF NOT EXISTS on an existing dataset succeeds.
+	resp, err := dry("CREATE SCHEMA IF NOT EXISTS `proj.sales`")
+	if err != nil {
+		t.Fatalf("dry run create schema IF NOT EXISTS: %v", err)
+	}
+	if resp.Data["statementType"] != "CREATE_SCHEMA" {
+		t.Fatalf("dry run statementType = %v", resp.Data["statementType"])
+	}
+	if _, ok := resp.Data["rows"]; ok {
+		t.Fatalf("dry run returned rows: %v", resp.Data["rows"])
+	}
+
+	// A fresh target validates without creating the dataset.
+	if _, err := dry("CREATE SCHEMA `proj.dryrun_ds`"); err != nil {
+		t.Fatalf("dry run create fresh schema: %v", err)
+	}
+	if _, err := p.GetDataset(ctx, newNR(map[string]any{"datasetId": "dryrun_ds"})); err == nil {
+		t.Fatal("dry run created a dataset")
+	}
+	// The same statement then succeeds for real.
+	if res := queryOK(t, p, "CREATE SCHEMA `proj.dryrun_ds`"); res["statementType"] != "CREATE_SCHEMA" {
+		t.Fatalf("create schema = %v", res)
+	}
+
+	// A dry-run CREATE TABLE in a missing dataset is NotFound, not success.
+	_, err = dry("CREATE TABLE `proj.missing_ds.t` (a INT64)")
+	assertProviderErr(t, err, "NotFound", 404)
+	// A dry-run DROP SCHEMA of a missing dataset is NotFound unless IF EXISTS.
+	_, err = dry("DROP SCHEMA `proj.missing_ds`")
+	assertProviderErr(t, err, "NotFound", 404)
+	if _, err := dry("DROP SCHEMA IF EXISTS `proj.missing_ds`"); err != nil {
+		t.Fatalf("dry run drop schema IF EXISTS: %v", err)
+	}
+}
+
 func TestQueryDMLNotFound(t *testing.T) {
 	ctx := context.Background()
 	p := seedDMLProvider(t)
