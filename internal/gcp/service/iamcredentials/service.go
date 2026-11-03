@@ -9,6 +9,14 @@
 // internal/gcp/identity can recover the caller identity from it and
 // impersonation flows keep working. Real GCP returns an opaque token; the
 // emulator's is likewise opaque to clients — it carries no recognizable prefix.
+//
+// Every method resolves the service account through the IAM registry first: real
+// GCP requires the account to exist, so a missing one is NOT_FOUND on all four
+// methods (J67). The request's delegation chain is validated as documented (J68):
+// each delegate must be a "projects/-/serviceAccounts/{...}" name naming an
+// existing service account, in a chain that does not repeat an account and does
+// not name the target. The credential itself always represents the target
+// account, exactly as the delegated flow documents.
 package iamcredentials
 
 import (
@@ -17,6 +25,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/service/resourcemanager"
 	"jaiscloud/internal/gcp/serviceaccount"
 	"jaiscloud/internal/store"
 )
@@ -55,27 +64,53 @@ type accessTokenClaims struct {
 
 // idTokenClaims is the JWT payload of a generated OpenID Connect ID token.
 type idTokenClaims struct {
-	Issuer        string `json:"iss"`
-	Audience      string `json:"aud"`
-	Subject       string `json:"sub"`
-	IssuedAt      int64  `json:"iat"`
-	ExpiresAt     int64  `json:"exp"`
-	Email         string `json:"email,omitempty"`
-	EmailVerified bool   `json:"email_verified,omitempty"`
+	Issuer        string         `json:"iss"`
+	Audience      string         `json:"aud"`
+	Subject       string         `json:"sub"`
+	IssuedAt      int64          `json:"iat"`
+	ExpiresAt     int64          `json:"exp"`
+	Email         string         `json:"email,omitempty"`
+	EmailVerified bool           `json:"email_verified,omitempty"`
+	Google        *idTokenGoogle `json:"google,omitempty"`
 }
 
-// key resolves the signing key for (account, email). account may be the
-// "projects/-" wildcard; the project embedded in the email is used then.
-func (s *Service) key(ctx context.Context, account, email string) (*serviceaccount.Key, error) {
+// idTokenGoogle is the documented `google` claim block. organization_number is
+// present (and null for an account outside any organization) only when the
+// request sets organizationNumberIncluded.
+type idTokenGoogle struct {
+	OrganizationNumber *int64 `json:"organization_number"`
+}
+
+// IDTokenOptions are the generateIdToken request fields beyond the account name.
+type IDTokenOptions struct {
+	Audience                   string
+	Delegates                  []string
+	IncludeEmail               bool
+	OrganizationNumberIncluded bool
+}
+
+// key resolves the signing key for (account, email) after requiring the service
+// account to exist. account may be the "projects/-" wildcard; the project
+// embedded in the email is used then. delegates is the request's delegation
+// chain, validated against the registry.
+func (s *Service) key(ctx context.Context, account, email string, delegates []string) (*serviceaccount.Key, error) {
 	if email == "" {
 		return nil, serviceaccount.Invalid("service account is required")
 	}
-	return serviceaccount.EnsureKey(ctx, s.resources, serviceaccount.AccountForSA(account, email), email)
+	acc, canonical, err := serviceaccount.LookupAccount(ctx, s.resources, account, email)
+	if err != nil {
+		return nil, err
+	}
+	if err := serviceaccount.ValidateDelegates(ctx, s.resources, canonical, delegates); err != nil {
+		return nil, err
+	}
+	return serviceaccount.EnsureKey(ctx, s.resources, acc, canonical)
 }
 
 // GenerateAccessToken mints an OAuth2 access token for email. scopes must be
 // non-empty and lifetime defaults to (and is capped at) the documented bounds.
-func (s *Service) GenerateAccessToken(ctx context.Context, account, email string, scopes []string, lifetime time.Duration) (string, time.Time, error) {
+// delegates is the documented delegation chain (empty for a direct request).
+func (s *Service) GenerateAccessToken(ctx context.Context, account, email string, scopes []string, lifetime time.Duration, delegates []string) (string, time.Time, error) {
 	if len(scopes) == 0 {
 		return "", time.Time{}, serviceaccount.Invalid("at least one scope is required")
 	}
@@ -85,7 +120,7 @@ func (s *Service) GenerateAccessToken(ctx context.Context, account, email string
 	if lifetime < 0 || lifetime > serviceaccount.MaxJWTLifetime {
 		return "", time.Time{}, serviceaccount.Invalid("lifetime must be between 0s and 12h")
 	}
-	k, err := s.key(ctx, account, email)
+	k, err := s.key(ctx, account, email, delegates)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -109,13 +144,12 @@ func (s *Service) GenerateAccessToken(ctx context.Context, account, email string
 	return jwt, expires, nil
 }
 
-// GenerateIDToken mints an OpenID Connect ID token for email. audience is
-// required; includeEmail adds the email/email_verified claims.
-func (s *Service) GenerateIDToken(ctx context.Context, account, email, audience string, includeEmail bool) (string, error) {
-	if strings.TrimSpace(audience) == "" {
+// GenerateIDToken mints an OpenID Connect ID token for email.
+func (s *Service) GenerateIDToken(ctx context.Context, account, email string, opts IDTokenOptions) (string, error) {
+	if strings.TrimSpace(opts.Audience) == "" {
 		return "", serviceaccount.Invalid("audience is required")
 	}
-	k, err := s.key(ctx, account, email)
+	k, err := s.key(ctx, account, email, opts.Delegates)
 	if err != nil {
 		return "", err
 	}
@@ -126,24 +160,31 @@ func (s *Service) GenerateIDToken(ctx context.Context, account, email, audience 
 	now := clock.Now().UTC()
 	claims := idTokenClaims{
 		Issuer:    idTokenIssuer,
-		Audience:  audience,
+		Audience:  opts.Audience,
 		Subject:   email,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(idTokenLifetime).Unix(),
 	}
-	if includeEmail {
+	if opts.IncludeEmail {
 		claims.Email = email
 		claims.EmailVerified = true
+	}
+	if opts.OrganizationNumberIncluded {
+		org, err := resourcemanager.OrganizationNumberForProject(ctx, s.resources, projectFor(account, email))
+		if err != nil {
+			return "", err
+		}
+		claims.Google = &idTokenGoogle{OrganizationNumber: org}
 	}
 	return serviceaccount.SignClaims(privDER, k.KeyID, claims)
 }
 
 // SignBlob signs the SHA-256 digest of payload with the account's emulator key.
-func (s *Service) SignBlob(ctx context.Context, account, email string, payload []byte) (string, []byte, error) {
+func (s *Service) SignBlob(ctx context.Context, account, email string, payload []byte, delegates []string) (string, []byte, error) {
 	if err := serviceaccount.ValidateBlobPayload(payload); err != nil {
 		return "", nil, err
 	}
-	k, err := s.key(ctx, account, email)
+	k, err := s.key(ctx, account, email, delegates)
 	if err != nil {
 		return "", nil, err
 	}
@@ -160,11 +201,11 @@ func (s *Service) SignBlob(ctx context.Context, account, email string, payload [
 
 // SignJWT signs a caller-supplied JWT claims set (a serialized JSON object).
 // Any exp claim must be an integer within the next 12 hours.
-func (s *Service) SignJWT(ctx context.Context, account, email, payload string) (string, string, error) {
+func (s *Service) SignJWT(ctx context.Context, account, email, payload string, delegates []string) (string, string, error) {
 	if err := serviceaccount.ValidateJWTPayload(payload, clock.Now().UTC()); err != nil {
 		return "", "", err
 	}
-	k, err := s.key(ctx, account, email)
+	k, err := s.key(ctx, account, email, delegates)
 	if err != nil {
 		return "", "", err
 	}

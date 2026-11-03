@@ -21,7 +21,9 @@ import (
 )
 
 const (
-	rtServiceAccount        = "gcp_service_account"
+	// rtServiceAccount is the shared registry type of a service-account record;
+	// the signing surfaces resolve accounts through it.
+	rtServiceAccount        = serviceaccount.AccountResourceType
 	rtServiceAccountPolicy  = "gcp_service_account_policy"
 	rtServiceAccountDeleted = "gcp_service_account_deleted"
 )

@@ -820,6 +820,7 @@ test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence test
 	JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
 	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m \
 	    ./internal/gcp/store/... ./internal/gcp/service/resourcemanager/... \
+	    ./internal/gcp/service/iamcredentials/... \
 	    ./internal/gcp/provider/bigquery/... ./internal/gcp/provider/iam/...
 	cd tests/persistent_mode/gcp/parity-grpc && JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
 	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./...

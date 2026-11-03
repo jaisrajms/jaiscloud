@@ -72,7 +72,7 @@ func (p *Provider) GenerateAccessToken(ctx context.Context, nr *model.Normalized
 	if err != nil {
 		return nil, err
 	}
-	token, expires, err := p.core.GenerateAccessToken(ctx, p.account(nr), serviceAccountEmail(nr), scopes, lifetime)
+	token, expires, err := p.core.GenerateAccessToken(ctx, p.account(nr), serviceAccountEmail(nr), scopes, lifetime, stringSlice(body["delegates"]))
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,13 @@ func (p *Provider) GenerateIdToken(ctx context.Context, nr *model.NormalizedRequ
 		audience = stringParam(nr, "audience")
 	}
 	includeEmail, _ := body["includeEmail"].(bool)
-	token, err := p.core.GenerateIDToken(ctx, p.account(nr), serviceAccountEmail(nr), audience, includeEmail)
+	organizationNumber, _ := body["organizationNumberIncluded"].(bool)
+	token, err := p.core.GenerateIDToken(ctx, p.account(nr), serviceAccountEmail(nr), iamcredentials.IDTokenOptions{
+		Audience:                   audience,
+		Delegates:                  stringSlice(body["delegates"]),
+		IncludeEmail:               includeEmail,
+		OrganizationNumberIncluded: organizationNumber,
+	})
 	if err != nil {
 		return nil, err
 	}

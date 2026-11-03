@@ -481,13 +481,36 @@ func Scenarios(suffix string) []Scenario {
 	// ─── IAM Service Account Credentials ──────────────────────────────────────
 	// The unique iamcredentials verbs. signBlob/signJwt share their path with
 	// iam and are exercised by the IAM block above.
+	//
+	// Every method requires the target account to exist (J67), so this block
+	// provisions its own target and delegate (the IAM block's accounts are
+	// deleted by its own chain) and deletes them at the end. The delegates[] of
+	// a generateAccessToken/generateIdToken request must name existing accounts
+	// in the documented "projects/-/serviceAccounts/{email}" form (J68).
+	saCred := "conf-saic-" + suffix
+	saCredEmail := saCred + "@" + p + ".iam.gserviceaccount.com"
+	saCredDelegate := saCred + "-d"
+	saCredDelegateEmail := saCredDelegate + "@" + p + ".iam.gserviceaccount.com"
 	sc = append(sc,
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + saCred,
+			Body: `{"serviceAccount":{"displayName":"Conformance SA credentials"}}`},
+		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + saCredDelegate,
+			Body: `{"serviceAccount":{"displayName":"Conformance SA delegate"}}`},
 		Scenario{Service: "iamcredentials", Method: "POST",
-			Path: "/v1/projects/-/serviceAccounts/" + saEmail + ":generateAccessToken",
-			Body: `{"scope":["https://www.googleapis.com/auth/cloud-platform"],"lifetime":"3600s"}`},
+			Path: "/v1/projects/-/serviceAccounts/" + saCredEmail + ":generateAccessToken",
+			Body: fmt.Sprintf(`{"scope":["https://www.googleapis.com/auth/cloud-platform"],"lifetime":"3600s","delegates":["projects/-/serviceAccounts/%s"]}`, saCredDelegateEmail)},
 		Scenario{Service: "iamcredentials", Method: "POST",
-			Path: "/v1/projects/-/serviceAccounts/" + saEmail + ":generateIdToken",
-			Body: `{"audience":"https://example.com","includeEmail":true}`},
+			Path: "/v1/projects/-/serviceAccounts/" + saCredEmail + ":generateIdToken",
+			Body: `{"audience":"https://example.com","includeEmail":true,"organizationNumberIncluded":true}`},
+		// A missing account is NOT_FOUND instead of a lazily minted credential.
+		Scenario{Service: "iamcredentials", Method: "POST",
+			Path: "/v1/projects/-/serviceAccounts/missing-" + saCredEmail + ":generateAccessToken",
+			Body: `{"scope":["https://www.googleapis.com/auth/cloud-platform"]}`},
+		Scenario{Service: "iamcredentials", Method: "POST",
+			Path: "/v1/projects/-/serviceAccounts/" + saCredEmail + ":generateIdToken",
+			Body: fmt.Sprintf(`{"audience":"https://example.com","delegates":["%s"]}`, saCredDelegateEmail)},
+		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saCredDelegateEmail},
+		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saCredEmail},
 	)
 
 	// ─── Cloud DNS ────────────────────────────────────────────────────────────

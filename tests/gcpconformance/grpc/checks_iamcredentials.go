@@ -6,19 +6,52 @@ import (
 	"strings"
 	"time"
 
+	iamadminpb "cloud.google.com/go/iam/admin/apiv1/adminpb"
 	credentials "cloud.google.com/go/iam/credentials/apiv1"
 	credentialspb "cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-// iamCredentialsEmail is the run-addressed service account the checks
-// impersonate. The account need not exist: GenerateAccessToken/GenerateIdToken
-// lazily create an emulator signing key (a documented emulator divergence).
-func iamCredentialsEmail(cfg Config) string {
-	return fmt.Sprintf("conformance@%s.iam.gserviceaccount.com", cfg.Project)
+// iamCredentialsAccounts creates the run's target service account and the
+// intermediate account its delegation chain names, and returns their emails plus
+// a cleanup func. Real GCP requires every account an IAM Credentials method
+// touches to exist (J67), so each check provisions them through the IAM Admin
+// API; the delegate also gives J68's chain a real account to name.
+func iamCredentialsAccounts(ctx context.Context, cfg Config) (target, delegate string, cleanup func(), err error) {
+	client, err := newIAMAdminClient(ctx, cfg)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("new IAM admin client: %w", err)
+	}
+	created := make([]string, 0, 2)
+	for _, id := range []string{"gcpc-ic", "gcpc-ic-d"} {
+		accountID := strings.ToLower(cfg.ResourceName(id))
+		sa, cerr := client.CreateServiceAccount(ctx, &iamadminpb.CreateServiceAccountRequest{
+			Name:      "projects/" + cfg.Project,
+			AccountId: accountID,
+			ServiceAccount: &iamadminpb.ServiceAccount{
+				DisplayName: "gRPC conformance IAM Credentials",
+			},
+		})
+		if cerr != nil {
+			client.Close()
+			return "", "", nil, fmt.Errorf("CreateServiceAccount(%s/%s): %w", cfg.Project, accountID, cerr)
+		}
+		created = append(created, sa.GetName())
+	}
+	email := func(name string) string {
+		return name[strings.LastIndex(name, "/")+1:]
+	}
+	return email(created[0]), email(created[1]), func() {
+		defer client.Close()
+		for _, name := range created {
+			_ = client.DeleteServiceAccount(ctx, &iamadminpb.DeleteServiceAccountRequest{Name: name})
+		}
+	}, nil
 }
 
 // newIamCredentialsClient dials the IAM Credentials RPC service at the emulator
@@ -37,10 +70,10 @@ func newIamCredentialsClient(ctx context.Context, cfg Config) (*credentials.IamC
 // and signJwt, which share a REST path with iam — are exercised directly.
 func iamCredentialsChecks() []Check {
 	return []Check{
-		{Service: "iamcredentials", RPC: "GenerateAccessToken", KeyField: "accessToken is a non-empty opaque token; expireTime is in the future", Run: checkIamCredentialsGenerateAccessToken},
-		{Service: "iamcredentials", RPC: "GenerateIdToken", KeyField: "token is a well-formed JWT", Run: checkIamCredentialsGenerateIdToken},
-		{Service: "iamcredentials", RPC: "SignBlob", KeyField: "keyId + non-empty signedBlob", Run: checkIamCredentialsSignBlob},
-		{Service: "iamcredentials", RPC: "SignJwt", KeyField: "keyId + well-formed signedJwt", Run: checkIamCredentialsSignJwt},
+		{Service: "iamcredentials", RPC: "GenerateAccessToken", KeyField: "accessToken is a non-empty opaque token; expireTime is in the future; a missing account is NOT_FOUND; a delegation chain is validated", Run: checkIamCredentialsGenerateAccessToken},
+		{Service: "iamcredentials", RPC: "GenerateIdToken", KeyField: "token is a well-formed JWT for an existing account", Run: checkIamCredentialsGenerateIdToken},
+		{Service: "iamcredentials", RPC: "SignBlob", KeyField: "keyId + non-empty signedBlob for an existing account", Run: checkIamCredentialsSignBlob},
+		{Service: "iamcredentials", RPC: "SignJwt", KeyField: "keyId + well-formed signedJwt for an existing account", Run: checkIamCredentialsSignJwt},
 	}
 }
 
@@ -50,9 +83,26 @@ func checkIamCredentialsGenerateAccessToken(ctx context.Context, cfg Config) err
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
+	target, delegate, cleanup, err := iamCredentialsAccounts(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	name := "projects/-/serviceAccounts/" + target
+	// J67: the service account must exist. A name that resolves to no account is
+	// NOT_FOUND, never a lazily minted token.
+	_, err = client.GenerateAccessToken(ctx, &credentialspb.GenerateAccessTokenRequest{
+		Name:     "projects/-/serviceAccounts/missing-" + target,
+		Scope:    []string{"https://www.googleapis.com/auth/cloud-platform"},
+		Lifetime: durationpb.New(time.Hour),
+	})
+	if status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GenerateAccessToken for a missing account = %v, want NotFound", status.Code(err))
+	}
 
 	resp, err := client.GenerateAccessToken(ctx, &credentialspb.GenerateAccessTokenRequest{
-		Name:     fmt.Sprintf("projects/-/serviceAccounts/%s", iamCredentialsEmail(cfg)),
+		Name:     name,
 		Scope:    []string{"https://www.googleapis.com/auth/cloud-platform"},
 		Lifetime: durationpb.New(time.Hour),
 	})
@@ -65,6 +115,26 @@ func checkIamCredentialsGenerateAccessToken(ctx context.Context, cfg Config) err
 	if resp.GetExpireTime() == nil || !resp.GetExpireTime().AsTime().After(time.Now()) {
 		return fmt.Errorf("GenerateAccessToken expireTime = %v, want a future timestamp", resp.GetExpireTime())
 	}
+
+	// J68: a documented delegation chain naming an existing intermediate account
+	// is accepted, and a malformed entry is INVALID_ARGUMENT.
+	if _, err := client.GenerateAccessToken(ctx, &credentialspb.GenerateAccessTokenRequest{
+		Name:      name,
+		Scope:     []string{"https://www.googleapis.com/auth/cloud-platform"},
+		Lifetime:  durationpb.New(time.Hour),
+		Delegates: []string{"projects/-/serviceAccounts/" + delegate},
+	}); err != nil {
+		return fmt.Errorf("GenerateAccessToken with a delegation chain: %w", err)
+	}
+	_, err = client.GenerateAccessToken(ctx, &credentialspb.GenerateAccessTokenRequest{
+		Name:      name,
+		Scope:     []string{"https://www.googleapis.com/auth/cloud-platform"},
+		Lifetime:  durationpb.New(time.Hour),
+		Delegates: []string{delegate},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("GenerateAccessToken with a malformed delegate = %v, want InvalidArgument", status.Code(err))
+	}
 	return nil
 }
 
@@ -74,9 +144,14 @@ func checkIamCredentialsGenerateIdToken(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
+	target, _, cleanup, err := iamCredentialsAccounts(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	resp, err := client.GenerateIdToken(ctx, &credentialspb.GenerateIdTokenRequest{
-		Name:         fmt.Sprintf("projects/-/serviceAccounts/%s", iamCredentialsEmail(cfg)),
+		Name:         "projects/-/serviceAccounts/" + target,
 		Audience:     "https://example.com",
 		IncludeEmail: true,
 	})
@@ -95,9 +170,14 @@ func checkIamCredentialsSignBlob(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
+	target, _, cleanup, err := iamCredentialsAccounts(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	resp, err := client.SignBlob(ctx, &credentialspb.SignBlobRequest{
-		Name:    fmt.Sprintf("projects/-/serviceAccounts/%s", iamCredentialsEmail(cfg)),
+		Name:    "projects/-/serviceAccounts/" + target,
 		Payload: []byte("conformance"),
 	})
 	if err != nil {
@@ -115,9 +195,14 @@ func checkIamCredentialsSignJwt(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new IAM Credentials client: %w", err)
 	}
 	defer client.Close()
+	target, _, cleanup, err := iamCredentialsAccounts(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	resp, err := client.SignJwt(ctx, &credentialspb.SignJwtRequest{
-		Name:    fmt.Sprintf("projects/-/serviceAccounts/%s", iamCredentialsEmail(cfg)),
+		Name:    "projects/-/serviceAccounts/" + target,
 		Payload: `{"iss":"conformance"}`,
 	})
 	if err != nil {

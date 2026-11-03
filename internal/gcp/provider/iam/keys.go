@@ -447,31 +447,23 @@ func (p *Provider) ServiceAccountKeyEnable(ctx context.Context, nr *model.Normal
 }
 
 // signTarget resolves the service account a signBlob/signJwt request signs for.
-// Both identifier forms are documented, but signing resolves the account more
-// leniently than the management surface: through "projects/-" it signs lazily
-// for an account that need not exist (the IAM Credentials surface does the
-// same), while a concrete project path requires the account. A unique-id
-// identifier names no project of its own, so it is resolved against the
-// addressed account; the wildcard cannot resolve one (DC29) and answers the
+// Both identifier forms are documented, but signing requires the account to
+// exist: real IAM does not sign for a service account that was never created, so
+// through "projects/-" the account is resolved from the email's project and a
+// miss is NOT_FOUND (the same answer the IAM Credentials gRPC surface gives).
+// A unique-id identifier names no project of its own, so it is resolved against
+// the addressed account; the wildcard cannot resolve one (DC29) and answers the
 // documented miss instead of signing for a phantom account.
 func (p *Provider) signTarget(ctx context.Context, nr *model.NormalizedRequest, name string) (saRef, error) {
 	identifier := emailFromName(name)
 	if !strings.Contains(identifier, "@") {
 		return p.resolveSA(ctx, nr, identifier)
 	}
-	account := serviceaccount.AccountForSA(nr.AccountID, identifier)
-	if account == "" || account == "-" {
-		// The identifier embeds no project and the path project is the
-		// wildcard, so there is nothing to scope the signature to.
-		return saRef{}, saLookupError(nr, "serviceAccounts/"+identifier, "service account not found")
+	account, email, err := serviceaccount.LookupAccount(ctx, p.resources, nr.AccountID, identifier)
+	if err != nil {
+		return saRef{}, err
 	}
-	ref := saRef{Account: account, Email: identifier}
-	if nr.AccountID != "-" {
-		if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
-			return saRef{}, err
-		}
-	}
-	return ref, nil
+	return saRef{Account: account, Email: email}, nil
 }
 
 // ServiceAccountSignBlob serves iam.projects.serviceAccounts.signBlob. The
@@ -489,11 +481,14 @@ func (p *Provider) ServiceAccountSignBlob(ctx context.Context, nr *model.Normali
 	if err != nil {
 		return nil, err
 	}
+	body, _ := nr.Params["body"].(map[string]any)
+	if err := serviceaccount.ValidateDelegates(ctx, p.resources, ref.Email, requestDelegates(body)); err != nil {
+		return nil, err
+	}
 	m, err := p.ensureKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
 	}
-	body, _ := nr.Params["body"].(map[string]any)
 	// IAM carries the payload under bytesToSign; IAM Credentials uses payload.
 	blob, _ := body["bytesToSign"].(string)
 	if blob == "" {
@@ -553,6 +548,9 @@ func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.Normaliz
 	if err := serviceaccount.ValidateJWTPayload(payloadStr, clock.Now().UTC()); err != nil {
 		return nil, err
 	}
+	if err := serviceaccount.ValidateDelegates(ctx, p.resources, ref.Email, requestDelegates(body)); err != nil {
+		return nil, err
+	}
 	m, err := p.ensureKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
@@ -569,4 +567,18 @@ func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.Normaliz
 		"keyId":     m.KeyID,
 		"signedJwt": signed,
 	}), nil
+}
+
+// requestDelegates reads the documented delegates[] field of a signBlob/signJwt
+// body (IAM Credentials shape). The sign verbs share their path with IAM, which
+// has no delegation chain, so an absent field is the common case.
+func requestDelegates(body map[string]any) []string {
+	raw, _ := body["delegates"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }

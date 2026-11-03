@@ -58,7 +58,7 @@ func (s *Service) GenerateAccessToken(ctx context.Context, req *credentialspb.Ge
 	if req.GetLifetime() != nil && req.GetLifetime().AsDuration() <= 0 {
 		return nil, grpcutil.GRPCStatus(serviceaccount.Invalid("lifetime must be positive"))
 	}
-	token, expires, err := s.core.GenerateAccessToken(ctx, s.account(account), email, req.GetScope(), req.GetLifetime().AsDuration())
+	token, expires, err := s.core.GenerateAccessToken(ctx, s.account(account), email, req.GetScope(), req.GetLifetime().AsDuration(), req.GetDelegates())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -71,7 +71,14 @@ func (s *Service) GenerateAccessToken(ctx context.Context, req *credentialspb.Ge
 // GenerateIdToken mints an OpenID Connect ID token.
 func (s *Service) GenerateIdToken(ctx context.Context, req *credentialspb.GenerateIdTokenRequest) (*credentialspb.GenerateIdTokenResponse, error) {
 	account, email := splitName(req.GetName())
-	token, err := s.core.GenerateIDToken(ctx, s.account(account), email, req.GetAudience(), req.GetIncludeEmail())
+	token, err := s.core.GenerateIDToken(ctx, s.account(account), email, core.IDTokenOptions{
+		Audience:     req.GetAudience(),
+		Delegates:    req.GetDelegates(),
+		IncludeEmail: req.GetIncludeEmail(),
+		// organizationNumberIncluded is a REST-only field of the v1 Discovery
+		// document; google.iam.credentials.v1.GenerateIdTokenRequest has no
+		// such proto field, so a gRPC client cannot send it.
+	})
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -81,7 +88,7 @@ func (s *Service) GenerateIdToken(ctx context.Context, req *credentialspb.Genera
 // SignBlob signs a blob with the account's emulator key.
 func (s *Service) SignBlob(ctx context.Context, req *credentialspb.SignBlobRequest) (*credentialspb.SignBlobResponse, error) {
 	account, email := splitName(req.GetName())
-	keyID, sig, err := s.core.SignBlob(ctx, s.account(account), email, req.GetPayload())
+	keyID, sig, err := s.core.SignBlob(ctx, s.account(account), email, req.GetPayload(), req.GetDelegates())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -91,7 +98,7 @@ func (s *Service) SignBlob(ctx context.Context, req *credentialspb.SignBlobReque
 // SignJwt signs a caller-supplied JWT claims set.
 func (s *Service) SignJwt(ctx context.Context, req *credentialspb.SignJwtRequest) (*credentialspb.SignJwtResponse, error) {
 	account, email := splitName(req.GetName())
-	keyID, signed, err := s.core.SignJWT(ctx, s.account(account), email, req.GetPayload())
+	keyID, signed, err := s.core.SignJWT(ctx, s.account(account), email, req.GetPayload(), req.GetDelegates())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
