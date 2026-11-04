@@ -162,3 +162,33 @@ func TestBareClusterCreateDisambiguatedByBody(t *testing.T) {
 		})
 	}
 }
+
+// A project can hold a GKE cluster and a Managed Kafka cluster in the same
+// location. Kafka's clusterId is a positive signal and must win over the GKE
+// existence probe, or the probe would hijack every Kafka create in a project
+// that happens to have a GKE cluster.
+func TestKafkaCreateWinsOverGKEProbe(t *testing.T) {
+	a := NewAdapter("")
+	a.SetContainerClusterProbe(func(_ context.Context, _, _ string) bool { return true })
+
+	for _, tc := range []struct{ name, url, body string }{
+		{"query clusterId", "http://localhost:8080/v1/projects/p/locations/us-central1/clusters?clusterId=k1", `{"cluster":{"name":"k1"}}`},
+		{"body clusterId", "http://localhost:8080/v1/projects/p/locations/us-central1/clusters", `{"clusterId":"k1","cluster":{"name":"k1"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := http.NewRequest(http.MethodPost, tc.url, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			svc, _ := DetectService(r)
+			if svc != "managedkafka" {
+				t.Fatalf("precondition: DetectService = %q", svc)
+			}
+			_, codec, err := a.DetectAndDecode(r, []byte(tc.body))
+			if err != nil {
+				t.Fatalf("DetectAndDecode: %v", err)
+			}
+			if got := codec.ServiceName(); got != "managedkafka" {
+				t.Fatalf("codec = %q, want managedkafka", got)
+			}
+		})
+	}
+}

@@ -118,22 +118,26 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	}
 
 	// The bare /v1/projects/{p}/locations/{l}/clusters collection is genuinely
-	// shared with Managed Kafka, and path alone cannot separate the two. Two
-	// things narrow it, so a GKE client configured without a container.* host is
-	// never silently answered by Managed Kafka:
+	// shared with Managed Kafka, and path alone cannot separate the two. Three
+	// rules narrow it, so neither service is silently answered by the other:
 	//
-	//   - Managed Kafka's CreateCluster requires a clusterId (its own error names
-	//     it: "missing location or clusterId"), so a create body carrying a GKE
-	//     `cluster` object and no clusterId cannot be Kafka's. This is what makes
-	//     the FIRST create in an empty project/location work, before there is any
-	//     stored cluster to probe for.
-	//   - Once the control plane holds a cluster at that project+location, the
-	//     location is GKE's for reads, updates and deletes too.
+	//   - Managed Kafka's CreateCluster REQUIRES a clusterId (in the body or the
+	//     query — its own error is "missing location or clusterId"), so a request
+	//     carrying one is Kafka's, full stop. This must win over the store probe:
+	//     a project can hold a GKE cluster and a Kafka cluster in the same
+	//     location.
+	//   - A create body carrying a GKE `cluster` object and no clusterId cannot
+	//     be Kafka's. This is what makes the FIRST GKE create in an empty
+	//     project/location work, before there is any stored cluster to probe for.
+	//   - Once the control plane holds a GKE cluster at that project+location,
+	//     the location is GKE's for reads, updates and deletes too.
 	if service == "managedkafka" {
 		if project, location, ok := bareClusterScope(r.URL.Path); ok {
+			kafkaSignal := jsonHasKey(body, "clusterId") || r.URL.Query().Get("clusterId") != ""
 			switch {
-			case r.Method == http.MethodPost && !jsonHasKey(body, "clusterId") &&
-				r.URL.Query().Get("clusterId") == "" && jsonHasKey(body, "cluster"):
+			case kafkaSignal:
+				// Kafka's own request; leave it.
+			case r.Method == http.MethodPost && jsonHasKey(body, "cluster"):
 				service, source = "container", SourcePath
 			case a.containerClusterProbe != nil && a.containerClusterProbe(r.Context(), project, location):
 				service, source = "container", SourcePath
