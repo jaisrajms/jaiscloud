@@ -1,0 +1,57 @@
+# A second values set for the chart gate. The defaults are already covered by
+# golden/defaults.yaml; this file exists so `helm template` is exercised as a
+# template (conditionals, quoting, overrides) rather than only as a static dump:
+#
+#   * cross-project buckets (DGD8's shape) with a second project and region
+#   * a port-forwarded emulator instead of the in-cluster Service
+#   * an image the gate would have loaded locally, pulled always
+#   * job.serviceAccountName, extraArgs and extraEnv set, so those branches render
+#   * credentials.existingSecret set, so the chart renders NO Secret
+#   * job.teardown true, so the boolean flips in the ConfigMap
+project: dpgke-two
+region: europe-west1
+storageProject: dpgke-buckets
+gkeLocation: europe-west1-b
+gkeCluster: dpgke-gke-b
+dataprocCluster: dpgke-dataproc-b
+namespace: dpgke-demo-b
+
+buckets:
+  input: dpgke-buckets-input
+  output: dpgke-buckets-output
+  staging: dpgke-buckets-staging
+
+sparkRelease: 3.5-dataproc-29
+machineType: e2-medium
+
+endpoints:
+  rest: http://127.0.0.1:18080
+  grpc: 127.0.0.1
+  grpcPort: 18081
+
+image:
+  repository: registry.example.test/dpgke/lifecycle-java
+  tag: "9.9.9-test"
+  pullPolicy: Always
+
+credentials:
+  existingSecret: dpgke-credentials
+  # Ignored while existingSecret is set; present to prove it stays out of the
+  # render rather than leaking into an unused Secret.
+  accessToken: ignored
+
+job:
+  backoffLimit: 2
+  activeDeadlineSeconds: 120
+  serviceAccountName: dpgke-submitter
+  teardown: true
+  outputPrefix: wordcount-b
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  extraArgs:
+    - --dry-run
+  extraEnv:
+    - name: JAVA_TOOL_OPTIONS
+      value: -Xmx256m

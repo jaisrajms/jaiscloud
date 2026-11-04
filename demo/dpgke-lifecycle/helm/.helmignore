@@ -1,0 +1,11 @@
+# Everything here is chart source or a test artefact, not something Helm should
+# package: the goldens and the gate script stay in the repository (where they are
+# diffed) instead of in the released .tgz.
+golden/
+render.sh
+.git/
+.gitignore
+*.swp
+*.tmp
+*~
+.DS_Store

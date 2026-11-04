@@ -1,0 +1,30 @@
+The Dataproc-on-GKE submitter ran as Job {{ include "dpgke.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+Follow it (the container's stdout is the lifecycle log, one line per step):
+
+  kubectl -n {{ .Release.Namespace }} logs -f job/{{ include "dpgke.fullname" . }}
+
+It talks to:
+  REST  {{ .Values.endpoints.rest }}
+  gRPC  {{ .Values.endpoints.grpc }}:{{ .Values.endpoints.grpcPort }}
+
+Those must be reachable FROM THE POD. localhost means the pod itself; an
+emulator running outside the cluster needs endpoints overridden with
+host.k3d.internal (k3d) or host.docker.internal (Docker Desktop).
+
+What this chart does not do:
+  * create the GKE cluster, the virtual cluster or the buckets -- ../terraform does
+  * delete them -- `terraform destroy` does. `helm uninstall` removes only the
+    Job, ConfigMap and Secret from this namespace. There is no pre-delete hook:
+    a Job cannot run on uninstall, and a hook would race the destroy that owns
+    the resources.
+  * publish an image -- the default tag is a placeholder. The k3d gate (DGD6)
+    builds ../java/Dockerfile and overrides image.repository/image.tag.
+
+{{- if and (not .Values.credentials.existingSecret) (not .Values.credentials.accessToken) }}
+
+No token configured: the pod runs without one, which is the Workload Identity /
+ADC shape on real GCP and matches the emulator's NoCredentials clients. To hand
+it the emulator bearer token instead, reinstall with:
+  --set-string credentials.accessToken="$GOOGLE_OAUTH_ACCESS_TOKEN"
+{{- end }}

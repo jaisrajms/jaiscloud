@@ -1,0 +1,145 @@
+---
+# Source: dpgke-lifecycle/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dpgke-lifecycle-credentials
+  namespace: dpgke-demo
+  labels:
+    helm.sh/chart: dpgke-lifecycle-0.1.0
+    app.kubernetes.io/name: dpgke-lifecycle
+    app.kubernetes.io/instance: dpgke-lifecycle
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+# stringData, not data: the value is a token as typed, and Helm would otherwise
+# have to base64 it in the template.
+stringData:
+  GOOGLE_OAUTH_ACCESS_TOKEN: ""
+
+---
+# Source: dpgke-lifecycle/templates/configmap.yaml
+# The non-secret half of the submitter's configuration. The names are exactly
+# the ones DemoConfig.java reads (DGD3 is merged; the chart must not rename
+# them), and the values come from the Terraform module's outputs via values.yaml.
+#
+# Everything is a string because an environment variable is one: the app parses
+# DGD3_GRPC_PORT and DGD3_TEARDOWN itself, and quoting keeps Helm from emitting
+# 8081 as a number or false as a boolean that a YAML reader would fold.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dpgke-lifecycle-config
+  namespace: dpgke-demo
+  labels:
+    helm.sh/chart: dpgke-lifecycle-0.1.0
+    app.kubernetes.io/name: dpgke-lifecycle
+    app.kubernetes.io/instance: dpgke-lifecycle
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  # Where the clusters and buckets are.
+  DGD3_PROJECT: "dpgke-demo"
+  DGD3_REGION: "us-central1"
+  DGD3_STORAGE_PROJECT: "dpgke-demo"
+  DGD3_GKE_LOCATION: "us-central1-a"
+  DGD3_GKE_CLUSTER: "dpgke-gke"
+  DGD3_DATAPROC_CLUSTER: "dpgke-dataproc"
+  DGD3_NAMESPACE: "dpgke-demo"
+
+  # The module's three buckets. The app reads input for code/input, writes the
+  # output prefix, and expects Dataproc's driver output in staging.
+  DGD3_INPUT_BUCKET: "dpgke-demo-input"
+  DGD3_OUTPUT_BUCKET: "dpgke-demo-output"
+  DGD3_STAGING_BUCKET: "dpgke-demo-staging"
+
+  # Where the emulator is. gRPC is split into host and port because the app
+  # joins them; the REST value is a URL the Storage client takes whole.
+  DGD3_REST_ENDPOINT: "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080"
+  DGD3_GRPC_ENDPOINT: "jaiscloud-gcp.jaiscloud.svc.cluster.local"
+  DGD3_GRPC_PORT: "8081"
+
+  # What the app asserts about the cluster it adopts, so these must match the
+  # module's stored values rather than whatever is convenient here.
+  DGD3_SPARK_RELEASE: "3.5-dataproc-28"
+  DGD3_MACHINE_TYPE: "e2-small"
+
+  # The job's object names inside the buckets.
+  DGD3_JOB_CODE_OBJECT: "code/wordcount.py"
+  DGD3_JOB_INPUT_OBJECT: "input/words.txt"
+  DGD3_JOB_OUTPUT_PREFIX: "wordcount"
+
+  # Local PySpark file to upload when the object above is missing. Empty: the
+  # module (or its google_dataproc_job) already uploaded it and the container
+  # ships no copy of ../spark/wordcount.py.
+  DGD3_SPARK_SCRIPT: ""
+
+  # Whether the run deletes the clusters when it finishes. Defaults to false:
+  # Terraform owns them, so the chart must never turn `helm install` into a
+  # destroy. (values.yaml explains when true is right.)
+  DGD3_TEARDOWN: "false"
+
+---
+# Source: dpgke-lifecycle/templates/job.yaml
+# The submitter, as a one-shot Job. It is deliberately not a Deployment: the
+# app runs the lifecycle once (adopt -> submit -> wait -> read) and exits, and a
+# restart would submit a second job against clusters that may be mid-teardown.
+#
+# It does not create infrastructure (Terraform does), and it does not delete it
+# by default (DGD3_TEARDOWN=false; `terraform destroy` is the teardown). See
+# README.md for why there is no Helm uninstall hook.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dpgke-lifecycle
+  namespace: dpgke-demo
+  labels:
+    helm.sh/chart: dpgke-lifecycle-0.1.0
+    app.kubernetes.io/name: dpgke-lifecycle
+    app.kubernetes.io/instance: dpgke-lifecycle
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  # No retry on failure: the app's create is get-or-create, but a retry after a
+  # partial run re-submits a job and leaves the failed attempt's job behind.
+  # backoffLimit 0 fails the Job on the first error, logs intact.
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dpgke-lifecycle
+        app.kubernetes.io/instance: dpgke-lifecycle
+    spec:
+      restartPolicy: Never
+      # The image (../java/Dockerfile) runs as uid 1000 and needs no privileges;
+      # pinning it here means a substitute image cannot quietly become root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: submitter
+          image: "jaiscloud/dpgke-lifecycle-java:0.0.0-dgd6-placeholder"
+          imagePullPolicy: IfNotPresent
+          # The non-secret DGD3_* set, then the one secret. envFrom first so an
+          # extraEnv entry with the same name can still override it.
+          envFrom:
+            - configMapRef:
+                name: dpgke-lifecycle-config
+          env:
+            - name: GOOGLE_OAUTH_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dpgke-lifecycle-credentials
+                  key: GOOGLE_OAUTH_ACCESS_TOKEN
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

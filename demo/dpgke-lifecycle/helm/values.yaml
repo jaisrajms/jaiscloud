@@ -1,0 +1,151 @@
+# Values for the Dataproc-on-GKE submitter chart (DGD4).
+#
+# Everything non-secret maps to a `terraform output` from ../terraform, and
+# README.md carries the table. The defaults mirror that module's variables, so
+# a reader who applied it unchanged only has to override the endpoints (and, for
+# a real cluster, the image) to install.
+#
+# Rendering is deliberately deterministic: neither this file nor templates/ may
+# call randAlphaNum, now or lookup, and no value is generated at render time.
+# render.sh diffs the output against the committed goldens, offline.
+
+# Project that owns the GKE cluster and the Dataproc virtual cluster.
+# terraform output: project
+project: dpgke-demo
+
+# Region of the Dataproc virtual cluster. It stays a regional resource even when
+# the GKE target is zonal.
+# terraform output: region
+region: us-central1
+
+# Project that owns the three buckets; equal to project unless the module was
+# applied with a second storage project (the cross-project shape, DGD8).
+# terraform output: storage_project
+storageProject: dpgke-demo
+
+# Zone of a zonal GKE cluster (us-central1-a) or region of a regional one. The
+# same value forms the Dataproc gkeClusterTarget, so it must match the cluster
+# Terraform created or the virtual-cluster create is rejected.
+# terraform output: gke_location
+gkeLocation: us-central1-a
+
+# terraform output: gke_cluster_name
+gkeCluster: dpgke-gke
+
+# terraform output: dataproc_cluster_name
+dataprocCluster: dpgke-dataproc
+
+# Kubernetes namespace Dataproc creates the Spark workload in. This is the app's
+# DGD3_NAMESPACE, not the namespace the chart installs into: chart objects go to
+# the release namespace (`helm install --namespace`), which README.md suggests
+# setting to this same value.
+# terraform output: namespace
+namespace: dpgke-demo
+
+# The three bucket names. The module derives them from its bucket_prefix, so
+# these defaults are "<prefix>-input" and friends.
+# terraform output: buckets.{input,output,staging}
+buckets:
+  input: dpgke-demo-input
+  output: dpgke-demo-output
+  staging: dpgke-demo-staging
+
+# Fully-qualified Spark component version pinned on the virtual cluster. The app
+# asserts it when it adopts the cluster, so it must be the module's stored value,
+# never an alias such as "3.5".
+# terraform output: spark_release
+sparkRelease: 3.5-dataproc-28
+
+# Machine type the reconciled node pools report; asserted on adopt.
+# terraform output: machine_type
+machineType: e2-small
+
+# Where the submitter reaches jaiscloud-gcp. Inside a pod localhost is the pod
+# itself, so the defaults are the in-cluster Service that deploy/k8s installs.
+# An emulator running outside the cluster needs an override: host.k3d.internal
+# (k3d), host.docker.internal (Docker Desktop), or a port-forwarded address.
+endpoints:
+  # Base URL of the REST surface (the Java Storage client is HTTP/JSON).
+  rest: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+  # gRPC host only: the Dataproc and GKE clients run on gRPC and DemoConfig joins
+  # this with grpcPort itself (DGD3_GRPC_ENDPOINT + DGD3_GRPC_PORT). A host:port
+  # here would make the app dial host:port:port.
+  grpc: jaiscloud-gcp.jaiscloud.svc.cluster.local
+  # The emulator's documented pair is REST 8080 / gRPC 8081, so a reader who
+  # port-forwards or uses the in-cluster Service rarely changes this.
+  grpcPort: 8081
+
+# The submitter image. THE DEFAULT IS A PLACEHOLDER: no tag for this demo is
+# published. The k3d gate (DGD6) builds ../java/Dockerfile, loads it into the
+# cluster and overrides both fields. `helm template` and `helm lint` never need
+# the image to exist.
+image:
+  repository: jaiscloud/dpgke-lifecycle-java
+  tag: "0.0.0-dgd6-placeholder"
+  # IfNotPresent: the gate loads a locally built image and must not pull a
+  # same-named one from a registry.
+  pullPolicy: IfNotPresent
+
+# The one credential. The app's clients use NoCredentials against the emulator,
+# and on real GCP the pod would use Workload Identity/ADC — so the default is
+# empty and the chart never invents or generates a token.
+credentials:
+  # Name of a Secret you create yourself (kubectl create secret generic ...)
+  # holding the key GOOGLE_OAUTH_ACCESS_TOKEN. When set, the chart renders no
+  # Secret at all and accessToken is ignored — the way to never have a token in
+  # a values file.
+  existingSecret: ""
+  # Emulator bearer token, used only when existingSecret is empty. Prefer
+  # `--set-string credentials.accessToken="$GOOGLE_OAUTH_ACCESS_TOKEN"` over
+  # committing a value here.
+  accessToken: ""
+
+job:
+  # Retries after a failed run. Zero: a retry would re-run create and submit
+  # against state the first attempt may have half-changed, and the emulator's
+  # job list would collect the losers. Read the logs, fix, reinstall.
+  backoffLimit: 0
+  # A backstop for a hung client, not the primary timeout: every wait in the app
+  # is already bounded (DGD3_POLL_SECONDS x DGD3_POLL_ATTEMPTS, 2s x 60).
+  activeDeadlineSeconds: 900
+  # Kubernetes ServiceAccount for the pod. Empty means the namespace default. On
+  # real GCP this is the KSA a Workload Identity binding points at the module's
+  # job GSA (terraform output service_account_email).
+  serviceAccountName: ""
+  # DGD3_TEARDOWN: delete the clusters when the run finishes. False because
+  # Terraform owns them and `terraform destroy` is the teardown; set true only
+  # when this Job also created the infrastructure.
+  teardown: false
+  # Object name of the PySpark file inside the input bucket. The module uploads
+  # ../spark/wordcount.py to exactly this key and names it in the job's
+  # mainPythonFileUri, so it is a value only so a renamed copy keeps working.
+  # terraform: the google_storage_bucket_object the job's main_python_file_uri names
+  codeObject: code/wordcount.py
+  # Object name of the seed text the job reads.
+  # terraform variable: job_input_object
+  inputObject: input/words.txt
+  # Object prefix, inside the output bucket, the job writes its word count under.
+  # terraform variable: job_output_prefix
+  outputPrefix: wordcount
+  # Path inside the image of the PySpark file to upload when the input bucket has
+  # no code object. Empty by design: the module (or its google_dataproc_job)
+  # already uploaded codeObject, and the image ships no copy of
+  # ../spark/wordcount.py.
+  sparkScript: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      # The clients buffer the driver-output object, so leave headroom over the
+      # request. No CPU limit: the container is I/O-bound and a throttled JVM
+      # only makes startup slower.
+      memory: 1Gi
+  # Extra args appended to the image's `java -jar ...` entrypoint. The app takes
+  # its configuration from the environment today, so these exist for a future
+  # flag and are rendered only when non-empty.
+  extraArgs: []
+  # Extra env entries appended after the rendered DGD3_* set (an escape hatch for
+  # JAVA_TOOL_OPTIONS, DGD3_POLL_ATTEMPTS, ...). A duplicate name here wins over
+  # the ConfigMap's, because Kubernetes applies `env` after `envFrom`.
+  extraEnv: []
