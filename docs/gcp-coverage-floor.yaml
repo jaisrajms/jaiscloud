@@ -99,6 +99,8 @@ packages:
     min_percent: 83.94
   - package: internal/gcp/seams
     min_percent: 60.82
+  - package: internal/gcp/service/cloudbilling
+    min_percent: 76.92
   - package: internal/gcp/service/container
     min_percent: 69.35
   - package: internal/gcp/service/dataproc
@@ -229,6 +231,8 @@ packages:
     min_percent: 84.06
   - package: internal/gcp/transport/grpc/workflows
     min_percent: 85.92
+  - package: internal/gcp/transport/rest/cloudbilling
+    min_percent: 70.49
   - package: internal/gcp/transport/rest/container
     min_percent: 53.81
   - package: internal/gcp/transport/rest/dataproc
