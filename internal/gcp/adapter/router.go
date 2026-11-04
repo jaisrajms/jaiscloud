@@ -42,9 +42,12 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 	// label is the discriminator: container.localhost / container.googleapis.com
 	// → GKE. The path is left unchanged (the container codec accepts the
 	// canonical form); Terraform/gcloud use the /container/ path prefix, claimed
-	// by the descriptor's PathPrefixes below. Only /v1/ paths are matched, so
-	// GCS XML/object, /storage, /v2 and health endpoints are never affected.
-	if strings.HasPrefix(r.URL.Path, "/v1/") && firstHostLabel(r.Host) == "container" {
+	// by the descriptor's PathPrefixes below. Only /v1/ and /v1beta1/ paths are
+	// matched, so GCS XML/object, /storage, /v2 and health endpoints are never
+	// affected. Real GKE publishes both versions and the beta client surfaces
+	// (gcloud beta container, the google-beta provider) request /v1beta1/;
+	// serving them from the same core keeps one implementation.
+	if containerVersionPath(r.URL.Path) && firstHostLabel(r.Host) == "container" {
 		return "container", SourceHost
 	}
 	// Managed Kafka and Dataproc Metastore share the bare
@@ -132,7 +135,7 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	// /discovery/v1/apis/{svc}/{ver}/rest form is never a raw media download of
 	// a bucket literally named "$discovery" or "discovery".
 	for _, prefix := range []string{
-		"v1/", "v2/", "bigquery/", "storage/v1/", "upload/storage/", "download/storage/",
+		"v1/", "v1beta1/", "v2/", "bigquery/", "storage/v1/", "upload/storage/", "download/storage/",
 		"upload/bigquery/", "resumable/upload/", "batch/storage/", "projects/",
 		"$discovery/", "discovery/",
 	} {
@@ -668,6 +671,13 @@ func isLocationOperationsPath(path string) bool {
 	}
 	rest := seg[pi+2:]
 	return len(rest) >= 3 && rest[0] == "locations" && rest[2] == "operations"
+}
+
+// containerVersionPath reports whether path is a versioned GKE path — /v1/… or
+// /v1beta1/… . Real GKE publishes both versions; the beta client surfaces
+// request the latter, and both are served from the same core.
+func containerVersionPath(path string) bool {
+	return strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/v1beta1/")
 }
 
 // firstHostLabel returns the first DNS label of an HTTP Host header, stripping

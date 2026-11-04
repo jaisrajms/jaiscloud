@@ -276,3 +276,29 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	s.clusters = make(map[string]map[string]Cluster)
 	s.operations = make(map[string]map[string]Operation)
 }
+
+// ListLocations returns every location holding a cluster or an operation for the
+// project, sorted, so the Discovery wildcard parent ("-") can span regions and
+// zones in one list call.
+func (s *MemoryStore) ListLocations(_ context.Context, projectID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	seen := map[string]struct{}{}
+	for key := range s.clusters {
+		if len(key) > len(prefix) && key[:len(prefix)] == prefix && len(s.clusters[key]) > 0 {
+			seen[key[len(prefix):]] = struct{}{}
+		}
+	}
+	for key := range s.operations {
+		if len(key) > len(prefix) && key[:len(prefix)] == prefix && len(s.operations[key]) > 0 {
+			seen[key[len(prefix):]] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for loc := range seen {
+		out = append(out, loc)
+	}
+	sort.Strings(out)
+	return out, nil
+}

@@ -417,3 +417,51 @@ func TestResetClearsState(t *testing.T) {
 		t.Fatalf("ListOperations after reset = %d, %v", len(ops), err)
 	}
 }
+
+// `locations/-` is the Discovery wildcard parent: it must span every location
+// the project holds clusters in, because that is what
+// `gcloud container clusters list` sends with no --region/--zone.
+func TestListClustersWildcardLocation(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+	for _, c := range []struct{ cluster, location string }{
+		{"a", "us-central1"},
+		{"b", "europe-west1"},
+		{"c", "us-central1-a"},
+	} {
+		if _, err := svc.CreateCluster(ctx, "p", c.location, containerstore.Cluster{Name: c.cluster}); err != nil {
+			t.Fatalf("CreateCluster %s: %v", c.cluster, err)
+		}
+	}
+	// Another project must not leak into the wildcard list.
+	if _, err := svc.CreateCluster(ctx, "other", "us-central1", containerstore.Cluster{Name: "leak"}); err != nil {
+		t.Fatalf("CreateCluster other: %v", err)
+	}
+
+	all, err := svc.ListClusters(ctx, "p", WildcardLocation)
+	if err != nil {
+		t.Fatalf("ListClusters(-): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("wildcard list returned %d clusters, want 3", len(all))
+	}
+	for _, c := range all {
+		if c.Name == "leak" {
+			t.Fatal("wildcard list leaked another project's cluster")
+		}
+	}
+
+	one, err := svc.ListClusters(ctx, "p", "us-central1")
+	if err != nil {
+		t.Fatalf("ListClusters(us-central1): %v", err)
+	}
+	if len(one) != 1 {
+		t.Fatalf("scoped list returned %d clusters, want 1", len(one))
+	}
+
+	// An empty wildcard answers empty, not an error.
+	empty, err := svc.ListClusters(ctx, "none", WildcardLocation)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty wildcard = %v, %v", empty, err)
+	}
+}

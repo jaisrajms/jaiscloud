@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 
@@ -205,17 +206,59 @@ func (s *Service) GetCluster(ctx context.Context, project, location, name string
 	return WithReadDefaults(c), nil
 }
 
+// WildcardLocation is the Discovery parent spelling that matches every zone and
+// region: `projects/{p}/locations/-`. `gcloud container clusters list` with no
+// --region/--zone sends it, so treating it as a literal location made the
+// default list print nothing.
+const WildcardLocation = "-"
+
 // ListClusters lists clusters under a location, sorted by short name, with the
-// response messages real GKE always renders filled in.
+// response messages real GKE always renders filled in. The wildcard location
+// spans every location the project has a cluster in.
 func (s *Service) ListClusters(ctx context.Context, project, location string) ([]containerstore.Cluster, error) {
-	clusters, err := s.store.ListClusters(ctx, project, location)
+	locations, err := s.scopeLocations(ctx, project, location)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, err
 	}
+	var clusters []containerstore.Cluster
+	for _, loc := range locations {
+		got, err := s.store.ListClusters(ctx, project, loc)
+		if err != nil {
+			return nil, mapStoreErr(err)
+		}
+		clusters = append(clusters, got...)
+	}
+	// Real GKE sorts the aggregated list by resource name; short-name ordering
+	// within a location is preserved by the store, so sort the union the same
+	// way a client sees it.
+	sort.Slice(clusters, func(i, j int) bool {
+		if clusters[i].Location != clusters[j].Location {
+			return clusters[i].Location < clusters[j].Location
+		}
+		return clusters[i].Name < clusters[j].Name
+	})
 	for i := range clusters {
 		clusters[i] = WithReadDefaults(clusters[i])
 	}
 	return clusters, nil
+}
+
+// scopeLocations turns a list parent's location into the concrete locations to
+// query: the wildcard expands to every location the project holds state in, and
+// an ordinary location is itself.
+func (s *Service) scopeLocations(ctx context.Context, project, location string) ([]string, error) {
+	if location != WildcardLocation {
+		return []string{location}, nil
+	}
+	locs, err := s.store.ListLocations(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	if len(locs) == 0 {
+		// An empty expansion still answers an empty list, not an error.
+		return nil, nil
+	}
+	return locs, nil
 }
 
 // DeleteCluster deprovisions and removes a cluster, returning the
@@ -258,10 +301,24 @@ func (s *Service) GetOperation(ctx context.Context, project, location, name stri
 // ListOperations lists operations under a location, sorted by id, with
 // simulated in-flight operations settled to DONE once their window has elapsed.
 func (s *Service) ListOperations(ctx context.Context, project, location string) ([]containerstore.Operation, error) {
-	ops, err := s.store.ListOperations(ctx, project, location)
+	locations, err := s.scopeLocations(ctx, project, location)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, err
 	}
+	var ops []containerstore.Operation
+	for _, loc := range locations {
+		got, err := s.store.ListOperations(ctx, project, loc)
+		if err != nil {
+			return nil, mapStoreErr(err)
+		}
+		ops = append(ops, got...)
+	}
+	sort.Slice(ops, func(i, j int) bool {
+		if ops[i].Location != ops[j].Location {
+			return ops[i].Location < ops[j].Location
+		}
+		return ops[i].Name < ops[j].Name
+	})
 	for i := range ops {
 		ops[i] = s.settleOperation(ops[i])
 	}

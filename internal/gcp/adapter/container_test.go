@@ -22,6 +22,15 @@ func TestDetectContainerService(t *testing.T) {
 		{"container.localhost:4588", "/v1/projects/p/locations/us-central1/clusters/c1", "container", SourceHost},
 		{"container.localhost:4588", "/v1/projects/p/locations/us-central1/operations", "container", SourceHost},
 		{"container.googleapis.com", "/v1/projects/p/locations/us-central1/clusters/c1", "container", SourceHost},
+		// Real GKE publishes v1 and v1beta1; the beta client surfaces
+		// (gcloud beta container, the google-beta provider) request /v1beta1/.
+		{"container.localhost:4588", "/v1beta1/projects/p/locations/us-central1/clusters", "container", SourceHost},
+		{"container.googleapis.com", "/v1beta1/projects/p/locations/us-central1/clusters/c1", "container", SourceHost},
+		{"localhost:8080", "/container/v1beta1/projects/p/locations/us-central1/clusters", "container", SourcePath},
+		// A beta path with no container host must not become a GCS object
+		// download (the pre-fix behaviour answered an XML NoSuchBucket); it is
+		// an unknown service, which is the honest answer.
+		{"localhost:8080", "/v1beta1/projects/p/locations/us-central1/clusters", "", SourceUnknown},
 		// Default host: the canonical path stays Managed Kafka (the pre-existing
 		// behavior — do not regress the collision).
 		{"localhost:8080", "/v1/projects/p/locations/us-central1/clusters", "managedkafka", SourcePath},

@@ -194,17 +194,17 @@ google.cloud.tasks.v2.CloudTasks: 20 mapped, 0 without a registry key
   + TestIamPermissions=Tasks.QueuesTestIamPermissions
   + UpdateCmekConfig=Tasks.UpdateCmekConfig
   + UpdateQueue=Tasks.QueuesPatch
-google.cloud.resourcemanager.v3.Projects: 9 mapped, 2 without a registry key
+google.cloud.resourcemanager.v3.Projects: 8 mapped, 3 without a registry key
   + CreateProject=ResourceManager.ProjectCreate
   + DeleteProject=ResourceManager.ProjectDelete
   + GetIamPolicy=ResourceManager.ProjectGetIamPolicy
   + GetProject=ResourceManager.ProjectGet
   + ListProjects=ResourceManager.ProjectList
-  + SearchProjects=Storage.ObjectsGetMedia
   + SetIamPolicy=ResourceManager.ProjectSetIamPolicy
   + TestIamPermissions=ResourceManager.ProjectTestIamPermissions
   + UndeleteProject=ResourceManager.ProjectUndelete
   - MoveProject
+  - SearchProjects
   - UpdateProject
 google.iam.credentials.v1.IAMCredentials: 4 mapped, 0 without a registry key
   + GenerateAccessToken=IAMCredentials.GenerateAccessToken
