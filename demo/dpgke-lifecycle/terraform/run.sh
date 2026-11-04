@@ -8,8 +8,8 @@
 # a targeted destroy that proves the virtual cluster goes before the GKE
 # cluster -> full destroy -> "nothing is left".
 #
-# Deliberately Terraform-only. The demo's other legs are a Java job and a Helm
-# installer; both arrive in later sessions and neither is exercised here. This
+# Deliberately Terraform-only. The demo's other legs are the Java submitter
+# (../java/, DGD3) and a Helm installer (DGD4); neither is exercised here. This
 # gate answers one question: does the module the demo ships still create the
 # infrastructure and submit the job the later legs read from, cleanly and
 # idempotently?
