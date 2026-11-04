@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -119,5 +120,45 @@ func TestBareClusterRoutesToGKEWhentheControlPlaneHasOne(t *testing.T) {
 	r2, _ := http.NewRequest(http.MethodGet, "http://localhost:8080/v1/projects/other/locations/europe-west1/clusters", nil)
 	if _, _, err := a.DetectAndDecode(r2, nil); err != nil {
 		t.Fatalf("DetectAndDecode(other): %v", err)
+	}
+}
+
+// A create body is itself a discriminator: Managed Kafka's CreateCluster
+// requires clusterId (in the body or the query), so a GKE-shaped create cannot
+// be Kafka's — which is what makes the FIRST create in an empty location work.
+func TestBareClusterCreateDisambiguatedByBody(t *testing.T) {
+	a := NewAdapter("") // no probe installed: nothing stored yet
+	cases := []struct {
+		name  string
+		url   string
+		body  string
+		wantS string
+	}{
+		{
+			name: "GKE create", url: "http://localhost:8080/v1/projects/p/locations/us-central1/clusters",
+			body: `{"cluster":{"name":"c1","initialNodeCount":1}}`, wantS: "container",
+		},
+		{
+			name: "Kafka create (query clusterId)", url: "http://localhost:8080/v1/projects/p/locations/us-central1/clusters?clusterId=k1",
+			body: `{"cluster":{"name":"k1"}}`, wantS: "managedkafka",
+		},
+		{
+			name: "Kafka create (body clusterId)", url: "http://localhost:8080/v1/projects/p/locations/us-central1/clusters",
+			body: `{"clusterId":"k1","cluster":{"name":"k1"}}`, wantS: "managedkafka",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := http.NewRequest(http.MethodPost, tc.url, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			svc, _ := DetectService(r)
+			if svc != "managedkafka" {
+				t.Fatalf("precondition: DetectService = %q", svc)
+			}
+			_, _, err := a.DetectAndDecode(r, []byte(tc.body))
+			if err != nil {
+				t.Fatalf("DetectAndDecode: %v", err)
+			}
+		})
 	}
 }

@@ -49,6 +49,13 @@ func ResolveClusterVersion(requested string) (string, error) {
 	if requested == base || strings.HasPrefix(base, requested+".") {
 		return DefaultMasterVersion, nil
 	}
+	// Real GKE distinguishes a release it does not serve from a prefix that
+	// matches no version at all (both captured 2026-11-03): a full release
+	// string gets `Master version "<v>" is unsupported.`, while a prefix gets
+	// `No valid versions with the prefix "<v>" found.`
+	if !strings.Contains(requested, "-") {
+		return "", invalidArgument(`No valid versions with the prefix "` + requested + `" found.`)
+	}
 	return "", invalidArgument(`Master version "` + requested + `" is unsupported.`)
 }
 

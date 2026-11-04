@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -117,15 +118,26 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	}
 
 	// The bare /v1/projects/{p}/locations/{l}/clusters collection is genuinely
-	// shared with Managed Kafka, and path alone cannot separate the two. When no
-	// host token disambiguated it and the GKE control plane actually holds a
-	// cluster there, the request is GKE's — otherwise a GKE client configured
-	// without a container.* host was silently answered by Managed Kafka with an
-	// empty list (a terraform plan then reported "no clusters, no drift").
-	if service == "managedkafka" && a.containerClusterProbe != nil {
-		if project, location, ok := bareClusterScope(r.URL.Path); ok &&
-			a.containerClusterProbe(r.Context(), project, location) {
-			service, source = "container", SourcePath
+	// shared with Managed Kafka, and path alone cannot separate the two. Two
+	// things narrow it, so a GKE client configured without a container.* host is
+	// never silently answered by Managed Kafka:
+	//
+	//   - Managed Kafka's CreateCluster requires a clusterId (its own error names
+	//     it: "missing location or clusterId"), so a create body carrying a GKE
+	//     `cluster` object and no clusterId cannot be Kafka's. This is what makes
+	//     the FIRST create in an empty project/location work, before there is any
+	//     stored cluster to probe for.
+	//   - Once the control plane holds a cluster at that project+location, the
+	//     location is GKE's for reads, updates and deletes too.
+	if service == "managedkafka" {
+		if project, location, ok := bareClusterScope(r.URL.Path); ok {
+			switch {
+			case r.Method == http.MethodPost && !jsonHasKey(body, "clusterId") &&
+				r.URL.Query().Get("clusterId") == "" && jsonHasKey(body, "cluster"):
+				service, source = "container", SourcePath
+			case a.containerClusterProbe != nil && a.containerClusterProbe(r.Context(), project, location):
+				service, source = "container", SourcePath
+			}
 		}
 	}
 
@@ -271,4 +283,19 @@ func (a *GCPAdapter) EnrichRequest(r *http.Request, defaultRegion, defaultAccoun
 // Returns a GCP resource-name formatter for the given project.
 func (a *GCPAdapter) ResourceIDFor(_, accountID string) func(resourceType, name string) string {
 	return resource.ResourceID(accountID)
+}
+
+// jsonHasKey reports whether body is a JSON object carrying key at its top
+// level. It is only used for routing disambiguation, so a malformed or non-JSON
+// body simply answers false and the request keeps its path-detected service.
+func jsonHasKey(body []byte, key string) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return false
+	}
+	_, ok := m[key]
+	return ok
 }

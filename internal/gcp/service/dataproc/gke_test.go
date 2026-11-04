@@ -600,7 +600,7 @@ func TestCreateCluster_ReconcileResolutionFailures(t *testing.T) {
 		err  error
 		code string
 	}{
-		{name: "missing GKE cluster", err: model.NewProviderError("NotFound", "cluster not found", 404), code: "NotFound"},
+		{name: "missing GKE cluster", err: model.NewProviderError("NotFound", "cluster not found", 404), code: "InvalidArgument"},
 		{name: "autopilot target", gke: GKECluster{Autopilot: true, WorkloadIdentityPool: "proj.svc.id.goog"}, code: "InvalidArgument"},
 		{name: "no workload identity", gke: GKECluster{}, code: "InvalidArgument"},
 	}

@@ -10,6 +10,7 @@ import (
 
 	"jaiscloud/internal/gcp/resource"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/model"
 )
 
 // GKENodePoolProvisioner resolves a Dataproc-on-GKE target cluster and reconciles
@@ -309,6 +310,14 @@ func poolResourceName(p gkePoolTarget) string {
 	return resource.ResourceID(p.project)("container-node-pool", p.location+"/"+p.cluster+"/"+p.name)
 }
 
+// GKEClusterResourceName builds the canonical GKE cluster resource name
+// (projects/{p}/locations/{loc}/clusters/{c}). Real GCP normalises the legacy
+// `zones/{zone}` spelling to this form when it reports a target, so error text
+// built from it matches what a client sees from the service.
+func GKEClusterResourceName(project, location, cluster string) string {
+	return resource.ResourceID(project)("container-cluster", location+"/"+cluster)
+}
+
 // gkeNodePoolNamePattern is the pattern real GCP quotes when
 // GkeNodePoolTarget.nodePool is not a full node-pool resource name. The
 // surrounding message is verbatim from a real-GCP capture
@@ -597,6 +606,15 @@ func (s *Service) reconcileGKEVirtualCluster(ctx context.Context, project, regio
 	}
 	gke, err := s.gkePools.ResolveGKETarget(ctx, project, gkeLocation, v.target)
 	if err != nil {
+		// Real GCP reports an unknown target as INVALID_ARGUMENT, not NotFound,
+		// and names the canonicalised target (captured 2026-11-03):
+		//   Target GKE cluster does not exist: 'projects/p/locations/<loc>/clusters/<c>'.
+		// A `zones/{zone}` spelling is normalised to `locations/{zone}` there too.
+		var pe *model.ProviderError
+		if errors.As(err, &pe) && pe.HTTPStatus == 404 {
+			return invalidArgument("Target GKE cluster does not exist: '" +
+				GKEClusterResourceName(project, gkeLocation, v.target) + "'.")
+		}
 		return err
 	}
 	if gke.Autopilot {

@@ -91,12 +91,21 @@ func TestResolveClusterVersion(t *testing.T) {
 			t.Fatalf("ResolveClusterVersion(%q) = %q, want %q", in, got, DefaultMasterVersion)
 		}
 	}
-	for _, in := range []string{"1.29", "1.29.7-gke.1000", "1.31", "2", "1.30.5-gke.9999999"} {
+	for _, in := range []string{"1.29", "1.31", "2"} {
+		_, err := ResolveClusterVersion(in)
+		if err == nil {
+			t.Fatalf("ResolveClusterVersion(%q) must reject an unsupported prefix", in)
+		}
+		if !strings.Contains(err.Error(), `No valid versions with the prefix "`+in+`" found`) {
+			t.Fatalf("ResolveClusterVersion(%q) error = %v, want the real-GCP prefix message", in, err)
+		}
+	}
+	for _, in := range []string{"1.29.7-gke.1000", "1.30.5-gke.9999999"} {
 		_, err := ResolveClusterVersion(in)
 		if err == nil {
 			t.Fatalf("ResolveClusterVersion(%q) must reject an unsupported release", in)
 		}
-		if !strings.Contains(err.Error(), `"`+in+`" is unsupported`) {
+		if !strings.Contains(err.Error(), `Master version "`+in+`" is unsupported`) {
 			t.Fatalf("ResolveClusterVersion(%q) error = %v, want the real-GCP unsupported-release message", in, err)
 		}
 	}
