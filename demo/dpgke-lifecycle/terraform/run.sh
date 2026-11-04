@@ -348,6 +348,12 @@ done
 # $PROJECT, so the cross-project shape is exercised when it is set.
 for b in "$BUCKET_INPUT" "$BUCKET_OUTPUT" "$BUCKET_STAGING"; do
   check "GCS bucket $b exists" "$ENDPOINT/storage/v1/b/$b" "\"name\":\"$b\""
+  # DGD10: the bucket read reports the uniform bucket-level access the module
+  # set, which is what lets the re-plan above converge instead of showing a
+  # permanent diff. The deprecated bucketPolicyOnly alias mirrors it.
+  check "GCS bucket $b reports uniform bucket-level access" "$ENDPOINT/storage/v1/b/$b" \
+    '"uniformBucketLevelAccess":{"enabled":true}' \
+    '"bucketPolicyOnly":{"enabled":true}'
 done
 check "bucket listing for project $STORAGE_PROJECT contains all three" \
   "$ENDPOINT/storage/v1/b?project=$STORAGE_PROJECT" \

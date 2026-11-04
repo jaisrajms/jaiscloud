@@ -372,6 +372,12 @@ type bucketMeta struct {
 	SoftDeletePolicy map[string]any `json:"softDeletePolicy,omitempty"`
 	// Labels is the bucket's user-defined label set (GCS Bucket.labels).
 	Labels map[string]string `json:"labels,omitempty"`
+	// IamConfiguration is the bucket's IAM configuration (GCS
+	// Bucket.iamConfiguration): uniform bucket-level access and public access
+	// prevention. Stored in the normalized form MergeIAMConfig produces, so a
+	// create/patch round-trips through the bucket-meta JSON (and a restart or
+	// snapshot) and both transports report what the caller set.
+	IamConfiguration map[string]any `json:"iamConfiguration,omitempty"`
 	// DefaultEventBasedHold is inherited by newly created objects that do not
 	// explicitly set eventBasedHold (GCS Bucket.defaultEventBasedHold).
 	DefaultEventBasedHold bool `json:"defaultEventBasedHold,omitempty"`
@@ -809,6 +815,16 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Cors = bodySlice(body, "cors")
 	b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
 	b.Labels = bodyStringMap(body, "labels")
+	// Insert carries iamConfiguration in the resource body (the JSON API has no
+	// uniformBucketLevelAccess query parameters — the hashicorp/google provider
+	// sends it here on create and in a PATCH body on update).
+	if _, ok := body["iamConfiguration"]; ok {
+		cfg, err := MergeIAMConfig(nil, bodyMap(body, "iamConfiguration"))
+		if err != nil {
+			return nil, err
+		}
+		b.IamConfiguration = cfg
+	}
 	if h, ok := body["defaultEventBasedHold"].(bool); ok {
 		b.DefaultEventBasedHold = h
 	}
@@ -929,6 +945,16 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		if _, ok := body["labels"]; ok {
 			b.Labels = bodyStringMap(body, "labels")
+		}
+		// iamConfiguration is patch-merged: only the members the request carries
+		// change, so a PATCH that toggles uniform bucket-level access alone
+		// keeps the bucket's public access prevention mode.
+		if _, ok := body["iamConfiguration"]; ok {
+			cfg, err := MergeIAMConfig(b.IamConfiguration, bodyMap(body, "iamConfiguration"))
+			if err != nil {
+				return nil, err
+			}
+			b.IamConfiguration = cfg
 		}
 		if h, ok := body["defaultEventBasedHold"].(bool); ok {
 			b.DefaultEventBasedHold = h
@@ -3687,25 +3713,21 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 		metageneration = "1"
 	}
 	out := map[string]any{
-		"kind":           "storage#bucket",
-		"id":             b.Name,
-		"name":           b.Name,
-		"location":       b.Location,
-		"locationType":   BucketLocationType(b.Location),
-		"storageClass":   b.StorageClass,
-		"timeCreated":    b.TimeCreated,
-		"updated":        b.Updated,
-		"generation":     "1",
-		"metageneration": metageneration,
-		"projectNumber":  resource.ProjectNumber(nr.AccountID),
-		"selfLink":       bucketSelfLink(baseURL(nr), b.Name),
-		"etag":           BucketEtag(metageneration),
-		"versioning":     versioning,
-		"iamConfiguration": map[string]any{
-			"uniformBucketLevelAccess": map[string]any{"enabled": false},
-			"bucketPolicyOnly":         map[string]any{"enabled": false},
-			"publicAccessPrevention":   "inherited",
-		},
+		"kind":             "storage#bucket",
+		"id":               b.Name,
+		"name":             b.Name,
+		"location":         b.Location,
+		"locationType":     BucketLocationType(b.Location),
+		"storageClass":     b.StorageClass,
+		"timeCreated":      b.TimeCreated,
+		"updated":          b.Updated,
+		"generation":       "1",
+		"metageneration":   metageneration,
+		"projectNumber":    resource.ProjectNumber(nr.AccountID),
+		"selfLink":         bucketSelfLink(baseURL(nr), b.Name),
+		"etag":             BucketEtag(metageneration),
+		"versioning":       versioning,
+		"iamConfiguration": IAMConfigFromMap(b.IamConfiguration).REST(),
 	}
 	if b.RetentionPolicy != nil {
 		out["retentionPolicy"] = b.RetentionPolicy

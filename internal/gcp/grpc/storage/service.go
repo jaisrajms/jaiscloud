@@ -332,12 +332,19 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		}
 		b.RetentionPolicy = policy
 	}
-	// iamConfig mirrors the REST iamConfiguration the provider derives (uniform
-	// bucket-level access disabled, public access prevention inherited). The
-	// proto defines iam_config, so real GCP returns it over gRPC too.
+	// iamConfig mirrors the REST iamConfiguration: the stored uniform
+	// bucket-level access flag and public access prevention mode, with GCS's
+	// defaults (off / inherited) when a bucket predates the field. The proto has
+	// no bucketPolicyOnly alias — real GCS reports that only over REST.
+	//
+	// lock_time is left unset on purpose: real GCS fills it with the end of the
+	// 90-day window during which the setting can still be disabled, and this
+	// emulator neither enforces that window nor tracks how long it has been on,
+	// so a value here would be invented.
+	iam := storageprovider.IAMConfigFromMeta(m)
 	b.IamConfig = &storagepb.Bucket_IamConfig{
-		UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: false},
-		PublicAccessPrevention:   "inherited",
+		UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: iam.UniformBucketLevelAccess},
+		PublicAccessPrevention:   iam.PublicAccessPrevention,
 	}
 	// softDeletePolicy mirrors the REST default: real GCS enables soft delete on
 	// every bucket with a 7-day window, and effectiveTime defaults to the
@@ -625,6 +632,15 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if rp := bucketRetentionToMap(req.GetBucket().GetRetentionPolicy()); rp != nil {
 		meta["retentionPolicy"] = rp
 	}
+	// The bucket's IAM configuration travels as a field of the Bucket resource,
+	// the same way the REST insert body carries it.
+	if ic := req.GetBucket().GetIamConfig(); ic != nil {
+		cfg, err := storageprovider.MergeIAMConfig(nil, protoIamConfigPatch(ic))
+		if err != nil {
+			return nil, mapError(err)
+		}
+		meta["iamConfiguration"] = cfg
+	}
 	meta["defaultEventBasedHold"] = req.GetBucket().GetDefaultEventBasedHold()
 
 	if err := s.objects.CreateBucket(ctx, project, name, meta); err != nil {
@@ -777,11 +793,11 @@ func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
 
 // applyBucketMask overlays the request's masked Bucket fields onto the stored
 // bucket metadata. Only the field paths this service models (labels, versioning,
-// storageClass, location, retentionPolicy) are applied; "*" applies all of them.
-// An absent/empty masked field clears the stored key where GCS treats the field
-// as a map/message (labels, versioning, retentionPolicy) and is otherwise left
-// untouched.
-func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) {
+// storageClass, location, retentionPolicy, iamConfig) are applied; "*" applies
+// all of them. An absent/empty masked field clears the stored key where GCS
+// treats the field as a map/message (labels, versioning, retentionPolicy) and is
+// otherwise left untouched.
+func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) error {
 	applyBucketLabelsMask(meta, pb, mask)
 	if maskIncludes(mask, "versioning") {
 		if v := pb.GetVersioning(); v != nil && v.GetEnabled() {
@@ -810,6 +826,62 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 			delete(meta, "defaultEventBasedHold")
 		}
 	}
+	return applyBucketIamMask(meta, pb, mask)
+}
+
+// applyBucketIamMask applies the iam_config update-mask paths. The official Go
+// client toggles uniform bucket-level access with
+// `iam_config.uniform_bucket_level_access.enabled` and public access prevention
+// with `iam_config.public_access_prevention`; the message and parent paths are
+// accepted too, and "*" applies both. Only the masked member changes, so an
+// update that flips one does not reset the other.
+func applyBucketIamMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) error {
+	whole := maskIncludes(mask, "iam_config")
+	uniform := whole ||
+		maskIncludes(mask, "iam_config.uniform_bucket_level_access") ||
+		maskIncludes(mask, "iam_config.uniform_bucket_level_access.enabled")
+	pap := whole || maskIncludes(mask, "iam_config.public_access_prevention")
+	if !uniform && !pap {
+		return nil
+	}
+	ic := pb.GetIamConfig()
+	patch := map[string]any{}
+	if uniform {
+		// A masked proto3 field that the request leaves unset means the zero
+		// value, so an iam_config update without the message clears the flag
+		// rather than silently keeping the old one.
+		patch["uniformBucketLevelAccess"] = map[string]any{
+			"enabled": ic.GetUniformBucketLevelAccess().GetEnabled(),
+		}
+	}
+	if pap {
+		mode := storageprovider.PublicAccessPreventionInherited
+		if v := ic.GetPublicAccessPrevention(); v != "" {
+			mode = v
+		}
+		patch["publicAccessPrevention"] = mode
+	}
+	cur, _ := meta["iamConfiguration"].(map[string]any)
+	merged, err := storageprovider.MergeIAMConfig(cur, patch)
+	if err != nil {
+		return err
+	}
+	meta["iamConfiguration"] = merged
+	return nil
+}
+
+// protoIamConfigPatch converts a proto Bucket.IamConfig into the wire-shaped
+// iamConfiguration object MergeIAMConfig consumes. The proto has no
+// bucketPolicyOnly alias, so only the two real members are carried.
+func protoIamConfigPatch(ic *storagepb.Bucket_IamConfig) map[string]any {
+	patch := map[string]any{}
+	if uba := ic.GetUniformBucketLevelAccess(); uba != nil {
+		patch["uniformBucketLevelAccess"] = map[string]any{"enabled": uba.GetEnabled()}
+	}
+	if pap := ic.GetPublicAccessPrevention(); pap != "" {
+		patch["publicAccessPrevention"] = pap
+	}
+	return patch
 }
 
 // applyBucketLabelsMask applies the labels-related update-mask paths. The bare
@@ -910,7 +982,9 @@ func (s *Service) UpdateBucket(ctx context.Context, req *storagepb.UpdateBucketR
 		if !gcs.BucketMetagenerationMatches(meta, pre) {
 			return nil, gcs.ErrPreconditionFailed
 		}
-		applyBucketMask(meta, req.GetBucket(), mask)
+		if err := applyBucketMask(meta, req.GetBucket(), mask); err != nil {
+			return nil, err
+		}
 		meta["metageneration"] = bumpMeta(gcs.BucketMetageneration(meta))
 		meta["updated"] = clock.Now().Format(time.RFC3339Nano)
 		return meta, nil

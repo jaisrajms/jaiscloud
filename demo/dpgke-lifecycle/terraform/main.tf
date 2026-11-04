@@ -72,24 +72,27 @@ resource "google_service_account" "job" {
 # var.project only; a second storage project is not enrolled here because the
 # emulator does not gate calls on API enablement.
 #
-# uniform_bucket_level_access is deliberately NOT set. The emulator's bucket read
-# always reports iamConfiguration.uniformBucketLevelAccess.enabled = false (the
-# field is never stored), so setting it would produce a permanent diff. Add it
-# back when the emulator echoes it.
+# uniform_bucket_level_access is what a job bucket should use on real GCP (ACLs
+# off, access only through the bucket IAM grants below), so the module sets it
+# and relies on the emulator echoing it back (DGD10). The provider sends it in
+# the create body and in the PATCH body on update; a bucket read that dropped it
+# would show up as a permanent diff in the re-plan step of run.sh.
 resource "google_storage_bucket" "input" {
-  name          = local.buckets.input
-  project       = local.storage_project
-  location      = "US"
-  force_destroy = true
+  name                        = local.buckets.input
+  project                     = local.storage_project
+  location                    = "US"
+  uniform_bucket_level_access = true
+  force_destroy               = true
 
   depends_on = [google_project_service.apis]
 }
 
 resource "google_storage_bucket" "output" {
-  name          = local.buckets.output
-  project       = local.storage_project
-  location      = "US"
-  force_destroy = true
+  name                        = local.buckets.output
+  project                     = local.storage_project
+  location                    = "US"
+  uniform_bucket_level_access = true
+  force_destroy               = true
 
   depends_on = [google_project_service.apis]
 }
@@ -97,10 +100,11 @@ resource "google_storage_bucket" "output" {
 # Dataproc stages into this one, so it is named by the virtual cluster below
 # rather than by the job.
 resource "google_storage_bucket" "staging" {
-  name          = local.buckets.staging
-  project       = local.storage_project
-  location      = "US"
-  force_destroy = true
+  name                        = local.buckets.staging
+  project                     = local.storage_project
+  location                    = "US"
+  uniform_bucket_level_access = true
+  force_destroy               = true
 
   depends_on = [google_project_service.apis]
 }

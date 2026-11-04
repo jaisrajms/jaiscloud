@@ -86,6 +86,15 @@ GCP the second project has to exist first; the emulator does not check. Bucket
 IAM and requester-pays are not enforced by the emulator (DGD9), so this
 demonstrates the shape, not an authorization outcome.
 
+## Bucket access
+
+All three buckets set `uniform_bucket_level_access = true` — on real GCP that is
+what makes the bucket IAM grants below the only way in, and it disables the
+per-object ACLs a job bucket should not rely on. The emulator stores the setting
+and echoes it back from the bucket read (DGD10), so the re-plan in `run.sh`
+converges; before that fix it always reported `false`, and setting it produced a
+permanent diff.
+
 ## Why the Spark release is pinned
 
 Aliases such as `3.5` are dereferenced at cluster creation on real GCP, so a
