@@ -302,6 +302,16 @@ func detectV1Service(path string) string {
 	if detectDataprocResourceType(rest) != "" {
 		return "dataproc"
 	}
+	// Dataproc Serverless (the product now called Managed Service for Apache
+	// Spark) is locations-scoped — batches, sessions, sessionTemplates — and the
+	// emulator deliberately does not implement it. Claiming the paths here lets
+	// the dataproc codec answer a real UNIMPLEMENTED instead of letting them
+	// fall through to the unknown-service 404 or the GCS raw-media fallback.
+	// Note: locations/{l}/operations is NOT claimed — it is the shared LRO path
+	// and stays with Workflows (see detectMemorystoreResourceType's note).
+	if detectDataprocServerlessResourceType(rest) != "" {
+		return "dataproc"
+	}
 	// Managed Kafka lives under /v1/projects/{project}/locations/{location}/clusters
 	// — detect it before the generic resource-type switch (a topic path's "topics"
 	// segment would otherwise be mistaken for the Pub/Sub topic surface).
@@ -564,6 +574,27 @@ func detectDataprocResourceType(seg []string) string {
 	}
 	switch resource {
 	case "clusters", "jobs", "operations", "workflowTemplates":
+		return resource
+	}
+	return ""
+}
+
+// detectDataprocServerlessResourceType returns the Dataproc Serverless resource
+// family when the segments after projects/{project} form
+// locations/{location}/{batches|sessions|sessionTemplates}[/...][:verb].
+// Dataproc's cluster surface is regions-scoped, so the "locations" segment does
+// not collide with it; the emulator does not implement serverless, and claiming
+// the paths makes it fail loud rather than fall through.
+func detectDataprocServerlessResourceType(seg []string) string {
+	if len(seg) < 3 || seg[0] != "locations" {
+		return ""
+	}
+	resource := seg[2]
+	if i := strings.IndexByte(resource, ':'); i >= 0 {
+		resource = resource[:i]
+	}
+	switch resource {
+	case "batches", "sessions", "sessionTemplates":
 		return resource
 	}
 	return ""

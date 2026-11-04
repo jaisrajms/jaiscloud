@@ -67,6 +67,9 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 
 	// rest = ["regions", "{region}", ...] after projects/{project}.
 	rest := seg[pi+2:]
+	if len(rest) >= 2 && rest[0] == "locations" {
+		return decodeServerless(nr, rest, r)
+	}
 	if len(rest) < 2 || rest[0] != "regions" {
 		return nil, model.NewProviderError("InvalidRequest", "expected regions/{region} in dataproc path", 404)
 	}
@@ -245,4 +248,84 @@ func (c *Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderErro
 	}
 	out, _ := json.Marshal(env)
 	return status, headers, out
+}
+
+// decodeServerless recognises the Dataproc Serverless (Managed Service for
+// Apache Spark) locations-scoped surface — batches, sessions, sessionTemplates —
+// and hands the provider the real RPC name so both transports fail loud with the
+// same UNIMPLEMENTED. The emulator does not implement serverless; the point of
+// claiming these paths is that a client gets "not implemented" rather than an
+// unknown-service 404 (REST) while gRPC says UNIMPLEMENTED.
+func decodeServerless(nr *model.NormalizedRequest, rest []string, r *http.Request) (*model.NormalizedRequest, error) {
+	if len(rest) < 3 {
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+	}
+	nr.Params["region"] = rest[1]
+	nr.Params["location"] = rest[1]
+	resource := rest[2]
+	verb := ""
+	if i := strings.IndexByte(resource, ':'); i >= 0 {
+		verb, resource = resource[i+1:], resource[:i]
+	}
+	// A custom verb on the item segment: batches/{id}:analyze,
+	// sessions/{id}:terminate.
+	if verb == "" {
+		if last := rest[len(rest)-1]; last != rest[2] {
+			if i := strings.IndexByte(last, ':'); i >= 0 {
+				verb = last[i+1:]
+			}
+		}
+	}
+	var rpc string
+	switch resource {
+	case "batches":
+		rpc = serverlessRPC("BatchController", "Batch", "Batches", verb, r.Method, len(rest))
+	case "sessions":
+		rpc = serverlessRPC("SessionController", "Session", "Sessions", verb, r.Method, len(rest))
+	case "sessionTemplates":
+		rpc = serverlessRPC("SessionTemplateController", "SessionTemplate", "SessionTemplates", verb, r.Method, len(rest))
+	default:
+		// sparkApplications and anything else nested under a batch/session: the
+		// parent controller still owns them.
+		if strings.Contains(strings.Join(rest, "/"), "sparkApplications") {
+			rpc = "SparkApplications"
+		} else {
+			return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		}
+	}
+	nr.Params["rpc"] = rpc
+	nr.Action = "Serverless"
+	return nr, nil
+}
+
+// serverlessRPC maps a Dataproc Serverless REST path to its RPC name, so the
+// unimplemented error names exactly what the client asked for.
+func serverlessRPC(controller, noun, plural, verb, method string, segs int) string {
+	switch {
+	case verb != "":
+		switch verb {
+		case "analyze":
+			return controller + ".Analyze" + noun
+		case "terminate":
+			return controller + ".Terminate" + noun
+		}
+		return controller + "." + noun + ":" + verb
+	case segs == 3: // collection
+		if method == http.MethodPost {
+			return controller + ".Create" + noun
+		}
+		if method == http.MethodGet {
+			return controller + ".List" + plural
+		}
+	case segs == 4: // one resource
+		switch method {
+		case http.MethodGet:
+			return controller + ".Get" + noun
+		case http.MethodDelete:
+			return controller + ".Delete" + noun
+		case http.MethodPatch:
+			return controller + ".Update" + noun
+		}
+	}
+	return controller + "." + noun
 }

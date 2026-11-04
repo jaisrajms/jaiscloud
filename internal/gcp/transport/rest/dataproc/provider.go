@@ -35,6 +35,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Dataproc.StartCluster":         p.StartCluster,
 		"Dataproc.StopCluster":          p.StopCluster,
 		"Dataproc.DiagnoseCluster":      p.DiagnoseCluster,
+		"Dataproc.Serverless":           p.Serverless,
 		"Dataproc.SubmitJob":            p.SubmitJob,
 		"Dataproc.SubmitJobAsOperation": p.SubmitJobAsOperation,
 		"Dataproc.GetJob":               p.GetJob,
@@ -150,6 +151,13 @@ func (p *Provider) StopCluster(ctx context.Context, nr *model.NormalizedRequest)
 // succeeding, so SDK callers observe a real UNIMPLEMENTED error.
 func (p *Provider) DiagnoseCluster(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return nil, p.core.DiagnoseCluster()
+}
+
+// Serverless fails the Dataproc Serverless (Managed Service for Apache Spark)
+// surface loud with UNIMPLEMENTED, naming the RPC the client asked for. The
+// emulator models clusters and jobs, not serverless batches or sessions.
+func (p *Provider) Serverless(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, p.core.ServerlessUnsupported(strParam(nr, "rpc"))
 }
 
 // --- Jobs ---

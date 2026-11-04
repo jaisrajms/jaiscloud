@@ -171,6 +171,12 @@ func EnumerateGRPC() []GRPCService {
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})
+	// Dataproc Serverless (Managed Spark) services are registered but every RPC
+	// answers UNIMPLEMENTED; they are listed so the catalogue and the enumeration
+	// gate see the declared-but-unsupported surface.
+	dataprocpb.RegisterBatchControllerServer(reg, &grpcdataproc.Service{})
+	dataprocpb.RegisterSessionControllerServer(reg, &grpcdataproc.Service{})
+	dataprocpb.RegisterSessionTemplateControllerServer(reg, &grpcdataproc.Service{})
 	containerpb.RegisterClusterManagerServer(reg, &grpccontainer.Service{})
 	runSvc := &grpcrun.Service{}
 	runpb.RegisterServicesServer(reg, runSvc)

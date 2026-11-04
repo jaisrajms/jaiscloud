@@ -31,23 +31,31 @@ var directLinks = map[string]string{
 	// Functions <-> Eventarc trigger plumbing: one feature implemented by two cores
 	// with a platform-owned protocol (naming, ownership labels, re-pointing); it is
 	// not the Eventarc or Functions client API. Their Pub/Sub dependency, and every Storage, Metastore and Cloud Run call, IS seamed.
-	"SetFunctionExister":       "eventarc validates destination.cloudFunction against the functions core",
-	"SetEventTargets":          "functions delivery engine reads eventarc triggers",
-	"SetTriggerProvisioner":    "function event triggers materialize a backing eventarc trigger",
-	"SetOperationResolvers":    "async-LRO-only top-level operation lookup across services",
-	"SetCodeLoader":            "executor loads function code, not a service API",
-	"SetLambdaCodeFetcher":     "admin hook: function code for the executor",
-	"SetEngine":                "background engine (scheduler/tasks), not a service",
-	"SetAccountObserver":       "console project discovery hook",
-	"WithServiceModes":         "UI configuration",
-	"SetDockerExecutor":        "executor, not a service",
-	"SetSparkRunner":           "executor, not a service",
-	"WithExecutor":             "executor, not a service",
-	"RegisterResetter":         "admin lifecycle",
-	"RegisterSnapshotter":      "admin lifecycle",
-	"RegisterSchedulerTicker":  "admin test hook",
-	"RegisterTasksTicker":      "admin test hook",
-	"RegisterMonitoringTicker": "admin test hook",
+	"SetFunctionExister":    "eventarc validates destination.cloudFunction against the functions core",
+	"SetEventTargets":       "functions delivery engine reads eventarc triggers",
+	"SetTriggerProvisioner": "function event triggers materialize a backing eventarc trigger",
+	"SetOperationResolvers": "async-LRO-only top-level operation lookup across services",
+
+	// Dataproc <-> GKE: a Dataproc-on-GKE virtual cluster reconciles its node
+	// pools through the GKE control plane, which is the documented cross-API
+	// behaviour (the pool is readable through container.v1). There is no
+	// container seam in internal/gcp/seams yet; both links are recorded here so
+	// the direct dependency stays visible until one exists.
+	"WithGKENodePoolProvisioner": "cross-API: Dataproc reconciles node pools through the GKE core",
+	"SetContainerClusterProbe":   "router disambiguation: reads whether GKE holds a cluster at project+location, a query rather than a service API call",
+	"SetCodeLoader":              "executor loads function code, not a service API",
+	"SetLambdaCodeFetcher":       "admin hook: function code for the executor",
+	"SetEngine":                  "background engine (scheduler/tasks), not a service",
+	"SetAccountObserver":         "console project discovery hook",
+	"WithServiceModes":           "UI configuration",
+	"SetDockerExecutor":          "executor, not a service",
+	"SetSparkRunner":             "executor, not a service",
+	"WithExecutor":               "executor, not a service",
+	"RegisterResetter":           "admin lifecycle",
+	"RegisterSnapshotter":        "admin lifecycle",
+	"RegisterSchedulerTicker":    "admin test hook",
+	"RegisterTasksTicker":        "admin test hook",
+	"RegisterMonitoringTicker":   "admin test hook",
 }
 
 // infra are hooks that read provider state for the gateway itself.

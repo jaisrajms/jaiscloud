@@ -1080,6 +1080,13 @@ func startCmd() *cobra.Command {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterWorkflowTemplateServiceServer(gserv.GRPC(), dataprocGRPC)
+					// Dataproc Serverless (Managed Spark) is not implemented; the
+					// services are registered so a serverless client gets
+					// UNIMPLEMENTED rather than "unknown service", matching the
+					// REST transport's 501.
+					dataprocpb.RegisterBatchControllerServer(gserv.GRPC(), dataprocGRPC)
+					dataprocpb.RegisterSessionControllerServer(gserv.GRPC(), dataprocGRPC)
+					dataprocpb.RegisterSessionTemplateControllerServer(gserv.GRPC(), dataprocGRPC)
 				}
 				if transports.GRPCFor("container") {
 					containerpb.RegisterClusterManagerServer(gserv.GRPC(), containerGRPC)
