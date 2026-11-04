@@ -1043,6 +1043,7 @@ test-gcp-mutation-update: test-gcp-mutation ## Rewrite the mutation floor for PK
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
+	go test -count=1 -tags gcp_conformance ./tools/fidelitygen/
 
 # The offline REST routing matrix: asserts every request shape a real client
 # emits (the curated flows + one Discovery-synthesized probe per registered

@@ -7,6 +7,8 @@ import (
 	"sort"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
@@ -124,6 +126,23 @@ var grpcWireService = map[string]string{
 	"google.longrunning.Operations":                         "operations",
 }
 
+// grpcRuntimeUnimplemented maps the gRPC services the server registers at
+// runtime but deliberately leaves out of the *graded* surface (EnumerateGRPC):
+// the Dataproc Serverless controllers. cmd/jaiscloud-gcp registers them so a
+// serverless client gets UNIMPLEMENTED rather than "unknown service" (the
+// REST transport answers 501 for the same paths), but the fidelity matrix must
+// not grade an unimplemented surface `ga`.
+//
+// They are still part of the *served* surface — every RPC is registered and
+// answers UNIMPLEMENTED — so the published-vs-served coverage report counts
+// them as served and not graded. That is the boundary GKP8 draws: a documented
+// UNIMPLEMENTED is `served`/`unsupported`, never `absent`.
+var grpcRuntimeUnimplemented = map[string]string{
+	"google.cloud.dataproc.v1.BatchController":           "dataproc",
+	"google.cloud.dataproc.v1.SessionController":         "dataproc",
+	"google.cloud.dataproc.v1.SessionTemplateController": "dataproc",
+}
+
 // EnumerateGRPC returns the emulator's gRPC surface without any network I/O.
 //
 // It constructs a fresh grpc.Server, registers every emulator service with a
@@ -174,9 +193,10 @@ func EnumerateGRPC() []GRPCService {
 	// Deliberately NOT registered here: the Dataproc Serverless controllers
 	// (Batch/Session/SessionTemplate). The emulator registers them at runtime so a
 	// serverless client gets UNIMPLEMENTED rather than "unknown service", but this
-	// registry enumerates the *served* surface and the fidelity matrix is derived
-	// from it — listing 15 unimplemented RPCs as implemented would be a false ga.
-	// Surfacing them as an explicit `unsupported` state is GKP8.
+	// registry enumerates the *graded* surface and the fidelity matrix is derived
+	// from it — grading 14 unimplemented RPCs would be a false ga. They are
+	// counted as served-but-ungraded by the coverage report instead
+	// (EnumerateGRPCUnimplemented + PublishedGRPCServices).
 	containerpb.RegisterClusterManagerServer(reg, &grpccontainer.Service{})
 	runSvc := &grpcrun.Service{}
 	runpb.RegisterServicesServer(reg, runSvc)
@@ -190,10 +210,77 @@ func EnumerateGRPC() []GRPCService {
 	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}, &grpcmetastore.Service{}, &grpcdataproc.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())
 
-	info := reg.GetServiceInfo()
+	return servicesFromInfo(reg.GetServiceInfo(), grpcWireService)
+}
+
+// EnumerateGRPCUnimplemented reads the runtime-registered unimplemented
+// controllers back from a grpc.Server, the same way EnumerateGRPC reads the
+// graded surface. They are registered with the zero-value Dataproc service,
+// whose embedded generated Unimplemented servers answer UNIMPLEMENTED for every
+// RPC; no handler is ever invoked.
+func EnumerateGRPCUnimplemented() []GRPCService {
+	reg := grpc.NewServer()
+	svc := &grpcdataproc.Service{}
+	dataprocpb.RegisterBatchControllerServer(reg, svc)
+	dataprocpb.RegisterSessionControllerServer(reg, svc)
+	dataprocpb.RegisterSessionTemplateControllerServer(reg, svc)
+	return servicesFromInfo(reg.GetServiceInfo(), grpcRuntimeUnimplemented)
+}
+
+// PublishedGRPCServices returns every RPC declared by the proto descriptors of
+// the gRPC services the emulator wires — the graded surface plus the
+// runtime-registered unimplemented controllers. It returns one row per wire
+// service (a fidelity service may span several, e.g. Cloud Functions v1+v2);
+// callers dedupe per fidelity service.
+//
+// It is the gRPC half of the coverage source of truth: EnumerateGRPC says what
+// is graded, this says what is *published* by the protos the emulator serves.
+// A registered service exposes every method of its proto (unimplemented ones
+// answer UNIMPLEMENTED), so published - graded is always served-but-ungraded,
+// never an invented cell.
+func PublishedGRPCServices() []GRPCService {
+	wires := map[string]string{}
+	for wire, service := range grpcWireService {
+		wires[wire] = service
+	}
+	for wire, service := range grpcRuntimeUnimplemented {
+		wires[wire] = service
+	}
+
+	names := make([]string, 0, len(wires))
+	for wire := range wires {
+		names = append(names, wire)
+	}
+	sort.Strings(names)
+
+	services := make([]GRPCService, 0, len(names))
+	for _, wire := range names {
+		d, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(wire))
+		if err != nil {
+			panic(fmt.Sprintf("gcpconformance: descriptor for %q: %v", wire, err))
+		}
+		sd, ok := d.(protoreflect.ServiceDescriptor)
+		if !ok {
+			panic(fmt.Sprintf("gcpconformance: %q is not a service descriptor", wire))
+		}
+		methods := make([]string, 0, sd.Methods().Len())
+		for i := 0; i < sd.Methods().Len(); i++ {
+			methods = append(methods, string(sd.Methods().Get(i).Name()))
+		}
+		sort.Strings(methods)
+		services = append(services, GRPCService{WireService: wire, Service: wires[wire], Methods: methods})
+	}
+	sort.Slice(services, func(i, j int) bool { return services[i].WireService < services[j].WireService })
+	return services
+}
+
+// servicesFromInfo turns grpc.Server.GetServiceInfo into GRPCService rows,
+// panicking on a wire service with no fidelity mapping (a programming error in
+// this file, not a runtime condition).
+func servicesFromInfo(info map[string]grpc.ServiceInfo, wiring map[string]string) []GRPCService {
 	services := make([]GRPCService, 0, len(info))
 	for wire, si := range info {
-		service, ok := grpcWireService[wire]
+		service, ok := wiring[wire]
 		if !ok {
 			panic(fmt.Sprintf("gcpconformance: gRPC service %q has no fidelity-service mapping", wire))
 		}

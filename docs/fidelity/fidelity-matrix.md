@@ -6,6 +6,12 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
+A cell is a *grade*; it is not the whole published API. The [Coverage](#coverage)
+section below states, per service and transport, how many published methods the
+emulator registers a route for and how many the cells grade, so a service can never
+read as complete while most of its published surface is missing. A method with no
+registered route is listed there as **not served**; it is never counted as `ga`.
+
 Cells: **1212**
 
 ## Rollup
@@ -35,7 +41,135 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | rest | 665 | 46 |
 | grpc | 455 | 46 |
 
+## Coverage
+
+**Published** is the official method list (the vendored Discovery document for REST, the proto service descriptors for gRPC). **Served** means the emulator registers a route/RPC for it — a served method may still answer the documented `UNIMPLEMENTED` and be graded `unsupported`; it is not missing. **Graded** is how many published methods have a matrix cell. **not served** is a registration statement, not a grade: no route exists, so no cell could grade it. `unavailable` means the source of truth is not vendored, so the count cannot be derived — the cells for that row are not a coverage claim.
+
+| service | transport | published | served | graded | not served | served-but-ungraded | source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| bigquery | rest | 47 | 42 | 31 | 5 | 11 | bigquery.v2 |
+| bigquery | grpc | — | — | — | — | — | unavailable |
+| clouddns | rest | 40 | 40 | 17 | 0 | 23 | dns.v1 |
+| clouddns | grpc | — | — | — | — | — | unavailable |
+| cloudsql | rest | 80 | 69 | 23 | 11 | 46 | sqladmin.v1 |
+| cloudsql | grpc | — | — | — | — | — | unavailable |
+| compute | rest | 1011 | 974 | 32 | 37 | 942 | compute.v1 |
+| compute | grpc | — | — | — | — | — | unavailable |
+| container | rest | 71 | 31 | 30 | 40 | 1 | container.v1 |
+| container | grpc | 37 | 37 | 37 | 0 | 0 | google.container.v1.ClusterManager |
+| dataproc | rest | 136 | 90 | 26 | 46 | 64 | dataproc.v1 |
+| dataproc | grpc | 36 | 36 | 22 | 0 | 14 | google.cloud.dataproc.v1.BatchController, google.cloud.dataproc.v1.ClusterController, google.cloud.dataproc.v1.JobController, google.cloud.dataproc.v1.SessionController, google.cloud.dataproc.v1.SessionTemplateController, google.cloud.dataproc.v1.WorkflowTemplateService |
+| datastore | rest | 18 | 8 | 8 | 10 | 0 | datastore.v1 |
+| datastore | grpc | 8 | 8 | 8 | 0 | 0 | google.datastore.v1.Datastore |
+| eventarc | rest | 66 | 64 | 64 | 2 | 0 | eventarc.v1 |
+| eventarc | grpc | 39 | 39 | 39 | 0 | 0 | google.cloud.eventarc.v1.Eventarc |
+| firestore | rest | 60 | 50 | 49 | 10 | 1 | firestore.v1 |
+| firestore | grpc | 17 | 17 | 17 | 0 | 0 | google.firestore.v1.Firestore |
+| firestoreadmin | rest | — | — | — | — | — | unavailable |
+| firestoreadmin | grpc | 32 | 32 | 32 | 0 | 0 | google.firestore.admin.v1.FirestoreAdmin |
+| functions | rest | 22 | 22 | 22 | 0 | 0 | cloudfunctions.v1 |
+| functions | grpc | 12 | 12 | 12 | 0 | 0 | google.cloud.functions.v1.CloudFunctionsService, google.cloud.functions.v2.FunctionService |
+| iam | rest | 136 | 21 | 21 | 115 | 0 | iam.v1 |
+| iam | grpc | 31 | 31 | 31 | 0 | 0 | google.iam.admin.v1.IAM, google.iam.v1.IAMPolicy |
+| iamcredentials | rest | 7 | 4 | 3 | 3 | 1 | iamcredentials.v1 |
+| iamcredentials | grpc | 4 | 4 | 4 | 0 | 0 | google.iam.credentials.v1.IAMCredentials |
+| iceberg | rest | — | — | — | — | — | unavailable |
+| iceberg | grpc | — | — | — | — | — | unavailable |
+| kms | rest | 87 | 42 | 42 | 45 | 0 | cloudkms.v1 |
+| kms | grpc | 35 | 35 | 35 | 0 | 0 | google.cloud.kms.v1.KeyManagementService |
+| logging | rest | 254 | 205 | 50 | 49 | 155 | logging.v2 |
+| logging | grpc | 43 | 43 | 43 | 0 | 0 | google.logging.v2.ConfigServiceV2, google.logging.v2.LoggingServiceV2, google.logging.v2.MetricsServiceV2 |
+| managedkafka | rest | 89 | 23 | 23 | 66 | 0 | managedkafka.v1 |
+| managedkafka | grpc | 21 | 21 | 21 | 0 | 0 | google.cloud.managedkafka.v1.ManagedKafka |
+| memorystore | rest | 47 | 13 | 13 | 34 | 0 | redis.v1 |
+| memorystore | grpc | — | — | — | — | — | unavailable |
+| metastore | rest | 48 | 37 | 37 | 11 | 0 | metastore.v1 |
+| metastore | grpc | 23 | 23 | 23 | 0 | 0 | google.cloud.metastore.v1.DataprocMetastore, google.cloud.metastore.v1.DataprocMetastoreFederation |
+| monitoring | rest | 73 | 59 | 44 | 14 | 15 | monitoring.v3 |
+| monitoring | grpc | 40 | 40 | 40 | 0 | 0 | google.monitoring.v3.AlertPolicyService, google.monitoring.v3.MetricService, google.monitoring.v3.NotificationChannelService, google.monitoring.v3.ServiceMonitoringService, google.monitoring.v3.UptimeCheckService |
+| operations | rest | — | — | — | — | — | unavailable |
+| operations | grpc | 5 | 5 | 5 | 0 | 0 | google.longrunning.Operations |
+| pubsub | rest | 46 | 25 | 23 | 21 | 2 | pubsub.v1 |
+| pubsub | grpc | 25 | 25 | 25 | 0 | 0 | google.pubsub.v1.Publisher, google.pubsub.v1.Subscriber |
+| resourcemanager | rest | 38 | 9 | 9 | 29 | 0 | cloudresourcemanager.v1 |
+| resourcemanager | grpc | 11 | 11 | 11 | 0 | 0 | google.cloud.resourcemanager.v3.Projects |
+| run | rest | 59 | 14 | 14 | 45 | 0 | run.v2 |
+| run | grpc | 11 | 11 | 11 | 0 | 0 | google.cloud.run.v2.Revisions, google.cloud.run.v2.Services |
+| scheduler | rest | 16 | 8 | 8 | 8 | 0 | cloudscheduler.v1 |
+| scheduler | grpc | 8 | 8 | 8 | 0 | 0 | google.cloud.scheduler.v1.CloudScheduler |
+| secretmanager | rest | 36 | 34 | 17 | 2 | 17 | secretmanager.v1 |
+| secretmanager | grpc | 17 | 17 | 17 | 0 | 0 | google.cloud.secretmanager.v1.SecretManagerService |
+| serviceusage | rest | 10 | 6 | 6 | 4 | 0 | serviceusage.v1 |
+| serviceusage | grpc | 6 | 6 | 6 | 0 | 0 | google.api.serviceusage.v1.ServiceUsage |
+| storage | rest | 87 | 38 | 30 | 49 | 8 | storage.v1 |
+| storage | grpc | 24 | 24 | 24 | 0 | 0 | google.storage.v2.Storage |
+| tasks | rest | 24 | 21 | 21 | 3 | 0 | cloudtasks.v2 |
+| tasks | grpc | 20 | 20 | 20 | 0 | 0 | google.cloud.tasks.v2.CloudTasks |
+| workflowexecutions | rest | 10 | 4 | 4 | 6 | 0 | workflowexecutions.v1 |
+| workflowexecutions | grpc | 4 | 4 | 4 | 0 | 0 | google.cloud.workflows.executions.v1.Executions |
+| workflows | rest | 11 | 9 | 9 | 2 | 0 | workflows.v1 |
+| workflows | grpc | 6 | 6 | 6 | 0 | 0 | google.cloud.workflows.v1.Workflows |
+
+**Coverage notes**
+
+- `bigquery` REST: 11 served method(s) have no graded cell; 9 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `bigquery` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `clouddns` REST: 23 served method(s) have no graded cell; 23 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `clouddns` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `cloudsql` REST: 46 served method(s) have no graded cell; 46 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `cloudsql` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `compute` REST: 942 served method(s) have no graded cell; 934 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `compute` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `container` REST: 1 served method(s) have no graded cell (their routes are aggregated under one cell)
+- `dataproc` REST: 64 served method(s) have no graded cell; 62 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `dataproc` GRPC: 14 served RPC(s) have no graded cell; a registered RPC without a cell answers the documented UNIMPLEMENTED
+- `firestore` REST: 1 served method(s) have no graded cell (their routes are aggregated under one cell); the Firestore Discovery document also declares the Firestore Admin methods, which this REST wire service serves; the Admin gRPC service is reported separately as firestoreadmin
+- `firestoreadmin` REST: no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim
+- `iamcredentials` REST: 1 served method(s) have no graded cell (their routes are aggregated under one cell)
+- `iceberg` REST: no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim
+- `iceberg` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `logging` REST: 155 served method(s) have no graded cell; 2 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `memorystore` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `monitoring` REST: 15 served method(s) have no graded cell; 14 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `operations` REST: no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim
+- `pubsub` REST: 2 served method(s) have no graded cell (their routes are aggregated under one cell)
+- `secretmanager` REST: 17 served method(s) have no graded cell (their routes are aggregated under one cell)
+- `storage` REST: 8 served method(s) have no graded cell (their routes are aggregated under one cell)
+
+### Published methods with no registered route
+
+- **bigquery** REST (5): bigquery.datasets.undelete, bigquery.projects.list, bigquery.tables.getIamPolicy, bigquery.tables.setIamPolicy, bigquery.tables.testIamPermissions
+- **cloudsql** REST (11): sql.Backups.CreateBackup, sql.Backups.DeleteBackup, sql.Backups.GetBackup, sql.Backups.ListBackups, sql.Backups.UpdateBackup, sql.blueGreenDeployments.create, sql.blueGreenDeployments.delete, sql.blueGreenDeployments.get, sql.blueGreenDeployments.list, sql.connect.resolve, sql.instances.pointInTimeRestore
+- **compute** REST (37): compute.firewallPolicies.addAssociation, compute.firewallPolicies.addRule, compute.firewallPolicies.cloneRules, compute.firewallPolicies.delete, compute.firewallPolicies.get, compute.firewallPolicies.getAssociation, compute.firewallPolicies.getIamPolicy, compute.firewallPolicies.getRule, compute.firewallPolicies.insert, compute.firewallPolicies.list, compute.firewallPolicies.listAssociations, compute.firewallPolicies.move, compute.firewallPolicies.patch, compute.firewallPolicies.patchRule, compute.firewallPolicies.removeAssociation, compute.firewallPolicies.removeRule, compute.firewallPolicies.setIamPolicy, compute.firewallPolicies.testIamPermissions, compute.globalOrganizationOperations.delete, compute.globalOrganizationOperations.get, compute.globalOrganizationOperations.list, compute.organizationSecurityPolicies.addAssociation, compute.organizationSecurityPolicies.addRule, compute.organizationSecurityPolicies.copyRules, compute.organizationSecurityPolicies.delete, compute.organizationSecurityPolicies.get, compute.organizationSecurityPolicies.getAssociation, compute.organizationSecurityPolicies.getRule, compute.organizationSecurityPolicies.insert, compute.organizationSecurityPolicies.list, compute.organizationSecurityPolicies.listAssociations, compute.organizationSecurityPolicies.listPreconfiguredExpressionSets, compute.organizationSecurityPolicies.move, compute.organizationSecurityPolicies.patch, compute.organizationSecurityPolicies.patchRule, compute.organizationSecurityPolicies.removeAssociation, compute.organizationSecurityPolicies.removeRule
+- **container** REST (40): container.projects.aggregated.usableSubnetworks.list, container.projects.locations.clusters.checkAutopilotCompatibility, container.projects.locations.clusters.completeControlPlaneUpgrade, container.projects.locations.clusters.fetchClusterUpgradeInfo, container.projects.locations.clusters.getJwks, container.projects.locations.clusters.nodePools.completeUpgrade, container.projects.locations.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.locations.clusters.well-known.getOpenid-configuration, container.projects.zones.clusters.addons, container.projects.zones.clusters.completeControlPlaneUpgrade, container.projects.zones.clusters.completeIpRotation, container.projects.zones.clusters.create, container.projects.zones.clusters.delete, container.projects.zones.clusters.fetchClusterUpgradeInfo, container.projects.zones.clusters.get, container.projects.zones.clusters.legacyAbac, container.projects.zones.clusters.list, container.projects.zones.clusters.locations, container.projects.zones.clusters.logging, container.projects.zones.clusters.master, container.projects.zones.clusters.monitoring, container.projects.zones.clusters.nodePools.autoscaling, container.projects.zones.clusters.nodePools.create, container.projects.zones.clusters.nodePools.delete, container.projects.zones.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.zones.clusters.nodePools.get, container.projects.zones.clusters.nodePools.list, container.projects.zones.clusters.nodePools.rollback, container.projects.zones.clusters.nodePools.setManagement, container.projects.zones.clusters.nodePools.setSize, container.projects.zones.clusters.nodePools.update, container.projects.zones.clusters.resourceLabels, container.projects.zones.clusters.setMaintenancePolicy, container.projects.zones.clusters.setMasterAuth, container.projects.zones.clusters.setNetworkPolicy, container.projects.zones.clusters.startIpRotation, container.projects.zones.clusters.update, container.projects.zones.operations.cancel, container.projects.zones.operations.get, container.projects.zones.operations.list
+- **dataproc** REST (46): dataproc.projects.locations.autoscalingPolicies.create, dataproc.projects.locations.autoscalingPolicies.delete, dataproc.projects.locations.autoscalingPolicies.get, dataproc.projects.locations.autoscalingPolicies.getIamPolicy, dataproc.projects.locations.autoscalingPolicies.list, dataproc.projects.locations.autoscalingPolicies.setIamPolicy, dataproc.projects.locations.autoscalingPolicies.testIamPermissions, dataproc.projects.locations.autoscalingPolicies.update, dataproc.projects.locations.operations.cancel, dataproc.projects.locations.operations.delete, dataproc.projects.locations.operations.get, dataproc.projects.locations.operations.list, dataproc.projects.locations.workflowTemplates.create, dataproc.projects.locations.workflowTemplates.delete, dataproc.projects.locations.workflowTemplates.get, dataproc.projects.locations.workflowTemplates.getIamPolicy, dataproc.projects.locations.workflowTemplates.instantiate, dataproc.projects.locations.workflowTemplates.instantiateInline, dataproc.projects.locations.workflowTemplates.list, dataproc.projects.locations.workflowTemplates.setIamPolicy, dataproc.projects.locations.workflowTemplates.testIamPermissions, dataproc.projects.locations.workflowTemplates.update, dataproc.projects.regions.autoscalingPolicies.create, dataproc.projects.regions.autoscalingPolicies.delete, dataproc.projects.regions.autoscalingPolicies.get, dataproc.projects.regions.autoscalingPolicies.getIamPolicy, dataproc.projects.regions.autoscalingPolicies.list, dataproc.projects.regions.autoscalingPolicies.setIamPolicy, dataproc.projects.regions.autoscalingPolicies.testIamPermissions, dataproc.projects.regions.autoscalingPolicies.update, dataproc.projects.regions.clusters.getIamPolicy, dataproc.projects.regions.clusters.injectCredentials, dataproc.projects.regions.clusters.nodeGroups.create, dataproc.projects.regions.clusters.nodeGroups.repair, dataproc.projects.regions.clusters.nodeGroups.resize, dataproc.projects.regions.clusters.repair, dataproc.projects.regions.clusters.setIamPolicy, dataproc.projects.regions.clusters.testIamPermissions, dataproc.projects.regions.jobs.getIamPolicy, dataproc.projects.regions.jobs.setIamPolicy, dataproc.projects.regions.jobs.testIamPermissions, dataproc.projects.regions.operations.cancel, dataproc.projects.regions.operations.delete, dataproc.projects.regions.operations.getIamPolicy, dataproc.projects.regions.operations.setIamPolicy, dataproc.projects.regions.operations.testIamPermissions
+- **datastore** REST (10): datastore.projects.export, datastore.projects.import, datastore.projects.indexes.create, datastore.projects.indexes.delete, datastore.projects.indexes.get, datastore.projects.indexes.list, datastore.projects.operations.cancel, datastore.projects.operations.delete, datastore.projects.operations.get, datastore.projects.operations.list
+- **eventarc** REST (2): eventarc.projects.locations.get, eventarc.projects.locations.list
+- **firestore** REST (10): firestore.projects.databases.bulkDeleteDocuments, firestore.projects.databases.clone, firestore.projects.databases.documents.listen, firestore.projects.databases.documents.runAggregationQuery, firestore.projects.databases.documents.write, firestore.projects.databases.exportDocuments, firestore.projects.databases.importDocuments, firestore.projects.databases.restore, firestore.projects.locations.get, firestore.projects.locations.list
+- **iam** REST (115): iam.iamPolicies.lintPolicy, iam.iamPolicies.queryAuditableServices, iam.locations.workforcePools.create, iam.locations.workforcePools.delete, iam.locations.workforcePools.get, iam.locations.workforcePools.getIamPolicy, iam.locations.workforcePools.list, iam.locations.workforcePools.operations.get, iam.locations.workforcePools.patch, iam.locations.workforcePools.providers.create, iam.locations.workforcePools.providers.delete, iam.locations.workforcePools.providers.get, iam.locations.workforcePools.providers.keys.create, iam.locations.workforcePools.providers.keys.delete, iam.locations.workforcePools.providers.keys.get, iam.locations.workforcePools.providers.keys.list, iam.locations.workforcePools.providers.keys.operations.get, iam.locations.workforcePools.providers.keys.undelete, iam.locations.workforcePools.providers.list, iam.locations.workforcePools.providers.operations.get, iam.locations.workforcePools.providers.patch, iam.locations.workforcePools.providers.scimTenants.create, iam.locations.workforcePools.providers.scimTenants.delete, iam.locations.workforcePools.providers.scimTenants.get, iam.locations.workforcePools.providers.scimTenants.getIamPolicy, iam.locations.workforcePools.providers.scimTenants.list, iam.locations.workforcePools.providers.scimTenants.patch, iam.locations.workforcePools.providers.scimTenants.setIamPolicy, iam.locations.workforcePools.providers.scimTenants.testIamPermissions, iam.locations.workforcePools.providers.scimTenants.tokens.create, iam.locations.workforcePools.providers.scimTenants.tokens.delete, iam.locations.workforcePools.providers.scimTenants.tokens.get, iam.locations.workforcePools.providers.scimTenants.tokens.list, iam.locations.workforcePools.providers.scimTenants.tokens.patch, iam.locations.workforcePools.providers.scimTenants.undelete, iam.locations.workforcePools.providers.undelete, iam.locations.workforcePools.setIamPolicy, iam.locations.workforcePools.subjects.delete, iam.locations.workforcePools.subjects.operations.get, iam.locations.workforcePools.subjects.undelete, iam.locations.workforcePools.testIamPermissions, iam.locations.workforcePools.undelete, iam.organizations.roles.create, iam.organizations.roles.delete, iam.organizations.roles.get, iam.organizations.roles.list, iam.organizations.roles.patch, iam.organizations.roles.undelete, iam.permissions.queryTestablePermissions, iam.projects.locations.oauthClients.create, iam.projects.locations.oauthClients.credentials.create, iam.projects.locations.oauthClients.credentials.delete, iam.projects.locations.oauthClients.credentials.get, iam.projects.locations.oauthClients.credentials.list, iam.projects.locations.oauthClients.credentials.patch, iam.projects.locations.oauthClients.delete, iam.projects.locations.oauthClients.get, iam.projects.locations.oauthClients.list, iam.projects.locations.oauthClients.patch, iam.projects.locations.oauthClients.undelete, iam.projects.locations.workloadIdentityPools.addAttestationRule, iam.projects.locations.workloadIdentityPools.create, iam.projects.locations.workloadIdentityPools.delete, iam.projects.locations.workloadIdentityPools.get, iam.projects.locations.workloadIdentityPools.getIamPolicy, iam.projects.locations.workloadIdentityPools.list, iam.projects.locations.workloadIdentityPools.listAttestationRules, iam.projects.locations.workloadIdentityPools.namespaces.create, iam.projects.locations.workloadIdentityPools.namespaces.delete, iam.projects.locations.workloadIdentityPools.namespaces.get, iam.projects.locations.workloadIdentityPools.namespaces.list, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.addAttestationRule, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.create, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.delete, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.get, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.list, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.listAttestationRules, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.operations.get, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.patch, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.removeAttestationRule, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.setAttestationRules, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.undelete, iam.projects.locations.workloadIdentityPools.namespaces.managedIdentities.workloadSources.operations.get, iam.projects.locations.workloadIdentityPools.namespaces.operations.get, iam.projects.locations.workloadIdentityPools.namespaces.patch, iam.projects.locations.workloadIdentityPools.namespaces.undelete, iam.projects.locations.workloadIdentityPools.operations.get, iam.projects.locations.workloadIdentityPools.patch, iam.projects.locations.workloadIdentityPools.providers.create, iam.projects.locations.workloadIdentityPools.providers.delete, iam.projects.locations.workloadIdentityPools.providers.get, iam.projects.locations.workloadIdentityPools.providers.keys.create, iam.projects.locations.workloadIdentityPools.providers.keys.delete, iam.projects.locations.workloadIdentityPools.providers.keys.get, iam.projects.locations.workloadIdentityPools.providers.keys.list, iam.projects.locations.workloadIdentityPools.providers.keys.operations.get, iam.projects.locations.workloadIdentityPools.providers.keys.undelete, iam.projects.locations.workloadIdentityPools.providers.list, iam.projects.locations.workloadIdentityPools.providers.operations.get, iam.projects.locations.workloadIdentityPools.providers.patch, iam.projects.locations.workloadIdentityPools.providers.undelete, iam.projects.locations.workloadIdentityPools.removeAttestationRule, iam.projects.locations.workloadIdentityPools.setAttestationRules, iam.projects.locations.workloadIdentityPools.setIamPolicy, iam.projects.locations.workloadIdentityPools.testIamPermissions, iam.projects.locations.workloadIdentityPools.undelete, iam.projects.roles.create, iam.projects.roles.delete, iam.projects.roles.get, iam.projects.roles.list, iam.projects.roles.patch, iam.projects.roles.undelete, iam.roles.get, iam.roles.list, iam.roles.queryGrantableRoles
+- **iamcredentials** REST (3): iamcredentials.locations.workforcePools.getAllowedLocations, iamcredentials.projects.serviceAccounts.signBlob, iamcredentials.projects.serviceAccounts.signJwt
+- **kms** REST (45): cloudkms.folders.getAutokeyConfig, cloudkms.folders.getKajPolicyConfig, cloudkms.folders.showEffectiveAutokeyConfig, cloudkms.folders.updateAutokeyConfig, cloudkms.folders.updateKajPolicyConfig, cloudkms.organizations.getKajPolicyConfig, cloudkms.organizations.updateKajPolicyConfig, cloudkms.projects.getAutokeyConfig, cloudkms.projects.getKajPolicyConfig, cloudkms.projects.locations.ekmConfig.getIamPolicy, cloudkms.projects.locations.ekmConfig.setIamPolicy, cloudkms.projects.locations.ekmConfig.testIamPermissions, cloudkms.projects.locations.ekmConnections.create, cloudkms.projects.locations.ekmConnections.get, cloudkms.projects.locations.ekmConnections.getIamPolicy, cloudkms.projects.locations.ekmConnections.list, cloudkms.projects.locations.ekmConnections.patch, cloudkms.projects.locations.ekmConnections.setIamPolicy, cloudkms.projects.locations.ekmConnections.testIamPermissions, cloudkms.projects.locations.ekmConnections.verifyConnectivity, cloudkms.projects.locations.get, cloudkms.projects.locations.getEkmConfig, cloudkms.projects.locations.keyHandles.create, cloudkms.projects.locations.keyHandles.get, cloudkms.projects.locations.keyHandles.list, cloudkms.projects.locations.keyRings.delete, cloudkms.projects.locations.list, cloudkms.projects.locations.operations.get, cloudkms.projects.locations.retiredResources.get, cloudkms.projects.locations.retiredResources.list, cloudkms.projects.locations.singleTenantHsmInstances.create, cloudkms.projects.locations.singleTenantHsmInstances.get, cloudkms.projects.locations.singleTenantHsmInstances.list, cloudkms.projects.locations.singleTenantHsmInstances.proposals.approve, cloudkms.projects.locations.singleTenantHsmInstances.proposals.create, cloudkms.projects.locations.singleTenantHsmInstances.proposals.delete, cloudkms.projects.locations.singleTenantHsmInstances.proposals.execute, cloudkms.projects.locations.singleTenantHsmInstances.proposals.get, cloudkms.projects.locations.singleTenantHsmInstances.proposals.list, cloudkms.projects.locations.updateEkmConfig, cloudkms.projects.showEffectiveAutokeyConfig, cloudkms.projects.showEffectiveKeyAccessJustificationsEnrollmentConfig, cloudkms.projects.showEffectiveKeyAccessJustificationsPolicyConfig, cloudkms.projects.updateAutokeyConfig, cloudkms.projects.updateKajPolicyConfig
+- **logging** REST (49): logging.billingAccounts.locations.get, logging.billingAccounts.locations.list, logging.billingAccounts.locations.operations.cancel, logging.billingAccounts.locations.operations.get, logging.billingAccounts.locations.operations.list, logging.billingAccounts.locations.recentQueries.list, logging.billingAccounts.locations.savedQueries.create, logging.billingAccounts.locations.savedQueries.delete, logging.billingAccounts.locations.savedQueries.get, logging.billingAccounts.locations.savedQueries.list, logging.billingAccounts.locations.savedQueries.patch, logging.folders.locations.get, logging.folders.locations.list, logging.folders.locations.operations.cancel, logging.folders.locations.operations.get, logging.folders.locations.operations.list, logging.folders.locations.recentQueries.list, logging.folders.locations.savedQueries.create, logging.folders.locations.savedQueries.delete, logging.folders.locations.savedQueries.get, logging.folders.locations.savedQueries.list, logging.folders.locations.savedQueries.patch, logging.locations.get, logging.locations.list, logging.locations.operations.cancel, logging.locations.operations.get, logging.locations.operations.list, logging.organizations.locations.get, logging.organizations.locations.list, logging.organizations.locations.operations.cancel, logging.organizations.locations.operations.get, logging.organizations.locations.operations.list, logging.organizations.locations.recentQueries.list, logging.organizations.locations.savedQueries.create, logging.organizations.locations.savedQueries.delete, logging.organizations.locations.savedQueries.get, logging.organizations.locations.savedQueries.list, logging.organizations.locations.savedQueries.patch, logging.projects.locations.get, logging.projects.locations.list, logging.projects.locations.operations.cancel, logging.projects.locations.operations.get, logging.projects.locations.operations.list, logging.projects.locations.recentQueries.list, logging.projects.locations.savedQueries.create, logging.projects.locations.savedQueries.delete, logging.projects.locations.savedQueries.get, logging.projects.locations.savedQueries.list, logging.projects.locations.savedQueries.patch
+- **managedkafka** REST (66): managedkafka.projects.locations.connectClusters.connectors.create, managedkafka.projects.locations.connectClusters.connectors.delete, managedkafka.projects.locations.connectClusters.connectors.get, managedkafka.projects.locations.connectClusters.connectors.list, managedkafka.projects.locations.connectClusters.connectors.patch, managedkafka.projects.locations.connectClusters.connectors.pause, managedkafka.projects.locations.connectClusters.connectors.restart, managedkafka.projects.locations.connectClusters.connectors.resume, managedkafka.projects.locations.connectClusters.connectors.stop, managedkafka.projects.locations.connectClusters.create, managedkafka.projects.locations.connectClusters.delete, managedkafka.projects.locations.connectClusters.get, managedkafka.projects.locations.connectClusters.list, managedkafka.projects.locations.connectClusters.patch, managedkafka.projects.locations.get, managedkafka.projects.locations.list, managedkafka.projects.locations.operations.cancel, managedkafka.projects.locations.operations.delete, managedkafka.projects.locations.schemaRegistries.compatibility.checkCompatibility, managedkafka.projects.locations.schemaRegistries.config.delete, managedkafka.projects.locations.schemaRegistries.config.get, managedkafka.projects.locations.schemaRegistries.config.update, managedkafka.projects.locations.schemaRegistries.contexts.compatibility.checkCompatibility, managedkafka.projects.locations.schemaRegistries.contexts.config.delete, managedkafka.projects.locations.schemaRegistries.contexts.config.get, managedkafka.projects.locations.schemaRegistries.contexts.config.update, managedkafka.projects.locations.schemaRegistries.contexts.get, managedkafka.projects.locations.schemaRegistries.contexts.list, managedkafka.projects.locations.schemaRegistries.contexts.mode.delete, managedkafka.projects.locations.schemaRegistries.contexts.mode.get, managedkafka.projects.locations.schemaRegistries.contexts.mode.update, managedkafka.projects.locations.schemaRegistries.contexts.schemas.get, managedkafka.projects.locations.schemaRegistries.contexts.schemas.getSchema, managedkafka.projects.locations.schemaRegistries.contexts.schemas.subjects.list, managedkafka.projects.locations.schemaRegistries.contexts.schemas.types.list, managedkafka.projects.locations.schemaRegistries.contexts.schemas.versions.list, managedkafka.projects.locations.schemaRegistries.contexts.subjects.delete, managedkafka.projects.locations.schemaRegistries.contexts.subjects.list, managedkafka.projects.locations.schemaRegistries.contexts.subjects.lookupVersion, managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.create, managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.delete, managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.get, managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.getSchema, managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.list, managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.referencedby.list, managedkafka.projects.locations.schemaRegistries.create, managedkafka.projects.locations.schemaRegistries.delete, managedkafka.projects.locations.schemaRegistries.get, managedkafka.projects.locations.schemaRegistries.list, managedkafka.projects.locations.schemaRegistries.mode.delete, managedkafka.projects.locations.schemaRegistries.mode.get, managedkafka.projects.locations.schemaRegistries.mode.update, managedkafka.projects.locations.schemaRegistries.schemas.get, managedkafka.projects.locations.schemaRegistries.schemas.getSchema, managedkafka.projects.locations.schemaRegistries.schemas.subjects.list, managedkafka.projects.locations.schemaRegistries.schemas.types.list, managedkafka.projects.locations.schemaRegistries.schemas.versions.list, managedkafka.projects.locations.schemaRegistries.subjects.delete, managedkafka.projects.locations.schemaRegistries.subjects.list, managedkafka.projects.locations.schemaRegistries.subjects.lookupVersion, managedkafka.projects.locations.schemaRegistries.subjects.versions.create, managedkafka.projects.locations.schemaRegistries.subjects.versions.delete, managedkafka.projects.locations.schemaRegistries.subjects.versions.get, managedkafka.projects.locations.schemaRegistries.subjects.versions.getSchema, managedkafka.projects.locations.schemaRegistries.subjects.versions.list, managedkafka.projects.locations.schemaRegistries.subjects.versions.referencedby.list
+- **memorystore** REST (34): redis.projects.locations.aclPolicies.create, redis.projects.locations.aclPolicies.delete, redis.projects.locations.aclPolicies.get, redis.projects.locations.aclPolicies.list, redis.projects.locations.aclPolicies.patch, redis.projects.locations.aclPolicies.revisions.get, redis.projects.locations.aclPolicies.revisions.list, redis.projects.locations.backupCollections.backups.delete, redis.projects.locations.backupCollections.backups.export, redis.projects.locations.backupCollections.backups.get, redis.projects.locations.backupCollections.backups.list, redis.projects.locations.backupCollections.get, redis.projects.locations.backupCollections.list, redis.projects.locations.clusters.addTokenAuthUser, redis.projects.locations.clusters.backup, redis.projects.locations.clusters.create, redis.projects.locations.clusters.delete, redis.projects.locations.clusters.get, redis.projects.locations.clusters.getCertificateAuthority, redis.projects.locations.clusters.list, redis.projects.locations.clusters.patch, redis.projects.locations.clusters.rescheduleClusterMaintenance, redis.projects.locations.clusters.tokenAuthUsers.addAuthToken, redis.projects.locations.clusters.tokenAuthUsers.authTokens.delete, redis.projects.locations.clusters.tokenAuthUsers.authTokens.get, redis.projects.locations.clusters.tokenAuthUsers.authTokens.list, redis.projects.locations.clusters.tokenAuthUsers.delete, redis.projects.locations.clusters.tokenAuthUsers.get, redis.projects.locations.clusters.tokenAuthUsers.list, redis.projects.locations.getSharedRegionalCertificateAuthority, redis.projects.locations.operations.cancel, redis.projects.locations.operations.delete, redis.projects.locations.operations.get, redis.projects.locations.operations.list
+- **metastore** REST (11): metastore.projects.locations.get, metastore.projects.locations.list, metastore.projects.locations.operations.cancel, metastore.projects.locations.operations.delete, metastore.projects.locations.services.alterTableProperties, metastore.projects.locations.services.cancelMigration, metastore.projects.locations.services.completeMigration, metastore.projects.locations.services.migrationExecutions.delete, metastore.projects.locations.services.migrationExecutions.get, metastore.projects.locations.services.migrationExecutions.list, metastore.projects.locations.services.startMigration
+- **monitoring** REST (14): monitoring.locations.global.metricsScopes.get, monitoring.locations.global.metricsScopes.listMetricsScopesByMonitoredProject, monitoring.locations.global.metricsScopes.projects.create, monitoring.locations.global.metricsScopes.projects.delete, monitoring.operations.get, monitoring.organizations.timeSeries.list, monitoring.projects.location.prometheus.api.v1.label.values, monitoring.projects.location.prometheus.api.v1.labels, monitoring.projects.location.prometheus.api.v1.metadata.list, monitoring.projects.location.prometheus.api.v1.query, monitoring.projects.location.prometheus.api.v1.query_exemplars, monitoring.projects.location.prometheus.api.v1.query_range, monitoring.projects.location.prometheus.api.v1.series, monitoring.projects.timeSeries.query
+- **pubsub** REST (21): pubsub.projects.schemas.commit, pubsub.projects.schemas.create, pubsub.projects.schemas.delete, pubsub.projects.schemas.deleteRevision, pubsub.projects.schemas.get, pubsub.projects.schemas.getIamPolicy, pubsub.projects.schemas.list, pubsub.projects.schemas.listRevisions, pubsub.projects.schemas.rollback, pubsub.projects.schemas.setIamPolicy, pubsub.projects.schemas.testIamPermissions, pubsub.projects.schemas.validate, pubsub.projects.schemas.validateMessage, pubsub.projects.snapshots.create, pubsub.projects.snapshots.delete, pubsub.projects.snapshots.get, pubsub.projects.snapshots.getIamPolicy, pubsub.projects.snapshots.list, pubsub.projects.snapshots.patch, pubsub.projects.snapshots.setIamPolicy, pubsub.projects.snapshots.testIamPermissions
+- **resourcemanager** REST (29): cloudresourcemanager.folders.clearOrgPolicy, cloudresourcemanager.folders.getEffectiveOrgPolicy, cloudresourcemanager.folders.getOrgPolicy, cloudresourcemanager.folders.listAvailableOrgPolicyConstraints, cloudresourcemanager.folders.listOrgPolicies, cloudresourcemanager.folders.setOrgPolicy, cloudresourcemanager.liens.create, cloudresourcemanager.liens.delete, cloudresourcemanager.liens.get, cloudresourcemanager.liens.list, cloudresourcemanager.operations.get, cloudresourcemanager.organizations.clearOrgPolicy, cloudresourcemanager.organizations.get, cloudresourcemanager.organizations.getEffectiveOrgPolicy, cloudresourcemanager.organizations.getIamPolicy, cloudresourcemanager.organizations.getOrgPolicy, cloudresourcemanager.organizations.listAvailableOrgPolicyConstraints, cloudresourcemanager.organizations.listOrgPolicies, cloudresourcemanager.organizations.search, cloudresourcemanager.organizations.setIamPolicy, cloudresourcemanager.organizations.setOrgPolicy, cloudresourcemanager.organizations.testIamPermissions, cloudresourcemanager.projects.clearOrgPolicy, cloudresourcemanager.projects.getAncestry, cloudresourcemanager.projects.getEffectiveOrgPolicy, cloudresourcemanager.projects.getOrgPolicy, cloudresourcemanager.projects.listAvailableOrgPolicyConstraints, cloudresourcemanager.projects.listOrgPolicies, cloudresourcemanager.projects.setOrgPolicy
+- **run** REST (45): run.projects.locations.builds.submit, run.projects.locations.exportImage, run.projects.locations.exportImageMetadata, run.projects.locations.exportMetadata, run.projects.locations.exportProjectMetadata, run.projects.locations.instances.create, run.projects.locations.instances.delete, run.projects.locations.instances.get, run.projects.locations.instances.getIamPolicy, run.projects.locations.instances.list, run.projects.locations.instances.patch, run.projects.locations.instances.setIamPolicy, run.projects.locations.instances.start, run.projects.locations.instances.stop, run.projects.locations.instances.testIamPermissions, run.projects.locations.jobs.create, run.projects.locations.jobs.delete, run.projects.locations.jobs.executions.cancel, run.projects.locations.jobs.executions.delete, run.projects.locations.jobs.executions.exportStatus, run.projects.locations.jobs.executions.get, run.projects.locations.jobs.executions.list, run.projects.locations.jobs.executions.tasks.get, run.projects.locations.jobs.executions.tasks.list, run.projects.locations.jobs.get, run.projects.locations.jobs.getIamPolicy, run.projects.locations.jobs.list, run.projects.locations.jobs.patch, run.projects.locations.jobs.run, run.projects.locations.jobs.setIamPolicy, run.projects.locations.jobs.testIamPermissions, run.projects.locations.operations.wait, run.projects.locations.services.revisions.exportStatus, run.projects.locations.sourceUploads.upload, run.projects.locations.workerPools.create, run.projects.locations.workerPools.delete, run.projects.locations.workerPools.get, run.projects.locations.workerPools.getIamPolicy, run.projects.locations.workerPools.list, run.projects.locations.workerPools.patch, run.projects.locations.workerPools.revisions.delete, run.projects.locations.workerPools.revisions.get, run.projects.locations.workerPools.revisions.list, run.projects.locations.workerPools.setIamPolicy, run.projects.locations.workerPools.testIamPermissions
+- **scheduler** REST (8): cloudscheduler.projects.locations.get, cloudscheduler.projects.locations.getCmekConfig, cloudscheduler.projects.locations.list, cloudscheduler.projects.locations.operations.cancel, cloudscheduler.projects.locations.operations.delete, cloudscheduler.projects.locations.operations.get, cloudscheduler.projects.locations.operations.list, cloudscheduler.projects.locations.updateCmekConfig
+- **secretmanager** REST (2): secretmanager.projects.locations.get, secretmanager.projects.locations.list
+- **serviceusage** REST (4): serviceusage.operations.cancel, serviceusage.operations.delete, serviceusage.operations.get, serviceusage.operations.list
+- **storage** REST (49): storage.anywhereCaches.disable, storage.anywhereCaches.get, storage.anywhereCaches.insert, storage.anywhereCaches.list, storage.anywhereCaches.pause, storage.anywhereCaches.resume, storage.anywhereCaches.update, storage.bucketAccessControls.delete, storage.bucketAccessControls.get, storage.bucketAccessControls.patch, storage.bucketAccessControls.update, storage.buckets.operations.advanceRelocateBucket, storage.buckets.operations.cancel, storage.buckets.operations.get, storage.buckets.operations.list, storage.buckets.relocate, storage.buckets.restore, storage.channels.stop, storage.defaultObjectAccessControls.delete, storage.defaultObjectAccessControls.get, storage.defaultObjectAccessControls.insert, storage.defaultObjectAccessControls.list, storage.defaultObjectAccessControls.patch, storage.defaultObjectAccessControls.update, storage.folders.delete, storage.folders.deleteRecursive, storage.folders.get, storage.folders.insert, storage.folders.list, storage.folders.rename, storage.managedFolders.delete, storage.managedFolders.get, storage.managedFolders.getIamPolicy, storage.managedFolders.insert, storage.managedFolders.list, storage.managedFolders.setIamPolicy, storage.managedFolders.testIamPermissions, storage.managedFolders.update, storage.projects.hmacKeys.create, storage.projects.hmacKeys.delete, storage.projects.hmacKeys.get, storage.projects.hmacKeys.list, storage.projects.hmacKeys.update, storage.projects.serviceAccount.get, storage.rapidCaches.disable, storage.rapidCaches.get, storage.rapidCaches.insert, storage.rapidCaches.list, storage.rapidCaches.update
+- **tasks** REST (3): cloudtasks.projects.locations.get, cloudtasks.projects.locations.list, cloudtasks.projects.locations.operations.get
+- **workflowexecutions** REST (6): workflowexecutions.projects.locations.workflows.executions.callbacks.list, workflowexecutions.projects.locations.workflows.executions.deleteExecutionHistory, workflowexecutions.projects.locations.workflows.executions.exportData, workflowexecutions.projects.locations.workflows.executions.stepEntries.get, workflowexecutions.projects.locations.workflows.executions.stepEntries.list, workflowexecutions.projects.locations.workflows.triggerPubsubExecution
+- **workflows** REST (2): workflows.projects.locations.get, workflows.projects.locations.list
+
 ## bigquery
+
+_Coverage: REST **42 of 47** published methods served · 5 not served · 31 graded · 11 served-but-ungraded (`bigquery.v2` Discovery)_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
 _37 cell(s): ga=1 limited=33 preview=0 unsupported=3_
 
@@ -81,6 +215,10 @@ _37 cell(s): ga=1 limited=33 preview=0 unsupported=3_
 
 ## clouddns
 
+_Coverage: REST **40 of 40** published methods served · 17 graded · 23 served-but-ungraded (`dns.v1` Discovery)_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
+
 _18 cell(s): ga=0 limited=17 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
@@ -105,6 +243,10 @@ _18 cell(s): ga=0 limited=17 preview=0 unsupported=1_
 | CloudDNS.Unimplemented | rest | unsupported | no | explicit Unimplemented stub |
 
 ## cloudsql
+
+_Coverage: REST **69 of 80** published methods served · 11 not served · 23 graded · 46 served-but-ungraded (`sqladmin.v1` Discovery)_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
 _24 cell(s): ga=0 limited=23 preview=0 unsupported=1_
 
@@ -136,6 +278,10 @@ _24 cell(s): ga=0 limited=23 preview=0 unsupported=1_
 | CloudSQL.UsersUpdate | rest | limited | no | metadata-only over ResourceStore (no control plane) |
 
 ## compute
+
+_Coverage: REST **974 of 1011** published methods served · 37 not served · 32 graded · 942 served-but-ungraded (`compute.v1` Discovery)_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
 _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
@@ -176,6 +322,10 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 | Compute.ZonesList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 
 ## container
+
+_Coverage: REST **31 of 71** published methods served · 40 not served · 30 graded · 1 served-but-ungraded (`container.v1` Discovery)_
+
+_Coverage: GRPC **37 of 37** published methods served · 37 graded (`google.container.v1.ClusterManager` proto)_
 
 _67 cell(s): ga=60 limited=0 preview=0 unsupported=7_
 
@@ -251,6 +401,10 @@ _67 cell(s): ga=60 limited=0 preview=0 unsupported=7_
 
 ## dataproc
 
+_Coverage: REST **90 of 136** published methods served · 46 not served · 26 graded · 64 served-but-ungraded (`dataproc.v1` Discovery)_
+
+_Coverage: GRPC **36 of 36** published methods served · 22 graded · 14 served-but-ungraded (`google.cloud.dataproc.v1.BatchController, google.cloud.dataproc.v1.ClusterController, google.cloud.dataproc.v1.JobController, google.cloud.dataproc.v1.SessionController, google.cloud.dataproc.v1.SessionTemplateController, google.cloud.dataproc.v1.WorkflowTemplateService` proto)_
+
 _49 cell(s): ga=46 limited=0 preview=0 unsupported=3_
 
 | operation | transport | state | verified | reason |
@@ -307,6 +461,10 @@ _49 cell(s): ga=46 limited=0 preview=0 unsupported=3_
 
 ## datastore
 
+_Coverage: REST **8 of 18** published methods served · 10 not served · 8 graded (`datastore.v1` Discovery)_
+
+_Coverage: GRPC **8 of 8** published methods served · 8 graded (`google.datastore.v1.Datastore` proto)_
+
 _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -329,6 +487,10 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 | RunQuery | grpc | ga | yes | — |
 
 ## eventarc
+
+_Coverage: REST **64 of 66** published methods served · 2 not served · 64 graded (`eventarc.v1` Discovery)_
+
+_Coverage: GRPC **39 of 39** published methods served · 39 graded (`google.cloud.eventarc.v1.Eventarc` proto)_
 
 _103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 
@@ -440,6 +602,10 @@ _103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
+_Coverage: REST **50 of 60** published methods served · 10 not served · 49 graded · 1 served-but-ungraded (`firestore.v1` Discovery)_
+
+_Coverage: GRPC **17 of 17** published methods served · 17 graded (`google.firestore.v1.Firestore` proto)_
+
 _66 cell(s): ga=66 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -513,6 +679,10 @@ _66 cell(s): ga=66 limited=0 preview=0 unsupported=0_
 
 ## firestoreadmin
 
+_Coverage: REST: coverage unavailable — no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim_
+
+_Coverage: GRPC **32 of 32** published methods served · 32 graded (`google.firestore.admin.v1.FirestoreAdmin` proto)_
+
 _32 cell(s): ga=27 limited=0 preview=0 unsupported=5_
 
 | operation | transport | state | verified | reason |
@@ -551,6 +721,10 @@ _32 cell(s): ga=27 limited=0 preview=0 unsupported=5_
 | UpdateField | grpc | ga | yes | — |
 
 ## functions
+
+_Coverage: REST **22 of 22** published methods served · 22 graded (`cloudfunctions.v1` Discovery)_
+
+_Coverage: GRPC **12 of 12** published methods served · 12 graded (`google.cloud.functions.v1.CloudFunctionsService, google.cloud.functions.v2.FunctionService` proto)_
 
 _39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 
@@ -597,6 +771,10 @@ _39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 | UpdateFunction | grpc | ga | yes | — |
 
 ## iam
+
+_Coverage: REST **21 of 136** published methods served · 115 not served · 21 graded (`iam.v1` Discovery)_
+
+_Coverage: GRPC **31 of 31** published methods served · 31 graded (`google.iam.admin.v1.IAM, google.iam.v1.IAMPolicy` proto)_
 
 _52 cell(s): ga=25 limited=17 preview=0 unsupported=10_
 
@@ -657,6 +835,10 @@ _52 cell(s): ga=25 limited=17 preview=0 unsupported=10_
 
 ## iamcredentials
 
+_Coverage: REST **4 of 7** published methods served · 3 not served · 3 graded · 1 served-but-ungraded (`iamcredentials.v1` Discovery)_
+
+_Coverage: GRPC **4 of 4** published methods served · 4 graded (`google.iam.credentials.v1.IAMCredentials` proto)_
+
 _7 cell(s): ga=7 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -670,6 +852,10 @@ _7 cell(s): ga=7 limited=0 preview=0 unsupported=0_
 | SignJwt | grpc | ga | yes | — |
 
 ## iceberg
+
+_Coverage: REST: coverage unavailable — no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
 _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
@@ -691,6 +877,10 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 | Iceberg.UpdateNamespaceProperties | rest | preview | no | BigLake Iceberg REST catalog; no official Discovery document |
 
 ## kms
+
+_Coverage: REST **42 of 87** published methods served · 45 not served · 42 graded (`cloudkms.v1` Discovery)_
+
+_Coverage: GRPC **35 of 35** published methods served · 35 graded (`google.cloud.kms.v1.KeyManagementService` proto)_
 
 _77 cell(s): ga=77 limited=0 preview=0 unsupported=0_
 
@@ -775,6 +965,10 @@ _77 cell(s): ga=77 limited=0 preview=0 unsupported=0_
 | UpdateCryptoKeyVersion | grpc | ga | yes | — |
 
 ## logging
+
+_Coverage: REST **205 of 254** published methods served · 49 not served · 50 graded · 155 served-but-ungraded (`logging.v2` Discovery)_
+
+_Coverage: GRPC **43 of 43** published methods served · 43 graded (`google.logging.v2.ConfigServiceV2, google.logging.v2.LoggingServiceV2, google.logging.v2.MetricsServiceV2` proto)_
 
 _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 
@@ -876,6 +1070,10 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 
 ## managedkafka
 
+_Coverage: REST **23 of 89** published methods served · 66 not served · 23 graded (`managedkafka.v1` Discovery)_
+
+_Coverage: GRPC **21 of 21** published methods served · 21 graded (`google.cloud.managedkafka.v1.ManagedKafka` proto)_
+
 _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -927,6 +1125,10 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 ## memorystore
 
+_Coverage: REST **13 of 47** published methods served · 34 not served · 13 graded (`redis.v1` Discovery)_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
+
 _13 cell(s): ga=0 limited=13 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -946,6 +1148,10 @@ _13 cell(s): ga=0 limited=13 preview=0 unsupported=0_
 | Memorystore.UpgradeInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 
 ## metastore
+
+_Coverage: REST **37 of 48** published methods served · 11 not served · 37 graded (`metastore.v1` Discovery)_
+
+_Coverage: GRPC **23 of 23** published methods served · 23 graded (`google.cloud.metastore.v1.DataprocMetastore, google.cloud.metastore.v1.DataprocMetastoreFederation` proto)_
 
 _60 cell(s): ga=54 limited=0 preview=0 unsupported=6_
 
@@ -1013,6 +1219,10 @@ _60 cell(s): ga=54 limited=0 preview=0 unsupported=6_
 | UpdateService | grpc | ga | yes | — |
 
 ## monitoring
+
+_Coverage: REST **59 of 73** published methods served · 14 not served · 44 graded · 15 served-but-ungraded (`monitoring.v3` Discovery)_
+
+_Coverage: GRPC **40 of 40** published methods served · 40 graded (`google.monitoring.v3.AlertPolicyService, google.monitoring.v3.MetricService, google.monitoring.v3.NotificationChannelService, google.monitoring.v3.ServiceMonitoringService, google.monitoring.v3.UptimeCheckService` proto)_
 
 _84 cell(s): ga=73 limited=10 preview=0 unsupported=1_
 
@@ -1105,6 +1315,10 @@ _84 cell(s): ga=73 limited=10 preview=0 unsupported=1_
 
 ## operations
 
+_Coverage: REST: coverage unavailable — no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim_
+
+_Coverage: GRPC **5 of 5** published methods served · 5 graded (`google.longrunning.Operations` proto)_
+
 _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -1116,6 +1330,10 @@ _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 | WaitOperation | grpc | ga | yes | — |
 
 ## pubsub
+
+_Coverage: REST **25 of 46** published methods served · 21 not served · 23 graded · 2 served-but-ungraded (`pubsub.v1` Discovery)_
+
+_Coverage: GRPC **25 of 25** published methods served · 25 graded (`google.pubsub.v1.Publisher, google.pubsub.v1.Subscriber` proto)_
 
 _48 cell(s): ga=48 limited=0 preview=0 unsupported=0_
 
@@ -1172,6 +1390,10 @@ _48 cell(s): ga=48 limited=0 preview=0 unsupported=0_
 
 ## resourcemanager
 
+_Coverage: REST **9 of 38** published methods served · 29 not served · 9 graded (`cloudresourcemanager.v1` Discovery)_
+
+_Coverage: GRPC **11 of 11** published methods served · 11 graded (`google.cloud.resourcemanager.v3.Projects` proto)_
+
 _20 cell(s): ga=20 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -1198,6 +1420,10 @@ _20 cell(s): ga=20 limited=0 preview=0 unsupported=0_
 | UpdateProject | grpc | ga | yes | — |
 
 ## run
+
+_Coverage: REST **14 of 59** published methods served · 45 not served · 14 graded (`run.v2` Discovery)_
+
+_Coverage: GRPC **11 of 11** published methods served · 11 graded (`google.cloud.run.v2.Revisions, google.cloud.run.v2.Services` proto)_
 
 _28 cell(s): ga=28 limited=0 preview=0 unsupported=0_
 
@@ -1234,6 +1460,10 @@ _28 cell(s): ga=28 limited=0 preview=0 unsupported=0_
 
 ## scheduler
 
+_Coverage: REST **8 of 16** published methods served · 8 not served · 8 graded (`cloudscheduler.v1` Discovery)_
+
+_Coverage: GRPC **8 of 8** published methods served · 8 graded (`google.cloud.scheduler.v1.CloudScheduler` proto)_
+
 _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -1256,6 +1486,10 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 | UpdateJob | grpc | ga | yes | — |
 
 ## secretmanager
+
+_Coverage: REST **34 of 36** published methods served · 2 not served · 17 graded · 17 served-but-ungraded (`secretmanager.v1` Discovery)_
+
+_Coverage: GRPC **17 of 17** published methods served · 17 graded (`google.cloud.secretmanager.v1.SecretManagerService` proto)_
 
 _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 
@@ -1298,6 +1532,10 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 
 ## serviceusage
 
+_Coverage: REST **6 of 10** published methods served · 4 not served · 6 graded (`serviceusage.v1` Discovery)_
+
+_Coverage: GRPC **6 of 6** published methods served · 6 graded (`google.api.serviceusage.v1.ServiceUsage` proto)_
+
 _12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -1316,6 +1554,10 @@ _12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
 | ServiceUsage.ServicesList | rest | ga | yes | — |
 
 ## storage
+
+_Coverage: REST **38 of 87** published methods served · 49 not served · 30 graded · 8 served-but-ungraded (`storage.v1` Discovery)_
+
+_Coverage: GRPC **24 of 24** published methods served · 24 graded (`google.storage.v2.Storage` proto)_
 
 _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 
@@ -1381,6 +1623,10 @@ _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 
 ## tasks
 
+_Coverage: REST **21 of 24** published methods served · 3 not served · 21 graded (`cloudtasks.v2` Discovery)_
+
+_Coverage: GRPC **20 of 20** published methods served · 20 graded (`google.cloud.tasks.v2.CloudTasks` proto)_
+
 _41 cell(s): ga=41 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -1429,6 +1675,10 @@ _41 cell(s): ga=41 limited=0 preview=0 unsupported=0_
 
 ## workflowexecutions
 
+_Coverage: REST **4 of 10** published methods served · 6 not served · 4 graded (`workflowexecutions.v1` Discovery)_
+
+_Coverage: GRPC **4 of 4** published methods served · 4 graded (`google.cloud.workflows.executions.v1.Executions` proto)_
+
 _8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
@@ -1443,6 +1693,10 @@ _8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 | WorkflowExecution.ListExecutions | rest | ga | yes | — |
 
 ## workflows
+
+_Coverage: REST **9 of 11** published methods served · 2 not served · 9 graded (`workflows.v1` Discovery)_
+
+_Coverage: GRPC **6 of 6** published methods served · 6 graded (`google.cloud.workflows.v1.Workflows` proto)_
 
 _15 cell(s): ga=15 limited=0 preview=0 unsupported=0_
 
