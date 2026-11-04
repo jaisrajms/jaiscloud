@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/adapter"
+	restcloudbilling "jaiscloud/internal/gcp/transport/rest/cloudbilling"
 	restcontainer "jaiscloud/internal/gcp/transport/rest/container"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
@@ -189,6 +190,17 @@ var gcpServices = []ServiceDescriptor{
 		ServiceName:    "serviceusage",
 		ProviderPrefix: "ServiceUsage",
 		Codec:          func() adapter.Codec { return restserviceusage.NewCodec() },
+	},
+	{
+		// Cloud Billing v1 shares the /v1/ prefix; the project billing singleton
+		// (/v1/projects/{project}/billingInfo) is claimed by segment detection
+		// (detectV1Service) on the exact "billingInfo" segment, so it has no
+		// PathPrefixes. The codec lives with the REST transport package that
+		// adapts it to the shared core. REST only: no client in scope speaks
+		// google.cloud.billing.v1 over gRPC.
+		ServiceName:    "cloudbilling",
+		ProviderPrefix: "CloudBilling",
+		Codec:          func() adapter.Codec { return restcloudbilling.NewCodec() },
 	},
 	{
 		// Cloud Resource Manager v1 project surface shares /v1/ and is claimed

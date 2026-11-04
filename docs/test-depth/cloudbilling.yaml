@@ -1,0 +1,31 @@
+# Behavioural depth record - cloudbilling (TD1, recorded by CB3).
+#
+# p2-p5 are defined in docs/gcp/testability.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
+#
+# Scope note: only the project↔billing-account association
+# (projects.getBillingInfo / projects.updateBillingInfo), the empty
+# billingAccounts list and the permissive billingAccounts.testIamPermissions echo
+# exist. The billing-account catalog, sub-accounts and the SKU catalog are
+# deliberately not modelled (plan CB5), so no class here can exercise them.
+service: cloudbilling
+classes:
+  p2:
+    state: present
+    suites: [sdk-rest]
+    note: "two concurrent projects.updateBillingInfo calls on one project's billingInfo singleton under -race; both succeed and the following read is exactly one of the two written associations (no torn or merged record)"
+  p3:
+    state: present
+    suites: [sdk-rest]
+    note: "a billingAccountName outside the billingAccounts/{account} resource form is InvalidArgument 400 and is not stored (the read still reports the untouched default), and billingAccounts.get on any id is NotFound 404 — the emulator never fabricates an account"
+  p4:
+    state: present
+    suites: [sdk-rest]
+    note: "billingAccounts.list asserts the schema-valid empty answer and an empty nextPageToken even when the caller passes a pageSize: the catalog is always empty by design, so that is the entire paging surface (the Discovery list's pageToken/filter cannot select a non-existent account)"
+  p5:
+    state: present
+    suites: [sdk-rest]
+    note: "a project id at the 30-character maximum real GCP allows round-trips through updateBillingInfo and the following read with the name and projectId unaltered"

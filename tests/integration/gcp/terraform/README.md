@@ -28,6 +28,9 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
 - Service Usage (`/v1/projects/{project}/services`)
+- Cloud Billing — the `data "google_project"` `billing_account` read
+  (`projects.getBillingInfo`) and `google_project`'s `billing_account`
+  association round-trip (`projects.updateBillingInfo`)
 
 Deliberately **excluded** because it makes `apply` fail (and abort the run):
 
@@ -88,6 +91,68 @@ Against an already-running emulator:
 tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 ```
+
+## Pinned consumer-module gate
+
+`run.sh` drives a fixture *we* wrote, so it only proves the surface we already
+declared. `run-module.sh` (and `make test-gcp-terraform-pubsub`) drives a
+**third-party** module instead: the real consumer is the specification.
+
+The pinned consumer is
+[`terraform-google-modules/terraform-google-pubsub`](https://github.com/terraform-google-modules/terraform-google-pubsub)
+at commit **`6cf1860`** (2026-10-07, `google >= 6.2, < 9`). Its `main.tf` reads
+`data "google_project"` on every plan to build the default Pub/Sub service-agent
+e-mail (`service-${number}@gcp-sa-pubsub.iam.gserviceaccount.com`). That data
+source also exposes `billing_account`, so the read performs
+`GET /v1/projects/{p}/billingInfo` — the call that used to answer
+`404 UnknownService: cannot detect target GCP service` and made the module
+unusable. The gate proves that call now succeeds and that the module's whole
+lifecycle works against the emulator.
+
+Clone it once (this is the only step that needs the network):
+
+```bash
+git clone https://github.com/terraform-google-modules/terraform-google-pubsub \
+  "$HOME/.cache/terraform-modules/terraform-google-pubsub"
+git -C "$HOME/.cache/terraform-modules/terraform-google-pubsub" checkout 6cf1860
+make test-gcp-terraform-pubsub
+```
+
+`TF_MODULE_DIR` overrides the checkout location (default
+`$HOME/.cache/terraform-modules/terraform-google-pubsub`). The target is
+**opt-in** for two reasons: it needs that one-time clone (this repo never clones
+from the network in a gate), and it resolves the provider from the registry. It
+is still safe to invoke unconditionally — with no checkout or no `terraform` it
+prints `SKIP` and exits 0.
+
+Against an already-running emulator, with a checkout you control:
+
+```bash
+TF_MODULE_DIR=/path/to/terraform-google-pubsub \
+  tests/integration/gcp/terraform/run-module.sh http://localhost:8080 test-project
+```
+
+### What the module gate does
+
+The script generates a throwaway root module in a temp dir — a `provider
+"google"` block with the per-service custom endpoints the module touches
+(`pubsub`, `resource_manager`, `cloud_billing`, `iam`, `service_usage`, each
+with exactly one trailing slash) and a `module` block pointing at the local
+checkout with `project_id`, `topic` and one `pull_subscriptions` entry — then
+runs:
+
+1. `init` (provider from the registry)
+2. `plan` — must complete, which is what proves
+   `data.google_project` + `projects.getBillingInfo` work
+3. `apply`
+4. spot checks through the emulator's REST API: the topic, the pull
+   subscription (on that topic), and `projects/{p}/billingInfo` answering the
+   no-account default (`billingAccountName: ""`, `billingEnabled: false`)
+5. a second `plan -detailed-exitcode` — must report **no changes** (no
+   permadiff on the module's computed IAM member / topic / subscription)
+6. `destroy` (also on exit via a trap, so a failure still cleans up)
+
+It prints one `PASS`/`FAIL` line per step and exits non-zero on any failure.
 
 ## What it does
 

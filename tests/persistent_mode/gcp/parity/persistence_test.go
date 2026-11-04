@@ -895,6 +895,7 @@ var probedElsewhere = map[string]string{
 	"firestoreadmin":  "gRPC wire service (the REST control plane is served under the firestore service); its database/field/backup/user-creds state is the firestore provider's shared ResourceStore",
 	"serviceusage":    "service enable/disable state and operations live in the shared ResourceStore",
 	"resourcemanager": "project lifecycle state and operations live in the shared ResourceStore",
+	"cloudbilling":    "the project billing association lives in the shared ResourceStore",
 }
 
 // persistenceExemptions documents a wire service with no persisted resource

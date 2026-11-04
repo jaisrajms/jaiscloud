@@ -174,6 +174,47 @@ func TestDetectServiceMonitoringV1Dashboards(t *testing.T) {
 	}
 }
 
+// TestDetectServiceCloudBilling locks the Cloud Billing paths: the project
+// billingInfo singleton (GET/PUT) and the top-level billingAccounts collection
+// (list/get/testIamPermissions) resolve to "cloudbilling", while the neighbouring
+// project-last, resource-type and other /v1 collection paths keep their owners
+// (the billingInfo arm runs after the resource-manager guards, the
+// billingAccounts arm before the projects scan).
+func TestDetectServiceCloudBilling(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		r, _ := http.NewRequest(method, "/v1/projects/p/billingInfo", nil)
+		if svc, _ := DetectService(r); svc != "cloudbilling" {
+			t.Errorf("%s /v1/projects/p/billingInfo detected as %q, want cloudbilling", method, svc)
+		}
+	}
+	for _, tc := range []struct {
+		name, method, path, want string
+	}{
+		// The top-level billing-account collection and its custom methods.
+		{"billingAccounts list", http.MethodGet, "/v1/billingAccounts", "cloudbilling"},
+		{"billingAccounts get", http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X", "cloudbilling"},
+		{"billingAccounts testIamPermissions", http.MethodPost, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:testIamPermissions", "cloudbilling"},
+		{"billingAccounts unimplemented family", http.MethodPost, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:setIamPolicy", "cloudbilling"},
+		// The project itself and its custom methods keep resourcemanager.
+		{"bare project", http.MethodGet, "/v1/projects/p", "resourcemanager"},
+		{"project IAM", http.MethodPost, "/v1/projects/p:getIamPolicy", "resourcemanager"},
+		{"project update", http.MethodPut, "/v1/projects/p", "resourcemanager"},
+		// The resource-type switch keeps its own owners.
+		{"serviceusage", http.MethodGet, "/v1/projects/p/services", "serviceusage"},
+		{"pubsub", http.MethodGet, "/v1/projects/p/topics", "pubsub"},
+		// The singleton arm is segment-exact and case-sensitive.
+		{"lowercase is not the singleton", http.MethodGet, "/v1/projects/p/billinginfo", ""},
+		{"singleton has no child resource", http.MethodGet, "/v1/projects/p/billingInfo/extra", ""},
+		// The v2 billingAccounts scope belongs to Cloud Logging, not billing.
+		{"logging v2 billingAccounts scope", http.MethodGet, "/v2/billingAccounts/b/sinks", "logging"},
+	} {
+		r, _ := http.NewRequest(tc.method, tc.path, nil)
+		if svc, _ := DetectService(r); svc != tc.want {
+			t.Errorf("%s: %s %s detected as %q, want %q", tc.name, tc.method, tc.path, svc, tc.want)
+		}
+	}
+}
+
 // TestKnownServiceNamesIncludesGRPConly guards the transport-selection set: the
 // gRPC-only services must be present, otherwise a default "grpc" selection
 // would silently disable their gRPC surface.

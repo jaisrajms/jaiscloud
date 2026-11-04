@@ -43,6 +43,7 @@ internal/gcp/service/kms/service.go:reset-registration           # state is the 
 internal/gcp/service/logging/core.go:reset-registration          # state is the registered log-entry store + resource store
 internal/gcp/service/monitoring/service.go:reset-registration    # state is the registered monitoring store + resource store
 internal/gcp/service/serviceusage/service.go:reset-registration  # state is the registered resource store; operations settle lazily
+internal/gcp/service/cloudbilling/service.go:reset-registration  # state is the registered resource store (the billing association)
 internal/gcp/service/workflows/service.go:reset-registration     # state is the registered workflow store
 internal/gcp/service/workflowexecutions/service.go:reset-registration # state is the registered workflow store + engine
 internal/gcp/service/scheduler/engine.go:reset-registration      # Engine is owned by the registered scheduler Service, whose Reset clears it
