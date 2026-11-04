@@ -185,7 +185,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 		provisioned.SelfLink = ClusterName(project, location, provisioned.Name)
 	}
 	if err := s.store.CreateCluster(ctx, project, location, provisioned); err != nil {
-		return containerstore.Operation{}, mapStoreErr(err)
+		return containerstore.Operation{}, mapStoreErrNamed(ClusterName(project, location, provisioned.Name), err)
 	}
 
 	op := s.newOperation(project, location, containerstore.OperationCreateCluster,
@@ -201,7 +201,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 func (s *Service) GetCluster(ctx context.Context, project, location, name string) (containerstore.Cluster, error) {
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
-		return containerstore.Cluster{}, mapStoreErr(err)
+		return containerstore.Cluster{}, mapStoreErrNamed(ClusterName(project, location, name), err)
 	}
 	return WithReadDefaults(c), nil
 }
@@ -268,7 +268,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, name str
 	// concurrent-operation check only guards a cluster that exists.
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
-		return containerstore.Operation{}, mapStoreErr(err)
+		return containerstore.Operation{}, mapStoreErrNamed(ClusterName(project, location, name), err)
 	}
 	release, err := s.acquireOperation(ctx, project, location, ClusterName(project, location, name), "")
 	if err != nil {
@@ -293,7 +293,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, name str
 func (s *Service) GetOperation(ctx context.Context, project, location, name string) (containerstore.Operation, error) {
 	op, err := s.store.GetOperation(ctx, project, location, name)
 	if err != nil {
-		return containerstore.Operation{}, mapStoreErr(err)
+		return containerstore.Operation{}, mapStoreErrNamed(OperationName(project, location, name), err)
 	}
 	return s.settleOperation(op), nil
 }
@@ -361,16 +361,34 @@ func modelNotFound(msg string) error {
 	return model.NewProviderError("NotFound", msg, 404)
 }
 
-func mapStoreErr(err error) error {
+// modelNotFoundNamed is modelNotFound for a known resource, using real GKE's
+// "Not found: <resource name>." sentence.
+func modelNotFoundNamed(name string) error {
+	return model.NewProviderError("NotFound", "Not found: "+name+".", 404)
+}
+
+func mapStoreErr(err error) error { return mapStoreErrNamed("", err) }
+
+// mapStoreErrNamed maps a store sentinel to the GCP error real GKE answers. When
+// the canonical resource name is known it is included, matching real GKE's
+// "Not found: projects/…/clusters/…." / "Already exists: …." sentences
+// (captured for clusters.get in docs/gcp/gke-dataproc-p0-captures.md §3).
+func mapStoreErrNamed(name string, err error) error {
+	withName := func(prefix, fallback string) string {
+		if name == "" {
+			return fallback
+		}
+		return prefix + name + "."
+	}
 	switch {
 	case errors.Is(err, containerstore.ErrNoSuchCluster):
-		return model.NewProviderError("NotFound", "cluster not found", 404)
+		return model.NewProviderError("NotFound", withName("Not found: ", "cluster not found"), 404)
 	case errors.Is(err, containerstore.ErrNoSuchNodePool):
-		return model.NewProviderError("NotFound", "node pool not found", 404)
+		return model.NewProviderError("NotFound", withName("Not found: ", "node pool not found"), 404)
 	case errors.Is(err, containerstore.ErrNoSuchOperation):
-		return model.NewProviderError("NotFound", "operation not found", 404)
+		return model.NewProviderError("NotFound", withName("Not found: ", "operation not found"), 404)
 	case errors.Is(err, containerstore.ErrAlreadyExists):
-		return model.NewProviderError("AlreadyExists", "already exists", 409)
+		return model.NewProviderError("AlreadyExists", withName("Already exists: ", "already exists"), 409)
 	default:
 		return err
 	}

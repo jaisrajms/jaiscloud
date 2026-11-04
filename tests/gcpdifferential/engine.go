@@ -278,7 +278,11 @@ func RealTarget(project, projectNumber, suffix string, names ResourceNames, toke
 
 // EmulatorTarget builds a replay target for the local emulator. All services are
 // served from one origin, so the per-scenario path (which already carries the
-// service prefix) is appended unchanged.
+// service prefix) is appended unchanged — except GKE: `container` shares its
+// canonical /v1/projects/{p}/locations/{l}/clusters path with Managed Kafka on a
+// single origin, so replay uses the `/container/` path prefix Terraform and
+// gcloud send. Without it the GKE scenarios were replayed against Managed Kafka
+// and passed for the wrong reason (both empty lists look alike).
 func EmulatorTarget(endpoint, project, suffix string, names ResourceNames) *Target {
 	return &Target{
 		Name:          "emulator",
@@ -287,7 +291,10 @@ func EmulatorTarget(endpoint, project, suffix string, names ResourceNames) *Targ
 		Suffix:        suffix,
 		Names:         names,
 		HTTP:          &http.Client{Timeout: 60 * time.Second},
-		URLFor: func(_, path string) string {
+		URLFor: func(service, path string) string {
+			if service == "container" {
+				return endpoint + "/container" + path
+			}
 			return endpoint + path
 		},
 	}

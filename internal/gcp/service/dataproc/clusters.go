@@ -169,8 +169,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 			"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
 	}
 	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
+	// Real GCP distinguishes the GKE virtual-cluster create from the
+	// Compute-Engine one in the operation metadata: `CREATE_VIRTUAL_GKE` vs
+	// `CREATE`, and the first status is PENDING (captured 2026-11-03).
+	opType, opState := "CREATE", "RUNNING"
+	if gkeVCC != nil {
+		opType, opState = "CREATE_VIRTUAL_GKE", "PENDING"
+	}
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
-		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
+		clusterOperationMetadata(name, c.ClusterUUID, opType, opState))
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}

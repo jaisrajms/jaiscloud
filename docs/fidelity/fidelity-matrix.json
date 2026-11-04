@@ -1,12 +1,12 @@
 {
   "version": 1,
   "summary": {
-    "total": 1211,
+    "total": 1212,
     "by_state": {
       "ga": 1013,
       "limited": 146,
       "preview": 14,
-      "unsupported": 38
+      "unsupported": 39
     },
     "by_transport": {
       "grpc": {
@@ -18,7 +18,7 @@
         "ga": 563,
         "limited": 123,
         "preview": 14,
-        "unsupported": 10
+        "unsupported": 11
       }
     },
     "by_service": {
@@ -45,7 +45,7 @@
       },
       "dataproc": {
         "ga": 46,
-        "unsupported": 2
+        "unsupported": 3
       },
       "datastore": {
         "ga": 16
@@ -138,7 +138,7 @@
       },
       "unverified": {
         "grpc": 46,
-        "rest": 45
+        "rest": 46
       }
     },
     "grpc_only_services": [
@@ -2921,6 +2921,18 @@
         "discovery=dataproc.projects.regions.workflowTemplates.list",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.Serverless",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "whole Dataproc Serverless surface is an explicit 501/UNIMPLEMENTED stub (62 of 136 v1 methods)",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "verified=false (rest, no Discovery method)"
       ]
     },
     {

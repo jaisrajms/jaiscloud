@@ -197,6 +197,7 @@ dataproc,Dataproc.InstantiateWorkflowTemplate,rest,ga,true,
 dataproc,Dataproc.ListClusters,rest,ga,true,
 dataproc,Dataproc.ListJobs,rest,ga,true,
 dataproc,Dataproc.ListWorkflowTemplates,rest,ga,true,
+dataproc,Dataproc.Serverless,rest,unsupported,false,whole Dataproc Serverless surface is an explicit 501/UNIMPLEMENTED stub (62 of 136 v1 methods)
 dataproc,Dataproc.StartCluster,rest,ga,true,
 dataproc,Dataproc.StopCluster,rest,ga,true,
 dataproc,Dataproc.SubmitJob,rest,ga,true,"covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"

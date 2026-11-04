@@ -107,6 +107,16 @@ operations:
     operation: DiagnoseCluster
     state: unsupported
     reason: "explicit Unimplemented stub"
+  # Dataproc Serverless (Managed Spark) — the whole locations-scoped surface:
+  # BatchController, SessionController, SessionTemplateController and the
+  # sparkApplications methods. The REST codec recognises the paths so it can
+  # answer 501 Unimplemented naming the RPC (and the gRPC controllers are
+  # registered with UNIMPLEMENTED bodies), which is why an action exists at all;
+  # it is not implemented, so the cell is unsupported rather than limited.
+  - service: dataproc
+    operation: Dataproc.Serverless
+    state: unsupported
+    reason: "whole Dataproc Serverless surface is an explicit 501/UNIMPLEMENTED stub (62 of 136 v1 methods)"
   # Cloud Monitoring uptime checks (NF28). The configuration is a declarative
   # control plane: it validates against the Discovery schema, stores in the
   # shared resource store and echoes back verbatim over both transports

@@ -6,7 +6,7 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1211**
+Cells: **1212**
 
 ## Rollup
 
@@ -15,13 +15,13 @@ Cells: **1211**
 | ga | 1013 |
 | limited | 146 |
 | preview | 14 |
-| unsupported | 38 |
+| unsupported | 39 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 563 | 123 | 14 | 10 |
+| rest | 563 | 123 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 665 | 45 |
+| rest | 665 | 46 |
 | grpc | 455 | 46 |
 
 ## bigquery
@@ -251,7 +251,7 @@ _67 cell(s): ga=60 limited=0 preview=0 unsupported=7_
 
 ## dataproc
 
-_48 cell(s): ga=46 limited=0 preview=0 unsupported=2_
+_49 cell(s): ga=46 limited=0 preview=0 unsupported=3_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -274,6 +274,7 @@ _48 cell(s): ga=46 limited=0 preview=0 unsupported=2_
 | Dataproc.ListClusters | rest | ga | yes | — |
 | Dataproc.ListJobs | rest | ga | yes | — |
 | Dataproc.ListWorkflowTemplates | rest | ga | yes | — |
+| Dataproc.Serverless | rest | unsupported | no | whole Dataproc Serverless surface is an explicit 501/UNIMPLEMENTED stub (62 of 136 v1 methods) |
 | Dataproc.StartCluster | rest | ga | yes | — |
 | Dataproc.StopCluster | rest | ga | yes | — |
 | Dataproc.SubmitJob | rest | ga | yes | covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS) |
