@@ -8,6 +8,14 @@
 # a targeted destroy that proves the virtual cluster goes before the GKE
 # cluster -> full destroy -> "nothing is left".
 #
+# Two shapes run through the same gate. By default the buckets live in the
+# cluster's project. When STORAGE_PROJECT names a second project the gate turns
+# on its cross-project assertions (DGD8): the buckets are listed under the owner
+# only, resolve by global name from either project context, receive the job's
+# driver output, and are gone from both projects after the destroy. That shape
+# is what run-cross-project.sh runs; a manual run is the same command with
+# -var storage_project=<owner>.
+#
 # Deliberately Terraform-only. The demo's other legs are the Java submitter
 # (../java/, DGD3) and a Helm installer (DGD4); neither is exercised here. This
 # gate answers one question: does the module the demo ships still create the
@@ -38,8 +46,15 @@
 #     ENDPOINT  base URL of jaiscloud-gcp REST (default: http://localhost:8080)
 #
 # Env:
-#   TF_BIN    terraform binary to use (default: terraform)
-#   PROJECT   project id (default: dpgke-demo, the module's own default)
+#   TF_BIN           terraform binary to use (default: terraform)
+#   PROJECT          project id (default: dpgke-demo, the module's own default)
+#   STORAGE_PROJECT  project that owns the three buckets (default: none, which
+#                    leaves the module's default — PROJECT). Set it to a second
+#                    project to run the cross-project shape.
+#   DPGKE_WORKSPACE  run the shape in a named Terraform workspace instead of the
+#                    default one, so its state is independent of another shape's
+#                    (default: none). The workspace is deleted on a clean
+#                    teardown and kept when state is left for inspection.
 
 set -euo pipefail
 
@@ -49,6 +64,10 @@ TF="${TF_BIN:-terraform}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"
 PROJECT="${PROJECT:-dpgke-demo}"
+# Empty means the module's default (local.storage_project = var.project): the
+# single-project shape. A value switches on the cross-project assertions below.
+STORAGE_PROJECT="${STORAGE_PROJECT:-}"
+WORKSPACE="${DPGKE_WORKSPACE:-}"
 PLAN="$DIR/dpgke.tfplan"
 LOG="${TMPDIR:-/tmp}/jaiscloud-gcp-dpgke-terraform.log"
 
@@ -142,6 +161,45 @@ check_prefix() {
 
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
+# ensure_project PROJECT — create the bucket-owning project, because real GCP
+# refuses a bucket in a project that does not exist and this module cannot
+# create one: google_project reads Cloud Billing, which the provider cannot
+# reach here (provider.tf only sets resource_manager_custom_endpoint for the
+# lookup google_project_service does). The gate uses the same Cloud Resource
+# Manager v1 API the provider talks to — `POST /v1/projects`, the call
+# `gcloud projects create` makes — rather than faking a project record.
+#
+# Idempotent across gate runs: a project an earlier run created answers 409
+# AlreadyExists, and one that was left DELETE_REQUESTED is undeleted (real GCP
+# keeps a deleted project restorable for 30 days; the emulator models the same
+# state, so the gate restores it instead of creating a second project).
+#
+# The ACTIVE read alone would not prove the create: the emulator synthesizes an
+# ACTIVE project for any id the wire sees. The projects.list check is the real
+# one — a merely synthesized id is not listed, a created one is.
+ensure_project() {
+  local p="$1" code body
+  body="$(printf '{"projectId":"%s","name":"%s"}' "$p" "$p")"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    -H 'Content-Type: application/json' \
+    --data "$body" "$ENDPOINT/v1/projects" 2>/dev/null || true)"
+  if [[ "$code" != "200" && "$code" != "409" ]]; then
+    printf '  [FAIL] create owner project %s (HTTP %s)\n' "$p" "$code"
+    FAIL=$((FAIL + 1))
+    return 0
+  fi
+  if curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    "$ENDPOINT/v1/projects/$p" 2>/dev/null | grep -q '"lifecycleState":"DELETE_REQUESTED"'; then
+    curl -s -o /dev/null -X POST -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+      "$ENDPOINT/v1/projects/$p:undelete" 2>/dev/null || true
+  fi
+  check "owner project $p exists and is ACTIVE" \
+    "$ENDPOINT/v1/projects/$p" '"lifecycleState":"ACTIVE"'
+  check "owner project $p was created (listed in projects.list, not merely synthesized)" \
+    "$ENDPOINT/v1/projects" "\"projectId\":\"$p\""
+}
+
 # out NAME — a string output, empty when the output is missing.
 out() { tf output -raw "$1" 2>/dev/null || true; }
 
@@ -186,6 +244,14 @@ clean_artifacts() {
   # Keep the init cache (.terraform + lock) always, and keep state unless this run
   # destroyed everything: a failed run's state is what lets the next step clean up.
   if [[ "$DESTROYED" == "1" && -z "$(tf state list 2>/dev/null || true)" ]]; then
+    # A named workspace is this gate's scratch space: once its state is empty,
+    # switch back to the default and delete it, so a re-run starts clean and
+    # nothing accumulates under terraform.tfstate.d/. A workspace that still
+    # holds state is kept, exactly like a default-workspace state file.
+    if [[ -n "$WORKSPACE" ]]; then
+      tf workspace select default >/dev/null 2>&1 || true
+      tf workspace delete "$WORKSPACE" >/dev/null 2>&1 || true
+    fi
     rm -f "${DIR:?}/terraform.tfstate" "${DIR:?}/terraform.tfstate.backup"
   fi
 }
@@ -293,10 +359,32 @@ if [[ -z "${TF_PLUGIN_CACHE_DIR:-}" && -d "$HOME/.terraform.d/plugin-cache" ]]; 
 fi
 
 TF_VARS=(-var="endpoint=$ENDPOINT" -var="project=$PROJECT" -var="container_endpoint=$CONTAINER_ENDPOINT")
+# A second bucket project is opt-in. Passing it explicitly (rather than relying
+# on the module default) is what makes the gate's claim "these buckets are owned
+# by another project" true of the run rather than of the variables file.
+CROSS=0
+if [[ -n "$STORAGE_PROJECT" && "$STORAGE_PROJECT" != "$PROJECT" ]]; then
+  CROSS=1
+  TF_VARS+=(-var="storage_project=$STORAGE_PROJECT")
+fi
 
-echo "== $TF: init / validate / plan / apply (endpoint=$ENDPOINT project=$PROJECT)"
+echo "== $TF: init / validate / plan / apply (endpoint=$ENDPOINT project=$PROJECT${STORAGE_PROJECT:+ storage_project=$STORAGE_PROJECT})"
 tf init -input=false -no-color >/dev/null
+# A named workspace gives this shape its own state file, so the single-project
+# and cross-project runs can be torn down independently and a failed one does
+# not present the other with state it never created.
+if [[ -n "$WORKSPACE" ]]; then
+  tf workspace select -or-create "$WORKSPACE" >/dev/null
+fi
 tf validate -no-color >/dev/null
+
+# Real GCP needs the bucket-owning project to exist. Create it here rather than
+# documenting an assumption the gate cannot check.
+if [[ "$CROSS" == "1" ]]; then
+  echo "== cross-project: ensure the bucket-owning project exists"
+  ensure_project "$STORAGE_PROJECT"
+fi
+
 tf plan -input=false -no-color -out="$PLAN" "${TF_VARS[@]}" >/dev/null
 tf apply -input=false -auto-approve -no-color "$PLAN" >/dev/null
 
@@ -324,7 +412,11 @@ GKE_CLUSTER="$(out gke_cluster_name)"
 DP_CLUSTER="$(out dataproc_cluster_name)"
 REGION="$(out region)"
 GKE_LOCATION="$(out gke_location)"
-STORAGE_PROJECT="$(out storage_project)"
+# OWNER is the module's resolved storage project (an output, not the env
+# variable): the assertions below must describe what Terraform actually created,
+# so a module that ignored storage_project would fail them instead of passing
+# against the variable the gate set.
+OWNER="$(out storage_project)"
 SA_EMAIL="$(out service_account_email)"
 BUCKET_INPUT="$(bucket input)"
 BUCKET_OUTPUT="$(bucket output)"
@@ -394,8 +486,9 @@ done
 
 # ── Buckets: input / output / staging ────────────────────────────────────────
 # The three buckets live in local.storage_project, which defaults to the cluster
-# project; the listing is checked against that project, not blindly against
-# $PROJECT, so the cross-project shape is exercised when it is set.
+# project; the listing is checked against that project (the module's own
+# storage_project output), not blindly against $PROJECT, so the cross-project
+# shape is exercised when it is set.
 for b in "$BUCKET_INPUT" "$BUCKET_OUTPUT" "$BUCKET_STAGING"; do
   check "GCS bucket $b exists" "$ENDPOINT/storage/v1/b/$b" "\"name\":\"$b\""
   # DGD10: the bucket read reports the uniform bucket-level access the module
@@ -405,9 +498,52 @@ for b in "$BUCKET_INPUT" "$BUCKET_OUTPUT" "$BUCKET_STAGING"; do
     '"uniformBucketLevelAccess":{"enabled":true}' \
     '"bucketPolicyOnly":{"enabled":true}'
 done
-check "bucket listing for project $STORAGE_PROJECT contains all three" \
-  "$ENDPOINT/storage/v1/b?project=$STORAGE_PROJECT" \
+check "bucket listing for project $OWNER contains all three" \
+  "$ENDPOINT/storage/v1/b?project=$OWNER" \
   "\"name\":\"$BUCKET_INPUT\"" "\"name\":\"$BUCKET_OUTPUT\"" "\"name\":\"$BUCKET_STAGING\""
+
+# ── Cross-project buckets (DGD8) ─────────────────────────────────────────────
+# The shape customers run: the GKE cluster, the virtual cluster and the job live
+# in $PROJECT, the buckets belong to $OWNER. Nothing in the repo pinned the
+# invariants before this block, and each one is a way that shape could break:
+#
+#   * a per-project bucket namespace would keep a "shadow" copy in the runner
+#     project — GCS buckets are a global name namespace, so the runner's listing
+#     must be empty;
+#   * `buckets.get` takes no project (the name is global), so the same bucket
+#     must resolve from either project context. The emulator carries the context
+#     in ?project= (the same parameter buckets.list uses), which is the exact
+#     request asserted below;
+#   * the driver output must land in the *owner's* staging bucket, not a bucket
+#     the runner created for it;
+#   * object bytes are stored inside the bucket, so reading the staged object by
+#     name from the runner's context must return the job's own log — and the
+#     runner has no bucket that could hold a second copy.
+#
+# Skipped when the two projects are the same: every assertion is then vacuous,
+# and the single-project gate above already covers the resource itself.
+if [[ "$CROSS" == "1" ]]; then
+  echo "== cross-project: buckets owned by $OWNER, cluster and job in $PROJECT"
+  check_value "module placed the buckets in the requested project" "$OWNER" "$STORAGE_PROJECT"
+
+  # Listing, both directions. The runner's listing is asserted two ways: it must
+  # not contain these three names (a shadow copy), and it must contain no bucket
+  # at all (a shadow under any name would still be a bucket the runner created).
+  check_absent "runner project $PROJECT does not list the owner's buckets" \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" \
+    "\"name\":\"$BUCKET_INPUT\"" "\"name\":\"$BUCKET_OUTPUT\"" "\"name\":\"$BUCKET_STAGING\""
+  check_absent "runner project $PROJECT lists no buckets (no shadow bucket)" \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" '"name":"'
+
+  # buckets.get by global name, from each project context. The bucket has no
+  # project in its address, so a 200 here is the same bucket, not two copies.
+  for b in "$BUCKET_INPUT" "$BUCKET_OUTPUT" "$BUCKET_STAGING"; do
+    check "GET /storage/v1/b/$b?project=$PROJECT resolves the owner's bucket from the runner context" \
+      "$ENDPOINT/storage/v1/b/$b?project=$PROJECT" "\"name\":\"$b\""
+    check "GET /storage/v1/b/$b?project=$OWNER resolves it from the owner context" \
+      "$ENDPOINT/storage/v1/b/$b?project=$OWNER" "\"name\":\"$b\""
+  done
+fi
 
 # ── Service account ──────────────────────────────────────────────────────────
 check "job service account exists" \
@@ -480,6 +616,32 @@ check "driver output object exists in the staging bucket" \
   "$(object_url "$BUCKET_STAGING" "$DRIVER_KEY.000000000")" \
   "\"name\":\"$DRIVER_KEY.000000000\""
 
+# Cross-project driver output (DGD8). The URI naming the staging bucket is not
+# enough on its own: that bucket has to be the *owner's*, and the object has to
+# resolve by name — the driver output is written by the job's staging path with
+# the runner project as its context, which is exactly the write that could
+# silently create a bucket in the wrong project or lose the bytes.
+#
+# In mock mode the bytes are the emulator's synthetic terminal log (see the
+# comment above), and they are the only job-written object there is; Spark
+# output is asserted absent below and belongs to DGD6's k3d gate. The control
+# file the same path writes is not asserted separately — same bucket, same write
+# path, no extra invariant.
+if [[ "$CROSS" == "1" ]]; then
+  check "staging bucket $BUCKET_STAGING (the driver output target) is owned by $OWNER" \
+    "$ENDPOINT/storage/v1/b?project=$OWNER" "\"name\":\"$BUCKET_STAGING\""
+  # GET /storage/v1/b/<staging>/o/<driverOutputResourceUri>.000000000?alt=media&project=<runner>
+  check "driver output bytes resolve by name in the owner's bucket (read from the runner context)" \
+    "$(object_url "$BUCKET_STAGING" "$DRIVER_KEY.000000000")?alt=media&project=$PROJECT" \
+    "job $JOB_ID finished with state DONE"
+  # The seed object is the Terraform leg's write into the owner's bucket, so this
+  # is a second, independent object whose bytes must land there and be readable
+  # from the runner's context.
+  check "seed input bytes resolve by name in the owner's input bucket" \
+    "$(object_url "$BUCKET_INPUT" input/words.txt)?alt=media&project=$PROJECT" \
+    "the quick brown fox jumps over the lazy dog"
+fi
+
 # Honesty check: mock mode never starts the driver, so the output bucket must be
 # empty. If this ever changes, the gate should be updated deliberately (DGD6
 # asserts real output), not silently start claiming Spark ran here.
@@ -544,6 +706,16 @@ done
 for b in "$BUCKET_INPUT" "$BUCKET_OUTPUT" "$BUCKET_STAGING"; do
   check_status "GCS bucket $b is gone (404)" "$ENDPOINT/storage/v1/b/$b" 404
 done
+# Cross-project teardown (DGD8): "nothing is left" has to hold in both projects,
+# and a bucket is the only thing this module puts in the owner. The runner is
+# checked as a listing too, not just by the three names above, so a shadow
+# bucket left by the job's staging path would survive this gate.
+if [[ "$CROSS" == "1" ]]; then
+  check_absent "runner project $PROJECT bucket listing is empty after the destroy" \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" '"name":"'
+  check_absent "owner project $OWNER bucket listing is empty after the destroy" \
+    "$ENDPOINT/storage/v1/b?project=$OWNER" '"name":"'
+fi
 
 echo "== summary: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
