@@ -174,6 +174,38 @@ func TestDetectServiceMonitoringV1Dashboards(t *testing.T) {
 	}
 }
 
+// TestDetectServiceCloudBilling locks the Cloud Billing project billing
+// singleton: GET and PUT /v1/projects/{p}/billingInfo resolve to "cloudbilling"
+// while the neighbouring project-last and resource-type paths keep their owners
+// (the billingInfo arm runs after the resource-manager guards).
+func TestDetectServiceCloudBilling(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		r, _ := http.NewRequest(method, "/v1/projects/p/billingInfo", nil)
+		if svc, _ := DetectService(r); svc != "cloudbilling" {
+			t.Errorf("%s /v1/projects/p/billingInfo detected as %q, want cloudbilling", method, svc)
+		}
+	}
+	for _, tc := range []struct {
+		name, method, path, want string
+	}{
+		// The project itself and its custom methods keep resourcemanager.
+		{"bare project", http.MethodGet, "/v1/projects/p", "resourcemanager"},
+		{"project IAM", http.MethodPost, "/v1/projects/p:getIamPolicy", "resourcemanager"},
+		{"project update", http.MethodPut, "/v1/projects/p", "resourcemanager"},
+		// The resource-type switch keeps its own owners.
+		{"serviceusage", http.MethodGet, "/v1/projects/p/services", "serviceusage"},
+		{"pubsub", http.MethodGet, "/v1/projects/p/topics", "pubsub"},
+		// The arm is segment-exact and case-sensitive.
+		{"lowercase is not the singleton", http.MethodGet, "/v1/projects/p/billinginfo", ""},
+		{"singleton has no child resource", http.MethodGet, "/v1/projects/p/billingInfo/extra", ""},
+	} {
+		r, _ := http.NewRequest(tc.method, tc.path, nil)
+		if svc, _ := DetectService(r); svc != tc.want {
+			t.Errorf("%s: %s %s detected as %q, want %q", tc.name, tc.method, tc.path, svc, tc.want)
+		}
+	}
+}
+
 // TestKnownServiceNamesIncludesGRPConly guards the transport-selection set: the
 // gRPC-only services must be present, otherwise a default "grpc" selection
 // would silently disable their gRPC surface.

@@ -901,6 +901,7 @@ var probedElsewhere = map[string]string{
 // state of its own to round-trip.
 var persistenceExemptions = map[string]string{
 	"iamcredentials": "token-only surface (generateAccessToken/generateIdToken) with no resource lifecycle",
+	"cloudbilling":   "read-only surface: projects.getBillingInfo reads the project billing association from the shared ResourceStore but serves no REST write to seed a round-trip (updateBillingInfo replaces this exemption with a probe once it lands)",
 }
 
 // wireAlias maps a wire service name to the probe/fidelity name used in the

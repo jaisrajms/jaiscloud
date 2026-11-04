@@ -255,6 +255,17 @@ func detectV1Service(path string) string {
 		return ""
 	}
 	rest := seg[pi+2:]
+	// Cloud Billing v1: /v1/projects/{project}/billingInfo is the project's
+	// billing-association singleton (cloudbilling.projects.getBillingInfo). It
+	// has no trailing resource id — "billingInfo" is the resource — so it is
+	// claimed on the exact segment, and the match is case-sensitive (capital
+	// "I"), as the Discovery document declares it. This runs after the
+	// resource-manager project-last guards above, so /v1/projects/{project} and
+	// its ':' custom methods keep their owner, and before the generic
+	// resource-type switch, which has no billingInfo arm.
+	if len(rest) == 1 && rest[0] == "billingInfo" {
+		return "cloudbilling"
+	}
 	// Capture and strip a trailing custom-method suffix (":commit", ":runQuery",
 	// ...) from the last segment so "documents:commit" detects as "documents"
 	// (mirrors the JSONCodec.Decode custom-method handling).

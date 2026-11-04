@@ -86,6 +86,15 @@ func TestRoutingMatrixAdversarial(t *testing.T) {
 		{"serviceusage services", "", http.MethodGet, "/v1/projects/p/services", "serviceusage", SourcePath},
 		{"metastore services", "", http.MethodGet, "/v1/projects/p/locations/l/services", "metastore", SourcePath},
 
+		// --- Cloud Billing singleton vs the resource-manager guards -------
+		{"cloudbilling billingInfo", "", http.MethodGet, "/v1/projects/p/billingInfo", "cloudbilling", SourcePath},
+		{"cloudbilling billingInfo update", "", http.MethodPut, "/v1/projects/p/billingInfo", "cloudbilling", SourcePath},
+		// The project-last guards run first, so the project itself and its
+		// custom verbs stay with resourcemanager.
+		{"cloudbilling neighbour bare project", "", http.MethodGet, "/v1/projects/p", "resourcemanager", SourcePath},
+		{"cloudbilling neighbour project IAM", "", http.MethodPost, "/v1/projects/p:getIamPolicy", "resourcemanager", SourcePath},
+		{"cloudbilling neighbour services", "", http.MethodGet, "/v1/projects/p/services", "serviceusage", SourcePath},
+
 		// --- raw GCS media fallback vs unknown ----------------------------
 		// A two-segment GET/PUT/HEAD path is the raw XML object form.
 		{"raw media GET is storage", "localhost:8080", http.MethodGet, "/bucket/object.txt", "storage", SourcePath},

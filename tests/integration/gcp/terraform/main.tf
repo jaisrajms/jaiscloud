@@ -361,6 +361,17 @@ resource "google_dataproc_cluster" "gce" {
   }
 }
 
+# ── Cloud Billing: the aggregate data "google_project" read ──────────────────
+# The data source always reads projects.getBillingInfo (to populate
+# `billing_account`) alongside the Resource Manager project lookup. Before CB1
+# that call was unrouted and every data "google_project" read failed with
+# UnknownService, which is what blocked the terraform-google-pubsub module's
+# default service-agent email. The emulator models only the project↔account
+# association, so an unlinked project reads back an empty billing_account.
+data "google_project" "compat" {
+  project_id = var.project
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -440,6 +451,10 @@ output "bigquery_routine_id" {
 
 output "bigquery_row_access_policy_id" {
   value = google_bigquery_row_access_policy.compat.policy_id
+}
+
+output "billing_account" {
+  value = data.google_project.compat.billing_account
 }
 
 # ── BigQuery: dataset-scoped routine + table-scoped row access policy (NF31) ──

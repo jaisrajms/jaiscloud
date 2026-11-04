@@ -161,6 +161,7 @@ BQ_DATASET="$(out bigquery_dataset_id)"
 BQ_TABLE="$(out bigquery_table_id)"
 BQ_ROUTINE="$(out bigquery_routine_id)"
 BQ_POLICY="$(out bigquery_row_access_policy_id)"
+BILLING_ACCOUNT="$(out billing_account)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -216,6 +217,21 @@ check "Secret Manager IAM accessor grant" \
   'roles/secretmanager.secretAccessor'
 check "CRM project lookup reports ACTIVE" \
   "$ENDPOINT/v1/projects/$PROJECT" '"lifecycleState":"ACTIVE"'
+# Cloud Billing: data "google_project" reads projects.getBillingInfo to populate
+# billing_account. The emulator models only the association, so the four-field
+# default (no account, billing disabled) is what both the wire and the data
+# source must report — before CB1 this path was an UnknownService 404.
+check "Cloud Billing billingInfo reads the no-account default" \
+  "$ENDPOINT/v1/projects/$PROJECT/billingInfo" \
+  "\"name\":\"projects/$PROJECT/billingInfo\"" \
+  '"billingAccountName":""' '"billingEnabled":false'
+if [[ -z "$BILLING_ACCOUNT" ]]; then
+  printf '  [PASS] data.google_project billing_account is empty\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] data.google_project billing_account = %q, want empty (no billing catalog)\n' "$BILLING_ACCOUNT"
+  FAIL=$((FAIL + 1))
+fi
 check_post "Project IAM grant present" \
   "$ENDPOINT/v1/projects/$PROJECT:getIamPolicy" \
   'roles/pubsub.publisher' 'jaiscloud-tf-sa@'

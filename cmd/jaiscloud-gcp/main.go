@@ -57,6 +57,7 @@ import (
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/gcp/runexec"
 	"jaiscloud/internal/gcp/seams"
+	cloudbillingcore "jaiscloud/internal/gcp/service/cloudbilling"
 	containercore "jaiscloud/internal/gcp/service/container"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
@@ -118,6 +119,7 @@ import (
 	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
+	restcloudbilling "jaiscloud/internal/gcp/transport/rest/cloudbilling"
 	restcontainer "jaiscloud/internal/gcp/transport/rest/container"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
@@ -849,6 +851,13 @@ func startCmd() *cobra.Command {
 			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode), serviceusagecore.WithEventBus(eventBus))
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
+			// Cloud Billing v1's transport-neutral core backs the REST
+			// provider below; the project billing association lives in the
+			// shared ResourceStore, so memory and --dsn behave identically and
+			// no store or reset hook of its own is needed.
+			cloudBillingCore := cloudbillingcore.NewService(stores.resources)
+			cloudBillingP := restcloudbilling.NewProvider(cloudBillingCore, cfg.ProjectID)
+
 			// Cloud Scheduler v1's transport-neutral core is shared by the REST
 			// provider, the gRPC adapter, and the cron engine, so all three run
 			// against one store and cannot drift. The engine fires
@@ -937,6 +946,7 @@ func startCmd() *cobra.Command {
 				{"container", containerP},
 				{"run", runP},
 				{"serviceusage", serviceusageP},
+				{"cloudbilling", cloudBillingP},
 				{"scheduler", schedulerP},
 				{"tasks", tasksP},
 				{"resourcemanager", resourcemanagerP},

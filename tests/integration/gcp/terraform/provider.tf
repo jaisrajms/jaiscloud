@@ -90,6 +90,11 @@ provider "google" {
   service_usage_custom_endpoint    = "${var.endpoint}/v1/"
   resource_manager_custom_endpoint = "${var.endpoint}/v1/"
 
+  # Cloud Billing's project billingInfo singleton: the read that data
+  # "google_project" always performs (it exposes `billing_account`). One trailing
+  # slash is mandatory for the provider's endpoint regexp.
+  cloud_billing_custom_endpoint = "${var.endpoint}/v1/"
+
   # Dataproc Metastore (service + federation + database/table IAM). The
   # federation resource (google_dataproc_metastore_federation) and the
   # database IAM member go through the same v1 custom endpoint.
