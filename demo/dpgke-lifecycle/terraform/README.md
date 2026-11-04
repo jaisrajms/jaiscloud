@@ -201,9 +201,10 @@ to the ones the single-project gate already makes. Each is its own PASS line:
   `buckets.list` takes.
 - **Driver output.** The job's `driverOutputResourceUri` (a module output, read
   back from the provider's state) names the owner's staging bucket, that bucket
-  is listed under the owner, and `GET /storage/v1/b/<staging>/o/<key>.000000000`
-  `?alt=media&project=<runner>` returns the job's terminal log. The runner has no
-  bucket in which a second copy could live.
+  is listed under the owner, and
+  `GET /storage/v1/b/<staging>/o/<key>.000000000?alt=media&project=<runner>`
+  returns the job's terminal log. The runner has no bucket in which a second
+  copy could live.
 - **Object bytes.** The Terraform-uploaded seed object is readable by name from
   the runner's context, so the bytes landed in the owner's bucket.
 - **Teardown.** After the destroy, both projects' bucket listings are empty.
