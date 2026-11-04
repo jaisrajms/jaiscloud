@@ -43,11 +43,13 @@ type GCPAdapter struct {
 	// accountObserver is the optional sink for served (project, service) pairs,
 	// used by the console's observed-project discovery. Nil disables it.
 	accountObserver func(ctx context.Context, account, service string)
-	// containerClusterProbe is the optional GKE existence probe used to resolve
-	// the one path Managed Kafka and GKE genuinely share on a bare origin
-	// (/v1/projects/{p}/locations/{l}/clusters). Nil keeps the historical
+	// containerClusterProbe / managedKafkaClusterProbe resolve the one path the
+	// two services genuinely share on a bare origin
+	// (/v1/projects/{p}/locations/{l}/clusters): each reports whether its own
+	// store holds a cluster at that project+location. Nil keeps the historical
 	// Managed-Kafka ownership.
-	containerClusterProbe func(ctx context.Context, project, location string) bool
+	containerClusterProbe    func(ctx context.Context, project, location string) bool
+	managedKafkaClusterProbe func(ctx context.Context, project, location string) bool
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default
@@ -76,9 +78,18 @@ func NewAdapter(serviceAccount string) *GCPAdapter {
 // SetContainerClusterProbe installs the GKE existence probe used to resolve the
 // bare-origin /v1/projects/{p}/locations/{l}/clusters ambiguity. It must report
 // whether the emulated GKE control plane holds a cluster at that project and
-// location; when it does, the request is GKE's, not Managed Kafka's.
+// location.
 func (a *GCPAdapter) SetContainerClusterProbe(probe func(ctx context.Context, project, location string) bool) {
 	a.containerClusterProbe = probe
+}
+
+// SetManagedKafkaClusterProbe installs the Managed Kafka existence probe for the
+// same path. Both probes together keep the shared collection correct in both
+// directions: a location that holds Kafka clusters stays Kafka's even when the
+// project also runs GKE elsewhere (or at the same location), and a location that
+// holds only GKE clusters becomes GKE's.
+func (a *GCPAdapter) SetManagedKafkaClusterProbe(probe func(ctx context.Context, project, location string) bool) {
+	a.managedKafkaClusterProbe = probe
 }
 
 // Cloud implements adapter.CloudAdapter.
@@ -130,7 +141,9 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	//     be Kafka's. This is what makes the FIRST GKE create in an empty
 	//     project/location work, before there is any stored cluster to probe for.
 	//   - Once the control plane holds a GKE cluster at that project+location,
-	//     the location is GKE's for reads, updates and deletes too.
+	//     the location is GKE's for reads, updates and deletes too — but only
+	//     while Kafka holds none there. A location that holds Kafka clusters
+	//     stays Kafka's, so neither service can hijack the other's data.
 	if service == "managedkafka" {
 		if project, location, ok := bareClusterScope(r.URL.Path); ok {
 			kafkaSignal := jsonHasKey(body, "clusterId") || r.URL.Query().Get("clusterId") != ""
@@ -139,6 +152,8 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 				// Kafka's own request; leave it.
 			case r.Method == http.MethodPost && jsonHasKey(body, "cluster"):
 				service, source = "container", SourcePath
+			case a.managedKafkaClusterProbe != nil && a.managedKafkaClusterProbe(r.Context(), project, location):
+				// Kafka has clusters here; keep them.
 			case a.containerClusterProbe != nil && a.containerClusterProbe(r.Context(), project, location):
 				service, source = "container", SourcePath
 			}

@@ -192,3 +192,35 @@ func TestKafkaCreateWinsOverGKEProbe(t *testing.T) {
 		})
 	}
 }
+
+// The shared clusters collection must not be hijacked in either direction: a
+// location that holds Kafka clusters stays Kafka's even when the project also
+// runs GKE, and a location that holds only GKE clusters becomes GKE's.
+func TestBareClusterListOwnershipIsTwoSided(t *testing.T) {
+	path := "http://localhost:8080/v1/projects/p/locations/us-central1/clusters"
+	cases := []struct {
+		name             string
+		gke, kafka, want bool
+		wantSvc          string
+	}{
+		{name: "only GKE has clusters", gke: true, wantSvc: "container"},
+		{name: "only Kafka has clusters", kafka: true, wantSvc: "managedkafka"},
+		{name: "both have clusters", gke: true, kafka: true, wantSvc: "managedkafka"},
+		{name: "neither has clusters", wantSvc: "managedkafka"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewAdapter("")
+			a.SetContainerClusterProbe(func(_ context.Context, _, _ string) bool { return tc.gke })
+			a.SetManagedKafkaClusterProbe(func(_ context.Context, _, _ string) bool { return tc.kafka })
+			r, _ := http.NewRequest(http.MethodGet, path, nil)
+			_, codec, err := a.DetectAndDecode(r, nil)
+			if err != nil {
+				t.Fatalf("DetectAndDecode: %v", err)
+			}
+			if got := codec.ServiceName(); got != tc.wantSvc {
+				t.Fatalf("codec = %q, want %q", got, tc.wantSvc)
+			}
+		})
+	}
+}
