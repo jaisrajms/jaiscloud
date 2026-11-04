@@ -5,7 +5,8 @@ virtual cluster that targets it, the input/output/staging buckets, the service
 account a job runs as, and a PySpark job submitted through
 `google_dataproc_job`. This module's job is the "provision -> run" proof; the
 Java submitter that runs the same lifecycle through the official clients lives
-in [`../java/`](../java/), and the Helm chart is a later leg (DGD4).
+in [`../java/`](../java/), and the Helm chart that installs it as a Job lives in
+[`../helm/`](../helm/).
 
 The job's code is `../spark/wordcount.py`, uploaded into the input bucket as
 `code/wordcount.py` and named by the job's `mainPythonFileUri`. It reads a

@@ -1,0 +1,14 @@
+# The Dataproc-on-GKE demo's only Helm chart (DGD4). It installs the Java
+# submitter (../java) as a one-shot Job; the infrastructure is Terraform's job
+# (../terraform) and teardown is `terraform destroy`, not `helm uninstall`.
+apiVersion: v2
+name: dpgke-lifecycle
+description: >-
+  One-shot submitter for the Dataproc-on-GKE lifecycle demo: adopts the virtual
+  cluster Terraform created, submits the wordcount PySpark job, waits for DONE
+  and reads the driver output.
+type: application
+# Chart version stays 0.1.0 while the demo is un-released; appVersion tracks the
+# Java module's <version> in ../java/pom.xml so the chart and the jar agree.
+version: 0.1.0
+appVersion: "1.0.0"

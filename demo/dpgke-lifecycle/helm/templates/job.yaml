@@ -1,0 +1,63 @@
+# The submitter, as a one-shot Job. It is deliberately not a Deployment: the
+# app runs the lifecycle once (adopt -> submit -> wait -> read) and exits, and a
+# restart would submit a second job against clusters that may be mid-teardown.
+#
+# It does not create infrastructure (Terraform does), and it does not delete it
+# by default (DGD3_TEARDOWN=false; `terraform destroy` is the teardown). See
+# README.md for why there is no Helm uninstall hook.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dpgke.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dpgke.labels" . | nindent 4 }}
+spec:
+  # No retry on failure: the app's create is get-or-create, but a retry after a
+  # partial run re-submits a job and leaves the failed attempt's job behind.
+  # backoffLimit 0 fails the Job on the first error, logs intact.
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dpgke.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.job.serviceAccountName }}
+      serviceAccountName: {{ . | quote }}
+      {{- end }}
+      # The image (../java/Dockerfile) runs as uid 1000 and needs no privileges;
+      # pinning it here means a substitute image cannot quietly become root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: submitter
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.job.extraArgs }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # The non-secret DGD3_* set, then the one secret. envFrom first so an
+          # extraEnv entry with the same name can still override it.
+          envFrom:
+            - configMapRef:
+                name: {{ include "dpgke.configMapName" . }}
+          env:
+            - name: GOOGLE_OAUTH_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dpgke.secretName" . }}
+                  key: GOOGLE_OAUTH_ACCESS_TOKEN
+            {{- with .Values.job.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.job.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
