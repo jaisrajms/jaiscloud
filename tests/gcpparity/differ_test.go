@@ -339,6 +339,42 @@ func TestStorageBucketProjectionReconcilesEncodings(t *testing.T) {
 	}
 }
 
+// TestStorageBucketProjectionDropsBucketPolicyOnlyAlias proves the projection
+// drops the REST-only deprecated bucketPolicyOnly alias when it is populated
+// (uniform bucket-level access enabled), because the proto Bucket.IamConfig has
+// no such field — while a genuinely different uniformBucketLevelAccess value
+// still gates.
+func TestStorageBucketProjectionDropsBucketPolicyOnlyAlias(t *testing.T) {
+	rest, err := storageBucketProjection(json.RawMessage(`{"name":"b",` +
+		`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true},` +
+		`"bucketPolicyOnly":{"enabled":true},"publicAccessPrevention":"enforced"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpc, err := storageBucketProjection(json.RawMessage(`{"name":"projects/_/buckets/b",` +
+		`"iamConfig":{"uniformBucketLevelAccess":{"enabled":true},` +
+		`"publicAccessPrevention":"enforced"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nr, _ := normalizeJSON(rest)
+	ng, _ := normalizeJSON(grpc)
+	if fs := failFindings(compareNormalized("storage", "GetBucket", nr, ng, nil)); len(fs) != 0 {
+		t.Fatalf("the deprecated bucketPolicyOnly alias must not gate, got %+v", fs)
+	}
+
+	// The uniform flag itself is still compared.
+	disabled, err := storageBucketProjection(json.RawMessage(`{"name":"projects/_/buckets/b",` +
+		`"iamConfig":{"publicAccessPrevention":"enforced"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nd, _ := normalizeJSON(disabled)
+	if len(failFindings(compareNormalized("storage", "GetBucket", nr, nd, nil))) == 0 {
+		t.Fatal("a differing uniformBucketLevelAccess value must still gate")
+	}
+}
+
 // TestStorageObjectProjectionReconcilesEncodings proves the storage projection
 // equalizes the REST and protojson renderings of one Object — the REST-only
 // derived members (kind/id/selfLink/mediaLink/timeFinalized/

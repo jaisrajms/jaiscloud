@@ -29,7 +29,13 @@ func storageBucketsScenario() Scenario {
 	project := func(e *Env) string { return e.Cfg.Project }
 
 	bucketBody := func(e *Env) string {
-		return fmt.Sprintf(`{"name":%q,"location":"US","storageClass":"STANDARD"}`, bkt(e))
+		// The bucket is created with uniform bucket-level access on and public
+		// access prevention enforced, so every create/get/list/update step below
+		// compares a non-default iamConfiguration across the two transports
+		// (DGD10). The hashicorp/google provider sends exactly this shape: the
+		// iamConfiguration field on insert and in the PATCH body on update.
+		return fmt.Sprintf(`{"name":%q,"location":"US","storageClass":"STANDARD",`+
+			`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true},"publicAccessPrevention":"enforced"}}`, bkt(e))
 	}
 	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
 		return e.Rest(ctx, http.MethodPost, "/storage/v1/b?project="+url.QueryEscape(project(e)), bucketBody(e))
@@ -41,7 +47,11 @@ func storageBucketsScenario() Scenario {
 		return e.Rest(ctx, http.MethodGet, "/storage/v1/b?project="+url.QueryEscape(project(e)), "")
 	}
 	updateREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
-		return e.Rest(ctx, http.MethodPatch, "/storage/v1/b/"+bkt(e), `{"labels":{"marker":"v2"}}`)
+		// The update toggles uniform bucket-level access off and public access
+		// prevention back to inherited through the PATCH body — the write path
+		// google_storage_bucket uses to change either setting.
+		return e.Rest(ctx, http.MethodPatch, "/storage/v1/b/"+bkt(e),
+			`{"labels":{"marker":"v2"},"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},"publicAccessPrevention":"inherited"}}`)
 	}
 	deleteREST := func(ctx context.Context, e *Env) error {
 		return e.RestDelete(ctx, "/storage/v1/b/"+bkt(e))
@@ -53,7 +63,14 @@ func storageBucketsScenario() Scenario {
 			out, cerr = c.CreateBucket(ctx, &storagepb.CreateBucketRequest{
 				Parent:   "projects/" + project(e),
 				BucketId: bkt(e),
-				Bucket:   &storagepb.Bucket{Location: "US", StorageClass: "STANDARD"},
+				Bucket: &storagepb.Bucket{
+					Location:     "US",
+					StorageClass: "STANDARD",
+					IamConfig: &storagepb.Bucket_IamConfig{
+						UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: true},
+						PublicAccessPrevention:   "enforced",
+					},
+				},
 			})
 			return cerr
 		})
@@ -91,8 +108,19 @@ func storageBucketsScenario() Scenario {
 		err := storageDial(ctx, e, func(c storagepb.StorageClient) error {
 			var cerr error
 			out, cerr = c.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
-				Bucket:     &storagepb.Bucket{Name: "projects/_/buckets/" + bkt(e), Labels: map[string]string{"marker": "v2"}},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+				Bucket: &storagepb.Bucket{
+					Name:   "projects/_/buckets/" + bkt(e),
+					Labels: map[string]string{"marker": "v2"},
+					IamConfig: &storagepb.Bucket_IamConfig{
+						UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: false},
+						PublicAccessPrevention:   "inherited",
+					},
+				},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"labels",
+					"iam_config.uniform_bucket_level_access.enabled",
+					"iam_config.public_access_prevention",
+				}},
 			})
 			return cerr
 		})
@@ -215,6 +243,12 @@ func canonicalizeStorageBucket(m map[string]any) {
 	if v, ok := m["iamConfiguration"]; ok {
 		delete(m, "iamConfiguration")
 		m["iamConfig"] = v
+	}
+	// The REST iamConfiguration mirrors uniformBucketLevelAccess into the
+	// deprecated bucketPolicyOnly alias; the proto Bucket.IamConfig has no such
+	// field, so the alias carries no information the uniform flag does not.
+	if ic, ok := m["iamConfig"].(map[string]any); ok {
+		delete(ic, "bucketPolicyOnly")
 	}
 	if n, ok := m["name"].(string); ok {
 		m["name"] = strings.TrimPrefix(n, "projects/_/buckets/")
