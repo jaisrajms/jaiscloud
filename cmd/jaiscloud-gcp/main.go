@@ -513,6 +513,16 @@ func startCmd() *cobra.Command {
 			// ClusterManager seam whose only implementation is the mock: a
 			// cluster is a stored record, not a real Kubernetes control plane.
 			containerCore := containercore.NewService(stores.container, containerOptions()...)
+			// The bare /v1/projects/{p}/locations/{l}/clusters collection is
+			// shared with Managed Kafka, and path alone cannot separate the two.
+			// Give the adapter the GKE existence probe so a client configured
+			// without a container.* host is not silently answered by Managed
+			// Kafka with an empty list when the GKE control plane actually holds
+			// a cluster there.
+			cloudAdapter.SetContainerClusterProbe(func(ctx context.Context, project, location string) bool {
+				clusters, err := containerCore.ListClusters(ctx, project, location)
+				return err == nil && len(clusters) > 0
+			})
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE, or Docker on the

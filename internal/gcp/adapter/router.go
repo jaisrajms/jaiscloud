@@ -305,6 +305,12 @@ func detectV1Service(path string) string {
 	// Managed Kafka lives under /v1/projects/{project}/locations/{location}/clusters
 	// — detect it before the generic resource-type switch (a topic path's "topics"
 	// segment would otherwise be mistaken for the Pub/Sub topic surface).
+	if detectGKEClusterResourceType(rest, custom) != "" {
+		// The subpaths and verbs below are GKE-only, so they disambiguate without
+		// a host token even though the collection path is shared with Managed
+		// Kafka.
+		return "container"
+	}
 	if detectManagedKafkaResourceType(rest) != "" {
 		return "managedkafka"
 	}
@@ -582,6 +588,74 @@ func detectManagedKafkaResourceType(seg []string) string {
 		return "clusters"
 	}
 	return ""
+}
+
+// gkeOnlyClusterActions are the container.v1 custom verbs on a cluster or node
+// pool. Managed Kafka has none of them (its only verbs are :addAclEntry and
+// :removeAclEntry under a cluster's acls), so seeing one proves the request is
+// GKE even on a bare host.
+var gkeOnlyClusterActions = map[string]bool{
+	"setAddons":                   true,
+	"setLegacyAbac":               true,
+	"setLocations":                true,
+	"setLogging":                  true,
+	"setMonitoring":               true,
+	"setNetworkPolicy":            true,
+	"setMaintenancePolicy":        true,
+	"setMasterAuth":               true,
+	"setResourceLabels":           true,
+	"updateMaster":                true,
+	"startIpRotation":             true,
+	"completeIpRotation":          true,
+	"checkAutopilotCompatibility": true,
+	"completeControlPlaneUpgrade": true,
+	"fetchClusterUpgradeInfo":     true,
+	"getJwks":                     true,
+	"setNodePoolAutoscaling":      true,
+	"setNodePoolManagement":       true,
+	"setNodePoolSize":             true,
+	"rollback":                    true,
+	"completeUpgrade":             true,
+	"fetchNodePoolUpgradeInfo":    true,
+}
+
+// detectGKEClusterResourceType returns a non-empty type when the segments after
+// projects/{project} form a GKE-only resource under locations/{location}/clusters
+// — a node-pool subpath, a cluster or node-pool custom verb, or the cluster's
+// jwks / well-known discovery paths. The bare clusters collection is shared with
+// Managed Kafka and is deliberately not claimed here. custom is the trailing
+// ":verb" the caller has already stripped from the last segment.
+func detectGKEClusterResourceType(seg []string, custom string) string {
+	if len(seg) < 3 || seg[0] != "locations" || seg[2] != "clusters" {
+		return ""
+	}
+	// locations/{l}/clusters/{c}/nodePools[/{np}][:verb]: node pools do not exist
+	// in Managed Kafka.
+	if len(seg) >= 5 && seg[4] == "nodePools" {
+		return "nodePools"
+	}
+	// locations/{l}/clusters/{c}/jwks and /well-known/openid-configuration.
+	if len(seg) >= 5 && (seg[4] == "jwks" || seg[4] == "well-known") {
+		return "cluster"
+	}
+	if len(seg) == 4 {
+		// locations/{l}/clusters/{c}:verb
+		if custom != "" && gkeOnlyClusterActions[custom] {
+			return "cluster"
+		}
+	}
+	return ""
+}
+
+// bareClusterScope extracts project and location from a bare-origin
+// /v1/projects/{project}/locations/{location}/clusters request — the one shape
+// Managed Kafka and GKE both claim when no host token is present.
+func bareClusterScope(path string) (project, location string, ok bool) {
+	seg := splitEscaped("/" + strings.TrimLeft(path, "/"))
+	if len(seg) != 6 || seg[0] != "v1" || seg[1] != "projects" || seg[3] != "locations" || seg[5] != "clusters" {
+		return "", "", false
+	}
+	return seg[2], seg[4], true
 }
 
 // detectMemorystoreResourceType returns "instances" when the segments after

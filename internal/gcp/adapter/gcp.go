@@ -42,6 +42,11 @@ type GCPAdapter struct {
 	// accountObserver is the optional sink for served (project, service) pairs,
 	// used by the console's observed-project discovery. Nil disables it.
 	accountObserver func(ctx context.Context, account, service string)
+	// containerClusterProbe is the optional GKE existence probe used to resolve
+	// the one path Managed Kafka and GKE genuinely share on a bare origin
+	// (/v1/projects/{p}/locations/{l}/clusters). Nil keeps the historical
+	// Managed-Kafka ownership.
+	containerClusterProbe func(ctx context.Context, project, location string) bool
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default
@@ -65,6 +70,14 @@ func NewAdapter(serviceAccount string) *GCPAdapter {
 		functionTrigger: restfunctions.NewTriggerCodec(),
 		runInvocation:   restrun.NewInvocationCodec(),
 	}
+}
+
+// SetContainerClusterProbe installs the GKE existence probe used to resolve the
+// bare-origin /v1/projects/{p}/locations/{l}/clusters ambiguity. It must report
+// whether the emulated GKE control plane holds a cluster at that project and
+// location; when it does, the request is GKE's, not Managed Kafka's.
+func (a *GCPAdapter) SetContainerClusterProbe(probe func(ctx context.Context, project, location string) bool) {
+	a.containerClusterProbe = probe
 }
 
 // Cloud implements adapter.CloudAdapter.
@@ -101,6 +114,19 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	service, source := DetectService(r)
 	if service == "" {
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target GCP service", 404)
+	}
+
+	// The bare /v1/projects/{p}/locations/{l}/clusters collection is genuinely
+	// shared with Managed Kafka, and path alone cannot separate the two. When no
+	// host token disambiguated it and the GKE control plane actually holds a
+	// cluster there, the request is GKE's — otherwise a GKE client configured
+	// without a container.* host was silently answered by Managed Kafka with an
+	// empty list (a terraform plan then reported "no clusters, no drift").
+	if service == "managedkafka" && a.containerClusterProbe != nil {
+		if project, location, ok := bareClusterScope(r.URL.Path); ok &&
+			a.containerClusterProbe(r.Context(), project, location) {
+			service, source = "container", SourcePath
+		}
 	}
 
 	// A host-detected request is a deployed function's HTTPS trigger, which has
