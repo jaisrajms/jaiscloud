@@ -17,6 +17,69 @@
 # Disable with `make ... RESOLVED=` or `-resolved ''`.
 
 entries:
+  # #674 shipped GKP1–GKP7 as one PR. Its title named the range, and the ledger's
+  # PR↔row join matches ids individually, so only GKP1/GKP2 were closed; these
+  # rows still read "todo" in a doc whose work is merged and released.
+  #
+  # `match` is a case-insensitive substring of the row's id/aliases/gap, so a
+  # bare id also hits any row that merely *mentions* it — GKP10's gap says
+  # "Deferred while implementing GKP4", and a note that names GKP6 or GKP7 does
+  # the same. Each match below is therefore a phrase unique to the row it closes
+  # (the wave rows are matched on their index summary, which is what the ledger
+  # indexes for them).
+  - source: "gke-dataproc-conformance"
+    match: "matches all zones and all regions"
+    pr: 674
+    note: "resolved: locations/- wildcard shipped in #674"
+
+  - source: "gke-dataproc-conformance"
+    match: "version surface is"
+    pr: 674
+    note: "resolved: the v1beta1 surface shipped in #674"
+
+  - source: "gke-dataproc-conformance"
+    match: "detectManagedKafkaResourceType"
+    pr: 674
+    note: "resolved: the bare-origin clusters ambiguity is two-sided as of #674"
+
+  - source: "gke-dataproc-conformance"
+    match: "main.go:1069-1073"
+    pr: 674
+    note: "resolved: serverless fails loud and identically as of #674"
+
+  # GKP7's own work (replay routing + the P0 captures) shipped in #674; the
+  # unrecorded goldens it left behind are tracked separately as GKP13, so this
+  # row closes without pretending the goldens exist.
+  - source: "gke-dataproc-conformance"
+    match: "container differential is currently a false pass"
+    pr: 674
+    note: "resolved: replay routing + P0 captures shipped in #674; the goldens re-record is GKP13"
+
+  # The wave index is a second set of ledger rows (kind=wave) and it joins on the
+  # session's ids, which are `merged`-only for GKP1/GKP2 — so the four waves whose
+  # detail rows the overlay above closes need their own entries, or `gcp-status
+  # next` keeps proposing them. W2.2 (GKP8) and W3.1 (GKP9) are deliberately left
+  # out: one is being implemented, the other is parked as demand-driven.
+  - source: "gke-dataproc-conformance"
+    match: "v1beta1 version surface"
+    pr: 674
+    note: "resolved: wave W1.2 shipped in #674"
+
+  - source: "gke-dataproc-conformance"
+    match: "silent GKE"
+    pr: 674
+    note: "resolved: wave W1.3 shipped in #674"
+
+  - source: "gke-dataproc-conformance"
+    match: "fails loud and consistently"
+    pr: 674
+    note: "resolved: wave W1.4 shipped in #674"
+
+  - source: "gke-dataproc-conformance"
+    match: "real-GCP differential for every P0"
+    pr: 674
+    note: "resolved: wave W2.1 shipped in #674"
+
   # #151 shipped project-level IAM (resourcemanager projects.* IAM) — the source
   # finding (gcp-terraform-compat-2026-09-22.md) still reads "not implemented".
   - match: "cloud-resource-manager-project-level-iam"
