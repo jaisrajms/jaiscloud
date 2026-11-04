@@ -167,8 +167,12 @@ them through `job.extraEnv` if you want different poll bounds.
   standalone shape `java/run.sh` uses), set `job.teardown=true`; that is the
   app's own teardown path, not a Helm hook.
 - **It does not publish an image.** `image.tag` is
-  `0.0.0-dgd6-placeholder`. DGD6 builds [`../java/Dockerfile`](../java/Dockerfile)
-  and loads it into k3d; nothing in this session built or pushed anything.
+  `0.0.0-dgd6-placeholder`. DGD6's k3d gate
+  ([`../scripts/e2e-k3d.sh`](../scripts/e2e-k3d.sh)) builds
+  [`../java/Dockerfile`](../java/Dockerfile), pushes it to the registry the node
+  pulls from (`GCP_REGISTRY`, the same registry the emulator image uses) and
+  overrides both `image.repository` and `image.tag` for the install; nothing in
+  this chart released a tag.
 - **It does not mint credentials.** Neither the OAuth token nor the two
   downscoped tokens are generated, and nothing is `randAlphaNum`/`now`/`lookup`.
   A downscoped token is the result of an STS token-exchange and expires, so it

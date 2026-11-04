@@ -181,13 +181,14 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-scheduler-k8s \
+        test-e2e-dpgke-demo-k3d test-dpgke-demo-terraform \
         test-e2e-demo-spine-k3d \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
         _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-dataproc-namespace-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
-        _check-iceberg-k3d-prereq \
+        _check-iceberg-k3d-prereq _check-dpgke-demo-k3d-prereq \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-routing \
         test-gcp-error-mapping \
@@ -1222,6 +1223,15 @@ test-gcp-terraform: ## Opt-in GCP Terraform compat suite (requires terraform; sk
 	  done; echo "  ready (REST :8080)"; \
 	  TF_BIN=terraform tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 
+# The demo module's own gate (../demo/dpgke-lifecycle/terraform/run.sh): apply,
+# re-plan for permadiffs, the provider's job submit/read, destroy ordering and
+# "nothing left". Kept separate from the k3d lifecycle so a developer can iterate
+# on the module against a local emulator without a cluster. Skips when
+# terraform is absent.
+DPGKE_TF_ENDPOINT ?= http://localhost:8080
+test-dpgke-demo-terraform: ## Dataproc-on-GKE Terraform module gate (apply/re-plan/destroy; skips without terraform)
+	./demo/dpgke-lifecycle/terraform/run.sh $(DPGKE_TF_ENDPOINT)
+
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \
 	  command -v tofu >/dev/null 2>&1 || { echo "SKIP: tofu not installed"; exit 0; }; \
@@ -1510,6 +1520,33 @@ test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-i
 	kubectl apply -f deploy/k8s/rbac.yaml
 	K8S_NAMESPACE=$(K8S_NAMESPACE) DATAPROC_NAMESPACE_E2E=1 \
 	  go test -v -tags dataproc_namespace_e2e -run '^TestDataprocNamespaceIsolationK3d$$' -timeout 30m ./tests/persistent_mode/gcp/dataproc/
+
+# The whole Dataproc-on-GKE demo as one lifecycle (DGD6): Terraform on the host
+# -> the submitter image -> Helm -> the Java app inside the cluster -> assertions
+# -> helm uninstall -> terraform destroy -> nothing left. The shell work lives in
+# demo/dpgke-lifecycle/scripts/e2e-k3d.sh; this target only supplies the k3d
+# conventions (prereq, emulator image, namespace) so the gate is readable.
+#
+# The emulator image is refreshed inside the script, not as a prerequisite: the
+# preflight must be able to SKIP (missing terraform/helm/java/k3d, no cluster)
+# without first spending minutes rebuilding an image for a run that cannot
+# happen. The script calls _refresh-gcp-image once it knows the run is real, and
+# honours SKIP_GCP_IMAGE_REBUILD=1 exactly like the other k3d targets.
+#
+# Deliberately not a PR check: it needs a k3d cluster, a registry the node can
+# pull from and a real Spark execution. The dispatch-only job in
+# .github/workflows/gcp-terraform.yml is where CI runs it.
+test-e2e-dpgke-demo-k3d: _check-dpgke-demo-k3d-prereq ## Full Dataproc-on-GKE demo lifecycle on k3d — Terraform → Helm → in-cluster Java submitter → assertions → uninstall/destroy (SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  GCP_REGISTRY=$(GCP_REGISTRY) \
+	  DPGKE_GCP_IMAGE=$(GCP_IMAGE) \
+	  SKIP_GCP_IMAGE_REBUILD=$(SKIP_GCP_IMAGE_REBUILD) \
+	  DPGKE_IMAGE_MODE=$(DPGKE_IMAGE_MODE) \
+	  DPGKE_K3D_CLUSTER=$(DPGKE_K3D_CLUSTER) \
+	  DPGKE_IMAGE_REPO=$(DPGKE_IMAGE_REPO) \
+	  DPGKE_IMAGE_TAG=$(DPGKE_IMAGE_TAG) \
+	  DPGKE_SPARK_IMAGE=$(DPGKE_SPARK_IMAGE) \
+	  ./demo/dpgke-lifecycle/scripts/e2e-k3d.sh
 
 test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies deploy/k8s/rbac.yaml because per-cluster namespace create/delete needs the jaiscloud-namespace-admin ClusterRoleBinding.
 	go clean -testcache
@@ -1851,6 +1888,20 @@ _check-dataproc-namespace-k8s-prereq:
 	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
 	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
+
+# DGD6's prereq is deliberately soft: a missing tool or cluster is a SKIP (the
+# `make test-gcp-terraform` precedent), not a red gate. The script repeats the
+# check and is the authority for terraform/helm/java/docker too, so a direct
+# invocation behaves identically. A run that gets past this and then fails an
+# assertion is still a failure.
+_check-dpgke-demo-k3d-prereq:
+	@if ! command -v kubectl > /dev/null 2>&1; then \
+	  echo "SKIP: kubectl not found — install kubectl and start a k3d cluster"; \
+	elif ! kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1; then \
+	  echo "SKIP: namespace '$(K8S_NAMESPACE)' not found — start the k3d cluster and deploy the emulator"; \
+	elif ! kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1; then \
+	  echo "SKIP: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; \
+	fi
 
 _check-managedkafka-broker-k8s-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)

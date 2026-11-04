@@ -46,11 +46,12 @@ import java.util.Map;
  * same object with a plain (non-downscoped) token, so a 403 cannot be an
  * artefact of a wrong object name or a broken client.
  *
- * <p><b>What this cannot prove:</b> the emulator's default Dataproc executor is
- * the mock Spark executor, so the PySpark job this app submits never fetches a
- * credential or touches GCS. This class is the workload's credential path — the
- * same code shape a driver would run — and the in-cluster leg that runs it
- * inside the Dataproc job is DGD6's k3d gate.
+ * <p><b>What this cannot prove:</b> the PySpark job this app submits never
+ * fetches a credential or touches GCS — the job reads and writes with whatever
+ * the executor gives it, while this class is the submitter's credential path,
+ * the same code shape a driver would run. DGD6's k3d gate moves the whole app
+ * into a pod in the cluster, so the exchange and the denials happen over the
+ * in-cluster Service; it still does not make the Spark driver the token holder.
  */
 final class DownscopedAccess {
 
@@ -146,6 +147,16 @@ final class DownscopedAccess {
     int inputWrite = status(() -> writer.create(blob(cfg.inputBucket, inputScope + "denied-write.txt"),
         PROBE.getBytes(StandardCharsets.UTF_8)));
     check("input write under the output boundary is 403", inputWrite == 403, "HTTP " + inputWrite);
+
+    // The probe lives inside the job's output prefix on purpose: the boundary a
+    // workload is handed is scoped to the prefix it may write. Real Spark's
+    // output committer refuses an output prefix that already exists, so the
+    // temporary probe must not outlive the credential phase. This only showed
+    // up once DGD6 ran a real driver: the mock executor never writes, so the
+    // leftover object was invisible to DGD5's own gate.
+    admin.delete(BlobId.of(cfg.outputBucket, probe));
+    check("the downscope probe is cleared so the job's output prefix starts empty",
+        admin.get(BlobId.of(cfg.outputBucket, probe)) == null, probe + " still exists");
 
     log("DGD5: the boundary is enforced, not just advertised — "
         + "the same object reads 200 for the plain token and 403 for the two boundaries");
