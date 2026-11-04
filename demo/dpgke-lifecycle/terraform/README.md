@@ -182,7 +182,10 @@ synthesizes an ACTIVE project for any id it is asked about, so "the project
 exists" is not something a read can prove there; the gate creates the project
 through the Cloud Resource Manager v1 API (`POST /v1/projects`, the call
 `gcloud projects create` makes) and asserts it appears in `projects.list`, which
-a merely synthesized id does not.
+a merely synthesized id does not. The project record itself is left in place —
+real GCP keeps a deleted project restorable for 30 days, so a gate that
+"deleted" it would only be marking it `DELETE_REQUESTED` — while every resource
+the module puts in it is destroyed and asserted gone.
 
 `run-cross-project.sh` is this shape as one command, and adds these assertions
 to the ones the single-project gate already makes. Each is its own PASS line:
