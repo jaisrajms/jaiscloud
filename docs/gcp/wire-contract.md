@@ -31,6 +31,14 @@ per-service caveats, see [`README-GCP.md`](../../README-GCP.md).
   [README-GCP "Known Limitations"](../../README-GCP.md#known-limitations).
 - Unsupported surfaces fail loud — HTTP `501 UNIMPLEMENTED` on REST, `codes.Unimplemented` on
   gRPC — rather than silently succeeding or fabricating data.
+- The matrix also reports **coverage**, per service and transport: the published method list
+  (the vendored Discovery document for REST, the proto service descriptors for gRPC) against the
+  routes the emulator actually registers and the methods the cells grade. `served` is a
+  registration statement — a served method may answer the documented `UNIMPLEMENTED` and be graded
+  `unsupported`; it is not missing. `not served` means no route exists at all, so no cell could
+  grade it. A missing cell is therefore **not** a `ga` claim, and where the published list cannot
+  be derived from what is vendored (no Discovery document, or a REST-only service with no gRPC
+  surface) the row says `unavailable` with the reason instead of guessing.
 
 In short: a client written against the official SDKs will interoperate; a workload that needs a real
 backend the emulator does not model (a VM, event delivery, a full analytics engine) will not get
@@ -489,8 +497,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   list` — which sends it — is not empty. There is **no real Kubernetes control plane** behind
   it, so `Autopilot` compatibility, `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
   `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys` and
-  `listUsableSubnetworks` remain explicit `Unimplemented` stubs, and there is no Artifact
-  Registry/OCI pull path. GKE shares the canonical
+  `listUsableSubnetworks` remain explicit `Unimplemented` stubs on the gRPC `ClusterManager`
+  surface (graded `unsupported`). They are **not** registered on the REST codec, so the coverage
+  report lists those methods as not served on REST — the same boundary the coverage table states
+  for every service: a registered route that fails loud is served/`unsupported`, an unregistered
+  one is not served. There is no Artifact Registry/OCI pull path. GKE shares the canonical
   `/v1/projects/{p}/locations/{l}/clusters` path with Managed Kafka on the single emulator origin, so
   it is disambiguated by host (the first DNS label is `container`, as in
   `container.googleapis.com`) or by the `/container` path prefix Terraform/gcloud use; Managed
@@ -581,7 +592,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   Discovery methods) is not implemented: the REST paths answer `501 Unimplemented` naming the RPC
   and the three gRPC controllers are registered but answer `UNIMPLEMENTED`, so the gap is loud and
   identical on both transports (`locations/{location}/operations` stays with Workflows, the shared
-  LRO path);
+  LRO path). Coverage counts those 62 as **served** (their routes are registered) and
+  served-but-ungraded: the surface has one `unsupported` cell (`Dataproc.Serverless`), so they are
+  never reported as absent. Autoscaling policies, `nodeGroups.*`, `clusters.repair` and
+  `injectCredentials` have no route on either transport and are reported as not served;
   a GKE-backed cluster's `gkeClusterTarget` is resolved through the emulated GKE control plane at
   create (same project/region, standard not Autopilot, Workload Identity enabled — a **zonal**
   target resolves under its own zone) and its

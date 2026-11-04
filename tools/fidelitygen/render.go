@@ -20,9 +20,10 @@ const matrixVersion = 1
 // fields (no timestamp, no commit sha) so a regenerate-and-diff drift check is
 // exact.
 type MatrixDoc struct {
-	Version int           `json:"version"`
-	Summary MatrixSummary `json:"summary"`
-	Cells   []Cell        `json:"cells"`
+	Version  int             `json:"version"`
+	Summary  MatrixSummary   `json:"summary"`
+	Coverage []CoverageEntry `json:"coverage"`
+	Cells    []Cell          `json:"cells"`
 }
 
 // MatrixSummary is the rollup over all cells.
@@ -47,7 +48,7 @@ type EvidenceSummary struct {
 var stateOrder = []string{StateGA, StateLimited, StatePreview, StateUnsupported}
 
 // Render sorts cells deterministically and builds the matrix document.
-func Render(cells []Cell, grpcOnly []string) MatrixDoc {
+func Render(cells []Cell, grpcOnly []string, coverage []CoverageEntry) MatrixDoc {
 	sorted := append([]Cell(nil), cells...)
 	sort.Slice(sorted, func(i, j int) bool {
 		a, b := sorted[i], sorted[j]
@@ -79,7 +80,7 @@ func Render(cells []Cell, grpcOnly []string) MatrixDoc {
 	}
 	sum.GRPCOnlyServices = grpcOnly
 
-	return MatrixDoc{Version: matrixVersion, Summary: sum, Cells: sorted}
+	return MatrixDoc{Version: matrixVersion, Summary: sum, Coverage: coverage, Cells: sorted}
 }
 
 func bump(m map[string]map[string]int, key, state string) {
@@ -139,6 +140,11 @@ func writeMarkdown(path string, doc MatrixDoc) error {
 	b.WriteString("States: **ga** = supported and wire-conformant · **limited** = implemented with a " +
 		"declared caveat · **preview** = not covered by the stability promise · " +
 		"**unsupported** = not implemented.\n\n")
+	b.WriteString("A cell is a *grade*; it is not the whole published API. The [Coverage](#coverage)\n")
+	b.WriteString("section below states, per service and transport, how many published methods the\n")
+	b.WriteString("emulator registers a route for and how many the cells grade, so a service can never\n")
+	b.WriteString("read as complete while most of its published surface is missing. A method with no\n")
+	b.WriteString("registered route is listed there as **not served**; it is never counted as `ga`.\n\n")
 
 	fmt.Fprintf(&b, "Cells: **%d**\n\n", doc.Summary.Total)
 
@@ -168,6 +174,8 @@ func writeMarkdown(path string, doc MatrixDoc) error {
 			tr, doc.Summary.Evidence.Verified[tr], doc.Summary.Evidence.Unverified[tr])
 	}
 
+	writeCoverage(&b, doc.Coverage)
+
 	services := make([]string, 0, len(doc.Summary.ByService))
 	for svc := range doc.Summary.ByService {
 		services = append(services, svc)
@@ -177,6 +185,9 @@ func writeMarkdown(path string, doc MatrixDoc) error {
 	for _, svc := range services {
 		m := doc.Summary.ByService[svc]
 		fmt.Fprintf(&b, "\n## %s\n\n", svc)
+		for _, line := range coverageLines(doc.Coverage, svc) {
+			fmt.Fprintf(&b, "_Coverage: %s_\n\n", line)
+		}
 		fmt.Fprintf(&b, "_%d cell(s): ga=%d limited=%d preview=%d unsupported=%d_\n\n",
 			totalStates(m), m[StateGA], m[StateLimited], m[StatePreview], m[StateUnsupported])
 		b.WriteString("| operation | transport | state | verified | reason |\n| --- | --- | --- | --- | --- |\n")
@@ -189,6 +200,89 @@ func writeMarkdown(path string, doc MatrixDoc) error {
 		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// writeCoverage renders the published-vs-served table, its notes, and the
+// per-transport list of published methods with no registered route.
+func writeCoverage(b *strings.Builder, coverage []CoverageEntry) {
+	if len(coverage) == 0 {
+		return
+	}
+	b.WriteString("\n## Coverage\n\n")
+	b.WriteString("**Published** is the official method list (the vendored Discovery document for REST, " +
+		"the proto service descriptors for gRPC). **Served** means the emulator registers a route/RPC " +
+		"for it — a served method may still answer the documented `UNIMPLEMENTED` and be graded " +
+		"`unsupported`; it is not missing. **Graded** is how many published methods have a matrix cell. " +
+		"**not served** is a registration statement, not a grade: no route exists, so no cell could " +
+		"grade it. `unavailable` means the source of truth is not vendored, so the count cannot be " +
+		"derived — the cells for that row are not a coverage claim.\n\n")
+	b.WriteString("| service | transport | published | served | graded | not served | served-but-ungraded | source |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	for _, e := range coverage {
+		if e.Source == CoverageUnavailable {
+			fmt.Fprintf(b, "| %s | %s | — | — | — | — | — | %s |\n", e.Service, e.Transport, e.Source)
+			continue
+		}
+		fmt.Fprintf(b, "| %s | %s | %d | %d | %d | %d | %d | %s |\n",
+			e.Service, e.Transport, e.Published, e.Served, e.Graded, len(e.Unserved), e.Ungraded, mdCell(e.SourceRef))
+	}
+
+	var notes []CoverageEntry
+	for _, e := range coverage {
+		if e.Note != "" {
+			notes = append(notes, e)
+		}
+	}
+	if len(notes) > 0 {
+		b.WriteString("\n**Coverage notes**\n\n")
+		for _, e := range notes {
+			fmt.Fprintf(b, "- `%s` %s: %s\n", e.Service, strings.ToUpper(e.Transport), e.Note)
+		}
+	}
+
+	var lists []CoverageEntry
+	for _, e := range coverage {
+		if len(e.Unserved) > 0 {
+			lists = append(lists, e)
+		}
+	}
+	if len(lists) > 0 {
+		b.WriteString("\n### Published methods with no registered route\n\n")
+		for _, e := range lists {
+			fmt.Fprintf(b, "- **%s** %s (%d): %s\n",
+				e.Service, strings.ToUpper(e.Transport), len(e.Unserved), strings.Join(e.Unserved, ", "))
+		}
+	}
+}
+
+// coverageLines renders the per-service header lines, one per transport.
+func coverageLines(coverage []CoverageEntry, svc string) []string {
+	var out []string
+	for _, e := range coverage {
+		if e.Service != svc {
+			continue
+		}
+		switch e.Source {
+		case CoverageUnavailable:
+			out = append(out, strings.ToUpper(e.Transport)+": coverage unavailable — "+e.Note)
+		default:
+			s := fmt.Sprintf("%s **%d of %d** published methods served", strings.ToUpper(e.Transport), e.Served, e.Published)
+			if len(e.Unserved) > 0 {
+				s += fmt.Sprintf(" · %d not served", len(e.Unserved))
+			}
+			s += fmt.Sprintf(" · %d graded", e.Graded)
+			if e.Ungraded > 0 {
+				s += fmt.Sprintf(" · %d served-but-ungraded", e.Ungraded)
+			}
+			if e.Source == CoverageDiscovery {
+				s += fmt.Sprintf(" (`%s` Discovery)", e.SourceRef)
+			} else {
+				s += fmt.Sprintf(" (`%s` proto)", e.SourceRef)
+			}
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func totalStates(m map[string]int) int {

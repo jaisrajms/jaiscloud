@@ -63,24 +63,12 @@ func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath, transcrip
 	}
 
 	grpcFacts := GRPCFacts(conf.EnumerateGRPC(), ov, grpcReport)
-	all := append(RestFacts(ops, docs, report, ov, coverage), grpcFacts...)
+	cells, suspicious := classifyAll(ops, docs, report, grpcReport, ov, coverage)
 
-	cells := make([]Cell, 0, len(all))
-	var suspicious []string
-	for _, f := range all {
-		c := Classify(f)
-		cells = append(cells, c)
-		// A ga cell with a non-allowlisted medium/high finding can only happen
-		// via an allow_upgrade override — surface it under -strict.
-		if c.State == StateGA {
-			if fd, ok := worstUnallowedFinding(f.Findings); ok {
-				suspicious = append(suspicious, fmt.Sprintf("%s/%s (%s %s at %s)",
-					c.Service, c.Operation, fd.Severity, fd.Kind, fd.Path))
-			}
-		}
+	doc := Render(cells, GRPCOnlyServices(ops, grpcFacts), BuildCoverage(cells, docs))
+	if err := ValidateCoverage(cells, doc.Coverage); err != nil {
+		return err
 	}
-
-	doc := Render(cells, GRPCOnlyServices(ops, grpcFacts))
 	if err := WriteMatrix(out, doc); err != nil {
 		return err
 	}
@@ -94,11 +82,51 @@ func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath, transcrip
 		ev.Verified["rest"], ev.Verified["rest"]+ev.Unverified["rest"],
 		ev.Verified["grpc"], ev.Verified["grpc"]+ev.Unverified["grpc"])
 
+	derived, unavailable := 0, 0
+	for _, e := range doc.Coverage {
+		if e.Source == CoverageUnavailable {
+			unavailable++
+			continue
+		}
+		derived++
+	}
+	fmt.Printf("coverage: %d derived record(s), %d unavailable source(s) stated explicitly\n", derived, unavailable)
+	for _, svc := range []string{"container", "dataproc"} {
+		for _, e := range doc.Coverage {
+			if e.Service == svc && e.Source != CoverageUnavailable {
+				fmt.Printf("  %s: %s\n", svc, coverageSummary(e))
+			}
+		}
+	}
+
 	if strict && len(suspicious) > 0 {
 		return fmt.Errorf("-strict: %d ga cell(s) carry non-allowlisted high/medium findings:\n  %s",
 			len(suspicious), strings.Join(suspicious, "\n  "))
 	}
 	return nil
+}
+
+// classifyAll derives one Cell per (operation, transport) fact and returns the
+// cells plus the ga cells that carry a non-allowlisted high/medium finding
+// (only reachable through an allow_upgrade override; surfaced under -strict).
+// It is shared by run() and the generator's unit tests.
+func classifyAll(ops []conf.Operation, docs map[string]*conf.DiscoveryDoc, report *conf.Report, grpcReport *grpcReport, ov *Overrides, coverage map[string]int) ([]Cell, []string) {
+	grpcFacts := GRPCFacts(conf.EnumerateGRPC(), ov, grpcReport)
+	all := append(RestFacts(ops, docs, report, ov, coverage), grpcFacts...)
+
+	cells := make([]Cell, 0, len(all))
+	var suspicious []string
+	for _, f := range all {
+		c := Classify(f)
+		cells = append(cells, c)
+		if c.State == StateGA {
+			if fd, ok := worstUnallowedFinding(f.Findings); ok {
+				suspicious = append(suspicious, fmt.Sprintf("%s/%s (%s %s at %s)",
+					c.Service, c.Operation, fd.Severity, fd.Kind, fd.Path))
+			}
+		}
+	}
+	return cells, suspicious
 }
 
 // readTranscript loads the committed wire-conformance transcript used to derive
