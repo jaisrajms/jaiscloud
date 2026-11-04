@@ -10,6 +10,7 @@ Terraform just created.
 ```
 ConfigMap  the non-secret DGD3_* environment DemoConfig.java reads
 Secret     GOOGLE_OAUTH_ACCESS_TOKEN, and nothing else (optional)
+Secret     DGD5_INPUT_TOKEN / DGD5_OUTPUT_TOKEN, the two downscoped tokens (optional)
 Job        java -jar dpgke-lifecycle-java.jar, once
 ```
 
@@ -130,6 +131,9 @@ The chart must not rename them (DGD3 is merged); it only carries them.
 | `job.outputPrefix` | `DGD3_JOB_OUTPUT_PREFIX` | |
 | `job.sparkScript` | `DGD3_SPARK_SCRIPT` | empty: the object already exists in the bucket |
 | `job.teardown` | `DGD3_TEARDOWN` | default `false` — see below |
+| `downscope.inputToken` | `DGD5_INPUT_TOKEN` | the input-read boundary token; empty means the app mints one |
+| `downscope.outputToken` | `DGD5_OUTPUT_TOKEN` | the output-write boundary token; empty means the app mints one |
+| `downscope.existingSecret` | — | name a Secret holding both keys instead; the chart then renders none |
 | `job.extraEnv` | (appended) | escape hatch for anything the chart does not expose |
 
 `endpoints.grpc` is a host, not `host:port`: `DemoConfig.grpcTarget()` appends
@@ -165,6 +169,11 @@ them through `job.extraEnv` if you want different poll bounds.
 - **It does not publish an image.** `image.tag` is
   `0.0.0-dgd6-placeholder`. DGD6 builds [`../java/Dockerfile`](../java/Dockerfile)
   and loads it into k3d; nothing in this session built or pushed anything.
+- **It does not mint credentials.** Neither the OAuth token nor the two
+  downscoped tokens are generated, and nothing is `randAlphaNum`/`now`/`lookup`.
+  A downscoped token is the result of an STS token-exchange and expires, so it
+  is produced per run — by the app itself when the keys are empty (the default),
+  or by a minting stage that writes the Secret `downscope.existingSecret` names.
 
 ## Endpoints: the one caveat
 
@@ -211,6 +220,31 @@ with `NoCredentials` because the emulator does not verify tokens
 the chart wires it correctly and never invents it, and no assertion in the demo
 depends on the emulator enforcing it.
 
+### The two downscoped tokens (DGD5)
+
+`DGD5_INPUT_TOKEN` and `DGD5_OUTPUT_TOKEN` are short-lived tokens an STS
+token-exchange produced from the source access token, each scoped by a
+Credential Access Boundary (input bucket read; output bucket create/overwrite).
+They are **not** part of the chart's defaults and never generated at render
+time, because they expire and belong to one run. Two ways to supply them:
+
+```sh
+# 1. A minting stage writes a Secret; point the chart at it. No token in values.
+kubectl -n dpgke-demo create secret generic dpgke-downscope-tokens \
+  --from-literal=DGD5_INPUT_TOKEN="$INPUT_TOKEN" \
+  --from-literal=DGD5_OUTPUT_TOKEN="$OUTPUT_TOKEN"
+helm install ... --set downscope.existingSecret=dpgke-downscope-tokens
+
+# 2. Let the chart render a Secret from values (emulator only; still per run).
+--set-string downscope.inputToken="$INPUT_TOKEN" \
+--set-string downscope.outputToken="$OUTPUT_TOKEN"
+```
+
+With neither set, the Job's references are `optional` and absent: the app
+exchanges its own pair at `/v1/token`, which is why a default install needs no
+credential and why the chart can stay deterministic. The app reads each key
+independently, so supplying only one is valid — it mints the other.
+
 ## The deterministic gate
 
 `helm template` is the assertion — no cluster, no credentials:
@@ -224,9 +258,12 @@ cd demo/dpgke-lifecycle/helm
 byte for byte, diffs against `golden/defaults.yaml`, then repeats with
 `golden/override-values.yaml` (a different project, cross-project buckets, a
 port-forwarded emulator, `existingSecret`, `extraArgs`/`extraEnv`, a service
-account) against `golden/overrides.yaml`. A second values set is what keeps the
-templates honest: the defaults alone would pass even if a conditional branch
-were broken.
+account) against `golden/overrides.yaml`, and once more with
+`golden/tokens-values.yaml` (DGD5's two downscoped tokens as values, so the
+chart renders its own Secret) against `golden/tokens.yaml`. The defaults plus
+these two values sets are what keep the templates honest: the defaults alone
+would pass even if a conditional branch were broken, and the overrides cover
+the "no Secret rendered" branch while `tokens` covers the "Secret rendered" one.
 
 The chart is written to make that possible: no `randAlphaNum`, no `now`, no
 `lookup`, no generated Secret value, and no `.Capabilities` branching. If a
@@ -248,4 +285,6 @@ helm lint .
 helm template dpgke-lifecycle . --namespace dpgke-demo
 helm template dpgke-lifecycle . --namespace dpgke-demo \
   --values golden/override-values.yaml
+helm template dpgke-lifecycle . --namespace dpgke-demo \
+  --values golden/tokens-values.yaml
 ```

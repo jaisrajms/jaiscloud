@@ -52,6 +52,22 @@ spec:
                 secretKeyRef:
                   name: {{ include "dpgke.secretName" . }}
                   key: GOOGLE_OAUTH_ACCESS_TOKEN
+            # DGD5: the two downscoped tokens, when a minting stage produced
+            # them. `optional` because both absent is the normal state: the app
+            # then exchanges its own pair through the emulator's STS endpoint,
+            # so the chart never needs to generate a credential to start a pod.
+            - name: DGD5_INPUT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dpgke.downscopeSecretName" . }}
+                  key: DGD5_INPUT_TOKEN
+                  optional: true
+            - name: DGD5_OUTPUT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dpgke.downscopeSecretName" . }}
+                  key: DGD5_OUTPUT_TOKEN
+                  optional: true
             {{- with .Values.job.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

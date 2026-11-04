@@ -16,6 +16,12 @@
 # Both runs must be green. The first also proves the create path; the second
 # proves the get-or-create path and the teardown order.
 #
+# DGD5 is asserted here too, on the same runs: the app exchanges two
+# Credential Access Boundaries at /v1/token (input read, output write) and puts
+# the denials in its output. The gate greps for those PASS lines, because a
+# boundary demo that only reports its 200s is theatre — see the assert_pass
+# block after run 2.
+#
 # Transport: the Dataproc and GKE clients use their default gRPC transport on
 # --grpc-port (plaintext, no credentials); the Storage client uses its HTTP/JSON
 # transport against --port. Nothing falls back to REST silently — see README.md.
@@ -47,6 +53,8 @@ ENDPOINT="${ENDPOINT%/}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"
 LOG="${TMPDIR:-/tmp}/jaiscloud-gcp-dpgke-java.log"
+APP_LOG="${TMPDIR:-/tmp}/jaiscloud-gcp-dpgke-java-app.log"
+: > "$APP_LOG"
 
 # ── Toolchain ─────────────────────────────────────────────────────────────────
 # The harness shell is non-interactive, and ~/.bashrc returns early for those,
@@ -186,7 +194,9 @@ export DGD3_SPARK_SCRIPT="${DGD3_SPARK_SCRIPT:-$DIR/../spark/wordcount.py}"
 export DGD3_DELETE_BUCKETS="${DGD3_DELETE_BUCKETS:-true}"
 
 run_app() {
-  ( cd "$DIR" && DGD3_TEARDOWN="$1" java -jar target/dpgke-lifecycle-java.jar )
+  # tee keeps the evidence the DGD5 assertions below grep for, and pipefail in
+  # the script's `set -euo pipefail` still fails the gate on a non-zero exit.
+  ( cd "$DIR" && DGD3_TEARDOWN="$1" java -jar target/dpgke-lifecycle-java.jar ) | tee -a "$APP_LOG"
 }
 
 echo
@@ -198,5 +208,32 @@ echo "== java run 2/2: adopt the existing clusters, submit, tear down, assert cl
 run_app true
 
 DESTROYED=1
+
+# ── DGD5: the denial is the assertion ────────────────────────────────────────
+# The app asserts these itself; repeating them here keeps the boundary phase
+# visible in the gate's transcript and makes "the demo still shows 200s but
+# stopped proving the 403s" a gate failure rather than a quiet refactor. The
+# plain-token 200 is the witness: the very same object reads 200 without a
+# boundary, so the 403s cannot be a typo in the object name or the client.
+assert_pass() { # assert_pass <line the app prints>
+  local line="$1"
+  if grep -Fq "[PASS] $line" "$APP_LOG"; then
+    echo "  [PASS] $line"
+  else
+    echo "  [FAIL] the app did not print '[PASS] $line' (see $APP_LOG)"
+    exit 1
+  fi
+}
+
 echo
-echo "== java gate: both runs green (run 2 adopted what run 1 created; nothing is left)"
+echo "== DGD5: downscoped credentials, boundaries enforced"
+assert_pass "input read under the input boundary is 200"
+assert_pass "output write under the output boundary is 200"
+assert_pass "output read with the plain token is 200"
+assert_pass "output read under the output boundary is 403"
+assert_pass "output read under the input boundary is 403"
+assert_pass "output write under the input boundary is 403"
+
+echo
+echo "== java gate: both runs green (run 2 adopted what run 1 created; nothing is left;"
+echo "   the input/output boundaries allow their own side and deny the other)"

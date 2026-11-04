@@ -100,6 +100,24 @@ credentials:
   # committing a value here.
   accessToken: ""
 
+# The two downscoped credentials (DGD5). Each is a short-lived token an STS
+# token-exchange minted from a source access token and scoped by a Credential
+# Access Boundary: one may read the input bucket, one may write the output
+# bucket. They are NOT baked into this chart and never generated at render
+# time — the demo mints them per run (the DGD5 phase in ../java exchanges them
+# at /v1/token), and a minting stage can write them into the Secret below.
+downscope:
+  # Name of a Secret you create yourself holding DGD5_INPUT_TOKEN and
+  # DGD5_OUTPUT_TOKEN. When set, the chart renders no Secret for them and these
+  # values are ignored.
+  existingSecret: ""
+  # Used only when existingSecret is empty. Both empty (the default) means "not
+  # injected": the app then mints its own pair, which is why a default install
+  # needs no token at all. Prefer a minting stage or --set-file over a values
+  # file — a token in git is a leaked token.
+  inputToken: ""
+  outputToken: ""
+
 job:
   # Retries after a failed run. Zero: a retry would re-run create and submit
   # against state the first attempt may have half-changed, and the emulator's

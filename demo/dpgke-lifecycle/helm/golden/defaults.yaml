@@ -133,6 +133,22 @@ spec:
                 secretKeyRef:
                   name: dpgke-lifecycle-credentials
                   key: GOOGLE_OAUTH_ACCESS_TOKEN
+            # DGD5: the two downscoped tokens, when a minting stage produced
+            # them. `optional` because both absent is the normal state: the app
+            # then exchanges its own pair through the emulator's STS endpoint,
+            # so the chart never needs to generate a credential to start a pod.
+            - name: DGD5_INPUT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dpgke-lifecycle-downscope
+                  key: DGD5_INPUT_TOKEN
+                  optional: true
+            - name: DGD5_OUTPUT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dpgke-lifecycle-downscope
+                  key: DGD5_OUTPUT_TOKEN
+                  optional: true
           resources:
             limits:
               memory: 1Gi

@@ -19,6 +19,10 @@ Nothing here is emulator-specific: the only overrides are the endpoint
 (`InstantiatingGrpcChannelProvider` with plaintext + `NoCredentials`) and, for
 Storage, `StorageOptions.setHost` + `NoCredentials`. Against real GCP the same
 code with ADC and no endpoint overrides is the normal client configuration.
+The DGD5 boundary phase adds one URL, not a different protocol: it posts the
+RFC 8693 token-exchange form to `{rest}/v1/token`, which is where the emulator
+mounts the OAuth2/STS surface (real STS is
+`https://sts.googleapis.com/v1/token`, same body).
 
 ## What it does
 
@@ -27,12 +31,22 @@ code with ADC and no endpoint overrides is the normal client configuration.
    input bucket. These are the Terraform module's names and objects; the module
    owns them on a full demo run and this leg only fills them in when it runs
    standalone.
-2. **GKE.** Verifies `projects/{p}/locations/{loc}/clusters/{name}` or creates
+2. **Downscoped access (DGD5).** Exchanges a source access token at the
+   emulator's STS endpoint (`POST /v1/token`, RFC 8693 token-exchange) for two
+   downscoped tokens built from Credential Access Boundaries — one that may read
+   the input bucket, one that may write the output bucket — and uses each as the
+   credential on the wire through a separate `Storage` client: it reads the
+   input object with the read boundary and writes the job's output with the
+   write boundary. It then asserts the **denials** (reading an output object
+   under either boundary is 403, writing the output bucket under the input
+   boundary is 403) and the witness that makes them meaningful: the same object
+   reads 200 with a plain token. See [`DownscopedAccess.java`](src/main/java/com/jaiscloud/demo/dpgke/DownscopedAccess.java).
+3. **GKE.** Verifies `projects/{p}/locations/{loc}/clusters/{name}` or creates
    it with `initialNodeCount: 1` and
    `workloadIdentityConfig.workloadPool = {project}.svc.id.goog`, then polls
    `GetOperation` until `DONE` and asserts the cluster is `RUNNING` with Workload
    Identity set. Dataproc-on-GKE rejects a target without it.
-3. **Virtual cluster.** Verifies the Dataproc cluster or creates it with
+4. **Virtual cluster.** Verifies the Dataproc cluster or creates it with
    `virtualClusterConfig`: staging bucket, namespace, the **zonal**
    `gkeClusterTarget` (`locations/us-central1-a`, not the region), two
    `nodePoolTarget`s (controller + spark, full resource names, autoscaling,
@@ -40,14 +54,14 @@ code with ADC and no endpoint overrides is the normal client configuration.
    `OperationFuture`; the app polls it 2s × 60 (the medallion script's
    contract) and then asserts the cluster reaches `RUNNING` (or fails on
    `ERROR`).
-4. **Node pools.** Lists them through `ClusterManagerClient` and asserts both
+5. **Node pools.** Lists them through `ClusterManagerClient` and asserts both
    reconciled pools exist with the module's machine type, autoscaler bound and
    `goog-dataproc-cluster-name` label.
-5. **Job.** Submits the PySpark job (`mainPythonFileUri` = the uploaded object,
+6. **Job.** Submits the PySpark job (`mainPythonFileUri` = the uploaded object,
    args = the input object and the output prefix), polls `GetJob` until `DONE`,
    asserts `driverOutputResourceUri` is in the staging bucket, and reads
    `<uri>.000000000` through `Storage`.
-6. **Teardown** in the order the resources require: jobs → virtual cluster →
+7. **Teardown** in the order the resources require: jobs → virtual cluster →
    GKE cluster → (optionally) buckets. It also asserts the middle step real
    Dataproc has: deleting the virtual cluster leaves its reconciled node pools,
    and deleting the GKE cluster is what removes them.
@@ -64,10 +78,12 @@ Dataproc job <id> finished with state DONE
 ```
 
 No Spark driver starts, nothing is scheduled onto the reconciled pools, and the
-**output bucket stays empty**. This app asserts exactly what is true (job
-`DONE`, driver object present and readable, output prefix empty) and never
-claims Spark ran or wrote records. Real Spark bytes and the actual word count
-are DGD6's k3d gate.
+**output bucket stays empty** apart from the object DGD5's write-boundary probe
+creates. This app asserts exactly what is true (job `DONE`, driver object
+present and readable, no Spark output) and never claims Spark ran or wrote
+records. DGD5's boundaries are asserted in this process, not by the job: the
+mock executor never fetches a credential or reads GCS, so the in-cluster leg is
+DGD6's k3d gate. Real Spark bytes and the actual word count are DGD6's as well.
 
 ## Configuration
 
@@ -101,6 +117,9 @@ against Terraform-provisioned infrastructure needs no overrides.
 | `DGD3_TEARDOWN` | `true` | Delete the clusters when the run finishes |
 | `DGD3_DELETE_BUCKETS` | `false` | Also delete the three buckets |
 | `DGD3_CLEANUP_ONLY` | `false` | Only delete what is there (failure-path safety net) |
+| `DGD5_INPUT_TOKEN` | unset | Pre-minted input-read boundary token; unset means this run mints it at `/v1/token` |
+| `DGD5_OUTPUT_TOKEN` | unset | Pre-minted output-write boundary token; unset means this run mints it |
+| `GOOGLE_OAUTH_ACCESS_TOKEN` | unset | Source access token the boundaries are exchanged from; unset means one is minted at `/v1/token`. The Helm chart injects it from a Secret |
 
 `DGD3_DELETE_BUCKETS=true` is for the standalone gate, where this app created
 the buckets. Leave it `false` when Terraform owns them, or the next
@@ -183,3 +202,10 @@ GKE over its native gRPC endpoint instead.
   recorded no-fix on the emulator side. The app asserts the config field, not
   an authorization outcome.
 - Bucket IAM enforcement (DGD9): grants are metadata-only on the emulator.
+- That the *job* used the downscoped credentials. The mock executor never
+  starts a driver, so the tokens are minted and used by this process — the same
+  `Storage` + boundary code a driver would run, but not inside the Dataproc
+  pod. DGD6's k3d gate is where the in-cluster leg runs for real. What is proven
+  here is the boundary itself: the emulator enforces the `access_boundary`
+  claim on every GCS call, and both 403s (and the plain-token 200) are real
+  HTTP responses.

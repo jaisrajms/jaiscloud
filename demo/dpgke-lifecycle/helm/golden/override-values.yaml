@@ -40,6 +40,13 @@ credentials:
   # render rather than leaking into an unused Secret.
   accessToken: ignored
 
+# DGD5's other branch: the tokens come from a Secret a minting stage writes, so
+# the chart must render no Secret for them and the Job must read the named one.
+downscope:
+  existingSecret: dpgke-downscope-tokens
+  # Ignored while existingSecret is set, exactly like credentials.accessToken.
+  inputToken: ignored
+
 job:
   backoffLimit: 2
   activeDeadlineSeconds: 120
