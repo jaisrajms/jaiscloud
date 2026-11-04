@@ -52,9 +52,14 @@ type fakeGKENodePoolProvisioner struct {
 	ensureErr  error
 	specs      []GKENodePoolSpec
 	existing   map[string]bool // pool name → adopt instead of create
+	// resolvedLocation is the location the core asked the GKE control plane to
+	// look the cluster up under. It must be the target's own location (a zone
+	// for a zonal cluster), never the Dataproc region.
+	resolvedLocation string
 }
 
 func (f *fakeGKENodePoolProvisioner) ResolveGKETarget(_ context.Context, project, location, cluster string) (GKECluster, error) {
+	f.resolvedLocation = location
 	if f.resolveErr != nil {
 		return GKECluster{}, f.resolveErr
 	}
@@ -519,6 +524,31 @@ func TestCreateCluster_SynthesisesDefaultPool(t *testing.T) {
 	}
 	if len(stub.specs) != 1 || stub.specs[0].Name != "default-pool" || stub.specs[0].Verify {
 		t.Fatalf("expected one synthesised DEFAULT pool, got %+v", stub.specs)
+	}
+}
+
+func TestCreateCluster_ZonalGKETargetResolvesWithItsOwnLocation(t *testing.T) {
+	// A GKE cluster may be zonal; the target's own location keys the GKE
+	// lookup, not the Dataproc region. Passing the region here made every zonal
+	// target NotFound even though validation accepts it.
+	for _, target := range []string{
+		"projects/proj/locations/us-central1-a/clusters/gke-zonal",
+		"projects/proj/zones/us-central1-a/clusters/gke-zonal",
+	} {
+		t.Run(target, func(t *testing.T) {
+			stub := &fakeGKENodePoolProvisioner{gke: GKECluster{WorkloadIdentityPool: "proj.svc.id.goog"}}
+			p := NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(), WithGKENodePoolProvisioner(stub))
+			raw, err := json.Marshal(vccWith(map[string]any{"gkeClusterTarget": target}))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if _, _, err := p.CreateCluster(context.Background(), "proj", "us-central1", "dp-gke-zonal", ClusterInput{VirtualClusterConfig: raw}); err != nil {
+				t.Fatalf("CreateCluster with a zonal target: %v", err)
+			}
+			if stub.resolvedLocation != "us-central1-a" {
+				t.Fatalf("ResolveGKETarget location = %q, want the target's zone us-central1-a", stub.resolvedLocation)
+			}
+		})
 	}
 }
 

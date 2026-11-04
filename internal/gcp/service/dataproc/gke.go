@@ -585,7 +585,17 @@ func (s *Service) reconcileGKEVirtualCluster(ctx context.Context, project, regio
 	if v == nil || v.target == "" || s.gkePools == nil {
 		return nil
 	}
-	gke, err := s.gkePools.ResolveGKETarget(ctx, project, region, v.target)
+	// The target's OWN location keys the GKE lookup: a GKE cluster may be
+	// regional or zonal, and the container store is keyed by the cluster's
+	// location, not by the Dataproc region. Validation has already established
+	// that the target sits in the Dataproc cluster's region (gke.go
+	// collectGKEPlacement), so passing the region here would make every zonal
+	// target — the shape real GKE and this repo's own capture use — NotFound.
+	gkeLocation := v.targetLocation
+	if gkeLocation == "" {
+		gkeLocation = region
+	}
+	gke, err := s.gkePools.ResolveGKETarget(ctx, project, gkeLocation, v.target)
 	if err != nil {
 		return err
 	}

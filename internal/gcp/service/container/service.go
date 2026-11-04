@@ -126,10 +126,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	defer release()
 	c.Location = location
 	c.Status = containerstore.StatusProvisioning
-	if c.CurrentMasterVersion == "" {
-		c.CurrentMasterVersion = DefaultMasterVersion
+	// Honour the caller's requested version the way real GKE does: resolve the
+	// documented aliases and reject an unsupported release instead of rewriting
+	// it. A create that names none gets the service default.
+	resolved, err := ResolveClusterVersion(c.InitialClusterVersion)
+	if err != nil {
+		return containerstore.Operation{}, err
 	}
-	c.InitialClusterVersion = c.CurrentMasterVersion
+	c.CurrentMasterVersion = resolved
+	c.InitialClusterVersion = resolved
 	if c.Network == "" {
 		c.Network = "default"
 	}
