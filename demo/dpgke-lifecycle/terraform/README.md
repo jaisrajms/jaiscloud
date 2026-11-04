@@ -3,8 +3,9 @@
 Creates the infrastructure for the demo: a GKE cluster, a Dataproc-on-GKE
 virtual cluster that targets it, the input/output/staging buckets, the service
 account a job runs as, and a PySpark job submitted through
-`google_dataproc_job`. The Helm/Java submitter is a later leg of the demo; this
-module's job is the "provision -> run" proof.
+`google_dataproc_job`. This module's job is the "provision -> run" proof; the
+Java submitter that runs the same lifecycle through the official clients lives
+in [`../java/`](../java/), and the Helm chart is a later leg (DGD4).
 
 The job's code is `../spark/wordcount.py`, uploaded into the input bucket as
 `code/wordcount.py` and named by the job's `mainPythonFileUri`. It reads a
