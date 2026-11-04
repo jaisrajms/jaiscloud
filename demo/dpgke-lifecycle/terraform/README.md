@@ -68,6 +68,16 @@ binary is on PATH, and it never installs tooling.
 ./demo/dpgke-lifecycle/terraform/run.sh http://localhost:9090    # a different emulator
 ```
 
+`run-cross-project.sh` runs the same gate with `project` and `storage_project`
+set to different values (see [Cross-project buckets](#cross-project-buckets)).
+Both shapes are independent: each applies, re-plans and destroys on its own, and
+the cross-project one uses a separate Terraform workspace so a failed run cannot
+leave the single-project shape with state it never created.
+
+```sh
+./demo/dpgke-lifecycle/terraform/run-cross-project.sh
+```
+
 ## The job: `google_dataproc_job`
 
 The module uploads `../spark/wordcount.py` with
@@ -154,11 +164,69 @@ Dataproc cluster stays regional either way, and the target must be in `region`.
 
 ## Cross-project buckets
 
-`storage_project` moves all three buckets to a second project while the clusters
-stay in `project`, and the buckets become that project's only footprint. On real
-GCP the second project has to exist first; the emulator does not check. Bucket
-IAM and requester-pays are not enforced by the emulator (DGD9), so this
-demonstrates the shape, not an authorization outcome.
+The buckets do not have to live in the project that runs the job. `storage_project`
+moves all three into a second project while the GKE cluster, the virtual cluster
+and the job stay in `project`:
+
+```sh
+terraform apply \
+  -var project=dpgke-demo \
+  -var storage_project=dpgke-demo-storage \
+  -var endpoint=http://localhost:8080
+```
+
+The module cannot create that second project (`google_project` reads Cloud
+Billing, which the provider cannot reach here), so on real GCP it has to exist
+first: `gcloud projects create dpgke-demo-storage`. The emulator's wire
+synthesizes an ACTIVE project for any id it is asked about, so "the project
+exists" is not something a read can prove there; the gate creates the project
+through the Cloud Resource Manager v1 API (`POST /v1/projects`, the call
+`gcloud projects create` makes) and asserts it appears in `projects.list`, which
+a merely synthesized id does not. The project record itself is left in place —
+real GCP keeps a deleted project restorable for 30 days, so a gate that
+"deleted" it would only be marking it `DELETE_REQUESTED` — while every resource
+the module puts in it is destroyed and asserted gone.
+
+`run-cross-project.sh` is this shape as one command, and adds these assertions
+to the ones the single-project gate already makes. Each is its own PASS line:
+
+- **Ownership.** `GET /storage/v1/b?project=dpgke-demo-storage` lists all three
+  buckets; `GET /storage/v1/b?project=dpgke-demo` lists none — not the three
+  names, and no bucket at all. GCS bucket names are a global namespace, so a
+  per-project namespace would have to keep a *shadow* copy in the runner.
+- **Resolution by name.** `GET /storage/v1/b/<bucket>?project=<runner>` and
+  `GET /storage/v1/b/<bucket>?project=<owner>` both return the same bucket.
+  `buckets.get` has no project in its address (the name is global); `?project=`
+  is how the emulator carries the request's project context, the same parameter
+  `buckets.list` takes.
+- **Driver output.** The job's `driverOutputResourceUri` (a module output, read
+  back from the provider's state) names the owner's staging bucket, that bucket
+  is listed under the owner, and
+  `GET /storage/v1/b/<staging>/o/<key>.000000000?alt=media&project=<runner>`
+  returns the job's terminal log. The runner has no bucket in which a second
+  copy could live.
+- **Object bytes.** The Terraform-uploaded seed object is readable by name from
+  the runner's context, so the bytes landed in the owner's bucket.
+- **Teardown.** After the destroy, both projects' bucket listings are empty.
+
+### What this does not prove
+
+The emulator's default Dataproc executor is mock, so the only object the job
+path writes is the synthetic driver log (and the control file beside it). No
+Spark driver reads the input or writes the output prefix, and the gate asserts
+the output bucket is **empty** rather than pretending otherwise. Real job bytes
+across projects — Spark reading the owner's input bucket and writing the owner's
+output bucket — need the k3d gate (DGD6).
+
+And two cross-project behaviours real GCP has are not modelled, so the demo must
+not assert an authorization outcome for a cross-project read (DGD9):
+
+- bucket IAM is metadata only: the bindings are stored and echoed but never
+  enforced, so a job in one project can never be *denied* a bucket in another;
+- requester-pays (`userProject`) is not read at all anywhere in the emulator
+  (`provider.tf` sets `user_project_override = false` for the same reason).
+
+The cross-project shape is therefore demonstrated, never authorised.
 
 ## Bucket access
 

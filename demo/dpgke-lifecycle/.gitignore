@@ -1,6 +1,8 @@
 # Terraform working state — never commit.
 .terraform/
 .terraform.lock.hcl
+# Workspace state (run-cross-project.sh uses a separate workspace).
+terraform.tfstate.d/
 *.tfstate
 *.tfstate.*
 *.tfplan
