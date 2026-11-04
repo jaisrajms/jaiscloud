@@ -1,8 +1,9 @@
 # Resources for the Dataproc-on-GKE lifecycle demo.
 #
-# Scope: the bucket + cluster + virtual-cluster infrastructure only. No job is
-# submitted and nothing is installed on a cluster here; the job and the installer
-# are separate legs of the demo.
+# Scope: the bucket + cluster + virtual-cluster infrastructure, the demo's
+# PySpark job, and nothing installed on a cluster. The job is submitted through
+# the provider's google_dataproc_job (the "provision -> run" half of the story);
+# the Helm/Java legs install their own submitter later.
 #
 # Keep this file to services the emulator implements. Adding a resource whose
 # service is not served makes apply fail and aborts the whole run.
@@ -21,6 +22,11 @@ locals {
     output  = "${local.bucket_prefix}-output"
     staging = "${local.bucket_prefix}-staging"
   }
+
+  # The job's code lives in the input bucket rather than in the staging bucket:
+  # the bucket IAM below already gives the job read access, and it keeps the
+  # object that Terraform creates and the object Spark executes the same thing.
+  job_code_object = "code/wordcount.py"
 
   # The target is written through the resource rather than var.gke_cluster_name
   # so the dependency on the GKE cluster is explicit in both directions.
@@ -125,6 +131,31 @@ resource "google_storage_bucket_iam_member" "job_output_admin" {
   bucket = google_storage_bucket.output.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.job.email}"
+}
+
+# ── Objects the job uses ──────────────────────────────────────────────────────
+# The PySpark file is uploaded as an object and the job below names it by URI,
+# so the customer story is the real one: code in GCS, job submission points at
+# it, no local file is handed to the cluster. The source is the demo's tracked
+# script (../spark/wordcount.py); Terraform hashes it into state, so editing the
+# job forces a re-upload.
+resource "google_storage_bucket_object" "job_code" {
+  name   = local.job_code_object
+  bucket = google_storage_bucket.input.name
+  source = "${path.module}/../spark/wordcount.py"
+}
+
+# A small seed document so the job has something to read. DGD6's k3d run uses
+# this same object and compares the output; here the mock executor never opens
+# it, which the gate states rather than pretends otherwise.
+resource "google_storage_bucket_object" "job_input" {
+  name    = var.job_input_object
+  bucket  = google_storage_bucket.input.name
+  content = <<-TEXT
+    dataproc on gke reads this object and writes a word count
+    the quick brown fox jumps over the lazy dog
+    dataproc on gke is the job the demo proves
+  TEXT
 }
 
 # ── GKE cluster ───────────────────────────────────────────────────────────────
@@ -235,4 +266,49 @@ resource "google_dataproc_cluster" "gke" {
   }
 
   depends_on = [google_container_cluster.gke]
+}
+
+# ── The job: provision -> run ─────────────────────────────────────────────────
+# google_dataproc_job is the provider resource that calls jobs.submit. This is
+# the demo's proof that the "provision" half is not all Terraform can do: the
+# job below points at the uploaded Spark file, names the virtual cluster as its
+# placement, and reads/writes the module's own buckets.
+#
+# wait_for_completion = true is deliberate. With the default (false) the
+# provider stops waiting at RUNNING, so the resource's first read would not yet
+# be the terminal state; the demo wants a job it can assert as DONE. The
+# provider's waiter polls GetJob, and the emulator's mock executor advances one
+# state per read (PENDING -> SETUP_DONE -> RUNNING -> DONE), so this converges
+# without a driver.
+#
+# Destroy order is encoded in the references, not in a prose promise:
+#   * placement.cluster_name names google_dataproc_cluster.gke, so Terraform
+#     creates the virtual cluster first and destroys the job before it;
+#   * the virtual cluster's gke_cluster_target and depends_on name the GKE
+#     cluster, so the GKE cluster is created first and destroyed last.
+# Without those edges a destroy could delete the GKE cluster while the job or
+# the virtual cluster still referenced it. run.sh proves the middle step: a
+# targeted destroy of the virtual cluster leaves both reconciled node pools
+# readable, and only the GKE cluster delete removes them.
+resource "google_dataproc_job" "wordcount" {
+  project = var.project
+  region  = var.region
+
+  placement {
+    cluster_name = google_dataproc_cluster.gke.name
+  }
+
+  pyspark_config {
+    main_python_file_uri = "gs://${google_storage_bucket.input.name}/${google_storage_bucket_object.job_code.name}"
+
+    # The job's own contract: read the seeded input object, write under the
+    # output bucket's prefix. The output is a prefix, not a file, because
+    # Spark writes a directory of part files.
+    args = [
+      "gs://${google_storage_bucket.input.name}/${google_storage_bucket_object.job_input.name}",
+      "gs://${google_storage_bucket.output.name}/${var.job_output_prefix}",
+    ]
+  }
+
+  wait_for_completion = true
 }

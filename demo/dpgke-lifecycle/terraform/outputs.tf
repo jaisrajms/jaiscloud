@@ -59,3 +59,52 @@ output "spark_release" {
   description = "Fully-qualified Spark component version pinned on the virtual cluster."
   value       = var.spark_release
 }
+
+# The job leg. The id/name are what a submitter (or the gate) needs to address
+# the job; state and the driver output URI are the provider's read-back of the
+# resource, so asserting them proves google_dataproc_job's read path, not just
+# that the API accepted the submit.
+output "job_id" {
+  description = "Server-assigned Dataproc job id (reference.jobId)."
+  value       = google_dataproc_job.wordcount.reference[0].job_id
+}
+
+output "job_name" {
+  description = "Full resource name of the job (projects/{p}/regions/{r}/jobs/{id})."
+  value       = google_dataproc_job.wordcount.id
+}
+
+output "job_state" {
+  description = "Job state as the provider last read it; DONE once the mock executor settles."
+  value       = google_dataproc_job.wordcount.status[0].state
+}
+
+output "job_placement_cluster_name" {
+  description = "Virtual cluster name the job was placed on."
+  value       = google_dataproc_job.wordcount.placement[0].cluster_name
+}
+
+output "job_placement_cluster_uuid" {
+  description = "Output-only cluster UUID Dataproc captured when the job was submitted."
+  value       = google_dataproc_job.wordcount.placement[0].cluster_uuid
+}
+
+output "job_driver_output_resource_uri" {
+  description = "gs:// URI of the job's driver stdout, allocated in the staging bucket."
+  value       = google_dataproc_job.wordcount.driver_output_resource_uri
+}
+
+output "job_main_python_file_uri" {
+  description = "gs:// URI of the uploaded PySpark file the job runs."
+  value       = google_dataproc_job.wordcount.pyspark_config[0].main_python_file_uri
+}
+
+output "job_input_uri" {
+  description = "gs:// URI of the seed object the job reads."
+  value       = "gs://${google_storage_bucket.input.name}/${google_storage_bucket_object.job_input.name}"
+}
+
+output "job_output_uri" {
+  description = "gs:// prefix the job writes its word count under."
+  value       = "gs://${google_storage_bucket.output.name}/${var.job_output_prefix}"
+}

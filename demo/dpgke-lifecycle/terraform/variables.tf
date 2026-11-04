@@ -66,6 +66,21 @@ variable "namespace" {
   default     = "dpgke-demo"
 }
 
+# The job's object names are variables so a later leg (Helm/Java) can point at
+# the same input and output without re-deriving them, and so the gate's REST
+# checks never hardcode a path that only this module knows.
+variable "job_input_object" {
+  type        = string
+  description = "Object name of the seed text the job reads, inside the input bucket."
+  default     = "input/words.txt"
+}
+
+variable "job_output_prefix" {
+  type        = string
+  description = "Object prefix, inside the output bucket, the job writes its word count under."
+  default     = "wordcount"
+}
+
 variable "machine_type" {
   type        = string
   description = "Machine type of the Dataproc-reconciled node pools."
