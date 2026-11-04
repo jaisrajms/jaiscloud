@@ -235,6 +235,8 @@ provider "google" {
 
 The provider's own schema also requires `kubernetes_cluster_config.kubernetes_namespace` and `node_pool_config.locations`, which the API marks optional, so a real-GCP config that omits them needs them added. There is no `google_dataproc_cluster` data source and no import support upstream, so inspection is `terraform state show`, `terraform plan -refresh-only`, or the REST API.
 
+The customer-shaped version of these notes — a zonal `google_container_cluster`, a `google_dataproc_cluster` with `virtual_cluster_config`, the input/output/staging buckets and a `google_dataproc_job`, then Helm and the official Java clients — is [`demo/dpgke-lifecycle/`](demo/dpgke-lifecycle/README.md), gated by `make test-dpgke-demo-terraform` and `make test-e2e-dpgke-demo-k3d`.
+
 ---
 
 ## Configuration
@@ -818,6 +820,11 @@ it (the shared namespace create now waits for the old namespace to disappear).
 The Scheduler hop gate also gained a Service-endpoint readiness wait, because a
 Ready submitter pod does not guarantee kube-proxy has programmed the ClusterIP and
 a no-`retryConfig` job delivers exactly once.
+
+The Dataproc-on-GKE lifecycle behind that hop — a zonal GKE cluster, the virtual
+cluster, cross-project buckets and the downscoped credential — has its own
+customer-shaped demo and gate: [`demo/dpgke-lifecycle/`](demo/dpgke-lifecycle/README.md),
+`make test-e2e-dpgke-demo-k3d`.
 
 ---
 

@@ -27,6 +27,15 @@ wave plan; excluded from the GCP status ledger). This directory is the build.
 Your app is only two of those: the bridge and the Cloud Run leaderboard (plus the
 publisher that backs it).
 
+Dataproc-on-GKE has its own canonical, gated demo:
+[`demo/dpgke-lifecycle/`](../dpgke-lifecycle/README.md) — Terraform, Helm and the
+official Java clients against a real-Spark k3d gate. This demo's `cm-spark` is
+the same virtual-cluster shape, but `scripts/democtl.py` targets
+`projects/crypto-medallion/locations/us-central1/clusters/cm-gke` and nothing in
+this directory creates that cluster (`terraform/provider.tf` sets no
+`container_custom_endpoint` either), so its Dataproc-on-GKE half is not runnable
+as written; read or copy the lifecycle demo for that story.
+
 ## Prerequisites
 
 - A running k3d emulator (`deploy/k8s/jaiscloud-gcp.yaml`) with the demo's
