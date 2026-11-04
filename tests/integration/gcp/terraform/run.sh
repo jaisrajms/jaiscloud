@@ -162,6 +162,7 @@ BQ_TABLE="$(out bigquery_table_id)"
 BQ_ROUTINE="$(out bigquery_routine_id)"
 BQ_POLICY="$(out bigquery_row_access_policy_id)"
 BILLING_ACCOUNT="$(out billing_account)"
+PROJECT_BILLING="$(out project_billing_account)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -232,6 +233,32 @@ else
   printf '  [FAIL] data.google_project billing_account = %q, want empty (no billing catalog)\n' "$BILLING_ACCOUNT"
   FAIL=$((FAIL + 1))
 fi
+# CB2: resource "google_project" with billing_account writes the association
+# (POST billingAccounts/{id}:testIamPermissions, POST projects, PUT
+# projects/{p}/billingInfo) and the provider reads it back. The wire stores and
+# echoes the full billingAccounts/… resource name, while the provider strips the
+# prefix into its `billing_account` attribute — that is what keeps the configured
+# bare id and the read-back value equal, so the clean re-plan above proves there
+# is no permadiff. Both halves are asserted: the wire body below, the attribute
+# after it.
+TF_BILLING_PROJECT="jaiscloud-tf-billing"
+TF_BILLING_ACCOUNT_NAME="billingAccounts/0X0X0X-0X0X0X-0X0X0X"
+check "Cloud Billing billingInfo stores the google_project association" \
+  "$ENDPOINT/v1/projects/$TF_BILLING_PROJECT/billingInfo" \
+  "\"name\":\"projects/$TF_BILLING_PROJECT/billingInfo\"" \
+  "\"billingAccountName\":\"$TF_BILLING_ACCOUNT_NAME\"" \
+  '"billingEnabled":true'
+if [[ "$PROJECT_BILLING" == "0X0X0X-0X0X0X-0X0X0X" ]]; then
+  printf '  [PASS] google_project billing_account round-trips as the bare id %s\n' "$PROJECT_BILLING"
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] google_project billing_account = %q, want the bare id 0X0X0X-0X0X0X-0X0X0X\n' "$PROJECT_BILLING"
+  FAIL=$((FAIL + 1))
+fi
+# The billing-account catalog stays empty: no account lifecycle is modelled, so
+# the list is the schema-valid empty answer rather than a fabricated account.
+check "Cloud Billing billingAccounts list is empty" \
+  "$ENDPOINT/v1/billingAccounts" '"billingAccounts":[]'
 check_post "Project IAM grant present" \
   "$ENDPOINT/v1/projects/$PROJECT:getIamPolicy" \
   'roles/pubsub.publisher' 'jaiscloud-tf-sa@'

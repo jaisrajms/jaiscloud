@@ -218,6 +218,13 @@ func detectV1Service(path string) string {
 	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "operations" {
 		return "functions"
 	}
+	// Cloud Billing v1 billing-account collection: /v1/billingAccounts[/{id}]
+	// plus its custom methods (:testIamPermissions, ...). It has no project
+	// segment, so it is claimed here — before the projects scan below, whose
+	// pi-based guards would treat the path as malformed and return "".
+	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "billingAccounts" {
+		return "cloudbilling"
+	}
 	pi := -1
 	for i, s := range seg {
 		if s == "projects" {

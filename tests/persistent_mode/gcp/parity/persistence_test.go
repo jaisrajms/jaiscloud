@@ -895,13 +895,13 @@ var probedElsewhere = map[string]string{
 	"firestoreadmin":  "gRPC wire service (the REST control plane is served under the firestore service); its database/field/backup/user-creds state is the firestore provider's shared ResourceStore",
 	"serviceusage":    "service enable/disable state and operations live in the shared ResourceStore",
 	"resourcemanager": "project lifecycle state and operations live in the shared ResourceStore",
+	"cloudbilling":    "the project billing association lives in the shared ResourceStore",
 }
 
 // persistenceExemptions documents a wire service with no persisted resource
 // state of its own to round-trip.
 var persistenceExemptions = map[string]string{
 	"iamcredentials": "token-only surface (generateAccessToken/generateIdToken) with no resource lifecycle",
-	"cloudbilling":   "read-only surface: projects.getBillingInfo reads the project billing association from the shared ResourceStore but serves no REST write to seed a round-trip (updateBillingInfo replaces this exemption with a probe once it lands)",
 }
 
 // wireAlias maps a wire service name to the probe/fidelity name used in the

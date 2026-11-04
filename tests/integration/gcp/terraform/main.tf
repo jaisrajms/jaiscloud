@@ -372,6 +372,26 @@ data "google_project" "compat" {
   project_id = var.project
 }
 
+# ── Cloud Billing: the project association write path ────────────────────────
+# `billing_account` drives the provider's write path (CB2): it first checks
+# billingAccounts/{account}:testIamPermissions for
+# billing.resourceAssociations.create (a default-permissive echo here), then
+# POSTs the project, PUTs projects/{p}/billingInfo and reads the association
+# back. The Terraform value is the BARE account id; the provider prepends
+# "billingAccounts/" itself, so passing the full resource name here would yield
+# billingAccounts/billingAccounts/… and a failed-precondition error.
+#
+# deletion_policy = "DELETE" is required because the provider defaults to
+# "PREVENT" (which only removes the resource from state). The project gets its
+# own id so the fixture's main project stays unlinked — the data source's
+# empty-account assertion above depends on that.
+resource "google_project" "billing" {
+  project_id      = "jaiscloud-tf-billing"
+  name            = "jaiscloud tf billing"
+  deletion_policy = "DELETE"
+  billing_account = "0X0X0X-0X0X0X-0X0X0X"
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -455,6 +475,15 @@ output "bigquery_row_access_policy_id" {
 
 output "billing_account" {
   value = data.google_project.compat.billing_account
+}
+
+# The google_project resource's stored association. The provider reads
+# projects/{p}/billingInfo back after the write and strips the
+# "billingAccounts/" prefix, so the attribute holds the bare account id the
+# configuration names (no permadiff); the wire itself carries the full resource
+# name (run.sh asserts both).
+output "project_billing_account" {
+  value = google_project.billing.billing_account
 }
 
 # ── BigQuery: dataset-scoped routine + table-scoped row access policy (NF31) ──
