@@ -4,12 +4,21 @@
 #
 # Drives this module against a running jaiscloud-gcp and asserts the result
 # through the emulator's REST API: init -> validate -> plan -> apply -> spot
-# checks -> a second plan (permadiff) -> destroy -> "nothing is left".
+# checks (including the submitted PySpark job) -> a second plan (permadiff) ->
+# a targeted destroy that proves the virtual cluster goes before the GKE
+# cluster -> full destroy -> "nothing is left".
 #
 # Deliberately Terraform-only. The demo's other legs are a Java job and a Helm
 # installer; both arrive in later sessions and neither is exercised here. This
 # gate answers one question: does the module the demo ships still create the
-# infrastructure the later legs read from, cleanly and idempotently?
+# infrastructure and submit the job the later legs read from, cleanly and
+# idempotently?
+#
+# The job check is honest about the backend: the emulator's default Dataproc
+# executor is mock, so the job reaches DONE and carries a driverOutputResourceUri
+# without a Spark driver running. This gate asserts the provider's read-back and
+# explicitly asserts that no Spark output bytes exist. Real execution belongs to
+# DGD6's k3d gate.
 #
 # It never installs tooling. When no terraform binary is on PATH it prints SKIP
 # and exits 0 (the `make test-gcp-terraform` precedent), because a checkout
@@ -105,6 +114,32 @@ check_status() {
   fi
 }
 
+# check_value NAME GOT WANT — compare two strings. The provider's read-back is
+# read from terraform outputs (state), not from a REST body, so it needs a check
+# that is not a URL GET.
+check_value() {
+  local name="$1" got="$2" want="$3"
+  if [[ "$got" == "$want" ]]; then
+    printf '  [PASS] %s\n' "$name"
+    PASS=$((PASS + 1))
+  else
+    printf '  [FAIL] %s (got %q, want %q)\n' "$name" "$got" "$want"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# check_prefix NAME GOT PREFIX — require GOT to start with PREFIX and be non-empty.
+check_prefix() {
+  local name="$1" got="$2" prefix="$3"
+  if [[ -n "$got" && "$got" == "$prefix"* ]]; then
+    printf '  [PASS] %s\n' "$name"
+    PASS=$((PASS + 1))
+  else
+    printf '  [FAIL] %s (got %q, want prefix %q)\n' "$name" "$got" "$prefix"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
 # out NAME — a string output, empty when the output is missing.
@@ -115,6 +150,13 @@ out() { tf output -raw "$1" 2>/dev/null || true; }
 bucket() {
   tf output -json buckets 2>/dev/null | tr -d '\n' |
     sed -nE 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
+}
+
+# object_url BUCKET KEY — the GCS JSON API path for one object. An object name is
+# a path segment there, so its slashes are percent-encoded; a raw key would hit
+# the wrong route.
+object_url() {
+  printf '%s/storage/v1/b/%s/o/%s' "$ENDPOINT" "$1" "${2//\//%2F}"
 }
 
 DESTROYED=0
@@ -287,6 +329,14 @@ SA_EMAIL="$(out service_account_email)"
 BUCKET_INPUT="$(bucket input)"
 BUCKET_OUTPUT="$(bucket output)"
 BUCKET_STAGING="$(bucket staging)"
+JOB_ID="$(out job_id)"
+JOB_STATE="$(out job_state)"
+JOB_CLUSTER="$(out job_placement_cluster_name)"
+JOB_CLUSTER_UUID="$(out job_placement_cluster_uuid)"
+JOB_DRIVER_URI="$(out job_driver_output_resource_uri)"
+JOB_MAIN_URI="$(out job_main_python_file_uri)"
+JOB_INPUT_URI="$(out job_input_uri)"
+JOB_OUTPUT_URI="$(out job_output_uri)"
 
 echo "== spot checks"
 
@@ -373,6 +423,93 @@ check "input bucket IAM names the job GSA as objectViewer" \
   '"role":"roles/storage.objectViewer"' \
   "serviceAccount:$SA_EMAIL"
 
+# ── The job: google_dataproc_job's create/read path ──────────────────────────
+# The job is the resource this gate exists for: nothing else in the repo submits
+# through the provider. The emulator's default executor is mock, so DONE and the
+# driverOutputResourceUri below come from the state machine, not from a Spark
+# driver — the final check in this block asserts that no Spark output was
+# written, rather than implying it was. Real execution is DGD6's k3d gate.
+JOB_URL="$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/jobs/$JOB_ID"
+
+check "Dataproc job $JOB_ID reached DONE" \
+  "$JOB_URL" '"state":"DONE"' '"done":true'
+check_value "provider read-back stores the job state DONE" "$JOB_STATE" "DONE"
+
+# placement.clusterName is the virtual cluster, not a resolved GKE target: the
+# provider sends the name the module gave it, and the read echoes it.
+check "job placement names the virtual cluster" \
+  "$JOB_URL" "\"clusterName\":\"$DP_CLUSTER\""
+check_value "provider read-back placement is the virtual cluster" \
+  "$JOB_CLUSTER" "$DP_CLUSTER"
+
+# placement.clusterUuid is output-only and captured at submit. Assert it matches
+# the virtual cluster's own uuid: a job submitted against a different cluster
+# would still read DONE but carry the wrong uuid.
+DP_UUID="$(curl -s -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$DP_URL" 2>/dev/null |
+  sed -nE 's/.*"clusterUuid":"([^"]+)".*/\1/p')"
+check_prefix "virtual cluster read has a clusterUuid" "$DP_UUID" ""
+check_value "job placement captured the virtual cluster uuid" \
+  "$JOB_CLUSTER_UUID" "$DP_UUID"
+
+# The driver output URI is allocated in the virtual cluster's staging bucket at
+# submit, so it proves the job inherited the module's stagingBucket. The object
+# itself is the emulator's synthetic terminal log (mock mode), not Spark's
+# stdout — the name says "driveroutput", the bytes do not.
+check_prefix "provider read-back driver output URI is in the staging bucket" \
+  "$JOB_DRIVER_URI" "gs://$BUCKET_STAGING/"
+check "wire driver output URI matches the provider read-back" \
+  "$JOB_URL" "\"driverOutputResourceUri\":\"$JOB_DRIVER_URI\""
+check "driver output URI is scoped to job $JOB_ID" \
+  "$JOB_URL" "/jobs/$JOB_ID/driveroutput"
+
+# The job runs the object Terraform uploaded, and its two args are the seeded
+# input object and the output bucket prefix — the read/write contract the demo
+# narrates. Assert both the provider read-back and the wire body.
+check_value "job runs the uploaded PySpark object" \
+  "$JOB_MAIN_URI" "gs://$BUCKET_INPUT/code/wordcount.py"
+check "PySpark file object exists in the input bucket" \
+  "$(object_url "$BUCKET_INPUT" code/wordcount.py)" \
+  '"name":"code/wordcount.py"'
+check "job args name the seeded input and the output prefix" \
+  "$JOB_URL" "\"$JOB_INPUT_URI\"" "\"$JOB_OUTPUT_URI\""
+
+# The URI is a prefix; the emulator materializes <uri>.000000000 when the mock
+# job reaches a terminal state. Assert the advertised location resolves.
+DRIVER_KEY="${JOB_DRIVER_URI#gs://$BUCKET_STAGING/}"
+check "driver output object exists in the staging bucket" \
+  "$(object_url "$BUCKET_STAGING" "$DRIVER_KEY.000000000")" \
+  "\"name\":\"$DRIVER_KEY.000000000\""
+
+# Honesty check: mock mode never starts the driver, so the output bucket must be
+# empty. If this ever changes, the gate should be updated deliberately (DGD6
+# asserts real output), not silently start claiming Spark ran here.
+check_absent "mock executor wrote no Spark output (output bucket is empty)" \
+  "$ENDPOINT/storage/v1/b/$BUCKET_OUTPUT/o" '"name":"'
+
+# ── Destroy order: job -> virtual cluster -> GKE cluster ─────────────────────
+# The point of DGD2's ordering case. Deleting the virtual cluster leaves its two
+# reconciled node pools behind — real Dataproc does not own them, and the
+# emulator only removes the pools with the GKE cluster that stores them. Target
+# the virtual cluster first, prove the pools and the GKE cluster survive, then
+# finish the destroy and prove the pools are gone. If a targeted destroy took
+# the GKE cluster with it, the pool checks below would 404 and the summary would
+# fail; nothing here waits on a resource that might never appear.
+echo "== destroy order: virtual cluster before the GKE cluster"
+TARGET_RC=0
+tf destroy -input=false -auto-approve -no-color \
+  -target=google_dataproc_cluster.gke "${TF_VARS[@]}" >/dev/null 2>&1 || TARGET_RC=$?
+check_value "targeted destroy of the virtual cluster succeeded" "$TARGET_RC" "0"
+
+check_status "virtual cluster is gone after the targeted destroy (404)" "$DP_URL" 404
+check_status "job is gone after the targeted destroy (404)" "$JOB_URL" 404
+check "targeted destroy left the GKE cluster in place" \
+  "$CONTAINER_BASE/projects/$PROJECT/locations/$GKE_LOCATION/clusters/$GKE_CLUSTER" \
+  "\"name\":\"$GKE_CLUSTER\""
+for pool in controller spark; do
+  check "targeted destroy left the $pool node pool in place" \
+    "$GKE_POOLS/$DP_CLUSTER-$pool" "\"name\":\"$DP_CLUSTER-$pool\""
+done
+
 # ── Destroy ──────────────────────────────────────────────────────────────────
 echo "== destroy"
 tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null
@@ -397,6 +534,7 @@ check_absent "GKE cluster list no longer contains $GKE_CLUSTER" \
 check_absent "Dataproc list no longer contains $DP_CLUSTER" \
   "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters" \
   "\"clusterName\":\"$DP_CLUSTER\""
+check_status "Dataproc job $JOB_ID is gone (404)" "$JOB_URL" 404
 # Deleting the virtual cluster leaves its node pools behind on real Dataproc;
 # deleting the GKE cluster is what reclaims them. Both must now be gone.
 for pool in controller spark; do
