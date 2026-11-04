@@ -1,0 +1,21 @@
+# Example overrides for the Dataproc-on-GKE lifecycle module.
+#
+# Copy to terraform.tfvars (gitignored) and uncomment what you need. Every value
+# below is already the default except where noted, so an empty tfvars file plans
+# the same thing.
+
+# project = "dpgke-demo"
+# region  = "us-central1"
+
+# A zone makes a zonal cluster (the quickstart shape); a region makes a regional
+# one. Either way it must belong to `region` above.
+# gke_location = "us-central1-a"
+
+# Put the buckets in a second project to stage across projects. Bucket IAM is
+# metadata-only on the emulator, so this shows the shape, not an authorization
+# outcome.
+# storage_project = "dpgke-demo-storage"
+
+# The emulator's REST base. GKE is reached through a container.<host> endpoint
+# derived from this, not through the bare host (see provider.tf).
+# endpoint = "http://localhost:8080"
