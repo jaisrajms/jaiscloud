@@ -257,8 +257,11 @@ func checkDPCreateClusterGKEUnknownTarget(ctx context.Context, cfg Config) error
 			},
 		},
 	})
-	if status.Code(err) != codes.NotFound {
-		return fmt.Errorf("CreateCluster with an unknown gkeClusterTarget: got %v, want NotFound", err)
+	// Real GCP reports an unknown target as INVALID_ARGUMENT naming the
+	// canonicalised cluster, not NOT_FOUND (captured 2026-11-03:
+	// docs/gcp/gke-dataproc-p0-captures.md §4).
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("CreateCluster with an unknown gkeClusterTarget: got %v, want InvalidArgument", err)
 	}
 	return nil
 }
@@ -1237,10 +1240,12 @@ func checkDPGKEVirtualClusterRules(ctx context.Context, cfg Config) error {
 			code: codes.InvalidArgument, text: "not a zone in region",
 		},
 		{
+			// Real GCP answers INVALID_ARGUMENT and names the target
+			// (captured 2026-11-03).
 			name:  "unknown GKE cluster",
 			pools: nil,
 			tgt:   missing,
-			code:  codes.NotFound, text: "",
+			code:  codes.InvalidArgument, text: "Target GKE cluster does not exist",
 		},
 	}
 	for i, tc := range cases {

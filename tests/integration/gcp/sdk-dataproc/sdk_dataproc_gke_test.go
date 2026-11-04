@@ -469,7 +469,9 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 			ClusterName:          unique("dpgke-bad"),
 			VirtualClusterConfig: gkeVCC(missing),
 		}).Do()
-		requireCode(t, err, 404, "missing GKE cluster")
+		// Real GCP reports an unknown target as INVALID_ARGUMENT naming the
+		// canonicalised cluster, not NOT_FOUND (captured 2026-11-03).
+		requireCode(t, err, 400, "missing GKE cluster")
 	})
 
 	t.Run("target without Workload Identity", func(t *testing.T) {
