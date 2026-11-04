@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 
@@ -126,10 +127,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	defer release()
 	c.Location = location
 	c.Status = containerstore.StatusProvisioning
-	if c.CurrentMasterVersion == "" {
-		c.CurrentMasterVersion = DefaultMasterVersion
+	// Honour the caller's requested version the way real GKE does: resolve the
+	// documented aliases and reject an unsupported release instead of rewriting
+	// it. A create that names none gets the service default.
+	resolved, err := ResolveClusterVersion(c.InitialClusterVersion)
+	if err != nil {
+		return containerstore.Operation{}, err
 	}
-	c.InitialClusterVersion = c.CurrentMasterVersion
+	c.CurrentMasterVersion = resolved
+	c.InitialClusterVersion = resolved
 	if c.Network == "" {
 		c.Network = "default"
 	}
@@ -179,7 +185,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 		provisioned.SelfLink = ClusterName(project, location, provisioned.Name)
 	}
 	if err := s.store.CreateCluster(ctx, project, location, provisioned); err != nil {
-		return containerstore.Operation{}, mapStoreErr(err)
+		return containerstore.Operation{}, mapStoreErrNamed(ClusterName(project, location, provisioned.Name), err)
 	}
 
 	op := s.newOperation(project, location, containerstore.OperationCreateCluster,
@@ -195,22 +201,64 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 func (s *Service) GetCluster(ctx context.Context, project, location, name string) (containerstore.Cluster, error) {
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
-		return containerstore.Cluster{}, mapStoreErr(err)
+		return containerstore.Cluster{}, mapStoreErrNamed(ClusterName(project, location, name), err)
 	}
 	return WithReadDefaults(c), nil
 }
 
+// WildcardLocation is the Discovery parent spelling that matches every zone and
+// region: `projects/{p}/locations/-`. `gcloud container clusters list` with no
+// --region/--zone sends it, so treating it as a literal location made the
+// default list print nothing.
+const WildcardLocation = "-"
+
 // ListClusters lists clusters under a location, sorted by short name, with the
-// response messages real GKE always renders filled in.
+// response messages real GKE always renders filled in. The wildcard location
+// spans every location the project has a cluster in.
 func (s *Service) ListClusters(ctx context.Context, project, location string) ([]containerstore.Cluster, error) {
-	clusters, err := s.store.ListClusters(ctx, project, location)
+	locations, err := s.scopeLocations(ctx, project, location)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, err
 	}
+	var clusters []containerstore.Cluster
+	for _, loc := range locations {
+		got, err := s.store.ListClusters(ctx, project, loc)
+		if err != nil {
+			return nil, mapStoreErr(err)
+		}
+		clusters = append(clusters, got...)
+	}
+	// Real GKE sorts the aggregated list by resource name; short-name ordering
+	// within a location is preserved by the store, so sort the union the same
+	// way a client sees it.
+	sort.Slice(clusters, func(i, j int) bool {
+		if clusters[i].Location != clusters[j].Location {
+			return clusters[i].Location < clusters[j].Location
+		}
+		return clusters[i].Name < clusters[j].Name
+	})
 	for i := range clusters {
 		clusters[i] = WithReadDefaults(clusters[i])
 	}
 	return clusters, nil
+}
+
+// scopeLocations turns a list parent's location into the concrete locations to
+// query: the wildcard expands to every location the project holds state in, and
+// an ordinary location is itself.
+func (s *Service) scopeLocations(ctx context.Context, project, location string) ([]string, error) {
+	if location != WildcardLocation {
+		return []string{location}, nil
+	}
+	locs, err := s.store.ListLocations(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	if len(locs) == 0 {
+		// An empty expansion still answers an empty list, not an error.
+		return nil, nil
+	}
+	return locs, nil
 }
 
 // DeleteCluster deprovisions and removes a cluster, returning the
@@ -220,7 +268,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, name str
 	// concurrent-operation check only guards a cluster that exists.
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
-		return containerstore.Operation{}, mapStoreErr(err)
+		return containerstore.Operation{}, mapStoreErrNamed(ClusterName(project, location, name), err)
 	}
 	release, err := s.acquireOperation(ctx, project, location, ClusterName(project, location, name), "")
 	if err != nil {
@@ -245,7 +293,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, name str
 func (s *Service) GetOperation(ctx context.Context, project, location, name string) (containerstore.Operation, error) {
 	op, err := s.store.GetOperation(ctx, project, location, name)
 	if err != nil {
-		return containerstore.Operation{}, mapStoreErr(err)
+		return containerstore.Operation{}, mapStoreErrNamed(OperationName(project, location, name), err)
 	}
 	return s.settleOperation(op), nil
 }
@@ -253,10 +301,24 @@ func (s *Service) GetOperation(ctx context.Context, project, location, name stri
 // ListOperations lists operations under a location, sorted by id, with
 // simulated in-flight operations settled to DONE once their window has elapsed.
 func (s *Service) ListOperations(ctx context.Context, project, location string) ([]containerstore.Operation, error) {
-	ops, err := s.store.ListOperations(ctx, project, location)
+	locations, err := s.scopeLocations(ctx, project, location)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, err
 	}
+	var ops []containerstore.Operation
+	for _, loc := range locations {
+		got, err := s.store.ListOperations(ctx, project, loc)
+		if err != nil {
+			return nil, mapStoreErr(err)
+		}
+		ops = append(ops, got...)
+	}
+	sort.Slice(ops, func(i, j int) bool {
+		if ops[i].Location != ops[j].Location {
+			return ops[i].Location < ops[j].Location
+		}
+		return ops[i].Name < ops[j].Name
+	})
 	for i := range ops {
 		ops[i] = s.settleOperation(ops[i])
 	}
@@ -299,16 +361,34 @@ func modelNotFound(msg string) error {
 	return model.NewProviderError("NotFound", msg, 404)
 }
 
-func mapStoreErr(err error) error {
+// modelNotFoundNamed is modelNotFound for a known resource, using real GKE's
+// "Not found: <resource name>." sentence.
+func modelNotFoundNamed(name string) error {
+	return model.NewProviderError("NotFound", "Not found: "+name+".", 404)
+}
+
+func mapStoreErr(err error) error { return mapStoreErrNamed("", err) }
+
+// mapStoreErrNamed maps a store sentinel to the GCP error real GKE answers. When
+// the canonical resource name is known it is included, matching real GKE's
+// "Not found: projects/…/clusters/…." / "Already exists: …." sentences
+// (captured for clusters.get in docs/gcp/gke-dataproc-p0-captures.md §3).
+func mapStoreErrNamed(name string, err error) error {
+	withName := func(prefix, fallback string) string {
+		if name == "" {
+			return fallback
+		}
+		return prefix + name + "."
+	}
 	switch {
 	case errors.Is(err, containerstore.ErrNoSuchCluster):
-		return model.NewProviderError("NotFound", "cluster not found", 404)
+		return model.NewProviderError("NotFound", withName("Not found: ", "cluster not found"), 404)
 	case errors.Is(err, containerstore.ErrNoSuchNodePool):
-		return model.NewProviderError("NotFound", "node pool not found", 404)
+		return model.NewProviderError("NotFound", withName("Not found: ", "node pool not found"), 404)
 	case errors.Is(err, containerstore.ErrNoSuchOperation):
-		return model.NewProviderError("NotFound", "operation not found", 404)
+		return model.NewProviderError("NotFound", withName("Not found: ", "operation not found"), 404)
 	case errors.Is(err, containerstore.ErrAlreadyExists):
-		return model.NewProviderError("AlreadyExists", "already exists", 409)
+		return model.NewProviderError("AlreadyExists", withName("Already exists: ", "already exists"), 409)
 	default:
 		return err
 	}

@@ -169,8 +169,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 			"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
 	}
 	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
+	// Real GCP distinguishes the GKE virtual-cluster create from the
+	// Compute-Engine one in the operation metadata: `CREATE_VIRTUAL_GKE` vs
+	// `CREATE`, and the first status is PENDING (captured 2026-11-03).
+	opType, opState := "CREATE", "RUNNING"
+	if gkeVCC != nil {
+		opType, opState = "CREATE_VIRTUAL_GKE", "PENDING"
+	}
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
-		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
+		clusterOperationMetadata(name, c.ClusterUUID, opType, opState))
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
@@ -427,6 +434,18 @@ func (s *Service) StopCluster(ctx context.Context, project, region, name string)
 // succeeding, so SDK callers observe a real UNIMPLEMENTED error.
 func (s *Service) DiagnoseCluster() error {
 	return model.NewProviderError("Unimplemented", "DiagnoseCluster is not supported by the emulator", 501)
+}
+
+// ServerlessUnsupported reports the Dataproc Serverless (the product now called
+// Managed Service for Apache Spark) control plane as deliberately unimplemented.
+// Both transports answer the same UNIMPLEMENTED through it, so a serverless
+// client gets "not implemented" rather than an unknown-service 404 (REST) and a
+// different code from gRPC. rpc names the method the request asked for.
+func (s *Service) ServerlessUnsupported(rpc string) error {
+	if rpc == "" {
+		return model.NewProviderError("Unimplemented", "the Dataproc Serverless API is not supported by the emulator", 501)
+	}
+	return model.NewProviderError("Unimplemented", rpc+" is not supported by the emulator (Dataproc Serverless is not implemented)", 501)
 }
 
 // --- Lazy cluster state machine ---

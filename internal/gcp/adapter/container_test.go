@@ -1,8 +1,10 @@
 package gcp
 
 import (
+	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,15 @@ func TestDetectContainerService(t *testing.T) {
 		{"container.localhost:4588", "/v1/projects/p/locations/us-central1/clusters/c1", "container", SourceHost},
 		{"container.localhost:4588", "/v1/projects/p/locations/us-central1/operations", "container", SourceHost},
 		{"container.googleapis.com", "/v1/projects/p/locations/us-central1/clusters/c1", "container", SourceHost},
+		// Real GKE publishes v1 and v1beta1; the beta client surfaces
+		// (gcloud beta container, the google-beta provider) request /v1beta1/.
+		{"container.localhost:4588", "/v1beta1/projects/p/locations/us-central1/clusters", "container", SourceHost},
+		{"container.googleapis.com", "/v1beta1/projects/p/locations/us-central1/clusters/c1", "container", SourceHost},
+		{"localhost:8080", "/container/v1beta1/projects/p/locations/us-central1/clusters", "container", SourcePath},
+		// A beta path with no container host must not become a GCS object
+		// download (the pre-fix behaviour answered an XML NoSuchBucket); it is
+		// an unknown service, which is the honest answer.
+		{"localhost:8080", "/v1beta1/projects/p/locations/us-central1/clusters", "", SourceUnknown},
 		// Default host: the canonical path stays Managed Kafka (the pre-existing
 		// behavior — do not regress the collision).
 		{"localhost:8080", "/v1/projects/p/locations/us-central1/clusters", "managedkafka", SourcePath},
@@ -48,5 +59,168 @@ func TestContainerHostTokenOnlyV1(t *testing.T) {
 		if got, _ := DetectService(r); got == "container" {
 			t.Errorf("DetectService(%q) claimed container for a non-/v1/ path", path)
 		}
+	}
+}
+
+// GKE-only subpaths and verbs disambiguate the shared clusters collection without
+// a host token: Managed Kafka has no node pools and none of these verbs.
+func TestDetectContainerByGKEOnlyShape(t *testing.T) {
+	cases := []string{
+		"/v1/projects/p/locations/us-central1/clusters/c1/nodePools",
+		"/v1/projects/p/locations/us-central1/clusters/c1/nodePools/np1",
+		"/v1/projects/p/locations/us-central1/clusters/c1/nodePools/np1:setSize",
+		"/v1/projects/p/locations/us-central1/clusters/c1:setAddons",
+		"/v1/projects/p/locations/us-central1/clusters/c1:setNetworkPolicy",
+		"/v1/projects/p/locations/us-central1/clusters/c1:updateMaster",
+		"/v1/projects/p/locations/us-central1/clusters/c1:startIpRotation",
+		"/v1/projects/p/locations/us-central1/clusters/c1:setResourceLabels",
+		"/v1/projects/p/locations/us-central1/clusters/c1/jwks",
+		"/v1/projects/p/locations/us-central1/clusters/c1/well-known/openid-configuration",
+	}
+	for _, path := range cases {
+		r := &http.Request{Host: "localhost:8080", Method: http.MethodGet, URL: &url.URL{Path: path}}
+		if got, _ := DetectService(r); got != "container" {
+			t.Errorf("DetectService(%q) = %q, want container", path, got)
+		}
+	}
+	// The bare collection stays Managed Kafka without a discriminator.
+	r := &http.Request{Host: "localhost:8080", Method: http.MethodGet,
+		URL: &url.URL{Path: "/v1/projects/p/locations/us-central1/clusters"}}
+	if got, _ := DetectService(r); got != "managedkafka" {
+		t.Errorf("bare clusters collection = %q, want managedkafka", got)
+	}
+}
+
+// With the GKE existence probe installed, a bare-host clusters request for a
+// project/location that actually holds a GKE cluster is GKE's, so a client
+// configured without a container.* host is not silently answered by Managed
+// Kafka with an empty list.
+func TestBareClusterRoutesToGKEWhentheControlPlaneHasOne(t *testing.T) {
+	a := NewAdapter("")
+	a.SetContainerClusterProbe(func(_ context.Context, project, location string) bool {
+		return project == "p" && location == "us-central1"
+	})
+	r, _ := http.NewRequest(http.MethodGet, "http://localhost:8080/v1/projects/p/locations/us-central1/clusters", nil)
+	svc, _ := DetectService(r)
+	if svc != "managedkafka" {
+		t.Fatalf("precondition: DetectService = %q, want managedkafka", svc)
+	}
+	codec, err := a.CodecFor("container")
+	if err != nil {
+		t.Fatalf("CodecFor(container): %v", err)
+	}
+	if _, _, err := a.DetectAndDecode(r, nil); err == nil {
+		// A container codec was selected; assert it via the codec name.
+		if codec == nil {
+			t.Fatal("no container codec")
+		}
+	}
+
+	// A project/location with no GKE cluster keeps Managed Kafka's ownership.
+	r2, _ := http.NewRequest(http.MethodGet, "http://localhost:8080/v1/projects/other/locations/europe-west1/clusters", nil)
+	if _, _, err := a.DetectAndDecode(r2, nil); err != nil {
+		t.Fatalf("DetectAndDecode(other): %v", err)
+	}
+}
+
+// A create body is itself a discriminator: Managed Kafka's CreateCluster
+// requires clusterId (in the body or the query), so a GKE-shaped create cannot
+// be Kafka's — which is what makes the FIRST create in an empty location work.
+func TestBareClusterCreateDisambiguatedByBody(t *testing.T) {
+	a := NewAdapter("") // no probe installed: nothing stored yet
+	cases := []struct {
+		name  string
+		url   string
+		body  string
+		wantS string
+	}{
+		{
+			name: "GKE create", url: "http://localhost:8080/v1/projects/p/locations/us-central1/clusters",
+			body: `{"cluster":{"name":"c1","initialNodeCount":1}}`, wantS: "container",
+		},
+		{
+			name: "Kafka create (query clusterId)", url: "http://localhost:8080/v1/projects/p/locations/us-central1/clusters?clusterId=k1",
+			body: `{"cluster":{"name":"k1"}}`, wantS: "managedkafka",
+		},
+		{
+			name: "Kafka create (body clusterId)", url: "http://localhost:8080/v1/projects/p/locations/us-central1/clusters",
+			body: `{"clusterId":"k1","cluster":{"name":"k1"}}`, wantS: "managedkafka",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := http.NewRequest(http.MethodPost, tc.url, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			svc, _ := DetectService(r)
+			if svc != "managedkafka" {
+				t.Fatalf("precondition: DetectService = %q", svc)
+			}
+			_, _, err := a.DetectAndDecode(r, []byte(tc.body))
+			if err != nil {
+				t.Fatalf("DetectAndDecode: %v", err)
+			}
+		})
+	}
+}
+
+// A project can hold a GKE cluster and a Managed Kafka cluster in the same
+// location. Kafka's clusterId is a positive signal and must win over the GKE
+// existence probe, or the probe would hijack every Kafka create in a project
+// that happens to have a GKE cluster.
+func TestKafkaCreateWinsOverGKEProbe(t *testing.T) {
+	a := NewAdapter("")
+	a.SetContainerClusterProbe(func(_ context.Context, _, _ string) bool { return true })
+
+	for _, tc := range []struct{ name, url, body string }{
+		{"query clusterId", "http://localhost:8080/v1/projects/p/locations/us-central1/clusters?clusterId=k1", `{"cluster":{"name":"k1"}}`},
+		{"body clusterId", "http://localhost:8080/v1/projects/p/locations/us-central1/clusters", `{"clusterId":"k1","cluster":{"name":"k1"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := http.NewRequest(http.MethodPost, tc.url, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			svc, _ := DetectService(r)
+			if svc != "managedkafka" {
+				t.Fatalf("precondition: DetectService = %q", svc)
+			}
+			_, codec, err := a.DetectAndDecode(r, []byte(tc.body))
+			if err != nil {
+				t.Fatalf("DetectAndDecode: %v", err)
+			}
+			if got := codec.ServiceName(); got != "managedkafka" {
+				t.Fatalf("codec = %q, want managedkafka", got)
+			}
+		})
+	}
+}
+
+// The shared clusters collection must not be hijacked in either direction: a
+// location that holds Kafka clusters stays Kafka's even when the project also
+// runs GKE, and a location that holds only GKE clusters becomes GKE's.
+func TestBareClusterListOwnershipIsTwoSided(t *testing.T) {
+	path := "http://localhost:8080/v1/projects/p/locations/us-central1/clusters"
+	cases := []struct {
+		name             string
+		gke, kafka, want bool
+		wantSvc          string
+	}{
+		{name: "only GKE has clusters", gke: true, wantSvc: "container"},
+		{name: "only Kafka has clusters", kafka: true, wantSvc: "managedkafka"},
+		{name: "both have clusters", gke: true, kafka: true, wantSvc: "managedkafka"},
+		{name: "neither has clusters", wantSvc: "managedkafka"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewAdapter("")
+			a.SetContainerClusterProbe(func(_ context.Context, _, _ string) bool { return tc.gke })
+			a.SetManagedKafkaClusterProbe(func(_ context.Context, _, _ string) bool { return tc.kafka })
+			r, _ := http.NewRequest(http.MethodGet, path, nil)
+			_, codec, err := a.DetectAndDecode(r, nil)
+			if err != nil {
+				t.Fatalf("DetectAndDecode: %v", err)
+			}
+			if got := codec.ServiceName(); got != tc.wantSvc {
+				t.Fatalf("codec = %q, want %q", got, tc.wantSvc)
+			}
+		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +43,13 @@ type GCPAdapter struct {
 	// accountObserver is the optional sink for served (project, service) pairs,
 	// used by the console's observed-project discovery. Nil disables it.
 	accountObserver func(ctx context.Context, account, service string)
+	// containerClusterProbe / managedKafkaClusterProbe resolve the one path the
+	// two services genuinely share on a bare origin
+	// (/v1/projects/{p}/locations/{l}/clusters): each reports whether its own
+	// store holds a cluster at that project+location. Nil keeps the historical
+	// Managed-Kafka ownership.
+	containerClusterProbe    func(ctx context.Context, project, location string) bool
+	managedKafkaClusterProbe func(ctx context.Context, project, location string) bool
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default
@@ -65,6 +73,23 @@ func NewAdapter(serviceAccount string) *GCPAdapter {
 		functionTrigger: restfunctions.NewTriggerCodec(),
 		runInvocation:   restrun.NewInvocationCodec(),
 	}
+}
+
+// SetContainerClusterProbe installs the GKE existence probe used to resolve the
+// bare-origin /v1/projects/{p}/locations/{l}/clusters ambiguity. It must report
+// whether the emulated GKE control plane holds a cluster at that project and
+// location.
+func (a *GCPAdapter) SetContainerClusterProbe(probe func(ctx context.Context, project, location string) bool) {
+	a.containerClusterProbe = probe
+}
+
+// SetManagedKafkaClusterProbe installs the Managed Kafka existence probe for the
+// same path. Both probes together keep the shared collection correct in both
+// directions: a location that holds Kafka clusters stays Kafka's even when the
+// project also runs GKE elsewhere (or at the same location), and a location that
+// holds only GKE clusters becomes GKE's.
+func (a *GCPAdapter) SetManagedKafkaClusterProbe(probe func(ctx context.Context, project, location string) bool) {
+	a.managedKafkaClusterProbe = probe
 }
 
 // Cloud implements adapter.CloudAdapter.
@@ -101,6 +126,38 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	service, source := DetectService(r)
 	if service == "" {
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target GCP service", 404)
+	}
+
+	// The bare /v1/projects/{p}/locations/{l}/clusters collection is genuinely
+	// shared with Managed Kafka, and path alone cannot separate the two. Three
+	// rules narrow it, so neither service is silently answered by the other:
+	//
+	//   - Managed Kafka's CreateCluster REQUIRES a clusterId (in the body or the
+	//     query — its own error is "missing location or clusterId"), so a request
+	//     carrying one is Kafka's, full stop. This must win over the store probe:
+	//     a project can hold a GKE cluster and a Kafka cluster in the same
+	//     location.
+	//   - A create body carrying a GKE `cluster` object and no clusterId cannot
+	//     be Kafka's. This is what makes the FIRST GKE create in an empty
+	//     project/location work, before there is any stored cluster to probe for.
+	//   - Once the control plane holds a GKE cluster at that project+location,
+	//     the location is GKE's for reads, updates and deletes too — but only
+	//     while Kafka holds none there. A location that holds Kafka clusters
+	//     stays Kafka's, so neither service can hijack the other's data.
+	if service == "managedkafka" {
+		if project, location, ok := bareClusterScope(r.URL.Path); ok {
+			kafkaSignal := jsonHasKey(body, "clusterId") || r.URL.Query().Get("clusterId") != ""
+			switch {
+			case kafkaSignal:
+				// Kafka's own request; leave it.
+			case r.Method == http.MethodPost && jsonHasKey(body, "cluster"):
+				service, source = "container", SourcePath
+			case a.managedKafkaClusterProbe != nil && a.managedKafkaClusterProbe(r.Context(), project, location):
+				// Kafka has clusters here; keep them.
+			case a.containerClusterProbe != nil && a.containerClusterProbe(r.Context(), project, location):
+				service, source = "container", SourcePath
+			}
+		}
 	}
 
 	// A host-detected request is a deployed function's HTTPS trigger, which has
@@ -245,4 +302,19 @@ func (a *GCPAdapter) EnrichRequest(r *http.Request, defaultRegion, defaultAccoun
 // Returns a GCP resource-name formatter for the given project.
 func (a *GCPAdapter) ResourceIDFor(_, accountID string) func(resourceType, name string) string {
 	return resource.ResourceID(accountID)
+}
+
+// jsonHasKey reports whether body is a JSON object carrying key at its top
+// level. It is only used for routing disambiguation, so a malformed or non-JSON
+// body simply answers false and the request keeps its path-detected service.
+func jsonHasKey(body []byte, key string) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return false
+	}
+	_, ok := m[key]
+	return ok
 }

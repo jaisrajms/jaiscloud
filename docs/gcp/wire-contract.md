@@ -477,7 +477,16 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `masterAuthorizedNetworksConfig` member (that is a `Cluster` field, echoed on the cluster), and the
   container API documents no `projects.locations.get`/`list` method (neither Discovery nor the
   `google.container.v1.ClusterManager` proto declares one; only `getServerConfig` is
-  location-scoped), so neither is synthesized. There is **no real Kubernetes control plane** behind
+  location-scoped), so neither is synthesized. The served version surface is `v1` **and**
+  `v1beta1`: both versions route to the same core and codec on the `container` host and under
+  `/container/`, because real GKE publishes both (v1beta2 and v1alpha1 are no longer published) and
+  the beta client surfaces — `gcloud beta container`, the Magic Modules `google-beta` provider
+  whose base URL is `…/v1beta1/` — request the latter. `clusters.create` honours the caller's
+  `initialClusterVersion`, resolving `latest` and the `1`/`1.X`/`1.X.Y` prefixes against the served
+  release and rejecting anything else with real GKE's `Master version "<v>" is unsupported.` The
+  Discovery wildcard parent `projects/{p}/locations/-` ("matches all zones and all regions") is
+  honoured on `clusters.list` and `operations.list`, so the default `gcloud container clusters
+  list` — which sends it — is not empty. There is **no real Kubernetes control plane** behind
   it, so `Autopilot` compatibility, `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
   `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys` and
   `listUsableSubnetworks` remain explicit `Unimplemented` stubs, and there is no Artifact
@@ -566,9 +575,16 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   with an explicit `Unimplemented` error rather than a plausible empty response.
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
   `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
-  and has no subworkflows/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
+  and has no subworkflows/IAM/CMEK; Dataproc Serverless (the whole
+  `locations/{location}` surface — `BatchController` 5 methods, `SessionController` 5,
+  `SessionTemplateController` 5 and the 47 `sparkApplications` methods, 62 of the 136 Dataproc v1
+  Discovery methods) is not implemented: the REST paths answer `501 Unimplemented` naming the RPC
+  and the three gRPC controllers are registered but answer `UNIMPLEMENTED`, so the gap is loud and
+  identical on both transports (`locations/{location}/operations` stays with Workflows, the shared
+  LRO path);
   a GKE-backed cluster's `gkeClusterTarget` is resolved through the emulated GKE control plane at
-  create (same project/region, standard not Autopilot, Workload Identity enabled) and its
+  create (same project/region, standard not Autopilot, Workload Identity enabled — a **zonal**
+  target resolves under its own zone) and its
   `nodePoolTarget` pools are created through the GKE API or verified field-by-field against an
   existing one (adopted when the caller sends no `nodePoolConfig`, which is input-only and never
   read back; a `nodePool` that is not the full

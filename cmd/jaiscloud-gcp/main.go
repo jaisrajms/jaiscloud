@@ -681,6 +681,19 @@ func startCmd() *cobra.Command {
 			// against one store and cannot drift.
 			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode), managedkafkacore.WithBroker(mkBroker), managedkafkacore.WithEventBus(eventBus))
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
+			// The bare /v1/projects/{p}/locations/{l}/clusters collection is
+			// shared with GKE, and path alone cannot separate the two. Each
+			// service reports whether it holds clusters at the requested
+			// project+location so a location that belongs to one is never
+			// answered by the other.
+			cloudAdapter.SetContainerClusterProbe(func(ctx context.Context, project, location string) bool {
+				clusters, err := containerCore.ListClusters(ctx, project, location)
+				return err == nil && len(clusters) > 0
+			})
+			cloudAdapter.SetManagedKafkaClusterProbe(func(ctx context.Context, project, location string) bool {
+				clusters, _, err := managedKafkaCore.ListClusters(ctx, project, location, 0, "")
+				return err == nil && len(clusters) > 0
+			})
 
 			icebergP := icebergprovider.New(stores.iceberg)
 
@@ -1070,6 +1083,13 @@ func startCmd() *cobra.Command {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterWorkflowTemplateServiceServer(gserv.GRPC(), dataprocGRPC)
+					// Dataproc Serverless (Managed Spark) is not implemented; the
+					// services are registered so a serverless client gets
+					// UNIMPLEMENTED rather than "unknown service", matching the
+					// REST transport's 501.
+					dataprocpb.RegisterBatchControllerServer(gserv.GRPC(), dataprocGRPC)
+					dataprocpb.RegisterSessionControllerServer(gserv.GRPC(), dataprocGRPC)
+					dataprocpb.RegisterSessionTemplateControllerServer(gserv.GRPC(), dataprocGRPC)
 				}
 				if transports.GRPCFor("container") {
 					containerpb.RegisterClusterManagerServer(gserv.GRPC(), containerGRPC)

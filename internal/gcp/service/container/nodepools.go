@@ -114,7 +114,7 @@ func materializeNodePools(project, location string, c *containerstore.Cluster) e
 func (s *Service) GetNodePool(ctx context.Context, project, location, cluster, pool string) (containerstore.NodePool, error) {
 	c, err := s.store.GetCluster(ctx, project, location, cluster)
 	if err != nil {
-		return containerstore.NodePool{}, mapStoreErr(err)
+		return containerstore.NodePool{}, mapStoreErrNamed(ClusterName(project, location, cluster), err)
 	}
 	for _, p := range c.NodePools {
 		if p.Name == pool {
@@ -123,7 +123,7 @@ func (s *Service) GetNodePool(ctx context.Context, project, location, cluster, p
 			return NodePoolWithReadDefaults(p), nil
 		}
 	}
-	return containerstore.NodePool{}, modelNotFound("node pool not found")
+	return containerstore.NodePool{}, modelNotFoundNamed(NodePoolName(project, location, cluster, pool))
 }
 
 // ListNodePools lists a cluster's node pools, sorted by short name.

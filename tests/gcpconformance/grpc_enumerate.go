@@ -171,6 +171,12 @@ func EnumerateGRPC() []GRPCService {
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})
+	// Deliberately NOT registered here: the Dataproc Serverless controllers
+	// (Batch/Session/SessionTemplate). The emulator registers them at runtime so a
+	// serverless client gets UNIMPLEMENTED rather than "unknown service", but this
+	// registry enumerates the *served* surface and the fidelity matrix is derived
+	// from it — listing 15 unimplemented RPCs as implemented would be a false ga.
+	// Surfacing them as an explicit `unsupported` state is GKP8.
 	containerpb.RegisterClusterManagerServer(reg, &grpccontainer.Service{})
 	runSvc := &grpcrun.Service{}
 	runpb.RegisterServicesServer(reg, runSvc)

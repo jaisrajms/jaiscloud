@@ -10,8 +10,15 @@
 // Any, and the client's Poll/Wait resolves it through the emulator's
 // google.longrunning.Operations service (see ResolveOperation), which drives the
 // core's lazy cluster state machine. SubmitJobAsOperation packs a typed Job as
-// its response. WorkflowTemplateService, BatchController, Session* and
-// AutoscalingPolicy are deliberately not registered.
+// its response.
+//
+// BatchController, SessionController and SessionTemplateController are
+// registered but unimplemented: the emulator models clusters and jobs, not the
+// Dataproc Serverless (Managed Service for Apache Spark) control plane. They are
+// registered so the stock clients get UNIMPLEMENTED — the same answer the REST
+// transport gives for the same paths — instead of an unknown-service error, and
+// so the absence is visible in the served-service catalogue. AutoscalingPolicy
+// is not registered (it has no surface in either transport).
 package dataproc
 
 import (
@@ -33,6 +40,12 @@ type Service struct {
 	dataprocpb.UnimplementedClusterControllerServer
 	dataprocpb.UnimplementedJobControllerServer
 	dataprocpb.UnimplementedWorkflowTemplateServiceServer
+	// The Serverless controllers are embedded unimplemented on purpose: every
+	// RPC answers UNIMPLEMENTED through the generated stubs, matching the REST
+	// transport's 501 for the same paths.
+	dataprocpb.UnimplementedBatchControllerServer
+	dataprocpb.UnimplementedSessionControllerServer
+	dataprocpb.UnimplementedSessionTemplateControllerServer
 
 	core        *core.Service
 	defaultProj string

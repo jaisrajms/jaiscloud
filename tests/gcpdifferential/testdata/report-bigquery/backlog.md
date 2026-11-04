@@ -25,8 +25,8 @@ Summary: **40 match, 15 gap, 19 bug** (74 cases).
 | --- | --- | --- | ---: | ---: | --- |
 | agg_countif | aggregate | gap | 400 | 8 | diverges (expected) |
 | agg_group_by | aggregate | bug | 200 | 1 | diverges (expected) |
-| err_type_mismatch | error | bug | 200 | 2 | diverges (expected) |
-| expr_arith_div_zero | expression | bug | 200 | 2 | diverges (expected) |
+| err_type_mismatch | error | bug | 400 | 0 | **matches now — stale expectation** |
+| expr_arith_div_zero | expression | bug | 400 | 0 | **matches now — stale expectation** |
 | expr_case | expression | bug | 200 | 2 | diverges (expected) |
 | expr_cast_float_int | expression | bug | 200 | 1 | diverges (expected) |
 | expr_current_date | expression | gap | 400 | 8 | diverges (expected) |
@@ -91,23 +91,17 @@ HTTP 200, 10 accepted divergence(s) triaged.
 
 SQL: `SELECT 1 + 'a'`
 
-HTTP 200, 8 accepted divergence(s) triaged.
+HTTP 400, 4 accepted divergence(s) triaged.
 
-| kind | location | real GCP | emulator |
-| --- | --- | --- | --- |
-| status_mismatch | status | 400 | 200 |
-| missing_field | response.error | {"code":400,"errors":[{"domain":"global","location":"q","locationType":"parameter","message":"Could not cast literal \"a\" to type DATE at [1:12]","reason":"invalidQuery"}],"message":"Could not cast literal \"a\" to type DATE at [1:12]","st… | absent |
+The emulator now matches real GCP for this case; the declared `bug` expectation is stale and should be updated to `match`.
 
 ### expr_arith_div_zero — bug (expression)
 
 SQL: `SELECT 1/0`
 
-HTTP 200, 8 accepted divergence(s) triaged.
+HTTP 400, 4 accepted divergence(s) triaged.
 
-| kind | location | real GCP | emulator |
-| --- | --- | --- | --- |
-| status_mismatch | status | 400 | 200 |
-| missing_field | response.error | {"code":400,"errors":[{"domain":"global","location":"q","locationType":"parameter","message":"division by zero: 1 / 0","reason":"invalidQuery"}],"message":"division by zero: 1 / 0","status":"INVALID_ARGUMENT"} | absent |
+The emulator now matches real GCP for this case; the declared `bug` expectation is stale and should be updated to `match`.
 
 ### expr_case — bug (expression)
 

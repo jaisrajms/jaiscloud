@@ -1,7 +1,11 @@
 package container
 
 import (
+	"context"
+	"strings"
 	"testing"
+
+	containerstore "jaiscloud/internal/gcp/store/container"
 )
 
 func TestGetServerConfigShape(t *testing.T) {
@@ -71,4 +75,60 @@ func TestGetServerConfigRequiresProjectAndLocation(t *testing.T) {
 	providerErr(t, err, "InvalidArgument")
 	_, err = svc.GetServerConfig("p", "")
 	providerErr(t, err, "InvalidArgument")
+}
+
+// A create must honour the version the caller pinned — resolving the documented
+// aliases and rejecting an unsupported release — instead of rewriting it to the
+// mock's default. Real GKE never silently substitutes a different release.
+func TestResolveClusterVersion(t *testing.T) {
+	accepted := []string{"", "latest", "1", "1.30", "1.30.5", DefaultMasterVersion}
+	for _, in := range accepted {
+		got, err := ResolveClusterVersion(in)
+		if err != nil {
+			t.Fatalf("ResolveClusterVersion(%q): %v", in, err)
+		}
+		if got != DefaultMasterVersion {
+			t.Fatalf("ResolveClusterVersion(%q) = %q, want %q", in, got, DefaultMasterVersion)
+		}
+	}
+	for _, in := range []string{"1.29", "1.31", "2"} {
+		_, err := ResolveClusterVersion(in)
+		if err == nil {
+			t.Fatalf("ResolveClusterVersion(%q) must reject an unsupported prefix", in)
+		}
+		if !strings.Contains(err.Error(), `No valid versions with the prefix "`+in+`" found`) {
+			t.Fatalf("ResolveClusterVersion(%q) error = %v, want the real-GCP prefix message", in, err)
+		}
+	}
+	for _, in := range []string{"1.29.7-gke.1000", "1.30.5-gke.9999999"} {
+		_, err := ResolveClusterVersion(in)
+		if err == nil {
+			t.Fatalf("ResolveClusterVersion(%q) must reject an unsupported release", in)
+		}
+		if !strings.Contains(err.Error(), `Master version "`+in+`" is unsupported`) {
+			t.Fatalf("ResolveClusterVersion(%q) error = %v, want the real-GCP unsupported-release message", in, err)
+		}
+	}
+}
+
+// CreateCluster must persist and read back the caller's pinned version.
+func TestCreateClusterHonoursInitialClusterVersion(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+	op, err := svc.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{Name: "pinned", InitialClusterVersion: "1.30"})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	_ = op
+	c, err := svc.GetCluster(ctx, "p", "us-central1", "pinned")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if c.InitialClusterVersion != DefaultMasterVersion || c.CurrentMasterVersion != DefaultMasterVersion {
+		t.Fatalf("pinned version not honoured: initial=%q current=%q", c.InitialClusterVersion, c.CurrentMasterVersion)
+	}
+	_, err = svc.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{Name: "bad", InitialClusterVersion: "1.29.7-gke.1000"})
+	if err == nil {
+		t.Fatal("a create pinned to an unsupported version must be rejected")
+	}
 }

@@ -322,6 +322,12 @@ type Store interface {
 	GetOperation(ctx context.Context, projectID, location, name string) (Operation, error)
 	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
 
+	// ListLocations returns every location the project has a cluster or an
+	// operation in. It backs the Discovery wildcard parent (Location "-" matches
+	// all zones and all regions), so the list methods can span locations on one
+	// request.
+	ListLocations(ctx context.Context, projectID string) ([]string, error)
+
 	// Reset clears all clusters and operations (/_jaiscloud/reset).
 	Reset(ctx context.Context)
 }

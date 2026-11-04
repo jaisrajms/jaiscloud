@@ -95,3 +95,34 @@ func TestCodecWorkflowTemplateIAM(t *testing.T) {
 		t.Fatal("unknown custom verb decoded successfully")
 	}
 }
+
+// The serverless paths must decode to a Dataproc action (so the provider can
+// answer 501) rather than falling through as an unknown resource.
+func TestDecodeServerlessPaths(t *testing.T) {
+	c := NewCodec()
+	cases := []struct {
+		path, action, rpc string
+		method            string
+	}{
+		{"/v1/projects/p/locations/us-central1/batches", "Serverless", "BatchController.CreateBatch", http.MethodPost},
+		{"/v1/projects/p/locations/us-central1/batches", "Serverless", "BatchController.ListBatches", http.MethodGet},
+		{"/v1/projects/p/locations/us-central1/batches/b1", "Serverless", "BatchController.GetBatch", http.MethodGet},
+		{"/v1/projects/p/locations/us-central1/batches/b1", "Serverless", "BatchController.DeleteBatch", http.MethodDelete},
+		{"/v1/projects/p/locations/us-central1/batches/b1:analyze", "Serverless", "BatchController.AnalyzeBatch", http.MethodPost},
+		{"/v1/projects/p/locations/us-central1/sessions", "Serverless", "SessionController.CreateSession", http.MethodPost},
+		{"/v1/projects/p/locations/us-central1/sessionTemplates", "Serverless", "SessionTemplateController.CreateSessionTemplate", http.MethodPost},
+	}
+	for _, tc := range cases {
+		r, _ := http.NewRequest(tc.method, "http://localhost:8080"+tc.path, nil)
+		nr, err := c.Decode(r, nil)
+		if err != nil {
+			t.Fatalf("%s %s: %v", tc.method, tc.path, err)
+		}
+		if nr.Action != tc.action {
+			t.Fatalf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+		if got := nr.Params["rpc"]; got != tc.rpc {
+			t.Fatalf("%s %s: rpc = %v, want %q", tc.method, tc.path, got, tc.rpc)
+		}
+	}
+}

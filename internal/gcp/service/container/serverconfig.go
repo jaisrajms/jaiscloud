@@ -1,5 +1,9 @@
 package container
 
+import (
+	"strings"
+)
+
 // ServerConfig is google.container.v1.ServerConfig: the Kubernetes version and
 // node-image catalog the service supports, plus its release channels. It is
 // derived (the emulator has no version catalog to store), so GetServerConfig
@@ -18,6 +22,41 @@ type ReleaseChannelConfig struct {
 	Channel        string
 	DefaultVersion string
 	ValidVersions  []string
+}
+
+// ResolveClusterVersion resolves a requested Cluster.initialClusterVersion to
+// the concrete release the service will run. Real GKE accepts a full version,
+// the `latest` alias, and the `1` / `1.X` prefix forms, and rejects anything it
+// does not serve with `Master version "<v>" is unsupported.` — it never silently
+// substitutes a different release. The emulator serves one version, so those
+// prefix forms resolve against it and every other request is rejected rather
+// than rewritten (a create pinned to a version the mock does not run must fail
+// the same way real GKE fails it).
+func ResolveClusterVersion(requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	switch requested {
+	case "", "latest":
+		return DefaultMasterVersion, nil
+	}
+	if requested == DefaultMasterVersion {
+		return DefaultMasterVersion, nil
+	}
+	// Accept the documented prefix aliases (1, 1.30, 1.30.5) when they are a
+	// whole-segment prefix of the release actually served. The `-gke.N` build
+	// suffix is not part of the alias space, so only the plain version part is
+	// prefix-matched.
+	base, _, _ := strings.Cut(DefaultMasterVersion, "-")
+	if requested == base || strings.HasPrefix(base, requested+".") {
+		return DefaultMasterVersion, nil
+	}
+	// Real GKE distinguishes a release it does not serve from a prefix that
+	// matches no version at all (both captured 2026-11-03): a full release
+	// string gets `Master version "<v>" is unsupported.`, while a prefix gets
+	// `No valid versions with the prefix "<v>" found.`
+	if !strings.Contains(requested, "-") {
+		return "", invalidArgument(`No valid versions with the prefix "` + requested + `" found.`)
+	}
+	return "", invalidArgument(`Master version "` + requested + `" is unsupported.`)
 }
 
 // ServerConfigValidImageTypes is ServerConfig.validImageTypes: the node images a

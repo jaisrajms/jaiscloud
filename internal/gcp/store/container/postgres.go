@@ -231,6 +231,31 @@ func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, n
 	return op, nil
 }
 
+// ListLocations returns every location holding a cluster or an operation for the
+// project, sorted, so the Discovery wildcard parent ("-") can span regions and
+// zones in one list call.
+func (s *PostgresStore) ListLocations(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT location FROM jc_container_clusters WHERE project_id=$1
+		UNION
+		SELECT location FROM jc_container_operations WHERE project_id=$1
+		ORDER BY location
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var loc string
+		if err := rows.Scan(&loc); err != nil {
+			return nil, err
+		}
+		out = append(out, loc)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location string) ([]Operation, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT operation_name, data FROM jc_container_operations

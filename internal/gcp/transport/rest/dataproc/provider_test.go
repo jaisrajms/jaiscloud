@@ -1221,3 +1221,20 @@ func TestCreateCluster_PHSHistoryServer(t *testing.T) {
 		t.Fatalf("missing PHS cluster: expected 404 NotFound, got %v", err)
 	}
 }
+
+// Dataproc Serverless (Managed Spark) is not implemented, but it must fail loud
+// and identically to gRPC: a 501 UNIMPLEMENTED naming the RPC, not an
+// unknown-service 404 and never a GCS raw-media error.
+func TestServerless_Unimplemented(t *testing.T) {
+	p := newProvider(t)
+	for _, rpc := range []string{"BatchController.CreateBatch", "SessionController.CreateSession", ""} {
+		_, err := p.Serverless(context.Background(), testNR(map[string]any{"rpc": rpc}))
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 501 {
+			t.Fatalf("rpc %q: expected 501 Unimplemented, got %v", rpc, err)
+		}
+		if rpc != "" && !strings.Contains(pe.Message, rpc) {
+			t.Fatalf("rpc %q: error must name the RPC, got %q", rpc, pe.Message)
+		}
+	}
+}

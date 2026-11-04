@@ -804,3 +804,30 @@ func TestCreateCluster_PHSHistoryServer(t *testing.T) {
 		t.Fatalf("missing PHS cluster: got %v, want NotFound", err)
 	}
 }
+
+// The Dataproc Serverless controllers are registered but unimplemented: a stock
+// serverless client must get UNIMPLEMENTED, matching the REST transport's 501,
+// rather than "unknown service".
+func TestServerlessControllers_Unimplemented(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	req := &dataprocpb.CreateBatchRequest{
+		Parent: "projects/proj/locations/us-central1",
+		Batch:  &dataprocpb.Batch{},
+	}
+	if _, err := s.CreateBatch(ctx, req); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("BatchController.CreateBatch = %v, want Unimplemented", err)
+	}
+	if _, err := s.CreateSession(ctx, &dataprocpb.CreateSessionRequest{
+		Parent:  "projects/proj/locations/us-central1",
+		Session: &dataprocpb.Session{},
+	}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("SessionController.CreateSession = %v, want Unimplemented", err)
+	}
+	if _, err := s.CreateSessionTemplate(ctx, &dataprocpb.CreateSessionTemplateRequest{
+		Parent:          "projects/proj/locations/us-central1",
+		SessionTemplate: &dataprocpb.SessionTemplate{},
+	}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("SessionTemplateController.CreateSessionTemplate = %v, want Unimplemented", err)
+	}
+}
