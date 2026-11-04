@@ -1,0 +1,11 @@
+# A third values set for the chart gate, existing only to exercise the DGD5
+# branch where a minting stage hands the two downscoped tokens to the pod.
+# Everything else stays at the defaults, so the diff against
+# golden/defaults.yaml is exactly one Secret.
+#
+# The tokens are fake: the chart never mints, generates or validates one, and a
+# real pair is short-lived and produced per run by the STS exchange. This file
+# proves values → Secret stringData → the Job's secretKeyRef wiring renders.
+downscope:
+  inputToken: fake-downscoped-input-token-for-the-render-check
+  outputToken: fake-downscoped-output-token-for-the-render-check

@@ -98,4 +98,10 @@ check defaults "$GOLDEN_DIR/defaults.yaml"
 # cross-project bucket shape all have to render correctly here.
 check overrides "$GOLDEN_DIR/overrides.yaml" --values "$GOLDEN_DIR/override-values.yaml"
 
+# DGD5's other branch: both tokens supplied as values, no existingSecret, so the
+# chart has to render them into its own Secret. Kept separate from the defaults
+# rather than made the default: an empty pair is the honest default, and a
+# golden that never sees a non-empty token would not catch a broken key name.
+check tokens "$GOLDEN_DIR/tokens.yaml" --values "$GOLDEN_DIR/tokens-values.yaml"
+
 echo "== chart gate passed"

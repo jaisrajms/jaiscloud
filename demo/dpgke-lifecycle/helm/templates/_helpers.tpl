@@ -32,6 +32,21 @@ creates the Secret uses the same branch, so the two never disagree.
 {{- end -}}
 {{- end -}}
 
+{{/*
+The Secret holding the two downscoped tokens (DGD5). Same branch as
+dpgke.secretName: `downscope.existingSecret` names one the reader created out
+of band (a minting stage can write it per run), otherwise the chart renders its
+own — but only when a value is present, because an empty pair means "the app
+mints its own".
+*/}}
+{{- define "dpgke.downscopeSecretName" -}}
+{{- if .Values.downscope.existingSecret -}}
+{{- .Values.downscope.existingSecret -}}
+{{- else -}}
+{{- printf "%s-downscope" (include "dpgke.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "dpgke.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "dpgke.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}

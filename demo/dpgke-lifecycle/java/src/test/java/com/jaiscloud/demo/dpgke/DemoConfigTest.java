@@ -1,6 +1,7 @@
 package com.jaiscloud.demo.dpgke;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Assumptions;
@@ -41,6 +42,18 @@ class DemoConfigTest {
     assertEquals("gs://" + cfg.inputBucket + "/" + cfg.jobCodeObject, cfg.jobCodeUri());
     assertEquals("gs://" + cfg.inputBucket + "/" + cfg.jobInputObject, cfg.jobInputUri());
     assertEquals("gs://" + cfg.outputBucket + "/" + cfg.jobOutputPrefix, cfg.jobOutputUri());
+  }
+
+  @Test
+  void downscopedTokensAreAbsentUntilInjected() {
+    // DGD5: absent means "mint them here"; a blank value from a chart-rendered
+    // Secret must mean the same, never an empty bearer token.
+    Assumptions.assumeTrue(System.getenv("DGD5_INPUT_TOKEN") == null, "DGD5_INPUT_TOKEN is set");
+    Assumptions.assumeTrue(System.getenv("DGD5_OUTPUT_TOKEN") == null, "DGD5_OUTPUT_TOKEN is set");
+
+    DemoConfig cfg = DemoConfig.fromEnv();
+    assertNull(cfg.inputToken);
+    assertNull(cfg.outputToken);
   }
 
   @Test

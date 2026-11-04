@@ -59,6 +59,15 @@ final class DemoConfig {
   /** Local copy of the PySpark file; null when the object is already in GCS. */
   final String sparkScript;
 
+  /**
+   * DGD5: the two downscoped tokens, when a minting stage injected them. Null
+   * means this run mints the pair itself through the emulator's STS exchange at
+   * {@code /v1/token}; the chart's matching keys are optional and absent when
+   * it does not inject them.
+   */
+  final String inputToken;
+  final String outputToken;
+
   final int pollSeconds;
   final int pollAttempts;
 
@@ -94,6 +103,8 @@ final class DemoConfig {
       String jobInputObject,
       String jobOutputPrefix,
       String sparkScript,
+      String inputToken,
+      String outputToken,
       int pollSeconds,
       int pollAttempts,
       boolean teardown,
@@ -120,6 +131,8 @@ final class DemoConfig {
     this.jobInputObject = jobInputObject;
     this.jobOutputPrefix = jobOutputPrefix;
     this.sparkScript = sparkScript;
+    this.inputToken = inputToken;
+    this.outputToken = outputToken;
     this.pollSeconds = pollSeconds;
     this.pollAttempts = pollAttempts;
     this.teardown = teardown;
@@ -157,6 +170,11 @@ final class DemoConfig {
         env("DGD3_JOB_INPUT_OBJECT", DEFAULT_JOB_INPUT_OBJECT),
         env("DGD3_JOB_OUTPUT_PREFIX", DEFAULT_JOB_OUTPUT_PREFIX),
         resolveSparkScript(),
+        // A blank token is not a token: the app falls back to the STS exchange
+        // rather than sending "Bearer " to GCS and failing on a 401/403 that
+        // looks like a boundary denial.
+        envOrNull("DGD5_INPUT_TOKEN"),
+        envOrNull("DGD5_OUTPUT_TOKEN"),
         envInt("DGD3_POLL_SECONDS", DEFAULT_POLL_SECONDS),
         envInt("DGD3_POLL_ATTEMPTS", DEFAULT_POLL_ATTEMPTS),
         envBool("DGD3_TEARDOWN", true),
@@ -209,6 +227,11 @@ final class DemoConfig {
   private static String env(String key, String def) {
     String value = System.getenv(key);
     return value == null || value.isBlank() ? def : value.trim();
+  }
+
+  private static String envOrNull(String key) {
+    String value = System.getenv(key);
+    return value == null || value.isBlank() ? null : value.trim();
   }
 
   private static int envInt(String key, int def) {

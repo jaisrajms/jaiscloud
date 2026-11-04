@@ -79,6 +79,11 @@ import java.util.stream.Collectors;
  * readable) and does not claim Spark ran or that it wrote records. Real Spark
  * bytes are DGD6's k3d gate.
  *
+ * <p>DGD5 adds the credential half: two Credential Access Boundaries (input
+ * read, output write) are exchanged at the emulator's STS endpoint and used as
+ * the credential on the wire, with the <em>denials</em> asserted — see
+ * {@link DownscopedAccess}. A boundary that is never refused proves nothing.
+ *
  * <p>Run it twice to prove idempotent create: with {@code DGD3_TEARDOWN=false}
  * it leaves the clusters in place; a second run adopts them, submits another
  * job, and tears everything down. {@code run.sh} does exactly that.
@@ -105,6 +110,10 @@ public final class DpgkeLifecycle {
       try {
         if (!cfg.cleanupOnly) {
           ensureBucketsAndObjects(cfg, storage);
+          // DGD5: the credential path a customer's workload runs with. It only
+          // needs the buckets above, so it stays before the cluster work: a
+          // boundary regression fails the run in seconds, not after a create.
+          DownscopedAccess.assertBuckets(cfg, storage);
           ensureGkeCluster(gke, cfg);
           ensureVirtualCluster(dataproc, cfg);
           assertVirtualCluster(dataproc, cfg);
@@ -630,7 +639,8 @@ public final class DpgkeLifecycle {
         Storage.BlobListOption.prefix(cfg.jobOutputPrefix)).iterateAll()) {
       objects++;
     }
-    log("output prefix " + cfg.jobOutputUri() + " holds " + objects + " object(s)");
+    log("output prefix " + cfg.jobOutputUri() + " holds " + objects
+        + " object(s) (DGD5's downscope probe is one of them, when this run wrote it)");
     log("this leg does not assert Spark output: the default executor is mock and writes no "
         + "records. DGD6's k3d gate asserts the real word count.");
   }
@@ -855,13 +865,17 @@ public final class DpgkeLifecycle {
         + " namespace=" + cfg.namespace);
     log("buckets: input=gs://" + cfg.inputBucket + " output=gs://" + cfg.outputBucket
         + " staging=gs://" + cfg.stagingBucket + " (owned by " + cfg.storageProject + ")");
+    log("downscoped tokens: input=" + (cfg.inputToken == null ? "mint at STS" : "injected")
+        + " output=" + (cfg.outputToken == null ? "mint at STS" : "injected"));
     log("dataproc+gke transport=gRPC plaintext " + cfg.grpcTarget()
         + "; storage transport=REST " + cfg.restEndpoint);
     log("teardown=" + cfg.teardown + " delete_buckets=" + cfg.deleteBuckets
         + " cleanup_only=" + cfg.cleanupOnly);
   }
 
-  private static void check(String name, boolean ok, String detail) {
+  // Package-private so DGD5's boundary phase (DownscopedAccess) reports its
+  // assertions in exactly the same PASS/FAIL shape as the lifecycle's.
+  static void check(String name, boolean ok, String detail) {
     if (ok) {
       System.out.println("  [PASS] " + name);
       return;
@@ -892,7 +906,7 @@ public final class DpgkeLifecycle {
     return new String[]{rest.substring(0, slash), rest.substring(slash + 1)};
   }
 
-  private static void log(String message) {
+  static void log(String message) {
     System.out.println("== " + message);
   }
 
