@@ -88,3 +88,99 @@ jobs:
           name: jaiscloud-gcp-opentofu-log
           path: /tmp/jaiscloud-gcp-opentofu.log
           if-no-files-found: ignore
+
+  # DGD6's full Dataproc-on-GKE lifecycle: Terraform on the host -> the
+  # submitter image -> Helm -> the Java app in the cluster -> assertions ->
+  # helm uninstall -> terraform destroy -> nothing left. It needs a real k3d
+  # cluster, a real Spark image and a termurin JRE, so it is dispatch-only.
+  #
+  # Why it is not a pull_request check: a k3d/Docker Hub/registry hiccup on a
+  # shared runner would redden a contributor's PR for a demo-only gate, and the
+  # gate's job is customer-shaped evidence, not merge protection. The offline
+  # conformance and Terraform jobs remain the PR checks. Dispatch this job when
+  # the demo (or the emulator's Dataproc executor) changes.
+  #
+  # The workflow builds the emulator and Spark images from this checkout,
+  # imports them with `k3d image import` (no registry needed) and passes the
+  # import mode to the gate. The gate's own preflight still skips honestly if a
+  # tool is missing; a present tool that fails is a failure.
+  dpgke-demo-k3d:
+    name: Dataproc-on-GKE demo lifecycle (k3d)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.3'
+          terraform_wrapper: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.3.1
+
+      - name: Set up JDK 21 and Maven
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d version
+
+      - name: Create the k3d cluster
+        run: k3d cluster create jaiscloud --wait --timeout 180s
+
+      - name: Map the module's derived GKE host to loopback
+        run: echo "127.0.0.1 container.localhost" | sudo tee -a /etc/hosts
+
+      - name: Build and import the emulator and Spark images
+        run: |
+          docker build --build-arg CLOUD=gcp -t jaiscloud-gcp:ci -f Dockerfile .
+          bash tests/persistent_mode/gcp/iceberg/spark-iceberg/download-jars.sh
+          docker build -t spark-gcs:ci tests/persistent_mode/gcp/iceberg/spark-iceberg
+          k3d image import -c jaiscloud jaiscloud-gcp:ci spark-gcs:ci
+
+      - name: Deploy the emulator
+        run: |
+          kubectl apply -f deploy/k8s/namespace.yaml
+          kubectl apply -f deploy/k8s/postgres.yaml
+          kubectl apply -f deploy/k8s/rbac.yaml
+          kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
+          # The manifest names the build host's registry; use the imported tag
+          # and never let kubelet try to pull it from a registry.
+          kubectl -n jaiscloud set image deployment/jaiscloud-gcp jaiscloud-gcp=jaiscloud-gcp:ci
+          kubectl -n jaiscloud patch deployment jaiscloud-gcp --type=json \
+            -p '[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]'
+          kubectl -n jaiscloud rollout status deployment/postgres --timeout=180s
+          kubectl -n jaiscloud rollout status deployment/jaiscloud-gcp --timeout=180s
+
+      - name: Run the lifecycle gate
+        env:
+          DPGKE_IMAGE_MODE: import
+          DPGKE_K3D_CLUSTER: jaiscloud
+          DPGKE_IMAGE_REPO: jaiscloud/dpgke-lifecycle-java
+          DPGKE_IMAGE_TAG: dgd6-ci
+          DPGKE_SPARK_IMAGE: spark-gcs:ci
+        run: make test-e2e-dpgke-demo-k3d SKIP_GCP_IMAGE_REBUILD=1
+
+      - name: Upload the submitter transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpgke-demo-submitter-log
+          path: /tmp/jaiscloud-gcp-dpgke-k3d-submitter.log
+          if-no-files-found: ignore
+
+      - name: Delete the k3d cluster
+        if: always()
+        run: k3d cluster delete jaiscloud

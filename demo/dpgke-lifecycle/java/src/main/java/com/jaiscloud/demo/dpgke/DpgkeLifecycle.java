@@ -640,7 +640,8 @@ public final class DpgkeLifecycle {
       objects++;
     }
     log("output prefix " + cfg.jobOutputUri() + " holds " + objects
-        + " object(s) (DGD5's downscope probe is one of them, when this run wrote it)");
+        + " object(s); DGD5's probe is removed after its denials, so real Spark"
+        + " can create the prefix");
     log("this leg does not assert Spark output: the default executor is mock and writes no "
         + "records. DGD6's k3d gate asserts the real word count.");
   }
