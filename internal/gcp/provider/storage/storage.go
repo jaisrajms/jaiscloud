@@ -833,8 +833,12 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 		return nil, model.NewProviderError("InvalidRequest", "Invalid bucket name: "+name, 400)
 	}
 	b := bucketMeta{Name: name}
-	if loc, _ := body["location"].(string); loc != "" {
-		b.Location = loc
+	// GCS accepts the location code in any case and always serves the canonical
+	// uppercase form. google_storage_bucket's `location` is Required+ForceNew
+	// with StateFunc strings.ToUpper, so echoing the request's case made every
+	// plan after apply propose a replacement (us-central1 -> US-CENTRAL1).
+	if loc, _ := body["location"].(string); BucketLocationCanonical(loc) != "" {
+		b.Location = BucketLocationCanonical(loc)
 	} else {
 		b.Location = "US"
 	}
@@ -859,7 +863,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.HierarchicalNamespace = bodyMap(body, "hierarchicalNamespace")
 	b.Website = bodyMap(body, "website")
 	b.Logging = bodyMap(body, "logging")
-	b.CustomPlacementConfig = bodyMap(body, "customPlacementConfig")
+	b.CustomPlacementConfig = normalizeCustomPlacementConfig(bodyMap(body, "customPlacementConfig"))
 	b.IpFilter = bodyMap(body, "ipFilter")
 	// Insert carries iamConfiguration in the resource body (the JSON API has no
 	// uniformBucketLevelAccess query parameters — the hashicorp/google provider
@@ -929,9 +933,9 @@ func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.Normal
 		"bucket":                name,
 		"hierarchicalNamespace": map[string]any{"enabled": hnEnabled},
 	}
-	if loc, _ := meta["location"].(string); loc != "" {
+	if loc, locType := BucketLocationFromMeta(meta); loc != "" {
 		layout["location"] = loc
-		layout["locationType"] = BucketLocationType(loc)
+		layout["locationType"] = locType
 	}
 	return provider.OK(layout), nil
 }
@@ -1403,8 +1407,8 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		b := mapToBucket(meta)
 		// Preserve timeCreated; update only fields present in the request body.
-		if loc, _ := body["location"].(string); loc != "" {
-			b.Location = loc
+		if loc, _ := body["location"].(string); BucketLocationCanonical(loc) != "" {
+			b.Location = BucketLocationCanonical(loc)
 		}
 		if sc, _ := body["storageClass"].(string); sc != "" {
 			b.StorageClass = sc
@@ -3673,6 +3677,9 @@ func (p *Provider) EnsureBucket(ctx context.Context, project, bucket, location s
 	if project == "" {
 		project = "jaiscloud-project"
 	}
+	// Internal callers pass a region (the Dataproc staging location, a Cloud
+	// Functions source region); store the canonical uppercase code GCS serves.
+	location = BucketLocationCanonical(location)
 	if location == "" {
 		location = "US"
 	}
@@ -4204,20 +4211,126 @@ func notificationToMap(cfg notificationConfig) map[string]any {
 	return m
 }
 
-// BucketLocationType reports the GCS locationType for a bucket location. The
-// multi-region locations (and the empty default, which GCS treats as US) are
-// "multi-region"; a dual-region location ("X+Y") is "dual-region"; any other
-// named location is a single "region".
+// BucketLocationCanonical canonicalises a bucket location the way GCS does:
+// locations are case-insensitive on input and always served in their canonical
+// uppercase form (every code in the GCS locations docs is uppercase: US, EU,
+// ASIA, US-CENTRAL1, NAM4, ...). The empty string stays empty; callers that need
+// GCS's default multi-region supply "US".
+func BucketLocationCanonical(location string) string {
+	return strings.ToUpper(strings.TrimSpace(location))
+}
+
+// predefinedDualRegions are GCS's predefined dual-region location codes.
+var predefinedDualRegions = map[string]bool{
+	"ASIA1": true,
+	"EUR4":  true,
+	"EUR5":  true,
+	"EUR7":  true,
+	"EUR8":  true,
+	"NAM4":  true,
+}
+
+// BucketLocationType reports the GCS locationType for a bucket location,
+// ignoring a custom dual-region placement. Prefer BucketLocationTypeFor (or
+// BucketLocationFromMeta) when the bucket's customPlacementConfig is known.
 func BucketLocationType(location string) string {
-	loc := strings.ToUpper(strings.TrimSpace(location))
+	return BucketLocationTypeFor(location, false)
+}
+
+// BucketLocationTypeFor reports the GCS locationType for a bucket.
+// hasCustomPlacement says whether the bucket carries a non-empty
+// customPlacementConfig.dataLocations: such a bucket is a configurable
+// dual-region whatever its location field says (the JSON API reports "US" for
+// one). The multi-region codes are US/EU/ASIA plus the empty default (GCS
+// treats a missing location as US); a predefined dual-region code or a "X+Y"
+// pair is dual-region; any other named location is a single "region". Zonal
+// Rapid Bucket zones ("US-CENTRAL1-A") are out of scope: they are reported as
+// regions, not as the zonal locationType GCS exposes for them.
+func BucketLocationTypeFor(location string, hasCustomPlacement bool) string {
+	if hasCustomPlacement {
+		return "dual-region"
+	}
+	loc := BucketLocationCanonical(location)
 	switch loc {
 	case "", "US", "EU", "ASIA":
 		return "multi-region"
 	}
-	if strings.Contains(loc, "+") {
+	if predefinedDualRegions[loc] || strings.Contains(loc, "+") {
 		return "dual-region"
 	}
 	return "region"
+}
+
+// bucketLocationType is the bucket-aware form of BucketLocationTypeFor: a
+// configurable dual-region is only visible in the bucket's custom placement,
+// not in the location string alone.
+func bucketLocationType(b bucketMeta) string {
+	return BucketLocationTypeFor(b.Location, hasCustomPlacementDataLocations(b.CustomPlacementConfig))
+}
+
+// hasCustomPlacementDataLocations reports whether a customPlacementConfig
+// carries at least one data location. The config is stored as decoded JSON, so
+// the list is normally []any; []string is accepted too.
+func hasCustomPlacementDataLocations(cfg map[string]any) bool {
+	switch locs := cfg["dataLocations"].(type) {
+	case []any:
+		for _, l := range locs {
+			if s, _ := l.(string); strings.TrimSpace(s) != "" {
+				return true
+			}
+		}
+	case []string:
+		for _, s := range locs {
+			if strings.TrimSpace(s) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeCustomPlacementConfig returns a copy of a customPlacementConfig with
+// its dataLocations canonicalised. GCS serves those region codes uppercase, and
+// the provider's ForceNew diff on custom_placement_config.data_locations would
+// otherwise compare a lowercase request against the emulator's raw echo.
+func normalizeCustomPlacementConfig(cfg map[string]any) map[string]any {
+	if cfg == nil {
+		return nil
+	}
+	out := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		out[k] = v
+	}
+	switch locs := cfg["dataLocations"].(type) {
+	case []any:
+		canonical := make([]any, len(locs))
+		for i, l := range locs {
+			if s, ok := l.(string); ok {
+				canonical[i] = BucketLocationCanonical(s)
+			} else {
+				canonical[i] = l
+			}
+		}
+		out["dataLocations"] = canonical
+	case []string:
+		canonical := make([]string, len(locs))
+		for i, s := range locs {
+			canonical[i] = BucketLocationCanonical(s)
+		}
+		out["dataLocations"] = canonical
+	}
+	return out
+}
+
+// BucketLocationFromMeta returns a stored bucket meta map's canonical location
+// and locationType. buckets.getStorageLayout and the gRPC adapter both read the
+// raw map the stores persist, so they go through this to agree with toBucketMap
+// — including for legacy records persisted before locations were canonicalised.
+func BucketLocationFromMeta(meta map[string]any) (location, locationType string) {
+	location, _ = meta["location"].(string)
+	location = BucketLocationCanonical(location)
+	cfg, _ := meta["customPlacementConfig"].(map[string]any)
+	return location, BucketLocationTypeFor(location, hasCustomPlacementDataLocations(cfg))
 }
 
 // toBucketMap converts a bucketMeta struct into a map for JSON-encoding.
@@ -4230,12 +4343,17 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	if metageneration == "" {
 		metageneration = "1"
 	}
+	// Render canonical values even for a record persisted before the
+	// canonicalisation (the stores hold JSON blobs, so there is no migration):
+	// GCS always serves locations uppercase.
+	location := BucketLocationCanonical(b.Location)
+	customPlacement := normalizeCustomPlacementConfig(b.CustomPlacementConfig)
 	out := map[string]any{
 		"kind":             "storage#bucket",
 		"id":               b.Name,
 		"name":             b.Name,
-		"location":         b.Location,
-		"locationType":     BucketLocationType(b.Location),
+		"location":         location,
+		"locationType":     bucketLocationType(b),
 		"storageClass":     b.StorageClass,
 		"timeCreated":      b.TimeCreated,
 		"updated":          b.Updated,
@@ -4285,8 +4403,8 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	if b.Logging != nil {
 		out["logging"] = b.Logging
 	}
-	if b.CustomPlacementConfig != nil {
-		out["customPlacementConfig"] = b.CustomPlacementConfig
+	if customPlacement != nil {
+		out["customPlacementConfig"] = customPlacement
 	}
 	if b.IpFilter != nil {
 		out["ipFilter"] = b.IpFilter

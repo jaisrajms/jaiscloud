@@ -18,6 +18,12 @@
 #   mutate (autoclass on, labels/website/logging changed) -> apply -> No changes
 #   clear  (labels empty, logging removed, autoclass off, ip_filter Disabled)
 #          -> apply -> No changes
+#   location (TGM10: a regional bucket created with a lowercase `location`)
+#          -> apply -> API read-back uppercase -> No changes. GCS canonicalises
+#          the location code to uppercase and google_storage_bucket compares it
+#          through StateFunc strings.ToUpper on a Required+ForceNew field, so an
+#          emulator that echoes "us-central1" plans a bucket replacement forever
+#          (`~ location = "us-central1" -> "US-CENTRAL1" # forces replacement`).
 #
 # Two more consumer paths hang off the same root module, present in every phase
 # so the second plan must stay clean:
@@ -47,9 +53,10 @@ PFX="jc"
 BUCKET="$PFX-module-bucket"
 LOG_BUCKET="$PFX-logs"
 DUAL="$PFX-dual-region"
+REGIONAL_BUCKET="$PFX-lowercase-location"
 
 # write_module generates the root module for one gate phase:
-#   create | mutate | clear
+#   create | mutate | clear | location
 write_module() {
   local phase="$1"
   local labels website logging autoclass ip_filter
@@ -112,7 +119,7 @@ write_module() {
   }"
       ip_filter="${ip_filter/PLACEHOLDER/$PROJECT}"
       ;;
-    clear)
+    clear|location)
       labels='{}'
       website='{ main_page_suffix = "home.html", not_found_page = "missing.html" }'
       logging='{}'
@@ -129,6 +136,23 @@ write_module() {
       exit 2
       ;;
   esac
+
+  # TGM10: only the `location` phase adds the lowercase-location bucket; every
+  # other phase keeps the module state it already applied.
+  local regional_block=""
+  if [[ "$phase" == "location" ]]; then
+    regional_block=$(cat <<'TF'
+# TGM10: a regional bucket declared with a lowercase location. The provider
+# upper-cases the configured value (StateFunc), so the emulator must serve the
+# canonical uppercase form or every plan proposes a ForceNew replacement.
+resource "google_storage_bucket" "regional" {
+  name     = "jc-lowercase-location"
+  project  = var.project
+  location = "us-central1"
+}
+TF
+)
+  fi
 
   cat >"$WORK/main.tf" <<EOF
 terraform {
@@ -219,7 +243,7 @@ module "simple" {
   project_id = var.project
   location   = "US"
 }
-
+$regional_block
 # TGM8: the HMAC key owner. The emulator does not validate that the account
 # exists, but it is declared so the module's depends_on has a real dependency
 # and the key is associated with an account the apply actually created.
@@ -342,6 +366,25 @@ case_main() {
     "$ENDPOINT/storage/v1/b/$BUCKET" '"mode":"Disabled"'
   check_absent "ipFilter cleared its allowed ranges" "$BUCKET" '"203.0.113.0/24"' '"10.0.0.0/8"'
   plan_no_changes "re-plan after clear reports no changes"
+
+  # TGM10: the lowercase location. The emulator must serve the canonical
+  # uppercase form (GCS canonicalises the code) so the provider's ForceNew
+  # `location` diff clears; before TGM10 this plan was
+  #   ~ location = "us-central1" -> "US-CENTRAL1" # forces replacement
+  # and every subsequent plan proposed a bucket replacement.
+  write_module location
+  plan_phase "plan (regional bucket declared with a lowercase location)"
+  apply_phase "apply (lowercase location)"
+  assert_no_api_errors
+  echo "== spot checks (location)"
+  check "lowercase location reads back canonical (uppercase)" \
+    "$ENDPOINT/storage/v1/b/$REGIONAL_BUCKET" \
+    '"location":"US-CENTRAL1"' '"locationType":"region"'
+  check_absent "the requested lowercase form is not echoed" "$REGIONAL_BUCKET" '"location":"us-central1"'
+  check "getStorageLayout serves the canonical location" \
+    "$ENDPOINT/storage/v1/b/$REGIONAL_BUCKET/storageLayout" \
+    '"location":"US-CENTRAL1"' '"locationType":"region"'
+  plan_no_changes "re-plan after a lowercase location reports no changes"
 
   destroy_phase
 }
