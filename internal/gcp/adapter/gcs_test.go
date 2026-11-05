@@ -889,6 +889,46 @@ func TestGCSCodecStorageLayoutRouting(t *testing.T) {
 	}
 }
 
+// TestGCSCodecProjectsServiceAccountRouting covers projects.serviceAccount.get:
+// GET /storage/v1/projects/{projectId}/serviceAccount decodes to the project
+// handler, while any other projects/... path stays an unsupported 404 (the
+// hmacKeys surface is not implemented).
+func TestGCSCodecProjectsServiceAccountRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("GET", "/storage/v1/projects/terra-proj/serviceAccount?userProject=billing-proj", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode projects.serviceAccount: %v", err)
+	}
+	if nr.Action != "ProjectsServiceAccountGet" {
+		t.Fatalf("action = %q, want ProjectsServiceAccountGet", nr.Action)
+	}
+	if got, _ := nr.Params["project"].(string); got != "terra-proj" {
+		t.Fatalf("project = %q, want terra-proj", got)
+	}
+	if got, _ := nr.Params["userProject"].(string); got != "billing-proj" {
+		t.Fatalf("userProject = %q, want billing-proj", got)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"hmacKeys collection", "GET", "/storage/v1/projects/p/hmacKeys"},
+		{"hmacKeys item", "GET", "/storage/v1/projects/p/hmacKeys/abc"},
+		{"unknown project path", "GET", "/storage/v1/projects/p/badges"},
+		{"serviceAccount is GET-only", "POST", "/storage/v1/projects/p/serviceAccount"},
+	} {
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		if _, err := c.Decode(r, nil); err == nil {
+			t.Fatalf("%s: expected 404, decoded successfully", tc.name)
+		} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 404 {
+			t.Fatalf("%s: err = %v, want ProviderError 404", tc.name, err)
+		}
+	}
+}
+
 func TestGCSCodecNotificationConfigsRouting(t *testing.T) {
 	c := &GCSCodec{}
 

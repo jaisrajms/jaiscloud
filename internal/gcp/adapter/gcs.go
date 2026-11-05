@@ -407,6 +407,13 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 				}
 			}
 		}
+	case r.Method == http.MethodGet && len(seg) == 3 && seg[0] == "projects" && seg[2] == "serviceAccount":
+		// /projects/{projectId}/serviceAccount — projects.serviceAccount.get.
+		// No request body; the optional `userProject` billing query param is
+		// captured by queryToParams. Every other projects/... path (the
+		// hmacKeys surface is not implemented) keeps the 404 default.
+		nr.Params["project"] = seg[1]
+		nr.Action = "ProjectsServiceAccountGet"
 	default:
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
 	}

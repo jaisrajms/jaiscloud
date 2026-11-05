@@ -319,6 +319,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.BucketsUpdate":               p.BucketsUpdate,
 		"Storage.BucketsLockRetentionPolicy":  p.BucketsLockRetentionPolicy,
 		"Storage.BucketsGetStorageLayout":     p.BucketsGetStorageLayout,
+		"Storage.ProjectsServiceAccountGet":   p.ProjectsServiceAccountGet,
 		"Storage.NotificationsInsert":         p.NotificationsInsert,
 		"Storage.NotificationsList":           p.NotificationsList,
 		"Storage.NotificationsGet":            p.NotificationsGet,
@@ -924,6 +925,36 @@ func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.Normal
 		layout["locationType"] = BucketLocationType(loc)
 	}
 	return provider.OK(layout), nil
+}
+
+// ProjectsServiceAccountGet implements projects.serviceAccount.get: GET
+// /storage/v1/projects/{projectId}/serviceAccount. Terraform's
+// google_storage_project_service_account data source reads it at plan time
+// (the terraform-google-cloud-storage simple_bucket module declares it
+// unconditionally, even when create_encryption_key is false).
+//
+// Real GCS answers with the project's Cloud Storage service agent,
+// service-<project number>@gs-project-accounts.iam.gserviceaccount.com. The
+// emulator has no project registry and enforces no project existence anywhere
+// in GCS, so it synthesizes the same-shaped email from the deterministic
+// project number for any project id instead of inventing a 404.
+func (p *Provider) ProjectsServiceAccountGet(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
+	// The project in the resource path is authoritative (the codec records it);
+	// nr.AccountID is the identity-derived fallback, as for other providers.
+	project, _ := nr.Params["project"].(string)
+	if project == "" {
+		project = nr.AccountID
+	}
+	if project == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing project", 400)
+	}
+	return provider.OK(map[string]any{
+		"kind":          "storage#serviceAccount",
+		"email_address": "service-" + resource.ProjectNumber(project) + "@gs-project-accounts.iam.gserviceaccount.com",
+	}), nil
 }
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
