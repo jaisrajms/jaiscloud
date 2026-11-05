@@ -19,6 +19,19 @@
 #   clear  (labels empty, logging removed, autoclass off, ip_filter Disabled)
 #          -> apply -> No changes
 #
+# Two more consumer paths hang off the same root module, present in every phase
+# so the second plan must stay clean:
+#
+#   - `modules/simple_bucket` (TGM7) declares
+#     `data "google_storage_project_service_account"` unconditionally, so
+#     planning it forces projects.serviceAccount.get; it also creates its own
+#     bucket (versioning on by default).
+#   - `set_hmac_access` + `hmac_service_accounts` make the module create a
+#     `google_storage_hmac_key` (TGM8), whose lifecycle is create -> get (the
+#     provider's post-create read) -> deactivate/delete on destroy. The map is
+#     `map(string)`, so the key (the service-account email) must be known at
+#     plan time: it is hardcoded, not `google_service_account.hmac.email`.
+#
 # `website` is not removed in the clear phase: hashicorp/google 7.46.2 gives it
 # no NullFields clearing path (unlike logging), so removing the block would
 # send a PATCH with no website field at all and real GCS would keep the value
@@ -150,6 +163,12 @@ provider "google" {
   user_project_override = false
 
   storage_custom_endpoint = "\${var.endpoint}/storage/v1/"
+  # The HMAC key's owner is a google_service_account, so the IAM Admin surface
+  # must also point at the emulator. The resource is shared with the beta
+  # provider, which reads iam_beta_custom_endpoint (same split as run.sh's
+  # fixture provider block).
+  iam_custom_endpoint      = "\${var.endpoint}/"
+  iam_beta_custom_endpoint = "\${var.endpoint}/v1/"
 }
 
 module "storage" {
@@ -177,6 +196,36 @@ module "storage" {
   custom_placement_config = {
     "dual-region" = { data_locations = ["US-CENTRAL1", "US-EAST1"] }
   }
+
+  # TGM8: one google_storage_hmac_key per entry. hmac_service_accounts is
+  # map(string), so the email must be a plan-time literal — referencing the
+  # computed google_service_account.hmac.email would fail the plan. depends_on
+  # orders the service account ahead of the keys it owns.
+  set_hmac_access = true
+  hmac_service_accounts = {
+    "jc-hmac@\${var.project}.iam.gserviceaccount.com" = "ACTIVE"
+  }
+
+  depends_on = [google_service_account.hmac]
+}
+
+# TGM7: the simple_bucket submodule reads
+# data "google_storage_project_service_account" unconditionally, so a plan of
+# this module is impossible without projects.serviceAccount.get.
+module "simple" {
+  source = "$MODULE_DIR/modules/simple_bucket"
+
+  name       = "jc-simple-bucket"
+  project_id = var.project
+  location   = "US"
+}
+
+# TGM8: the HMAC key owner. The emulator does not validate that the account
+# exists, but it is declared so the module's depends_on has a real dependency
+# and the key is associated with an account the apply actually created.
+resource "google_service_account" "hmac" {
+  account_id   = "jc-hmac"
+  display_name = "jaiscloud terraform hmac key owner"
 }
 
 output "bucket" {
@@ -243,6 +292,18 @@ case_main() {
     "$ENDPOINT/storage/v1/b/$DUAL" \
     '"hierarchicalNamespace":{"enabled":true}' \
     '"customPlacementConfig":{' '"US-CENTRAL1"' '"US-EAST1"'
+  # TGM7: the simple_bucket module's unconditional data source read.
+  check "projects.serviceAccount.get is served (simple_bucket data source)" \
+    "$ENDPOINT/storage/v1/projects/$PROJECT/serviceAccount" \
+    '"kind":"storage#serviceAccount"' 'gs-project-accounts.iam.gserviceaccount.com'
+  check "simple_bucket submodule created its bucket" \
+    "$ENDPOINT/storage/v1/b/jc-simple-bucket" '"name":"jc-simple-bucket"'
+  # TGM8: the module owns one google_storage_hmac_key for the account above.
+  check "HMAC key is ACTIVE for the service account" \
+    "$ENDPOINT/storage/v1/projects/$PROJECT/hmacKeys" \
+    '"kind":"storage#hmacKeysMetadata"' \
+    '"serviceAccountEmail":"jc-hmac@'"$PROJECT"'.iam.gserviceaccount.com"' \
+    '"state":"ACTIVE"'
 
   echo "== $TF: second plan (permadiff check)"
   plan_no_changes "re-plan reports no changes"

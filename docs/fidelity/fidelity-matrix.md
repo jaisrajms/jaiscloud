@@ -12,13 +12,13 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1212**
+Cells: **1218**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1013 |
+| ga | 1019 |
 | limited | 146 |
 | preview | 14 |
 | unsupported | 39 |
@@ -27,7 +27,7 @@ Cells: **1212**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 563 | 123 | 14 | 11 |
+| rest | 569 | 123 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 665 | 46 |
+| rest | 671 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -101,7 +101,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | secretmanager | grpc | 17 | 17 | 17 | 0 | 0 | google.cloud.secretmanager.v1.SecretManagerService |
 | serviceusage | rest | 10 | 6 | 6 | 4 | 0 | serviceusage.v1 |
 | serviceusage | grpc | 6 | 6 | 6 | 0 | 0 | google.api.serviceusage.v1.ServiceUsage |
-| storage | rest | 87 | 38 | 30 | 49 | 8 | storage.v1 |
+| storage | rest | 87 | 44 | 36 | 43 | 8 | storage.v1 |
 | storage | grpc | 24 | 24 | 24 | 0 | 0 | google.storage.v2.Storage |
 | tasks | rest | 24 | 21 | 21 | 3 | 0 | cloudtasks.v2 |
 | tasks | grpc | 20 | 20 | 20 | 0 | 0 | google.cloud.tasks.v2.CloudTasks |
@@ -160,7 +160,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 - **scheduler** REST (8): cloudscheduler.projects.locations.get, cloudscheduler.projects.locations.getCmekConfig, cloudscheduler.projects.locations.list, cloudscheduler.projects.locations.operations.cancel, cloudscheduler.projects.locations.operations.delete, cloudscheduler.projects.locations.operations.get, cloudscheduler.projects.locations.operations.list, cloudscheduler.projects.locations.updateCmekConfig
 - **secretmanager** REST (2): secretmanager.projects.locations.get, secretmanager.projects.locations.list
 - **serviceusage** REST (4): serviceusage.operations.cancel, serviceusage.operations.delete, serviceusage.operations.get, serviceusage.operations.list
-- **storage** REST (49): storage.anywhereCaches.disable, storage.anywhereCaches.get, storage.anywhereCaches.insert, storage.anywhereCaches.list, storage.anywhereCaches.pause, storage.anywhereCaches.resume, storage.anywhereCaches.update, storage.bucketAccessControls.delete, storage.bucketAccessControls.get, storage.bucketAccessControls.patch, storage.bucketAccessControls.update, storage.buckets.operations.advanceRelocateBucket, storage.buckets.operations.cancel, storage.buckets.operations.get, storage.buckets.operations.list, storage.buckets.relocate, storage.buckets.restore, storage.channels.stop, storage.defaultObjectAccessControls.delete, storage.defaultObjectAccessControls.get, storage.defaultObjectAccessControls.insert, storage.defaultObjectAccessControls.list, storage.defaultObjectAccessControls.patch, storage.defaultObjectAccessControls.update, storage.folders.delete, storage.folders.deleteRecursive, storage.folders.get, storage.folders.insert, storage.folders.list, storage.folders.rename, storage.managedFolders.delete, storage.managedFolders.get, storage.managedFolders.getIamPolicy, storage.managedFolders.insert, storage.managedFolders.list, storage.managedFolders.setIamPolicy, storage.managedFolders.testIamPermissions, storage.managedFolders.update, storage.projects.hmacKeys.create, storage.projects.hmacKeys.delete, storage.projects.hmacKeys.get, storage.projects.hmacKeys.list, storage.projects.hmacKeys.update, storage.projects.serviceAccount.get, storage.rapidCaches.disable, storage.rapidCaches.get, storage.rapidCaches.insert, storage.rapidCaches.list, storage.rapidCaches.update
+- **storage** REST (43): storage.anywhereCaches.disable, storage.anywhereCaches.get, storage.anywhereCaches.insert, storage.anywhereCaches.list, storage.anywhereCaches.pause, storage.anywhereCaches.resume, storage.anywhereCaches.update, storage.bucketAccessControls.delete, storage.bucketAccessControls.get, storage.bucketAccessControls.patch, storage.bucketAccessControls.update, storage.buckets.operations.advanceRelocateBucket, storage.buckets.operations.cancel, storage.buckets.operations.get, storage.buckets.operations.list, storage.buckets.relocate, storage.buckets.restore, storage.channels.stop, storage.defaultObjectAccessControls.delete, storage.defaultObjectAccessControls.get, storage.defaultObjectAccessControls.insert, storage.defaultObjectAccessControls.list, storage.defaultObjectAccessControls.patch, storage.defaultObjectAccessControls.update, storage.folders.delete, storage.folders.deleteRecursive, storage.folders.get, storage.folders.insert, storage.folders.list, storage.folders.rename, storage.managedFolders.delete, storage.managedFolders.get, storage.managedFolders.getIamPolicy, storage.managedFolders.insert, storage.managedFolders.list, storage.managedFolders.setIamPolicy, storage.managedFolders.testIamPermissions, storage.managedFolders.update, storage.rapidCaches.disable, storage.rapidCaches.get, storage.rapidCaches.insert, storage.rapidCaches.list, storage.rapidCaches.update
 - **tasks** REST (3): cloudtasks.projects.locations.get, cloudtasks.projects.locations.list, cloudtasks.projects.locations.operations.get
 - **workflowexecutions** REST (6): workflowexecutions.projects.locations.workflows.executions.callbacks.list, workflowexecutions.projects.locations.workflows.executions.deleteExecutionHistory, workflowexecutions.projects.locations.workflows.executions.exportData, workflowexecutions.projects.locations.workflows.executions.stepEntries.get, workflowexecutions.projects.locations.workflows.executions.stepEntries.list, workflowexecutions.projects.locations.workflows.triggerPubsubExecution
 - **workflows** REST (2): workflows.projects.locations.get, workflows.projects.locations.list
@@ -1555,11 +1555,11 @@ _12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
 
 ## storage
 
-_Coverage: REST **38 of 87** published methods served · 49 not served · 30 graded · 8 served-but-ungraded (`storage.v1` Discovery)_
+_Coverage: REST **44 of 87** published methods served · 43 not served · 36 graded · 8 served-but-ungraded (`storage.v1` Discovery)_
 
 _Coverage: GRPC **24 of 24** published methods served · 24 graded (`google.storage.v2.Storage` proto)_
 
-_57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
+_63 cell(s): ga=63 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -1616,6 +1616,12 @@ _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 | Storage.ObjectsRewrite | rest | ga | yes | — |
 | Storage.ObjectsSetIamPolicy | rest | ga | yes | — |
 | Storage.ObjectsUpdate | rest | ga | yes | — |
+| Storage.ProjectsHmacKeysCreate | rest | ga | yes | — |
+| Storage.ProjectsHmacKeysDelete | rest | ga | yes | — |
+| Storage.ProjectsHmacKeysGet | rest | ga | yes | — |
+| Storage.ProjectsHmacKeysList | rest | ga | yes | — |
+| Storage.ProjectsHmacKeysUpdate | rest | ga | yes | — |
+| Storage.ProjectsServiceAccountGet | rest | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
 | UpdateBucket | grpc | ga | yes | — |
 | UpdateObject | grpc | ga | yes | — |

@@ -16,6 +16,16 @@ var actionOverrides = map[string]string{
 	"Storage.BucketACLInsert": "storage.bucketAccessControls.insert",
 	"Storage.ObjectACLList":   "storage.objectAccessControls.list",
 	"Storage.ObjectACLInsert": "storage.objectAccessControls.insert",
+	// The projects.hmacKeys.* methods and projects.serviceAccount.get are nested
+	// resource paths the flat "resource.verb" heuristic cannot derive (the
+	// resource is multi-word, and HMAC is an acronym CamelCase cannot split), so
+	// pin the Discovery ids.
+	"Storage.ProjectsServiceAccountGet": "storage.projects.serviceAccount.get",
+	"Storage.ProjectsHmacKeysCreate":    "storage.projects.hmacKeys.create",
+	"Storage.ProjectsHmacKeysGet":       "storage.projects.hmacKeys.get",
+	"Storage.ProjectsHmacKeysList":      "storage.projects.hmacKeys.list",
+	"Storage.ProjectsHmacKeysUpdate":    "storage.projects.hmacKeys.update",
+	"Storage.ProjectsHmacKeysDelete":    "storage.projects.hmacKeys.delete",
 	// Media download / resumable-upload are the same objects.* methods on the
 	// wire (alt=media and the resumable upload session).
 	"Storage.ObjectsGetMedia":             "storage.objects.get",
