@@ -1,0 +1,99 @@
+# Field-coverage inventory scope (FC1/FC2).
+#
+# Each source names one resource and the authoritative definition of its fields
+# per transport:
+#
+#   message:   a compiled proto message (descriptor linked into tools/fieldgen)
+#   discovery: a vendored Discovery document + schema (tests/gcpconformance/discovery)
+#   depth:     how many property levels to expand (1 = the resource's own fields)
+#
+# A transport may set both `message` and `discovery`; the rows are then the
+# union, each field recorded once because the walkers de-duplicate by path.
+# `message` without `discovery` means the transport's JSON is protojson for that
+# message (Functions v2: no v2 Discovery document is vendored, the only one is
+# v1, so the v2 proto is the definition for both transports).
+#
+# The list is intentionally curated: the universe is bounded by a reviewable
+# scope so a dependency upgrade cannot silently demand thousands of unrelated
+# classifications. Later waves add services here (see
+# plan_docs/gcp-defect-coverage-wave-plan.md §10).
+sources:
+  - service: storage
+    resource: Bucket
+    transports:
+      grpc:
+        message: google.storage.v2.Bucket
+        depth: 3
+      rest:
+        # The vendored Discovery snapshot is the JSON API v1, a different wire
+        # surface from google.storage.v2 (v1 uses timeCreated/metageneration,
+        # v2 uses create_time/metageneration_proto). Both are inventoried.
+        discovery: storage
+        schema: Bucket
+        depth: 3
+
+  - service: firestore
+    resource: Database
+    transports:
+      grpc:
+        message: google.firestore.admin.v1.Database
+        depth: 2
+      rest:
+        discovery: firestore
+        schema: GoogleFirestoreAdminV1Database
+        depth: 2
+
+  - service: firestore
+    resource: BackupSchedule
+    transports:
+      grpc:
+        message: google.firestore.admin.v1.BackupSchedule
+        depth: 2
+      rest:
+        discovery: firestore
+        schema: GoogleFirestoreAdminV1BackupSchedule
+        depth: 2
+
+  - service: functions
+    resource: Function
+    transports:
+      grpc:
+        message: google.cloud.functions.v2.Function
+        depth: 3
+      rest:
+        # No v2 Discovery snapshot is vendored (tests/gcpconformance/discovery/
+        # functions.json.gz is v1/CloudFunction); the v2 REST surface is
+        # protojson for the same message.
+        message: google.cloud.functions.v2.Function
+        depth: 3
+
+  - service: kms
+    resource: CryptoKey
+    transports:
+      grpc:
+        message: google.cloud.kms.v1.CryptoKey
+        depth: 2
+      rest:
+        discovery: kms
+        schema: CryptoKey
+        depth: 2
+
+  - service: clouddns
+    resource: ManagedZone
+    transports:
+      # Cloud DNS has no protobuf API in this repo: REST/JSON only.
+      rest:
+        discovery: clouddns
+        schema: ManagedZone
+        depth: 3
+
+  - service: monitoring
+    resource: AlertPolicy
+    transports:
+      grpc:
+        message: google.monitoring.v3.AlertPolicy
+        depth: 2
+      rest:
+        discovery: monitoring
+        schema: AlertPolicy
+        depth: 2

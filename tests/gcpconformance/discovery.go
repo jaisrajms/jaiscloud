@@ -63,6 +63,9 @@ type Parameter struct {
 
 // Schema is a Discovery JSON schema. additionalProperties is kept raw because
 // Discovery emits it either as a boolean or as a nested schema object.
+// ReadOnly marks a server-populated field; it is the Discovery equivalent of
+// the proto google.api.field_behavior OUTPUT_ONLY annotation and is what the
+// field-coverage inventory (tools/fieldgen) reads as the field's behavior.
 type Schema struct {
 	Ref                  string             `json:"$ref"`
 	Type                 string             `json:"type"`
@@ -70,6 +73,7 @@ type Schema struct {
 	Description          string             `json:"description"`
 	Properties           map[string]*Schema `json:"properties"`
 	Required             []string           `json:"required"`
+	ReadOnly             bool               `json:"readOnly"`
 	Enum                 []string           `json:"enum"`
 	Items                *Schema            `json:"items"`
 	AdditionalProperties json.RawMessage    `json:"additionalProperties"`
