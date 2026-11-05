@@ -588,9 +588,8 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		pushEndpoint, _ = pc["pushEndpoint"].(string)
 	}
-	if exactlyOnce && pushEndpoint != "" {
-		return nil, model.NewProviderError("InvalidArgument",
-			"exactly-once delivery is not supported for push subscriptions", 400)
+	if err := validateExactlyOncePush(exactlyOnce, pushEndpoint); err != nil {
+		return nil, err
 	}
 	ackDeadline := 10
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
@@ -667,6 +666,11 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	}
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		meta["pushConfig"] = pc
+	}
+	// Labels are stored as a string map, matching TopicCreate. An absent or
+	// empty map leaves no key at all, so GET never echoes "labels": null.
+	if labels := stringMap(body, "labels"); len(labels) > 0 {
+		meta["labels"] = labels
 	}
 	data, _ := json.Marshal(meta)
 	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: s, Data: data}); err != nil {

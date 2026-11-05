@@ -16,7 +16,18 @@
 # the per-service custom endpoints + a module block naming the local module
 # path), then runs:
 #
-#   init -> plan -> apply -> plan -detailed-exitcode (permadiff) -> destroy
+#   init -> plan -> apply -> spot checks -> second plan (permadiff)
+#        -> update phase 1 (ack/labels/retention) -> plan
+#        -> update phase 2 (ack/labels/retention) -> plan
+#        -> clear-back (labels {}, ack/retention unset) -> plan
+#        -> destroy
+#
+# The update phases are the PS2 acceptance run: the hashicorp/google provider
+# PATCHes `subscriptions.patch?updateMask=<changed>,bigqueryConfig` on every
+# re-apply, so the emulator must accept those masks (and the absent trailing
+# bigqueryConfig is a clear, not an unknown path). The second plan after each
+# apply must report `No changes`; an apply log carrying `unsupported update_mask
+# path` or an HTTP 400 fails the run.
 #
 # It never clones anything: point TF_MODULE_DIR (or $3) at a checkout you made
 # yourself. When that directory does not exist it prints SKIP and exits 0, so it
@@ -104,7 +115,22 @@ SUB="jc-module-sub"
 #   cloud_billing   -> the data source's billing_account read (the CB1 gap)
 #   iam             -> the module's service-agent IAM member
 #   service_usage   -> the provider's project-service lookups
-cat >"$WORK/main.tf" <<EOF
+#
+# write_root_module LABELS_HCL ACK RETENTION rewrites the module block so each
+# acceptance phase changes the three subscription inputs the provider PATCHes:
+# subscription_labels is module-wide, ack_deadline_seconds and
+# message_retention_duration are per pull_subscriptions entry. An empty ACK or
+# RETENTION omits the key (the module then uses its own default/leave-unset).
+write_root_module() {
+  local labels_hcl="$1" ack="$2" retention="$3"
+  local sub_extra=""
+  if [[ -n "$ack" ]]; then
+    sub_extra+="      ack_deadline_seconds       = ${ack}"$'\n'
+  fi
+  if [[ -n "$retention" ]]; then
+    sub_extra+="      message_retention_duration = \"${retention}\""$'\n'
+  fi
+  cat >"$WORK/main.tf" <<EOF
 terraform {
   required_providers {
     google = {
@@ -143,10 +169,12 @@ module "pubsub" {
   project_id = var.project
   topic      = "$TOPIC"
 
+  subscription_labels = ${labels_hcl}
+
   pull_subscriptions = [
     {
       name = "$SUB"
-    },
+${sub_extra}    },
   ]
 }
 
@@ -158,8 +186,53 @@ output "subscription_names" {
   value = module.pubsub.subscription_names
 }
 EOF
+}
+
+# apply_module LABEL LOGNAME runs apply, fails the run on a provider 400 or an
+# `unsupported update_mask path` in the log, and PASSes otherwise.
+apply_module() {
+  local label="$1" log="$WORK/apply-$2.log"
+  if ! "$TF" -chdir="$WORK" apply -input=false -auto-approve -no-color >"$log" 2>&1; then
+    cat "$log"
+    fail "$label (see the log above)"
+    return 1
+  fi
+  if grep -q "unsupported update_mask path" "$log"; then
+    cat "$log"
+    fail "$label (apply log reports 'unsupported update_mask path')"
+    return 1
+  fi
+  if grep -q "Error 400" "$log"; then
+    cat "$log"
+    fail "$label (apply log reports an HTTP 400)"
+    return 1
+  fi
+  pass "$label"
+}
+
+# plan_no_changes LABEL LOGNAME asserts plan -detailed-exitcode exits 0.
+plan_no_changes() {
+  local label="$1" log="$WORK/plan-$2.log" rc=0
+  set +e
+  "$TF" -chdir="$WORK" plan -input=false -no-color -detailed-exitcode >"$log" 2>&1
+  rc=$?
+  set -e
+  case "$rc" in
+    0) pass "$label" ;;
+    2)
+      cat "$log"
+      fail "$label (a permadiff: plan reports changes)"
+      ;;
+    *)
+      cat "$log"
+      fail "$label (plan failed, exit $rc)"
+      ;;
+  esac
+}
 
 echo "== $TF: consumer module $MODULE_DIR (endpoint=$ENDPOINT project=$PROJECT)"
+
+write_root_module '{ team = "platform", managed-by = "terraform" }' "" ""
 
 if ! "$TF" -chdir="$WORK" init -input=false -no-color >"$WORK/init.log" 2>&1; then
   cat "$WORK/init.log"
@@ -181,11 +254,7 @@ if [[ "$FAIL" -gt 0 ]]; then
   exit 1
 fi
 
-if "$TF" -chdir="$WORK" apply -input=false -auto-approve -no-color >"$WORK/apply.log" 2>&1; then
-  pass "apply"
-else
-  cat "$WORK/apply.log"
-  fail "apply (see the log above)"
+if ! apply_module "apply (create with subscription_labels)" create; then
   echo "== summary: $PASS passed, $FAIL failed"
   exit 1
 fi
@@ -207,13 +276,39 @@ check() {
   pass "$name"
 }
 
+# check_absent NAME URL WANT... asserts the read body contains none of the WANT
+# strings (used for the clear-back: the module's label keys must be gone).
+check_absent() {
+  local name="$1" url="$2"
+  shift 2
+  local body want
+  body="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$url" 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    fail "$name (the subscription could not be read)"
+    return 0
+  fi
+  for want in "$@"; do
+    if [[ "$body" == *"$want"* ]]; then
+      fail "$name (still present: $want)"
+      return 0
+    fi
+  done
+  pass "$name"
+}
+
+SUB_URL="$ENDPOINT/v1/projects/$PROJECT/subscriptions/$SUB"
+
 echo "== spot checks"
 check "module created the topic" \
   "$ENDPOINT/v1/projects/$PROJECT/topics/$TOPIC" "\"name\":\"projects/$PROJECT/topics/$TOPIC\""
 check "module created the pull subscription" \
-  "$ENDPOINT/v1/projects/$PROJECT/subscriptions/$SUB" \
+  "$SUB_URL" \
   "\"name\":\"projects/$PROJECT/subscriptions/$SUB\"" \
   "\"topic\":\"projects/$PROJECT/topics/$TOPIC\""
+# PS1: the module's subscription_labels round-trip on the create response AND the
+# read-back. Before the fix the subscription GET omitted `labels` entirely.
+check "create stored the module's subscription_labels" \
+  "$SUB_URL" '"team":"platform"' '"managed-by":"terraform"'
 # data "google_project" reads projects.getBillingInfo for its billing_account
 # attribute; the emulator models no account catalog, so the live answer is the
 # four-field default. Before CB1 this path was an UnknownService 404, which is
@@ -227,21 +322,49 @@ check "data.google_project billingInfo read answers the no-account default" \
 # subscription must read back exactly what the provider stored on apply (no
 # permadiff on the emulator's synthesized project number either).
 echo "== $TF: second plan (permadiff check)"
-set +e
-"$TF" -chdir="$WORK" plan -input=false -no-color -detailed-exitcode >"$WORK/replan.log" 2>&1
-RC=$?
-set -e
-case "$RC" in
-  0) pass "re-plan reports no changes" ;;
-  2)
-    cat "$WORK/replan.log"
-    fail "re-plan reports changes (a permadiff)"
-    ;;
-  *)
-    cat "$WORK/replan.log"
-    fail "re-plan failed (exit $RC)"
-    ;;
-esac
+plan_no_changes "re-plan reports no changes" permadiff
+
+# ── PS2 acceptance: the provider's update masks ───────────────────────────────
+# Each phase changes ack_deadline_seconds, message_retention_duration and the
+# label map, which is exactly the "change an ack deadline, label and retention,
+# apply again" sequence recorded against the real provider. The PATCH masks are
+# `ackDeadlineSeconds,bigqueryConfig`, `messageRetentionDuration,bigqueryConfig`
+# and `labels,bigqueryConfig`; the trailing bigqueryConfig is absent from the
+# body (a clear). A 400 aborts the apply and fails the phase.
+
+echo "== $TF: update phase 1 (ack 20, retention 1200s, extra label)"
+write_root_module '{ team = "platform", managed-by = "terraform", environment = "staging" }' 20 "1200s"
+if ! apply_module "update apply (ack 20, retention 1200s, extra label)" update1; then
+  echo "== summary: $PASS passed, $FAIL failed"
+  exit 1
+fi
+check "update 1 wrote labels/ack/retention" "$SUB_URL" \
+  '"team":"platform"' '"environment":"staging"' \
+  '"ackDeadlineSeconds":20' '"messageRetentionDuration":"1200s"'
+plan_no_changes "re-plan after update 1 reports no changes" update1
+
+echo "== $TF: update phase 2 (ack 30, retention 2400s, changed/extra label)"
+write_root_module '{ team = "data", managed-by = "terraform", environment = "staging", cost-center = "cc-42" }' 30 "2400s"
+if ! apply_module "update apply (ack 30, retention 2400s, changed/extra label)" update2; then
+  echo "== summary: $PASS passed, $FAIL failed"
+  exit 1
+fi
+check "update 2 wrote labels/ack/retention" "$SUB_URL" \
+  '"team":"data"' '"cost-center":"cc-42"' \
+  '"ackDeadlineSeconds":30' '"messageRetentionDuration":"2400s"'
+plan_no_changes "re-plan after update 2 reports no changes" update2
+
+echo "== $TF: clear-back (labels {}, ack/retention unset)"
+write_root_module '{}' "" ""
+if ! apply_module "clear-back apply (labels {}, ack/retention unset)" clear; then
+  echo "== summary: $PASS passed, $FAIL failed"
+  exit 1
+fi
+check_absent "clear-back removed the module's labels" "$SUB_URL" \
+  '"team"' '"managed-by"' '"environment"' '"cost-center"'
+check "clear-back reset retention to the 7-day default" "$SUB_URL" \
+  '"messageRetentionDuration":"604800s"'
+plan_no_changes "re-plan after clear-back reports no changes" clear
 
 echo "== destroy"
 if "$TF" -chdir="$WORK" destroy -input=false -auto-approve -no-color >"$WORK/destroy.log" 2>&1; then

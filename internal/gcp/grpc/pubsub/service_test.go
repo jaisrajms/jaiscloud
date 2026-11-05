@@ -12,8 +12,11 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
+	restpubsub "jaiscloud/internal/gcp/provider/pubsub"
+	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
 	"google.golang.org/grpc"
@@ -1312,5 +1315,480 @@ func TestLongPollBoundedFrozenClock(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("empty gRPC long-poll did not return under a frozen clock; deadline used the business clock")
+	}
+}
+
+// TestUpdateSubscriptionProviderMasksGRPC pins the gRPC mirror of the REST
+// updateMask contract: each mutable Subscription field accepts both the proto
+// snake_case and the JSON camelCase spelling, persists, and is rendered back by
+// subToProto (the GET after the update exercises the read path too).
+func TestUpdateSubscriptionProviderMasksGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/upd-masks-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	mkSub := func(id string) string {
+		name := "projects/test/subscriptions/" + id
+		if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: name, Topic: topic}); err != nil {
+			t.Fatalf("CreateSubscription(%s): %v", id, err)
+		}
+		return name
+	}
+	read := func(name string) *pubsubpb.Subscription {
+		got, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: name})
+		if err != nil {
+			t.Fatalf("GetSubscription(%s): %v", name, err)
+		}
+		return got
+	}
+
+	transforms := []*pubsubpb.MessageTransform{{
+		Transform: &pubsubpb.MessageTransform_JavascriptUdf{
+			JavascriptUdf: &pubsubpb.JavaScriptUDF{
+				FunctionName: "redact",
+				Code:         "function redact(m) { return m; }",
+			},
+		},
+	}}
+	cases := []struct {
+		name  string
+		id    string
+		mask  []string
+		sub   *pubsubpb.Subscription
+		check func(t *testing.T, got *pubsubpb.Subscription)
+	}{
+		{
+			name: "message_retention_duration snake_case",
+			id:   "upd-ret-snake",
+			mask: []string{"message_retention_duration"},
+			sub:  &pubsubpb.Subscription{MessageRetentionDuration: durationpb.New(1200 * time.Second)},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if d := got.GetMessageRetentionDuration().AsDuration(); d != 1200*time.Second {
+					t.Errorf("message_retention_duration = %v, want 1200s", d)
+				}
+			},
+		},
+		{
+			name: "messageRetentionDuration camelCase",
+			id:   "upd-ret-camel",
+			mask: []string{"messageRetentionDuration"},
+			sub:  &pubsubpb.Subscription{MessageRetentionDuration: durationpb.New(2400 * time.Second)},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if d := got.GetMessageRetentionDuration().AsDuration(); d != 2400*time.Second {
+					t.Errorf("messageRetentionDuration = %v, want 2400s", d)
+				}
+			},
+		},
+		{
+			name: "retain_acked_messages snake_case",
+			id:   "upd-retain-snake",
+			mask: []string{"retain_acked_messages"},
+			sub:  &pubsubpb.Subscription{RetainAckedMessages: true},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if !got.GetRetainAckedMessages() {
+					t.Error("retain_acked_messages = false, want true")
+				}
+			},
+		},
+		{
+			name: "retainAckedMessages camelCase",
+			id:   "upd-retain-camel",
+			mask: []string{"retainAckedMessages"},
+			sub:  &pubsubpb.Subscription{RetainAckedMessages: true},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if !got.GetRetainAckedMessages() {
+					t.Error("retainAckedMessages = false, want true")
+				}
+			},
+		},
+		{
+			name: "expiration_policy empty means never expire",
+			id:   "upd-expiry-snake",
+			mask: []string{"expiration_policy"},
+			sub:  &pubsubpb.Subscription{ExpirationPolicy: &pubsubpb.ExpirationPolicy{}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if got.GetExpirationPolicy() == nil {
+					t.Fatal("expiration_policy = nil, want a set-but-empty policy")
+				}
+				if got.GetExpirationPolicy().GetTtl() != nil {
+					t.Errorf("expiration_policy.ttl = %v, want unset (never expire)", got.GetExpirationPolicy().GetTtl())
+				}
+			},
+		},
+		{
+			name: "expirationPolicy camelCase",
+			id:   "upd-expiry-camel",
+			mask: []string{"expirationPolicy"},
+			sub:  &pubsubpb.Subscription{ExpirationPolicy: &pubsubpb.ExpirationPolicy{}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if got.GetExpirationPolicy() == nil {
+					t.Fatal("expirationPolicy = nil, want a set-but-empty policy")
+				}
+			},
+		},
+		{
+			name: "push_config snake_case",
+			id:   "upd-push-snake",
+			mask: []string{"push_config"},
+			sub:  &pubsubpb.Subscription{PushConfig: &pubsubpb.PushConfig{PushEndpoint: "https://example.com/push"}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if ep := got.GetPushConfig().GetPushEndpoint(); ep != "https://example.com/push" {
+					t.Errorf("push_config.push_endpoint = %q", ep)
+				}
+			},
+		},
+		{
+			name: "pushConfig camelCase",
+			id:   "upd-push-camel",
+			mask: []string{"pushConfig"},
+			sub:  &pubsubpb.Subscription{PushConfig: &pubsubpb.PushConfig{PushEndpoint: "https://example.com/push"}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if ep := got.GetPushConfig().GetPushEndpoint(); ep != "https://example.com/push" {
+					t.Errorf("pushConfig.pushEndpoint = %q", ep)
+				}
+			},
+		},
+		{
+			name: "bigquery_config snake_case",
+			id:   "upd-bq-snake",
+			mask: []string{"bigquery_config"},
+			sub: &pubsubpb.Subscription{BigqueryConfig: &pubsubpb.BigQueryConfig{
+				Table: "projects/test/datasets/ds/tables/tbl",
+			}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if tbl := got.GetBigqueryConfig().GetTable(); tbl != "projects/test/datasets/ds/tables/tbl" {
+					t.Errorf("bigquery_config.table = %q", tbl)
+				}
+			},
+		},
+		{
+			name: "bigqueryConfig camelCase",
+			id:   "upd-bq-camel",
+			mask: []string{"bigqueryConfig"},
+			sub: &pubsubpb.Subscription{BigqueryConfig: &pubsubpb.BigQueryConfig{
+				Table: "projects/test/datasets/ds/tables/tbl2",
+			}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if tbl := got.GetBigqueryConfig().GetTable(); tbl != "projects/test/datasets/ds/tables/tbl2" {
+					t.Errorf("bigqueryConfig.table = %q", tbl)
+				}
+			},
+		},
+		{
+			name: "cloud_storage_config snake_case",
+			id:   "upd-gcs-snake",
+			mask: []string{"cloud_storage_config"},
+			sub: &pubsubpb.Subscription{CloudStorageConfig: &pubsubpb.CloudStorageConfig{
+				Bucket: "my-bucket",
+			}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if b := got.GetCloudStorageConfig().GetBucket(); b != "my-bucket" {
+					t.Errorf("cloud_storage_config.bucket = %q", b)
+				}
+			},
+		},
+		{
+			name: "cloudStorageConfig camelCase",
+			id:   "upd-gcs-camel",
+			mask: []string{"cloudStorageConfig"},
+			sub: &pubsubpb.Subscription{CloudStorageConfig: &pubsubpb.CloudStorageConfig{
+				Bucket: "other-bucket",
+			}},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if b := got.GetCloudStorageConfig().GetBucket(); b != "other-bucket" {
+					t.Errorf("cloudStorageConfig.bucket = %q", b)
+				}
+			},
+		},
+		{
+			name: "message_transforms snake_case",
+			id:   "upd-xform-snake",
+			mask: []string{"message_transforms"},
+			sub:  &pubsubpb.Subscription{MessageTransforms: transforms},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if len(got.GetMessageTransforms()) != 1 {
+					t.Fatalf("message_transforms = %v, want one entry", got.GetMessageTransforms())
+				}
+				if fn := got.GetMessageTransforms()[0].GetJavascriptUdf().GetFunctionName(); fn != "redact" {
+					t.Errorf("message_transforms[0].function_name = %q", fn)
+				}
+			},
+		},
+		{
+			name: "messageTransforms camelCase",
+			id:   "upd-xform-camel",
+			mask: []string{"messageTransforms"},
+			sub:  &pubsubpb.Subscription{MessageTransforms: transforms},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if len(got.GetMessageTransforms()) != 1 {
+					t.Fatalf("messageTransforms = %v, want one entry", got.GetMessageTransforms())
+				}
+			},
+		},
+		{
+			name: "state is output only",
+			id:   "upd-state",
+			mask: []string{"state"},
+			sub:  &pubsubpb.Subscription{State: pubsubpb.Subscription_RESOURCE_ERROR},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if got.GetState() != pubsubpb.Subscription_ACTIVE {
+					t.Errorf("state = %v, want ACTIVE (OUTPUT_ONLY, never stored)", got.GetState())
+				}
+			},
+		},
+		{
+			// The recorded provider shape: the trailing bigquery_config is
+			// absent from the request, so it is a clear, not an unknown path.
+			name: "ack_deadline_seconds with absent bigquery_config",
+			id:   "upd-ack-bq",
+			mask: []string{"ack_deadline_seconds", "bigquery_config"},
+			sub:  &pubsubpb.Subscription{AckDeadlineSeconds: 20},
+			check: func(t *testing.T, got *pubsubpb.Subscription) {
+				if got.GetAckDeadlineSeconds() != 20 {
+					t.Errorf("ack_deadline_seconds = %d, want 20", got.GetAckDeadlineSeconds())
+				}
+				if got.GetBigqueryConfig() != nil {
+					t.Errorf("bigquery_config = %v, want cleared", got.GetBigqueryConfig())
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := mkSub(tc.id)
+			tc.sub.Name = name
+			updated, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+				Subscription: tc.sub,
+				UpdateMask:   &fieldmaskpb.FieldMask{Paths: tc.mask},
+			})
+			if err != nil {
+				t.Fatalf("UpdateSubscription(%v): %v", tc.mask, err)
+			}
+			tc.check(t, updated)
+			tc.check(t, read(name))
+		})
+	}
+
+	// The same masks with invalid values are InvalidArgument.
+	rejects := []struct {
+		name string
+		id   string
+		mask []string
+		sub  *pubsubpb.Subscription
+	}{
+		{"retention below 10m", "upd-rej-ret-low", []string{"message_retention_duration"},
+			&pubsubpb.Subscription{MessageRetentionDuration: durationpb.New(599 * time.Second)}},
+		{"retention above 31d", "upd-rej-ret-high", []string{"messageRetentionDuration"},
+			&pubsubpb.Subscription{MessageRetentionDuration: durationpb.New(2678401 * time.Second)}},
+		{"expiration ttl below 24h", "upd-rej-exp-low", []string{"expiration_policy"},
+			&pubsubpb.Subscription{ExpirationPolicy: &pubsubpb.ExpirationPolicy{Ttl: durationpb.New(time.Hour)}}},
+		{"expiration ttl above 365d", "upd-rej-exp-high", []string{"expirationPolicy"},
+			&pubsubpb.Subscription{ExpirationPolicy: &pubsubpb.ExpirationPolicy{Ttl: durationpb.New(365*24*time.Hour + time.Second)}}},
+		{"unknown path", "upd-rej-unknown", []string{"nope"},
+			&pubsubpb.Subscription{}},
+	}
+	for _, tc := range rejects {
+		t.Run(tc.name, func(t *testing.T) {
+			name := mkSub(tc.id)
+			tc.sub.Name = name
+			_, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+				Subscription: tc.sub,
+				UpdateMask:   &fieldmaskpb.FieldMask{Paths: tc.mask},
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("UpdateSubscription(%v) err = %v, want InvalidArgument", tc.mask, err)
+			}
+		})
+	}
+}
+
+// TestUpdateSubscriptionExactlyOncePushOrderIndependentGRPC pins that the
+// push/ exactly-once invariant is asserted against the merged state, so a patch
+// naming both fields is rejected in either path order and in either sequence.
+func TestUpdateSubscriptionExactlyOncePushOrderIndependentGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/eod-push-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	push := &pubsubpb.PushConfig{PushEndpoint: "https://example.com/push"}
+	mkSub := func(id string) string {
+		name := "projects/test/subscriptions/" + id
+		if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: name, Topic: topic}); err != nil {
+			t.Fatalf("CreateSubscription(%s): %v", id, err)
+		}
+		return name
+	}
+
+	for i, mask := range [][]string{
+		{"enable_exactly_once_delivery", "push_config"},
+		{"push_config", "enable_exactly_once_delivery"},
+		{"enableExactlyOnceDelivery", "pushConfig"},
+		{"pushConfig", "enableExactlyOnceDelivery"},
+	} {
+		name := mkSub("eod-both-" + string(rune('a'+i)))
+		_, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+			Subscription: &pubsubpb.Subscription{
+				Name:                      name,
+				EnableExactlyOnceDelivery: true,
+				PushConfig:                push,
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: mask},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("mask %v err = %v, want InvalidArgument", mask, err)
+		}
+	}
+
+	// Setting a push endpoint on an existing exactly-once subscription is
+	// rejected, and enabling exactly-once on an existing push subscription too.
+	seq := mkSub("eod-seq")
+	update := func(sub *pubsubpb.Subscription, paths ...string) error {
+		_, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+			Subscription: sub,
+			UpdateMask:   &fieldmaskpb.FieldMask{Paths: paths},
+		})
+		return err
+	}
+	if err := update(&pubsubpb.Subscription{Name: seq, PushConfig: push}, "push_config"); err != nil {
+		t.Fatalf("set push: %v", err)
+	}
+	if err := update(&pubsubpb.Subscription{Name: seq, EnableExactlyOnceDelivery: true}, "enable_exactly_once_delivery"); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("enable exactly-once on push err = %v, want InvalidArgument", err)
+	}
+	if err := update(&pubsubpb.Subscription{Name: seq}, "pushConfig"); err != nil {
+		t.Fatalf("clear push: %v", err)
+	}
+	if err := update(&pubsubpb.Subscription{Name: seq, EnableExactlyOnceDelivery: true}, "enableExactlyOnceDelivery"); err != nil {
+		t.Fatalf("enable exactly-once after clear: %v", err)
+	}
+	if err := update(&pubsubpb.Subscription{Name: seq, PushConfig: push}, "pushConfig"); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("push on exactly-once err = %v, want InvalidArgument", err)
+	}
+}
+
+// TestSubscriptionUpdateRESTWriteGRPCRead is the cross-transport read: a REST
+// update must be rendered by subToProto, so a missing renderer fails here
+// instead of silently dropping the field for gRPC clients.
+func TestSubscriptionUpdateRESTWriteGRPCRead(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	encryptor := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	rest := restpubsub.New(resources, messages, encryptor)
+	svc := NewService(resources, messages, encryptor, "test")
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	pubsubpb.RegisterSubscriberServer(srv, svc)
+	go srv.Serve(ln)
+	defer srv.Stop()
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	client := pubsubpb.NewSubscriberClient(conn)
+
+	nr := func(params map[string]any) *model.NormalizedRequest {
+		return &model.NormalizedRequest{
+			AccountID:  "test",
+			Params:     params,
+			ResourceID: resource.ResourceID("test"),
+		}
+	}
+	if _, err := rest.TopicCreate(ctx, nr(map[string]any{"name": "topics/xtopic"})); err != nil {
+		t.Fatalf("REST TopicCreate: %v", err)
+	}
+	if _, err := rest.SubscriptionCreate(ctx, nr(map[string]any{
+		"name": "subscriptions/xsub",
+		"body": map[string]any{"topic": "projects/test/topics/xtopic"},
+	})); err != nil {
+		t.Fatalf("REST SubscriptionCreate: %v", err)
+	}
+	if _, err := rest.SubscriptionUpdate(ctx, nr(map[string]any{
+		"name": "subscriptions/xsub",
+		"body": map[string]any{
+			"subscription": map[string]any{
+				"messageRetentionDuration": "1200s",
+				"retainAckedMessages":      true,
+				"bigqueryConfig":           map[string]any{"table": "projects/test/datasets/ds/tables/tbl"},
+				"pushConfig":               map[string]any{"pushEndpoint": "https://example.com/push"},
+				"messageTransforms": []any{map[string]any{
+					"javascriptUdf": map[string]any{"functionName": "redact", "code": "function redact(m) { return m; }"},
+				}},
+				"expirationPolicy": map[string]any{},
+			},
+			"updateMask": "messageRetentionDuration,retainAckedMessages,bigqueryConfig,pushConfig,messageTransforms,expirationPolicy",
+		},
+	})); err != nil {
+		t.Fatalf("REST SubscriptionUpdate: %v", err)
+	}
+
+	const name = "projects/test/subscriptions/xsub"
+	got, err := client.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: name})
+	if err != nil {
+		t.Fatalf("gRPC GetSubscription: %v", err)
+	}
+	if d := got.GetMessageRetentionDuration().AsDuration(); d != 1200*time.Second {
+		t.Errorf("message_retention_duration = %v, want 1200s", d)
+	}
+	if !got.GetRetainAckedMessages() {
+		t.Error("retain_acked_messages = false, want true")
+	}
+	if tbl := got.GetBigqueryConfig().GetTable(); tbl != "projects/test/datasets/ds/tables/tbl" {
+		t.Errorf("bigquery_config.table = %q", tbl)
+	}
+	if len(got.GetMessageTransforms()) != 1 {
+		t.Fatalf("message_transforms = %v, want one entry", got.GetMessageTransforms())
+	}
+	if fn := got.GetMessageTransforms()[0].GetJavascriptUdf().GetFunctionName(); fn != "redact" {
+		t.Errorf("message_transforms[0].function_name = %q", fn)
+	}
+	if got.GetExpirationPolicy() == nil {
+		t.Error("expiration_policy = nil, want a set-but-empty never-expire policy")
+	} else if got.GetExpirationPolicy().GetTtl() != nil {
+		t.Errorf("expiration_policy.ttl = %v, want unset", got.GetExpirationPolicy().GetTtl())
+	}
+	if ep := got.GetPushConfig().GetPushEndpoint(); ep != "https://example.com/push" {
+		t.Errorf("push_config.push_endpoint = %q", ep)
+	}
+
+	// A REST clear must read back as cleared over gRPC.
+	if _, err := rest.SubscriptionUpdate(ctx, nr(map[string]any{
+		"name": "subscriptions/xsub",
+		"body": map[string]any{
+			"subscription": map[string]any{
+				"bigqueryConfig":    nil,
+				"pushConfig":        nil,
+				"messageTransforms": []any{},
+			},
+			"updateMask": "bigqueryConfig,pushConfig,messageTransforms",
+		},
+	})); err != nil {
+		t.Fatalf("REST SubscriptionUpdate (clear): %v", err)
+	}
+	got, err = client.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: name})
+	if err != nil {
+		t.Fatalf("gRPC GetSubscription after clear: %v", err)
+	}
+	if got.GetBigqueryConfig() != nil {
+		t.Errorf("bigquery_config = %v, want cleared", got.GetBigqueryConfig())
+	}
+	if got.GetPushConfig() != nil {
+		t.Errorf("push_config = %v, want cleared", got.GetPushConfig())
+	}
+	if len(got.GetMessageTransforms()) != 0 {
+		t.Errorf("message_transforms = %v, want cleared", got.GetMessageTransforms())
 	}
 }

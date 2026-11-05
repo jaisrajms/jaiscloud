@@ -6,10 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
+)
+
+// Mutable-field bounds from the Pub/Sub Subscription reference: message
+// retention is 10 minutes–31 days, and an expiration policy TTL is 1 day–365
+// days (a missing TTL means "never expire").
+const (
+	minMessageRetention = 600 * time.Second      // 10 minutes
+	maxMessageRetention = 2678400 * time.Second  // 31 days
+	minExpirationTTL    = 86400 * time.Second    // 24 hours
+	maxExpirationTTL    = 31536000 * time.Second // 365 days
+	defaultRetention    = "604800s"              // 7 days
 )
 
 // SubscriptionUpdate applies an updateMask to a subscription
@@ -18,9 +30,11 @@ import (
 // mask is a body field ("updateMask"; a query fallback is tolerated). It mirrors
 // the gRPC UpdateSubscription handler so the two transports cannot drift: filter
 // is immutable, and labels, ackDeadlineSeconds, enableExactlyOnceDelivery,
-// enableMessageOrdering, deadLetterPolicy, and retryPolicy are supported. An
-// unknown mask path fails loud with InvalidArgument rather than being silently
-// ignored.
+// enableMessageOrdering, deadLetterPolicy, retryPolicy, messageRetentionDuration,
+// retainAckedMessages, expirationPolicy, pushConfig, bigqueryConfig,
+// cloudStorageConfig and messageTransforms are supported. state is OUTPUT_ONLY
+// and accepted as a no-op. An unknown mask path fails loud with InvalidArgument
+// rather than being silently ignored.
 func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -90,13 +104,10 @@ func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedR
 			}
 			meta["ackDeadlineSeconds"] = v
 		case "enableexactlyoncedelivery":
+			// The push/exactly-once invariant is asserted once after the whole
+			// mask is applied (below), so a patch that touches both fields is
+			// rejected regardless of path order.
 			if v, _ := in["enableExactlyOnceDelivery"].(bool); v {
-				if pc, ok := meta["pushConfig"].(map[string]any); ok {
-					if ep, _ := pc["pushEndpoint"].(string); ep != "" {
-						return nil, model.NewProviderError("InvalidArgument",
-							"exactly-once delivery is not supported for push subscriptions", 400)
-					}
-				}
 				meta["enableExactlyOnceDelivery"] = true
 			} else {
 				delete(meta, "enableExactlyOnceDelivery")
@@ -107,6 +118,124 @@ func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedR
 			} else {
 				delete(meta, "enableMessageOrdering")
 			}
+		case "messageretentionduration":
+			// Protobuf-JSON duration ("600s"), never Go's "10m0s": the official
+			// REST client unmarshals this string as google.protobuf.Duration.
+			// An absent/empty value under the mask resets to the documented
+			// 7-day default rather than deleting the key.
+			raw, present := in["messageRetentionDuration"]
+			if !present || raw == nil {
+				meta["messageRetentionDuration"] = defaultRetention
+				break
+			}
+			s, isString := raw.(string)
+			if !isString {
+				return nil, model.NewProviderError("InvalidArgument",
+					"messageRetentionDuration must be a duration string", 400)
+			}
+			if s == "" {
+				meta["messageRetentionDuration"] = defaultRetention
+				break
+			}
+			d, err := parseProtoDuration(s)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidArgument",
+					"invalid messageRetentionDuration: "+s, 400)
+			}
+			if d < minMessageRetention || d > maxMessageRetention {
+				return nil, model.NewProviderError("InvalidArgument",
+					fmt.Sprintf("messageRetentionDuration must be between 600s and 2678400s (got %s)", s), 400)
+			}
+			meta["messageRetentionDuration"] = formatProtoDuration(d)
+		case "retainackedmessages":
+			// Real Pub/Sub omits `false` booleans from the JSON response, so a
+			// false value clears the key (matching the create path).
+			if v, _ := in["retainAckedMessages"].(bool); v {
+				meta["retainAckedMessages"] = true
+			} else {
+				delete(meta, "retainAckedMessages")
+			}
+		case "expirationpolicy":
+			// null / {} / a missing ttl means "never expire": store an empty
+			// object so it stays distinguishable from an unset policy.
+			raw, present := in["expirationPolicy"]
+			if !present || raw == nil {
+				meta["expirationPolicy"] = map[string]any{}
+				break
+			}
+			ep, isObject := raw.(map[string]any)
+			if !isObject {
+				return nil, model.NewProviderError("InvalidArgument",
+					"expirationPolicy must be an object", 400)
+			}
+			ttl, _ := ep["ttl"].(string)
+			if ttl == "" {
+				meta["expirationPolicy"] = map[string]any{}
+				break
+			}
+			d, err := parseProtoDuration(ttl)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidArgument",
+					"invalid expirationPolicy.ttl: "+ttl, 400)
+			}
+			if d < minExpirationTTL || d > maxExpirationTTL {
+				return nil, model.NewProviderError("InvalidArgument",
+					fmt.Sprintf("expirationPolicy.ttl must be between 86400s and 31536000s (got %s)", ttl), 400)
+			}
+			stored := make(map[string]any, len(ep))
+			for k, v := range ep {
+				stored[k] = v
+			}
+			stored["ttl"] = formatProtoDuration(d)
+			meta["expirationPolicy"] = stored
+		case "pushconfig":
+			// absent / null / {} / an empty pushEndpoint clears push delivery,
+			// which is how the provider switches a subscription back to pull.
+			raw, present := in["pushConfig"]
+			if !present || raw == nil {
+				delete(meta, "pushConfig")
+				break
+			}
+			pc, isObject := raw.(map[string]any)
+			if !isObject {
+				return nil, model.NewProviderError("InvalidArgument",
+					"pushConfig must be an object", 400)
+			}
+			if ep, _ := pc["pushEndpoint"].(string); ep == "" {
+				delete(meta, "pushConfig")
+				break
+			}
+			meta["pushConfig"] = pc
+		case "bigqueryconfig":
+			// Store-and-echo only: delivery to BigQuery is not executed.
+			// An absent or JSON-null object clears the target (AIP-134).
+			if err := applyStorageConfigUpdate(meta, in, "bigqueryConfig"); err != nil {
+				return nil, err
+			}
+		case "cloudstorageconfig":
+			// Store-and-echo only: delivery to GCS is not executed.
+			if err := applyStorageConfigUpdate(meta, in, "cloudStorageConfig"); err != nil {
+				return nil, err
+			}
+		case "messagetransforms":
+			raw, present := in["messageTransforms"]
+			if !present || raw == nil {
+				delete(meta, "messageTransforms")
+				break
+			}
+			list, isList := raw.([]any)
+			if !isList {
+				return nil, model.NewProviderError("InvalidArgument",
+					"messageTransforms must be a list", 400)
+			}
+			if len(list) == 0 {
+				delete(meta, "messageTransforms")
+				break
+			}
+			meta["messageTransforms"] = list
+		case "state":
+			// OUTPUT_ONLY in Discovery: accept the mask path as a no-op and
+			// never persist a client-supplied value (detach has its own flag).
 		case "topic":
 			// A subscription cannot move to another topic through the public API. The
 			// emulator re-points its own Eventarc transport subscription when a trigger's
@@ -135,11 +264,62 @@ func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedR
 			return nil, model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+path, 400)
 		}
 	}
+	// Assert the push/exactly-once invariant once, against the fully-merged
+	// state, so a patch naming both fields is rejected in either order.
+	if err := validateExactlyOncePush(
+		boolField(meta, "enableExactlyOnceDelivery"),
+		pushEndpointOf(meta),
+	); err != nil {
+		return nil, err
+	}
 	data, _ := json.Marshal(meta)
 	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: s, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(meta), nil
+}
+
+// applyStorageConfigUpdate stores in[key] as an object verbatim when it is
+// present and non-null, and deletes meta[key] otherwise (absent or JSON null
+// under the mask clears the target, per AIP-134).
+func applyStorageConfigUpdate(meta, in map[string]any, key string) error {
+	raw, present := in[key]
+	if !present || raw == nil {
+		delete(meta, key)
+		return nil
+	}
+	obj, isObject := raw.(map[string]any)
+	if !isObject {
+		return model.NewProviderError("InvalidArgument", key+" must be an object", 400)
+	}
+	meta[key] = obj
+	return nil
+}
+
+// validateExactlyOncePush rejects exactly-once delivery on a subscription that
+// also carries a push endpoint: real Pub/Sub treats exactly-once as pull-only,
+// because a push subscriber never reports whether delivery was processed. The
+// create and update paths both call it, so the rule cannot drift.
+func validateExactlyOncePush(exactlyOnce bool, endpoint string) error {
+	if exactlyOnce && endpoint != "" {
+		return model.NewProviderError("InvalidArgument",
+			"exactly-once delivery is not supported for push subscriptions", 400)
+	}
+	return nil
+}
+
+// boolField reports whether meta[key] is the boolean true (a persisted map has
+// no type-preserving zero value).
+func boolField(meta map[string]any, key string) bool {
+	v, _ := meta[key].(bool)
+	return v
+}
+
+// pushEndpointOf returns the stored push endpoint, or "" for a pull subscription.
+func pushEndpointOf(meta map[string]any) string {
+	pc, _ := meta["pushConfig"].(map[string]any)
+	ep, _ := pc["pushEndpoint"].(string)
+	return ep
 }
 
 // nrStringParam returns a query parameter as a string, tolerating a repeated
