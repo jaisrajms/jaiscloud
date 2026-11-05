@@ -24,6 +24,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/resource"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -125,11 +126,13 @@ type databaseDef struct {
 }
 
 // cmekConfigDef mirrors google.firestore.admin.v1.Database.CmekConfig. The
-// block models the stored configuration only: kms_key_name is the key the
-// database was created with, and active_key_version is the OUTPUT_ONLY list of
-// key versions real GCP derives from KMS. This emulator has no KMS key-version
-// store to derive it from, so the list stays empty rather than being fabricated
-// (the REST rendering omits an empty list, as protojson does).
+// block models the stored configuration: kms_key_name is the key the database
+// was created with (validated against the attached KMS store), and
+// active_key_version is the OUTPUT_ONLY list of the key's ENABLED versions,
+// derived from KMS per response rather than persisted (a rotation must be
+// visible on the next read). With no KMS store attached (unit tests) the list
+// stays empty rather than being fabricated (the REST rendering omits an empty
+// list, as protojson does).
 type cmekConfigDef struct {
 	KmsKeyName       string   `json:"kmsKeyName,omitempty"`
 	ActiveKeyVersion []string `json:"activeKeyVersion,omitempty"`
@@ -471,6 +474,100 @@ func newDefaultDatabase(project string) databaseDef {
 // hyphens.
 var databaseIDRe = regexp.MustCompile(`^[a-z][a-z0-9-]{3,62}$`)
 
+// splitCMEKKeyName parses the documented CMEK key format
+// "projects/{project}/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}".
+func splitCMEKKeyName(name string) (project, location, ring, key string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 8 || parts[0] != "projects" || parts[2] != "locations" || parts[4] != "keyRings" || parts[6] != "cryptoKeys" {
+		return "", "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], parts[7], true
+}
+
+// cmekLocationMatches reports whether a KMS key location may encrypt a database
+// in dbLocation. database.proto pins the multi-region mapping — Firestore's nam5
+// uses Cloud KMS multi-region us, and eur3 uses europe — and every other
+// location must match exactly (case-insensitively).
+func cmekLocationMatches(dbLocation, keyLocation string) bool {
+	db := strings.ToLower(strings.TrimSpace(dbLocation))
+	key := strings.ToLower(strings.TrimSpace(keyLocation))
+	if db == "" || key == "" {
+		return true
+	}
+	switch db {
+	case "nam5":
+		return key == "us" || key == "nam5"
+	case "eur3":
+		return key == "europe" || key == "eur3"
+	}
+	return db == key
+}
+
+// validateCMEKConfig enforces the documented CmekConfig constraints on a create:
+// kms_key_name is REQUIRED when the block is present, must have the documented
+// resource-name shape, and "Only keys in the same location as this database are
+// allowed". With a KMS store attached it also requires the key to exist and to
+// be an ENCRYPT_DECRYPT key (a signing/verifying key cannot encrypt a database).
+// A nil store (unit tests) checks the wire-shaped constraints only.
+func (s *Service) validateCMEKConfig(ctx context.Context, dbLocation string, cc *cmekConfigDef) error {
+	if cc == nil || strings.TrimSpace(cc.KmsKeyName) == "" {
+		return nil
+	}
+	project, location, ring, key, ok := splitCMEKKeyName(cc.KmsKeyName)
+	if !ok {
+		return gcpInvalidArgument("cmek_config.kms_key_name must be projects/{project}/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}")
+	}
+	if !cmekLocationMatches(dbLocation, location) {
+		return gcpInvalidArgument("the CMEK key must be in the same location as the database")
+	}
+	if s.kms == nil {
+		return nil
+	}
+	ck, err := s.kms.GetCryptoKey(ctx, project, location, ring, key)
+	switch {
+	case errors.Is(err, kmsstore.ErrNoSuchCryptoKey), errors.Is(err, kmsstore.ErrNoSuchKeyRing):
+		return gcpInvalidArgument("cmek_config.kms_key_name refers to a key that does not exist: " + cc.KmsKeyName)
+	case err != nil:
+		return model.NewProviderError("Internal", err.Error(), 500)
+	}
+	if ck.Purpose != "" && ck.Purpose != "ENCRYPT_DECRYPT" {
+		return gcpInvalidArgument("the CMEK key must have purpose ENCRYPT_DECRYPT")
+	}
+	return nil
+}
+
+// resolveActiveCMEKVersions fills CmekConfig.active_key_version from the attached
+// KMS store: the key's ENABLED versions, which is what "currently in-use key
+// versions" means for an emulator that cannot track which version encrypted
+// which byte. During rotation more than one version is typically ENABLED, so the
+// list can be plural as database.proto documents. A nil store, a malformed
+// stored name or a key the KMS store no longer has leaves the list empty rather
+// than failing the Firestore read.
+func (s *Service) resolveActiveCMEKVersions(ctx context.Context, db *databaseDef) {
+	if db == nil || db.CmekConfig == nil {
+		return
+	}
+	db.CmekConfig.ActiveKeyVersion = nil
+	if s.kms == nil || db.CmekConfig.KmsKeyName == "" {
+		return
+	}
+	project, location, ring, key, ok := splitCMEKKeyName(db.CmekConfig.KmsKeyName)
+	if !ok {
+		return
+	}
+	versions, err := s.kms.ListVersions(ctx, project, location, ring, key)
+	if err != nil {
+		return
+	}
+	names := make([]string, 0, len(versions))
+	for _, v := range versions {
+		if v.State == "ENABLED" {
+			names = append(names, db.CmekConfig.KmsKeyName+"/cryptoKeyVersions/"+v.Version)
+		}
+	}
+	db.CmekConfig.ActiveKeyVersion = names
+}
+
 // CreateDatabaseDef creates a database metadata record and returns it with the
 // name of the terminal long-running operation wrapping it.
 //
@@ -528,10 +625,13 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 		if strings.TrimSpace(db.CmekConfig.KmsKeyName) == "" {
 			db.CmekConfig = nil
 		} else {
-			// active_key_version is OUTPUT_ONLY, derived from KMS on real GCP; a
-			// client-supplied value is not authoritative and nothing is fabricated
-			// in its place (see cmekConfigDef).
+			// active_key_version is OUTPUT_ONLY: a client-supplied value is not
+			// authoritative, so it is cleared here and derived from KMS on the
+			// response (resolveActiveCMEKVersions).
 			db.CmekConfig.ActiveKeyVersion = nil
+			if err := s.validateCMEKConfig(ctx, db.LocationID, db.CmekConfig); err != nil {
+				return databaseDef{}, "", err
+			}
 		}
 	}
 	db.DeleteProtectionState = normalizeDeleteProtection(db.DeleteProtectionState)
@@ -539,6 +639,7 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	if err := s.createDatabaseRecord(ctx, project, dbID, db); err != nil {
 		return databaseDef{}, "", err
 	}
+	s.resolveActiveCMEKVersions(ctx, &db)
 	return db, databaseOperationName(project, dbID, randomHex(12)), nil
 }
 
@@ -594,7 +695,12 @@ func (s *Service) createDatabaseRecord(ctx context.Context, project, dbID string
 // materialized on first access (see defaultDatabase).
 func (s *Service) GetDatabase(ctx context.Context, project, db string) (databaseDef, error) {
 	if db == defaultDatabaseID {
-		return s.defaultDatabase(ctx, project)
+		rec, err := s.defaultDatabase(ctx, project)
+		if err != nil {
+			return databaseDef{}, err
+		}
+		s.resolveActiveCMEKVersions(ctx, &rec)
+		return rec, nil
 	}
 	var rec databaseDef
 	if s.resources == nil {
@@ -606,7 +712,9 @@ func (s *Service) GetDatabase(ctx context.Context, project, db string) (database
 		if rec.Deleted {
 			return databaseDef{}, gcpNotFound("database")
 		}
-		return normalizeDatabase(rec), nil
+		out := normalizeDatabase(rec)
+		s.resolveActiveCMEKVersions(ctx, &out)
+		return out, nil
 	case !isNotFound(err):
 		return databaseDef{}, err
 	}
@@ -731,6 +839,9 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 		case !isNotFound(err):
 			return nil, err
 		}
+	}
+	for i := range out {
+		s.resolveActiveCMEKVersions(ctx, &out[i])
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -869,6 +980,7 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 	if err != nil {
 		return databaseDef{}, "", err
 	}
+	s.resolveActiveCMEKVersions(ctx, &updated)
 	return updated, databaseOperationName(project, db, randomHex(12)), nil
 }
 
@@ -1069,6 +1181,7 @@ func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag strin
 	if err := s.deleteDatabaseChildren(ctx, project, db); err != nil {
 		return databaseDef{}, "", err
 	}
+	s.resolveActiveCMEKVersions(ctx, &deleted)
 	return deleted, databaseOperationName(project, db, randomHex(12)), nil
 }
 

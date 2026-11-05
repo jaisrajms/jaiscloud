@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/gcperr"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -1071,8 +1073,10 @@ func TestDatabaseServerOwnedFields(t *testing.T) {
 // cmek_config.active_key_version is OUTPUT_ONLY, so a mask naming it writes
 // nothing (AIP-161).
 func TestDatabaseCmekConfig(t *testing.T) {
-	const key = "projects/proj/locations/us-central1/keyRings/jc-ring/cryptoKeys/jc-key"
-	const otherKey = "projects/proj/locations/us-central1/keyRings/jc-ring/cryptoKeys/jc-other"
+	// nam5's KMS counterpart is the "us" multi-region (database.proto), so a key
+	// in us is the documented match for a nam5 database.
+	const key = "projects/proj/locations/us/keyRings/jc-ring/cryptoKeys/jc-key"
+	const otherKey = "projects/proj/locations/us/keyRings/jc-ring/cryptoKeys/jc-other"
 	ctx := context.Background()
 	p := newAdminService()
 
@@ -1243,6 +1247,147 @@ func TestDatabaseCmekConfig(t *testing.T) {
 	}
 	if len(afterVersion.CmekConfig.ActiveKeyVersion) != 0 {
 		t.Errorf("active_key_version mask stored a fabricated version: %v", afterVersion.CmekConfig.ActiveKeyVersion)
+	}
+}
+
+// TestCMEKActiveKeyVersionsFromKMS pins the OUTPUT_ONLY
+// cmek_config.active_key_version derivation: with a KMS store attached, a read
+// lists the key's ENABLED versions (the "currently in-use" set), a rotation is
+// visible on the next read, and a disabled version drops out. The derivation is
+// per response, not persisted, so it also covers ListDatabases.
+func TestCMEKActiveKeyVersionsFromKMS(t *testing.T) {
+	ctx := context.Background()
+	keys := kmsstore.NewMemoryStore()
+	seedKMSKey(t, keys, "proj", "us", "ring", "key", "ENCRYPT_DECRYPT", "GOOGLE_SYMMETRIC_ENCRYPTION")
+	key := "projects/proj/locations/us/keyRings/ring/cryptoKeys/key"
+
+	p := newService(nil, store.NewMemoryResourceStore())
+	p.SetKMSStore(keys)
+
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "kms-cmek", databaseDef{
+		LocationID: "nam5",
+		CmekConfig: &cmekConfigDef{KmsKeyName: key, ActiveKeyVersion: []string{"client-supplied"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	want := []string{key + "/cryptoKeyVersions/1"}
+	if !reflect.DeepEqual(created.CmekConfig.ActiveKeyVersion, want) {
+		t.Errorf("create active_key_version = %v, want %v", created.CmekConfig.ActiveKeyVersion, want)
+	}
+
+	// A rotation (version 2) keeps version 1 ENABLED, so both are in use.
+	if _, err := keys.CreateVersion(ctx, "proj", "us", "ring", "key", kmsstore.Version{State: "ENABLED"}); err != nil {
+		t.Fatalf("CreateVersion: %v", err)
+	}
+	want = []string{key + "/cryptoKeyVersions/1", key + "/cryptoKeyVersions/2"}
+	got, err := p.GetDatabase(ctx, "proj", "kms-cmek")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if !reflect.DeepEqual(got.CmekConfig.ActiveKeyVersion, want) {
+		t.Errorf("GetDatabase active_key_version = %v, want %v", got.CmekConfig.ActiveKeyVersion, want)
+	}
+	list, err := p.ListDatabases(ctx, "proj", false)
+	if err != nil {
+		t.Fatalf("ListDatabases: %v", err)
+	}
+	found := false
+	for _, d := range list {
+		if d.Name == databaseName("proj", "kms-cmek") {
+			found = true
+			if !reflect.DeepEqual(d.CmekConfig.ActiveKeyVersion, want) {
+				t.Errorf("ListDatabases active_key_version = %v, want %v", d.CmekConfig.ActiveKeyVersion, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("ListDatabases omitted kms-cmek")
+	}
+
+	// A disabled version is no longer in use.
+	if err := keys.UpdateVersionState(ctx, "proj", "us", "ring", "key", "2", "DISABLED"); err != nil {
+		t.Fatalf("UpdateVersionState: %v", err)
+	}
+	got, err = p.GetDatabase(ctx, "proj", "kms-cmek")
+	if err != nil {
+		t.Fatalf("GetDatabase after disable: %v", err)
+	}
+	want = []string{key + "/cryptoKeyVersions/1"}
+	if !reflect.DeepEqual(got.CmekConfig.ActiveKeyVersion, want) {
+		t.Errorf("active_key_version after disabling v2 = %v, want %v", got.CmekConfig.ActiveKeyVersion, want)
+	}
+
+	// eur3's documented KMS counterpart is the "europe" multi-region.
+	seedKMSKey(t, keys, "proj", "europe", "ring3", "key3", "ENCRYPT_DECRYPT", "GOOGLE_SYMMETRIC_ENCRYPTION")
+	eurKey := "projects/proj/locations/europe/keyRings/ring3/cryptoKeys/key3"
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "eur-cmek", databaseDef{
+		LocationID: "eur3",
+		CmekConfig: &cmekConfigDef{KmsKeyName: eurKey},
+	}); err != nil {
+		t.Fatalf("CreateDatabaseDef(eur3/europe): %v", err)
+	}
+}
+
+// TestCMEKValidation pins the create-time CMEK constraints from database.proto:
+// kms_key_name is REQUIRED inside the block and must have the documented shape,
+// the key must be in the database's location (with the nam5→us / eur3→europe
+// multi-region mapping), and it must exist and be an ENCRYPT_DECRYPT key.
+func TestCMEKValidation(t *testing.T) {
+	ctx := context.Background()
+	keys := kmsstore.NewMemoryStore()
+	seedKMSKey(t, keys, "proj", "us", "ring", "sym", "ENCRYPT_DECRYPT", "GOOGLE_SYMMETRIC_ENCRYPTION")
+	seedKMSKey(t, keys, "proj", "us-central1", "ring2", "sign", "ASYMMETRIC_SIGN", "RSA_SIGN_PKCS1_2048_SHA256")
+
+	p := newService(nil, store.NewMemoryResourceStore())
+	p.SetKMSStore(keys)
+
+	cases := []struct{ name, location, key string }{
+		{"malformed name", "nam5", "not-a-key"},
+		{"missing key", "nam5", "projects/proj/locations/us/keyRings/ring/cryptoKeys/nope"},
+		{"missing key ring", "nam5", "projects/proj/locations/us/keyRings/nope/cryptoKeys/key"},
+		{"location mismatch", "nam5", "projects/proj/locations/us-central1/keyRings/ring2/cryptoKeys/sign"},
+		{"non-encryption purpose", "us-central1", "projects/proj/locations/us-central1/keyRings/ring2/cryptoKeys/sign"},
+	}
+	for _, tc := range cases {
+		if _, _, err := p.CreateDatabaseDef(ctx, "proj", "bad-cmek", databaseDef{
+			LocationID: tc.location,
+			CmekConfig: &cmekConfigDef{KmsKeyName: tc.key},
+		}); err == nil {
+			t.Errorf("%s: create succeeded, want InvalidArgument", tc.name)
+		} else {
+			assertProviderCode(t, err, "InvalidArgument", 400)
+		}
+	}
+
+	// Without a KMS store the wire-shaped constraints still apply (unit tests).
+	bare := newService(nil, store.NewMemoryResourceStore())
+	if _, _, err := bare.CreateDatabaseDef(ctx, "proj", "no-store", databaseDef{
+		LocationID: "nam5",
+		CmekConfig: &cmekConfigDef{KmsKeyName: "not-a-key"},
+	}); err == nil {
+		t.Error("malformed key accepted without a KMS store")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+	if _, _, err := bare.CreateDatabaseDef(ctx, "proj", "no-store", databaseDef{
+		LocationID: "nam5",
+		CmekConfig: &cmekConfigDef{KmsKeyName: "projects/proj/locations/us/keyRings/ring/cryptoKeys/sym"},
+	}); err != nil {
+		t.Errorf("shape-valid key rejected without a KMS store: %v", err)
+	}
+}
+
+func seedKMSKey(t *testing.T, keys kmsstore.Store, project, location, ring, key, purpose, algorithm string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := keys.CreateKeyRing(ctx, project, location, ring, kmsstore.KeyRing{Location: location, ID: ring}); err != nil {
+		t.Fatalf("CreateKeyRing(%s/%s): %v", location, ring, err)
+	}
+	if err := keys.CreateCryptoKeyWithVersion(ctx, project, location, ring, key, kmsstore.CryptoKey{
+		Location: location, KeyRingID: ring, ID: key, Purpose: purpose, Algorithm: algorithm,
+	}, kmsstore.Version{}, true); err != nil {
+		t.Fatalf("CreateCryptoKeyWithVersion(%s): %v", key, err)
 	}
 }
 

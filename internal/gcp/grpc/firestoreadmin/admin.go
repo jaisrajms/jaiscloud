@@ -196,9 +196,7 @@ func databaseToProto(d firestoreprovider.DatabaseDef) *adminpb.Database {
 	}
 	// A CMEK-protected database reports its cmek_config; a Google-managed one
 	// reports no block at all (the field's presence is the enablement signal).
-	// active_key_version is echoed only if the stored record carries one — this
-	// emulator derives none (no KMS key-version source), so the list stays empty
-	// rather than being fabricated.
+	// active_key_version is derived from the attached KMS store per response.
 	if c := d.CmekConfig; c != nil && c.KmsKeyName != "" {
 		cc := &adminpb.Database_CmekConfig{KmsKeyName: c.KmsKeyName}
 		if len(c.ActiveKeyVersion) > 0 {
