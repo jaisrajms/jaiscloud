@@ -490,6 +490,84 @@ func TestCryptoKeyVersionUpdate(t *testing.T) {
 	}
 }
 
+// TestCryptoKeyUpdateVersionTemplateAlgorithm pins the PATCH the Terraform
+// provider sends when `google_kms_crypto_key.version_template.algorithm`
+// changes: updateMask=versionTemplate.algorithm with the new algorithm in the
+// body. The template changes for future versions, the existing version keeps
+// its algorithm, and the key's protection level (ForceNew) is untouched (TGM6).
+func TestCryptoKeyUpdateVersionTemplateAlgorithm(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	keyName := "locations/global/keyRings/kr/cryptoKeys/mac"
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr", "cryptoKeyId": "mac",
+		"body": map[string]any{
+			"purpose":         "MAC",
+			"versionTemplate": map[string]any{"algorithm": "HMAC_SHA256"},
+		},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+
+	resp, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "versionTemplate.algorithm",
+		"body": map[string]any{"versionTemplate": map[string]any{"algorithm": "HMAC_SHA512"}},
+	}))
+	if err != nil {
+		t.Fatalf("patch versionTemplate.algorithm: %v", err)
+	}
+	vt, _ := resp.Data["versionTemplate"].(map[string]any)
+	if got, _ := vt["algorithm"].(string); got != "HMAC_SHA512" {
+		t.Fatalf("versionTemplate.algorithm = %q, want HMAC_SHA512", got)
+	}
+	if got, _ := vt["protectionLevel"].(string); got != "SOFTWARE" {
+		t.Fatalf("versionTemplate.protectionLevel = %q, want unchanged SOFTWARE", got)
+	}
+
+	// The first version keeps the algorithm it was created with; one created
+	// after the update uses the new template.
+	if _, err := p.CryptoKeyVersionCreate(ctx, newNR(map[string]any{
+		"name": keyName, "body": map[string]any{},
+	})); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	v1, err := p.CryptoKeyVersionGet(ctx, newNR(map[string]any{
+		"name": keyName + "/cryptoKeyVersions/1",
+	}))
+	if err != nil {
+		t.Fatalf("get version 1: %v", err)
+	}
+	if got, _ := v1.Data["algorithm"].(string); got != "HMAC_SHA256" {
+		t.Fatalf("version 1 algorithm = %q, want untouched HMAC_SHA256", got)
+	}
+	v2, err := p.CryptoKeyVersionGet(ctx, newNR(map[string]any{
+		"name": keyName + "/cryptoKeyVersions/2",
+	}))
+	if err != nil {
+		t.Fatalf("get version 2: %v", err)
+	}
+	if got, _ := v2.Data["algorithm"].(string); got != "HMAC_SHA512" {
+		t.Fatalf("version 2 algorithm = %q, want HMAC_SHA512", got)
+	}
+
+	// An absent algorithm under the mask resets the template to the purpose
+	// default (HMAC_SHA256 for MAC).
+	resp, err = p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "versionTemplate.algorithm", "body": map[string]any{},
+	}))
+	if err != nil {
+		t.Fatalf("reset versionTemplate.algorithm: %v", err)
+	}
+	vt, _ = resp.Data["versionTemplate"].(map[string]any)
+	if got, _ := vt["algorithm"].(string); got != "HMAC_SHA256" {
+		t.Fatalf("reset versionTemplate.algorithm = %q, want HMAC_SHA256", got)
+	}
+}
+
 // TestCryptoKeyUpdate pins cryptoKeys.patch — the real REST key update the
 // official clients send (mirroring gRPC UpdateCryptoKey). A masked field is
 // replaced wholesale from the body (labels is not deep-merged), an unmasked
@@ -640,13 +718,23 @@ func TestCryptoKeyUpdate(t *testing.T) {
 	}
 
 	// A path outside the writable field set is 400 INVALID_ARGUMENT — purpose is
-	// immutable, and an unknown name is not a field at all.
-	for _, mask := range []string{"purpose", "createTime", "name", "versionTemplate", "bogusField"} {
+	// immutable, protection level is ForceNew (only the template's algorithm is
+	// writable), and an unknown name is not a field at all.
+	for _, mask := range []string{"purpose", "createTime", "name", "versionTemplate.protectionLevel", "bogusField"} {
 		if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
 			"name": keyName, "updateMask": mask, "body": map[string]any{},
 		})); errStatus(err) != 400 {
 			t.Fatalf("mask %q: status = %d (%v), want 400", mask, errStatus(err), err)
 		}
+	}
+
+	// A writable versionTemplate path still validates the value: HMAC_SHA512 is
+	// not an algorithm this ENCRYPT_DECRYPT key can use.
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "versionTemplate.algorithm",
+		"body": map[string]any{"versionTemplate": map[string]any{"algorithm": "HMAC_SHA512"}},
+	})); errStatus(err) != 400 {
+		t.Fatalf("incompatible algorithm: status = %d (%v), want 400", errStatus(err), err)
 	}
 
 	// A missing crypto key is 404.

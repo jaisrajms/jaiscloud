@@ -548,6 +548,85 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 // TestKMSCryptoKeyRotationExecutesOnRead verifies the gRPC surface executes a
 // due rotation schedule lazily: once the clock advances past nextRotationTime,
 // GetCryptoKey creates version 2, makes it primary, and advances the schedule.
+func TestKMSCryptoKeyVersionTemplateAlgorithmUpdate(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+
+	created, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: "mac",
+		CryptoKey: &kmspb.CryptoKey{
+			Purpose: kmspb.CryptoKey_MAC,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: kmspb.CryptoKeyVersion_HMAC_SHA256,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+	if got := created.GetVersionTemplate().GetAlgorithm(); got != kmspb.CryptoKeyVersion_HMAC_SHA256 {
+		t.Fatalf("created algorithm = %v, want HMAC_SHA256", got)
+	}
+
+	// The proto snake_case mask path updates the template for future versions.
+	updated, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey: &kmspb.CryptoKey{
+			Name: macKey,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: kmspb.CryptoKeyVersion_HMAC_SHA512,
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"version_template.algorithm"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCryptoKey version_template.algorithm: %v", err)
+	}
+	if got := updated.GetVersionTemplate().GetAlgorithm(); got != kmspb.CryptoKeyVersion_HMAC_SHA512 {
+		t.Fatalf("updated algorithm = %v, want HMAC_SHA512", got)
+	}
+	if got := updated.GetVersionTemplate().GetProtectionLevel(); got != kmspb.ProtectionLevel_SOFTWARE {
+		t.Fatalf("updated protectionLevel = %v, want unchanged SOFTWARE", got)
+	}
+
+	// An algorithm the purpose cannot execute is 400, and the template is left
+	// untouched.
+	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey: &kmspb.CryptoKey{
+			Name: macKey,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: kmspb.CryptoKeyVersion_AES_256_GCM,
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"version_template.algorithm"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("AES_256_GCM on a MAC key err = %v, want InvalidArgument", err)
+	}
+
+	// A version created after the update uses the new algorithm; the template's
+	// protection level path stays immutable.
+	ver, err := client.CreateCryptoKeyVersion(ctx, &kmspb.CreateCryptoKeyVersionRequest{Parent: macKey})
+	if err != nil {
+		t.Fatalf("CreateCryptoKeyVersion: %v", err)
+	}
+	if got := ver.GetAlgorithm(); got != kmspb.CryptoKeyVersion_HMAC_SHA512 {
+		t.Fatalf("new version algorithm = %v, want HMAC_SHA512", got)
+	}
+	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey: &kmspb.CryptoKey{
+			Name: macKey,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				ProtectionLevel: kmspb.ProtectionLevel_HSM,
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"version_template.protection_level"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("version_template.protection_level err = %v, want InvalidArgument", err)
+	}
+}
+
 func TestKMSCryptoKeyRotationExecutesOnRead(t *testing.T) {
 	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	clock.SetGlobalClock(clock.FixedClock{T: t0})
