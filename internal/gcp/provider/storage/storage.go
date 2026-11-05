@@ -381,6 +381,31 @@ type bucketMeta struct {
 	// DefaultEventBasedHold is inherited by newly created objects that do not
 	// explicitly set eventBasedHold (GCS Bucket.defaultEventBasedHold).
 	DefaultEventBasedHold bool `json:"defaultEventBasedHold,omitempty"`
+	// Autoclass is the bucket's autoclass config (GCS Bucket.autoclass):
+	// {enabled, terminalStorageClass[, toggleTime,
+	// terminalStorageClassUpdateTime]}. Stored verbatim so the configuration a
+	// client sends (notably terraform-google-cloud-storage's always-present
+	// `autoclass { enabled = false }`) reads back exactly.
+	Autoclass map[string]any `json:"autoclass,omitempty"`
+	// HierarchicalNamespace is the bucket's hierarchical namespace config (GCS
+	// Bucket.hierarchicalNamespace): {enabled}. It is immutable after create
+	// (`ForceNew` in the provider), so it is decoded on insert and rendered on
+	// read but never applied by an update.
+	HierarchicalNamespace map[string]any `json:"hierarchicalNamespace,omitempty"`
+	// Website is the bucket's static-website config (GCS Bucket.website):
+	// {mainPageSuffix, notFoundPage}.
+	Website map[string]any `json:"website,omitempty"`
+	// Logging is the bucket's access/storage-logging config (GCS
+	// Bucket.logging): {logBucket, logObjectPrefix}.
+	Logging map[string]any `json:"logging,omitempty"`
+	// CustomPlacementConfig is the bucket's custom dual-region placement (GCS
+	// Bucket.customPlacementConfig): {dataLocations}. Immutable after create.
+	CustomPlacementConfig map[string]any `json:"customPlacementConfig,omitempty"`
+	// IpFilter is the bucket's IP filter config (GCS Bucket.ipFilter): {mode,
+	// publicNetworkSource, vpcNetworkSources, allowCrossOrgVpcs,
+	// allowAllServiceAgentAccess}. Replaced wholesale when a PATCH body carries
+	// ipFilter.
+	IpFilter map[string]any `json:"ipFilter,omitempty"`
 }
 
 type objectMeta struct {
@@ -815,6 +840,17 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Cors = bodySlice(body, "cors")
 	b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
 	b.Labels = bodyStringMap(body, "labels")
+	// autoclass and hierarchicalNamespace are sent on every create by the
+	// official storage module (both with enabled=false), and website/logging/
+	// customPlacementConfig/ipFilter when the caller configures them. Store each
+	// shaped object verbatim — the emulator does not synthesize defaults for a
+	// block the caller did not send.
+	b.Autoclass = bodyMap(body, "autoclass")
+	b.HierarchicalNamespace = bodyMap(body, "hierarchicalNamespace")
+	b.Website = bodyMap(body, "website")
+	b.Logging = bodyMap(body, "logging")
+	b.CustomPlacementConfig = bodyMap(body, "customPlacementConfig")
+	b.IpFilter = bodyMap(body, "ipFilter")
 	// Insert carries iamConfiguration in the resource body (the JSON API has no
 	// uniformBucketLevelAccess query parameters — the hashicorp/google provider
 	// sends it here on create and in a PATCH body on update).
@@ -857,9 +893,11 @@ func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 // BucketsGetStorageLayout implements buckets.getStorageLayout. The emulator
-// models no hierarchical namespace, so every bucket reports it disabled. This
-// is the resource `gcloud storage cp` (and the GCS SDKs) reads before uploading,
-// and its absence previously aborted those clients.
+// models the hierarchical namespace flag (it is a bucket metadata field), so
+// the layout reports the value the bucket was created with — false unless the
+// caller enabled it. This is the resource `gcloud storage cp` (and the GCS
+// SDKs) reads before uploading, and its absence previously aborted those
+// clients.
 func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	if err := requireBucketAdmin(nr); err != nil {
 		return nil, err
@@ -872,10 +910,14 @@ func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.Normal
 		}
 		return nil, err
 	}
+	hnEnabled := false
+	if hn, _ := meta["hierarchicalNamespace"].(map[string]any); hn != nil {
+		hnEnabled, _ = hn["enabled"].(bool)
+	}
 	layout := map[string]any{
 		"kind":                  "storage#storageLayout",
 		"bucket":                name,
-		"hierarchicalNamespace": map[string]any{"enabled": false},
+		"hierarchicalNamespace": map[string]any{"enabled": hnEnabled},
 	}
 	if loc, _ := meta["location"].(string); loc != "" {
 		layout["location"] = loc
@@ -945,6 +987,23 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		if _, ok := body["labels"]; ok {
 			b.Labels = bodyStringMap(body, "labels")
+		}
+		// The provider PATCHes these as whole blocks: a present block replaces
+		// the stored one, and an explicit JSON null (its NullFields clearing
+		// path for website/logging) clears it. hierarchicalNamespace and
+		// customPlacementConfig are immutable after create, so an update never
+		// touches them.
+		if _, ok := body["autoclass"]; ok {
+			b.Autoclass = bodyMap(body, "autoclass")
+		}
+		if _, ok := body["website"]; ok {
+			b.Website = bodyMap(body, "website")
+		}
+		if _, ok := body["logging"]; ok {
+			b.Logging = bodyMap(body, "logging")
+		}
+		if _, ok := body["ipFilter"]; ok {
+			b.IpFilter = bodyMap(body, "ipFilter")
 		}
 		// iamConfiguration is patch-merged: only the members the request carries
 		// change, so a PATCH that toggles uniform bucket-level access alone
@@ -3754,6 +3813,24 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	out["softDeletePolicy"] = softDelete
 	if b.Labels != nil {
 		out["labels"] = b.Labels
+	}
+	if b.Autoclass != nil {
+		out["autoclass"] = b.Autoclass
+	}
+	if b.HierarchicalNamespace != nil {
+		out["hierarchicalNamespace"] = b.HierarchicalNamespace
+	}
+	if b.Website != nil {
+		out["website"] = b.Website
+	}
+	if b.Logging != nil {
+		out["logging"] = b.Logging
+	}
+	if b.CustomPlacementConfig != nil {
+		out["customPlacementConfig"] = b.CustomPlacementConfig
+	}
+	if b.IpFilter != nil {
+		out["ipFilter"] = b.IpFilter
 	}
 	out["defaultEventBasedHold"] = b.DefaultEventBasedHold
 	return out

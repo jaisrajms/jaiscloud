@@ -92,82 +92,111 @@ tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 ```
 
-## Pinned consumer-module gate
+## Pinned consumer-module gates
 
 `run.sh` drives a fixture *we* wrote, so it only proves the surface we already
-declared. `run-module.sh` (and `make test-gcp-terraform-pubsub`) drives a
-**third-party** module instead: the real consumer is the specification.
+declared. `run-module.sh` drives a **third-party** module instead: the real
+consumer is the specification. It is a driver with one case file per module
+under `module-cases/`; each case pins a repo/commit, generates a throwaway root
+module, and requires the module's lifecycle to converge.
 
-The pinned consumer is
-[`terraform-google-modules/terraform-google-pubsub`](https://github.com/terraform-google-modules/terraform-google-pubsub)
-at commit **`6cf1860`** (2026-10-07, `google >= 6.2, < 9`). Its `main.tf` reads
-`data "google_project"` on every plan to build the default Pub/Sub service-agent
-e-mail (`service-${number}@gcp-sa-pubsub.iam.gserviceaccount.com`). That data
-source also exposes `billing_account`, so the read performs
-`GET /v1/projects/{p}/billingInfo` — the call that used to answer
-`404 UnknownService: cannot detect target GCP service` and made the module
-unusable. The gate proves that call now succeeds and that the module's whole
-lifecycle works against the emulator.
+| case | module | pinned commit | what the gate proves |
+|---|---|---|---|
+| `pubsub` | [`terraform-google-pubsub`](https://github.com/terraform-google-modules/terraform-google-pubsub) | `6cf1860` | `data.google_project` (`projects.getBillingInfo`), topic + pull subscription + IAM member, `plan` **No changes** |
+| `storage` | [`terraform-google-cloud-storage`](https://github.com/terraform-google-modules/terraform-google-cloud-storage) | `c7effc0be0f4` | `autoclass`, `hierarchicalNamespace`, `website`, `logging`, `customPlacementConfig` and `ipFilter` read back; mutated `autoclass.enabled` + labels/website/logging, then labels/logging/`ip_filter` cleared; each phase ends with `plan` **No changes** |
 
-Clone it once (this is the only step that needs the network):
+The storage case pins provider `hashicorp/google = 7.46.2`.
+
+Per-case targets are **opt-in** for two reasons: each needs a one-time module
+clone (this repo never clones from the network in a gate), and they resolve the
+provider from the registry. They are still safe to invoke unconditionally — with
+no checkout or no `terraform` they print `SKIP` and exit 0.
+
+Clone a module once (the only step that needs the network), then run its target:
 
 ```bash
 git clone https://github.com/terraform-google-modules/terraform-google-pubsub \
   "$HOME/.cache/terraform-modules/terraform-google-pubsub"
 git -C "$HOME/.cache/terraform-modules/terraform-google-pubsub" checkout 6cf1860
 make test-gcp-terraform-pubsub
+
+git clone https://github.com/terraform-google-modules/terraform-google-cloud-storage \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-storage"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-storage" checkout c7effc0be0f4
+make test-gcp-terraform-storage
 ```
 
-`TF_MODULE_DIR` overrides the checkout location (default
-`$HOME/.cache/terraform-modules/terraform-google-pubsub`). The target is
-**opt-in** for two reasons: it needs that one-time clone (this repo never clones
-from the network in a gate), and it resolves the provider from the registry. It
-is still safe to invoke unconditionally — with no checkout or no `terraform` it
-prints `SKIP` and exits 0.
+`TF_MODULE_DIR` overrides the checkout location for whichever case you run
+(default `$HOME/.cache/terraform-modules/<module repo>`); the Makefile targets
+point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
 ```bash
-TF_MODULE_DIR=/path/to/terraform-google-pubsub \
-  tests/integration/gcp/terraform/run-module.sh http://localhost:8080 test-project
+TF_MODULE_DIR=/path/to/terraform-google-cloud-storage \
+  tests/integration/gcp/terraform/run-module.sh storage http://localhost:8080 test-project
 ```
 
-### What the module gate does
+### What a case does
 
-The script generates a throwaway root module in a temp dir — a `provider
-"google"` block with the per-service custom endpoints the module touches
-(`pubsub`, `resource_manager`, `cloud_billing`, `iam`, `service_usage`, each
-with exactly one trailing slash) and a `module` block pointing at the local
-checkout with `project_id`, `topic`, `subscription_labels` and one
-`pull_subscriptions` entry — then runs:
+The driver sources `module-cases/<case>.sh` (one file per module) and supplies
+the temp work dir, the module checkout, the Terraform wrapper, `pass`/`fail`,
+`check` (substring assert on a REST body) and the phase helpers. A case sets
+`MODULE_REPO` / `MODULE_COMMIT` / `MODULE_GIT`, defines `case_main`, and
+generates its root module there. Every case ends with
+`plan -detailed-exitcode` = 0: that is the acceptance, not the apply exit code.
+
+**pubsub** — the generated root module carries the per-service custom endpoints
+the module touches (`pubsub`, `resource_manager`, `cloud_billing`, `iam`,
+`service_usage`, each with exactly one trailing slash) and a `module` block with
+`project_id`, `topic` and one `pull_subscriptions` entry, then runs:
 
 1. `init` (provider from the registry)
-2. `plan` — must complete, which is what proves
-   `data.google_project` + `projects.getBillingInfo` work
+2. `plan` — must complete, which proves `data.google_project` +
+   `projects.getBillingInfo` work
 3. `apply`
 4. spot checks through the emulator's REST API: the topic, the pull
-   subscription (on that topic, carrying the module's `subscription_labels`),
-   and `projects/{p}/billingInfo` answering the no-account default
-   (`billingAccountName: ""`, `billingEnabled: false`)
-5. a second `plan -detailed-exitcode` — must report **no changes** (no
-   permadiff on the module's computed IAM member / topic / subscription)
-6. an update phase: rewrite the module with `ack_deadline_seconds = 20`,
-   `message_retention_duration = "1200s"` and an extra label, `apply`, assert
-   the three values through the REST API, then a `plan -detailed-exitcode` that
-   must report **no changes**. The provider's PATCH is
-   `updateMask=ackDeadlineSeconds,bigqueryConfig` (and the label / retention
-   variants), so the run fails if the apply log reports
-   `unsupported update_mask path` or an HTTP 400
-7. a second update phase changing the same three inputs again (ack `30`,
-   retention `"2400s"`, another label), then the same apply/assert/plan cycle
-8. a clear-back phase (`subscription_labels = {}`, ack/retention unset):
-   apply, assert the module's labels are gone and retention reset to the 7-day
-   default `604800s`, then a final `plan -detailed-exitcode` reporting **no
-   changes**. The provider's own `goog-terraform-provisioned` label remains,
-   as it does with real GCP
-9. `destroy` (also on exit via a trap, so a failure still cleans up)
+   subscription on that topic, and `projects/{p}/billingInfo` answering the
+   no-account default (`billingAccountName: ""`, `billingEnabled: false`)
+5. a second `plan -detailed-exitcode` — must report **no changes**
+6. `destroy` (also on exit via a trap)
 
-It prints one `PASS`/`FAIL` line per step and exits non-zero on any failure.
+**storage** — three buckets in `location = "NAM4"` (`module-bucket` with the
+optional blocks, `logs` as the logging destination, `dual-region` created with
+the two `ForceNew` blocks) run the full gate:
+
+1. `apply` the module with its defaults (`autoclass`, `hierarchical_namespace`,
+   UBLA, `soft_delete_policy`), labels, `public_access_prevention = "enforced"`,
+   `website`, `logging` and `ip_filter`; the apply log must contain no `400`,
+   `501` or `unsupported update_mask`
+2. assert through the REST API that the bucket carries labels, UBLA/PAP,
+   `hierarchicalNamespace`, `website`, `logging` and the full `ipFilter`, and
+   that the `dual-region` bucket reads back `hierarchicalNamespace.enabled=true`
+   plus `customPlacementConfig.dataLocations` (the two `ForceNew` blocks — the
+   create read-back is what stops the next plan replacing the bucket)
+3. `plan -detailed-exitcode` → **no changes**
+4. flip `autoclass.enabled` to true, change a label, and change
+   `website`/`logging`; `apply`; assert the new values and that the untouched
+   `ipFilter` survived; `plan` → **no changes**
+5. clear back: `labels = {}`, `logging = {}`, `autoclass` false and
+   `ip_filter { mode = "Disabled" }`; `apply`; assert the caller labels and
+   logging are gone and the filter's ranges are cleared; `plan` → **no changes**
+6. `destroy`
+
+Two behaviours of `hashicorp/google` 7.46.2 are recorded, not worked around:
+
+- A create-time `autoclass { enabled = false }` block is **not sent** (the
+  block's `Optional+Computed` `terminal_storage_class` makes `GetOk` see the
+  whole block as zero). The emulator must not synthesize it either, and the
+  schema's `DiffSuppressFunc` keeps the plan clean. The mutate phase proves the
+  field round-trips once it is actually sent.
+- `website` has no clearing path in the provider (unlike `logging`, which sets
+  `NullFields`), so removing the block would PATCH nothing and real GCS would
+  keep the old value too. The clear phase changes `website` instead of removing
+  it; this is a provider limitation, not an emulator gap.
+
+Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
+failure.
 
 ## What it does
 
