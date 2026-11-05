@@ -104,8 +104,9 @@ module, and requires the module's lifecycle to converge.
 |---|---|---|---|
 | `pubsub` | [`terraform-google-pubsub`](https://github.com/terraform-google-modules/terraform-google-pubsub) | `6cf1860` | `data.google_project` (`projects.getBillingInfo`), topic + pull subscription + IAM member, `plan` **No changes** |
 | `storage` | [`terraform-google-cloud-storage`](https://github.com/terraform-google-modules/terraform-google-cloud-storage) | `c7effc0be0f4` | `autoclass`, `hierarchicalNamespace`, `website`, `logging`, `customPlacementConfig` and `ipFilter` read back; mutated `autoclass.enabled` + labels/website/logging, then labels/logging/`ip_filter` cleared; each phase ends with `plan` **No changes** |
+| `memorystore` | [`terraform-google-memorystore`](https://github.com/terraform-google-modules/terraform-google-memorystore) | `5415d5ccca28` | `authEnabled`, `connectMode`, `transitEncryptionMode`, `readReplicasMode`, `maintenancePolicy` and `persistenceConfig` read back (the two ForceNew modes no longer replace the instance); AUTH enabled then disabled, maintenance window/snapshot period changed, labels changed then cleared; each phase ends with `plan` **No changes** |
 
-The storage case pins provider `hashicorp/google = 7.46.2`.
+The storage and memorystore cases pin provider `hashicorp/google = 7.46.2`.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -124,11 +125,17 @@ git clone https://github.com/terraform-google-modules/terraform-google-cloud-sto
   "$HOME/.cache/terraform-modules/terraform-google-cloud-storage"
 git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-storage" checkout c7effc0be0f4
 make test-gcp-terraform-storage
+
+git clone https://github.com/terraform-google-modules/terraform-google-memorystore \
+  "$HOME/.cache/terraform-modules/terraform-google-memorystore"
+git -C "$HOME/.cache/terraform-modules/terraform-google-memorystore" checkout 5415d5ccca28
+make test-gcp-terraform-memorystore
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
 (default `$HOME/.cache/terraform-modules/<module repo>`); the Makefile targets
-point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` respectively.
+point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
+`TF_MEMORYSTORE_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -194,6 +201,41 @@ Two behaviours of `hashicorp/google` 7.46.2 are recorded, not worked around:
   `NullFields`), so removing the block would PATCH nothing and real GCS would
   keep the old value too. The clear phase changes `website` instead of removing
   it; this is a provider limitation, not an emulator gap.
+
+**memorystore** — one `STANDARD_HA` instance created through the module with
+its real inputs (`memory_size_gb`, `redis_version`, labels,
+`transit_encryption_mode = "SERVER_AUTHENTICATION"`,
+`read_replicas_mode = "READ_REPLICAS_DISABLED"`, `replica_count = 1`, an RDB
+`persistence_config` and a Monday 01:00 `maintenance_policy`) runs the gate:
+
+1. `apply` the module and assert through the REST API that GET returns
+   `authEnabled:false`, `connectMode`, `transitEncryptionMode`,
+   `readReplicasMode`, the maintenance window and the persistence config — the
+   two ForceNew modes' create read-back is what stops the next plan replacing
+   the instance; the apply log must contain no `400`, `501` or
+   `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. flip `auth_enabled` to true, move the maintenance window, change the
+   snapshot period and labels; `apply` (the provider reads
+   `GET …/instances/{i}/authString` once AUTH is on); assert the new values and
+   that the untouched ForceNew modes survived; `plan` → **no changes**
+4. clear back: `auth_enabled = false`, `maintenance_policy = null`,
+   `persistence_mode = "DISABLED"`, `labels = {}`; `apply`; assert AUTH false,
+   the policy gone, persistence disabled and the labels cleared; `plan` →
+   **no changes**
+5. `destroy`
+
+Two behaviours of `hashicorp/google` 7.46.2 are recorded, not worked around:
+
+- `auth_enabled = false` is never sent (both create and update drop a false
+  bool), and the update that disables AUTH sends `updateMask=authEnabled` with
+  **no** `authEnabled` member in the body. An update mask is authoritative in
+  proto3 semantics, so the emulator clears the masked path; a handler keyed on
+  "field present in body" would keep AUTH on and permadiff.
+- `persistence_config` is `Optional+Computed`: removing the block keeps the
+  prior state and sends no mask at all (real GCP keeps the config too), so the
+  clear phase disables persistence instead. `maintenance_policy` is plain
+  `Optional`, so removing it does PATCH `updateMask=maintenancePolicy`.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.

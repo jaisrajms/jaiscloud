@@ -12,10 +12,13 @@
 // shared locations/{location}/operations/{id} path is host-ambiguous with
 // Cloud Workflows' LRO surface and is deliberately not claimed here.
 //
-// Deferred surfaces (backup collections, the cluster surface, and the
-// instance-level maintenance/version surfaces the emulator does not model) are
-// not routed and fall through to the adapter's generic 404 rather than silently
-// succeeding. import/export/failover/reschedule-maintenance are accepted as
+// Deferred surfaces (backup collections and the cluster surface) are not
+// routed and fall through to the adapter's generic 404 rather than silently
+// succeeding. The instance-level maintenancePolicy/persistenceConfig are stored
+// and echoed as configured (metadata only — no maintenance run or snapshot is
+// ever performed); rescheduleMaintenance validates the documented request shape
+// but does not rewrite the stored window, and maintenanceVersion stays
+// output-only. import/export/failover/reschedule-maintenance are accepted as
 // control-plane operations (validating their documented request shape) and
 // getAuthString reports the empty AUTH string real Memorystore returns when AUTH
 // is disabled — the emulator never stands up a Redis server, so none of them
@@ -33,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
@@ -87,23 +91,77 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 
 // Instance is the redis.v1.Instance representation. id/creationTimestamp are
 // synthesized (the real proto carries createTime and no id).
+//
+// The fields a Terraform consumer configures are stored and echoed verbatim
+// (never executed — there is no data plane): the official
+// terraform-google-memorystore module always sends authEnabled/connectMode/
+// transitEncryptionMode/readReplicasMode and can send maintenancePolicy/
+// persistenceConfig, so dropping them made GET omit the configured values and
+// the provider either permadiffed or planned a replacement for the ForceNew
+// modes. maintenanceVersion stays output-only and is deliberately not stored.
 type Instance struct {
-	Name              string            `json:"name,omitempty"`
-	DisplayName       string            `json:"displayName,omitempty"`
-	State             string            `json:"state,omitempty"`
-	Tier              string            `json:"tier,omitempty"`
-	MemorySizeGb      int64             `json:"memorySizeGb,omitempty"`
-	RedisVersion      string            `json:"redisVersion,omitempty"`
-	Host              string            `json:"host,omitempty"`
-	Port              int64             `json:"port,omitempty"`
-	CurrentLocationID string            `json:"currentLocationId,omitempty"`
-	LocationID        string            `json:"locationId,omitempty"`
-	CreateTime        string            `json:"createTime,omitempty"`
-	RedisConfigs      map[string]string `json:"redisConfigs,omitempty"`
-	Labels            map[string]string `json:"labels,omitempty"`
-	ReplicaCount      int64             `json:"replicaCount,omitempty"`
-	ID                string            `json:"id,omitempty"`
-	CreationTimestamp string            `json:"creationTimestamp,omitempty"`
+	Name                  string `json:"name,omitempty"`
+	DisplayName           string `json:"displayName,omitempty"`
+	State                 string `json:"state,omitempty"`
+	Tier                  string `json:"tier,omitempty"`
+	MemorySizeGb          int64  `json:"memorySizeGb,omitempty"`
+	RedisVersion          string `json:"redisVersion,omitempty"`
+	Host                  string `json:"host,omitempty"`
+	Port                  int64  `json:"port,omitempty"`
+	CurrentLocationID     string `json:"currentLocationId,omitempty"`
+	LocationID            string `json:"locationId,omitempty"`
+	AlternativeLocationID string `json:"alternativeLocationId,omitempty"`
+	AuthorizedNetwork     string `json:"authorizedNetwork,omitempty"`
+	ReservedIPRange       string `json:"reservedIpRange,omitempty"`
+	SecondaryIPRange      string `json:"secondaryIpRange,omitempty"`
+	ConnectMode           string `json:"connectMode,omitempty"`
+	TransitEncryptionMode string `json:"transitEncryptionMode,omitempty"`
+	ReadReplicasMode      string `json:"readReplicasMode,omitempty"`
+	CustomerManagedKey    string `json:"customerManagedKey,omitempty"`
+	// AuthEnabled has no omitempty: the Discovery documents a default of false
+	// ("Default value is false meaning AUTH is disabled") and the provider reads
+	// an absent value as false, so rendering the documented default keeps the
+	// create read-back explicit instead of relying on omission.
+	AuthEnabled       bool               `json:"authEnabled"`
+	MaintenancePolicy *MaintenancePolicy `json:"maintenancePolicy,omitempty"`
+	PersistenceConfig *PersistenceConfig `json:"persistenceConfig,omitempty"`
+	CreateTime        string             `json:"createTime,omitempty"`
+	RedisConfigs      map[string]string  `json:"redisConfigs,omitempty"`
+	Labels            map[string]string  `json:"labels,omitempty"`
+	ReplicaCount      int64              `json:"replicaCount,omitempty"`
+	ID                string             `json:"id,omitempty"`
+	CreationTimestamp string             `json:"creationTimestamp,omitempty"`
+}
+
+// MaintenancePolicy mirrors redis.v1.MaintenancePolicy.
+type MaintenancePolicy struct {
+	Description             string                    `json:"description,omitempty"`
+	CreateTime              string                    `json:"createTime,omitempty"` // output only
+	UpdateTime              string                    `json:"updateTime,omitempty"` // output only
+	WeeklyMaintenanceWindow []WeeklyMaintenanceWindow `json:"weeklyMaintenanceWindow,omitempty"`
+}
+
+// WeeklyMaintenanceWindow mirrors redis.v1.WeeklyMaintenanceWindow.
+type WeeklyMaintenanceWindow struct {
+	Day       string     `json:"day,omitempty"`
+	StartTime *TimeOfDay `json:"startTime,omitempty"`
+	Duration  string     `json:"duration,omitempty"` // output only (fixed at 1 hour)
+}
+
+// TimeOfDay mirrors google.type.TimeOfDay.
+type TimeOfDay struct {
+	Hours   int32 `json:"hours,omitempty"`
+	Minutes int32 `json:"minutes,omitempty"`
+	Seconds int32 `json:"seconds,omitempty"`
+	Nanos   int32 `json:"nanos,omitempty"`
+}
+
+// PersistenceConfig mirrors redis.v1.PersistenceConfig.
+type PersistenceConfig struct {
+	PersistenceMode      string `json:"persistenceMode,omitempty"`
+	RdbSnapshotPeriod    string `json:"rdbSnapshotPeriod,omitempty"`
+	RdbSnapshotStartTime string `json:"rdbSnapshotStartTime,omitempty"`
+	RdbNextSnapshotTime  string `json:"rdbNextSnapshotTime,omitempty"` // output only
 }
 
 // Location is the redis.v1.Location representation.
@@ -144,6 +202,9 @@ func (p *Provider) CreateInstance(ctx context.Context, nr *model.NormalizedReque
 	}
 	if inst.RedisVersion == "" {
 		inst.RedisVersion = defaultRedisVersion
+	}
+	if err := validateInstance(&inst); err != nil {
+		return nil, err
 	}
 	inst.LocationID = location
 	inst.CurrentLocationID = location
@@ -347,10 +408,11 @@ func (p *Provider) FailoverInstance(ctx context.Context, nr *model.NormalizedReq
 	return provider.OK(p.operation(nr, location, "failover", inst.Name, map[string]any{})), nil
 }
 
-// RescheduleMaintenanceInstance records a maintenance reschedule. The emulator
-// models no maintenance policy, so it validates the documented request shape
-// (rescheduleType, plus scheduleTime for SPECIFIC_TIME) and reports the
-// control-plane operation as done.
+// RescheduleMaintenance records a maintenance reschedule. The emulator stores a
+// configured maintenancePolicy but runs no maintenance, so it validates the
+// documented request shape (rescheduleType, plus scheduleTime for SPECIFIC_TIME)
+// and reports the control-plane operation as done without rewriting the stored
+// window.
 func (p *Provider) RescheduleMaintenance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	inst, location, err := p.mutationTarget(ctx, nr)
 	if err != nil {
@@ -427,9 +489,14 @@ func (p *Provider) loadInstance(ctx context.Context, account, location, id strin
 }
 
 // applyInstanceUpdate merges the mutable instance fields. A non-empty mask
-// names the paths to overlay (masked paths take the incoming value, unmasked
-// paths retain the stored value); an empty mask overlays every field present in
-// the request. Unsupported mask paths fail loud rather than silently no-op.
+// names the paths to overlay; a masked path is authoritative even when the
+// request body omits it, because that is how the provider clears or disables a
+// field (hashicorp/google 7.46.2 sends updateMask=authEnabled with no
+// authEnabled member when AUTH goes true -> false, and names
+// maintenancePolicy/persistenceConfig with no block when the caller removes
+// them). An empty mask overlays every field present in the request.
+// Unsupported mask paths fail loud rather than silently no-op; a genuinely
+// output-only path (maintenanceVersion) is accepted as a no-op.
 func applyInstanceUpdate(inst *Instance, body map[string]any, mask string) error {
 	// Validate every masked path up front so an unsupported field fails loud
 	// rather than being silently no-op-ed.
@@ -442,33 +509,163 @@ func applyInstanceUpdate(inst *Instance, body map[string]any, mask string) error
 	if err := decodeBody(body, &incoming); err != nil {
 		return err
 	}
-	apply := func(field string) bool {
-		return mask == "" || containsMaskField(mask, field)
+	// takes reports whether a path is being written. With a mask, the named path
+	// always takes the (possibly zero) incoming value; without one, only fields
+	// the request actually carries are overlaid.
+	takes := func(field, key string) bool {
+		if mask == "" {
+			return bodyHas(body, key)
+		}
+		return containsMaskField(mask, field)
 	}
-	if apply("displayName") && bodyHas(body, "displayName") {
+	if takes("displayName", "displayName") {
 		inst.DisplayName = incoming.DisplayName
 	}
-	if apply("labels") && bodyHas(body, "labels") {
+	if takes("labels", "labels") {
 		inst.Labels = incoming.Labels
 	}
-	if apply("memorySizeGb") && bodyHas(body, "memorySizeGb") {
-		if incoming.MemorySizeGb > 0 {
-			inst.MemorySizeGb = incoming.MemorySizeGb
-		}
+	if takes("authEnabled", "authEnabled") {
+		inst.AuthEnabled = incoming.AuthEnabled
 	}
-	if (apply("redisVersion") || apply("redis_version")) && bodyHas(body, "redisVersion") {
+	if takes("readReplicasMode", "readReplicasMode") {
+		inst.ReadReplicasMode = incoming.ReadReplicasMode
+	}
+	if takes("secondaryIpRange", "secondaryIpRange") {
+		inst.SecondaryIPRange = incoming.SecondaryIPRange
+	}
+	if takes("maintenancePolicy", "maintenancePolicy") {
+		inst.MaintenancePolicy = incoming.MaintenancePolicy
+	}
+	if takes("persistenceConfig", "persistenceConfig") {
+		inst.PersistenceConfig = incoming.PersistenceConfig
+	}
+	// memorySizeGb keeps its existing guard: a masked zero is not a valid size,
+	// so the stored value is retained instead of zeroing it.
+	if takes("memorySizeGb", "memorySizeGb") && incoming.MemorySizeGb > 0 {
+		inst.MemorySizeGb = incoming.MemorySizeGb
+	}
+	if bodyHas(body, "redisVersion") &&
+		(mask == "" || containsMaskField(mask, "redisVersion") || containsMaskField(mask, "redis_version")) {
 		if incoming.RedisVersion != "" {
 			inst.RedisVersion = incoming.RedisVersion
 		}
 	}
-	for _, field := range []string{"redisConfigs", "redisConfig", "redis_config"} {
-		if apply(field) && redisConfigsPresent(body) {
-			inst.RedisConfigs = incoming.RedisConfigs
-			break
-		}
+	redisConfigsMasked := containsMaskField(mask, "redisConfigs") ||
+		containsMaskField(mask, "redisConfig") ||
+		containsMaskField(mask, "redis_config")
+	if redisConfigsMasked || (mask == "" && redisConfigsPresent(body)) {
+		inst.RedisConfigs = incoming.RedisConfigs
 	}
-	if (apply("replicaCount") || apply("replica_count")) && bodyHas(body, "replicaCount") {
+	if takes("replicaCount", "replicaCount") || containsMaskField(mask, "replica_count") {
 		inst.ReplicaCount = incoming.ReplicaCount
+	}
+	if err := validateInstance(inst); err != nil {
+		return err
+	}
+	return nil
+}
+
+// supportedMaskField reports whether an update mask path is one the provider
+// can send. The ForceNew paths (connectMode, transitEncryptionMode,
+// authorizedNetwork, alternativeLocationId, reservedIpRange,
+// customerManagedKey) are create-only and stay unsupported here: the provider
+// never PATCHes them, so rejecting them keeps a genuine gap loud.
+// maintenanceVersion is accepted as a no-op — it is output-only and never
+// stored (the provider names it when the computed value changes).
+func supportedMaskField(field string) bool {
+	switch field {
+	case "displayName", "labels", "memorySizeGb", "redisVersion", "redis_version",
+		"redisConfigs", "redisConfig", "redis_config", "replicaCount", "replica_count",
+		"authEnabled", "readReplicasMode", "secondaryIpRange", "maintenancePolicy",
+		"persistenceConfig", "maintenanceVersion":
+		return true
+	}
+	return false
+}
+
+// validateInstance enforces the enum/shape rules the Discovery document
+// declares for the fields the consumer module sends. Empty values are the
+// proto defaults and are accepted (the API documents defaults for
+// connectMode/readReplicasMode/authEnabled).
+func validateInstance(inst *Instance) error {
+	switch inst.ConnectMode {
+	case "", "CONNECT_MODE_UNSPECIFIED", "DIRECT_PEERING", "PRIVATE_SERVICE_ACCESS":
+	default:
+		return model.NewProviderError("InvalidArgument",
+			"connectMode must be DIRECT_PEERING or PRIVATE_SERVICE_ACCESS", 400)
+	}
+	switch inst.TransitEncryptionMode {
+	case "", "TRANSIT_ENCRYPTION_MODE_UNSPECIFIED", "SERVER_AUTHENTICATION", "DISABLED":
+	default:
+		return model.NewProviderError("InvalidArgument",
+			"transitEncryptionMode must be SERVER_AUTHENTICATION or DISABLED", 400)
+	}
+	switch inst.ReadReplicasMode {
+	case "", "READ_REPLICAS_MODE_UNSPECIFIED", "READ_REPLICAS_DISABLED", "READ_REPLICAS_ENABLED":
+	default:
+		return model.NewProviderError("InvalidArgument",
+			"readReplicasMode must be READ_REPLICAS_DISABLED or READ_REPLICAS_ENABLED", 400)
+	}
+	if inst.ReadReplicasMode == "READ_REPLICAS_ENABLED" && inst.Tier == "BASIC" {
+		return model.NewProviderError("InvalidArgument",
+			"readReplicasMode READ_REPLICAS_ENABLED is not valid for the BASIC tier", 400)
+	}
+	if err := validatePersistenceConfig(inst.PersistenceConfig); err != nil {
+		return err
+	}
+	return validateMaintenancePolicy(inst.MaintenancePolicy)
+}
+
+func validatePersistenceConfig(pc *PersistenceConfig) error {
+	if pc == nil {
+		return nil
+	}
+	switch pc.PersistenceMode {
+	case "", "PERSISTENCE_MODE_UNSPECIFIED", "DISABLED", "RDB":
+	default:
+		return model.NewProviderError("InvalidArgument",
+			"persistenceConfig.persistenceMode must be DISABLED or RDB", 400)
+	}
+	switch pc.RdbSnapshotPeriod {
+	case "", "SNAPSHOT_PERIOD_UNSPECIFIED", "ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS":
+	default:
+		return model.NewProviderError("InvalidArgument",
+			"persistenceConfig.rdbSnapshotPeriod must be ONE_HOUR, SIX_HOURS, TWELVE_HOURS or TWENTY_FOUR_HOURS", 400)
+	}
+	return nil
+}
+
+func validateMaintenancePolicy(mp *MaintenancePolicy) error {
+	if mp == nil {
+		return nil
+	}
+	if utf8.RuneCountInString(mp.Description) > 512 {
+		return model.NewProviderError("InvalidArgument",
+			"maintenancePolicy.description must be at most 512 characters", 400)
+	}
+	if len(mp.WeeklyMaintenanceWindow) > 1 {
+		return model.NewProviderError("InvalidArgument",
+			"maintenancePolicy.weeklyMaintenanceWindow accepts at most one window", 400)
+	}
+	for _, w := range mp.WeeklyMaintenanceWindow {
+		switch w.Day {
+		case "DAY_OF_WEEK_UNSPECIFIED", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY",
+			"FRIDAY", "SATURDAY", "SUNDAY":
+		default:
+			return model.NewProviderError("InvalidArgument",
+				"maintenancePolicy.weeklyMaintenanceWindow.day must be a valid day of week", 400)
+		}
+		if w.StartTime == nil {
+			return model.NewProviderError("InvalidArgument",
+				"maintenancePolicy.weeklyMaintenanceWindow.startTime is required", 400)
+		}
+		if w.StartTime.Hours < 0 || w.StartTime.Hours > 23 ||
+			w.StartTime.Minutes < 0 || w.StartTime.Minutes > 59 ||
+			w.StartTime.Seconds < 0 || w.StartTime.Seconds > 60 ||
+			w.StartTime.Nanos < 0 || w.StartTime.Nanos > 999999999 {
+			return model.NewProviderError("InvalidArgument",
+				"maintenancePolicy.weeklyMaintenanceWindow.startTime is out of range", 400)
+		}
 	}
 	return nil
 }
@@ -480,15 +677,6 @@ func redisConfigsPresent(body map[string]any) bool {
 	_, b := body["redisConfig"]
 	_, c := body["redis_config"]
 	return a || b || c
-}
-
-func supportedMaskField(field string) bool {
-	switch field {
-	case "displayName", "labels", "memorySizeGb", "redisVersion", "redis_version",
-		"redisConfigs", "redisConfig", "redis_config", "replicaCount", "replica_count":
-		return true
-	}
-	return false
 }
 
 func bodyHas(body map[string]any, key string) bool {
