@@ -14614,7 +14614,7 @@
       "evidence": [
         "discovery=pubsub.projects.topics.get",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -14695,7 +14695,7 @@
         "discovery=pubsub.projects.topics.patch",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

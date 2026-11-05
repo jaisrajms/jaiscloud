@@ -812,7 +812,7 @@
       "rpc": "UpdateTopic",
       "method": "UpdateTopic",
       "status": "pass",
-      "key_field": "masked labels + retention applied"
+      "key_field": "masked labels/retention + storage policy/schema/transforms/kms round-trip"
     },
     {
       "service": "pubsub",

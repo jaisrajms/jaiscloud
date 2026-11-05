@@ -215,14 +215,20 @@ func (s *Service) CreateTopic(ctx context.Context, req *pubsubpb.Topic) (*pubsub
 		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
 	}
 	meta := map[string]any{"name": topicName(project, t)}
-	if req.GetMessageRetentionDuration() != nil {
-		meta["messageRetentionDuration"] = durationJSON(req.GetMessageRetentionDuration().AsDuration())
+	// Build the protobuf-JSON map from the request Topic and run it through the
+	// same field model the REST provider uses, so both creates store the same
+	// fields with the same validation errors. protojson omits unset fields and
+	// emits the camelCase/enum/google-duration forms NormalizeTopicInput reads.
+	in, err := protoToJSONMap(req)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic", 400))
 	}
-	if k := req.GetKmsKeyName(); k != "" {
-		meta["kmsKeyName"] = k
+	fields, err := pubsubcore.NormalizeTopicInput(in)
+	if err != nil {
+		return nil, mapError(err)
 	}
-	if len(req.GetLabels()) > 0 {
-		meta["labels"] = req.GetLabels()
+	for k, v := range fields {
+		meta[k] = v
 	}
 	data, _ := json.Marshal(meta)
 	if err := s.resources.Create(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: t, Data: data}); err != nil {
@@ -1463,25 +1469,21 @@ func (s *Service) UpdateTopic(ctx context.Context, req *pubsubpb.UpdateTopicRequ
 
 	paths := req.GetUpdateMask().GetPaths()
 	if len(paths) == 0 {
+		// Mirrors the REST handler: an empty mask applies labels (PTF8).
 		paths = []string{"labels"}
 	}
-	for _, p := range paths {
-		switch p {
-		case "labels":
-			if len(in.GetLabels()) == 0 {
-				delete(meta, "labels")
-			} else {
-				meta["labels"] = in.GetLabels()
-			}
-		case "message_retention_duration", "messageRetentionDuration":
-			if in.GetMessageRetentionDuration() == nil {
-				delete(meta, "messageRetentionDuration")
-			} else {
-				meta["messageRetentionDuration"] = durationJSON(in.GetMessageRetentionDuration().AsDuration())
-			}
-		default:
-			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
-		}
+	// protojson renders the request Topic as the same protobuf-JSON map the
+	// REST provider stores, so the shared helper resolves camelCase and
+	// snake_case mask segments identically on both transports.
+	inMap, err := protoToJSONMap(in)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic", 400))
+	}
+	if _, nerr := pubsubcore.NormalizeTopicInput(inMap); nerr != nil && !pubsubcore.TopicMaskHasNestedPath(paths) {
+		return nil, mapError(nerr)
+	}
+	if err := pubsubcore.ApplyTopicUpdate(meta, inMap, paths); err != nil {
+		return nil, mapError(err)
 	}
 	data, _ := json.Marshal(meta)
 	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: id, Data: data}); err != nil {
@@ -1936,32 +1938,46 @@ func jsonMapToProto(m map[string]any, msg proto.Message) bool {
 	return protojson.Unmarshal(b, msg) == nil
 }
 
+// topicToProto rebuilds a Topic from its stored protobuf-JSON map. It decodes
+// exactly the shared field table's subset with protojson (so enum names,
+// durations and nested messages are re-typed the way the API declares them) and
+// then sets Name from the resource path. GetTopic, ListTopics and UpdateTopic all
+// render through here, so a field the REST provider stores is never dropped by
+// the gRPC transport.
 func topicToProto(project, id string, meta map[string]any) *pubsubpb.Topic {
-	t := &pubsubpb.Topic{Name: topicName(project, id)}
-	if k, _ := meta["kmsKeyName"].(string); k != "" {
-		t.KmsKeyName = k
-	}
-	switch ls := meta["labels"].(type) {
-	case map[string]string:
-		if len(ls) > 0 {
-			t.Labels = ls
-		}
-	case map[string]any:
-		for k, v := range ls {
-			if sv, ok := v.(string); ok {
-				if t.Labels == nil {
-					t.Labels = map[string]string{}
-				}
-				t.Labels[k] = sv
+	t := &pubsubpb.Topic{}
+	if !jsonMapToProto(topicProtoFields(meta), t) {
+		// A legacy record with one field in a form protojson rejects (e.g. a
+		// Go-style duration written before retention was canonicalised) still
+		// serves its other fields: decode them one at a time and merge.
+		t = &pubsubpb.Topic{}
+		for _, name := range pubsubcore.TopicFieldNames() {
+			v, ok := meta[name]
+			if !ok {
+				continue
+			}
+			one := &pubsubpb.Topic{}
+			if jsonMapToProto(map[string]any{name: v}, one) {
+				proto.Merge(t, one)
 			}
 		}
 	}
-	if ret, _ := meta["messageRetentionDuration"].(string); ret != "" {
-		if d, err := time.ParseDuration(ret); err == nil {
-			t.MessageRetentionDuration = durationpb.New(d)
+	t.Name = topicName(project, id)
+	return t
+}
+
+// topicProtoFields selects the mutable Topic fields from a stored meta map: the
+// subset protojson can decode into a Topic. Everything else in the record
+// (the name, internal flags, output-only remnants of older writes) is ignored.
+func topicProtoFields(meta map[string]any) map[string]any {
+	names := pubsubcore.TopicFieldNames()
+	out := make(map[string]any, len(names))
+	for _, name := range names {
+		if v, ok := meta[name]; ok {
+			out[name] = v
 		}
 	}
-	return t
+	return out
 }
 
 // subscriptionState maps a persisted state string to its proto enum. The REST

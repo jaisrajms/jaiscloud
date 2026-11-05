@@ -117,23 +117,15 @@ func (p *Provider) TopicCreate(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, model.NewProviderError("InvalidRequest", "missing topic name", 400)
 	}
 	meta := map[string]any{"name": nr.ResourceID("pubsub-topic", t)}
+	// The whole mutable Topic surface goes through the shared field model, so
+	// this path stores and validates exactly what the gRPC CreateTopic does.
 	if body, ok := nr.Params["body"].(map[string]any); ok {
-		if ret, ok := body["messageRetentionDuration"].(string); ok && ret != "" {
-			meta["messageRetentionDuration"] = ret
+		fields, err := pubsubcore.NormalizeTopicInput(body)
+		if err != nil {
+			return nil, err
 		}
-		if k, ok := body["kmsKeyName"].(string); ok && k != "" {
-			meta["kmsKeyName"] = k
-		}
-		if labels, ok := body["labels"].(map[string]any); ok {
-			lbls := make(map[string]string, len(labels))
-			for k, v := range labels {
-				if s, ok := v.(string); ok {
-					lbls[k] = s
-				}
-			}
-			if len(lbls) > 0 {
-				meta["labels"] = lbls
-			}
+		for k, v := range fields {
+			meta[k] = v
 		}
 	}
 	data, _ := json.Marshal(meta)

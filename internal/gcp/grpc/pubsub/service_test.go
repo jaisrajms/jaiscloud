@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -820,6 +823,193 @@ func assertStoredRetention(t *testing.T, resources store.ResourceStore, id, want
 	}
 	if got, _ := meta["messageRetentionDuration"].(string); got != want {
 		t.Errorf("stored retention = %q, want %q", got, want)
+	}
+}
+
+// grpcTopicWithAllFields builds a Topic carrying every field the
+// terraform-google-pubsub module sets on its topic resource.
+func grpcTopicWithAllFields(name string) *pubsubpb.Topic {
+	return &pubsubpb.Topic{
+		Name:                     name,
+		Labels:                   map[string]string{"env": "prod", "team": "data"},
+		KmsKeyName:               "projects/test/locations/global/keyRings/tf-keyring/cryptoKeys/tf-key",
+		MessageRetentionDuration: durationpb.New(10 * time.Minute),
+		MessageStoragePolicy: &pubsubpb.MessageStoragePolicy{
+			AllowedPersistenceRegions: []string{"us-central1", "europe-west1"},
+			EnforceInTransit:          true,
+		},
+		SchemaSettings: &pubsubpb.SchemaSettings{
+			Schema:   "projects/test/schemas/orders",
+			Encoding: pubsubpb.Encoding_JSON,
+		},
+	}
+}
+
+// assertTopicFieldsEqual compares the mutable Topic surface both transports must
+// round-trip (nil-able getters make an absent field comparable too).
+func assertTopicFieldsEqual(t *testing.T, where string, got, want *pubsubpb.Topic) {
+	t.Helper()
+	if got.GetName() != want.GetName() {
+		t.Errorf("%s: name = %q, want %q", where, got.GetName(), want.GetName())
+	}
+	if !reflect.DeepEqual(got.GetLabels(), want.GetLabels()) {
+		t.Errorf("%s: labels = %v, want %v", where, got.GetLabels(), want.GetLabels())
+	}
+	if got.GetKmsKeyName() != want.GetKmsKeyName() {
+		t.Errorf("%s: kmsKeyName = %q, want %q", where, got.GetKmsKeyName(), want.GetKmsKeyName())
+	}
+	if got.GetMessageRetentionDuration().AsDuration() != want.GetMessageRetentionDuration().AsDuration() {
+		t.Errorf("%s: messageRetentionDuration = %v, want %v", where,
+			got.GetMessageRetentionDuration().AsDuration(), want.GetMessageRetentionDuration().AsDuration())
+	}
+	if !reflect.DeepEqual(got.GetMessageStoragePolicy().GetAllowedPersistenceRegions(),
+		want.GetMessageStoragePolicy().GetAllowedPersistenceRegions()) {
+		t.Errorf("%s: allowedPersistenceRegions = %v, want %v", where,
+			got.GetMessageStoragePolicy().GetAllowedPersistenceRegions(),
+			want.GetMessageStoragePolicy().GetAllowedPersistenceRegions())
+	}
+	if got.GetMessageStoragePolicy().GetEnforceInTransit() != want.GetMessageStoragePolicy().GetEnforceInTransit() {
+		t.Errorf("%s: enforceInTransit = %v, want %v", where,
+			got.GetMessageStoragePolicy().GetEnforceInTransit(), want.GetMessageStoragePolicy().GetEnforceInTransit())
+	}
+	if got.GetSchemaSettings().GetSchema() != want.GetSchemaSettings().GetSchema() {
+		t.Errorf("%s: schemaSettings.schema = %q, want %q", where,
+			got.GetSchemaSettings().GetSchema(), want.GetSchemaSettings().GetSchema())
+	}
+	if got.GetSchemaSettings().GetEncoding() != want.GetSchemaSettings().GetEncoding() {
+		t.Errorf("%s: schemaSettings.encoding = %v, want %v", where,
+			got.GetSchemaSettings().GetEncoding(), want.GetSchemaSettings().GetEncoding())
+	}
+	if !proto.Equal(got.GetIngestionDataSourceSettings(), want.GetIngestionDataSourceSettings()) {
+		t.Errorf("%s: ingestionDataSourceSettings = %v, want %v", where,
+			got.GetIngestionDataSourceSettings(), want.GetIngestionDataSourceSettings())
+	}
+	gotTransforms, wantTransforms := got.GetMessageTransforms(), want.GetMessageTransforms()
+	if len(gotTransforms) != len(wantTransforms) {
+		t.Errorf("%s: messageTransforms length = %d, want %d", where, len(gotTransforms), len(wantTransforms))
+	} else {
+		for i := range wantTransforms {
+			if !proto.Equal(gotTransforms[i], wantTransforms[i]) {
+				t.Errorf("%s: messageTransforms[%d] = %v, want %v", where, i, gotTransforms[i], wantTransforms[i])
+			}
+		}
+	}
+}
+
+// TestCreateTopicFullFieldRoundTripGRPC covers PTF1 on the gRPC side: every
+// module field survives create, get and list. Before PTF1 the transcoder
+// rendered only name/kmsKeyName/labels/retention, so storage policy and schema
+// settings never reached a gRPC client.
+func TestCreateTopicFullFieldRoundTripGRPC(t *testing.T) {
+	pub, _, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	want := grpcTopicWithAllFields("projects/test/topics/full-fields")
+	req := grpcTopicWithAllFields(want.GetName())
+	// An output-only field a client echoes back must be ignored, not stored.
+	req.State = pubsubpb.Topic_ACTIVE
+
+	created, err := pub.CreateTopic(ctx, req)
+	if err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	assertTopicFieldsEqual(t, "CreateTopic", created, want)
+	if created.GetState() != pubsubpb.Topic_STATE_UNSPECIFIED {
+		t.Errorf("CreateTopic state = %v, want STATE_UNSPECIFIED (output-only is stripped)", created.GetState())
+	}
+
+	got, err := pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: want.GetName()})
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	assertTopicFieldsEqual(t, "GetTopic", got, want)
+
+	list, err := pub.ListTopics(ctx, &pubsubpb.ListTopicsRequest{Project: "projects/test"})
+	if err != nil {
+		t.Fatalf("ListTopics: %v", err)
+	}
+	var found *pubsubpb.Topic
+	for _, topic := range list.GetTopics() {
+		if topic.GetName() == want.GetName() {
+			found = topic
+		}
+	}
+	if found == nil {
+		t.Fatalf("ListTopics did not return %q", want.GetName())
+	}
+	assertTopicFieldsEqual(t, "ListTopics", found, want)
+}
+
+// TestTopicRESTGRPCParity asserts both transports serve one topic as the same
+// protobuf-JSON map: a topic created over gRPC reads back identically from the
+// REST provider and the gRPC renderer, so a field can never be visible on only
+// one side.
+func TestTopicRESTGRPCParity(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	enc := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	svc := NewService(resources, messages, enc, "test")
+	rest := restpubsub.New(resources, messages, enc)
+
+	if _, err := svc.CreateTopic(ctx, grpcTopicWithAllFields("projects/test/topics/parity")); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	got, err := svc.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: "projects/test/topics/parity"})
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	grpcMap, err := protoToJSONMap(got)
+	if err != nil {
+		t.Fatalf("protoToJSONMap: %v", err)
+	}
+
+	restResp, err := rest.TopicGet(ctx, &model.NormalizedRequest{
+		AccountID:  "test",
+		Params:     map[string]any{"name": "topics/parity"},
+		ResourceID: resource.ResourceID("test"),
+	})
+	if err != nil {
+		t.Fatalf("REST TopicGet: %v", err)
+	}
+	if !reflect.DeepEqual(restResp.Data, grpcMap) {
+		t.Fatalf("REST and gRPC topic maps differ\n  REST: %#v\n  gRPC: %#v", restResp.Data, grpcMap)
+	}
+}
+
+// TestTopicCreateValidationErrorParity asserts the shared field model's error is
+// the same message on both transports: REST answers 400 with the message, gRPC
+// answers INVALID_ARGUMENT with the identical text.
+func TestTopicCreateValidationErrorParity(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	enc := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	svc := NewService(resources, messages, enc, "test")
+	rest := restpubsub.New(resources, messages, enc)
+
+	_, restErr := rest.TopicCreate(ctx, &model.NormalizedRequest{
+		AccountID:  "test",
+		Params:     map[string]any{"name": "topics/bad", "body": map[string]any{"messageRetentionDuration": "599s"}},
+		ResourceID: resource.ResourceID("test"),
+	})
+	pe, ok := restErr.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("REST TopicCreate err = %v, want a 400 ProviderError", restErr)
+	}
+
+	_, grpcErr := svc.CreateTopic(ctx, &pubsubpb.Topic{
+		Name:                     "projects/test/topics/bad",
+		MessageRetentionDuration: durationpb.New(599 * time.Second),
+	})
+	st, ok := status.FromError(grpcErr)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Fatalf("gRPC CreateTopic err = %v, want INVALID_ARGUMENT", grpcErr)
+	}
+	if st.Message() != pe.Message {
+		t.Fatalf("validation error text differs\n  REST: %q\n  gRPC: %q", pe.Message, st.Message())
 	}
 }
 
@@ -1790,5 +1980,314 @@ func TestSubscriptionUpdateRESTWriteGRPCRead(t *testing.T) {
 	}
 	if len(got.GetMessageTransforms()) != 0 {
 		t.Errorf("message_transforms = %v, want cleared", got.GetMessageTransforms())
+	}
+}
+
+// ─── topic update masks (PTF2) ───────────────────────────────────────────────
+
+const (
+	grpcUpdateOldKey = "projects/test/locations/global/keyRings/old/cryptoKeys/old-key"
+	grpcUpdateNewKey = "projects/test/locations/global/keyRings/new/cryptoKeys/new-key"
+)
+
+func grpcUpdateTransforms(fn string) []*pubsubpb.MessageTransform {
+	return []*pubsubpb.MessageTransform{{
+		Transform: &pubsubpb.MessageTransform_JavascriptUdf{
+			JavascriptUdf: &pubsubpb.JavaScriptUDF{FunctionName: fn, Code: "function " + fn + "(m) { return m; }"},
+		},
+		Enabled: true,
+	}}
+}
+
+func grpcUpdateIngestion(bucket string) *pubsubpb.IngestionDataSourceSettings {
+	return &pubsubpb.IngestionDataSourceSettings{
+		Source: &pubsubpb.IngestionDataSourceSettings_CloudStorage_{
+			CloudStorage: &pubsubpb.IngestionDataSourceSettings_CloudStorage{Bucket: bucket},
+		},
+	}
+}
+
+// grpcUpdateBaseline carries every mutable topic field so a single-field mask
+// can prove it leaves the others intact.
+func grpcUpdateBaseline(name string) *pubsubpb.Topic {
+	return &pubsubpb.Topic{
+		Name:                     name,
+		Labels:                   map[string]string{"env": "old", "team": "data"},
+		KmsKeyName:               grpcUpdateOldKey,
+		MessageRetentionDuration: durationpb.New(10 * time.Minute),
+		MessageStoragePolicy: &pubsubpb.MessageStoragePolicy{
+			AllowedPersistenceRegions: []string{"us-east1"},
+			EnforceInTransit:          true,
+		},
+		SchemaSettings: &pubsubpb.SchemaSettings{
+			Schema:   "projects/test/schemas/orders",
+			Encoding: pubsubpb.Encoding_BINARY,
+		},
+		IngestionDataSourceSettings: grpcUpdateIngestion("old-bucket"),
+		MessageTransforms:           grpcUpdateTransforms("old"),
+	}
+}
+
+// TestUpdateTopicProviderMaskMatrixGRPC is the gRPC half of the provider mask
+// matrix: every mutable field, in both the proto snake_case and the JSON
+// camelCase spelling, applies alone and reads back through GetTopic.
+func TestUpdateTopicProviderMaskMatrixGRPC(t *testing.T) {
+	pub, _, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	cases := []struct {
+		name         string
+		snake, camel string
+		mutate       func(*pubsubpb.Topic)
+	}{
+		{"kmsKeyName", "kms_key_name", "kmsKeyName", func(topic *pubsubpb.Topic) {
+			topic.KmsKeyName = grpcUpdateNewKey
+		}},
+		{"messageStoragePolicy", "message_storage_policy", "messageStoragePolicy", func(topic *pubsubpb.Topic) {
+			topic.MessageStoragePolicy = &pubsubpb.MessageStoragePolicy{
+				AllowedPersistenceRegions: []string{"europe-west1", "asia-east1"},
+				EnforceInTransit:          true,
+			}
+		}},
+		{"schemaSettings", "schema_settings", "schemaSettings", func(topic *pubsubpb.Topic) {
+			topic.SchemaSettings = &pubsubpb.SchemaSettings{
+				Schema:   "projects/test/schemas/updated",
+				Encoding: pubsubpb.Encoding_JSON,
+			}
+		}},
+		{"messageRetentionDuration", "message_retention_duration", "messageRetentionDuration", func(topic *pubsubpb.Topic) {
+			topic.MessageRetentionDuration = durationpb.New(15 * time.Minute)
+		}},
+		{"ingestionDataSourceSettings", "ingestion_data_source_settings", "ingestionDataSourceSettings", func(topic *pubsubpb.Topic) {
+			topic.IngestionDataSourceSettings = grpcUpdateIngestion("new-bucket")
+		}},
+		{"messageTransforms", "message_transforms", "messageTransforms", func(topic *pubsubpb.Topic) {
+			topic.MessageTransforms = grpcUpdateTransforms("updated")
+		}},
+		{"labels", "labels", "labels", func(topic *pubsubpb.Topic) {
+			topic.Labels = map[string]string{"env": "new", "team": "data"}
+		}},
+	}
+	for _, tc := range cases {
+		for i, spelling := range []string{tc.snake, tc.camel} {
+			t.Run(tc.name+"/"+spelling, func(t *testing.T) {
+				name := "projects/test/topics/mask-" + strings.ToLower(tc.name) + "-" + spelling + "-" + string(rune('a'+i))
+				base := grpcUpdateBaseline(name)
+				if _, err := pub.CreateTopic(ctx, proto.Clone(base).(*pubsubpb.Topic)); err != nil {
+					t.Fatalf("CreateTopic: %v", err)
+				}
+				want := proto.Clone(base).(*pubsubpb.Topic)
+				tc.mutate(want)
+
+				updated, err := pub.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+					Topic:      proto.Clone(want).(*pubsubpb.Topic),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{spelling}},
+				})
+				if err != nil {
+					t.Fatalf("UpdateTopic(%q): %v", spelling, err)
+				}
+				assertTopicFieldsEqual(t, "UpdateTopic", updated, want)
+
+				got, err := pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: name})
+				if err != nil {
+					t.Fatalf("GetTopic: %v", err)
+				}
+				assertTopicFieldsEqual(t, "GetTopic", got, want)
+			})
+		}
+	}
+}
+
+// TestUpdateTopicClearsAbsentFieldGRPC pins the gRPC clear contract: a field
+// named by the mask but absent from the request Topic is removed.
+func TestUpdateTopicClearsAbsentFieldGRPC(t *testing.T) {
+	pub, _, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	for _, mask := range []string{
+		"message_storage_policy,message_transforms,ingestion_data_source_settings",
+		"messageStoragePolicy,messageTransforms,ingestionDataSourceSettings",
+	} {
+		t.Run(mask, func(t *testing.T) {
+			name := "projects/test/topics/clear-" + strings.ReplaceAll(mask, ",", "-")
+			if _, err := pub.CreateTopic(ctx, grpcUpdateBaseline(name)); err != nil {
+				t.Fatalf("CreateTopic: %v", err)
+			}
+			updated, err := pub.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+				Topic:      &pubsubpb.Topic{Name: name},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: strings.Split(mask, ",")},
+			})
+			if err != nil {
+				t.Fatalf("UpdateTopic: %v", err)
+			}
+			if updated.GetMessageStoragePolicy() != nil {
+				t.Errorf("messageStoragePolicy = %v, want cleared", updated.GetMessageStoragePolicy())
+			}
+			if len(updated.GetMessageTransforms()) != 0 {
+				t.Errorf("messageTransforms = %v, want cleared", updated.GetMessageTransforms())
+			}
+			if updated.GetIngestionDataSourceSettings() != nil {
+				t.Errorf("ingestionDataSourceSettings = %v, want cleared", updated.GetIngestionDataSourceSettings())
+			}
+			got, err := pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: name})
+			if err != nil {
+				t.Fatalf("GetTopic: %v", err)
+			}
+			if got.GetMessageStoragePolicy() != nil || len(got.GetMessageTransforms()) != 0 || got.GetIngestionDataSourceSettings() != nil {
+				t.Errorf("cleared fields persisted: %v", got)
+			}
+		})
+	}
+}
+
+// TestUpdateTopicRejectsInvalidGRPC proves the shared validator answers
+// INVALID_ARGUMENT on the gRPC side and leaves the stored topic untouched.
+func TestUpdateTopicRejectsInvalidGRPC(t *testing.T) {
+	pub, _, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	name := "projects/test/topics/reject-grpc"
+	if _, err := pub.CreateTopic(ctx, grpcUpdateBaseline(name)); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	cases := []struct {
+		name  string
+		path  string
+		topic *pubsubpb.Topic
+	}{
+		{"retention below minimum", "message_retention_duration", &pubsubpb.Topic{
+			Name: name, MessageRetentionDuration: durationpb.New(599 * time.Second)}},
+		{"storage policy without regions", "message_storage_policy", &pubsubpb.Topic{
+			Name: name, MessageStoragePolicy: &pubsubpb.MessageStoragePolicy{}}},
+		{"output-only state", "state", &pubsubpb.Topic{Name: name}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := pub.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+				Topic:      tc.topic,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{tc.path}},
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("err = %v, want INVALID_ARGUMENT", err)
+			}
+		})
+	}
+	want := grpcUpdateBaseline(name)
+	got, err := pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: name})
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	assertTopicFieldsEqual(t, "GetTopic after rejected updates", got, want)
+}
+
+// TestTopicUpdateCrossTransport updates over one transport and reads over the
+// other in both directions.
+func TestTopicUpdateCrossTransport(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	encryptor := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	rest := restpubsub.New(resources, messages, encryptor)
+	svc := NewService(resources, messages, encryptor, "test")
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	pubsubpb.RegisterPublisherServer(srv, svc)
+	go srv.Serve(ln)
+	defer srv.Stop()
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	client := pubsubpb.NewPublisherClient(conn)
+
+	nr := func(params map[string]any) *model.NormalizedRequest {
+		return &model.NormalizedRequest{
+			AccountID:  "test",
+			Params:     params,
+			ResourceID: resource.ResourceID("test"),
+		}
+	}
+
+	// REST create → gRPC update → reads on both transports.
+	restBody := map[string]any{
+		"name":                     "topics/xt-rest-create",
+		"labels":                   map[string]any{"env": "old"},
+		"kmsKeyName":               grpcUpdateOldKey,
+		"messageRetentionDuration": "600s",
+		"messageStoragePolicy":     map[string]any{"allowedPersistenceRegions": []any{"us-east1"}},
+	}
+	if _, err := rest.TopicCreate(ctx, nr(restBody)); err != nil {
+		t.Fatalf("REST TopicCreate: %v", err)
+	}
+	if _, err := client.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+		Topic: &pubsubpb.Topic{
+			Name: "projects/test/topics/xt-rest-create",
+			MessageStoragePolicy: &pubsubpb.MessageStoragePolicy{
+				AllowedPersistenceRegions: []string{"europe-west1"},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"message_storage_policy"}},
+	}); err != nil {
+		t.Fatalf("gRPC UpdateTopic: %v", err)
+	}
+	gotGRPC, err := client.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: "projects/test/topics/xt-rest-create"})
+	if err != nil {
+		t.Fatalf("gRPC GetTopic: %v", err)
+	}
+	if regions := gotGRPC.GetMessageStoragePolicy().GetAllowedPersistenceRegions(); !reflect.DeepEqual(regions, []string{"europe-west1"}) {
+		t.Errorf("gRPC regions = %v, want [europe-west1]", regions)
+	}
+	gotREST, err := rest.TopicGet(ctx, nr(map[string]any{"name": "topics/xt-rest-create"}))
+	if err != nil {
+		t.Fatalf("REST TopicGet: %v", err)
+	}
+	if regions, _ := gotREST.Data["messageStoragePolicy"].(map[string]any)["allowedPersistenceRegions"].([]any); !reflect.DeepEqual(regions, []any{"europe-west1"}) {
+		t.Errorf("REST regions = %v, want [europe-west1]", gotREST.Data["messageStoragePolicy"])
+	}
+
+	// gRPC create → REST update → reads on both transports.
+	if _, err := client.CreateTopic(ctx, grpcUpdateBaseline("projects/test/topics/xt-grpc-create")); err != nil {
+		t.Fatalf("gRPC CreateTopic: %v", err)
+	}
+	if _, err := rest.TopicUpdate(ctx, nr(map[string]any{
+		"name": "topics/xt-grpc-create",
+		"body": map[string]any{
+			"topic": map[string]any{
+				"messageTransforms": []any{map[string]any{
+					"javascriptUdf": map[string]any{"functionName": "restUpdated", "code": "function restUpdated(m) { return m; }"},
+					"enabled":       true,
+				}},
+				"ingestionDataSourceSettings": map[string]any{
+					"cloudStorage": map[string]any{"bucket": "rest-bucket"},
+				},
+			},
+			"updateMask": "messageTransforms,ingestionDataSourceSettings",
+		},
+	})); err != nil {
+		t.Fatalf("REST TopicUpdate: %v", err)
+	}
+	gotGRPC, err = client.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: "projects/test/topics/xt-grpc-create"})
+	if err != nil {
+		t.Fatalf("gRPC GetTopic after REST update: %v", err)
+	}
+	if got := gotGRPC.GetMessageTransforms(); len(got) != 1 || got[0].GetJavascriptUdf().GetFunctionName() != "restUpdated" {
+		t.Errorf("gRPC transforms = %v, want restUpdated", got)
+	}
+	if got := gotGRPC.GetIngestionDataSourceSettings().GetCloudStorage().GetBucket(); got != "rest-bucket" {
+		t.Errorf("gRPC ingestion bucket = %q, want rest-bucket", got)
+	}
+	gotREST, err = rest.TopicGet(ctx, nr(map[string]any{"name": "topics/xt-grpc-create"}))
+	if err != nil {
+		t.Fatalf("REST TopicGet after REST update: %v", err)
+	}
+	if transforms, _ := gotREST.Data["messageTransforms"].([]any); len(transforms) != 1 {
+		t.Errorf("REST transforms = %v, want one entry", gotREST.Data["messageTransforms"])
 	}
 }
