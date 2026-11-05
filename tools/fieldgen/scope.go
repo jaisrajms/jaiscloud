@@ -86,8 +86,11 @@ func LoadScope(path string) (*Scope, error) {
 			if transport != "rest" && transport != "grpc" {
 				return nil, fmt.Errorf("scope (%s): %s/%s has unknown transport %q (want rest or grpc)", path, src.Service, src.Resource, transport)
 			}
-			if t.Message == "" && (t.Discovery == "" || t.Schema == "") {
-				return nil, fmt.Errorf("scope (%s): %s/%s/%s needs message or discovery+schema", path, src.Service, src.Resource, transport)
+			if t.Message == "" && t.Discovery == "" {
+				return nil, fmt.Errorf("scope (%s): %s/%s/%s needs message and/or discovery", path, src.Service, src.Resource, transport)
+			}
+			if (t.Discovery == "") != (t.Schema == "") {
+				return nil, fmt.Errorf("scope (%s): %s/%s/%s sets only one of discovery/schema; both are required together", path, src.Service, src.Resource, transport)
 			}
 			if t.Depth < 1 {
 				return nil, fmt.Errorf("scope (%s): %s/%s/%s needs depth >= 1", path, src.Service, src.Resource, transport)

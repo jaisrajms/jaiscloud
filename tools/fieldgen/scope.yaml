@@ -7,8 +7,9 @@
 #   discovery: a vendored Discovery document + schema (tests/gcpconformance/discovery)
 #   depth:     how many property levels to expand (1 = the resource's own fields)
 #
-# A transport may set both `message` and `discovery`; the rows are then the
-# union, each field recorded once because the walkers de-duplicate by path.
+# A transport may set both `message` and `discovery` when the two definitions are
+# disjoint; each declared path is recorded once, and a duplicate row key is a
+# hard error so an accidental double source is visible rather than merged.
 # `message` without `discovery` means the transport's JSON is protojson for that
 # message (Functions v2: no v2 Discovery document is vendored, the only one is
 # v1, so the v2 proto is the definition for both transports).
@@ -59,13 +60,13 @@ sources:
     transports:
       grpc:
         message: google.cloud.functions.v2.Function
-        depth: 3
+        depth: 4
       rest:
         # No v2 Discovery snapshot is vendored (tests/gcpconformance/discovery/
         # functions.json.gz is v1/CloudFunction); the v2 REST surface is
         # protojson for the same message.
         message: google.cloud.functions.v2.Function
-        depth: 3
+        depth: 4
 
   - service: kms
     resource: CryptoKey

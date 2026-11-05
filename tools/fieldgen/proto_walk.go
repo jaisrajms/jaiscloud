@@ -39,8 +39,8 @@ var wellKnownMessages = map[protoreflect.FullName]bool{
 // WalkProto enumerates the fields of a compiled proto message, recursing into
 // nested message fields up to depth levels (depth 1 = the message's own fields).
 //
-// Field names are the proto (snake_case) names, which is also what the gRPC
-// wire and protojson use. Nested fields use a dotted path
+// Field names are the proto (snake_case) names on gRPC and the protojson
+// (camelCase) names on a REST surface defined by a proto. Nested fields use a dotted path
 // (retention_policy.retention_period). Map fields are recorded as the map field
 // itself and not expanded: Discovery models labels/annotations as additional
 // properties, and their keys are caller data, not API fields.
@@ -80,7 +80,12 @@ func walkProtoFields(service, transport, resource string, md protoreflect.Messag
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
+		// gRPC/protojson uses the proto name; a REST JSON surface (protojson)
+		// uses the declared json_name, which is camelCase for these APIs.
 		name := string(fd.Name())
+		if transport == "rest" {
+			name = string(fd.JSONName())
+		}
 		if prefix != "" {
 			name = prefix + "." + name
 		}
@@ -110,9 +115,10 @@ func walkProtoFields(service, transport, resource string, md protoreflect.Messag
 func protoBehavior(fd protoreflect.FieldDescriptor) string {
 	var tokens []string
 	if proto.HasExtension(fd.Options(), annotations.E_FieldBehavior) {
-		behaviors, _ := proto.GetExtension(fd.Options(), annotations.E_FieldBehavior).([]annotations.FieldBehavior)
-		for _, b := range behaviors {
-			tokens = append(tokens, strings.ToLower(strings.TrimPrefix(b.String(), "FIELD_BEHAVIOR_")))
+		if behaviors, ok := proto.GetExtension(fd.Options(), annotations.E_FieldBehavior).([]annotations.FieldBehavior); ok {
+			for _, b := range behaviors {
+				tokens = append(tokens, strings.ToLower(strings.TrimPrefix(b.String(), "FIELD_BEHAVIOR_")))
+			}
 		}
 	}
 	if proto.HasExtension(fd.Options(), annotations.E_ResourceReference) {

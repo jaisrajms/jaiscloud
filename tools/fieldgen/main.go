@@ -14,7 +14,11 @@
 //   - gRPC: the compiled proto descriptors reachable from a scope entry, reading
 //     google.api.field_behavior and google.api.resource_reference;
 //   - REST: the vendored Discovery schemas reachable from a scope entry,
-//     reading readOnly.
+//     reading readOnly. The vendored storage v1 and Cloud DNS v1 snapshots
+//     declare no readOnly flags at all, so those REST rows carry an empty
+//     behavior and their server-owned members are classified by review rather
+//     than by annotation; behavior drift on those rows cannot be detected from
+//     the definition.
 //
 // The scope (which resources are enumerated) is curated in
 // tools/fieldgen/scope.yaml; the classification (how the emulator treats each
@@ -36,6 +40,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -79,16 +84,19 @@ func main() {
 		}
 	}
 
+	// Paths are repo-root-relative unless absolute, so the tool works from any
+	// directory inside the module (the Makefile runs it from the root).
+	root := repoRoot()
 	err := run(options{
-		CSVPath:         *csvPath,
-		ScopePath:       *scopePath,
-		DiscoveryDir:    *discoveryDir,
-		ExemptionsPath:  *exemptionsPath,
-		Gen:             *gen,
-		Check:           *check,
-		Verbose:         *verbose,
-		ProviderSchema:  provider,
-		ProviderApplied: provider != nil,
+		Root:           root,
+		CSVPath:        resolvePath(root, *csvPath),
+		ScopePath:      resolvePath(root, *scopePath),
+		DiscoveryDir:   resolvePath(root, *discoveryDir),
+		ExemptionsPath: resolvePath(root, *exemptionsPath),
+		Gen:            *gen,
+		Check:          *check,
+		Verbose:        *verbose,
+		ProviderSchema: provider,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fieldgen:", err)
@@ -97,15 +105,15 @@ func main() {
 }
 
 type options struct {
-	CSVPath         string
-	ScopePath       string
-	DiscoveryDir    string
-	ExemptionsPath  string
-	Gen             bool
-	Check           bool
-	Verbose         bool
-	ProviderSchema  *ProviderSchema
-	ProviderApplied bool
+	Root           string
+	CSVPath        string
+	ScopePath      string
+	DiscoveryDir   string
+	ExemptionsPath string
+	Gen            bool
+	Check          bool
+	Verbose        bool
+	ProviderSchema *ProviderSchema
 }
 
 func run(o options) error {
@@ -142,15 +150,41 @@ func run(o options) error {
 	if err != nil {
 		return err
 	}
-	report, err := Check(universe, rows, exemptions)
+	report, err := CheckIn(o.Root, universe, rows, exemptions)
 	if err != nil {
 		return err
 	}
-	printReport(report, o.Verbose)
+	printReport(report, o.Verbose, o.ExemptionsPath, exemptions)
 	return nil
 }
 
-func printReport(r Report, verbose bool) {
+func resolvePath(root, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
+}
+
+// repoRoot walks up from the working directory to the module root, so paths and
+// evidence pointers (repo-relative) resolve no matter where the tool is invoked.
+func repoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "."
+		}
+		dir = parent
+	}
+}
+
+func printReport(r Report, verbose bool, exemptionsPath string, exemptions Exemptions) {
 	fmt.Printf("field-coverage: %d field(s) across %d resource(s): %s\n",
 		r.Total, r.Resources, formatCounts(r.ByCoverage))
 	if verbose {
@@ -159,7 +193,17 @@ func printReport(r Report, verbose bool) {
 		}
 	}
 	if r.Exempt > 0 {
-		fmt.Printf("field-coverage: %d field(s) rely on an exemption (tests/gcpconformance/testdata/field-coverage-exemptions.json)\n", r.Exempt)
+		fmt.Printf("field-coverage: %d field(s) rely on an exemption (%s)\n", r.Exempt, exemptionsPath)
+		if verbose {
+			keys := make([]string, 0, len(exemptions))
+			for k := range exemptions {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Printf("  %s: %s\n", k, exemptions[k])
+			}
+		}
 	}
 }
 

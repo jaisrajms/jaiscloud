@@ -1572,6 +1572,10 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 gen-gcp-field-coverage: ## Regenerate docs/fidelity/field-coverage.csv from the API definitions (preserves classifications)
 	go run -tags gcp_conformance ./tools/fieldgen -gen
 
+# The check re-derives the field universe (row set + definition behavior) from the
+# definitions itself, so unlike check-gcp-fidelity-matrix it does not need a
+# regenerate-and-diff step: a missing/stale row or behavior drift is reported by
+# name. The coverage/evidence/reason columns are hand-authored by design.
 check-gcp-field-coverage: ## Fail if a definition field is unclassified/stale or a classified row lacks evidence/reason
 	go test -count=1 -tags gcp_conformance ./tools/fieldgen/
 	go run -tags gcp_conformance ./tools/fieldgen -check
@@ -1696,7 +1700,7 @@ gcp-ci-wait: ## Wait for PR=<n>'s checks; on failure print the failing logs and 
 # gcloud self-skips when it is not on PATH. The offline persistence coverage gate
 # (test-gcp-persistence-parity) is included; the Docker/Postgres-backed persistence
 # round-trip and the e2e targets are intentionally excluded.
-ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-error-mapping test-gcp-persistence-parity test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
+ga-check: check-gcp-fidelity-matrix check-gcp-field-coverage test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-error-mapping test-gcp-persistence-parity test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
 	@echo ""
 	@echo "GA gate: offline + client conformance passed"
 	@echo "  (grpc/gcloud targets build + boot an ephemeral emulator; this can take a few minutes)"

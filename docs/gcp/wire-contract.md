@@ -58,6 +58,36 @@ schemas, the wire-conformance harness, and the curated
 fails CI if the committed matrix drifts. The current service/cell rollup, by state and by
 transport, is in the generated matrix — `make gcp-status` prints the same rollup.
 
+### Field coverage
+
+The matrix grades **operations**; a field can be present in the published API,
+absent from the emulator's mapping, and still pass every operation-level gate.
+That is the defect class behind TGM1-3, TGM6, TGM11-1 and TGM14, so fields have
+their own derived inventory:
+[`docs/fidelity/field-coverage.csv`](../fidelity/field-coverage.csv). It lists one
+row per field and transport for the resources in
+[`tools/fieldgen/scope.yaml`](../../tools/fieldgen/scope.yaml) — derived from the
+compiled proto descriptors (`google.api.field_behavior`,
+`google.api.resource_reference`) and the vendored Discovery schemas
+(`readOnly`) — and classifies each row `roundtrip`, `derived`, `immutable`,
+`output-only` or `unsupported`. `roundtrip`/`immutable` rows must point at an
+existing test function (`path#TestName`, resolved by the gate) that exercises
+the field, `derived` rows
+name the formula, `output-only` rows carry a test or a reason the emulator never
+populates them, and `unsupported` rows carry a written reason and a future review
+date (an expired date fails). A `roundtrip` row whose definition declares the
+field `OUTPUT_ONLY`/`IMMUTABLE`/`readOnly` must carry a reason: it is a
+deliberate deviation, not an accident. `make gen-gcp-field-coverage`
+scaffolds new definition fields (they arrive unclassified) and drops the
+classification of a row whose definition behavior changed, so a semantics change
+forces re-review; `make check-gcp-field-coverage` fails CI when a definition field
+has no row, a row is stale, recorded behavior drifts from the definition, or a
+classification's evidence contract is unmet. The pilot scope is Storage `Bucket`, Firestore
+`Database`/`BackupSchedule`, Functions v2 `Function`, KMS `CryptoKey`, Cloud DNS
+`ManagedZone` and Monitoring `AlertPolicy`; later waves widen it. A Terraform
+provider-schema join (sent-but-unsupported attributes) is the documented FC6 hook
+in `tools/fieldgen/terraform.go`.
+
 ### States
 
 | state | meaning |
@@ -694,7 +724,7 @@ The real jobs in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) an
 | --- | --- |
 | `test-gcp-unit` | race-tested unit tests for `internal/gcp/...` plus the shared Spark/K8s/platform/executor packages, the `tools/gcpstatus` dev-tool tests, the **behavioural-coverage gate** (`make gcp-status-behavioral-gate` — every `ga` service has an official-client suite or a reasoned exemption), the **behavioural-depth gate** (`make gcp-status-depth-gate` — every `ga` service records each of `p2`–`p5` as present or dated-exempt), and the **statement-coverage ratchet** (`make test-gcp-coverage` — no `internal/gcp` package drops below its committed per-package floor) (no services required) |
 | `test-gcp-integration` | builds and boots the binary (REST `:8080`, gRPC `:8081`), then runs the raw-HTTP integration suite and **18** official-SDK test modules |
-| `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite, the REST↔gRPC cross-transport parity suite, and the gcloud CLI suite, and fails if the fidelity matrix is stale |
+| `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite, the REST↔gRPC cross-transport parity suite, and the gcloud CLI suite, fails if the fidelity matrix is stale, and fails if the **field-coverage inventory** (`make check-gcp-field-coverage`) has an unclassified or stale field or a `roundtrip` row whose evidence pointer no longer resolves |
 | `test-gcp-persistence` | with a Postgres service container, runs the `gcp_persistence` suite proving state survives process restarts |
 | `test-aws` | AWS + shared unit/integration tests (`internal/gcp/...` excluded — the GCP package must never import `internal/aws/`) |
 | `docker-build` | the shared `Dockerfile` builds for `linux/amd64` (no push) **for both clouds** (`CLOUD=aws` on 4566 and `CLOUD=gcp` on 8080), then runs each image: the `VERSION` build arg reaches `version`, `/_jaiscloud/health` answers on the cloud's REST port, and `/ui/` answers 200 on 4567 with `--ui` (proves the UI build stage + `-tags ui`) |

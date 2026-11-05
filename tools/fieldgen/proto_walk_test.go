@@ -48,6 +48,7 @@ func testWidgetProto(t *testing.T) protoreflect.MessageDescriptor {
 	}
 
 	name := withRef(withBehavior(field("name", 1, str, opt, ""), annotations.FieldBehavior_REQUIRED), "test.googleapis.com/Widget")
+	displayName := field("display_name", 6, str, opt, "")
 	createTime := withBehavior(field("create_time", 2, msg, opt, ".google.protobuf.Timestamp"), annotations.FieldBehavior_OUTPUT_ONLY)
 	settings := field("settings", 3, msg, opt, ".test.v1.Widget.Settings")
 	items := field("items", 4, msg, rep, ".test.v1.Widget.Item")
@@ -77,7 +78,7 @@ func testWidgetProto(t *testing.T) protoreflect.MessageDescriptor {
 	}
 	widget := &descriptorpb.DescriptorProto{
 		Name:  proto.String("Widget"),
-		Field: []*descriptorpb.FieldDescriptorProto{name, createTime, settings, items, mapEntry},
+		Field: []*descriptorpb.FieldDescriptorProto{name, createTime, settings, items, mapEntry, displayName},
 		NestedType: []*descriptorpb.DescriptorProto{
 			settingsMsg, itemMsg, labelsEntry,
 		},
@@ -115,6 +116,7 @@ func TestWalkProtoFields(t *testing.T) {
 		"items":          "",
 		"items.label":    "",
 		"labels":         "",
+		"display_name":   "",
 	}
 	for name, behavior := range want {
 		b, ok := got[name]
@@ -137,6 +139,30 @@ func TestWalkProtoFields(t *testing.T) {
 	}
 }
 
+// TestWalkProtoRESTUsesJSONNames pins the REST surface's field names: a REST
+// JSON API defined by a proto uses protojson's json_name (camelCase), not the
+// proto name.
+func TestWalkProtoRESTUsesJSONNames(t *testing.T) {
+	md := testWidgetProto(t)
+	fields, err := walkMessage("test", "rest", "Widget", md, 2)
+	if err != nil {
+		t.Fatalf("walkMessage: %v", err)
+	}
+	got := map[string]string{}
+	for _, f := range fields {
+		got[f.Name] = f.Behavior
+	}
+	if _, ok := got["displayName"]; !ok {
+		t.Fatalf("REST walk did not use json_name: %v", keys(got))
+	}
+	if _, ok := got["display_name"]; ok {
+		t.Fatalf("REST walk kept the proto name: %v", keys(got))
+	}
+	if got["createTime"] != "output_only" {
+		t.Fatalf("createTime behavior = %q, want output_only", got["createTime"])
+	}
+}
+
 func TestWalkProtoDepthLimit(t *testing.T) {
 	md := testWidgetProto(t)
 	fields, err := walkMessage("test", "grpc", "Widget", md, 1)
@@ -144,7 +170,7 @@ func TestWalkProtoDepthLimit(t *testing.T) {
 		t.Fatalf("walkMessage: %v", err)
 	}
 	for _, f := range fields {
-		if f.Name != "name" && f.Name != "create_time" && f.Name != "settings" && f.Name != "items" && f.Name != "labels" {
+		if f.Name != "name" && f.Name != "create_time" && f.Name != "settings" && f.Name != "items" && f.Name != "labels" && f.Name != "display_name" {
 			t.Errorf("depth 1 walked nested field %q", f.Name)
 		}
 	}

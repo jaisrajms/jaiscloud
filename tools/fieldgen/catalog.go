@@ -85,7 +85,7 @@ func ReadCSV(path string) ([]Row, error) {
 	rows := make([]Row, 0, len(records)-1)
 	for i, rec := range records[1:] {
 		if len(rec) != len(csvHeader) {
-			return nil, fmt.Errorf("%s:%d: %d columns (want %d)", path, i+2, len(rec), len(csvHeader))
+			return nil, fmt.Errorf("%s:%d: %d column(s), want %d", path, i+2, len(rec), len(csvHeader))
 		}
 		rows = append(rows, Row{
 			Service: rec[0], Transport: rec[1], Resource: rec[2], Field: rec[3],
@@ -121,10 +121,17 @@ func writeCSV(path string, rows []Row) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o644)
 }
 
 // Generate refreshes the CSV from the definition universe. It preserves every
@@ -151,12 +158,19 @@ func Generate(path string, universe *Universe) error {
 
 	inUniverse := make(map[string]bool, len(universe.Fields))
 	out := make([]Row, 0, len(universe.Fields)+len(existing))
-	added := 0
+	added, reclassified := 0, 0
 	for _, f := range universe.Fields {
 		inUniverse[f.Key()] = true
 		row, ok := byKey[f.Key()]
 		if !ok {
 			added++
+		} else if row.Behavior != f.Behavior {
+			// The definition changed since the row was classified (a field
+			// became OUTPUT_ONLY/IMMUTABLE, a reference moved, ...). Drop the
+			// classification so the new behavior has to be re-reviewed instead
+			// of silently inheriting the old verdict.
+			reclassified++
+			row.Coverage, row.Evidence, row.Reason, row.ReviewBy = "", "", "", ""
 		}
 		row.Service, row.Transport, row.Resource, row.Field = f.Service, f.Transport, f.Resource, f.Name
 		row.Behavior = f.Behavior
@@ -176,10 +190,13 @@ func Generate(path string, universe *Universe) error {
 	if err := writeCSV(path, out); err != nil {
 		return err
 	}
-	fmt.Printf("field-coverage: wrote %s — %d field(s), %d newly scaffolded, %d stale row(s) preserved\n",
-		path, len(universe.Fields), added, stale)
+	fmt.Printf("field-coverage: wrote %s — %d field(s), %d newly scaffolded, %d reclassified after a definition change, %d stale row(s) preserved\n",
+		path, len(universe.Fields), added, reclassified, stale)
 	if added > 0 {
 		fmt.Println("field-coverage: scaffolded rows have no coverage yet; classify them (the check fails until then)")
+	}
+	if reclassified > 0 {
+		fmt.Println("field-coverage: rows whose definition behavior changed lost their classification; re-review and reclassify them")
 	}
 	if stale > 0 {
 		fmt.Println("field-coverage: stale rows are for fields the definitions no longer declare; re-map or delete them")
@@ -232,25 +249,23 @@ type Report struct {
 	ByService  map[string]int
 }
 
-// Check validates the committed rows against the freshly derived universe and
-// each row's classification contract:
+// CheckIn validates the committed rows against the freshly derived universe and
+// each row's classification contract. root is the repository root that evidence
+// pointers are resolved against.
 //
 //   - every definition field has exactly one row                      (missing)
 //   - every row belongs to a still-defined field                      (stale)
 //   - the recorded behavior matches the definition                    (drift)
 //   - coverage is one of the five classes                             (invalid)
-//   - roundtrip/immutable rows carry an evidence pointer at an
-//     existing repo file, unless exempted                             (evidence)
+//   - roundtrip rows the definition declares non-writable carry a
+//     written reason                                                  (deviation)
+//   - roundtrip/immutable rows carry an evidence pointer naming an
+//     existing test function, unless exempted                         (evidence)
 //   - output-only rows carry an evidence pointer or a reason why the
 //     emulator never populates the member                             (reason)
 //   - derived rows name their formula in reason                       (reason)
-//   - unsupported rows carry a reason and a review_by date            (reason)
-func Check(universe *Universe, rows []Row, exemptions Exemptions) (Report, error) {
-	return CheckIn(".", universe, rows, exemptions)
-}
-
-// CheckIn is Check with an explicit repository root for evidence-pointer
-// resolution (tests point it at a temp dir).
+//   - unsupported rows carry a reason and a future review_by date     (reason)
+//   - exemptions are used (evidence waived) and never misapplied      (exemption)
 func CheckIn(root string, universe *Universe, rows []Row, exemptions Exemptions) (Report, error) {
 	rep := Report{ByCoverage: map[string]int{}, ByService: map[string]int{}}
 	byKey := make(map[string]Row, len(rows))
@@ -285,11 +300,23 @@ func CheckIn(root string, universe *Universe, rows []Row, exemptions Exemptions)
 			problems = append(problems, p)
 			continue
 		}
+		if _, ok := exemptions[k]; ok {
+			switch row.Coverage {
+			case CoverageRoundtrip, CoverageImmutable, CoverageOutputOnly:
+				if strings.TrimSpace(row.Evidence) == "" {
+					// The exemption is doing its job: waiving a missing
+					// evidence pointer for a field whose negative/round-trip
+					// assertion is scheduled for a later wave.
+					rep.Exempt++
+				} else {
+					problems = append(problems, fmt.Sprintf("unused exemption %s: the row already has an evidence pointer (remove the exemption)", k))
+				}
+			default:
+				problems = append(problems, fmt.Sprintf("misapplied exemption %s: coverage %q has no evidence requirement (remove the exemption)", k, row.Coverage))
+			}
+		}
 		rep.ByCoverage[row.Coverage]++
 		rep.ByService[row.Service]++
-		if _, ok := exemptions[k]; ok {
-			rep.Exempt++
-		}
 	}
 
 	for _, r := range rows {
@@ -314,11 +341,13 @@ func CheckIn(root string, universe *Universe, rows []Row, exemptions Exemptions)
 		sort.Strings(problems)
 		const limit = 40
 		shown := problems
+		note := ""
 		if len(shown) > limit {
 			shown = shown[:limit]
+			note = fmt.Sprintf("\n  ... showing the first %d of %d problems", limit, len(problems))
 		}
-		return rep, fmt.Errorf("field-coverage gate: %d problem(s):\n  %s",
-			len(problems), strings.Join(shown, "\n  "))
+		return rep, fmt.Errorf("field-coverage gate: %d problem(s):\n  %s%s",
+			len(problems), strings.Join(shown, "\n  "), note)
 	}
 	return rep, nil
 }
@@ -333,6 +362,12 @@ func validateRow(root string, r Row, exemptions Exemptions) string {
 	_, exempt := exemptions[key]
 	switch r.Coverage {
 	case CoverageRoundtrip:
+		// A field the definition declares OUTPUT_ONLY or IMMUTABLE but the
+		// emulator round-trips is a documented deviation (the TGM6/TGM11-1
+		// class). It is allowed, but the reason must say why.
+		if declaresNonWritable(r.Behavior) && strings.TrimSpace(r.Reason) == "" {
+			return fmt.Sprintf("roundtrip row %s contradicts its definition behavior %q: record why the emulator accepts/returns a field the API declares %s (or reclassify it)", key, r.Behavior, r.Behavior)
+		}
 		if !exempt {
 			if p := checkEvidence(root, key, r.Coverage, r.Evidence); p != "" {
 				return p
@@ -347,13 +382,25 @@ func validateRow(root string, r Row, exemptions Exemptions) string {
 	case CoverageOutputOnly:
 		// Server-populated fields either point at a test that asserts the
 		// populated value, or record why the emulator never populates the
-		// member (a legal state for an output-only field).
+		// member (a legal state for an output-only field). A pointer that is
+		// present must still resolve.
+		if strings.TrimSpace(r.Evidence) != "" && !exempt {
+			if p := checkEvidence(root, key, r.Coverage, r.Evidence); p != "" {
+				return p
+			}
+		}
 		if !exempt && strings.TrimSpace(r.Evidence) == "" && strings.TrimSpace(r.Reason) == "" {
 			return fmt.Sprintf("output-only row %s has neither an evidence pointer nor a reason for never populating it", key)
 		}
 	case CoverageDerived:
 		if strings.TrimSpace(r.Reason) == "" {
 			return fmt.Sprintf("derived row %s has no formula in reason (name how the emulator computes it)", key)
+		}
+		// A derived row may cite the test that asserts the computed value.
+		if strings.TrimSpace(r.Evidence) != "" && !exempt {
+			if p := checkEvidence(root, key, r.Coverage, r.Evidence); p != "" {
+				return p
+			}
 		}
 	case CoverageUnsupported:
 		if strings.TrimSpace(r.Reason) == "" {
@@ -362,16 +409,39 @@ func validateRow(root string, r Row, exemptions Exemptions) string {
 		if r.ReviewBy == "" {
 			return fmt.Sprintf("unsupported row %s has no review_by date", key)
 		}
-		if _, err := time.Parse("2006-01-02", r.ReviewBy); err != nil {
+		reviewBy, err := time.Parse("2006-01-02", r.ReviewBy)
+		if err != nil {
 			return fmt.Sprintf("unsupported row %s has invalid review_by %q (want YYYY-MM-DD)", key, r.ReviewBy)
+		}
+		// A review date that has passed means the deferral was never revisited.
+		if reviewBy.Before(today()) {
+			return fmt.Sprintf("unsupported row %s is overdue for review (review_by %s has passed): re-review it, fix it, or move the date with a note", key, r.ReviewBy)
 		}
 	}
 	return ""
 }
 
-// checkEvidence requires at least one repo path#TestName pointer, and every
-// referenced file must exist — a renamed or deleted test must not keep a
-// roundtrip row green.
+// declaresNonWritable reports whether a definition behavior token set declares
+// the field server-owned or create-only.
+func declaresNonWritable(behavior string) bool {
+	for _, token := range strings.Split(behavior, "|") {
+		switch token {
+		case "output_only", "input_only", "immutable", "read_only":
+			return true
+		}
+	}
+	return false
+}
+
+func today() time.Time {
+	now := time.Now().UTC()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// checkEvidence requires at least one `path/to/file_test.go#TestName` pointer.
+// The file must exist and the named test function must be defined in it: a
+// renamed or deleted test must not keep a roundtrip row green. Multiple pointers
+// are ';'-separated and every one is resolved.
 func checkEvidence(root, key, class, evidence string) string {
 	if strings.TrimSpace(evidence) == "" {
 		return fmt.Sprintf("%s row %s has no evidence pointer (path/to/file_test.go#TestName)", class, key)
@@ -381,15 +451,19 @@ func checkEvidence(root, key, class, evidence string) string {
 		if ref == "" {
 			continue
 		}
-		file := ref
-		if i := strings.IndexAny(file, "#:"); i >= 0 {
-			file = file[:i]
-		}
+		file, symbol, hasSymbol := strings.Cut(ref, "#")
 		if !strings.Contains(file, "/") {
 			return fmt.Sprintf("row %s: evidence %q is not a repo path pointer (want path/to/file_test.go#TestName)", key, ref)
 		}
-		if _, err := os.Stat(filepath.Join(root, file)); err != nil {
+		source, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil {
 			return fmt.Sprintf("row %s: evidence file %q does not exist (%v)", key, file, err)
+		}
+		if !hasSymbol || symbol == "" {
+			return fmt.Sprintf("row %s: evidence %q names no test function (want path/to/file_test.go#TestName)", key, ref)
+		}
+		if !strings.Contains(string(source), "func "+symbol+"(") {
+			return fmt.Sprintf("row %s: evidence %q names no such test: %s defines no func %s", key, ref, file, symbol)
 		}
 	}
 	return ""
