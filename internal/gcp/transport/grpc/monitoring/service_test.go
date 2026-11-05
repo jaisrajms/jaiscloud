@@ -624,6 +624,120 @@ func TestAlertPolicyCRUD(t *testing.T) {
 	}
 }
 
+// TestAlertPolicyStrategyRoundTrip covers the AlertStrategy message and the
+// Severity enum (TGM5) over gRPC: create -> get -> list -> masked update ->
+// clear, including the nested alert_strategy mask path the provider sends.
+func TestAlertPolicyStrategyRoundTrip(t *testing.T) {
+	_, ac, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := ac.CreateAlertPolicy(ctx, &monitoringpb.CreateAlertPolicyRequest{
+		Name: "projects/test",
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			DisplayName: "Uptime Policy",
+			Combiner:    monitoringpb.AlertPolicy_OR,
+			Enabled:     wrapperspb.Bool(true),
+			Severity:    monitoringpb.AlertPolicy_WARNING,
+			AlertStrategy: &monitoringpb.AlertPolicy_AlertStrategy{
+				AutoClose:             durationpb.New(18000 * time.Second),
+				NotificationRateLimit: &monitoringpb.AlertPolicy_AlertStrategy_NotificationRateLimit{Period: durationpb.New(300 * time.Second)},
+				NotificationChannelStrategy: []*monitoringpb.AlertPolicy_AlertStrategy_NotificationChannelStrategy{{
+					NotificationChannelNames: []string{"projects/test/notificationChannels/nc1"},
+					RenotifyInterval:         durationpb.New(600 * time.Second),
+				}},
+			},
+			Conditions: []*monitoringpb.AlertPolicy_Condition{{
+				DisplayName: "cond",
+				Condition: &monitoringpb.AlertPolicy_Condition_ConditionThreshold{ConditionThreshold: &monitoringpb.AlertPolicy_Condition_MetricThreshold{
+					Filter: `metric.type = "monitoring.googleapis.com/uptime_check/check_passed"`,
+				}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	if created.GetSeverity() != monitoringpb.AlertPolicy_WARNING {
+		t.Fatalf("created severity = %v, want WARNING", created.GetSeverity())
+	}
+	if got := created.GetAlertStrategy().GetAutoClose().AsDuration(); got != 18000*time.Second {
+		t.Fatalf("created autoClose = %v", got)
+	}
+
+	got, err := ac.GetAlertPolicy(ctx, &monitoringpb.GetAlertPolicyRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	if got.GetSeverity() != monitoringpb.AlertPolicy_WARNING {
+		t.Fatalf("get severity = %v", got.GetSeverity())
+	}
+	strategy := got.GetAlertStrategy()
+	if strategy.GetAutoClose().AsDuration() != 18000*time.Second ||
+		strategy.GetNotificationRateLimit().GetPeriod().AsDuration() != 300*time.Second {
+		t.Fatalf("get alertStrategy = %+v", strategy)
+	}
+	if ncs := strategy.GetNotificationChannelStrategy(); len(ncs) != 1 ||
+		ncs[0].GetNotificationChannelNames()[0] != "projects/test/notificationChannels/nc1" ||
+		ncs[0].GetRenotifyInterval().AsDuration() != 600*time.Second {
+		t.Fatalf("get channel strategy = %+v", ncs)
+	}
+
+	list, err := ac.ListAlertPolicies(ctx, &monitoringpb.ListAlertPoliciesRequest{Name: "projects/test"})
+	if err != nil || len(list.GetAlertPolicies()) != 1 {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	if list.GetAlertPolicies()[0].GetSeverity() != monitoringpb.AlertPolicy_WARNING ||
+		list.GetAlertPolicies()[0].GetAlertStrategy().GetAutoClose().AsDuration() != 18000*time.Second {
+		t.Fatalf("listed = %+v", list.GetAlertPolicies()[0])
+	}
+
+	// The provider's mutate shape: a nested alert_strategy path plus severity.
+	updated, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"alert_strategy.auto_close", "severity"}},
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			Name:     created.GetName(),
+			Severity: monitoringpb.AlertPolicy_CRITICAL,
+			AlertStrategy: &monitoringpb.AlertPolicy_AlertStrategy{
+				AutoClose:             durationpb.New(36000 * time.Second),
+				NotificationRateLimit: &monitoringpb.AlertPolicy_AlertStrategy_NotificationRateLimit{Period: durationpb.New(600 * time.Second)},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("masked update: %v", err)
+	}
+	if updated.GetSeverity() != monitoringpb.AlertPolicy_CRITICAL ||
+		updated.GetAlertStrategy().GetAutoClose().AsDuration() != 36000*time.Second ||
+		updated.GetAlertStrategy().GetNotificationRateLimit().GetPeriod().AsDuration() != 600*time.Second {
+		t.Fatalf("updated = %+v", updated)
+	}
+	if updated.GetDisplayName() != "Uptime Policy" || updated.GetCombiner() != monitoringpb.AlertPolicy_OR {
+		t.Fatalf("masked update clobbered unmasked fields: %+v", updated)
+	}
+
+	// Clearing both fields leaves an empty strategy and the unspecified severity.
+	cleared, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+		UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"alert_strategy", "severity"}},
+		AlertPolicy: &monitoringpb.AlertPolicy{Name: created.GetName()},
+	})
+	if err != nil {
+		t.Fatalf("clearing update: %v", err)
+	}
+	if cleared.GetAlertStrategy() != nil || cleared.GetSeverity() != monitoringpb.AlertPolicy_SEVERITY_UNSPECIFIED {
+		t.Fatalf("cleared = %+v", cleared)
+	}
+
+	// A read-only field still fails loud.
+	_, err = ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+		UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"validity"}},
+		AlertPolicy: &monitoringpb.AlertPolicy{Name: created.GetName()},
+	})
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("validity mask err = %v, want Unimplemented", err)
+	}
+}
+
 func TestUpdateAlertPolicyUpdateMask(t *testing.T) {
 	_, ac, cleanup := testServer(t)
 	defer cleanup()
@@ -684,15 +798,16 @@ func TestUpdateAlertPolicyUpdateMask(t *testing.T) {
 		t.Fatalf("unknown mask path err = %v, want InvalidArgument", err)
 	}
 
-	// A real-but-unimplemented field stays Unimplemented: alertStrategy is a
-	// field of AlertPolicy the emulator does not store.
+	// A real-but-unimplemented field stays Unimplemented: validity is a
+	// read-only field of AlertPolicy the emulator does not store (alert_strategy
+	// and severity became stored fields in TGM5).
 	if _, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"alert_strategy"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"validity"}},
 		AlertPolicy: &monitoringpb.AlertPolicy{
 			Name: created.GetName(),
 		},
 	}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("alert_strategy mask err = %v, want Unimplemented", err)
+		t.Fatalf("validity mask err = %v, want Unimplemented", err)
 	}
 }
 

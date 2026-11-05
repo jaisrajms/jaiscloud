@@ -333,7 +333,11 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 	for rows.Next() {
 		var p string
-		pol, err := scanAlertPolicy(rows.Scan)
+		// The query prepends project_id to policyCols; scan it before the
+		// policy columns so the destination count matches.
+		pol, err := scanAlertPolicy(func(dest ...any) error {
+			return rows.Scan(append([]any{&p}, dest...)...)
+		})
 		if err != nil {
 			rows.Close()
 			return err
@@ -523,11 +527,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	for _, row := range snap.Policies {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_monitoring_alert_policies
-				(project_id, id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+				(project_id, id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels, alert_strategy, severity)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		`, row.Project, row.Policy.ID, row.Policy.DisplayName, row.Policy.Combiner, row.Policy.Enabled,
 			jsonb(row.Policy.Documentation), jsonb(row.Policy.Conditions), jsonb(row.Policy.NotificationChannels),
-			jsonb(row.Policy.UserLabels)); err != nil {
+			jsonb(row.Policy.UserLabels), jsonb(row.Policy.AlertStrategy), row.Policy.Severity); err != nil {
 			return err
 		}
 	}

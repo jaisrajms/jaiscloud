@@ -435,6 +435,121 @@ func TestRESTAlertPolicyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRESTAlertPolicyStrategyRoundTrip covers the alertStrategy object and the
+// severity enum (TGM5) over the JSON API: the create body survives create ->
+// get -> masked patch -> clear, and a nested camelCase mask path applies the
+// whole strategy.
+func TestRESTAlertPolicyStrategyRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+	strategy := map[string]any{
+		"autoClose": "18000s",
+		"notificationRateLimit": map[string]any{
+			"period": "300s",
+		},
+		"notificationChannelStrategy": []any{map[string]any{
+			"notificationChannelNames": []any{"projects/test/notificationChannels/nc1"},
+			"renotifyInterval":         "600s",
+		}},
+	}
+	created, err := call(t, c, p, http.MethodPost, "/v3/projects/test/alertPolicies", map[string]any{
+		"displayName":          "Uptime Policy",
+		"combiner":             "OR",
+		"enabled":              true,
+		"notificationChannels": []any{"projects/test/notificationChannels/nc1"},
+		"userLabels":           map[string]any{"team": "platform"},
+		"severity":             "WARNING",
+		"alertStrategy":        strategy,
+		"conditions": []any{map[string]any{
+			"displayName": "cond",
+			"conditionThreshold": map[string]any{
+				"filter":     `metric.type="monitoring.googleapis.com/uptime_check/check_passed"`,
+				"comparison": "COMPARISON_GT", "thresholdValue": 1, "duration": "60s",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create alert policy: %v", err)
+	}
+	data := wireData(t, created)
+	name, _ := data["name"].(string)
+	if name == "" {
+		t.Fatalf("created = %+v", data)
+	}
+	if data["severity"] != "WARNING" {
+		t.Fatalf("created severity = %+v", data["severity"])
+	}
+	if got, _ := data["alertStrategy"].(map[string]any); got["autoClose"] != "18000s" {
+		t.Fatalf("created alertStrategy = %+v", data["alertStrategy"])
+	}
+
+	got, err := call(t, c, p, http.MethodGet, "/v3/"+name, nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	gd := wireData(t, got)
+	if gd["severity"] != "WARNING" {
+		t.Fatalf("get severity = %+v", gd["severity"])
+	}
+	gs, _ := gd["alertStrategy"].(map[string]any)
+	rate, _ := gs["notificationRateLimit"].(map[string]any)
+	if gs["autoClose"] != "18000s" || rate["period"] != "300s" {
+		t.Fatalf("get alertStrategy = %+v", gd["alertStrategy"])
+	}
+
+	// The provider's mutate shape: updateMask=alertStrategy,severity,userLabels
+	// with a new autoClose/rate limit — a nested path is accepted too.
+	patched, err := call(t, c, p, http.MethodPatch,
+		"/v3/"+name+"?updateMask=alertStrategy.autoClose,severity,userLabels", map[string]any{
+			"userLabels": map[string]any{"team": "sre"},
+			"severity":   "CRITICAL",
+			"alertStrategy": map[string]any{
+				"autoClose":             "36000s",
+				"notificationRateLimit": map[string]any{"period": "600s"},
+			},
+		})
+	if err != nil {
+		t.Fatalf("patch strategy: %v", err)
+	}
+	pd := wireData(t, patched)
+	ps, _ := pd["alertStrategy"].(map[string]any)
+	prate, _ := ps["notificationRateLimit"].(map[string]any)
+	if pd["severity"] != "CRITICAL" || ps["autoClose"] != "36000s" || prate["period"] != "600s" {
+		t.Fatalf("patched = %+v", pd)
+	}
+	if ul, _ := pd["userLabels"].(map[string]any); ul["team"] != "sre" {
+		t.Fatalf("patched labels = %+v", pd["userLabels"])
+	}
+	if pd["displayName"] != "Uptime Policy" {
+		t.Fatalf("masked patch clobbered displayName: %+v", pd)
+	}
+
+	// Clearing the strategy removes it from the wire (omit-empty) while the
+	// policy itself stays readable.
+	cleared, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=alertStrategy,severity", map[string]any{})
+	if err != nil {
+		t.Fatalf("clear strategy: %v", err)
+	}
+	cd := wireData(t, cleared)
+	if _, present := cd["alertStrategy"]; present {
+		t.Fatalf("cleared alertStrategy still rendered: %+v", cd["alertStrategy"])
+	}
+	if _, present := cd["severity"]; present {
+		t.Fatalf("cleared severity still rendered: %+v", cd["severity"])
+	}
+
+	// A read-only field stays a loud 501, an unknown path a 400.
+	if _, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=validity", map[string]any{}); err == nil {
+		t.Fatal("validity mask should be rejected")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 501 {
+		t.Fatalf("validity mask err = %v, want 501", err)
+	}
+	if _, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=bogusField", map[string]any{}); err == nil {
+		t.Fatal("unknown mask should be rejected")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 400 {
+		t.Fatalf("unknown mask err = %v, want 400", err)
+	}
+}
+
 func TestRESTNotificationChannelRoundTrip(t *testing.T) {
 	c, p := newTestProvider(t)
 

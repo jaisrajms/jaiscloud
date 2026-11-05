@@ -3,12 +3,27 @@ package monitoring
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
 )
 
 func double(v float64) *float64 { return &v }
+
+func boolPtr(v bool) *bool { return &v }
+
+// sameJSON reports whether two raw JSON documents decode to the same value.
+// The memory store keeps the client's bytes verbatim, whereas Postgres stores
+// the object in JSONB (which reorders keys), so strategy assertions compare the
+// decoded value rather than the spelling.
+func sameJSON(a, b []byte) bool {
+	var av, bv any
+	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 func testPoint(v float64, ts time.Time) Point {
 	return Point{EndTime: ts, Value: TypedValue{DoubleValue: double(v)}}
@@ -143,6 +158,103 @@ func TestMemoryStoreAlertPolicyCRUD(t *testing.T) {
 	}
 	if err := s.DeleteAlertPolicy(ctx, "p1", "ap-1"); err != ErrAlertPolicyNotFound {
 		t.Fatalf("delete missing err = %v, want ErrAlertPolicyNotFound", err)
+	}
+}
+
+func TestMemoryStoreAlertPolicyStrategy(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	// The strategy the CFT simple-uptime-check module emits: autoClose, a
+	// notification rate limit and a per-channel strategy.
+	first := json.RawMessage(`{"autoClose":"18000s","notificationRateLimit":{"period":"300s"},"notificationChannelStrategy":[{"notificationChannelNames":["projects/p1/notificationChannels/nc1"],"renotifyInterval":"600s"}]}`)
+	p := AlertPolicy{
+		ID:            "ap-strategy",
+		DisplayName:   "Uptime strategy",
+		Enabled:       boolPtr(true),
+		AlertStrategy: first,
+		Severity:      "WARNING",
+		UserLabels:    map[string]string{"team": "platform"},
+	}
+	if err := s.CreateAlertPolicy(ctx, "p1", p); err != nil {
+		t.Fatalf("create strategy policy: %v", err)
+	}
+
+	got, err := s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if err != nil {
+		t.Fatalf("get strategy policy: %v", err)
+	}
+	if !sameJSON(got.AlertStrategy, first) || got.Severity != "WARNING" {
+		t.Fatalf("get = %+v (strategy %s)", got, got.AlertStrategy)
+	}
+
+	list, err := s.ListAlertPolicies(ctx, "p1")
+	if err != nil || len(list) != 1 || !sameJSON(list[0].AlertStrategy, first) || list[0].Severity != "WARNING" {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+
+	// Change the strategy and the severity: both replace, not merge.
+	second := json.RawMessage(`{"autoClose":"36000s","notificationRateLimit":{"period":"600s"}}`)
+	p.AlertStrategy = second
+	p.Severity = "CRITICAL"
+	p.UserLabels = map[string]string{"team": "sre"}
+	if err := s.UpdateAlertPolicy(ctx, "p1", p); err != nil {
+		t.Fatalf("update strategy policy: %v", err)
+	}
+	got, _ = s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if !sameJSON(got.AlertStrategy, second) || got.Severity != "CRITICAL" || got.UserLabels["team"] != "sre" {
+		t.Fatalf("after update = %+v (strategy %s)", got, got.AlertStrategy)
+	}
+
+	// Every declared severity round-trips.
+	for _, sev := range []string{"SEVERITY_UNSPECIFIED", "CRITICAL", "ERROR", "WARNING"} {
+		p.Severity = sev
+		if err := s.UpdateAlertPolicy(ctx, "p1", p); err != nil {
+			t.Fatalf("update severity %q: %v", sev, err)
+		}
+		got, _ = s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+		if got.Severity != sev {
+			t.Fatalf("severity round-trip = %q, want %q", got.Severity, sev)
+		}
+	}
+
+	// Clearing the strategy is stored as empty, and snapshot/restore keeps both
+	// the cleared and the set shape (memory/snapshot parity).
+	p.AlertStrategy = nil
+	p.Severity = ""
+	p.UserLabels = nil
+	if err := s.UpdateAlertPolicy(ctx, "p1", p); err != nil {
+		t.Fatalf("clear strategy: %v", err)
+	}
+	cleared, _ := s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if len(cleared.AlertStrategy) != 0 || cleared.Severity != "" {
+		t.Fatalf("cleared = %+v (strategy %s)", cleared, cleared.AlertStrategy)
+	}
+
+	if err := s.CreateAlertPolicy(ctx, "p1", AlertPolicy{
+		ID: "ap-kept", DisplayName: "kept", AlertStrategy: first, Severity: "ERROR",
+	}); err != nil {
+		t.Fatalf("create second policy: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s2 := NewMemoryStore()
+	if err := s2.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	restored, err := s2.GetAlertPolicy(ctx, "p1", "ap-kept")
+	if err != nil {
+		t.Fatalf("restored policy: %v", err)
+	}
+	if !sameJSON(restored.AlertStrategy, first) || restored.Severity != "ERROR" {
+		t.Fatalf("restored = %+v (strategy %s)", restored, restored.AlertStrategy)
+	}
+	restoredCleared, _ := s2.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if len(restoredCleared.AlertStrategy) != 0 || restoredCleared.Severity != "" {
+		t.Fatalf("restored cleared = %+v (strategy %s)", restoredCleared, restoredCleared.AlertStrategy)
 	}
 }
 
