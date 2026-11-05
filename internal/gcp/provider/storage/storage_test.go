@@ -2660,3 +2660,64 @@ func TestPutObjectBytesRoundTrip(t *testing.T) {
 		t.Fatalf("live object missing after overwrite: %v", err)
 	}
 }
+
+// TestBucketLabelsKeepEmptyValues pins the documented GCS label rule: a label
+// value may be empty, and the API stores and serves it on create and update.
+// hashicorp/google 5.x+ strips empty-valued labels from the request before
+// sending it (provider issue #16528, "cannot be resolved"), so a Terraform plan
+// whose config carries such a label never converges — that is client-side and
+// reproduces against real GCP too; it is not an emulator gap.
+func TestBucketLabelsKeepEmptyValues(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{
+		"name":   "empty-label-bucket",
+		"labels": map[string]any{"team": "", "project": "", "env": "prod"},
+	}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "empty-label-bucket"
+	resp, err := p.BucketsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	labels, _ := resp.Data["labels"].(map[string]string)
+	if len(labels) != 3 || labels["env"] != "prod" {
+		t.Fatalf("labels = %v, want the three labels including the empty values", labels)
+	}
+	for _, k := range []string{"team", "project"} {
+		if v, present := labels[k]; !present || v != "" {
+			t.Fatalf("%s = %q (present=%v), want the empty value preserved", k, v, present)
+		}
+	}
+
+	// The update path (a label-set PATCH) keeps an empty value too, and still
+	// replaces the set as a whole.
+	nr = bucketParams()
+	nr.Params["bucket"] = "empty-label-bucket"
+	nr.Params["body"] = map[string]any{"labels": map[string]any{"team": "", "env": "staging"}}
+	if _, err := p.BucketsUpdate(ctx, nr); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "empty-label-bucket"
+	resp, err = p.BucketsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	labels, _ = resp.Data["labels"].(map[string]string)
+	if labels["env"] != "staging" {
+		t.Fatalf("env after update = %q, want staging", labels["env"])
+	}
+	if v, present := labels["team"]; !present || v != "" {
+		t.Fatalf("team after update = %q (present=%v), want the empty value preserved", v, present)
+	}
+	if _, present := labels["project"]; present {
+		t.Fatalf("project should be replaced away by the label-set PATCH: %v", labels)
+	}
+}

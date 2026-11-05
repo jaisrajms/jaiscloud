@@ -745,3 +745,62 @@ func TestCryptoKeyUpdate(t *testing.T) {
 		t.Fatalf("missing key: status = %d (%v), want 404", errStatus(err), err)
 	}
 }
+
+// TestCryptoKeyLabelsKeepEmptyValues pins the same label rule for cryptoKeys: a
+// label value may be empty, and the REST resource serves it back on create,
+// get and a masked patch. hashicorp/google strips empty label values from the
+// request client-side (provider issue #16528), so a Terraform key configured
+// with one never converges — that is not an emulator gap (real GCP sees the
+// same request and cannot return the label either).
+func TestCryptoKeyLabelsKeepEmptyValues(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr-empty"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	keyName := "locations/global/keyRings/kr-empty/cryptoKeys/k"
+	resp, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr-empty", "cryptoKeyId": "k",
+		"body": map[string]any{"labels": map[string]any{"team": "", "project": "", "env": "prod"}},
+	}))
+	if err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+	labels := stringMap(resp.Data["labels"])
+	if len(labels) != 3 || labels["env"] != "prod" {
+		t.Fatalf("create labels = %v, want the three labels including the empty values", labels)
+	}
+	for _, k := range []string{"team", "project"} {
+		if v, present := labels[k]; !present || v != "" {
+			t.Fatalf("%s = %q (present=%v), want the empty value preserved", k, v, present)
+		}
+	}
+
+	got, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": keyName}))
+	if err != nil {
+		t.Fatalf("cryptokey get: %v", err)
+	}
+	if labels := stringMap(got.Data["labels"]); len(labels) != 3 || labels["team"] != "" || labels["project"] != "" {
+		t.Fatalf("get labels = %v, want the empty values preserved", labels)
+	}
+
+	// A masked patch keeps the empty value and replaces the whole set.
+	patched, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "labels",
+		"body": map[string]any{"labels": map[string]any{"team": "", "env": "staging"}},
+	}))
+	if err != nil {
+		t.Fatalf("patch labels: %v", err)
+	}
+	labels = stringMap(patched.Data["labels"])
+	if len(labels) != 2 || labels["env"] != "staging" {
+		t.Fatalf("patch labels = %v, want the replacement set", labels)
+	}
+	if v, present := labels["team"]; !present || v != "" {
+		t.Fatalf("team after patch = %q (present=%v), want the empty value preserved", v, present)
+	}
+	if _, present := labels["project"]; present {
+		t.Fatalf("project should be replaced away by the masked patch: %v", labels)
+	}
+}
