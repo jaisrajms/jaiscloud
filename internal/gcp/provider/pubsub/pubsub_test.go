@@ -3,14 +3,22 @@ package pubsub
 import (
 	"context"
 	"encoding/base64"
+	"maps"
+	"net"
 	"testing"
 
+	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+
 	"jaiscloud/internal/gcp/crypto"
+	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	"jaiscloud/internal/gcp/resource"
 	kms "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func newTestProvider() *Provider {
@@ -322,5 +330,200 @@ func TestSubscriptionStateActive(t *testing.T) {
 	first, _ := items[0].(map[string]any)
 	if first["state"] != "ACTIVE" {
 		t.Fatalf("list state = %v, want ACTIVE", first["state"])
+	}
+}
+
+// providerSubscriptionLabels are the five labels the terraform-google-pubsub
+// module applies to every subscription it creates.
+var providerSubscriptionLabels = map[string]string{
+	"security_certified": "true",
+	"managed-by":         "terraform",
+	"module":             "terraform-google-pubsub",
+	"team":               "platform",
+	"project":            "proj",
+}
+
+// labelMap folds a labels value from a response into a map[string]string. The
+// in-memory create response is map[string]string, a JSON round-trip yields
+// map[string]any; both are the same wire shape.
+func labelMap(t *testing.T, v any) map[string]string {
+	t.Helper()
+	switch m := v.(type) {
+	case map[string]string:
+		return m
+	case map[string]any:
+		out := make(map[string]string, len(m))
+		for k, x := range m {
+			s, ok := x.(string)
+			if !ok {
+				t.Fatalf("label %q = %T %v, want string", k, x, x)
+			}
+			out[k] = s
+		}
+		return out
+	}
+	t.Fatalf("labels = %T %v, want a map", v, v)
+	return nil
+}
+
+// TestSubscriptionCreateStoresLabels covers PS1: REST SubscriptionCreate
+// persists the request's labels and create, get and list all render them.
+func TestSubscriptionCreateStoresLabels(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/labels-topic"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	requestLabels := make(map[string]any, len(providerSubscriptionLabels))
+	for k, v := range providerSubscriptionLabels {
+		requestLabels[k] = v
+	}
+	created, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/labels-sub",
+		"body": map[string]any{
+			"topic":  "projects/proj/topics/labels-topic",
+			"labels": requestLabels,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+	if got := labelMap(t, created.Data["labels"]); !maps.Equal(got, providerSubscriptionLabels) {
+		t.Errorf("create labels = %v, want %v", got, providerSubscriptionLabels)
+	}
+
+	read, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/labels-sub"}))
+	if err != nil {
+		t.Fatalf("subscription get: %v", err)
+	}
+	if got := labelMap(t, read.Data["labels"]); !maps.Equal(got, providerSubscriptionLabels) {
+		t.Errorf("get labels = %v, want %v", got, providerSubscriptionLabels)
+	}
+
+	list, err := p.SubscriptionList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("subscription list: %v", err)
+	}
+	items, _ := list.Data["subscriptions"].([]any)
+	var found map[string]any
+	for _, it := range items {
+		if m, _ := it.(map[string]any); m["name"] == "projects/proj/subscriptions/labels-sub" {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatal("expected subscription in list result")
+	}
+	if got := labelMap(t, found["labels"]); !maps.Equal(got, providerSubscriptionLabels) {
+		t.Errorf("list labels = %v, want %v", got, providerSubscriptionLabels)
+	}
+}
+
+// TestSubscriptionCreateWithoutLabelsOmitsKey pins the TopicCreate shape: an
+// absent or empty labels map leaves no "labels" key at all, never a null.
+func TestSubscriptionCreateWithoutLabelsOmitsKey(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/no-labels-topic"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "unlabelled-sub",
+			body: map[string]any{"topic": "projects/proj/topics/no-labels-topic"},
+		},
+		{
+			name: "empty-labels-sub",
+			body: map[string]any{
+				"topic":  "projects/proj/topics/no-labels-topic",
+				"labels": map[string]any{},
+			},
+		},
+	} {
+		created, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+			"name": "subscriptions/" + tc.name,
+			"body": tc.body,
+		}))
+		if err != nil {
+			t.Fatalf("%s: subscription create: %v", tc.name, err)
+		}
+		if v, ok := created.Data["labels"]; ok {
+			t.Errorf("%s: create labels key present, want absent (got %v)", tc.name, v)
+		}
+
+		read, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/" + tc.name}))
+		if err != nil {
+			t.Fatalf("%s: subscription get: %v", tc.name, err)
+		}
+		if v, ok := read.Data["labels"]; ok {
+			t.Errorf("%s: get labels key present, want absent (got %v)", tc.name, v)
+		}
+	}
+}
+
+// TestSubscriptionLabelsRESTGRPCParity pins the cross-transport contract: the
+// same labels created over gRPC render identically over gRPC and REST. The
+// gRPC path already stored labels; this guards the REST side against drifting
+// from it.
+func TestSubscriptionLabelsRESTGRPCParity(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	encryptor := crypto.NewEnvelopeEncryptor(kms.NewMemoryStore())
+	rest := New(resources, messages, encryptor)
+	svc := grpcpubsub.NewService(resources, messages, encryptor, "proj")
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	pubsubpb.RegisterSubscriberServer(srv, svc)
+	go srv.Serve(ln)
+	defer srv.Stop()
+
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	client := pubsubpb.NewSubscriberClient(conn)
+
+	if _, err := rest.TopicCreate(ctx, newNR(map[string]any{"name": "topics/parity-topic"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+
+	created, err := client.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:   "projects/proj/subscriptions/parity-sub",
+		Topic:  "projects/proj/topics/parity-topic",
+		Labels: providerSubscriptionLabels,
+	})
+	if err != nil {
+		t.Fatalf("gRPC CreateSubscription: %v", err)
+	}
+	if got := created.GetLabels(); !maps.Equal(got, providerSubscriptionLabels) {
+		t.Errorf("gRPC create labels = %v, want %v", got, providerSubscriptionLabels)
+	}
+
+	got, err := client.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: created.GetName()})
+	if err != nil {
+		t.Fatalf("gRPC GetSubscription: %v", err)
+	}
+	if labels := got.GetLabels(); !maps.Equal(labels, providerSubscriptionLabels) {
+		t.Errorf("gRPC get labels = %v, want %v", labels, providerSubscriptionLabels)
+	}
+
+	// The REST read of the same stored subscription renders the same map.
+	read, err := rest.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/parity-sub"}))
+	if err != nil {
+		t.Fatalf("REST SubscriptionGet: %v", err)
+	}
+	if labels := labelMap(t, read.Data["labels"]); !maps.Equal(labels, providerSubscriptionLabels) {
+		t.Errorf("REST labels = %v, want %v", labels, providerSubscriptionLabels)
 	}
 }

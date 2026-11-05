@@ -668,6 +668,11 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		meta["pushConfig"] = pc
 	}
+	// Labels are stored as a string map, matching TopicCreate. An absent or
+	// empty map leaves no key at all, so GET never echoes "labels": null.
+	if labels := stringMap(body, "labels"); len(labels) > 0 {
+		meta["labels"] = labels
+	}
 	data, _ := json.Marshal(meta)
 	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: s, Data: data}); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
