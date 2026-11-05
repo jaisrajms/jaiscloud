@@ -103,7 +103,7 @@ module, and requires the module's lifecycle to converge.
 | case | module | pinned commit | what the gate proves |
 |---|---|---|---|
 | `pubsub` | [`terraform-google-pubsub`](https://github.com/terraform-google-modules/terraform-google-pubsub) | `6cf1860` | `data.google_project` (`projects.getBillingInfo`), topic + pull subscription + IAM member, `plan` **No changes** |
-| `storage` | [`terraform-google-cloud-storage`](https://github.com/terraform-google-modules/terraform-google-cloud-storage) | `c7effc0be0f4` | `autoclass`, `hierarchicalNamespace`, `website`, `logging`, `customPlacementConfig` and `ipFilter` read back; mutated `autoclass.enabled` + labels/website/logging, then labels/logging/`ip_filter` cleared; each phase ends with `plan` **No changes** |
+| `storage` | [`terraform-google-cloud-storage`](https://github.com/terraform-google-modules/terraform-google-cloud-storage) | `c7effc0be0f4` | `autoclass`, `hierarchicalNamespace`, `website`, `logging`, `customPlacementConfig` and `ipFilter` read back; mutated `autoclass.enabled` + labels/website/logging, then labels/logging/`ip_filter` cleared; the `modules/simple_bucket` submodule forces the `google_storage_project_service_account` data source read (`projects.serviceAccount.get`) and a module-owned `google_storage_hmac_key` reads back `ACTIVE` (`projects.hmacKeys.*`); each phase ends with `plan` **No changes** |
 | `memorystore` | [`terraform-google-memorystore`](https://github.com/terraform-google-modules/terraform-google-memorystore) | `5415d5ccca28` | `authEnabled`, `connectMode`, `transitEncryptionMode`, `readReplicasMode`, `maintenancePolicy` and `persistenceConfig` read back (the two ForceNew modes no longer replace the instance); AUTH enabled then disabled, maintenance window/snapshot period changed, labels changed then cleared; each phase ends with `plan` **No changes** |
 | `functions` | [`terraform-google-event-function`](https://github.com/terraform-google-modules/terraform-google-event-function) | `9f2e26ae3b73` | `ingressSettings` (`ALLOW_ALL` → `ALLOW_INTERNAL_ONLY`), the event trigger's default `failurePolicy` and `failurePolicy.retry`, and `environment_variables` read back; ingress/env changed and cleared, retry toggled; each phase ends with a `plan` whose only remaining diff is the recorded storage-object gap |
 | `clouddns` | [`terraform-google-cloud-dns`](https://github.com/terraform-google-modules/terraform-google-cloud-dns) | `35cd6de8e647` | `privateVisibilityConfig` (VPC networks + GKE clusters), `forwardingConfig` (targets incl. `forwardingPath`), `peeringConfig` and `dnssecConfig` (state, `nonExistence`, both default key specs) read back; private description/labels/network list changed, then forwarding, peering and public-with-DNSSEC zones created and DNSSEC turned on; each phase ends with `plan` **No changes** |
@@ -196,7 +196,8 @@ the module touches (`pubsub`, `resource_manager`, `cloud_billing`, `iam`,
 
 **storage** — three buckets in `location = "NAM4"` (`module-bucket` with the
 optional blocks, `logs` as the logging destination, `dual-region` created with
-the two `ForceNew` blocks) run the full gate:
+the two `ForceNew` blocks), the `modules/simple_bucket` submodule, and one
+module-owned `google_storage_hmac_key`, run the full gate:
 
 1. `apply` the module with its defaults (`autoclass`, `hierarchical_namespace`,
    UBLA, `soft_delete_policy`), labels, `public_access_prevention = "enforced"`,
@@ -206,7 +207,11 @@ the two `ForceNew` blocks) run the full gate:
    `hierarchicalNamespace`, `website`, `logging` and the full `ipFilter`, and
    that the `dual-region` bucket reads back `hierarchicalNamespace.enabled=true`
    plus `customPlacementConfig.dataLocations` (the two `ForceNew` blocks — the
-   create read-back is what stops the next plan replacing the bucket)
+   create read-back is what stops the next plan replacing the bucket); that
+   `projects/{p}/serviceAccount` answers `storage#serviceAccount` (the
+   `simple_bucket` data source read) and its bucket exists; and that
+   `projects/{p}/hmacKeys` lists the module's key with the service-account email
+   and `state: ACTIVE`
 3. `plan -detailed-exitcode` → **no changes**
 4. flip `autoclass.enabled` to true, change a label, and change
    `website`/`logging`; `apply`; assert the new values and that the untouched
@@ -214,7 +219,22 @@ the two `ForceNew` blocks) run the full gate:
 5. clear back: `labels = {}`, `logging = {}`, `autoclass` false and
    `ip_filter { mode = "Disabled" }`; `apply`; assert the caller labels and
    logging are gone and the filter's ranges are cleared; `plan` → **no changes**
-6. `destroy`
+6. `destroy` (the HMAC key is deactivated and then deleted)
+
+The consumer paths added for the project service account and HMAC keys are in
+every phase, so their computed fields must also re-plan clean:
+
+- `modules/simple_bucket` declares
+  `data "google_storage_project_service_account"` unconditionally, so the data
+  source is read on every plan/apply (`projects.serviceAccount.get`).
+- `set_hmac_access` + `hmac_service_accounts` create a
+  `google_storage_hmac_key` for `jc-hmac@<project>.iam.gserviceaccount.com`
+  (`google_service_account` is declared for the same account). The map is
+  `map(string)`, so the email is a hardcoded plan-time literal — referencing the
+  account's computed `email` would fail the plan. The provider also needs
+  `iam_custom_endpoint`/`iam_beta_custom_endpoint` alongside
+  `storage_custom_endpoint`, because `google_service_account` is served by the
+  IAM Admin API.
 
 Two behaviours of `hashicorp/google` 7.46.2 are recorded, not worked around:
 

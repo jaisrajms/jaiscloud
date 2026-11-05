@@ -13,7 +13,7 @@
 
 | Service | Transport | Notes |
 |---|---|---|
-| Cloud Storage (GCS) | REST + gRPC v2 | Buckets, objects, resumable/multipart uploads, CMEK, CSEK |
+| Cloud Storage (GCS) | REST + gRPC v2 | Buckets, objects, resumable/multipart uploads, CMEK, CSEK, the project storage service account (`projects.serviceAccount.get`) and HMAC keys (`projects.hmacKeys.*`) |
 | Cloud Pub/Sub | REST + gRPC | Topics, subscriptions, snapshots, seek, push/pull delivery, ordering keys, DLQ, exactly-once delivery (pull); topics carry the full mutable field set (CMEK, message storage policy, schema settings, message transforms, ingestion sources) through create/get/update masks — transforms and ingestion are store-only, see [Known Limitations](#cloud-pubsub-topic-fields-are-stored-and-served-not-run) |
 | Secret Manager | REST + gRPC | Secrets, versions, rotation, CMEK envelope encryption |
 | Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation, key import + HSM/EKM trusted wrapping + KEM decapsulation; crypto ops honor a default-permissive cryptoKey IAM policy |

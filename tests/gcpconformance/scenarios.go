@@ -195,6 +195,42 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/storage/v1/b/" + sdBucket + "/o/soft.txt/restore?generation=${smSoftGen}"},
 	)
 
+	// ─── Cloud Storage: project service account + HMAC keys ───────────────────
+	// projects.serviceAccount.get is the read every
+	// `data "google_storage_project_service_account"` performs (the pinned
+	// storage module's modules/simple_bucket declares it unconditionally). The
+	// HMAC chain mirrors the Terraform provider's google_storage_hmac_key
+	// lifecycle: create (the secret is revealed exactly once) -> get -> list
+	// (paged) -> deactivate with the etag just read -> delete. A key can only be
+	// deleted while INACTIVE, so both keys are deactivated first.
+	hmacEmail := "conf-hmac-" + suffix + "@" + p + ".iam.gserviceaccount.com"
+	hmacBase := "/storage/v1/projects/" + p + "/hmacKeys"
+	hmacQuery := "?serviceAccountEmail=" + url.QueryEscape(hmacEmail)
+	sc = append(sc,
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/projects/" + p + "/serviceAccount"},
+		Scenario{Service: "storage", Method: "POST", Path: hmacBase + hmacQuery,
+			Body: fmt.Sprintf(`{"serviceAccountEmail":%q,"state":"ACTIVE"}`, hmacEmail),
+			Save: map[string]string{"smHmacAccessID": "metadata.accessId"}},
+		// A second key makes the paging assertion meaningful: maxResults=1
+		// returns one item plus the nextPageToken for the other.
+		Scenario{Service: "storage", Method: "POST", Path: hmacBase + hmacQuery,
+			Body: fmt.Sprintf(`{"serviceAccountEmail":%q}`, hmacEmail),
+			Save: map[string]string{"smHmacAccessID2": "metadata.accessId", "smHmacEtag2": "metadata.etag"}},
+		// get captures the etag the update is conditional on (the provider GETs
+		// before it PUTs state=INACTIVE).
+		Scenario{Service: "storage", Method: "GET", Path: hmacBase + "/${smHmacAccessID}",
+			Save: map[string]string{"smHmacEtag": "etag"}},
+		Scenario{Service: "storage", Method: "GET", Path: hmacBase + hmacQuery + "&maxResults=1",
+			Save: map[string]string{"smHmacPage": "nextPageToken"}},
+		Scenario{Service: "storage", Method: "GET", Path: hmacBase + hmacQuery + "&maxResults=1&pageToken=${smHmacPage}"},
+		Scenario{Service: "storage", Method: "PUT", Path: hmacBase + "/${smHmacAccessID}",
+			Body: `{"etag":"${smHmacEtag}","state":"INACTIVE"}`},
+		Scenario{Service: "storage", Method: "PUT", Path: hmacBase + "/${smHmacAccessID2}",
+			Body: `{"etag":"${smHmacEtag2}","state":"INACTIVE"}`},
+		Scenario{Service: "storage", Method: "DELETE", Path: hmacBase + "/${smHmacAccessID}"},
+		Scenario{Service: "storage", Method: "DELETE", Path: hmacBase + "/${smHmacAccessID2}"},
+	)
+
 	// ─── Cloud KMS (key created before the Pub/Sub topic uses it) ─────────────
 	// The topic PATCH below sets kmsKeyName, and the following publish must
 	// actually encrypt under that key, so the key has to exist first.

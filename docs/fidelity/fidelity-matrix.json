@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1212,
+    "total": 1218,
     "by_state": {
-      "ga": 1013,
+      "ga": 1019,
       "limited": 146,
       "preview": 14,
       "unsupported": 39
@@ -15,7 +15,7 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 563,
+        "ga": 569,
         "limited": 123,
         "preview": 14,
         "unsupported": 11
@@ -119,7 +119,7 @@
         "ga": 12
       },
       "storage": {
-        "ga": 57
+        "ga": 63
       },
       "tasks": {
         "ga": 41
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 665
+        "rest": 671
       },
       "unverified": {
         "grpc": 46,
@@ -1324,8 +1324,8 @@
       "source": "discovery",
       "source_ref": "storage.v1",
       "published": 87,
-      "served": 38,
-      "graded": 30,
+      "served": 44,
+      "graded": 36,
       "unserved": [
         "storage.anywhereCaches.disable",
         "storage.anywhereCaches.get",
@@ -1365,12 +1365,6 @@
         "storage.managedFolders.setIamPolicy",
         "storage.managedFolders.testIamPermissions",
         "storage.managedFolders.update",
-        "storage.projects.hmacKeys.create",
-        "storage.projects.hmacKeys.delete",
-        "storage.projects.hmacKeys.get",
-        "storage.projects.hmacKeys.list",
-        "storage.projects.hmacKeys.update",
-        "storage.projects.serviceAccount.get",
         "storage.rapidCaches.disable",
         "storage.rapidCaches.get",
         "storage.rapidCaches.insert",
@@ -16984,6 +16978,87 @@
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.ProjectsHmacKeysCreate",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "storage.projects.hmacKeys.create",
+      "verified": true,
+      "evidence": [
+        "discovery=storage.projects.hmacKeys.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 6 transcript entries)"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.ProjectsHmacKeysDelete",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "storage.projects.hmacKeys.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=storage.projects.hmacKeys.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.ProjectsHmacKeysGet",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "storage.projects.hmacKeys.get",
+      "verified": true,
+      "evidence": [
+        "discovery=storage.projects.hmacKeys.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.ProjectsHmacKeysList",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "storage.projects.hmacKeys.list",
+      "verified": true,
+      "evidence": [
+        "discovery=storage.projects.hmacKeys.list",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.ProjectsHmacKeysUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "storage.projects.hmacKeys.update",
+      "verified": true,
+      "evidence": [
+        "discovery=storage.projects.hmacKeys.update",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.ProjectsServiceAccountGet",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "storage.projects.serviceAccount.get",
+      "verified": true,
+      "evidence": [
+        "discovery=storage.projects.serviceAccount.get",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
