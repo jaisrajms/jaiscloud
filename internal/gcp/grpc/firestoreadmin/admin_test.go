@@ -228,6 +228,72 @@ func TestDefaultDatabaseCreate(t *testing.T) {
 	}
 }
 
+// TestDatabaseRecreateAfterDelete pins immediate id reuse on the gRPC surface:
+// after DeleteDatabase the same DatabaseId is available at once, so a Terraform
+// destroy -> apply converges without a cooldown (real GCP blocks reuse for about
+// five minutes; TGM13 records the deliberate divergence). The tombstone is
+// replaced in place, so the re-created database carries fresh server fields.
+func TestDatabaseRecreateAfterDelete(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "reuse-db",
+		Database:   &adminpb.Database{LocationId: "us-central1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+	if _, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "reuse-db",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	}); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("duplicate CreateDatabase = %v, want AlreadyExists", err)
+	}
+
+	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+		Name: created.GetName(), Etag: created.GetEtag(),
+	}); err != nil {
+		t.Fatalf("DeleteDatabase: %v", err)
+	}
+	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetDatabase(deleted) = %v, want NotFound", err)
+	}
+
+	reOp, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "reuse-db",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(after delete): %v", err)
+	}
+	recreated := &adminpb.Database{}
+	if err := reOp.GetResponse().UnmarshalTo(recreated); err != nil {
+		t.Fatalf("CreateDatabase(after delete) response unmarshal: %v", err)
+	}
+	if recreated.GetLocationId() != "nam5" || recreated.GetUid() == created.GetUid() {
+		t.Errorf("recreated = %+v, want the new location and a fresh uid", recreated)
+	}
+	if recreated.GetDeleteTime() != nil {
+		t.Errorf("recreated delete_time = %v, want unset", recreated.GetDeleteTime())
+	}
+	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase(recreated): %v", err)
+	}
+	if got.GetLocationId() != "nam5" || got.GetDeleteTime() != nil {
+		t.Errorf("GetDatabase(recreated) = %+v, want the live record", got)
+	}
+}
+
 // TestUpdateDatabaseServerOwnedFields pins database.proto's field ownership on
 // the gRPC surface: key_prefix (OUTPUT_ONLY) and database_edition (IMMUTABLE)
 // are never written by an update, and version_retention_period (OUTPUT_ONLY) is

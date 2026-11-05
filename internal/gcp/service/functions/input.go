@@ -190,6 +190,12 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 	if s, ok := sc["availableCpu"].(string); ok {
 		in.AvailableCPU, in.HasAvailableCPU = s, true
 	}
+	// ServiceConfig.ingressSettings (the v1 view carries the same value at the
+	// top level). The Terraform provider always sends its ALLOW_ALL default, so
+	// storing and echoing it is what keeps the v2 resource from permadiffing.
+	if s, ok := sc["ingressSettings"].(string); ok && s != "" {
+		in.IngressSettings, in.HasIngressSettings = s, true
+	}
 	if src := nestedMap(bc, "source"); src != nil {
 		if ss := nestedMap(src, "storageSource"); ss != nil {
 			in.SourceBucket = bodyString(ss, "bucket")
@@ -433,6 +439,10 @@ var functionUpdateFields = map[string]string{
 	"serviceconfig.max_instance_request_concurrency": "maxInstanceRequestConcurrency",
 	"serviceconfig.availablecpu":                     "availableCpu",
 	"serviceconfig.available_cpu":                    "availableCpu",
+	// v2 ingress settings live under serviceConfig (the v1 view carries the same
+	// stored value at the top level).
+	"serviceconfig.ingresssettings":  "ingressSettings",
+	"serviceconfig.ingress_settings": "ingressSettings",
 }
 
 // canonicalMaskField normalizes an updateMask path to its canonical field name.

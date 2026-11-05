@@ -29,6 +29,8 @@
 #   CMEK apply -> GET carries cmekConfig.kmsKeyName -> No changes
 #   mutate a non-ForceNew field (PITR disabled) -> apply -> GET -> No changes
 #   a second module instance with kms_key_name = null -> GET has no cmekConfig
+#   destroy -> apply the same database id -> GET -> No changes (TGM13: the id is
+#   reusable immediately; real GCP blocks reuse for about five minutes)
 #   destroy
 #
 # Before TGM12 the emulator answered 409 ALREADY_EXISTS for any
@@ -68,6 +70,7 @@ MODULE_GIT="https://github.com/GoogleCloudPlatform/terraform-google-firestore"
 
 DB="jc-cmek"
 PLAIN_DB="jc-plain"
+RECREATE_DB="jc-recreate"
 KEYRING="jc-firestore-ring"
 KEY="jc-firestore-key"
 
@@ -285,6 +288,100 @@ default_phase() {
   WORK="$saved"
 }
 
+# write_recreate_module generates the root module for the TGM13 phase: one
+# module instance with no CMEK key in this phase's own working directory/state,
+# so a full destroy -> apply cycle can be driven without touching the CMEK
+# phase's key ring (a key ring cannot be deleted, so re-creating it would be
+# ALREADY_EXISTS; only the database is part of this cycle).
+write_recreate_module() {
+  cat >"$RECREATE_WORK/main.tf" <<EOF
+terraform {
+  required_version = ">= 1.3"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "= 7.46.2"
+    }
+  }
+}
+
+variable "endpoint" {
+  type    = string
+  default = "$ENDPOINT"
+}
+
+variable "project" {
+  type    = string
+  default = "$PROJECT"
+}
+
+provider "google" {
+  project = var.project
+  region  = "us-central1"
+
+  user_project_override = false
+
+  # Versioned API base URL: exactly one trailing slash.
+  firestore_custom_endpoint = "\${var.endpoint}/v1/"
+}
+
+module "firestore" {
+  source = "$MODULE_DIR"
+
+  project_id  = var.project
+  database_id = "$RECREATE_DB"
+  location    = "us-central1"
+
+  kms_key_name = null
+
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = "DELETE"
+}
+EOF
+}
+
+# recreate_phase drives a full destroy -> apply cycle for one named database in
+# its own working directory/state. Real GCP refuses to reuse a deleted database
+# id for about five minutes; the emulator deliberately does not model that
+# cooldown (TGM13), so the recreate Terraform performs after a destroy — and the
+# delete+create half of a ForceNew replacement — must converge immediately.
+recreate_phase() {
+  local saved="$WORK"
+  WORK="$RECREATE_WORK"
+  mkdir -p "$RECREATE_WORK"
+  write_recreate_module
+
+  init_phase
+  apply_phase "apply (database before the recreate cycle)"
+  assert_no_api_errors
+  check_db "database created before the recreate cycle" "$(db_url "$RECREATE_DB")" \
+    '"locationId":"us-central1"'
+
+  echo "== destroy (before recreate)"
+  if "$TF" -chdir="$RECREATE_WORK" destroy -input=false -auto-approve -no-color >"$RECREATE_WORK/destroy.log" 2>&1; then
+    pass "destroy (before recreate)"
+  else
+    cat "$RECREATE_WORK/destroy.log"
+    fail "destroy (before recreate) (see the log above)"
+  fi
+
+  apply_phase "re-create the same database id"
+  assert_no_api_errors
+  check_db "re-created database echoes the same locationId" "$(db_url "$RECREATE_DB")" \
+    '"locationId":"us-central1"'
+  plan_no_changes "re-plan after the re-create reports no changes"
+
+  echo "== destroy (recreate phase)"
+  if "$TF" -chdir="$RECREATE_WORK" destroy -input=false -auto-approve -no-color >"$RECREATE_WORK/destroy2.log" 2>&1; then
+    pass "destroy (recreate phase)"
+  else
+    cat "$RECREATE_WORK/destroy2.log"
+    fail "destroy (recreate phase) (see the log above)"
+  fi
+  WORK="$saved"
+}
+
 case_main() {
   # The (default) phase goes first, in $WORK/default: its own working directory
   # and state, so no earlier read of this project's default has materialised it.
@@ -313,6 +410,12 @@ case_main() {
     '"pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED"' \
     '"cmekConfig":{"kmsKeyName":"'"$KEY_NAME"'"}'
   plan_no_changes "re-plan after the PITR change reports no changes"
+
+  # A destroy -> apply cycle on the same database id must converge immediately
+  # (TGM13). It runs in its own workdir/state so the CMEK key ring (which cannot
+  # be deleted and re-created) is not part of the cycle.
+  RECREATE_WORK="$WORK/recreate"
+  recreate_phase
 
   destroy_phase
 }

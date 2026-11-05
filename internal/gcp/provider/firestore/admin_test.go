@@ -37,6 +37,89 @@ func assertDeletePrecondition(t *testing.T, err error, what string) {
 	}
 }
 
+// TestDatabaseRecreateAfterDelete pins the emulator's immediate id reuse: a
+// deleted database leaves its id available at once, so a Terraform
+// destroy -> apply (or the delete+create half of a ForceNew replacement)
+// converges without a cooldown, while the tombstone stays observable through
+// showDeleted until the create replaces it. Real GCP refuses to reuse the id
+// for about five minutes ("You cannot reuse a database ID until 5 minutes
+// after the delete happens"); the emulator deliberately does not model that
+// server-side window (TGM13).
+func TestDatabaseRecreateAfterDelete(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "reuse-db", databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "reuse-db", databaseDef{LocationID: "us-central1"}); err == nil {
+		t.Error("duplicate CreateDatabaseDef succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	deleted, _, err := p.DeleteDatabaseDef(ctx, "proj", "reuse-db", created.Etag)
+	if err != nil {
+		t.Fatalf("DeleteDatabaseDef: %v", err)
+	}
+	if !deleted.Deleted || deleted.DeleteTime.IsZero() {
+		t.Errorf("deleted record = %+v, want Deleted + DeleteTime", deleted)
+	}
+	if _, err := p.GetDatabase(ctx, "proj", "reuse-db"); !isNotFound(err) {
+		t.Fatalf("GetDatabase(deleted) = %v, want NotFound", err)
+	}
+	// The tombstone stays visible through showDeleted (real GCP keeps deleted
+	// databases readable that way; only the id-reuse cooldown is not modelled).
+	tombstoned := false
+	if listed, err := p.ListDatabases(ctx, "proj", true); err != nil {
+		t.Fatalf("ListDatabases(showDeleted): %v", err)
+	} else {
+		for _, d := range listed {
+			if d.Name == databaseName("proj", "reuse-db") {
+				tombstoned = d.Deleted && !d.DeleteTime.IsZero()
+			}
+		}
+	}
+	if !tombstoned {
+		t.Error("ListDatabases(showDeleted) omitted the tombstone")
+	}
+
+	// The create succeeds immediately, replacing the tombstone with fresh fields.
+	recreated, _, err := p.CreateDatabaseDef(ctx, "proj", "reuse-db", databaseDef{
+		LocationID:            "nam5",
+		DeleteProtectionState: deleteProtectionEnabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(after delete): %v", err)
+	}
+	if recreated.LocationID != "nam5" || recreated.Uid == created.Uid || recreated.Etag == created.Etag ||
+		recreated.Deleted || !recreated.DeleteTime.IsZero() ||
+		recreated.DeleteProtectionState != deleteProtectionEnabled {
+		t.Errorf("recreated = %+v, want the new fields and a fresh uid/etag", recreated)
+	}
+	if got, err := p.GetDatabase(ctx, "proj", "reuse-db"); err != nil || got.LocationID != "nam5" || got.Deleted {
+		t.Errorf("GetDatabase(recreated) = %+v err=%v, want the live record", got, err)
+	}
+	// One record, not two: the create replaced the tombstone in place.
+	records := 0
+	if listed, err := p.ListDatabases(ctx, "proj", true); err != nil {
+		t.Fatalf("ListDatabases(showDeleted) after recreate: %v", err)
+	} else {
+		for _, d := range listed {
+			if d.Name == databaseName("proj", "reuse-db") {
+				records++
+				if d.Deleted {
+					t.Error("recreated database still reports Deleted")
+				}
+			}
+		}
+	}
+	if records != 1 {
+		t.Errorf("ListDatabases(showDeleted) has %d reuse-db records, want 1", records)
+	}
+}
+
 func TestDatabaseCRUD(t *testing.T) {
 	ctx := context.Background()
 	p := newAdminService()

@@ -469,13 +469,19 @@ var databaseIDRe = regexp.MustCompile(`^[a-z][a-z0-9-]{3,62}$`)
 // CreateDatabaseDef creates a database metadata record and returns it with the
 // name of the terminal long-running operation wrapping it.
 //
-// The implicit (default) database is create-if-absent: real GCP creates it for a
-// project that has none — the Firebase Terraform shape,
-// google_firestore_database { name = "(default)" } — and records the requested
-// location. A live record is ALREADY_EXISTS, while a missing or tombstoned one (a
-// deleted default) accepts the create, so a destroy→create cycle converges. The
-// requested location_id is stored verbatim: the Firestore provider applies no
-// case normalisation, so echoing what the client sent keeps the plan clean.
+// Creating an id that a previous delete tombstoned is allowed: the emulator
+// treats a deleted record as absent for every database id, so a Terraform
+// `destroy` → `apply` cycle (or a ForceNew replacement, which deletes then
+// re-creates) converges immediately. Real GCP retains a deleted database and
+// refuses to reuse its id for about five minutes ("You cannot reuse a database
+// ID until 5 minutes after the delete happens"), a server-side cooldown this
+// emulator deliberately does not model — an emulator that keeps a dev loop
+// waiting adds friction without teaching anything about the wire contract. The
+// tombstone itself is still kept, so `showDeleted` and the delete operation's
+// Database response behave as documented. A LIVE record is ALREADY_EXISTS.
+//
+// The requested location_id is stored verbatim: the Firestore provider applies
+// no case normalisation, so echoing what the client sent keeps the plan clean.
 func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, db databaseDef) (databaseDef, string, error) {
 	if dbID == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database id is required")
@@ -525,28 +531,28 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	}
 	db.DeleteProtectionState = normalizeDeleteProtection(db.DeleteProtectionState)
 	db.Etag = randomHex(16)
-	if dbID == defaultDatabaseID {
-		if err := s.createDefaultDatabase(ctx, project, db); err != nil {
-			return databaseDef{}, "", err
-		}
-	} else if err := s.putResource(ctx, project, rtDatabase, databaseRel(dbID), db, true); err != nil {
+	if err := s.createDatabaseRecord(ctx, project, dbID, db); err != nil {
 		return databaseDef{}, "", err
 	}
 	return db, databaseOperationName(project, dbID, randomHex(12)), nil
 }
 
-// createDefaultDatabase stores the implicit (default) database on request,
-// treating a missing record or a tombstone as absent and a live record as
-// ALREADY_EXISTS. The read-check-write runs inside the store's atomic
-// UpsertAtomic (mirroring defaultDatabase), so two concurrent creates cannot
-// both succeed, and a create racing the first read's lazy materialisation still
-// answers exactly one of the two outcomes. When no store is attached (unit
-// tests) the create runs without persisting, like putResource.
-func (s *Service) createDefaultDatabase(ctx context.Context, project string, db databaseDef) error {
+// createDatabaseRecord stores a database on request, treating a missing record
+// or a tombstone as absent and a live record as ALREADY_EXISTS. The read-check-
+// write runs inside the store's atomic UpsertAtomic (mirroring defaultDatabase),
+// so two concurrent creates cannot both succeed, and a create racing the first
+// read's lazy materialisation of (default) still answers exactly one of the two
+// outcomes. A tombstone is overwritten by the new record (uid, etag, timestamps
+// and the requested fields all come from the create), which is what makes an
+// immediate delete→create converge; see CreateDatabaseDef for the deliberate
+// divergence from real GCP's five-minute id-reuse cooldown. When no store is
+// attached (unit tests) the create runs without persisting, like putResource.
+func (s *Service) createDatabaseRecord(ctx context.Context, project, dbID string, db databaseDef) error {
 	if s.resources == nil {
 		return nil
 	}
-	_, err := s.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtDatabase, databaseRel(defaultDatabaseID),
+	id := databaseRel(dbID)
+	_, err := s.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtDatabase, id,
 		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
 			if exists {
 				var cur databaseDef
@@ -561,7 +567,7 @@ func (s *Service) createDefaultDatabase(ctx context.Context, project string, db 
 			if err != nil {
 				return current, model.NewProviderError("Internal", err.Error(), 500)
 			}
-			return store.ResourceEntry{Type: rtDatabase, ID: databaseRel(defaultDatabaseID), Data: data}, nil
+			return store.ResourceEntry{Type: rtDatabase, ID: id, Data: data}, nil
 		})
 	return err
 }
