@@ -9,6 +9,8 @@ import (
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	"jaiscloud/internal/clock"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
+	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/store"
 
 	"google.golang.org/genproto/googleapis/type/dayofweek"
@@ -1171,6 +1173,64 @@ func TestDatabaseCmekConfig(t *testing.T) {
 // carries the statistics message (the data becomes available once the backup is
 // materialized, and an empty database legitimately measures zero), while a
 // backup that is still being created has none.
+// TestDatabaseCmekActiveKeyVersions pins the gRPC view of the derived
+// OUTPUT_ONLY active_key_version: with a KMS store attached, create/get/list
+// carry the key's ENABLED version names, and an invalid key is InvalidArgument.
+func TestDatabaseCmekActiveKeyVersions(t *testing.T) {
+	ctx := context.Background()
+	keys := kmsstore.NewMemoryStore()
+	if err := keys.CreateKeyRing(ctx, "proj", "us", "ring", kmsstore.KeyRing{Location: "us", ID: "ring"}); err != nil {
+		t.Fatalf("CreateKeyRing: %v", err)
+	}
+	if err := keys.CreateCryptoKeyWithVersion(ctx, "proj", "us", "ring", "key", kmsstore.CryptoKey{
+		Location: "us", KeyRingID: "ring", ID: "key", Purpose: "ENCRYPT_DECRYPT", Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION",
+	}, kmsstore.Version{}, true); err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+	providerSvc := firestoreprovider.New(firestorestore.NewMemoryStore(), store.NewMemoryResourceStore())
+	providerSvc.SetKMSStore(keys)
+	svc := NewService(providerSvc.Service, "test")
+
+	const key = "projects/proj/locations/us/keyRings/ring/cryptoKeys/key"
+	op, err := svc.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "kms-cmek",
+		Database: &adminpb.Database{
+			LocationId: "nam5",
+			CmekConfig: &adminpb.Database_CmekConfig{KmsKeyName: key},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response: %v", err)
+	}
+	want := key + "/cryptoKeyVersions/1"
+	if got := created.GetCmekConfig().GetActiveKeyVersion(); len(got) != 1 || got[0] != want {
+		t.Errorf("create activeKeyVersion = %v, want [%s]", got, want)
+	}
+	got, err := svc.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if versions := got.GetCmekConfig().GetActiveKeyVersion(); len(versions) != 1 || versions[0] != want {
+		t.Errorf("GetDatabase activeKeyVersion = %v, want [%s]", versions, want)
+	}
+
+	if _, err := svc.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "bad-cmek",
+		Database: &adminpb.Database{
+			LocationId: "nam5",
+			CmekConfig: &adminpb.Database_CmekConfig{KmsKeyName: "not-a-key"},
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("malformed CMEK key = %v, want InvalidArgument", err)
+	}
+}
+
 func TestBackupToProtoStats(t *testing.T) {
 	ready := backupToProto(firestoreprovider.BackupDef{
 		Name: "projects/p/locations/l/backups/b", State: "READY",

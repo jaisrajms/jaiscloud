@@ -330,8 +330,8 @@ func databaseMap(d databaseDef) map[string]any {
 	// cmekConfig is present only for a CMEK-protected database (the field's
 	// presence is the enablement signal), so a Google-managed database gets no
 	// member at all rather than an empty object. activeKeyVersion is OUTPUT_ONLY
-	// and this emulator derives none; a stored list (written by a future build)
-	// would still be echoed, and an empty one is omitted as protojson does.
+	// and derived from the attached KMS store per response; an empty list is
+	// omitted as protojson does.
 	if c := d.CmekConfig; c != nil && c.KmsKeyName != "" {
 		cmek := map[string]any{"kmsKeyName": c.KmsKeyName}
 		if len(c.ActiveKeyVersion) > 0 {

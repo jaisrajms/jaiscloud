@@ -352,6 +352,10 @@ func startCmd() *cobra.Command {
 			// same Pub/Sub publish path, for both transports.
 			secretP.SetEventPublisher(pubsubSeam)
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
+			// The Firestore admin plane validates a database's cmek_config key
+			// against KMS and derives active_key_version from it, so it shares the
+			// running KMS store (memory or --dsn) with the KMS service.
+			firestoreP.SetKMSStore(stores.keys)
 
 			// Cloud Datastore's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports use one

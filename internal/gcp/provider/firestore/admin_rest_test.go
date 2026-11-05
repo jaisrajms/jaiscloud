@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"jaiscloud/internal/clock"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -694,6 +696,57 @@ func TestRESTDatabaseCmekConfig(t *testing.T) {
 	}
 	if starredResp["pointInTimeRecoveryEnablement"] != "POINT_IN_TIME_RECOVERY_ENABLED" {
 		t.Errorf("`*` patch did not apply pointInTimeRecoveryEnablement = %v", starredResp["pointInTimeRecoveryEnablement"])
+	}
+}
+
+// TestRESTDatabaseCmekActiveKeyVersion pins the JSON rendering of the derived
+// OUTPUT_ONLY active_key_version when a KMS store is attached: a CMEK database
+// reports the key's ENABLED version names, and an invalid key is a 400 with the
+// InvalidArgument envelope.
+func TestRESTDatabaseCmekActiveKeyVersion(t *testing.T) {
+	ctx := context.Background()
+	keys := kmsstore.NewMemoryStore()
+	seedKMSKey(t, keys, "proj", "us", "ring", "key", "ENCRYPT_DECRYPT", "GOOGLE_SYMMETRIC_ENCRYPTION")
+	key := "projects/proj/locations/us/keyRings/ring/cryptoKeys/key"
+
+	p := New(nil, store.NewMemoryResourceStore())
+	p.SetKMSStore(keys)
+
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "kms-cmek",
+		"body": map[string]any{
+			"locationId": "nam5",
+			"cmekConfig": map[string]any{"kmsKeyName": key},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(kms cmek): %v", err)
+	}
+	resp, _ := created.Data["response"].(map[string]any)
+	cmek, _ := resp["cmekConfig"].(map[string]any)
+	want := []string{key + "/cryptoKeyVersions/1"}
+	if !reflect.DeepEqual(cmek["activeKeyVersion"], want) {
+		t.Errorf("create activeKeyVersion = %v, want %v", cmek["activeKeyVersion"], want)
+	}
+	got, err := p.GetDatabase(ctx, adminNR("databases/kms-cmek", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	gotCmek, _ := got.Data["cmekConfig"].(map[string]any)
+	if !reflect.DeepEqual(gotCmek["activeKeyVersion"], want) {
+		t.Errorf("GET activeKeyVersion = %v, want %v", gotCmek["activeKeyVersion"], want)
+	}
+
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "bad-cmek",
+		"body": map[string]any{
+			"locationId": "nam5",
+			"cmekConfig": map[string]any{"kmsKeyName": "not-a-key"},
+		},
+	})); err == nil {
+		t.Error("malformed CMEK key accepted on the JSON wire")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
 	}
 }
 

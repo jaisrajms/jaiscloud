@@ -15,6 +15,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/resource"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -28,6 +29,12 @@ import (
 type Service struct {
 	store     firestorestore.FirestoreStore
 	resources store.ResourceStore
+	// kms, when attached, is the Cloud KMS store used to validate a database's
+	// cmek_config.kms_key_name and to derive its OUTPUT_ONLY active_key_version.
+	// It is nil in unit tests that do not model CMEK, in which case the key is
+	// stored as sent (shape/location validation still runs) and no versions are
+	// synthesized.
+	kms kms.Store
 
 	// txnMu guards readSets: the in-memory transaction read-set registry
 	// (transactions are ephemeral and never persisted).
@@ -58,6 +65,11 @@ func newService(s firestorestore.FirestoreStore, resources store.ResourceStore) 
 		readSets:  make(map[string]*readSet),
 	}
 }
+
+// SetKMSStore attaches the Cloud KMS store. It enables cmek_config.kms_key_name
+// validation (existence, same location, ENCRYPT_DECRYPT purpose) and the
+// OUTPUT_ONLY active_key_version derivation. A nil store disables both.
+func (s *Service) SetKMSStore(k kms.Store) { s.kms = k }
 
 // Reset clears transaction read-sets and the change-feed history/sequence
 // (document state is reset via the store's own Resetter; index state via the
