@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
-	"time"
 
+	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -16,10 +15,12 @@ import (
 // TopicUpdate applies an updateMask to a topic (pubsub.projects.topics.patch).
 // The REST request is an UpdateTopicRequest: the fields to update live under
 // "topic", the mask is a body field ("updateMask"; a query fallback is
-// tolerated). It mirrors the gRPC UpdateTopic handler so the two transports
-// cannot drift: labels and messageRetentionDuration are supported, an empty mask
-// applies labels, and an unknown mask path fails loud with InvalidArgument
-// rather than being silently ignored.
+// tolerated). It mirrors the gRPC UpdateTopic handler through the shared
+// pubsubcore.ApplyTopicUpdate helper, so the two transports cannot drift:
+// every mutable topic field is maskable, nested AIP-134 paths merge into the
+// stored object, a field absent/empty under its mask is cleared, and an
+// unknown mask path fails loud with InvalidArgument rather than being silently
+// ignored. An empty mask applies labels (PTF8 tolerance).
 func (p *Provider) TopicUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -56,32 +57,15 @@ func (p *Provider) TopicUpdate(ctx context.Context, nr *model.NormalizedRequest)
 		// Mirrors the gRPC handler: an empty mask applies labels.
 		paths = []string{"labels"}
 	}
-	for _, path := range paths {
-		switch normalizeMaskPath(path) {
-		case "labels":
-			if labels := stringMap(in, "labels"); len(labels) == 0 {
-				delete(meta, "labels")
-			} else {
-				meta["labels"] = labels
-			}
-		case "messageretentionduration":
-			ret, _ := in["messageRetentionDuration"].(string)
-			if ret == "" {
-				delete(meta, "messageRetentionDuration")
-				break
-			}
-			d, perr := time.ParseDuration(ret)
-			if perr != nil {
-				return nil, model.NewProviderError("InvalidArgument", "invalid messageRetentionDuration: "+ret, 400)
-			}
-			// Store the protobuf-JSON Duration form ("600s"), not Go's
-			// "10m0s": the official REST client unmarshals this string as a
-			// google.protobuf.Duration, which only accepts the seconds-suffixed
-			// form, so the Go form would break every later REST read.
-			meta["messageRetentionDuration"] = fmt.Sprintf("%ds", int64(d.Seconds()))
-		default:
-			return nil, model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+path, 400)
-		}
+	// Validate the complete fields the body carries up front, so an invalid
+	// root value fails before anything is persisted. A nested mask may carry a
+	// partial object (only the masked leaf); ApplyTopicUpdate validates the
+	// field merged with its stored value instead.
+	if _, nerr := pubsubcore.NormalizeTopicInput(in); nerr != nil && !pubsubcore.TopicMaskHasNestedPath(paths) {
+		return nil, nerr
+	}
+	if err := pubsubcore.ApplyTopicUpdate(meta, in, paths); err != nil {
+		return nil, err
 	}
 	data, _ := json.Marshal(meta)
 	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: t, Data: data}); err != nil {

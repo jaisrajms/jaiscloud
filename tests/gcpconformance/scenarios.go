@@ -195,12 +195,39 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/storage/v1/b/" + sdBucket + "/o/soft.txt/restore?generation=${smSoftGen}"},
 	)
 
+	// ─── Cloud KMS (key created before the Pub/Sub topic uses it) ─────────────
+	// The topic PATCH below sets kmsKeyName, and the following publish must
+	// actually encrypt under that key, so the key has to exist first.
+	base := "/v1/projects/" + p + "/locations/global/keyRings"
+	keyPath := base + "/" + ring + "/cryptoKeys/" + key
+	sc = append(sc,
+		Scenario{Service: "kms", Method: "POST", Path: base + "?keyRingId=" + ring, Body: `{}`},
+		Scenario{Service: "kms", Method: "POST", Path: base + "/" + ring + "/cryptoKeys?cryptoKeyId=" + key,
+			Body: `{"purpose":"ENCRYPT_DECRYPT"}`, Save: map[string]string{"cryptoKey": "name"}},
+	)
+
 	// ─── Pub/Sub ──────────────────────────────────────────────────────────────
+	confSchemaName := "projects/" + p + "/schemas/conf-schema-" + suffix
+	confKeyName := "projects/" + p + "/locations/global/keyRings/" + ring + "/cryptoKeys/" + key
 	sc = append(sc,
 		Scenario{Service: "pubsub", Method: "PUT", Path: "/v1/projects/" + p + "/topics/" + topic,
 			Body: fmt.Sprintf(`{"name":%q}`, topicName)},
 		Scenario{Service: "pubsub", Method: "GET", Path: "/v1/projects/" + p + "/topics/" + topic},
 		Scenario{Service: "pubsub", Method: "GET", Path: "/v1/projects/" + p + "/topics"},
+		// topics.patch with the provider's full mutable field body and the
+		// multi-field updateMask (the provider comma-joins changed fields in
+		// its fixed order, as the query param; the API also accepts it in the
+		// body). The committed response is schema-validated by
+		// TestTranscriptsConform.
+		Scenario{Service: "pubsub", Method: "PATCH",
+			Path: "/v1/projects/" + p + "/topics/" + topic +
+				"?updateMask=kmsKeyName,messageStoragePolicy,schemaSettings,messageRetentionDuration,messageTransforms,labels",
+			Body: fmt.Sprintf(`{"topic":{"name":%q,"labels":{"env":"conf"},"kmsKeyName":%q,`+
+				`"messageRetentionDuration":"900s","messageStoragePolicy":{"allowedPersistenceRegions":["us-central1","europe-west1"],"enforceInTransit":true},`+
+				`"schemaSettings":{"schema":%q,"encoding":"JSON"},"messageTransforms":[{"javascriptUdf":{"functionName":"conf","code":"function conf(m) { return m; }"},"enabled":true}]},`+
+				`"updateMask":"kmsKeyName,messageStoragePolicy,schemaSettings,messageRetentionDuration,messageTransforms,labels"}`,
+				topicName, confKeyName, confSchemaName)},
+		Scenario{Service: "pubsub", Method: "GET", Path: "/v1/projects/" + p + "/topics/" + topic},
 		Scenario{Service: "pubsub", Method: "GET", Path: "/v1/projects/" + p + "/topics/missing-" + suffix},
 		Scenario{Service: "pubsub", Method: "PUT", Path: "/v1/projects/" + p + "/subscriptions/" + sub,
 			Body: fmt.Sprintf(`{"name":%q,"topic":%q,"ackDeadlineSeconds":10}`, subName, topicName)},
@@ -242,14 +269,11 @@ func Scenarios(suffix string) []Scenario {
 	)
 
 	// ─── Cloud KMS ────────────────────────────────────────────────────────────
-	base := "/v1/projects/" + p + "/locations/global/keyRings"
-	keyPath := base + "/" + ring + "/cryptoKeys/" + key
+	// The ring and key were created before the Pub/Sub block so a topic could
+	// reference the key; the rest of the surface is exercised here.
 	sc = append(sc,
-		Scenario{Service: "kms", Method: "POST", Path: base + "?keyRingId=" + ring, Body: `{}`},
 		Scenario{Service: "kms", Method: "GET", Path: base + "/" + ring},
 		Scenario{Service: "kms", Method: "GET", Path: base},
-		Scenario{Service: "kms", Method: "POST", Path: base + "/" + ring + "/cryptoKeys?cryptoKeyId=" + key,
-			Body: `{"purpose":"ENCRYPT_DECRYPT"}`, Save: map[string]string{"cryptoKey": "name"}},
 		Scenario{Service: "kms", Method: "GET", Path: keyPath},
 		Scenario{Service: "kms", Method: "PATCH", Path: keyPath + "?updateMask=labels",
 			Body: `{"labels":{"env":"conf"}}`},

@@ -113,6 +113,276 @@ func NormalizeTopicInput(in map[string]any) (map[string]any, error) {
 	return out, nil
 }
 
+// TopicMaskHasNestedPath reports whether any mask path addresses a field below
+// a topic root. Both update handlers use it to tolerate a partial nested object
+// (for example a mask of schemaSettings.encoding whose body carries only the
+// encoding): ApplyTopicUpdate validates the field merged with the stored value.
+func TopicMaskHasNestedPath(paths []string) bool {
+	for _, p := range paths {
+		if strings.Contains(p, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// ApplyTopicUpdate applies an AIP-134 update mask to a stored topic map. `in` is
+// the request topic body in protobuf-JSON form (camelCase keys, enum names,
+// "600s" durations) and maskPaths is the update mask. Each path's root must be
+// a mutable topic field; an unknown root is an InvalidArgument, never a silent
+// ignore.
+//
+// Resolution is generic over the field tree. A root path replaces the whole
+// field, validated through the field table. A nested path merges into the stored
+// object and replaces just that leaf; a segment that lands on a repeated field
+// replaces the whole list. A field that is absent or empty under its mask is
+// cleared: the key is removed and parents left empty are pruned. Clearing
+// messageStoragePolicy means "no constraint" here; real GCP falls back to the
+// project/organization policy, which the emulator does not model.
+//
+// The stored value is always re-validated after the merge, so a nested mask
+// cannot write a value the create path would reject. A kmsKeyName change only
+// affects later publishes (messages already carry their per-message DEK key).
+func ApplyTopicUpdate(meta map[string]any, in map[string]any, maskPaths []string) error {
+	for _, path := range maskPaths {
+		if err := applyTopicUpdatePath(meta, in, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyTopicUpdatePath applies one mask path. The root segment is matched
+// against the mutable field table (case/underscore insensitive); the remaining
+// segments are resolved against the request body and merged into the stored
+// value.
+func applyTopicUpdatePath(meta, in map[string]any, rawPath string) error {
+	segments := strings.Split(rawPath, ".")
+	if segments[0] == "" {
+		return invalidArgument("unsupported update_mask path: " + rawPath)
+	}
+	field, ok := topicFieldByName(segments[0])
+	if !ok {
+		return invalidArgument("unsupported update_mask path: " + rawPath)
+	}
+	if len(segments) == 1 {
+		value, present := lookupTopicKey(in, segments[0])
+		return storeTopicField(meta, field, value, present)
+	}
+
+	value, present := lookupTopicPath(in, segments)
+	existing := topicMapValue(meta[field.name])
+	merged := cloneTopicMap(existing)
+	if !present || isEmptyTopicValue(value) {
+		deleteTopicPath(merged, segments[1:])
+	} else {
+		setTopicPath(merged, segments[1:], value)
+	}
+	if len(merged) == 0 {
+		delete(meta, field.name)
+		return nil
+	}
+	normalized, err := field.normalize(merged)
+	if err != nil {
+		return err
+	}
+	if normalized == nil {
+		delete(meta, field.name)
+		return nil
+	}
+	meta[field.name] = normalized
+	return nil
+}
+
+// storeTopicField replaces (or clears) a whole root field.
+func storeTopicField(meta map[string]any, field topicField, value any, present bool) error {
+	if !present || isEmptyTopicValue(value) {
+		delete(meta, field.name)
+		return nil
+	}
+	normalized, err := field.normalize(value)
+	if err != nil {
+		return err
+	}
+	if normalized == nil {
+		delete(meta, field.name)
+		return nil
+	}
+	meta[field.name] = normalized
+	return nil
+}
+
+// topicFieldByName resolves a mask segment to a mutable field. Field names are
+// compared with normalizeMaskSegment, so message_storage_policy and
+// messageStoragePolicy both name the same field.
+func topicFieldByName(segment string) (topicField, bool) {
+	want := normalizeMaskSegment(segment)
+	for _, f := range topicMutableFields {
+		if normalizeMaskSegment(f.name) == want {
+			return f, true
+		}
+	}
+	return topicField{}, false
+}
+
+// normalizeMaskSegment folds a mask-path segment to a case/underscore-insensitive
+// form, matching the subscription handler's normalizeMaskPath.
+func normalizeMaskSegment(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
+}
+
+// lookupTopicKey returns the value stored under a key whose spelling folds to
+// segment, so a camelCase body resolves against a snake_case mask (and back).
+func lookupTopicKey(m map[string]any, segment string) (any, bool) {
+	want := normalizeMaskSegment(segment)
+	for k, v := range m {
+		if normalizeMaskSegment(k) == want {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// lookupTopicPath resolves a nested mask path's value from the request body.
+// A segment that lands on a repeated field yields the whole list: repeated
+// fields are always replaced wholesale, never indexed by a mask path.
+func lookupTopicPath(in map[string]any, segments []string) (any, bool) {
+	var cur any = in
+	for _, seg := range segments {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		v, ok := lookupTopicKey(m, seg)
+		if !ok {
+			return nil, false
+		}
+		cur = v
+		if _, isList := cur.([]any); isList {
+			return cur, true
+		}
+	}
+	return cur, true
+}
+
+// setTopicPath writes value at a nested path, reusing the object's existing key
+// spellings. Intermediate objects are created as needed.
+func setTopicPath(obj map[string]any, segments []string, value any) {
+	key := topicKeyFor(obj, segments[0])
+	if len(segments) == 1 {
+		obj[key] = value
+		return
+	}
+	child, _ := obj[key].(map[string]any)
+	if child == nil {
+		child = map[string]any{}
+	}
+	obj[key] = child
+	setTopicPath(child, segments[1:], value)
+}
+
+// deleteTopicPath removes a nested leaf and prunes any parent object left empty.
+func deleteTopicPath(obj map[string]any, segments []string) {
+	key := topicKeyFor(obj, segments[0])
+	if _, ok := obj[key]; !ok {
+		return
+	}
+	if len(segments) == 1 {
+		delete(obj, key)
+		return
+	}
+	child, ok := obj[key].(map[string]any)
+	if !ok {
+		return
+	}
+	deleteTopicPath(child, segments[1:])
+	if len(child) == 0 {
+		delete(obj, key)
+	}
+}
+
+// topicKeyFor returns the object's existing spelling of segment, or the segment
+// itself when the key is not present yet.
+func topicKeyFor(obj map[string]any, segment string) string {
+	want := normalizeMaskSegment(segment)
+	for k := range obj {
+		if normalizeMaskSegment(k) == want {
+			return k
+		}
+	}
+	return segment
+}
+
+// isEmptyTopicValue reports whether a masked value means "clear the field":
+// absent (handled by the caller's present flag), null, an empty string, or an
+// empty object/list. A false boolean is a real value, not an empty one.
+func isEmptyTopicValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case string:
+		return v == ""
+	case map[string]any:
+		return len(v) == 0
+	case []any:
+		return len(v) == 0
+	}
+	return false
+}
+
+// topicMapValue coerces a stored object field to the plain JSON object shape.
+// Records loaded from the store are already map[string]any; NormalizeTopicInput
+// returns map[string]string for labels, so the unit-level caller can pass either.
+func topicMapValue(v any) map[string]any {
+	switch m := v.(type) {
+	case map[string]any:
+		return m
+	case map[string]string:
+		out := make(map[string]any, len(m))
+		for k, item := range m {
+			out[k] = item
+		}
+		return out
+	}
+	return nil
+}
+
+// cloneTopicMap deep-copies a stored field object so a nested update never
+// mutates the live map before validation succeeds.
+func cloneTopicMap(src map[string]any) map[string]any {
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		out[k] = cloneTopicValue(v)
+	}
+	return out
+}
+
+func cloneTopicValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return cloneTopicMap(t)
+	case map[string]string:
+		out := make(map[string]any, len(t))
+		for k, item := range t {
+			out[k] = item
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = cloneTopicValue(item)
+		}
+		return out
+	case []string:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = item
+		}
+		return out
+	}
+	return v
+}
+
 // normalizeTopicLabels stores labels as a string map. An empty map leaves no
 // key, so GET never echoes "labels": {} or "labels": null.
 func normalizeTopicLabels(value any) (any, error) {

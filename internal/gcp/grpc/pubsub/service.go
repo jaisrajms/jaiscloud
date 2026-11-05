@@ -1469,25 +1469,21 @@ func (s *Service) UpdateTopic(ctx context.Context, req *pubsubpb.UpdateTopicRequ
 
 	paths := req.GetUpdateMask().GetPaths()
 	if len(paths) == 0 {
+		// Mirrors the REST handler: an empty mask applies labels (PTF8).
 		paths = []string{"labels"}
 	}
-	for _, p := range paths {
-		switch p {
-		case "labels":
-			if len(in.GetLabels()) == 0 {
-				delete(meta, "labels")
-			} else {
-				meta["labels"] = in.GetLabels()
-			}
-		case "message_retention_duration", "messageRetentionDuration":
-			if in.GetMessageRetentionDuration() == nil {
-				delete(meta, "messageRetentionDuration")
-			} else {
-				meta["messageRetentionDuration"] = durationJSON(in.GetMessageRetentionDuration().AsDuration())
-			}
-		default:
-			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
-		}
+	// protojson renders the request Topic as the same protobuf-JSON map the
+	// REST provider stores, so the shared helper resolves camelCase and
+	// snake_case mask segments identically on both transports.
+	inMap, err := protoToJSONMap(in)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic", 400))
+	}
+	if _, nerr := pubsubcore.NormalizeTopicInput(inMap); nerr != nil && !pubsubcore.TopicMaskHasNestedPath(paths) {
+		return nil, mapError(nerr)
+	}
+	if err := pubsubcore.ApplyTopicUpdate(meta, inMap, paths); err != nil {
+		return nil, mapError(err)
 	}
 	data, _ := json.Marshal(meta)
 	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: id, Data: data}); err != nil {

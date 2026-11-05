@@ -31,7 +31,7 @@ func pubSubExtraChecks() []Check {
 		{Service: "pubsub", RPC: "UpdateSubscription", Method: "UpdateSubscription", KeyField: "masked labels applied", Run: checkPubSubUpdateSubscription},
 
 		// ── topic + attached-resource admin ─────────────────────────────────
-		{Service: "pubsub", RPC: "UpdateTopic", Method: "UpdateTopic", KeyField: "masked labels + retention applied", Run: checkPubSubUpdateTopic},
+		{Service: "pubsub", RPC: "UpdateTopic", Method: "UpdateTopic", KeyField: "masked labels/retention + storage policy/schema/transforms/kms round-trip", Run: checkPubSubUpdateTopic},
 		{Service: "pubsub", RPC: "ListTopicSubscriptions", Method: "ListTopicSubscriptions", KeyField: "subscriptions[] contains fixture", Run: checkPubSubListTopicSubscriptions},
 
 		// ── messaging ───────────────────────────────────────────────────────
@@ -324,29 +324,89 @@ func checkPubSubUpdateTopic(ctx context.Context, cfg Config) error {
 	}
 	defer client.Close()
 
-	topic := pubSubExtraTopic(cfg)
-	if err := pubSubEnsureTopic(ctx, client, topic); err != nil {
-		return err
+	// A dedicated topic: the check sets a CMEK key that (deliberately) does not
+	// exist in the emulator's KMS store, and the shared fixture topic must stay
+	// publishable for the messaging checks that follow.
+	topic := pubSubExtraTopic(cfg) + "-fields"
+	if _, err := client.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil &&
+		status.Code(err) != codes.AlreadyExists {
+		return fmt.Errorf("CreateTopic: %w", err)
 	}
+	defer func() {
+		_ = client.TopicAdminClient.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: topic})
+	}()
 	const retention = 10 * time.Minute
+	key := fmt.Sprintf("projects/%s/locations/global/keyRings/gcpc/cryptoKeys/topic", cfg.Project)
+	schema := fmt.Sprintf("projects/%s/schemas/%s", cfg.Project, cfg.ResourceName("gcpc-schema"))
+	transforms := []*pubsubpb.MessageTransform{{
+		Transform: &pubsubpb.MessageTransform_JavascriptUdf{
+			JavascriptUdf: &pubsubpb.JavaScriptUDF{
+				FunctionName: "conformance",
+				Code:         "function conformance(m) { return m; }",
+			},
+		},
+		Enabled: true,
+	}}
+	policy := &pubsubpb.MessageStoragePolicy{
+		AllowedPersistenceRegions: []string{"us-central1", "europe-west1"},
+		EnforceInTransit:          true,
+	}
+	schemaSettings := &pubsubpb.SchemaSettings{Schema: schema, Encoding: pubsubpb.Encoding_JSON}
 	updated, err := client.TopicAdminClient.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
 		Topic: &pubsubpb.Topic{
 			Name:                     topic,
 			Labels:                   map[string]string{"conformance": "updated"},
 			MessageRetentionDuration: durationpb.New(retention),
+			KmsKeyName:               key,
+			MessageStoragePolicy:     policy,
+			SchemaSettings:           schemaSettings,
+			MessageTransforms:        transforms,
 		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels", "message_retention_duration"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+			"labels", "message_retention_duration", "kms_key_name",
+			"message_storage_policy", "schema_settings", "message_transforms",
+		}},
 	})
 	if err != nil {
 		return fmt.Errorf("UpdateTopic: %w", err)
 	}
-	if got := updated.GetLabels()["conformance"]; got != "updated" {
-		return fmt.Errorf("UpdateTopic labels[conformance] = %q, want updated", got)
+	check := func(where string, got *pubsubpb.Topic) error {
+		if got.GetLabels()["conformance"] != "updated" {
+			return fmt.Errorf("%s labels[conformance] = %q, want updated", where, got.GetLabels()["conformance"])
+		}
+		if got.GetMessageRetentionDuration().AsDuration() != retention {
+			return fmt.Errorf("%s message_retention_duration = %v, want %v", where,
+				got.GetMessageRetentionDuration().AsDuration(), retention)
+		}
+		if got.GetKmsKeyName() != key {
+			return fmt.Errorf("%s kms_key_name = %q, want %q", where, got.GetKmsKeyName(), key)
+		}
+		regions := got.GetMessageStoragePolicy().GetAllowedPersistenceRegions()
+		if len(regions) != len(policy.GetAllowedPersistenceRegions()) || regions[0] != "us-central1" {
+			return fmt.Errorf("%s allowed_persistence_regions = %v, want %v", where, regions,
+				policy.GetAllowedPersistenceRegions())
+		}
+		if !got.GetMessageStoragePolicy().GetEnforceInTransit() {
+			return fmt.Errorf("%s enforce_in_transit = false, want true", where)
+		}
+		if got.GetSchemaSettings().GetSchema() != schema || got.GetSchemaSettings().GetEncoding() != pubsubpb.Encoding_JSON {
+			return fmt.Errorf("%s schema_settings = %v, want schema %q encoding JSON", where, got.GetSchemaSettings(), schema)
+		}
+		if len(got.GetMessageTransforms()) != 1 ||
+			got.GetMessageTransforms()[0].GetJavascriptUdf().GetFunctionName() != "conformance" {
+			return fmt.Errorf("%s message_transforms = %v, want the conformance UDF", where, got.GetMessageTransforms())
+		}
+		return nil
 	}
-	if got := updated.GetMessageRetentionDuration().AsDuration(); got != retention {
-		return fmt.Errorf("UpdateTopic message_retention_duration = %v, want %v", got, retention)
+	if err := check("UpdateTopic", updated); err != nil {
+		return err
 	}
-	return nil
+	// The mask must persist, not just echo.
+	got, err := client.TopicAdminClient.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: topic})
+	if err != nil {
+		return fmt.Errorf("GetTopic after UpdateTopic: %w", err)
+	}
+	return check("GetTopic", got)
 }
 
 func checkPubSubListTopicSubscriptions(ctx context.Context, cfg Config) error {
