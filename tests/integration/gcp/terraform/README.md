@@ -106,8 +106,9 @@ module, and requires the module's lifecycle to converge.
 | `storage` | [`terraform-google-cloud-storage`](https://github.com/terraform-google-modules/terraform-google-cloud-storage) | `c7effc0be0f4` | `autoclass`, `hierarchicalNamespace`, `website`, `logging`, `customPlacementConfig` and `ipFilter` read back; mutated `autoclass.enabled` + labels/website/logging, then labels/logging/`ip_filter` cleared; each phase ends with `plan` **No changes** |
 | `memorystore` | [`terraform-google-memorystore`](https://github.com/terraform-google-modules/terraform-google-memorystore) | `5415d5ccca28` | `authEnabled`, `connectMode`, `transitEncryptionMode`, `readReplicasMode`, `maintenancePolicy` and `persistenceConfig` read back (the two ForceNew modes no longer replace the instance); AUTH enabled then disabled, maintenance window/snapshot period changed, labels changed then cleared; each phase ends with `plan` **No changes** |
 | `functions` | [`terraform-google-event-function`](https://github.com/terraform-google-modules/terraform-google-event-function) | `9f2e26ae3b73` | `ingressSettings` (`ALLOW_ALL` → `ALLOW_INTERNAL_ONLY`), the event trigger's default `failurePolicy` and `failurePolicy.retry`, and `environment_variables` read back; ingress/env changed and cleared, retry toggled; each phase ends with a `plan` whose only remaining diff is the recorded storage-object gap |
+| `clouddns` | [`terraform-google-cloud-dns`](https://github.com/terraform-google-modules/terraform-google-cloud-dns) | `35cd6de8e647` | `privateVisibilityConfig` (VPC networks + GKE clusters), `forwardingConfig` (targets incl. `forwardingPath`), `peeringConfig` and `dnssecConfig` (state, `nonExistence`, both default key specs) read back; private description/labels/network list changed, then forwarding, peering and public-with-DNSSEC zones created and DNSSEC turned on; each phase ends with `plan` **No changes** |
 
-The storage, memorystore and functions cases pin provider `hashicorp/google = 7.46.2`.
+The storage, memorystore, functions and clouddns cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version).
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -136,12 +137,18 @@ git clone https://github.com/terraform-google-modules/terraform-google-event-fun
   "$HOME/.cache/terraform-modules/terraform-google-event-function"
 git -C "$HOME/.cache/terraform-modules/terraform-google-event-function" checkout 9f2e26ae3b73
 make test-gcp-terraform-functions
+
+git clone https://github.com/terraform-google-modules/terraform-google-cloud-dns \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-dns"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-dns" checkout 35cd6de8e647
+make test-gcp-terraform-clouddns
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
 (default `$HOME/.cache/terraform-modules/<module repo>`); the Makefile targets
 point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
-`TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` respectively.
+`TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` /
+`TF_CLOUDDNS_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -280,6 +287,23 @@ Three behaviours are recorded, not worked around:
   changed address is that object and fails on anything else; the case also
   supplies an existing uppercase-location bucket (`create_bucket = false`) so
   the bucket's location case does not add a second unrelated diff.
+
+**clouddns** — the module's default `type = "private"` zone is created with
+two VPC networks, one GKE cluster and labels; then the same zone's
+description/labels change and a third network is added; then a `forwarding`
+zone (two targets, one with `forwarding_path = "private"`), a `peering` zone
+(a target network) and a `public` zone with `dnssec_config` (`state = "off"`,
+then turned `"on"`) plus query logging are applied in turn. Every phase asserts
+through the REST API that GET returns the accepted block — the create read-back
+is what stops the next plan re-adding it — and then requires
+`plan -detailed-exitcode` = 0; every apply log must be free of `400`, `501` and
+`unsupported update_mask`.
+
+The blocks are echoed verbatim (no synthesized defaults): a public zone with a
+minimal `dnssec_config` reads back only what was sent, and the forwarding zone's
+optional `forwardingPath`/`ipv6Address` survive because the emulator stores the
+decoded object. `reverse_lookup` and `service_directory` zones are not exercised
+— they are `google-beta`-only variants, out of scope for this case.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
