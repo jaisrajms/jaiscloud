@@ -1113,7 +1113,7 @@
       "rpc": "DeleteDatabase",
       "method": "DeleteDatabase",
       "status": "pass",
-      "key_field": "stale etag -\u003e FailedPrecondition; delete protection -\u003e FailedPrecondition; operation response carries database; absent after delete"
+      "key_field": "stale etag -\u003e FailedPrecondition; delete protection -\u003e FailedPrecondition; operation response carries database; absent after delete; child backup schedules/user creds deleted with it (one daily + one weekly) and their lists NotFound"
     },
     {
       "service": "firestoreadmin",
@@ -1190,7 +1190,7 @@
       "rpc": "CreateBackupSchedule",
       "method": "CreateBackupSchedule",
       "status": "pass",
-      "key_field": "schedule name/retention"
+      "key_field": "server-assigned name (client-supplied name ignored); retention; daily recurrence"
     },
     {
       "service": "firestoreadmin",
@@ -1211,7 +1211,7 @@
       "rpc": "UpdateBackupSchedule",
       "method": "UpdateBackupSchedule",
       "status": "pass",
-      "key_field": "retention under mask + retention/recurrence under an omitted mask + empty mask is a no-op"
+      "key_field": "retention under mask + implied-mask retention with the stored recurrence + recurrence change -\u003e InvalidArgument (immutable) + empty mask is a no-op"
     },
     {
       "service": "firestoreadmin",

@@ -10,6 +10,7 @@ package grpcconformance
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
@@ -29,7 +30,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid/timestamps/etag + (default) materialized with stable output fields", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default) with output fields", Run: checkFsAdminListDatabases},
 		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected", Run: checkFsAdminUpdateDatabase},
-		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
+		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete; child backup schedules/user creds deleted with it (one daily + one weekly) and their lists NotFound", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask with OUTPUT_ONLY members derived + index_config/ttl_config under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip with derived ancestor/uses_ancestor_config + ttl state ACTIVE", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
@@ -40,10 +41,10 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "EnableUserCreds", Method: "EnableUserCreds", KeyField: "state ENABLED", Run: checkFsAdminEnableUserCreds},
 		{Service: "firestoreadmin", RPC: "ResetUserPassword", Method: "ResetUserPassword", KeyField: "new secure_password", Run: checkFsAdminResetUserPassword},
 		{Service: "firestoreadmin", RPC: "DeleteUserCreds", Method: "DeleteUserCreds", KeyField: "user creds absent after delete", Run: checkFsAdminDeleteUserCreds},
-		{Service: "firestoreadmin", RPC: "CreateBackupSchedule", Method: "CreateBackupSchedule", KeyField: "schedule name/retention", Run: checkFsAdminCreateBackupSchedule},
+		{Service: "firestoreadmin", RPC: "CreateBackupSchedule", Method: "CreateBackupSchedule", KeyField: "server-assigned name (client-supplied name ignored); retention; daily recurrence", Run: checkFsAdminCreateBackupSchedule},
 		{Service: "firestoreadmin", RPC: "GetBackupSchedule", Method: "GetBackupSchedule", KeyField: "retention round-trip", Run: checkFsAdminGetBackupSchedule},
 		{Service: "firestoreadmin", RPC: "ListBackupSchedules", Method: "ListBackupSchedules", KeyField: "schedule present", Run: checkFsAdminListBackupSchedules},
-		{Service: "firestoreadmin", RPC: "UpdateBackupSchedule", Method: "UpdateBackupSchedule", KeyField: "retention under mask + retention/recurrence under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateBackupSchedule},
+		{Service: "firestoreadmin", RPC: "UpdateBackupSchedule", Method: "UpdateBackupSchedule", KeyField: "retention under mask + implied-mask retention with the stored recurrence + recurrence change -> InvalidArgument (immutable) + empty mask is a no-op", Run: checkFsAdminUpdateBackupSchedule},
 		{Service: "firestoreadmin", RPC: "DeleteBackupSchedule", Method: "DeleteBackupSchedule", KeyField: "schedule absent after delete", Run: checkFsAdminDeleteBackupSchedule},
 		{Service: "firestoreadmin", RPC: "ListBackups", Method: "ListBackups", KeyField: "empty list (no create path)", Run: checkFsAdminListBackups},
 		{Service: "firestoreadmin", RPC: "GetBackup", Method: "GetBackup", KeyField: "missing backup -> NotFound", Run: checkFsAdminGetBackupMissing},
@@ -81,10 +82,18 @@ func fsAdminUserCredsName(cfg Config) string {
 	return fmt.Sprintf("%s/userCreds/%s", fsAdminDefaultDB(cfg), fsAdminUserCredsID(cfg))
 }
 
-func fsAdminScheduleID(cfg Config) string { return cfg.ResourceName("fssched") }
-
-func fsAdminScheduleName(cfg Config) string {
-	return fmt.Sprintf("%s/backupSchedules/%s", fsAdminDefaultDB(cfg), fsAdminScheduleID(cfg))
+// fsAdminScheduleName resolves the database's single backup schedule. The id is
+// auto-assigned (BackupSchedule.name is OUTPUT_ONLY), so a probe lists the
+// parent rather than guessing the server's chosen value.
+func fsAdminScheduleName(ctx context.Context, stub adminpb.FirestoreAdminClient, cfg Config) (string, error) {
+	resp, err := stub.ListBackupSchedules(ctx, &adminpb.ListBackupSchedulesRequest{Parent: fsAdminDefaultDB(cfg)})
+	if err != nil {
+		return "", err
+	}
+	if n := len(resp.GetBackupSchedules()); n != 1 {
+		return "", fmt.Errorf("ListBackupSchedules returned %d schedules, want 1", n)
+	}
+	return resp.GetBackupSchedules()[0].GetName(), nil
 }
 
 func fsAdminBackupParent(cfg Config) string {
@@ -320,6 +329,54 @@ func checkFsAdminDeleteDatabase(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("GetDatabase: %w", err)
 	}
+	// Stage the database's children before the delete: a backup schedule of each
+	// recurrence (the documented one-daily/one-weekly limit), a second daily
+	// rejected, and a user creds record. A blocked delete must leave them in
+	// place; the successful one takes them with it, while backups (tested in the
+	// unit suite) are retained.
+	createSchedule := func(bs *adminpb.BackupSchedule) (string, error) {
+		got, err := stub.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+			Parent:         name,
+			BackupSchedule: bs,
+		})
+		if err != nil {
+			return "", err
+		}
+		return got.GetName(), nil
+	}
+	dailyName, err := createSchedule(&adminpb.BackupSchedule{
+		Retention:  durationpb.New(24 * time.Hour),
+		Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateBackupSchedule(daily): %w", err)
+	}
+	weeklyName, err := createSchedule(&adminpb.BackupSchedule{
+		Retention: durationpb.New(24 * time.Hour),
+		Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+			WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_MONDAY},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateBackupSchedule(weekly): %w", err)
+	}
+	if dailyName == weeklyName {
+		return fmt.Errorf("daily and weekly schedules share the name %q", dailyName)
+	}
+	if _, err := createSchedule(&adminpb.BackupSchedule{
+		Retention:  durationpb.New(24 * time.Hour),
+		Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+	}); status.Code(err) != codes.AlreadyExists {
+		return fmt.Errorf("second daily backup schedule = %v, want AlreadyExists", err)
+	}
+	if _, err := stub.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+		Parent:      name,
+		UserCredsId: "delete-cascade-cred",
+		UserCreds:   &adminpb.UserCreds{},
+	}); err != nil {
+		return fmt.Errorf("CreateUserCreds: %w", err)
+	}
+	userCredsName := name + "/userCreds/delete-cascade-cred"
 	// DeleteDatabaseRequest.etag documents that a mismatch blocks the deletion
 	// with FAILED_PRECONDITION (not an update's ABORTED), so a stale token must
 	// leave the database in place.
@@ -395,6 +452,19 @@ func checkFsAdminDeleteDatabase(ctx context.Context, cfg Config) error {
 	}
 	if _, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetDatabase after delete = %v, want NotFound", err)
+	}
+	// The database's children are deleted with it (the cascade this check pins),
+	// and the parent-scoped list answers NOT_FOUND while the parent is gone.
+	for _, sched := range []string{dailyName, weeklyName} {
+		if _, err := stub.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: sched}); status.Code(err) != codes.NotFound {
+			return fmt.Errorf("GetBackupSchedule(%q) after delete = %v, want NotFound", sched, err)
+		}
+	}
+	if _, err := stub.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: userCredsName}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetUserCreds after delete = %v, want NotFound", err)
+	}
+	if _, err := stub.ListBackupSchedules(ctx, &adminpb.ListBackupSchedulesRequest{Parent: name}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("ListBackupSchedules after delete = %v, want NotFound", err)
 	}
 	return nil
 }
@@ -670,10 +740,13 @@ func checkFsAdminCreateBackupSchedule(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer conn.Close()
+	// BackupSchedule.name is OUTPUT_ONLY: a client-supplied name must be ignored
+	// and the server id used instead (the same on both transports).
+	clientChosen := fsAdminDefaultDB(cfg) + "/backupSchedules/client-chosen"
 	bs, err := stub.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
 		Parent: fsAdminDefaultDB(cfg),
 		BackupSchedule: &adminpb.BackupSchedule{
-			Name:      fsAdminScheduleName(cfg),
+			Name:      clientChosen,
 			Retention: durationpb.New(7 * 24 * time.Hour),
 			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
 				DailyRecurrence: &adminpb.DailyRecurrence{},
@@ -683,8 +756,12 @@ func checkFsAdminCreateBackupSchedule(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("CreateBackupSchedule: %w", err)
 	}
-	if bs.GetName() != fsAdminScheduleName(cfg) || bs.GetDailyRecurrence() == nil {
-		return fmt.Errorf("CreateBackupSchedule = %+v", bs)
+	if bs.GetName() == clientChosen || !strings.HasPrefix(bs.GetName(), fsAdminDefaultDB(cfg)+"/backupSchedules/") {
+		return fmt.Errorf("CreateBackupSchedule name = %q, want a server-assigned id under the database, not the client's %q",
+			bs.GetName(), clientChosen)
+	}
+	if bs.GetDailyRecurrence() == nil {
+		return fmt.Errorf("CreateBackupSchedule recurrence = %+v, want daily", bs.GetRecurrence())
 	}
 	return nil
 }
@@ -695,7 +772,11 @@ func checkFsAdminGetBackupSchedule(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer conn.Close()
-	got, err := stub.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: fsAdminScheduleName(cfg)})
+	name, err := fsAdminScheduleName(ctx, stub, cfg)
+	if err != nil {
+		return err
+	}
+	got, err := stub.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: name})
 	if err != nil {
 		return fmt.Errorf("GetBackupSchedule: %w", err)
 	}
@@ -715,12 +796,13 @@ func checkFsAdminListBackupSchedules(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("ListBackupSchedules: %w", err)
 	}
-	for _, bs := range resp.GetBackupSchedules() {
-		if bs.GetName() == fsAdminScheduleName(cfg) {
-			return nil
-		}
+	if n := len(resp.GetBackupSchedules()); n != 1 {
+		return fmt.Errorf("ListBackupSchedules returned %d schedules, want 1", n)
 	}
-	return fmt.Errorf("ListBackupSchedules did not include %q", fsAdminScheduleName(cfg))
+	if name := resp.GetBackupSchedules()[0].GetName(); !strings.HasPrefix(name, fsAdminDefaultDB(cfg)+"/backupSchedules/") {
+		return fmt.Errorf("ListBackupSchedules returned %q, want a schedule of %q", name, fsAdminDefaultDB(cfg))
+	}
+	return nil
 }
 
 func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
@@ -729,9 +811,13 @@ func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer conn.Close()
+	name, err := fsAdminScheduleName(ctx, stub, cfg)
+	if err != nil {
+		return err
+	}
 	got, err := stub.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
 		BackupSchedule: &adminpb.BackupSchedule{
-			Name:      fsAdminScheduleName(cfg),
+			Name:      name,
 			Retention: durationpb.New(14 * 24 * time.Hour),
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"retention"}},
@@ -743,14 +829,15 @@ func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("UpdateBackupSchedule retention = %v, want 14d", got.GetRetention())
 	}
 
-	// A nil UpdateMask applies every populated field — retention and the
-	// recurrence oneof, which the old `*` arm silently dropped.
+	// A nil UpdateMask applies every populated field. The recurrence is
+	// immutable ("you cannot update its recurrence"), so the maskless patch
+	// re-sends the stored daily recurrence and only the retention changes.
 	got, err = stub.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
 		BackupSchedule: &adminpb.BackupSchedule{
-			Name:      fsAdminScheduleName(cfg),
+			Name:      name,
 			Retention: durationpb.New(21 * 24 * time.Hour),
-			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
-				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
+				DailyRecurrence: &adminpb.DailyRecurrence{},
 			},
 		},
 	})
@@ -760,14 +847,27 @@ func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
 	if got.GetRetention().AsDuration() != 21*24*time.Hour {
 		return fmt.Errorf("UpdateBackupSchedule (omitted mask) retention = %v, want 21d", got.GetRetention())
 	}
-	if got.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
-		return fmt.Errorf("UpdateBackupSchedule (omitted mask) recurrence = %+v, want weekly Wednesday", got.GetRecurrence())
+	if got.GetDailyRecurrence() == nil {
+		return fmt.Errorf("UpdateBackupSchedule (omitted mask) recurrence = %+v, want the stored daily", got.GetRecurrence())
+	}
+	// A recurrence change is INVALID_ARGUMENT, not a silent rewrite that could
+	// create a second daily/weekly schedule.
+	if _, err := stub.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      name,
+			Retention: durationpb.New(21 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+			},
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("UpdateBackupSchedule(recurrence change) = %v, want InvalidArgument", err)
 	}
 	// A present-but-empty mask is AIP-134's no-op: retention and the recurrence
-	// oneof stay as stored.
+	// stay as stored.
 	got, err = stub.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
 		BackupSchedule: &adminpb.BackupSchedule{
-			Name:      fsAdminScheduleName(cfg),
+			Name:      name,
 			Retention: durationpb.New(28 * 24 * time.Hour),
 			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
 				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_TUESDAY},
@@ -781,8 +881,8 @@ func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
 	if got.GetRetention().AsDuration() != 21*24*time.Hour {
 		return fmt.Errorf("UpdateBackupSchedule(empty mask) applied retention = %v, want 21d", got.GetRetention())
 	}
-	if got.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
-		return fmt.Errorf("UpdateBackupSchedule(empty mask) applied recurrence = %+v, want weekly Wednesday", got.GetRecurrence())
+	if got.GetDailyRecurrence() == nil {
+		return fmt.Errorf("UpdateBackupSchedule(empty mask) changed the recurrence to %+v", got.GetRecurrence())
 	}
 	return nil
 }
@@ -793,10 +893,14 @@ func checkFsAdminDeleteBackupSchedule(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer conn.Close()
-	if _, err := stub.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: fsAdminScheduleName(cfg)}); err != nil {
+	name, err := fsAdminScheduleName(ctx, stub, cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := stub.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: name}); err != nil {
 		return fmt.Errorf("DeleteBackupSchedule: %w", err)
 	}
-	if _, err := stub.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: fsAdminScheduleName(cfg)}); status.Code(err) != codes.NotFound {
+	if _, err := stub.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: name}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetBackupSchedule after delete = %v, want NotFound", err)
 	}
 	return nil

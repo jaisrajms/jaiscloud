@@ -167,6 +167,38 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	}
 }
 
+// TestMemoryDeleteDocuments proves the database-delete purge removes only the
+// target project+database's documents (both are part of the name prefix, and
+// sibling databases/projects keep theirs).
+func TestMemoryDeleteDocuments(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+	docs := []string{
+		"projects/p/databases/db/documents/c/one",
+		"projects/p/databases/db/documents/c/two",
+		"projects/p/databases/other/documents/c/one",
+		"projects/other/databases/db/documents/c/one",
+	}
+	for _, name := range docs {
+		if err := s.CreateDocument(ctx, Document{Name: name}); err != nil {
+			t.Fatalf("CreateDocument(%s): %v", name, err)
+		}
+	}
+	if err := s.DeleteDocuments(ctx, "p", "db"); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	for _, name := range docs[:2] {
+		if _, err := s.GetDocument(ctx, name); !errors.Is(err, ErrDocumentNotFound) {
+			t.Errorf("GetDocument(%s) after purge = %v, want ErrDocumentNotFound", name, err)
+		}
+	}
+	for _, name := range docs[2:] {
+		if _, err := s.GetDocument(ctx, name); err != nil {
+			t.Errorf("purge removed a sibling document %q: %v", name, err)
+		}
+	}
+}
+
 func TestMemoryStoreSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)

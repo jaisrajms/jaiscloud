@@ -591,11 +591,10 @@ func (s *Service) CreateBackupSchedule(ctx context.Context, req *adminpb.CreateB
 	if project == "" {
 		project = s.resolveProject(ctx)
 	}
-	id := "1"
-	if _, _, nameID, ok := splitBackupScheduleName(req.GetBackupSchedule().GetName()); ok {
-		id = nameID
-	}
-	bs, err := s.svc.CreateBackupScheduleDef(ctx, project, database, id, backupScheduleFromProto(req.GetBackupSchedule()))
+	// BackupSchedule.name is OUTPUT_ONLY and auto-assigned (AIP-133: a name on
+	// create is ignored), so the service allocates the id. This matches the REST
+	// adapter, which ignores a body-supplied name too.
+	bs, err := s.svc.CreateBackupScheduleDef(ctx, project, database, "", backupScheduleFromProto(req.GetBackupSchedule()))
 	if err != nil {
 		return nil, mapError(err)
 	}

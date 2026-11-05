@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -117,6 +118,430 @@ func TestDatabaseRecreateAfterDelete(t *testing.T) {
 	}
 	if records != 1 {
 		t.Errorf("ListDatabases(showDeleted) has %d reuse-db records, want 1", records)
+	}
+}
+
+// TestDeleteDatabaseCascadesOwnedResources pins projects.databases.delete's
+// ownership contract: a database's documents and every database-scoped admin
+// resource are removed with it, so a re-created database starts clean. Backups
+// are the documented exception and are covered separately.
+func TestDeleteDatabaseCascadesOwnedResources(t *testing.T) {
+	ctx := context.Background()
+	p := newService(firestorestore.NewMemoryStore(), store.NewMemoryResourceStore())
+
+	db, _, err := p.CreateDatabaseDef(ctx, "proj", "cascade-db", databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "cascade-db", "",
+		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	if _, err := p.CreateUserCredsDef(ctx, "proj", "cascade-db", "cred1", userCredsDef{}); err != nil {
+		t.Fatalf("CreateUserCredsDef: %v", err)
+	}
+	if _, err := p.CreateChangeStreamDef(ctx, "proj", "cascade-db", "stream-1",
+		changeStreamDef{RetentionPeriod: 24 * time.Hour, DatabaseScope: true}); err != nil {
+		t.Fatalf("CreateChangeStreamDef: %v", err)
+	}
+	if _, _, err := p.UpdateFieldDef(ctx, "proj", "cascade-db", "cities", "population",
+		fieldDef{TtlConfig: &fieldTtlConfig{ExpirationOffset: time.Hour}}, []string{"ttl_config"}, true); err != nil {
+		t.Fatalf("UpdateFieldDef: %v", err)
+	}
+	if _, _, err := p.CreateIndexDef(ctx, "proj", "cascade-db", "cities", indexDef{
+		QueryScope: "COLLECTION",
+		Fields:     []indexField{{FieldPath: "a", Order: "ASCENDING"}, {FieldPath: "b", Order: "ASCENDING"}},
+	}); err != nil {
+		t.Fatalf("CreateIndexDef: %v", err)
+	}
+	for _, path := range []string{"cities/one", "cities/two"} {
+		if err := p.store.CreateDocument(ctx, firestorestore.Document{
+			Name: "projects/proj/databases/cascade-db/documents/" + path,
+		}); err != nil {
+			t.Fatalf("CreateDocument(%s): %v", path, err)
+		}
+	}
+
+	// A sibling database's children must survive: the purge is scoped to the
+	// deleted database, not the project, and "cascade-db2" is a string
+	// superstring of "cascade-db" (the store's List is a contains match).
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "cascade-db2", databaseDef{LocationID: "us-central1"}); err != nil {
+		t.Fatalf("CreateDatabaseDef(cascade-db2): %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "cascade-db2", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef(cascade-db2): %v", err)
+	}
+
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "cascade-db", db.Etag); err != nil {
+		t.Fatalf("DeleteDatabaseDef: %v", err)
+	}
+
+	// Every owned record is gone.
+	if _, err := p.GetBackupSchedule(ctx, "proj", "cascade-db", "1"); !isNotFound(err) {
+		t.Errorf("GetBackupSchedule after database delete = %v, want NotFound", err)
+	}
+	if _, err := p.GetUserCreds(ctx, "proj", "cascade-db", "cred1"); !isNotFound(err) {
+		t.Errorf("GetUserCreds after database delete = %v, want NotFound", err)
+	}
+	if _, err := p.GetChangeStream(ctx, "proj", "cascade-db", "stream-1"); !isNotFound(err) {
+		t.Errorf("GetChangeStream after database delete = %v, want NotFound", err)
+	}
+	if _, err := p.GetField(ctx, "proj", "cascade-db", "cities", "population"); !isNotFound(err) {
+		t.Errorf("GetField after database delete = %v, want NotFound", err)
+	}
+	if docs, err := p.store.ListDocuments(ctx, "proj", "cascade-db"); err != nil || len(docs) != 0 {
+		t.Errorf("documents after database delete len=%d err=%v, want none", len(docs), err)
+	}
+	for _, rt := range []string{rtIndex, rtField} {
+		entries, err := p.resources.List(ctx, "proj", store.GlobalRegion, rt, "databases/cascade-db/")
+		if err != nil || len(entries) != 0 {
+			t.Errorf("%s records after database delete len=%d err=%v, want none", rt, len(entries), err)
+		}
+	}
+	// The parent is gone, so its child collections answer NOT_FOUND rather than
+	// serving an empty list.
+	if _, err := p.ListBackupSchedules(ctx, "proj", "cascade-db"); !isNotFound(err) {
+		t.Errorf("ListBackupSchedules(deleted db) = %v, want NotFound", err)
+	}
+	if _, err := p.ListUserCreds(ctx, "proj", "cascade-db"); !isNotFound(err) {
+		t.Errorf("ListUserCreds(deleted db) = %v, want NotFound", err)
+	}
+	if _, _, err := p.ListFields(ctx, "proj", "cascade-db", "-", "", pageParams{}); !isNotFound(err) {
+		t.Errorf("ListFields(deleted db) = %v, want NotFound", err)
+	}
+	if _, _, err := p.ListIndexes(ctx, "proj", "cascade-db", "-", "", pageParams{}); !isNotFound(err) {
+		t.Errorf("ListIndexes(deleted db) = %v, want NotFound", err)
+	}
+	if _, err := p.ListChangeStreams(ctx, "proj", "cascade-db"); !isNotFound(err) {
+		t.Errorf("ListChangeStreams(deleted db) = %v, want NotFound", err)
+	}
+
+	// The sibling is untouched.
+	if _, err := p.GetBackupSchedule(ctx, "proj", "cascade-db2", "1"); err != nil {
+		t.Errorf("sibling schedule was removed: %v", err)
+	}
+	// The tombstone is still observable.
+	tombstoned := false
+	if listed, err := p.ListDatabases(ctx, "proj", true); err != nil {
+		t.Fatalf("ListDatabases(showDeleted): %v", err)
+	} else {
+		for _, d := range listed {
+			if d.Name == databaseName("proj", "cascade-db") {
+				tombstoned = d.Deleted
+			}
+		}
+	}
+	if !tombstoned {
+		t.Error("ListDatabases(showDeleted) omitted the deleted database")
+	}
+}
+
+// TestDeleteDatabaseRetainsBackups pins the documented exception: "Deleting the
+// source database does not automatically delete related backups". The schedule
+// goes away (so no new backups are produced), the existing ones stay readable
+// until their retention window closes, and a re-created database still sees them.
+func TestDeleteDatabaseRetainsBackups(t *testing.T) {
+	ctx := context.Background()
+	p := newService(firestorestore.NewMemoryStore(), store.NewMemoryResourceStore())
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	db, _, err := p.CreateDatabaseDef(ctx, "proj", "retain-db", databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "retain-db", "",
+		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(24*time.Hour + time.Minute)})
+	before, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil || len(before) != 1 {
+		t.Fatalf("ListBackups before delete len=%d err=%v, want 1", len(before), err)
+	}
+
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "retain-db", db.Etag); err != nil {
+		t.Fatalf("DeleteDatabaseDef: %v", err)
+	}
+	if _, err := p.GetBackupSchedule(ctx, "proj", "retain-db", "1"); !isNotFound(err) {
+		t.Errorf("schedule survived the database delete: %v", err)
+	}
+	kept, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil || len(kept) != 1 || kept[0].Name != before[0].Name {
+		t.Fatalf("backups after database delete = %+v err=%v, want the retained backup", kept, err)
+	}
+	id := before[0].Name[strings.LastIndex(before[0].Name, "/")+1:]
+	if _, err := p.GetBackup(ctx, "proj", "us-central1", id); err != nil {
+		t.Errorf("GetBackup(retained) = %v, want the backup", err)
+	}
+
+	// Re-creating the id does not resurrect the schedule nor hide the backup.
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "retain-db", databaseDef{LocationID: "nam5"}); err != nil {
+		t.Fatalf("CreateDatabaseDef(after delete): %v", err)
+	}
+	if list, err := p.ListBackupSchedules(ctx, "proj", "retain-db"); err != nil || len(list) != 0 {
+		t.Errorf("ListBackupSchedules(recreated) len=%d err=%v, want none", len(list), err)
+	}
+	if list, err := p.ListBackups(ctx, "proj", "us-central1", ""); err != nil || len(list) != 1 {
+		t.Errorf("ListBackups(recreated) len=%d err=%v, want the retained backup", len(list), err)
+	}
+
+	// The retained backup expires on its original window, with no schedule to
+	// renew it.
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(8*24*time.Hour + 2*time.Minute)})
+	if list, err := p.ListBackups(ctx, "proj", "us-central1", ""); err != nil || len(list) != 0 {
+		t.Errorf("ListBackups after retention len=%d err=%v, want the expired backup purged", len(list), err)
+	}
+}
+
+// TestDeleteDatabaseFailureKeepsChildren asserts a blocked delete (stale etag or
+// delete protection) leaves every child record in place: the etag/protection
+// precondition runs before the cascade.
+func TestDeleteDatabaseFailureKeepsChildren(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "keep-db", databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "keep-db", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "keep-db", "stale-etag"); err == nil {
+		t.Fatal("DeleteDatabaseDef(stale etag) succeeded")
+	} else {
+		assertDeletePrecondition(t, err, "stale etag")
+	}
+	if _, err := p.GetBackupSchedule(ctx, "proj", "keep-db", "1"); err != nil {
+		t.Fatalf("stale-etag delete removed the schedule: %v", err)
+	}
+
+	protected, _, err := p.UpdateDatabaseDef(ctx, "proj", "keep-db",
+		databaseDef{DeleteProtectionState: deleteProtectionEnabled}, []string{"delete_protection_state"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(enable protection): %v", err)
+	}
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "keep-db", protected.Etag); err == nil {
+		t.Fatal("DeleteDatabaseDef(delete protection) succeeded")
+	} else {
+		assertDeletePrecondition(t, err, "delete protection")
+	}
+	if _, err := p.GetBackupSchedule(ctx, "proj", "keep-db", "1"); err != nil {
+		t.Fatalf("protected delete removed the schedule: %v", err)
+	}
+}
+
+// TestCreateDatabaseOverTombstonePurgesLeftovers covers a database tombstoned by
+// a build that did not cascade (or a cascade interrupted by a store error): the
+// create that replaces the tombstone re-runs the purge, so the new incarnation
+// inherits neither the old schedule nor the old documents.
+func TestCreateDatabaseOverTombstonePurgesLeftovers(t *testing.T) {
+	ctx := context.Background()
+	p := newService(firestorestore.NewMemoryStore(), store.NewMemoryResourceStore())
+
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "legacy-db", databaseDef{LocationID: "us-central1"}); err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "legacy-db", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	if err := p.store.CreateDocument(ctx, firestorestore.Document{
+		Name: "projects/proj/databases/legacy-db/documents/cities/one",
+	}); err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+
+	// Write the tombstone by hand, leaving the children behind.
+	entry, err := p.resources.Get(ctx, "proj", store.GlobalRegion, rtDatabase, databaseRel("legacy-db"))
+	if err != nil {
+		t.Fatalf("Get database record: %v", err)
+	}
+	var rec databaseDef
+	if err := json.Unmarshal(entry.Data, &rec); err != nil {
+		t.Fatalf("unmarshal database record: %v", err)
+	}
+	rec.Deleted = true
+	rec.DeleteTime = clock.Now()
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal database record: %v", err)
+	}
+	if err := p.resources.Upsert(ctx, "proj", store.GlobalRegion,
+		store.ResourceEntry{Type: rtDatabase, ID: databaseRel("legacy-db"), Data: data}); err != nil {
+		t.Fatalf("write tombstone: %v", err)
+	}
+	if _, err := p.GetBackupSchedule(ctx, "proj", "legacy-db", "1"); err != nil {
+		t.Fatalf("leftover schedule missing before recreate: %v", err)
+	}
+
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "legacy-db", databaseDef{LocationID: "nam5"}); err != nil {
+		t.Fatalf("CreateDatabaseDef(over tombstone): %v", err)
+	}
+	if _, err := p.GetBackupSchedule(ctx, "proj", "legacy-db", "1"); !isNotFound(err) {
+		t.Errorf("recreate kept the leftover schedule: %v", err)
+	}
+	if docs, err := p.store.ListDocuments(ctx, "proj", "legacy-db"); err != nil || len(docs) != 0 {
+		t.Errorf("recreate kept %d leftover documents (err=%v)", len(docs), err)
+	}
+}
+
+// TestDatabaseChildSurfacesRequireParent pins the parent-existence rule for the
+// database-scoped admin surfaces: a named database that was never created (or
+// one that was deleted) answers NOT_FOUND instead of an empty list or an
+// accepted create.
+func TestDatabaseChildSurfacesRequireParent(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	assertMissing := func(what string, err error) {
+		t.Helper()
+		if !isNotFound(err) {
+			t.Errorf("%s on a missing database = %v, want NotFound", what, err)
+		}
+	}
+	daily := backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}
+	_, err := p.ListBackupSchedules(ctx, "proj", "missing-db")
+	assertMissing("ListBackupSchedules", err)
+	_, err = p.CreateBackupScheduleDef(ctx, "proj", "missing-db", "", daily)
+	assertMissing("CreateBackupScheduleDef", err)
+	_, err = p.ListUserCreds(ctx, "proj", "missing-db")
+	assertMissing("ListUserCreds", err)
+	_, err = p.CreateUserCredsDef(ctx, "proj", "missing-db", "cred1", userCredsDef{})
+	assertMissing("CreateUserCredsDef", err)
+	_, _, err = p.ListFields(ctx, "proj", "missing-db", "-", "", pageParams{})
+	assertMissing("ListFields", err)
+	_, _, err = p.UpdateFieldDef(ctx, "proj", "missing-db", "cities", "population",
+		fieldDef{TtlConfig: &fieldTtlConfig{ExpirationOffset: time.Hour}}, []string{"ttl_config"}, true)
+	assertMissing("UpdateFieldDef", err)
+	_, _, err = p.ListIndexes(ctx, "proj", "missing-db", "-", "", pageParams{})
+	assertMissing("ListIndexes", err)
+	_, _, err = p.CreateIndexDef(ctx, "proj", "missing-db", "cities", indexDef{
+		QueryScope: "COLLECTION",
+		Fields:     []indexField{{FieldPath: "a"}, {FieldPath: "b"}},
+	})
+	assertMissing("CreateIndexDef", err)
+	_, err = p.ListChangeStreams(ctx, "proj", "missing-db")
+	assertMissing("ListChangeStreams", err)
+	_, err = p.CreateChangeStreamDef(ctx, "proj", "missing-db", "stream-1",
+		changeStreamDef{RetentionPeriod: 24 * time.Hour, DatabaseScope: true})
+	assertMissing("CreateChangeStreamDef", err)
+
+	// A deleted parent behaves the same way.
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "gone-db", databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "gone-db", created.Etag); err != nil {
+		t.Fatalf("DeleteDatabaseDef: %v", err)
+	}
+	_, err = p.ListBackupSchedules(ctx, "proj", "gone-db")
+	assertMissing("ListBackupSchedules", err)
+	_, err = p.CreateBackupScheduleDef(ctx, "proj", "gone-db", "", daily)
+	assertMissing("CreateBackupScheduleDef", err)
+}
+
+// TestBackupScheduleOnePerRecurrence pins the documented limit — one DAILY and
+// one WEEKLY schedule per database — and the system-assigned id: the adapter no
+// longer hardcodes "1", so a second recurrence is accepted instead of 409ing.
+func TestBackupScheduleOnePerRecurrence(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	daily, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "DAILY"})
+	if err != nil {
+		t.Fatalf("CreateBackupScheduleDef(daily): %v", err)
+	}
+	if want := "projects/proj/databases/(default)/backupSchedules/1"; daily.Name != want {
+		t.Errorf("daily name = %q, want %q", daily.Name, want)
+	}
+	weekly, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1})
+	if err != nil {
+		t.Fatalf("CreateBackupScheduleDef(weekly): %v", err)
+	}
+	if want := "projects/proj/databases/(default)/backupSchedules/2"; weekly.Name != want {
+		t.Errorf("weekly name = %q, want %q", weekly.Name, want)
+	}
+
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err == nil {
+		t.Error("second daily schedule accepted")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 2}); err == nil {
+		t.Error("second weekly schedule accepted")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+	if list, err := p.ListBackupSchedules(ctx, "proj", "(default)"); err != nil || len(list) != 2 {
+		t.Fatalf("ListBackupSchedules len=%d err=%v, want 2", len(list), err)
+	}
+	// The weekly day is part of the immutable recurrence.
+	if _, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "2",
+		backupScheduleDef{Recurrence: "WEEKLY", DayOfWeek: 3}, []string{"weekly_recurrence"}, true); err == nil {
+		t.Error("weekly day change succeeded, want InvalidArgument")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+
+	// A deleted schedule frees its recurrence and its id.
+	if err := p.DeleteBackupSchedule(ctx, "proj", "(default)", "1"); err != nil {
+		t.Fatalf("DeleteBackupSchedule: %v", err)
+	}
+	again, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"})
+	if err != nil {
+		t.Fatalf("CreateBackupScheduleDef(daily, after delete): %v", err)
+	}
+	if again.Name != daily.Name {
+		t.Errorf("re-created daily name = %q, want the freed %q", again.Name, daily.Name)
+	}
+
+	// A recurrence-less create is classified as the daily default (the same
+	// classification the materializer uses), so while a daily exists it is
+	// ALREADY_EXISTS. A weekly without a real day, an unknown recurrence, and a
+	// retention beyond the documented 14 weeks are INVALID_ARGUMENT.
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 24 * time.Hour}); err == nil {
+		t.Error("second (implicit daily) schedule accepted")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "WEEKLY"}); err == nil {
+		t.Error("weekly create without a day accepted")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "HOURLY"}); err == nil {
+		t.Error("unknown recurrence accepted")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Retention: maxBackupRetention + time.Hour, Recurrence: "DAILY"}); err == nil {
+		t.Error("retention beyond 14 weeks accepted")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+	// An omitted retention keeps the documented 7-day fallback.
+	if err := p.DeleteBackupSchedule(ctx, "proj", "(default)", "1"); err != nil {
+		t.Fatalf("DeleteBackupSchedule: %v", err)
+	}
+	fallback, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "",
+		backupScheduleDef{Recurrence: "DAILY"})
+	if err != nil || fallback.Retention != 0 {
+		t.Errorf("create without retention = %+v err=%v, want the stored zero and the materialization fallback", fallback, err)
 	}
 }
 
@@ -1117,8 +1542,11 @@ func TestBackupScheduleLifecycle(t *testing.T) {
 		t.Errorf("name = %q, want %q", created.Name, want)
 	}
 
-	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "1", backupScheduleDef{}); err == nil {
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "1",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err == nil {
 		t.Error("duplicate schedule accepted, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
 	}
 
 	got, err := p.GetBackupSchedule(ctx, "proj", "(default)", "1")
@@ -1132,15 +1560,22 @@ func TestBackupScheduleLifecycle(t *testing.T) {
 		t.Fatalf("UpdateBackupScheduleDef = %+v err=%v", upd, err)
 	}
 
-	// An omitted mask is the implied mask of every populated field: it must
-	// carry the retention *and* the recurrence oneof, not only `retention`.
+	// The recurrence is immutable (Firestore: "you cannot update its
+	// recurrence"): a maskless patch that re-sends the stored daily recurrence
+	// applies only the retention, and a change to weekly is INVALID_ARGUMENT.
 	maskless, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
-		backupScheduleDef{Retention: 2 * 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1}, nil, false)
+		backupScheduleDef{Retention: 2 * 24 * time.Hour, Recurrence: "DAILY"}, nil, false)
 	if err != nil {
 		t.Fatalf("maskless UpdateBackupScheduleDef: %v", err)
 	}
-	if maskless.Retention != 2*24*time.Hour || maskless.Recurrence != "WEEKLY" || maskless.DayOfWeek != 1 {
-		t.Errorf("maskless update = %+v, want 2d weekly Monday", maskless)
+	if maskless.Retention != 2*24*time.Hour || maskless.Recurrence != "DAILY" {
+		t.Errorf("maskless update = %+v, want 2d daily", maskless)
+	}
+	if _, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
+		backupScheduleDef{Recurrence: "WEEKLY", DayOfWeek: 1}, []string{"weekly_recurrence"}, true); err == nil {
+		t.Error("a recurrence change succeeded, want InvalidArgument")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
 	}
 
 	list, err := p.ListBackupSchedules(ctx, "proj", "(default)")
@@ -1410,7 +1845,9 @@ func TestFieldAndScheduleUpdatesAreAtomic(t *testing.T) {
 		t.Errorf("a concurrent patch lost the TTL offset: %+v", merged.TtlConfig)
 	}
 
-	// Backup schedule: retention and the recurrence oneof likewise.
+	// Backup schedule: two concurrent masked retention updates must serialize
+	// through the atomic primitive (a lost update would leave the older value),
+	// and neither may change the immutable recurrence.
 	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "1",
 		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
 		t.Fatalf("CreateBackupScheduleDef: %v", err)
@@ -1425,7 +1862,7 @@ func TestFieldAndScheduleUpdatesAreAtomic(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		_, errs[1] = p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
-			backupScheduleDef{Recurrence: "WEEKLY", DayOfWeek: 1}, []string{"weekly_recurrence"}, true)
+			backupScheduleDef{Retention: 21 * 24 * time.Hour}, []string{"retention"}, true)
 	}()
 	wg.Wait()
 	for i, err := range errs {
@@ -1437,8 +1874,11 @@ func TestFieldAndScheduleUpdatesAreAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBackupSchedule: %v", err)
 	}
-	if bs.Retention != 14*24*time.Hour || bs.Recurrence != "WEEKLY" || bs.DayOfWeek != 1 {
-		t.Errorf("a concurrent patch lost a schedule change: %+v", bs)
+	if bs.Retention != 14*24*time.Hour && bs.Retention != 21*24*time.Hour {
+		t.Errorf("concurrent retention updates left %v, want one of 14d/21d", bs.Retention)
+	}
+	if bs.Recurrence != "DAILY" {
+		t.Errorf("concurrent retention updates changed the recurrence to %q", bs.Recurrence)
 	}
 }
 
@@ -1485,8 +1925,11 @@ func TestBackupMaterializationFromSchedule(t *testing.T) {
 		t.Fatalf("ListBackups after first occurrence = %d backups, want 1", len(list))
 	}
 	b := list[0]
-	if want := "projects/proj/locations/us-central1/backups/1-" + strconv.FormatInt(base.Add(24*time.Hour).Unix(), 10); b.Name != want {
-		t.Errorf("backup name = %q, want %q", b.Name, want)
+	// The id is opaque: schedule id, incarnation, occurrence. Assert the shape,
+	// not the emulator's chosen values.
+	if wantPrefix := "projects/proj/locations/us-central1/backups/1-"; !strings.HasPrefix(b.Name, wantPrefix) ||
+		!strings.HasSuffix(b.Name, "-"+strconv.FormatInt(base.Add(24*time.Hour).Unix(), 10)) {
+		t.Errorf("backup name = %q, want %q…%d", b.Name, wantPrefix, base.Add(24*time.Hour).Unix())
 	}
 	if b.Database != "projects/proj/databases/bkpdb" || b.DatabaseUid == "" {
 		t.Errorf("backup database = %q uid %q", b.Database, b.DatabaseUid)
@@ -1523,13 +1966,12 @@ func TestBackupMaterializationFromSchedule(t *testing.T) {
 		t.Fatalf("ListBackups(europe-west1) len=%d err=%v, want none", len(other), err)
 	}
 
-	got, err := p.GetBackup(ctx, "proj", "us-central1", "1-"+strconv.FormatInt(base.Add(24*time.Hour).Unix(), 10))
+	// Deleting it must not make the next read recreate it.
+	id := strings.TrimPrefix(b.Name, "projects/proj/locations/us-central1/backups/")
+	got, err := p.GetBackup(ctx, "proj", "us-central1", id)
 	if err != nil || got.Name != b.Name {
 		t.Fatalf("GetBackup = %+v err=%v", got, err)
 	}
-
-	// Deleting it must not make the next read recreate it.
-	id := strings.TrimPrefix(b.Name, "projects/proj/locations/us-central1/backups/")
 	if err := p.DeleteBackup(ctx, "proj", "us-central1", id); err != nil {
 		t.Fatalf("DeleteBackup: %v", err)
 	}
@@ -1563,7 +2005,7 @@ func TestBackupMaterializationPurgesExpired(t *testing.T) {
 	// A weekly schedule with a two-day retention: the occurrence expires before
 	// the next one is due.
 	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "purgedb", "1",
-		backupScheduleDef{Retention: 48 * time.Hour, Recurrence: "WEEKLY"}); err != nil {
+		backupScheduleDef{Retention: 48 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1}); err != nil {
 		t.Fatalf("CreateBackupScheduleDef: %v", err)
 	}
 
@@ -1674,10 +2116,10 @@ func TestBackupMaterializationClamp(t *testing.T) {
 	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "clampdb", databaseDef{LocationID: "us-central1"}); err != nil {
 		t.Fatalf("CreateDatabaseDef: %v", err)
 	}
-	// A long retention over a year-long jump: the pass is bounded by
+	// The maximum retention over a year-long jump: the pass is bounded by
 	// maxBackupsPerPass rather than materializing 365 records.
 	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "clampdb", "1",
-		backupScheduleDef{Retention: 400 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		backupScheduleDef{Retention: maxBackupRetention, Recurrence: "DAILY"}); err != nil {
 		t.Fatalf("CreateBackupScheduleDef: %v", err)
 	}
 	clock.SetGlobalClock(clock.FixedClock{T: base.Add(365 * 24 * time.Hour)})

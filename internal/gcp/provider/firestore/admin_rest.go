@@ -886,7 +886,10 @@ func (p *Provider) CreateBackupSchedule(ctx context.Context, nr *model.Normalize
 	if !ok || !isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid database parent path", 400)
 	}
-	bs, err := p.Service.CreateBackupScheduleDef(ctx, nr.AccountID, db, "1", backupScheduleFromREST(bodyMap(nr)))
+	// BackupSchedule.name is OUTPUT_ONLY: the server assigns the id. The service
+	// picks the lowest free one (and the emulator still honors a name supplied
+	// on the gRPC request, for the conformance/ad-hoc paths that do).
+	bs, err := p.Service.CreateBackupScheduleDef(ctx, nr.AccountID, db, "", backupScheduleFromREST(bodyMap(nr)))
 	if err != nil {
 		return nil, err
 	}

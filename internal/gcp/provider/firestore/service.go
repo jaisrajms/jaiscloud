@@ -1015,6 +1015,9 @@ func (s *Service) hasIndex(ctx context.Context, project, database string, requir
 // together with its long-running operation name. It is the shared core behind
 // both the REST CreateIndex wrapper and the FirestoreAdmin gRPC transport.
 func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg string, idx IndexDef) (IndexDef, string, error) {
+	if err := s.requireDatabase(ctx, project, database); err != nil {
+		return IndexDef{}, "", err
+	}
 	if len(idx.Fields) < 2 {
 		return IndexDef{}, "", model.NewProviderError("InvalidArgument", "a composite index requires at least 2 fields", 400)
 	}
@@ -1060,6 +1063,9 @@ func (s *Service) CreateIndex(ctx context.Context, project, database, cg string,
 // lists every collection group's indexes, matching the real API behavior used by
 // `gcloud firestore indexes composite list` and the Firestore console.
 func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter string, page pageParams) ([]indexDef, string, error) {
+	if err := s.requireDatabase(ctx, project, database); err != nil {
+		return nil, "", err
+	}
 	// The trailing slash is significant: for a concrete group the prefix is
 	// scoped to that group's /indexes/ collection; for the wildcard it spans
 	// every collectionGroups/*/indexes entry under the database.

@@ -97,6 +97,12 @@ func (s *PostgresStore) DeleteDocument(ctx context.Context, name string) error {
 	return err
 }
 
+// DeleteDocuments removes every document under the given project+database.
+func (s *PostgresStore) DeleteDocuments(ctx context.Context, project, database string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_firestore_documents WHERE project=$1 AND database=$2`, project, database)
+	return err
+}
+
 func (s *PostgresStore) ListDocuments(ctx context.Context, project, database string) ([]Document, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+firestoreDocCols+` FROM jc_firestore_documents
