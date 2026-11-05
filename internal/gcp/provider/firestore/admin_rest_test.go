@@ -328,6 +328,73 @@ func TestRESTDatabaseDefaultCreate(t *testing.T) {
 	}
 }
 
+// TestRESTDatabaseRecreateAfterDelete pins immediate id reuse on the JSON wire:
+// DELETE then POST with the same databaseId succeeds at once (the tombstone is
+// absent for create), and the tombstone remains listed under showDeleted until
+// the create replaces it. Real GCP blocks reuse for about five minutes; the
+// emulator deliberately does not model that cooldown (TGM13).
+func TestRESTDatabaseRecreateAfterDelete(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "reuse-db",
+		"body":       map[string]any{"locationId": "us-central1"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	cresp, _ := created.Data["response"].(map[string]any)
+
+	deleted, err := p.DeleteDatabase(ctx, adminNR("databases/reuse-db", map[string]any{"etag": cresp["etag"]}))
+	if err != nil {
+		t.Fatalf("DeleteDatabase: %v", err)
+	}
+	if dresp, _ := deleted.Data["response"].(map[string]any); dresp["deleteTime"] == nil {
+		t.Error("delete op response carries no deleteTime")
+	}
+	if _, err := p.GetDatabase(ctx, adminNR("databases/reuse-db", nil)); !isNotFound(err) {
+		t.Fatalf("GetDatabase(deleted) = %v, want NotFound", err)
+	}
+
+	// showDeleted still lists the tombstone.
+	listed, err := p.ListDatabases(ctx, adminNR("databases", map[string]any{"showDeleted": true}))
+	if err != nil {
+		t.Fatalf("ListDatabases(showDeleted): %v", err)
+	}
+	items, _ := listed.Data["databases"].([]any)
+	tombstoned := false
+	for _, it := range items {
+		db, _ := it.(map[string]any)
+		if db["name"] == "projects/proj/databases/reuse-db" {
+			tombstoned = db["deleteTime"] != nil
+		}
+	}
+	if !tombstoned {
+		t.Error("ListDatabases(showDeleted) omitted the tombstone")
+	}
+
+	// The same databaseId is available at once and the operation response is the
+	// new record; the create replaces the tombstone rather than adding one.
+	recreated, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "reuse-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(after delete): %v", err)
+	}
+	rein, _ := recreated.Data["response"].(map[string]any)
+	if rein["locationId"] != "nam5" {
+		t.Errorf("recreated locationId = %v, want nam5", rein["locationId"])
+	}
+	if rein["uid"] == cresp["uid"] {
+		t.Errorf("recreated uid = %v, want a fresh one", rein["uid"])
+	}
+	if _, has := rein["deleteTime"]; has {
+		t.Errorf("recreated record carries deleteTime: %v", rein["deleteTime"])
+	}
+}
+
 // TestRESTDatabaseServerOwnedFields pins the wire view of database.proto's field
 // ownership: a REST create/patch carrying key_prefix (OUTPUT_ONLY) or a changed
 // database_edition (IMMUTABLE) does not store them, and versionRetentionPeriod is

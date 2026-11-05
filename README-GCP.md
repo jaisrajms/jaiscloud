@@ -430,7 +430,11 @@ It emits **no change records**. Real Firestore records every matching mutation i
 
 ### Firestore: the implicit `(default)` database has no location until a client creates it
 
-Every project has an implicit `(default)` database, and the emulator materialises it on first read with its output fields (uid, timestamps, etag) but **no `location_id`**: there is no project region to source one from. A client create (`projects.databases.create` with `databaseId=(default)` — the Firebase shape `google_firestore_database { name = "(default)" }`) records the requested location and is `ALREADY_EXISTS` while a live default exists (a deleted default accepts the create again), so a default materialised only by a read and then imported into Terraform reports no `locationId` and plans a forced `location_id` replacement.
+Every project has an implicit `(default)` database, and the emulator materialises it on first read with its output fields (uid, timestamps, etag) but **no `location_id`**: there is no project region to source one from. A client create (`projects.databases.create` with `databaseId=(default)` — the Firebase shape `google_firestore_database { name = "(default)" }`) records the requested location and is `ALREADY_EXISTS` while a live default exists, so a default materialised only by a read and then imported into Terraform reports no `locationId` and plans a forced `location_id` replacement.
+
+### Firestore: a deleted database's id is reusable immediately
+
+Deleting a database tombstones it (`GET` is then `404`; `showDeleted=true` still lists it with its `deleteTime`), and a create reusing that id replaces the tombstone in place — a `terraform destroy` followed by `apply`, or the delete+create half of a ForceNew replacement, therefore converges at once. Real GCP keeps a deleted database and refuses to reuse its id for about five minutes ("You cannot reuse a database ID until 5 minutes after the delete happens"); that cooldown is a server-side convenience for production safety, and the emulator deliberately does not model it, because making a dev loop wait adds friction without exercising any client-visible contract. The delete operation's response still carries the tombstoned `Database`, and `showDeleted` still reports it until a create replaces it.
 
 ### Firestore: `ExecutePipeline` implements a read-only subset
 
