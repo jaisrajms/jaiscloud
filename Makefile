@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-storage \
+        test-gcp-terraform test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-storage test-gcp-terraform-memorystore \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
@@ -1280,6 +1280,34 @@ test-gcp-terraform-storage: ## Opt-in terraform-google-cloud-storage module gate
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-storage.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_MODULE_DIR="$(TF_STORAGE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh storage http://localhost:8080 test-project
+
+# The same driver with the terraform-google-memorystore case (TGM2): the module
+# always sends auth_enabled/connect_mode/transit_encryption_mode/
+# read_replicas_mode and can send maintenance_policy/persistence_config, which
+# the emulator used to drop (ForceNew replacement / permadiff) and whose update
+# masks it rejected with 400. Opt-in for the same reasons (one-time module
+# clone, provider from the registry) and SKIPs cleanly when either is missing.
+TF_MEMORYSTORE_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-memorystore
+test-gcp-terraform-memorystore: ## Opt-in terraform-google-memorystore module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_MEMORYSTORE_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_MEMORYSTORE_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-memorystore \"$(TF_MEMORYSTORE_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_MEMORYSTORE_MODULE_DIR)\" checkout 5415d5ccca28"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-memorystore.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-memorystore.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_MEMORYSTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh memorystore http://localhost:8080 test-project
 
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \
