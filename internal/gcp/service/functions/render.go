@@ -263,6 +263,13 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	if f.AvailableCPU != "" {
 		svc["availableCpu"] = f.AvailableCPU
 	}
+	// ServiceConfig.ingressSettings. Cloud Functions v2 nests it under
+	// serviceConfig (the v1 view carries the same stored value at the top
+	// level). The Terraform provider defaults the field to ALLOW_ALL and sends
+	// it, so dropping it here made every plan propose an in-place update.
+	if f.IngressSettings != "" {
+		svc["ingressSettings"] = f.IngressSettings
+	}
 	if len(svc) > 0 {
 		out["serviceConfig"] = svc
 	}

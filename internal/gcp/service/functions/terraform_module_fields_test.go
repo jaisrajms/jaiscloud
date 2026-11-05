@@ -293,3 +293,73 @@ func TestV1UnknownMaskStillUnimplemented(t *testing.T) {
 		t.Fatalf("unknown mask error = %v, want Unimplemented/501", err)
 	}
 }
+
+// TestV2ServiceConfigIngressSettings pins the v2 ServiceConfig.ingressSettings
+// round-trip. google_cloudfunctions2_function defaults the field to ALLOW_ALL
+// and always sends it under serviceConfig; the emulator dropped it, so every
+// plan proposed the same in-place update (`+ ingress_settings = "ALLOW_ALL"`)
+// and never converged.
+func TestV2ServiceConfigIngressSettings(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+
+	body := map[string]any{
+		"name": "projects/p/locations/us-central1/functions/f2",
+		"buildConfig": map[string]any{
+			"runtime":    "python312",
+			"entryPoint": "handler",
+			"source": map[string]any{
+				"storageSource": map[string]any{"bucket": "b", "object": "o"},
+			},
+		},
+		"serviceConfig": map[string]any{
+			"ingressSettings":  "ALLOW_ALL",
+			"availableMemory":  "256M",
+			"maxInstanceCount": float64(1),
+		},
+	}
+	if _, _, err := s.CreateFunction(ctx, "p", "us-central1", "f2", FunctionInputFromMap(body, V2), V2); err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	got, err := s.GetFunction(ctx, "p", "us-central1", "f2")
+	if err != nil {
+		t.Fatalf("GetFunction: %v", err)
+	}
+	if got.IngressSettings != "ALLOW_ALL" {
+		t.Fatalf("stored ingressSettings = %q, want ALLOW_ALL", got.IngressSettings)
+	}
+
+	v2 := FunctionJSON(V2, "p", got)
+	sc, _ := v2["serviceConfig"].(map[string]any)
+	if sc["ingressSettings"] != "ALLOW_ALL" {
+		t.Fatalf("v2 serviceConfig.ingressSettings = %v, want ALLOW_ALL", sc["ingressSettings"])
+	}
+	if _, has := v2["ingressSettings"]; has {
+		t.Errorf("v2 body carries the v1 top-level ingressSettings: %v", v2["ingressSettings"])
+	}
+	// The v1 view of the same record still carries it, so a cross-version read
+	// is not silently empty.
+	if v1 := FunctionJSON(V1, "p", got); v1["ingressSettings"] != "ALLOW_ALL" {
+		t.Errorf("v1 ingressSettings = %v, want ALLOW_ALL", v1["ingressSettings"])
+	}
+
+	// A v2 PATCH names the nested path; the proto snake_case and the JSON
+	// camelCase forms both resolve to the same field.
+	for _, mask := range []string{"serviceConfig.ingressSettings", "service_config.ingress_settings"} {
+		upd := FunctionInputFromMap(map[string]any{
+			"name":          "projects/p/locations/us-central1/functions/f2",
+			"serviceConfig": map[string]any{"ingressSettings": "ALLOW_INTERNAL_ONLY"},
+		}, V2)
+		f, _, err := s.UpdateFunction(ctx, "p", "us-central1", "f2", upd, []string{mask}, V2)
+		if err != nil {
+			t.Fatalf("UpdateFunction(%s): %v", mask, err)
+		}
+		if f.IngressSettings != "ALLOW_INTERNAL_ONLY" {
+			t.Fatalf("ingress after %s = %q, want ALLOW_INTERNAL_ONLY", mask, f.IngressSettings)
+		}
+		svc, _ := FunctionJSON(V2, "p", f)["serviceConfig"].(map[string]any)
+		if svc["ingressSettings"] != "ALLOW_INTERNAL_ONLY" {
+			t.Fatalf("rendered ingress after %s = %v, want ALLOW_INTERNAL_ONLY", mask, svc["ingressSettings"])
+		}
+	}
+}
