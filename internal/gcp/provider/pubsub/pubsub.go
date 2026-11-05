@@ -588,9 +588,8 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		pushEndpoint, _ = pc["pushEndpoint"].(string)
 	}
-	if exactlyOnce && pushEndpoint != "" {
-		return nil, model.NewProviderError("InvalidArgument",
-			"exactly-once delivery is not supported for push subscriptions", 400)
+	if err := validateExactlyOncePush(exactlyOnce, pushEndpoint); err != nil {
+		return nil, err
 	}
 	ackDeadline := 10
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {

@@ -138,19 +138,34 @@ The script generates a throwaway root module in a temp dir — a `provider
 "google"` block with the per-service custom endpoints the module touches
 (`pubsub`, `resource_manager`, `cloud_billing`, `iam`, `service_usage`, each
 with exactly one trailing slash) and a `module` block pointing at the local
-checkout with `project_id`, `topic` and one `pull_subscriptions` entry — then
-runs:
+checkout with `project_id`, `topic`, `subscription_labels` and one
+`pull_subscriptions` entry — then runs:
 
 1. `init` (provider from the registry)
 2. `plan` — must complete, which is what proves
    `data.google_project` + `projects.getBillingInfo` work
 3. `apply`
 4. spot checks through the emulator's REST API: the topic, the pull
-   subscription (on that topic), and `projects/{p}/billingInfo` answering the
-   no-account default (`billingAccountName: ""`, `billingEnabled: false`)
+   subscription (on that topic, carrying the module's `subscription_labels`),
+   and `projects/{p}/billingInfo` answering the no-account default
+   (`billingAccountName: ""`, `billingEnabled: false`)
 5. a second `plan -detailed-exitcode` — must report **no changes** (no
    permadiff on the module's computed IAM member / topic / subscription)
-6. `destroy` (also on exit via a trap, so a failure still cleans up)
+6. an update phase: rewrite the module with `ack_deadline_seconds = 20`,
+   `message_retention_duration = "1200s"` and an extra label, `apply`, assert
+   the three values through the REST API, then a `plan -detailed-exitcode` that
+   must report **no changes**. The provider's PATCH is
+   `updateMask=ackDeadlineSeconds,bigqueryConfig` (and the label / retention
+   variants), so the run fails if the apply log reports
+   `unsupported update_mask path` or an HTTP 400
+7. a second update phase changing the same three inputs again (ack `30`,
+   retention `"2400s"`, another label), then the same apply/assert/plan cycle
+8. a clear-back phase (`subscription_labels = {}`, ack/retention unset):
+   apply, assert the module's labels are gone and retention reset to the 7-day
+   default `604800s`, then a final `plan -detailed-exitcode` reporting **no
+   changes**. The provider's own `goog-terraform-provisioned` label remains,
+   as it does with real GCP
+9. `destroy` (also on exit via a trap, so a failure still cleans up)
 
 It prints one `PASS`/`FAIL` line per step and exits non-zero on any failure.
 
