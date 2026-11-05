@@ -863,7 +863,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.HierarchicalNamespace = bodyMap(body, "hierarchicalNamespace")
 	b.Website = bodyMap(body, "website")
 	b.Logging = bodyMap(body, "logging")
-	b.CustomPlacementConfig = normalizeCustomPlacementConfig(bodyMap(body, "customPlacementConfig"))
+	b.CustomPlacementConfig = NormalizeCustomPlacementConfig(bodyMap(body, "customPlacementConfig"))
 	b.IpFilter = bodyMap(body, "ipFilter")
 	// Insert carries iamConfiguration in the resource body (the JSON API has no
 	// uniformBucketLevelAccess query parameters — the hashicorp/google provider
@@ -4289,11 +4289,11 @@ func hasCustomPlacementDataLocations(cfg map[string]any) bool {
 	return false
 }
 
-// normalizeCustomPlacementConfig returns a copy of a customPlacementConfig with
+// NormalizeCustomPlacementConfig returns a copy of a customPlacementConfig with
 // its dataLocations canonicalised. GCS serves those region codes uppercase, and
 // the provider's ForceNew diff on custom_placement_config.data_locations would
 // otherwise compare a lowercase request against the emulator's raw echo.
-func normalizeCustomPlacementConfig(cfg map[string]any) map[string]any {
+func NormalizeCustomPlacementConfig(cfg map[string]any) map[string]any {
 	if cfg == nil {
 		return nil
 	}
@@ -4347,7 +4347,7 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	// canonicalisation (the stores hold JSON blobs, so there is no migration):
 	// GCS always serves locations uppercase.
 	location := BucketLocationCanonical(b.Location)
-	customPlacement := normalizeCustomPlacementConfig(b.CustomPlacementConfig)
+	customPlacement := NormalizeCustomPlacementConfig(b.CustomPlacementConfig)
 	out := map[string]any{
 		"kind":             "storage#bucket",
 		"id":               b.Name,
