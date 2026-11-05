@@ -96,6 +96,15 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 // ManagedZone is the dns#managedZone representation. id/nameServers/creationTime
 // are output-only and synthesized on the server; the mutable fields are echoed
 // from the request.
+//
+// The configuration blocks (dnssecConfig, forwardingConfig, peeringConfig,
+// privateVisibilityConfig) are kept as the decoded request objects rather than
+// re-typed field by field: the Terraform provider sends the whole block on
+// create and again in every PATCH, and the official modules round-trip
+// sub-fields the Discovery document declares (forwarding ipv6Address/domainName,
+// GKE clusters, default key specs). Echoing the accepted object verbatim means a
+// GET returns exactly what the client sent, so a second plan reports no changes.
+// Nothing is synthesized here: a block the client omitted stays omitted.
 type ManagedZone struct {
 	Kind         string            `json:"kind,omitempty"`
 	Name         string            `json:"name,omitempty"`
@@ -106,13 +115,24 @@ type ManagedZone struct {
 	Visibility   string            `json:"visibility,omitempty"`
 	CreationTime string            `json:"creationTime,omitempty"`
 	Labels       map[string]string `json:"labels,omitempty"`
-	// CloudLoggingConfig is output-only; real GCP always reports it (an empty
-	// config carrying only the kind). Modeled so the wire response matches.
+	// CloudLoggingConfig is always reported by real GCP (an empty config
+	// carrying only the kind), and the provider also sends it when
+	// enable_logging is set. Modeled so both the wire response and the update
+	// path match.
 	CloudLoggingConfig map[string]any `json:"cloudLoggingConfig,omitempty"`
+
+	DNSSECConfig            map[string]any `json:"dnssecConfig,omitempty"`
+	ForwardingConfig        map[string]any `json:"forwardingConfig,omitempty"`
+	PeeringConfig           map[string]any `json:"peeringConfig,omitempty"`
+	PrivateVisibilityConfig map[string]any `json:"privateVisibilityConfig,omitempty"`
 }
 
 // withZoneDefaults fills the output-only managed-zone fields real GCP always
-// reports, so zones created before these fields existed still render fully.
+// reports, so zones created before these fields existed still render fully. A
+// privateVisibilityConfig that binds neither a network nor a GKE cluster is not
+// rendered: `hashicorp/google` always sends `{"networks": []}` (the API's
+// documented "remove the binding" form) even on a public zone, and real GCP does
+// not report an empty private visibility block back.
 func withZoneDefaults(mz ManagedZone) ManagedZone {
 	if mz.Visibility == "" {
 		mz.Visibility = "public"
@@ -120,7 +140,29 @@ func withZoneDefaults(mz ManagedZone) ManagedZone {
 	if mz.CloudLoggingConfig == nil {
 		mz.CloudLoggingConfig = map[string]any{"kind": "dns#managedZoneCloudLoggingConfig"}
 	}
+	if !privateVisibilityBinds(mz.PrivateVisibilityConfig) {
+		mz.PrivateVisibilityConfig = nil
+	}
 	return mz
+}
+
+// privateVisibilityBinds reports whether a privateVisibilityConfig actually
+// binds VPC networks or GKE clusters. An absent block, an empty object and the
+// provider's `{"networks": []}` clearing form all bind nothing.
+func privateVisibilityBinds(cfg map[string]any) bool {
+	if len(cfg) == 0 {
+		return false
+	}
+	var pvc struct {
+		Networks    []any `json:"networks"`
+		GKEClusters []any `json:"gkeClusters"`
+	}
+	if err := decodeBody(cfg, &pvc); err != nil {
+		// A malformed block is not silently discarded; let the write path
+		// decide what to do with it.
+		return true
+	}
+	return len(pvc.Networks) > 0 || len(pvc.GKEClusters) > 0
 }
 
 // ResourceRecordSet is the dns#resourceRecordSet representation.
@@ -208,6 +250,9 @@ func (p *Provider) CreateManagedZone(ctx context.Context, nr *model.NormalizedRe
 	if mz.Visibility != "public" && mz.Visibility != "private" {
 		return nil, model.NewProviderError("InvalidArgument", "managedZone.visibility must be public or private", 400)
 	}
+	if err := validateManagedZoneConfig(mz); err != nil {
+		return nil, err
+	}
 	mz.ID = numericID(nr.AccountID + "/" + mz.Name)
 	mz.NameServers = nameServers()
 	mz.CreationTime = formatTimestamp(clock.Now())
@@ -275,12 +320,19 @@ func (p *Provider) UpdateManagedZone(ctx context.Context, nr *model.NormalizedRe
 }
 
 // applyManagedZoneUpdate merges the mutable managed-zone fields (description,
-// visibility, labels) from the request body. Both the PATCH and PUT wire
-// methods share these merge semantics; dnsName is immutable and ignored. The
-// mutation is applied and its operation recorded done in one call, so the
-// returned dns#operation settles immediately and the next managedZones.get
-// shows the new values — the sequence an official client's
+// visibility, labels and the dnssec/forwarding/peering/private-visibility/
+// cloud-logging configuration blocks) from the request body. Both the PATCH and
+// PUT wire methods share these merge semantics; dnsName is immutable and
+// ignored. The mutation is applied and its operation recorded done in one call,
+// so the returned dns#operation settles immediately and the next
+// managedZones.get shows the new values — the sequence an official client's
 // patch-then-poll-operations.get performs.
+//
+// The Terraform provider sends the whole configuration block in every PATCH
+// (its update path expands the full schema object), so a block present in the
+// body replaces the stored one. A JSON null or an empty object is not a block:
+// the provider emits `"privateVisibilityConfig": null` when the caller has no
+// private_visibility_config, and real GCP treats that as "unset", not "clear".
 func (p *Provider) applyManagedZoneUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr, "managedZone")
 	if name == "" {
@@ -305,6 +357,20 @@ func (p *Provider) applyManagedZoneUpdate(ctx context.Context, nr *model.Normali
 		if v, ok := body["labels"]; ok {
 			mz.Labels = stringMap(v)
 		}
+		for key, dst := range map[string]*map[string]any{
+			"dnssecConfig":            &mz.DNSSECConfig,
+			"forwardingConfig":        &mz.ForwardingConfig,
+			"peeringConfig":           &mz.PeeringConfig,
+			"privateVisibilityConfig": &mz.PrivateVisibilityConfig,
+			"cloudLoggingConfig":      &mz.CloudLoggingConfig,
+		} {
+			if v, ok := body[key].(map[string]any); ok && len(v) > 0 {
+				*dst = v
+			}
+		}
+	}
+	if err := validateManagedZoneConfig(mz); err != nil {
+		return nil, err
 	}
 	data, err := json.Marshal(mz)
 	if err != nil {
@@ -318,6 +384,63 @@ func (p *Provider) applyManagedZoneUpdate(ctx context.Context, nr *model.Normali
 		return nil, err
 	}
 	return provider.OK(toMap(op)), nil
+}
+
+// validateManagedZoneConfig enforces the combinations the Discovery document
+// and the Cloud DNS API declare for a managed zone's configuration blocks:
+// forwarding, peering and private visibility all live on private zones, a zone
+// cannot both forward and peer, and a forwarding target must name the IPv4
+// address it forwards to. dnssecConfig is stored verbatim and is not restricted
+// by these combination rules (its own fields belong to the DNSSEC surface).
+func validateManagedZoneConfig(mz ManagedZone) error {
+	private := mz.Visibility == "private"
+	if !private && privateVisibilityBinds(mz.PrivateVisibilityConfig) {
+		return model.NewProviderError("InvalidArgument",
+			"managedZone.privateVisibilityConfig requires visibility \"private\"", 400)
+	}
+	if len(mz.ForwardingConfig) > 0 {
+		if !private {
+			return model.NewProviderError("InvalidArgument",
+				"managedZone.forwardingConfig requires visibility \"private\"", 400)
+		}
+		if len(mz.PeeringConfig) > 0 {
+			return model.NewProviderError("InvalidArgument",
+				"managedZone.forwardingConfig and managedZone.peeringConfig cannot be combined", 400)
+		}
+		var fc struct {
+			TargetNameServers []struct {
+				IPv4Address string `json:"ipv4Address"`
+			} `json:"targetNameServers"`
+		}
+		if err := decodeBody(mz.ForwardingConfig, &fc); err != nil {
+			return model.NewProviderError("InvalidArgument", "managedZone.forwardingConfig is malformed", 400)
+		}
+		for i, target := range fc.TargetNameServers {
+			if target.IPv4Address == "" {
+				return model.NewProviderError("InvalidArgument",
+					fmt.Sprintf("managedZone.forwardingConfig.targetNameServers[%d].ipv4Address is required", i), 400)
+			}
+		}
+	}
+	if len(mz.PeeringConfig) > 0 {
+		if !private {
+			return model.NewProviderError("InvalidArgument",
+				"managedZone.peeringConfig requires visibility \"private\"", 400)
+		}
+		var pc struct {
+			TargetNetwork struct {
+				NetworkURL string `json:"networkUrl"`
+			} `json:"targetNetwork"`
+		}
+		if err := decodeBody(mz.PeeringConfig, &pc); err != nil {
+			return model.NewProviderError("InvalidArgument", "managedZone.peeringConfig is malformed", 400)
+		}
+		if pc.TargetNetwork.NetworkURL == "" {
+			return model.NewProviderError("InvalidArgument",
+				"managedZone.peeringConfig.targetNetwork.networkUrl is required", 400)
+		}
+	}
+	return nil
 }
 
 // ─── ManagedZone operation operations ─────────────────────────────────────────
@@ -962,11 +1085,15 @@ func formatTimestamp(t time.Time) string {
 }
 
 // numericID derives a stable decimal id from a string, mirroring Cloud DNS's
-// server-generated numeric managed-zone/project ids.
+// server-generated numeric managed-zone/project ids. Cloud DNS ids are uint64 on
+// the wire, but real server-generated ids are small; the official provider reads
+// `managed_zone_id` as a signed Go int (tpgresource.StringToFixed64 → int) and
+// fails the set with "expected type 'int'" when the value overflows int64, so
+// the synthesized id is masked to the positive int64 range.
 func numericID(s string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))
-	n := h.Sum64()
+	n := h.Sum64() & (1<<63 - 1)
 	if n == 0 {
 		n = 1
 	}
