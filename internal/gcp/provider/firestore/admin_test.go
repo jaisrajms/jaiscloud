@@ -92,9 +92,12 @@ func TestDatabaseCRUD(t *testing.T) {
 		t.Errorf("GetDatabase(missing) err = %v, want NotFound", err)
 	}
 
-	// Create of (default) is AlreadyExists.
+	// The (default) read above materialised it, so a create is AlreadyExists
+	// (create-if-absent for a fresh project is TestDefaultDatabaseCreate).
 	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "(default)", databaseDef{}); err == nil {
 		t.Error("CreateDatabase((default)) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
 	}
 }
 
@@ -196,6 +199,93 @@ func TestDefaultDatabaseOutputFields(t *testing.T) {
 	}
 	if _, _, err := p.DeleteDatabaseDef(ctx, "legacy", "(default)", repaired.Etag); err != nil {
 		t.Errorf("DeleteDatabaseDef(legacy default) with the repaired etag: %v", err)
+	}
+}
+
+// TestDefaultDatabaseCreate pins create-if-absent for the implicit (default)
+// database: real GCP creates it when the project has none (the Firebase
+// Terraform shape, google_firestore_database { name = "(default)" }), records
+// the requested location, answers ALREADY_EXISTS for a live record, and accepts
+// a create after the default was deleted.
+func TestDefaultDatabaseCreate(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	created, op, err := p.CreateDatabaseDef(ctx, "proj", defaultDatabaseID, databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(default): %v", err)
+	}
+	if !strings.Contains(op, "/operations/") {
+		t.Errorf("operation name = %q, want /operations/", op)
+	}
+	if want := "projects/proj/databases/(default)"; created.Name != want {
+		t.Errorf("created name = %q, want %q", created.Name, want)
+	}
+	// The location is echoed verbatim: the Firestore provider has no case
+	// normalisation, so a lowercase region must not be upper-cased.
+	if created.LocationID != "us-central1" {
+		t.Errorf("created location = %q, want us-central1", created.LocationID)
+	}
+	if created.Uid == "" || created.Etag == "" || created.CreateTime.IsZero() || created.UpdateTime.IsZero() {
+		t.Errorf("created default lacks server fields: %+v", created)
+	}
+	if created.Type != "FIRESTORE_NATIVE" || created.ConcurrencyMode != concurrencyPessimistic ||
+		created.DeleteProtectionState != deleteProtectionDisabled || created.Deleted {
+		t.Errorf("created default defaults = %+v", created)
+	}
+
+	got, err := p.GetDatabase(ctx, "proj", defaultDatabaseID)
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if got.LocationID != "us-central1" || got.Uid != created.Uid || got.Etag != created.Etag {
+		t.Errorf("GetDatabase(default) = location %q uid %q, want the created record", got.LocationID, got.Uid)
+	}
+
+	// A live record is ALREADY_EXISTS, whatever location the request carries.
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", defaultDatabaseID, databaseDef{LocationID: "nam5"}); err == nil {
+		t.Error("second CreateDatabaseDef(default) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	// A first read materialises the default too, with no location — there is no
+	// project region to source one from — and that project then has a live
+	// default, so its create is ALREADY_EXISTS.
+	materialised, err := p.GetDatabase(ctx, "lazy", defaultDatabaseID)
+	if err != nil {
+		t.Fatalf("GetDatabase(lazy default): %v", err)
+	}
+	if materialised.LocationID != "" {
+		t.Errorf("materialised default location = %q, want none (no project region)", materialised.LocationID)
+	}
+	if _, _, err := p.CreateDatabaseDef(ctx, "lazy", defaultDatabaseID, databaseDef{LocationID: "us-central1"}); err == nil {
+		t.Error("CreateDatabaseDef(default after GET) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	// A tombstone counts as absent: delete (protection is disabled by default)
+	// then create converges, with the new location and a fresh uid.
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", defaultDatabaseID, got.Etag); err != nil {
+		t.Fatalf("DeleteDatabaseDef(default): %v", err)
+	}
+	if _, err := p.GetDatabase(ctx, "proj", defaultDatabaseID); !isNotFound(err) {
+		t.Fatalf("GetDatabase(deleted default) = %v, want NotFound", err)
+	}
+	recreated, _, err := p.CreateDatabaseDef(ctx, "proj", defaultDatabaseID, databaseDef{LocationID: "nam5"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(default after delete): %v", err)
+	}
+	if recreated.LocationID != "nam5" || recreated.Uid == created.Uid || recreated.Deleted {
+		t.Errorf("recreated default = location %q uid %q, want the new location and a fresh uid", recreated.LocationID, recreated.Uid)
+	}
+	if reread, err := p.GetDatabase(ctx, "proj", defaultDatabaseID); err != nil || reread.LocationID != "nam5" {
+		t.Errorf("GetDatabase(recreated default) = %+v err=%v, want location nam5", reread, err)
+	}
+	// One database, not two: the create replaces the tombstone.
+	if listed, err := p.ListDatabases(ctx, "proj", true); err != nil || len(listed) != 1 || listed[0].LocationID != "nam5" {
+		t.Errorf("ListDatabases(showDeleted) = %+v err=%v, want the single recreated default", listed, err)
 	}
 }
 
@@ -460,6 +550,191 @@ func TestDatabaseServerOwnedFields(t *testing.T) {
 	}
 	if legacy.VersionRetentionPeriod != 7*24*time.Hour {
 		t.Errorf("legacy record retention = %v, want the derived 168h", legacy.VersionRetentionPeriod)
+	}
+}
+
+// TestDatabaseCmekConfig pins Database.cmek_config (TGM11). A create that
+// carries the block stores and echoes the KMS key on get/list; a database
+// created without one never grows a block (the field's presence is the CMEK
+// enablement signal, so synthesizing it would claim encryption the database
+// does not have). The block is create-only in practice: a masked resend of the
+// stored key is a no-op, while enabling CMEK on an existing database or
+// switching keys is INVALID_ARGUMENT; neither `*` form clears it, and
+// cmek_config.active_key_version is OUTPUT_ONLY, so a mask naming it writes
+// nothing (AIP-161).
+func TestDatabaseCmekConfig(t *testing.T) {
+	const key = "projects/proj/locations/us-central1/keyRings/jc-ring/cryptoKeys/jc-key"
+	const otherKey = "projects/proj/locations/us-central1/keyRings/jc-ring/cryptoKeys/jc-other"
+	ctx := context.Background()
+	p := newAdminService()
+
+	assertInvalid := func(label string, err error) {
+		t.Helper()
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("%s = %v, want InvalidArgument/400", label, err)
+		}
+	}
+
+	// A present-but-empty block is how the gcloud CLI serializes an unset
+	// CmekConfig (`"cmekConfig": {}` on every `firestore databases create`).
+	// Real GCP treats it as "no CMEK", so the create succeeds and stores no block.
+	empty, _, err := p.CreateDatabaseDef(ctx, "proj", "empty-cmek", databaseDef{
+		CmekConfig: &cmekConfigDef{},
+	})
+	if err != nil {
+		t.Fatalf("create with an empty cmek block: %v", err)
+	}
+	if empty.CmekConfig != nil {
+		t.Errorf("empty cmek block stored as %+v, want none", empty.CmekConfig)
+	}
+	if got, err := p.GetDatabase(ctx, "proj", "empty-cmek"); err != nil {
+		t.Fatalf("GetDatabase(empty-cmek): %v", err)
+	} else if got.CmekConfig != nil {
+		t.Errorf("GetDatabase(empty-cmek) cmek_config = %+v, want none", got.CmekConfig)
+	}
+
+	// A database created without cmek_config never grows one: an absent block is
+	// the documented signal that CMEK is not enabled (database.proto: "Presence
+	// indicates CMEK is enabled for this database").
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "plain-db", databaseDef{LocationID: "nam5"}); err != nil {
+		t.Fatalf("CreateDatabaseDef(plain): %v", err)
+	}
+
+	// A client-supplied active_key_version is OUTPUT_ONLY and not stored.
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "cmek-db", databaseDef{
+		LocationID: "nam5",
+		CmekConfig: &cmekConfigDef{KmsKeyName: key, ActiveKeyVersion: []string{"client-supplied"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(cmek): %v", err)
+	}
+	if created.CmekConfig == nil || created.CmekConfig.KmsKeyName != key {
+		t.Fatalf("created cmek_config = %+v, want kms_key_name %q", created.CmekConfig, key)
+	}
+	if len(created.CmekConfig.ActiveKeyVersion) != 0 {
+		t.Errorf("create stored the OUTPUT_ONLY active_key_version: %v", created.CmekConfig.ActiveKeyVersion)
+	}
+
+	got, err := p.GetDatabase(ctx, "proj", "cmek-db")
+	if err != nil {
+		t.Fatalf("GetDatabase(cmek): %v", err)
+	}
+	if got.CmekConfig == nil || got.CmekConfig.KmsKeyName != key {
+		t.Errorf("GetDatabase cmek_config = %+v, want the stored key", got.CmekConfig)
+	}
+
+	list, err := p.ListDatabases(ctx, "proj", false)
+	if err != nil {
+		t.Fatalf("ListDatabases: %v", err)
+	}
+	var listed bool
+	for _, d := range list {
+		switch {
+		case d.Name == databaseName("proj", "cmek-db"):
+			listed = true
+			if d.CmekConfig == nil || d.CmekConfig.KmsKeyName != key {
+				t.Errorf("ListDatabases cmek_config = %+v, want the stored key", d.CmekConfig)
+			}
+		case d.CmekConfig != nil:
+			t.Errorf("a Google-managed database reports a fabricated cmek_config: %s %+v", d.Name, d.CmekConfig)
+		}
+	}
+	if !listed {
+		t.Fatal("ListDatabases omitted cmek-db")
+	}
+
+	// Resending the stored key under cmek_config is a no-op: no error and the
+	// key survives (the etag may rotate, as for any accepted update).
+	same, _, err := p.UpdateDatabaseDef(ctx, "proj", "cmek-db",
+		databaseDef{CmekConfig: &cmekConfigDef{KmsKeyName: key}}, []string{"cmek_config"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(cmek_config, same key): %v", err)
+	}
+	if same.CmekConfig == nil || same.CmekConfig.KmsKeyName != key {
+		t.Errorf("resend changed cmek_config: %+v", same.CmekConfig)
+	}
+	// The nested path is the same field.
+	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "cmek-db",
+		databaseDef{CmekConfig: &cmekConfigDef{KmsKeyName: key}}, []string{"cmek_config.kms_key_name"}, true, same.Etag); err != nil {
+		t.Fatalf("UpdateDatabaseDef(cmek_config.kms_key_name, same key): %v", err)
+	}
+
+	// Changing the key is INVALID_ARGUMENT: Firestore documents that "you can't
+	// change a key for a CMEK-protected database".
+	current, err := p.GetDatabase(ctx, "proj", "cmek-db")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "cmek-db",
+		databaseDef{CmekConfig: &cmekConfigDef{KmsKeyName: otherKey}}, []string{"cmek_config"}, true, current.Etag); err != nil {
+		assertInvalid("cmek key change", err)
+	} else {
+		t.Error("cmek key change succeeded, want InvalidArgument")
+	}
+	// Enabling CMEK on a database that has none is INVALID_ARGUMENT too: it can
+	// only be set at creation.
+	plain, err := p.GetDatabase(ctx, "proj", "plain-db")
+	if err != nil {
+		t.Fatalf("GetDatabase(plain-db): %v", err)
+	}
+	if plain.CmekConfig != nil {
+		t.Errorf("a Google-managed database grew a cmek_config: %+v", plain.CmekConfig)
+	}
+	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "plain-db",
+		databaseDef{CmekConfig: &cmekConfigDef{KmsKeyName: key}}, []string{"cmek_config"}, true, plain.Etag); err != nil {
+		assertInvalid("enabling cmek on an existing database", err)
+	} else {
+		t.Error("enabling cmek on an existing database succeeded, want InvalidArgument")
+	}
+	if after, err := p.GetDatabase(ctx, "proj", "plain-db"); err != nil {
+		t.Errorf("GetDatabase(plain-db): %v", err)
+	} else if after.CmekConfig != nil {
+		t.Errorf("the rejected enable wrote a cmek_config: %+v", after.CmekConfig)
+	}
+
+	// An explicit `*` replace whose body omits cmek_config must preserve the
+	// stored block: there is no API that disables CMEK.
+	current, err = p.GetDatabase(ctx, "proj", "cmek-db")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	starred, _, err := p.UpdateDatabaseDef(ctx, "proj", "cmek-db", databaseDef{
+		ConcurrencyMode:               concurrencyOptimistic,
+		PointInTimeRecoveryEnablement: pitrEnabled,
+	}, []string{"*"}, true, current.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(*) without cmek_config: %v", err)
+	}
+	if starred.ConcurrencyMode != concurrencyOptimistic || starred.PointInTimeRecoveryEnablement != pitrEnabled {
+		t.Errorf("`*` patch did not apply the mutable fields: %+v", starred)
+	}
+	if starred.CmekConfig == nil || starred.CmekConfig.KmsKeyName != key {
+		t.Errorf("`*` patch cleared cmek_config: %+v", starred.CmekConfig)
+	}
+
+	// The same holds for an implied `*` (an omitted mask) — the common form.
+	implied, _, err := p.UpdateDatabaseDef(ctx, "proj", "cmek-db",
+		databaseDef{ConcurrencyMode: concurrencyPessimistic}, nil, false, starred.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(implied mask): %v", err)
+	}
+	if implied.CmekConfig == nil || implied.CmekConfig.KmsKeyName != key {
+		t.Errorf("implied `*` patch cleared cmek_config: %+v", implied.CmekConfig)
+	}
+
+	// A mask naming only the OUTPUT_ONLY active_key_version writes nothing: the
+	// request's (empty) list is ignored and the key stays.
+	afterVersion, _, err := p.UpdateDatabaseDef(ctx, "proj", "cmek-db",
+		databaseDef{CmekConfig: &cmekConfigDef{KmsKeyName: otherKey}}, []string{"cmek_config.active_key_version"}, true, implied.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(active_key_version): %v", err)
+	}
+	if afterVersion.CmekConfig == nil || afterVersion.CmekConfig.KmsKeyName != key {
+		t.Errorf("active_key_version mask touched the key: %+v", afterVersion.CmekConfig)
+	}
+	if len(afterVersion.CmekConfig.ActiveKeyVersion) != 0 {
+		t.Errorf("active_key_version mask stored a fabricated version: %v", afterVersion.CmekConfig.ActiveKeyVersion)
 	}
 }
 

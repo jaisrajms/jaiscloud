@@ -269,7 +269,11 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 // bucketToProto converts a stored bucket map into the proto Bucket.
 func bucketToProto(m map[string]any) *storagepb.Bucket {
 	name, _ := m["name"].(string)
-	location, _ := m["location"].(string)
+	// Canonical uppercase location + bucket-aware locationType (a custom
+	// dual-region placement is a dual-region whatever the location field says),
+	// so gRPC reads the same values as the REST storage#bucket body — including
+	// legacy records persisted before the canonicalisation.
+	location, locationType := storageprovider.BucketLocationFromMeta(m)
 	metageneration, _ := m["metageneration"].(string)
 	b := &storagepb.Bucket{
 		Name:           bucketResourceName(name),
@@ -278,7 +282,7 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		// The proto defines etag and locationType; real GCP populates both, so a
 		// gRPC client must see them, matching the REST storage#bucket body.
 		Etag:         storageprovider.BucketEtag(metageneration),
-		LocationType: storageprovider.BucketLocationType(location),
+		LocationType: locationType,
 	}
 	if location != "" {
 		b.Location = location
@@ -607,7 +611,7 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
 	}
 
-	location := req.GetBucket().GetLocation()
+	location := storageprovider.BucketLocationCanonical(req.GetBucket().GetLocation())
 	if location == "" {
 		location = "US"
 	}
@@ -809,7 +813,7 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 	if sc := pb.GetStorageClass(); sc != "" && maskIncludes(mask, "storage_class") {
 		meta["storageClass"] = sc
 	}
-	if loc := pb.GetLocation(); loc != "" && maskIncludes(mask, "location") {
+	if loc := storageprovider.BucketLocationCanonical(pb.GetLocation()); loc != "" && maskIncludes(mask, "location") {
 		meta["location"] = loc
 	}
 	if maskIncludes(mask, "retention_policy") {

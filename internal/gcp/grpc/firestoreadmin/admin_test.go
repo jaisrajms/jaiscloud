@@ -151,6 +151,83 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDefaultDatabaseCreate pins CreateDatabase for the implicit (default)
+// database on the gRPC surface: a fresh project accepts it (the Firebase
+// Terraform shape), GetDatabase echoes the stored location, and a duplicate is
+// ALREADY_EXISTS.
+func TestDefaultDatabaseCreate(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "(default)",
+		Database:   &adminpb.Database{LocationId: "us-central1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(default): %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("CreateDatabase(default) done = false, want true")
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase(default) response unmarshal: %v", err)
+	}
+	if want := "projects/proj/databases/(default)"; created.GetName() != want {
+		t.Errorf("created name = %q, want %q", created.GetName(), want)
+	}
+	if created.GetLocationId() != "us-central1" || created.GetUid() == "" || created.GetEtag() == "" {
+		t.Errorf("created default = %+v, want the location and server fields", created)
+	}
+
+	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if got.GetLocationId() != "us-central1" || got.GetUid() != created.GetUid() {
+		t.Errorf("GetDatabase(default) = %+v, want the created record", got)
+	}
+
+	// The default's create has no cmek_config unless the request carries one.
+	if got.GetCmekConfig() != nil {
+		t.Errorf("GetDatabase(default) cmek_config = %+v, want unset", got.GetCmekConfig())
+	}
+
+	if _, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "(default)",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	}); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("duplicate CreateDatabase(default) = %v, want AlreadyExists", err)
+	}
+
+	// A tombstoned default accepts the create again, with the new location.
+	delOp, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: created.GetEtag()})
+	if err != nil {
+		t.Fatalf("DeleteDatabase(default): %v", err)
+	}
+	if !delOp.GetDone() {
+		t.Fatal("DeleteDatabase(default) done = false, want true")
+	}
+	reOp, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "(default)",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(default after delete): %v", err)
+	}
+	recreated := &adminpb.Database{}
+	if err := reOp.GetResponse().UnmarshalTo(recreated); err != nil {
+		t.Fatalf("CreateDatabase(default after delete) response unmarshal: %v", err)
+	}
+	if recreated.GetLocationId() != "nam5" {
+		t.Errorf("recreated default location = %q, want nam5", recreated.GetLocationId())
+	}
+}
+
 // TestUpdateDatabaseServerOwnedFields pins database.proto's field ownership on
 // the gRPC surface: key_prefix (OUTPUT_ONLY) and database_edition (IMMUTABLE)
 // are never written by an update, and version_retention_period (OUTPUT_ONLY) is
@@ -780,6 +857,119 @@ func TestDatabaseOutputFields(t *testing.T) {
 	}
 	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()}); status.Code(err) != codes.NotFound {
 		t.Errorf("deleted (default) read code = %v, want NotFound", status.Code(err))
+	}
+}
+
+// TestDatabaseCmekConfig pins the gRPC view of Database.cmek_config (TGM11):
+// the create request's block is stored and returned by the terminal operation
+// and by Get/List, a database created without one reports no block (never
+// fabricated), and a masked key change is INVALID_ARGUMENT because CMEK is
+// create-only and a CMEK-protected database's key cannot change.
+func TestDatabaseCmekConfig(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	const key = "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k"
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "cmek-db",
+		Database: &adminpb.Database{
+			LocationId: "us-central1",
+			CmekConfig: &adminpb.Database_CmekConfig{KmsKeyName: key},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(cmek): %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+	if got := created.GetCmekConfig().GetKmsKeyName(); got != key {
+		t.Errorf("created cmek_config = %v, want kms_key_name %q", created.GetCmekConfig(), key)
+	}
+	if versions := created.GetCmekConfig().GetActiveKeyVersion(); len(versions) != 0 {
+		t.Errorf("created active_key_version = %v, want none (never fabricated)", versions)
+	}
+
+	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.GetCmekConfig().GetKmsKeyName() != key {
+		t.Errorf("GetDatabase cmek_config = %v, want the stored key", got.GetCmekConfig())
+	}
+
+	list, err := client.ListDatabases(ctx, &adminpb.ListDatabasesRequest{Parent: testDBParent})
+	if err != nil {
+		t.Fatalf("ListDatabases: %v", err)
+	}
+	for _, db := range list.GetDatabases() {
+		switch db.GetName() {
+		case created.GetName():
+			if db.GetCmekConfig().GetKmsKeyName() != key {
+				t.Errorf("ListDatabases %s cmek_config = %v", db.GetName(), db.GetCmekConfig())
+			}
+		default:
+			if db.GetCmekConfig() != nil {
+				t.Errorf("ListDatabases fabricated a cmek_config for %s: %v", db.GetName(), db.GetCmekConfig())
+			}
+		}
+	}
+
+	// Switching keys on a CMEK-protected database is INVALID_ARGUMENT.
+	if _, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name: created.GetName(),
+			CmekConfig: &adminpb.Database_CmekConfig{
+				KmsKeyName: "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/other",
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"cmek_config"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("cmek key change code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	// An all-default CmekConfig message is what the gcloud CLI sends (it never
+	// sets one); real GCP treats it as "no CMEK", so the create succeeds and the
+	// database reports no block.
+	empty, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "empty-cmek",
+		Database: &adminpb.Database{
+			LocationId: "nam5",
+			CmekConfig: &adminpb.Database_CmekConfig{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create with an empty CmekConfig: %v", err)
+	}
+	emptyDB := &adminpb.Database{}
+	if err := empty.GetResponse().UnmarshalTo(emptyDB); err != nil {
+		t.Fatalf("create response unmarshal: %v", err)
+	}
+	if emptyDB.GetCmekConfig() != nil {
+		t.Errorf("create with an empty CmekConfig stored %v, want none", emptyDB.GetCmekConfig())
+	}
+
+	// A resend of the stored key is a no-op, not an error.
+	same, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:       created.GetName(),
+			CmekConfig: &adminpb.Database_CmekConfig{KmsKeyName: key},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"cmek_config.kms_key_name"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(cmek_config.kms_key_name, same key): %v", err)
+	}
+	resent := &adminpb.Database{}
+	if err := same.GetResponse().UnmarshalTo(resent); err != nil {
+		t.Fatalf("UpdateDatabase response unmarshal: %v", err)
+	}
+	if resent.GetCmekConfig().GetKmsKeyName() != key {
+		t.Errorf("resend changed cmek_config = %v", resent.GetCmekConfig())
 	}
 }
 
