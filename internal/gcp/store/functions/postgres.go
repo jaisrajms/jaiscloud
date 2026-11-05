@@ -25,6 +25,29 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }
 
+// functionSelectColumns is the column list shared by every function read. It
+// matches scanFunction's scan order (function_id first; snapshot.go prepends
+// project_id) so a new column cannot be added to one query and forgotten in
+// another.
+const functionSelectColumns = `function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
+	       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
+	       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
+	       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
+	       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu,
+	       ingress_settings, max_instances, vpc_connector, vpc_connector_egress_settings,
+	       secret_environment_variables, secret_volumes, docker_registry, docker_repository,
+	       build_worker_pool, https_trigger_security_level`
+
+// nullableJSONList marshals a slice to JSONB, or returns SQL NULL when it is
+// nil/empty. Used for the v1 Secret Manager bindings (TGM3).
+func nullableJSONList[T any](v []T) any {
+	if len(v) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(v)
+	return json.RawMessage(b)
+}
+
 // nullableJSON marshals v to JSONB, or returns nil (SQL NULL) when v is nil.
 // A typed-nil pointer (e.g. a nil *EventTrigger or *Function) is also nil: it
 // would otherwise marshal to the JSON literal "null", which reads back as a
@@ -56,14 +79,20 @@ func (s *PostgresStore) CreateFunction(ctx context.Context, projectID, location,
 			 https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 			 available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
 			 revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-			 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+			 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu,
+			 ingress_settings, max_instances, vpc_connector, vpc_connector_egress_settings,
+			 secret_environment_variables, secret_volumes, docker_registry, docker_repository,
+			 build_worker_pool, https_trigger_security_level)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
 	`, projectID, location, id, f.Runtime, f.EntryPoint, f.SourceUploadURL, f.SourceArchiveURL,
 		f.HttpsTriggerURL, nullableJSON(f.EventTrigger), json.RawMessage(env), f.Status, f.CreateTime, f.UpdateTime,
 		json.RawMessage(labels), f.AvailableMemoryMB, f.Timeout, f.Description,
 		f.SourceSHA256, f.SourceSize, f.SourceBlobKey,
 		f.Revision, f.UpgradeState, f.UpgradeRuntime, f.UpgradeMaxInstances, f.UpgradeTrafficGen2,
-		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU)
+		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU,
+		f.IngressSettings, f.MaxInstances, f.VPCConnector, f.VPCConnectorEgressSettings,
+		nullableJSONList(f.SecretEnvironmentVariables), nullableJSONList(f.SecretVolumes),
+		f.DockerRegistry, f.DockerRepository, f.BuildWorkerPool, f.HttpsTriggerSecurityLevel)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -76,13 +105,16 @@ func (s *PostgresStore) CreateFunction(ctx context.Context, projectID, location,
 
 func scanFunction(row pgx.Row) (Function, error) {
 	var f Function
-	var eventTrigger, env, labels []byte
+	var eventTrigger, env, labels, secretEnv, secretVolumes []byte
 	err := row.Scan(&f.ID, &f.Location, &f.Runtime, &f.EntryPoint, &f.SourceUploadURL, &f.SourceArchiveURL,
 		&f.HttpsTriggerURL, &eventTrigger, &env, &f.Status, &f.CreateTime, &f.UpdateTime, &labels,
 		&f.AvailableMemoryMB, &f.Timeout, &f.Description,
 		&f.SourceSHA256, &f.SourceSize, &f.SourceBlobKey,
 		&f.Revision, &f.UpgradeState, &f.UpgradeRuntime, &f.UpgradeMaxInstances, &f.UpgradeTrafficGen2,
-		&f.MinInstanceCount, &f.MaxInstanceCount, &f.MaxInstanceRequestConcurrency, &f.AvailableCPU)
+		&f.MinInstanceCount, &f.MaxInstanceCount, &f.MaxInstanceRequestConcurrency, &f.AvailableCPU,
+		&f.IngressSettings, &f.MaxInstances, &f.VPCConnector, &f.VPCConnectorEgressSettings,
+		&secretEnv, &secretVolumes, &f.DockerRegistry, &f.DockerRepository,
+		&f.BuildWorkerPool, &f.HttpsTriggerSecurityLevel)
 	if err != nil {
 		return Function{}, err
 	}
@@ -91,16 +123,18 @@ func scanFunction(row pgx.Row) (Function, error) {
 	}
 	json.Unmarshal(env, &f.EnvironmentVariables)
 	json.Unmarshal(labels, &f.Labels)
+	if len(secretEnv) > 0 {
+		json.Unmarshal(secretEnv, &f.SecretEnvironmentVariables)
+	}
+	if len(secretVolumes) > 0 {
+		json.Unmarshal(secretVolumes, &f.SecretVolumes)
+	}
 	return f, nil
 }
 
 func (s *PostgresStore) GetFunction(ctx context.Context, projectID, location, id string) (Function, error) {
 	f, err := scanFunction(s.pool.QueryRow(ctx, `
-		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
-		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
+		SELECT `+functionSelectColumns+`
 		FROM jc_functions WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -118,14 +152,20 @@ func (s *PostgresStore) UpdateFunction(ctx context.Context, projectID, location,
 		       available_memory_mb=$14, timeout=$15, description=$16,
 		       source_sha256=$17, source_size=$18, source_blob_key=$19,
 		       revision=$20, upgrade_state=$21, upgrade_runtime=$22, upgrade_max_instances=$23, upgrade_traffic_gen2=$24,
-		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28
+		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28,
+		       ingress_settings=$29, max_instances=$30, vpc_connector=$31, vpc_connector_egress_settings=$32,
+		       secret_environment_variables=$33, secret_volumes=$34, docker_registry=$35, docker_repository=$36,
+		       build_worker_pool=$37, https_trigger_security_level=$38
 		WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id, f.Runtime, f.EntryPoint, f.SourceUploadURL, f.SourceArchiveURL,
 		f.HttpsTriggerURL, nullableJSON(f.EventTrigger), json.RawMessage(env), f.Status, f.UpdateTime,
 		json.RawMessage(labels), f.AvailableMemoryMB, f.Timeout, f.Description,
 		f.SourceSHA256, f.SourceSize, f.SourceBlobKey,
 		f.Revision, f.UpgradeState, f.UpgradeRuntime, f.UpgradeMaxInstances, f.UpgradeTrafficGen2,
-		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU)
+		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU,
+		f.IngressSettings, f.MaxInstances, f.VPCConnector, f.VPCConnectorEgressSettings,
+		nullableJSONList(f.SecretEnvironmentVariables), nullableJSONList(f.SecretVolumes),
+		f.DockerRegistry, f.DockerRepository, f.BuildWorkerPool, f.HttpsTriggerSecurityLevel)
 	if err != nil {
 		return err
 	}
@@ -157,11 +197,7 @@ func (s *PostgresStore) updateFunctionAtomicOnce(ctx context.Context, projectID,
 	defer tx.Rollback(ctx)
 
 	current, err := scanFunction(tx.QueryRow(ctx, `
-		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
-		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
+		SELECT `+functionSelectColumns+`
 		FROM jc_functions WHERE project_id=$1 AND location=$2 AND function_id=$3 FOR UPDATE
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -184,14 +220,20 @@ func (s *PostgresStore) updateFunctionAtomicOnce(ctx context.Context, projectID,
 		       available_memory_mb=$14, timeout=$15, description=$16,
 		       source_sha256=$17, source_size=$18, source_blob_key=$19,
 		       revision=$20, upgrade_state=$21, upgrade_runtime=$22, upgrade_max_instances=$23, upgrade_traffic_gen2=$24,
-		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28
+		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28,
+		       ingress_settings=$29, max_instances=$30, vpc_connector=$31, vpc_connector_egress_settings=$32,
+		       secret_environment_variables=$33, secret_volumes=$34, docker_registry=$35, docker_repository=$36,
+		       build_worker_pool=$37, https_trigger_security_level=$38
 		WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id, next.Runtime, next.EntryPoint, next.SourceUploadURL, next.SourceArchiveURL,
 		next.HttpsTriggerURL, nullableJSON(next.EventTrigger), json.RawMessage(env), next.Status, next.UpdateTime,
 		json.RawMessage(labels), next.AvailableMemoryMB, next.Timeout, next.Description,
 		next.SourceSHA256, next.SourceSize, next.SourceBlobKey,
 		next.Revision, next.UpgradeState, next.UpgradeRuntime, next.UpgradeMaxInstances, next.UpgradeTrafficGen2,
-		next.MinInstanceCount, next.MaxInstanceCount, next.MaxInstanceRequestConcurrency, next.AvailableCPU)
+		next.MinInstanceCount, next.MaxInstanceCount, next.MaxInstanceRequestConcurrency, next.AvailableCPU,
+		next.IngressSettings, next.MaxInstances, next.VPCConnector, next.VPCConnectorEgressSettings,
+		nullableJSONList(next.SecretEnvironmentVariables), nullableJSONList(next.SecretVolumes),
+		next.DockerRegistry, next.DockerRepository, next.BuildWorkerPool, next.HttpsTriggerSecurityLevel)
 	if err != nil {
 		return Function{}, err
 	}
@@ -219,11 +261,7 @@ func (s *PostgresStore) DeleteFunction(ctx context.Context, projectID, location,
 
 func (s *PostgresStore) ListFunctions(ctx context.Context, projectID, location string) ([]Function, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
-		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
+		SELECT `+functionSelectColumns+`
 		FROM jc_functions WHERE project_id=$1 AND location=$2 ORDER BY function_id
 	`, projectID, location)
 	if err != nil {
@@ -244,11 +282,7 @@ func (s *PostgresStore) ListFunctions(ctx context.Context, projectID, location s
 
 func (s *PostgresStore) ListFunctionsAllLocations(ctx context.Context, projectID string) ([]Function, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
-		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
+		SELECT `+functionSelectColumns+`
 		FROM jc_functions WHERE project_id=$1 ORDER BY location, function_id
 	`, projectID)
 	if err != nil {

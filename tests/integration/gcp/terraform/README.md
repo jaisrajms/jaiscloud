@@ -105,8 +105,9 @@ module, and requires the module's lifecycle to converge.
 | `pubsub` | [`terraform-google-pubsub`](https://github.com/terraform-google-modules/terraform-google-pubsub) | `6cf1860` | `data.google_project` (`projects.getBillingInfo`), topic + pull subscription + IAM member, `plan` **No changes** |
 | `storage` | [`terraform-google-cloud-storage`](https://github.com/terraform-google-modules/terraform-google-cloud-storage) | `c7effc0be0f4` | `autoclass`, `hierarchicalNamespace`, `website`, `logging`, `customPlacementConfig` and `ipFilter` read back; mutated `autoclass.enabled` + labels/website/logging, then labels/logging/`ip_filter` cleared; each phase ends with `plan` **No changes** |
 | `memorystore` | [`terraform-google-memorystore`](https://github.com/terraform-google-modules/terraform-google-memorystore) | `5415d5ccca28` | `authEnabled`, `connectMode`, `transitEncryptionMode`, `readReplicasMode`, `maintenancePolicy` and `persistenceConfig` read back (the two ForceNew modes no longer replace the instance); AUTH enabled then disabled, maintenance window/snapshot period changed, labels changed then cleared; each phase ends with `plan` **No changes** |
+| `functions` | [`terraform-google-event-function`](https://github.com/terraform-google-modules/terraform-google-event-function) | `9f2e26ae3b73` | `ingressSettings` (`ALLOW_ALL` → `ALLOW_INTERNAL_ONLY`), the event trigger's default `failurePolicy` and `failurePolicy.retry`, and `environment_variables` read back; ingress/env changed and cleared, retry toggled; each phase ends with a `plan` whose only remaining diff is the recorded storage-object gap |
 
-The storage and memorystore cases pin provider `hashicorp/google = 7.46.2`.
+The storage, memorystore and functions cases pin provider `hashicorp/google = 7.46.2`.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -130,12 +131,17 @@ git clone https://github.com/terraform-google-modules/terraform-google-memorysto
   "$HOME/.cache/terraform-modules/terraform-google-memorystore"
 git -C "$HOME/.cache/terraform-modules/terraform-google-memorystore" checkout 5415d5ccca28
 make test-gcp-terraform-memorystore
+
+git clone https://github.com/terraform-google-modules/terraform-google-event-function \
+  "$HOME/.cache/terraform-modules/terraform-google-event-function"
+git -C "$HOME/.cache/terraform-modules/terraform-google-event-function" checkout 9f2e26ae3b73
+make test-gcp-terraform-functions
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
 (default `$HOME/.cache/terraform-modules/<module repo>`); the Makefile targets
 point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
-`TF_MEMORYSTORE_MODULE_DIR` respectively.
+`TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -236,6 +242,44 @@ Two behaviours of `hashicorp/google` 7.46.2 are recorded, not worked around:
   prior state and sends no mask at all (real GCP keeps the config too), so the
   clear phase disables persistence instead. `maintenance_policy` is plain
   `Optional`, so removing it does PATCH `updateMask=maintenancePolicy`.
+
+**functions** — the v1 event-function module (`google_cloudfunctions_function`)
+is created with its defaults (`ingress_settings = "ALLOW_ALL"`, a Pub/Sub
+`event_trigger` with `failure_policy.retry = false`, `create_bucket = false`
+against a bucket the case supplies) and runs the gate:
+
+1. `apply`; assert through the REST API that GET returns
+   `ingressSettings: "ALLOW_ALL"`, the Pub/Sub event trigger and the empty
+   `failurePolicy` message; the apply log must contain no `400`, `501` or
+   `unsupported update_mask`
+2. a second `plan`; its only permitted diff is the recorded storage-object gap
+   below
+3. change `ingress_settings` to `ALLOW_INTERNAL_ONLY` and add
+   `environment_variables`; `apply`; assert the new values (the ingress change
+   is PATCHed in place by 7.46.2; the log records which path was taken);
+   `plan` → no function diff
+4. toggle `event_trigger_failure_policy_retry = true`; `apply`; assert
+   `eventTrigger.failurePolicy.retry`; `plan` → no function diff
+5. clear `environment_variables` and restore `ALLOW_ALL`; `apply`; assert the
+   env var is gone and ingress is back; `plan` → no function diff
+6. `destroy`
+
+Three behaviours are recorded, not worked around:
+
+- The provider names the v1 endpoint `cloud_functions_custom_endpoint`
+  (`cloudfunctions2_custom_endpoint` is the v2 one); the case uses the v1 name.
+- A v1 event trigger with the default `retry = false` is created with no
+  `failurePolicy` member, but the API answers with the empty `failurePolicy`
+  message (its documented "ignore failures" default). The emulator renders that
+  empty message; omitting it made the provider flatten to no block and plan
+  `+ failure_policy { retry = false }` forever.
+- The module always manages a `google_storage_bucket_object` for the archive,
+  and 7.46.2 permadiffs it because the emulator's storage-object renderer does
+  not model `content_disposition`/`metadata`. That is a storage gap (TGM1's
+  surface, not TGM3's), so the no-changes check accepts a plan whose **only**
+  changed address is that object and fails on anything else; the case also
+  supplies an existing uppercase-location bucket (`create_bucket = false`) so
+  the bucket's location case does not add a second unrelated diff.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.

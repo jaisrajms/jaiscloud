@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore \
+        test-gcp-terraform test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
@@ -1333,6 +1333,34 @@ test-gcp-terraform-memorystore: ## Opt-in terraform-google-memorystore module ga
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-memorystore.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_MODULE_DIR="$(TF_MEMORYSTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh memorystore http://localhost:8080 test-project
+
+# The same driver with the terraform-google-event-function case (TGM3): the v1
+# module always sends ingress_settings (ALLOW_ALL) and an event_trigger with
+# failure_policy.retry, and can send vpc/secret/docker fields, which the
+# emulator used to drop (permadiff) and whose update masks it rejected with 501.
+# Opt-in for the same reasons (one-time module clone, provider from the
+# registry) and SKIPs cleanly when either is missing.
+TF_FUNCTIONS_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-event-function
+test-gcp-terraform-functions: ## Opt-in terraform-google-event-function module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_FUNCTIONS_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_FUNCTIONS_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-event-function \"$(TF_FUNCTIONS_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_FUNCTIONS_MODULE_DIR)\" checkout 9f2e26ae3b73"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-functions.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-functions.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_FUNCTIONS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh functions http://localhost:8080 test-project
 
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \

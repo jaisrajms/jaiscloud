@@ -169,3 +169,78 @@ func TestPostgresFunctionInstanceConfig(t *testing.T) {
 	}
 	s.Reset(ctx)
 }
+
+// TestPostgresFunctionV1ModuleFields round-trips the TGM3 v1 columns
+// (ingress/maxInstances/vpc/secret/docker/build/HTTPS security level) through
+// Postgres (insert, get, update, snapshot/restore), so --dsn mode persists them
+// exactly like the memory backend.
+func TestPostgresFunctionV1ModuleFields(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres store test")
+	}
+	ctx := context.Background()
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	if err := s.CreateFunction(ctx, "proj", "us-central1", "v1", v1FieldsFunction()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetFunction(ctx, "proj", "us-central1", "v1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	assertV1Fields(t, got)
+
+	// Clear-back update: every optional field is empty, ingress is ALLOW_ALL.
+	got.IngressSettings = "ALLOW_ALL"
+	got.MaxInstances = 0
+	got.VPCConnector = ""
+	got.VPCConnectorEgressSettings = ""
+	got.SecretEnvironmentVariables = nil
+	got.SecretVolumes = nil
+	got.DockerRegistry = ""
+	got.DockerRepository = ""
+	got.BuildWorkerPool = ""
+	got.HttpsTriggerSecurityLevel = "SECURE_ALWAYS"
+	if err := s.UpdateFunction(ctx, "proj", "us-central1", "v1", got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	cleared, err := s.GetFunction(ctx, "proj", "us-central1", "v1")
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	if cleared.IngressSettings != "ALLOW_ALL" || cleared.MaxInstances != 0 || cleared.VPCConnector != "" ||
+		len(cleared.SecretEnvironmentVariables) != 0 || len(cleared.SecretVolumes) != 0 ||
+		cleared.DockerRegistry != "" || cleared.BuildWorkerPool != "" ||
+		cleared.HttpsTriggerSecurityLevel != "SECURE_ALWAYS" {
+		t.Fatalf("cleared function = %+v", cleared)
+	}
+
+	// Restore from the pre-clear snapshot and check the full field set again.
+	if err := s.CreateFunction(ctx, "proj", "us-central1", "v2", v1FieldsFunction()); err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	restored, err := s.GetFunction(ctx, "proj", "us-central1", "v2")
+	if err != nil {
+		t.Fatalf("get after restore: %v", err)
+	}
+	assertV1Fields(t, restored)
+	s.Reset(ctx)
+}
