@@ -43,6 +43,7 @@ type (
 	// Firestore Admin control-plane wire shapes (admin.go), shared with the
 	// FirestoreAdmin gRPC transport (internal/gcp/grpc/firestoreadmin).
 	DatabaseDef       = databaseDef
+	CmekConfigDef     = cmekConfigDef
 	FieldDef          = fieldDef
 	FieldIndexConfig  = fieldIndexConfig
 	FieldTtlConfig    = fieldTtlConfig

@@ -325,6 +325,179 @@ func TestRESTDatabaseServerOwnedFields(t *testing.T) {
 	}
 }
 
+// TestRESTDatabaseCmekConfig pins Database.cmek_config on the JSON wire (TGM11).
+// The create body carries the block, and every response that renders a Database
+// (the terminal operation's response, get, list, patch) echoes it. A plain
+// create has no cmekConfig member at all — presence is the enablement signal, so
+// an empty/fabricated block would wrongly claim CMEK. The block is create-only:
+// mask `cmekConfig` resending the key is a no-op, a different key is
+// INVALID_ARGUMENT, `*` keeps a stored block, and a body-supplied
+// activeKeyVersion is never read as authoritative state (OUTPUT_ONLY).
+func TestRESTDatabaseCmekConfig(t *testing.T) {
+	const key = "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k"
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	// Create with the block: the terminal operation's response is the Database
+	// the provider reads its state from after the apply.
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "cmek-db",
+		"body": map[string]any{
+			"locationId": "us-central1",
+			"cmekConfig": map[string]any{
+				"kmsKeyName": key,
+				// OUTPUT_ONLY; a client-supplied list is not stored.
+				"activeKeyVersion": []any{"1"},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(cmekConfig): %v", err)
+	}
+	cresp, _ := created.Data["response"].(map[string]any)
+	crespCmek, _ := cresp["cmekConfig"].(map[string]any)
+	if crespCmek["kmsKeyName"] != key {
+		t.Errorf("create response cmekConfig = %v, want kmsKeyName %q", cresp["cmekConfig"], key)
+	}
+	if _, ok := crespCmek["activeKeyVersion"]; ok {
+		t.Errorf("create response echoed the OUTPUT_ONLY activeKeyVersion = %v", crespCmek["activeKeyVersion"])
+	}
+
+	// GET echoes the stored block.
+	got, err := p.GetDatabase(ctx, adminNR("databases/cmek-db", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	gotCmek, _ := got.Data["cmekConfig"].(map[string]any)
+	if gotCmek["kmsKeyName"] != key {
+		t.Errorf("GET cmekConfig = %v, want kmsKeyName %q", got.Data["cmekConfig"], key)
+	}
+	if _, ok := gotCmek["activeKeyVersion"]; ok {
+		t.Errorf("GET echoed activeKeyVersion = %v, want it omitted", gotCmek["activeKeyVersion"])
+	}
+
+	// LIST echoes it, and only for the CMEK database.
+	list, err := p.ListDatabases(ctx, adminNR("databases", nil))
+	if err != nil {
+		t.Fatalf("ListDatabases: %v", err)
+	}
+	dbs, _ := list.Data["databases"].([]any)
+	var seen bool
+	for _, raw := range dbs {
+		db, _ := raw.(map[string]any)
+		cmek, hasCmek := db["cmekConfig"].(map[string]any)
+		switch db["name"] {
+		case "projects/proj/databases/cmek-db":
+			seen = true
+			if !hasCmek || cmek["kmsKeyName"] != key {
+				t.Errorf("list cmek-db cmekConfig = %v, want kmsKeyName %q", db["cmekConfig"], key)
+			}
+		default:
+			if hasCmek {
+				t.Errorf("list fabricated a cmekConfig for %v: %v", db["name"], db["cmekConfig"])
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("ListDatabases omitted cmek-db")
+	}
+
+	// A plain database has no cmekConfig member in any response.
+	plain, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "plain-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(plain): %v", err)
+	}
+	plainResp, _ := plain.Data["response"].(map[string]any)
+	if _, ok := plainResp["cmekConfig"]; ok {
+		t.Errorf("plain create response carries cmekConfig = %v", plainResp["cmekConfig"])
+	}
+
+	// The camelCase mask path arrives from the provider as `cmekConfig` and is
+	// normalized to the proto path; resending the key is a no-op.
+	same, err := p.UpdateDatabase(ctx, adminNR("databases/cmek-db", map[string]any{
+		"updateMask": "cmekConfig",
+		"body":       map[string]any{"cmekConfig": map[string]any{"kmsKeyName": key}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(cmekConfig, same key): %v", err)
+	}
+	sameResp, _ := same.Data["response"].(map[string]any)
+	if cmek, _ := sameResp["cmekConfig"].(map[string]any); cmek["kmsKeyName"] != key {
+		t.Errorf("resend changed cmekConfig = %v", sameResp["cmekConfig"])
+	}
+
+	// The nested path is the same field and behaves the same.
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/cmek-db", map[string]any{
+		"updateMask": "cmekConfig.kmsKeyName",
+		"body":       map[string]any{"cmekConfig": map[string]any{"kmsKeyName": key}},
+	})); err != nil {
+		t.Fatalf("UpdateDatabase(cmekConfig.kmsKeyName, same key): %v", err)
+	}
+
+	// A different key is INVALID_ARGUMENT: the key of a CMEK-protected database
+	// is fixed at creation.
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/cmek-db", map[string]any{
+		"updateMask": "cmekConfig",
+		"body": map[string]any{
+			"cmekConfig": map[string]any{
+				"kmsKeyName": "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/other",
+			},
+		},
+	})); err != nil {
+		assertRESTInvalidArgument(t, "cmek key change", err)
+	} else {
+		t.Error("cmek key change succeeded, want InvalidArgument")
+	}
+
+	// A present block without kms_key_name is how the gcloud CLI serializes an
+	// unset CmekConfig (`"cmekConfig": {}` on every `firestore databases
+	// create`). Real GCP treats it as "no CMEK": the create succeeds and the
+	// operation response carries no block.
+	empty, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "empty-cmek",
+		"body": map[string]any{
+			"type":       "FIRESTORE_NATIVE",
+			"locationId": "nam5",
+			"cmekConfig": map[string]any{},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("create with an empty cmekConfig: %v", err)
+	}
+	emptyResp, _ := empty.Data["response"].(map[string]any)
+	if block, has := emptyResp["cmekConfig"]; has {
+		t.Errorf("create with an empty cmekConfig echoed %v, want no block", block)
+	}
+	// A non-object value is malformed JSON for the field.
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "bad-cmek",
+		"body":       map[string]any{"cmekConfig": "projects/p/key"},
+	})); err != nil {
+		assertRESTInvalidArgument(t, "create with a non-object cmekConfig", err)
+	} else {
+		t.Error("create with a non-object cmekConfig succeeded, want InvalidArgument")
+	}
+
+	// An explicit `*` replace whose body omits cmekConfig preserves the block.
+	starred, err := p.UpdateDatabase(ctx, adminNR("databases/cmek-db", map[string]any{
+		"updateMask": "*",
+		"body":       map[string]any{"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_ENABLED"},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(*): %v", err)
+	}
+	starredResp, _ := starred.Data["response"].(map[string]any)
+	if cmek, _ := starredResp["cmekConfig"].(map[string]any); cmek["kmsKeyName"] != key {
+		t.Errorf("`*` patch cleared cmekConfig = %v", starredResp["cmekConfig"])
+	}
+	if starredResp["pointInTimeRecoveryEnablement"] != "POINT_IN_TIME_RECOVERY_ENABLED" {
+		t.Errorf("`*` patch did not apply pointInTimeRecoveryEnablement = %v", starredResp["pointInTimeRecoveryEnablement"])
+	}
+}
+
 func TestRESTDeleteProtectionBlock(t *testing.T) {
 	ctx := context.Background()
 	p := newAdminProvider()

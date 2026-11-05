@@ -99,26 +99,40 @@ const passwordAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01
 
 // databaseDef is the persisted google.firestore.admin.v1.Database (the mutable
 // subset the emulator models). Fields the emulator has no source for
-// (cmek_config, source_info, ...) are omitted rather than fabricated;
-// earliest_version_time is derived per response (EarliestVersionTime), never
-// stored, because the proto documents it as continuously updated.
+// (source_info, ...) are omitted rather than fabricated; earliest_version_time
+// is derived per response (EarliestVersionTime), never stored, because the
+// proto documents it as continuously updated. cmek_config is stored and echoed
+// when a create carries one (TGM11) — its presence is what tells a client CMEK
+// is enabled, so it is never synthesized for a Google-managed database.
 type databaseDef struct {
-	Name                          string        `json:"name,omitempty"`
-	Uid                           string        `json:"uid,omitempty"`
-	CreateTime                    time.Time     `json:"createTime,omitempty"`
-	UpdateTime                    time.Time     `json:"updateTime,omitempty"`
-	DeleteTime                    time.Time     `json:"deleteTime,omitempty"`
-	LocationID                    string        `json:"locationId,omitempty"`
-	Type                          string        `json:"type,omitempty"`
-	ConcurrencyMode               string        `json:"concurrencyMode,omitempty"`
-	AppEngineIntegrationMode      string        `json:"appEngineIntegrationMode,omitempty"`
-	PointInTimeRecoveryEnablement string        `json:"pointInTimeRecoveryEnablement,omitempty"`
-	DeleteProtectionState         string        `json:"deleteProtectionState,omitempty"`
-	DatabaseEdition               string        `json:"databaseEdition,omitempty"`
-	KeyPrefix                     string        `json:"keyPrefix,omitempty"`
-	VersionRetentionPeriod        time.Duration `json:"versionRetentionPeriod,omitempty"`
-	Etag                          string        `json:"etag,omitempty"`
-	Deleted                       bool          `json:"deleted,omitempty"`
+	Name                          string         `json:"name,omitempty"`
+	Uid                           string         `json:"uid,omitempty"`
+	CreateTime                    time.Time      `json:"createTime,omitempty"`
+	UpdateTime                    time.Time      `json:"updateTime,omitempty"`
+	DeleteTime                    time.Time      `json:"deleteTime,omitempty"`
+	LocationID                    string         `json:"locationId,omitempty"`
+	Type                          string         `json:"type,omitempty"`
+	ConcurrencyMode               string         `json:"concurrencyMode,omitempty"`
+	AppEngineIntegrationMode      string         `json:"appEngineIntegrationMode,omitempty"`
+	PointInTimeRecoveryEnablement string         `json:"pointInTimeRecoveryEnablement,omitempty"`
+	DeleteProtectionState         string         `json:"deleteProtectionState,omitempty"`
+	DatabaseEdition               string         `json:"databaseEdition,omitempty"`
+	KeyPrefix                     string         `json:"keyPrefix,omitempty"`
+	VersionRetentionPeriod        time.Duration  `json:"versionRetentionPeriod,omitempty"`
+	CmekConfig                    *cmekConfigDef `json:"cmekConfig,omitempty"`
+	Etag                          string         `json:"etag,omitempty"`
+	Deleted                       bool           `json:"deleted,omitempty"`
+}
+
+// cmekConfigDef mirrors google.firestore.admin.v1.Database.CmekConfig. The
+// block models the stored configuration only: kms_key_name is the key the
+// database was created with, and active_key_version is the OUTPUT_ONLY list of
+// key versions real GCP derives from KMS. This emulator has no KMS key-version
+// store to derive it from, so the list stays empty rather than being fabricated
+// (the REST rendering omits an empty list, as protojson does).
+type cmekConfigDef struct {
+	KmsKeyName       string   `json:"kmsKeyName,omitempty"`
+	ActiveKeyVersion []string `json:"activeKeyVersion,omitempty"`
 }
 
 // fieldDef is the persisted google.firestore.admin.v1.Field.
@@ -481,6 +495,22 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	// OUTPUT_ONLY as well, so a supplied value is not stored either.
 	db.VersionRetentionPeriod = databaseRetentionPeriod(db.PointInTimeRecoveryEnablement)
 	db.KeyPrefix = ""
+	if db.CmekConfig != nil {
+		// A present-but-empty block is not a request to enable CMEK: it is how a
+		// proto3 client that never set CmekConfig serializes the field (the gcloud
+		// CLI sends `"cmekConfig": {}` on every `firestore databases create`), and
+		// real GCP treats it as "no CMEK". Although kms_key_name is REQUIRED
+		// inside a populated CmekConfig, an all-default message is dropped rather
+		// than rejected so those clients keep working.
+		if strings.TrimSpace(db.CmekConfig.KmsKeyName) == "" {
+			db.CmekConfig = nil
+		} else {
+			// active_key_version is OUTPUT_ONLY, derived from KMS on real GCP; a
+			// client-supplied value is not authoritative and nothing is fabricated
+			// in its place (see cmekConfigDef).
+			db.CmekConfig.ActiveKeyVersion = nil
+		}
+	}
 	db.DeleteProtectionState = normalizeDeleteProtection(db.DeleteProtectionState)
 	db.Etag = randomHex(16)
 	if err := s.putResource(ctx, project, rtDatabase, databaseRel(dbID), db, true); err != nil {
@@ -673,7 +703,9 @@ func replacesResource(mask []string, maskPresent bool) bool {
 // takes the request value, falling back to its documented default when the
 // request omits it. Output-only fields (name, uid, times, etag, key_prefix,
 // version_retention_period) and immutable ones (location_id, type,
-// database_edition) stay under the server's control.
+// database_edition) stay under the server's control. cmek_config is untouched:
+// it is create-only, so a `*` body that omits it must not clear a stored block
+// (there is no API to disable CMEK).
 func applyDatabaseReplace(cur *databaseDef, patch databaseDef) {
 	cur.ConcurrencyMode = patch.ConcurrencyMode
 	if cur.ConcurrencyMode == "" {
@@ -701,6 +733,14 @@ func applyDatabaseReplace(cur *databaseDef, patch databaseDef) {
 // (key_prefix, version_retention_period) in the mask is ignored as AIP-161
 // requires, but a masked write that would *change* the IMMUTABLE database_edition
 // is INVALID_ARGUMENT (AIP-203); resending the current value is a no-op.
+//
+// cmek_config is create-only in practice: Firestore documents that CMEK can only
+// be set when the database is created and that "you can't change a key for a
+// CMEK-protected database". A mask that names it may therefore only resend the
+// current key (a no-op); enabling CMEK on a database that has none, or switching
+// keys, is INVALID_ARGUMENT. The block is never cleared — neither the explicit
+// `*` replace nor an implied one removes it — and cmek_config.active_key_version
+// is OUTPUT_ONLY, so a mask naming it writes nothing (AIP-161).
 func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, maskPresent bool, etag string) (databaseDef, string, error) {
 	replace := replacesResource(mask, maskPresent)
 	mask = impliedMask(mask, maskPresent)
@@ -710,10 +750,15 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 	// An explicit mask only covers the fields it names, so a body value outside
 	// it is irrelevant (AIP-134); `*` covers every populated field.
 	editionMasked := false
+	cmekMasked := false
 	for _, path := range mask {
-		if path == "*" || path == "database_edition" {
+		switch path {
+		case "*":
+			editionMasked, cmekMasked = true, true
+		case "database_edition":
 			editionMasked = true
-			break
+		case "cmek_config", "cmek_config.kms_key_name":
+			cmekMasked = true
 		}
 	}
 	updated, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
@@ -725,6 +770,14 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 		}
 		if editionMasked && patch.DatabaseEdition != "" && patch.DatabaseEdition != cur.DatabaseEdition {
 			return databaseDef{}, gcpInvalidArgument("database_edition is immutable and cannot be changed")
+		}
+		if cmekMasked && patch.CmekConfig != nil && strings.TrimSpace(patch.CmekConfig.KmsKeyName) != "" {
+			switch {
+			case cur.CmekConfig == nil || cur.CmekConfig.KmsKeyName == "":
+				return databaseDef{}, gcpInvalidArgument("cmek_config can only be set when the database is created: CMEK cannot be enabled on an existing database")
+			case patch.CmekConfig.KmsKeyName != cur.CmekConfig.KmsKeyName:
+				return databaseDef{}, gcpInvalidArgument("cmek_config.kms_key_name cannot be changed: the key of a CMEK-protected database is fixed at creation")
+			}
 		}
 		if replace {
 			applyDatabaseReplace(&cur, patch)
@@ -855,6 +908,11 @@ func mutateOne[T any](ctx context.Context, s *Service, project, rt, id string, c
 // version_retention_period are OUTPUT_ONLY and database_edition is IMMUTABLE
 // (database.proto), so a request that carries one never writes it. The
 // retention window is re-derived from the PITR toggle by the caller.
+//
+// cmek_config has no arm either, on purpose: it is create-only, and the caller's
+// immutability guard already rejects an attempt to enable or change it, so a
+// masked write here is a resend of the stored key (a no-op). There is no path
+// that clears the block.
 func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 	switch path {
 	case "*":

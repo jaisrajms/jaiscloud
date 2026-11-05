@@ -327,6 +327,18 @@ func databaseMap(d databaseDef) map[string]any {
 	if d.VersionRetentionPeriod > 0 {
 		m["versionRetentionPeriod"] = restDuration(d.VersionRetentionPeriod)
 	}
+	// cmekConfig is present only for a CMEK-protected database (the field's
+	// presence is the enablement signal), so a Google-managed database gets no
+	// member at all rather than an empty object. activeKeyVersion is OUTPUT_ONLY
+	// and this emulator derives none; a stored list (written by a future build)
+	// would still be echoed, and an empty one is omitted as protojson does.
+	if c := d.CmekConfig; c != nil && c.KmsKeyName != "" {
+		cmek := map[string]any{"kmsKeyName": c.KmsKeyName}
+		if len(c.ActiveKeyVersion) > 0 {
+			cmek["activeKeyVersion"] = append([]string(nil), c.ActiveKeyVersion...)
+		}
+		m["cmekConfig"] = cmek
+	}
 	// earliest_version_time is OUTPUT_ONLY and continuously updated
 	// (database.proto: "populated with `now - version_retention_period`"), so it
 	// is derived per response instead of being stored (DC54).
@@ -426,6 +438,20 @@ func databaseFromREST(body map[string]any) (databaseDef, error) {
 	}
 	if s, _ := body["versionRetentionPeriod"].(string); s != "" {
 		d.VersionRetentionPeriod = parseRestDuration(s)
+	}
+	if raw, ok := body["cmekConfig"]; ok && raw != nil {
+		cfg, ok := raw.(map[string]any)
+		if !ok {
+			return databaseDef{}, gcpInvalidArgument(fmt.Sprintf("invalid Database.cmekConfig value %v: want an object", raw))
+		}
+		// A block with no key means "no CMEK", not a malformed request: the gcloud
+		// CLI serializes an unset CmekConfig as `"cmekConfig": {}` on every
+		// `firestore databases create`, and real GCP accepts that form.
+		if s, _ := cfg["kmsKeyName"].(string); strings.TrimSpace(s) != "" {
+			// activeKeyVersion is OUTPUT_ONLY: it is accepted on the wire but
+			// never read as input, so nothing is stored from a client value.
+			d.CmekConfig = &cmekConfigDef{KmsKeyName: s}
+		}
 	}
 	return d, nil
 }
