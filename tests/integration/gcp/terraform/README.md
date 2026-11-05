@@ -107,8 +107,9 @@ module, and requires the module's lifecycle to converge.
 | `memorystore` | [`terraform-google-memorystore`](https://github.com/terraform-google-modules/terraform-google-memorystore) | `5415d5ccca28` | `authEnabled`, `connectMode`, `transitEncryptionMode`, `readReplicasMode`, `maintenancePolicy` and `persistenceConfig` read back (the two ForceNew modes no longer replace the instance); AUTH enabled then disabled, maintenance window/snapshot period changed, labels changed then cleared; each phase ends with `plan` **No changes** |
 | `functions` | [`terraform-google-event-function`](https://github.com/terraform-google-modules/terraform-google-event-function) | `9f2e26ae3b73` | `ingressSettings` (`ALLOW_ALL` → `ALLOW_INTERNAL_ONLY`), the event trigger's default `failurePolicy` and `failurePolicy.retry`, and `environment_variables` read back; ingress/env changed and cleared, retry toggled; each phase ends with a `plan` whose only remaining diff is the recorded storage-object gap |
 | `clouddns` | [`terraform-google-cloud-dns`](https://github.com/terraform-google-modules/terraform-google-cloud-dns) | `35cd6de8e647` | `privateVisibilityConfig` (VPC networks + GKE clusters), `forwardingConfig` (targets incl. `forwardingPath`), `peeringConfig` and `dnssecConfig` (state, `nonExistence`, both default key specs) read back; private description/labels/network list changed, then forwarding, peering and public-with-DNSSEC zones created and DNSSEC turned on; each phase ends with `plan` **No changes** |
+| `cloud-operations` | [`terraform-google-cloud-operations`](https://github.com/terraform-google-modules/terraform-google-cloud-operations) (`modules/simple-uptime-check`) | `8c3e37951bb4` | the alert policy's `alertStrategy` (`autoClose`, `notificationRateLimit.period`) and `userLabels` read back alongside the uptime check; `auto_close`/rate limit and labels changed, then the strategy and labels cleared; each phase ends with `plan` **No changes** |
 
-The storage, memorystore, functions and clouddns cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version).
+The storage, memorystore, functions, clouddns and cloud-operations cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -142,13 +143,18 @@ git clone https://github.com/terraform-google-modules/terraform-google-cloud-dns
   "$HOME/.cache/terraform-modules/terraform-google-cloud-dns"
 git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-dns" checkout 35cd6de8e647
 make test-gcp-terraform-clouddns
+
+git clone https://github.com/terraform-google-modules/terraform-google-cloud-operations \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-operations"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-operations" checkout 8c3e37951bb4
+make test-gcp-terraform-cloud-operations
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
 (default `$HOME/.cache/terraform-modules/<module repo>`); the Makefile targets
 point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` /
-`TF_CLOUDDNS_MODULE_DIR` respectively.
+`TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -304,6 +310,33 @@ minimal `dnssec_config` reads back only what was sent, and the forwarding zone's
 optional `forwardingPath`/`ipv6Address` survive because the emulator stores the
 decoded object. `reverse_lookup` and `service_directory` zones are not exercised
 — they are `google-beta`-only variants, out of scope for this case.
+
+**cloud-operations** — the `modules/simple-uptime-check` module is applied with
+`protocol = "HTTPS"`, a `monitored_resource` of type `uptime_url`,
+`auto_close = "18000s"`, `notification_rate_limit_period = "300s"` and
+`alert_policy_user_labels = { team = "platform" }`, which makes the module emit
+the alert policy's `alert_strategy` block. The gate:
+
+1. `apply`, then assert through the REST API that the uptime check exists, the
+   alert policy GET returns `alertStrategy.autoClose`, the
+   `alertStrategy.notificationRateLimit.period` and the user labels, and that no
+   `severity` was synthesized (a policy that never set it must not read one
+   back); the apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change `auto_close` to `"36000s"`, the rate limit to `"600s"` and the labels
+   to `{ team = "sre" }`; `apply` (the provider PATCHes
+   `updateMask=alertStrategy`); assert the new values; `plan` → **no changes**
+4. clear the strategy (`auto_close = null`,
+   `notification_rate_limit_period = null`) and the labels; `apply`; assert the
+   `alertStrategy` block and the labels are gone while the uptime check
+   survived; `plan` → **no changes**
+5. `destroy`
+
+The provider's `monitoring_custom_endpoint` is the API **base** URL — it appends
+`v3/` itself, so the case points it at `${endpoint}/`; a versioned endpoint
+(`${endpoint}/v3/`) produces `/v3/v3/...` and a 404. The `severity` enum the
+same change added has no module variable, so it is covered by the service,
+store, REST and gRPC tests rather than this gate.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.

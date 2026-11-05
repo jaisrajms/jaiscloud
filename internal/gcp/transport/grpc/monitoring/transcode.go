@@ -290,10 +290,19 @@ func alertPolicyToProto(p monitoringstore.AlertPolicy, project string) *monitori
 	if p.Enabled != nil {
 		out.Enabled = wrapperspb.Bool(*p.Enabled)
 	}
+	if p.Severity != "" {
+		out.Severity = monitoringpb.AlertPolicy_Severity(monitoringpb.AlertPolicy_Severity_value[p.Severity])
+	}
 	if len(p.Documentation) > 0 && string(p.Documentation) != "null" {
 		doc := &monitoringpb.AlertPolicy_Documentation{}
 		if protojson.Unmarshal(p.Documentation, doc) == nil {
 			out.Documentation = doc
+		}
+	}
+	if len(p.AlertStrategy) > 0 && string(p.AlertStrategy) != "null" {
+		strategy := &monitoringpb.AlertPolicy_AlertStrategy{}
+		if protojson.Unmarshal(p.AlertStrategy, strategy) == nil {
+			out.AlertStrategy = strategy
 		}
 	}
 	for _, c := range p.Conditions {
@@ -322,6 +331,16 @@ func alertPolicyFromProto(p *monitoringpb.AlertPolicy) (monitoringstore.AlertPol
 			return ap, err
 		}
 		ap.Documentation = json.RawMessage(b)
+	}
+	if p.GetAlertStrategy() != nil {
+		b, err := protojson.Marshal(p.GetAlertStrategy())
+		if err != nil {
+			return ap, err
+		}
+		ap.AlertStrategy = json.RawMessage(b)
+	}
+	if sev := p.GetSeverity(); sev != monitoringpb.AlertPolicy_SEVERITY_UNSPECIFIED {
+		ap.Severity = sev.String()
 	}
 	for _, c := range p.GetConditions() {
 		b, err := protojson.Marshal(c)

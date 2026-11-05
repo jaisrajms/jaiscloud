@@ -207,8 +207,8 @@ func (s *PostgresStore) ListAllTimeSeries(ctx context.Context) ([]TimeSeries, er
 
 func scanAlertPolicy(scan func(...any) error) (AlertPolicy, error) {
 	var p AlertPolicy
-	var documentation, conditions, notificationChannels, userLabels []byte
-	if err := scan(&p.ID, &p.DisplayName, &p.Combiner, &p.Enabled, &documentation, &conditions, &notificationChannels, &userLabels); err != nil {
+	var documentation, conditions, notificationChannels, userLabels, alertStrategy []byte
+	if err := scan(&p.ID, &p.DisplayName, &p.Combiner, &p.Enabled, &documentation, &conditions, &notificationChannels, &userLabels, &alertStrategy, &p.Severity); err != nil {
 		return AlertPolicy{}, err
 	}
 	if len(documentation) > 0 && string(documentation) != "null" {
@@ -223,18 +223,22 @@ func scanAlertPolicy(scan func(...any) error) (AlertPolicy, error) {
 	if len(userLabels) > 0 {
 		_ = json.Unmarshal(userLabels, &p.UserLabels)
 	}
+	if len(alertStrategy) > 0 && string(alertStrategy) != "null" {
+		p.AlertStrategy = json.RawMessage(alertStrategy)
+	}
 	return p, nil
 }
 
-const policyCols = "id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels"
+const policyCols = "id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels, alert_strategy, severity"
 
 func (s *PostgresStore) insertPolicy(ctx context.Context, project string, p AlertPolicy) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_monitoring_alert_policies
-			(project_id, id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			(project_id, id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels, alert_strategy, severity)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 	`, project, p.ID, p.DisplayName, p.Combiner, p.Enabled, jsonb(p.Documentation),
-		jsonb(p.Conditions), jsonb(p.NotificationChannels), jsonb(p.UserLabels))
+		jsonb(p.Conditions), jsonb(p.NotificationChannels), jsonb(p.UserLabels),
+		jsonb(p.AlertStrategy), p.Severity)
 	return err
 }
 
@@ -283,10 +287,12 @@ func (s *PostgresStore) ListAlertPolicies(ctx context.Context, project string) (
 func (s *PostgresStore) UpdateAlertPolicy(ctx context.Context, project string, p AlertPolicy) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_monitoring_alert_policies
-		SET display_name=$3, combiner=$4, enabled=$5, documentation=$6, conditions=$7, notification_channels=$8, user_labels=$9
+		SET display_name=$3, combiner=$4, enabled=$5, documentation=$6, conditions=$7, notification_channels=$8, user_labels=$9,
+		    alert_strategy=$10, severity=$11
 		WHERE project_id=$1 AND id=$2
 	`, project, p.ID, p.DisplayName, p.Combiner, p.Enabled, jsonb(p.Documentation),
-		jsonb(p.Conditions), jsonb(p.NotificationChannels), jsonb(p.UserLabels))
+		jsonb(p.Conditions), jsonb(p.NotificationChannels), jsonb(p.UserLabels),
+		jsonb(p.AlertStrategy), p.Severity)
 	if err != nil {
 		return fmt.Errorf("monitoring UpdateAlertPolicy: %w", err)
 	}
@@ -335,10 +341,12 @@ func (s *PostgresStore) updateAlertPolicyAtomicOnce(ctx context.Context, project
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE jc_monitoring_alert_policies
-		SET display_name=$3, combiner=$4, enabled=$5, documentation=$6, conditions=$7, notification_channels=$8, user_labels=$9
+		SET display_name=$3, combiner=$4, enabled=$5, documentation=$6, conditions=$7, notification_channels=$8, user_labels=$9,
+		    alert_strategy=$10, severity=$11
 		WHERE project_id=$1 AND id=$2
 	`, project, id, next.DisplayName, next.Combiner, next.Enabled, jsonb(next.Documentation),
-		jsonb(next.Conditions), jsonb(next.NotificationChannels), jsonb(next.UserLabels))
+		jsonb(next.Conditions), jsonb(next.NotificationChannels), jsonb(next.UserLabels),
+		jsonb(next.AlertStrategy), next.Severity)
 	if err != nil {
 		return AlertPolicy{}, fmt.Errorf("monitoring UpdateAlertPolicyAtomic: %w", err)
 	}

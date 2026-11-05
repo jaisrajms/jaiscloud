@@ -165,6 +165,117 @@ func TestPostgresServicesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPostgresAlertPolicyStrategyRoundTrip verifies the alertStrategy object
+// and the severity enum (TGM5) survive the Postgres columns (migration 060), an
+// update and a Snapshot/Restore round trip — the memory/Postgres parity the
+// store promises.
+func TestPostgresAlertPolicyStrategyRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres monitoring test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	defer s.Reset(ctx)
+	s.Reset(ctx)
+
+	enabled := true
+	first := json.RawMessage(`{"autoClose":"18000s","notificationRateLimit":{"period":"300s"},"notificationChannelStrategy":[{"notificationChannelNames":["projects/p1/notificationChannels/nc1"],"renotifyInterval":"600s"}]}`)
+	p := AlertPolicy{
+		ID: "ap-strategy", DisplayName: "Uptime strategy", Combiner: 1, Enabled: &enabled,
+		AlertStrategy: first, Severity: "WARNING", UserLabels: map[string]string{"team": "platform"},
+	}
+	if err := s.CreateAlertPolicy(ctx, "p1", p); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !sameJSON(got.AlertStrategy, first) || got.Severity != "WARNING" || got.UserLabels["team"] != "platform" {
+		t.Fatalf("get = %+v (strategy %s)", got, got.AlertStrategy)
+	}
+
+	// A masked update through the atomic path (the service's merge entry).
+	second := json.RawMessage(`{"autoClose":"36000s","notificationRateLimit":{"period":"600s"}}`)
+	updated, err := s.UpdateAlertPolicyAtomic(ctx, "p1", "ap-strategy", func(stored AlertPolicy) (AlertPolicy, error) {
+		stored.AlertStrategy = second
+		stored.Severity = "CRITICAL"
+		stored.UserLabels = map[string]string{"team": "sre"}
+		return stored, nil
+	})
+	if err != nil {
+		t.Fatalf("atomic update: %v", err)
+	}
+	if !sameJSON(updated.AlertStrategy, second) || updated.Severity != "CRITICAL" {
+		t.Fatalf("updated = %+v (strategy %s)", updated, updated.AlertStrategy)
+	}
+
+	// Every declared severity round-trips through the TEXT column.
+	for _, sev := range []string{"SEVERITY_UNSPECIFIED", "CRITICAL", "ERROR", "WARNING"} {
+		p.AlertStrategy = second
+		p.Severity = sev
+		if err := s.UpdateAlertPolicy(ctx, "p1", p); err != nil {
+			t.Fatalf("update severity %q: %v", sev, err)
+		}
+		got, _ := s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+		if got.Severity != sev {
+			t.Fatalf("severity round-trip = %q, want %q", got.Severity, sev)
+		}
+	}
+
+	// Clearing the strategy stores NULL, and a second policy keeps its own.
+	p.AlertStrategy = nil
+	p.Severity = ""
+	p.UserLabels = nil
+	if err := s.UpdateAlertPolicy(ctx, "p1", p); err != nil {
+		t.Fatalf("clear strategy: %v", err)
+	}
+	cleared, _ := s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if len(cleared.AlertStrategy) != 0 || cleared.Severity != "" {
+		t.Fatalf("cleared = %+v (strategy %s)", cleared, cleared.AlertStrategy)
+	}
+	if err := s.CreateAlertPolicy(ctx, "p1", AlertPolicy{
+		ID: "ap-kept", DisplayName: "kept", AlertStrategy: first, Severity: "ERROR",
+	}); err != nil {
+		t.Fatalf("create second policy: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	restored, err := s.GetAlertPolicy(ctx, "p1", "ap-kept")
+	if err != nil {
+		t.Fatalf("restored policy: %v", err)
+	}
+	if !sameJSON(restored.AlertStrategy, first) || restored.Severity != "ERROR" {
+		t.Fatalf("restored = %+v (strategy %s)", restored, restored.AlertStrategy)
+	}
+	restoredCleared, err := s.GetAlertPolicy(ctx, "p1", "ap-strategy")
+	if err != nil {
+		t.Fatalf("restored cleared policy: %v", err)
+	}
+	if len(restoredCleared.AlertStrategy) != 0 || restoredCleared.Severity != "" {
+		t.Fatalf("restored cleared = %+v (strategy %s)", restoredCleared, restoredCleared.AlertStrategy)
+	}
+}
+
 // TestPostgresAtomicRetriesSerializationConflict drives many concurrent
 // read-modify-writes of the same alert policy. Under SERIALIZABLE an unlucky
 // interleaving aborts one transaction with SQLSTATE 40001; before SPK8 the

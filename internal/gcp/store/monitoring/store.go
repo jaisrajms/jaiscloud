@@ -144,9 +144,14 @@ type TimeSeries struct {
 
 // AlertPolicy is a stored alerting policy (the CloudWatch alarm analogue). ID
 // is the server-assigned policy id (the trailing segment of the resource name).
-// Documentation and Conditions carry the proto sub-messages as opaque JSON so
-// they round-trip faithfully without the store depending on the proto package;
-// the emulator never evaluates them.
+// Documentation, Conditions and AlertStrategy carry the proto sub-messages as
+// opaque JSON so they round-trip faithfully without the store depending on the
+// proto package; the emulator never evaluates them. AlertStrategy holds the
+// whole `alertStrategy` object (autoClose, notificationRateLimit,
+// notificationChannelStrategy, notificationPrompts) exactly as the client sent
+// it, so a nested update-mask path can be applied as the root message.
+// Severity is the `severity` enum name (SEVERITY_UNSPECIFIED, CRITICAL, ERROR,
+// WARNING); an empty string means the client never set it.
 type AlertPolicy struct {
 	ID                   string            `json:"id,omitempty"`
 	DisplayName          string            `json:"displayName,omitempty"`
@@ -156,6 +161,8 @@ type AlertPolicy struct {
 	Enabled              *bool             `json:"enabled,omitempty"`
 	NotificationChannels []string          `json:"notificationChannels,omitempty"`
 	UserLabels           map[string]string `json:"userLabels,omitempty"`
+	AlertStrategy        json.RawMessage   `json:"alertStrategy,omitempty"`
+	Severity             string            `json:"severity,omitempty"`
 }
 
 // NotificationChannel is a stored notification destination (the CloudWatch

@@ -20,6 +20,10 @@
 #                  directory name under $HOME/.cache/terraform-modules)
 #   MODULE_COMMIT  the pinned commit printed in the SKIP/clone hint and README
 #   MODULE_GIT     optional clone URL (defaults to the CFT GitHub URL)
+#   MODULE_SUBDIR  optional module path inside the checkout, for a repo that is
+#                  a collection of modules (e.g.
+#                  terraform-google-cloud-operations/modules/simple-uptime-check);
+#                  case_main then sees $MODULE_DIR as that module directory
 #   case_main      the gate body; it runs with $WORK, $MODULE_DIR, $ENDPOINT,
 #                  $PROJECT and the helpers below in scope
 #
@@ -89,6 +93,7 @@ TF="${TF_BIN:-terraform}"
 MODULE_REPO=""
 MODULE_COMMIT=""
 MODULE_GIT=""
+MODULE_SUBDIR=""
 case_main() { :; }
 # shellcheck source=/dev/null
 source "$CASE_FILE"
@@ -117,6 +122,9 @@ if [[ ! -d "$MODULE_DIR" ]]; then
 fi
 
 MODULE_DIR="$(cd "$MODULE_DIR" && pwd)"
+if [[ -n "$MODULE_SUBDIR" ]]; then
+  MODULE_DIR="$MODULE_DIR/$MODULE_SUBDIR"
+fi
 if [[ ! -f "$MODULE_DIR/main.tf" ]]; then
   echo "ERROR: $MODULE_DIR does not look like $MODULE_REPO (no main.tf)"
   exit 1

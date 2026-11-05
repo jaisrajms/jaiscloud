@@ -653,12 +653,16 @@ func alertPolicyFromJSON(body map[string]any) monitoringstore.AlertPolicy {
 		Combiner:             enumValue(combinerValue, body["combiner"]),
 		NotificationChannels: strListFrom(body["notificationChannels"]),
 		UserLabels:           stringMapFrom(body["userLabels"]),
+		Severity:             strFrom(body["severity"]),
 	}
 	if enabled, ok := body["enabled"].(bool); ok {
 		p.Enabled = &enabled
 	}
 	if doc, ok := body["documentation"]; ok && doc != nil {
 		p.Documentation = rawMessage(doc)
+	}
+	if strategy, ok := body["alertStrategy"]; ok && strategy != nil {
+		p.AlertStrategy = rawMessage(strategy)
 	}
 	for _, c := range listFrom(body["conditions"]) {
 		p.Conditions = append(p.Conditions, rawMessage(c))
@@ -683,8 +687,14 @@ func alertPolicyToJSON(p monitoringstore.AlertPolicy, project string) map[string
 	if len(p.UserLabels) > 0 {
 		out["userLabels"] = p.UserLabels
 	}
+	if p.Severity != "" {
+		out["severity"] = p.Severity
+	}
 	if len(p.Documentation) > 0 && string(p.Documentation) != "null" {
 		out["documentation"] = rawToAny(p.Documentation)
+	}
+	if len(p.AlertStrategy) > 0 && string(p.AlertStrategy) != "null" {
+		out["alertStrategy"] = rawToAny(p.AlertStrategy)
 	}
 	if len(p.Conditions) > 0 {
 		conds := make([]any, 0, len(p.Conditions))

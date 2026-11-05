@@ -382,13 +382,14 @@ func (s *Service) DeleteAlertPolicy(ctx context.Context, project, id string) err
 
 // alertPolicyMaskFields is the full update_mask field set of a Cloud Monitoring
 // AlertPolicy (Discovery schema google.monitoring.v3.AlertPolicy), normalized
-// to snake_case roots. alertStrategy, severity, validity, creationRecord and
-// mutationRecord are real fields the emulator does not store, so a mask naming
-// one stays a 501 UnsupportedOperation rather than a client error.
+// to snake_case roots. validity, creationRecord and mutationRecord are
+// read-only fields the emulator does not store, so a mask naming one stays a
+// 501 UnsupportedOperation rather than a client error (a path that names no
+// field at all is still a 400).
 var alertPolicyMaskFields = maskFieldSet(
 	"displayName", "documentation", "conditions", "combiner", "enabled",
-	"notificationChannels", "userLabels",
-	"alertStrategy", "severity", "validity", "creationRecord", "mutationRecord",
+	"notificationChannels", "userLabels", "alertStrategy", "severity",
+	"validity", "creationRecord", "mutationRecord",
 	"name",
 )
 
@@ -419,6 +420,14 @@ func applyAlertPolicyMask(stored, incoming monitoringstore.AlertPolicy, updateMa
 			stored.NotificationChannels = incoming.NotificationChannels
 		case "user_labels":
 			stored.UserLabels = incoming.UserLabels
+		case "alert_strategy":
+			// The normaliser collapses a nested path (alertStrategy.autoClose,
+			// alertStrategy.notificationRateLimit.period, …) to the root, so the
+			// whole strategy object is replaced by the incoming one — matching the
+			// opaque-JSON storage. An empty incoming strategy clears the field.
+			stored.AlertStrategy = incoming.AlertStrategy
+		case "severity":
+			stored.Severity = incoming.Severity
 		default:
 			if !alertPolicyMaskFields[path] {
 				return stored, invalidMaskPath(raw)
