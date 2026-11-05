@@ -74,6 +74,19 @@ func (s *MemoryStore) ListDocuments(_ context.Context, project, database string)
 	return result, nil
 }
 
+// DeleteDocuments removes every document under the given project+database.
+func (s *MemoryStore) DeleteDocuments(_ context.Context, project, database string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := "projects/" + project + "/databases/" + database + "/documents/"
+	for name := range s.docs {
+		if strings.HasPrefix(name, prefix) {
+			delete(s.docs, name)
+		}
+	}
+	return nil
+}
+
 // Commit applies a batch of writes atomically. Read-set entries and write
 // preconditions are validated against the current state under the store lock;
 // a mismatch aborts the whole batch without applying any write.

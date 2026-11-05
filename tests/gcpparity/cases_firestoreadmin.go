@@ -43,8 +43,8 @@ func firestoreAdminScenario() Scenario {
 		return dbName(e) + "/collectionGroups/" + cg(e) + "/fields/" + fieldPath(e)
 	}
 	ucName := func(e *Env) string { return dbName(e) + "/userCreds/" + ucID(e) }
-	// Backup schedules have no client-supplied id; the emulator (like the index
-	// surface) assigns "1". The schedule is scoped by its unique database id.
+	// Backup schedules have no client-supplied id: the server auto-assigns the
+	// lowest free one ("1" for the first schedule on a fresh database).
 	scheduleName := func(e *Env) string { return dbName(e) + "/backupSchedules/1" }
 
 	// ─── gRPC side ────────────────────────────────────────────────────────────
@@ -93,6 +93,9 @@ func firestoreAdminScenario() Scenario {
 				Parent: dbName(e),
 				BackupSchedule: &adminpb.BackupSchedule{
 					Retention: durationpb.New(time.Hour),
+					Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
+						DailyRecurrence: &adminpb.DailyRecurrence{},
+					},
 				},
 			})
 			return err

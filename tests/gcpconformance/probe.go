@@ -356,9 +356,10 @@ var placeholderOverrides = map[string]string{
 	"providers":    "pubsub.googleapis.com",
 	"versions":     "1",
 	"acls":         "allTopics",
-	// Firestore Admin backup schedules have no id on create (the emulator
-	// assigns the single schedule id "1"), so a get/patch/delete probe must
-	// target "1" rather than a synthesized per-operation id.
+	// Firestore Admin backup schedules have no id on create (the server
+	// assigns the lowest free one, "1" on a fresh database), so a
+	// get/patch/delete probe must target "1" rather than a synthesized
+	// per-operation id.
 	"backupSchedules": "1",
 }
 

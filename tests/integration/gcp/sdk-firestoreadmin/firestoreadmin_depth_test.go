@@ -33,11 +33,15 @@
 // The terminal DeleteDatabase operation carries the soft-deleted Database (the
 // proto's operation_info declares response_type "Database"), so the suite waits
 // on it through the official client's DeleteDatabaseOperation.Wait and asserts
-// the returned record, then the resource's absence. A maskless UpdateDatabase
-// (AIP-134's implied mask of the populated fields) is asserted in the lifecycle's
-// Databases case — DC20 — and the same implied-mask form is asserted for
-// UpdateField and UpdateBackupSchedule (dotted through the official client),
-// which must apply every populated field including the recurrence oneof — DC36.
+// the returned record, then the resource's absence. Deleting a database also
+// cascades to its documents and database-scoped admin resources (backup
+// schedules, user creds, …) while retaining backups; the lifecycle case stages a
+// schedule and user creds, asserts they are gone, and re-creates the same id with
+// a successful schedule create. A maskless UpdateDatabase (AIP-134's implied mask
+// of the populated fields) is asserted in the lifecycle's Databases case — DC20 —
+// and the same implied-mask form is asserted for UpdateField (DC36); a backup
+// schedule's recurrence is immutable, so its maskless patch applies the
+// retention and rejects a recurrence change.
 // The ServerOwnedFields case pins database.proto's field ownership — DC38:
 // key_prefix/version_retention_period are OUTPUT_ONLY and database_edition is
 // IMMUTABLE, so a patch never stores them and the retention window is derived
@@ -124,6 +128,25 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 			"a maskless patch must not clear an unpopulated field")
 		require.NotEqual(t, updated.GetEtag(), implied.GetEtag(), "a maskless update rotates the etag")
 
+		// Stage the database's children: the delete cascade must take them with
+		// it, and the replacement database must not inherit them.
+		sched, err := c.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+			Parent: databaseName(id),
+			BackupSchedule: &adminpb.BackupSchedule{
+				Retention:  durationpb.New(24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+			},
+		})
+		require.NoError(t, err)
+		schedName := sched.GetName()
+		uc, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+			Parent:      databaseName(id),
+			UserCredsId: "depthcred",
+			UserCreds:   &adminpb.UserCreds{},
+		})
+		require.NoError(t, err)
+		ucName := uc.GetName()
+
 		// Delete returns a terminal operation carrying the soft-deleted
 		// database (operation_info response_type "Database"), so the typed
 		// Wait resolves instead of failing on an empty result.
@@ -136,6 +159,26 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.Equal(t, databaseName(id), deleted.GetName())
 		require.NotNil(t, deleted.GetDeleteTime(), "the operation response is the soft-deleted database")
 		testdepth.AssertError(t, getDatabaseErr(ctx, c, id), testdepth.SpecNotFound())
+
+		// The database's schedule and user creds are deleted with it.
+		_, err = c.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: schedName})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+		_, err = c.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: ucName})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+
+		// Re-creating the id starts clean: the first schedule create on the new
+		// database succeeds instead of answering 409 backup_schedule already
+		// exists (the bug the cascade fixes).
+		recreated := createDatabase(t, c, id)
+		require.NotEqual(t, created.GetUid(), recreated.GetUid(), "the replacement is a fresh database")
+		_, err = c.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+			Parent: databaseName(id),
+			BackupSchedule: &adminpb.BackupSchedule{
+				Retention:  durationpb.New(24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+			},
+		})
+		require.NoError(t, err, "a re-created database must not inherit the old backup schedule")
 	})
 
 	// database.proto marks key_prefix and version_retention_period OUTPUT_ONLY and
@@ -288,16 +331,15 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		testdepth.AssertError(t, err, testdepth.SpecNotFound())
 
 		schedParent := databaseName("(default)")
-		schedName := schedParent + "/backupSchedules/noop"
-		_, err = c.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+		createdSched, err := c.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
 			Parent: schedParent,
 			BackupSchedule: &adminpb.BackupSchedule{
-				Name:       schedName,
 				Retention:  durationpb.New(7 * 24 * time.Hour),
 				Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
 			},
 		})
 		require.NoError(t, err)
+		schedName := createdSched.GetName()
 		t.Cleanup(func() {
 			_ = c.DeleteBackupSchedule(context.Background(), &adminpb.DeleteBackupScheduleRequest{Name: schedName})
 		})
@@ -422,9 +464,21 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 14*24*time.Hour, updated.GetRetention().AsDuration())
 
-		// A nil UpdateMask applies every populated field — retention and the
-		// recurrence oneof, which the old `*` arm silently dropped.
+		// A nil UpdateMask applies every populated field. The recurrence is
+		// immutable (Firestore: "you cannot update its recurrence"), so the
+		// maskless patch re-sends the stored daily recurrence and only the
+		// retention changes; a change to weekly is INVALID_ARGUMENT.
 		updated, err = c.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+			BackupSchedule: &adminpb.BackupSchedule{
+				Name:       created.GetName(),
+				Retention:  durationpb.New(21 * 24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 21*24*time.Hour, updated.GetRetention().AsDuration())
+		require.NotNil(t, updated.GetDailyRecurrence(), "the recurrence must stay the stored daily")
+		_, err = c.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
 			BackupSchedule: &adminpb.BackupSchedule{
 				Name:      created.GetName(),
 				Retention: durationpb.New(21 * 24 * time.Hour),
@@ -433,9 +487,7 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
-		require.Equal(t, 21*24*time.Hour, updated.GetRetention().AsDuration())
-		require.Equal(t, dayofweek.DayOfWeek_WEDNESDAY, updated.GetWeeklyRecurrence().GetDay())
+		testdepth.AssertError(t, err, testdepth.SpecInvalidArgument())
 
 		err = c.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: created.GetName()})
 		require.NoError(t, err)
@@ -730,6 +782,25 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 			Want: testdepth.SpecNotFound(),
 			Run: func() error {
 				_, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(unique("nope"))})
+				return err
+			},
+		},
+		{
+			// A database-scoped child collection is parented by the database, so
+			// a named database that was never created is NOT_FOUND rather than an
+			// empty list.
+			Name: "ListBackupSchedulesOfMissingDatabaseIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := c.ListBackupSchedules(ctx, &adminpb.ListBackupSchedulesRequest{Parent: databaseName(unique("nodb"))})
+				return err
+			},
+		},
+		{
+			Name: "ListFieldsOfMissingDatabaseIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := listAllFields(ctx, c, collectionGroupParent(unique("nodb"), "cg"))
 				return err
 			},
 		},

@@ -178,6 +178,11 @@ type backupScheduleDef struct {
 	Retention  time.Duration `json:"retention,omitempty"`
 	Recurrence string        `json:"recurrence,omitempty"`
 	DayOfWeek  int           `json:"dayOfWeek,omitempty"`
+	// Uid identifies this schedule incarnation (internal; BackupSchedule has no
+	// such wire field). It is mixed into the materialized backup ids so a
+	// schedule deleted and re-created with the same id cannot overwrite a
+	// backup its predecessor produced and that Firestore retains.
+	Uid string `json:"uid,omitempty"`
 	// MaterializedThrough is the latest scheduled occurrence this emulator has
 	// already turned into a Backup record (or skipped because it had aged out
 	// of the retention window). It makes the lazy materialization idempotent
@@ -547,11 +552,17 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 // immediate delete→create converge; see CreateDatabaseDef for the deliberate
 // divergence from real GCP's five-minute id-reuse cooldown. When no store is
 // attached (unit tests) the create runs without persisting, like putResource.
+//
+// Replacing a tombstone also re-runs the database-child purge: the delete that
+// wrote the tombstone already cascaded, but repeating it here converges state
+// written by a build that did not (and repairs a cascade interrupted by a store
+// error) before the new incarnation can inherit stale schedules or documents.
 func (s *Service) createDatabaseRecord(ctx context.Context, project, dbID string, db databaseDef) error {
 	if s.resources == nil {
 		return nil
 	}
 	id := databaseRel(dbID)
+	replacedTombstone := false
 	_, err := s.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtDatabase, id,
 		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
 			if exists {
@@ -562,6 +573,7 @@ func (s *Service) createDatabaseRecord(ctx context.Context, project, dbID string
 				if !cur.Deleted {
 					return current, gcpAlreadyExists("database")
 				}
+				replacedTombstone = true
 			}
 			data, err := json.Marshal(db)
 			if err != nil {
@@ -569,7 +581,13 @@ func (s *Service) createDatabaseRecord(ctx context.Context, project, dbID string
 			}
 			return store.ResourceEntry{Type: rtDatabase, ID: id, Data: data}, nil
 		})
-	return err
+	if err != nil {
+		return err
+	}
+	if replacedTombstone {
+		return s.deleteDatabaseChildren(ctx, project, dbID)
+	}
+	return nil
 }
 
 // GetDatabase returns a database record. The implicit (default) database is
@@ -1011,14 +1029,22 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 // GCP returns it (deleteTime set) so the official client's
 // DeleteDatabaseOperation.Wait resolves.
 //
+// The delete also removes everything the database owns — its documents,
+// composite indexes, collection-group fields (including TTL policies), user
+// creds, change streams and backup schedules — because those are database-scoped
+// resources, and a re-created database must not inherit them. Backups are
+// deliberately retained: Firestore documents that "Deleting the source database
+// does not automatically delete related backups", and keeps them until the
+// retention window closes or a client deletes each one.
+//
 // DeleteDatabaseRequest.etag documents that a mismatch blocks the delete and
 // returns FAILED_PRECONDITION (the proto and the Discovery document both say
 // so), unlike an update's AIP-154 ABORTED.
 //
 // Delete protection is also a FAILED_PRECONDITION: Firestore documents that a
 // database with delete_protection_state DELETE_PROTECTION_ENABLED "cannot be
-// deleted ... until you disable delete protection", so the record is left
-// intact until the protection is patched off.
+// deleted ... until you disable delete protection", so the record (and every
+// child resource) is left intact until the protection is patched off.
 func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag string) (databaseDef, string, error) {
 	deleted, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
 		if etag != "" && etag != cur.Etag {
@@ -1040,7 +1066,62 @@ func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag strin
 	if err != nil {
 		return databaseDef{}, "", err
 	}
+	if err := s.deleteDatabaseChildren(ctx, project, db); err != nil {
+		return databaseDef{}, "", err
+	}
 	return deleted, databaseOperationName(project, db, randomHex(12)), nil
+}
+
+// databaseChildCollections lists the resource-store types whose records live
+// under "databases/{db}/..." and are owned by that database. Backups are not
+// here: they live under "locations/{loc}/backups/" and outlive the database.
+func databaseChildCollections(db string) []struct{ rt, prefix string } {
+	return []struct{ rt, prefix string }{
+		{rtField, "databases/" + db + "/collectionGroups/"},
+		{rtIndex, "databases/" + db + "/collectionGroups/"},
+		{rtUserCreds, "databases/" + db + "/userCreds/"},
+		{rtBackupSchedule, "databases/" + db + "/backupSchedules/"},
+		{rtChangeStream, "databases/" + db + "/changeStreams/"},
+	}
+}
+
+// deleteDatabaseChildren removes every resource a database owns. Called after
+// the database record is tombstoned (and again when a create replaces a
+// tombstone, which converges state written by a build that did not cascade).
+// The delete-then-delete loop is not atomic with the tombstone, but an error
+// here surfaces to the caller rather than being swallowed; the recreate path
+// repeats the purge, so a delete -> create cycle still converges.
+func (s *Service) deleteDatabaseChildren(ctx context.Context, project, db string) error {
+	if s.resources != nil {
+		for _, c := range databaseChildCollections(db) {
+			entries, err := s.resources.List(ctx, project, store.GlobalRegion, c.rt, c.prefix)
+			if err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if err := s.resources.Delete(ctx, project, store.GlobalRegion, c.rt, e.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+					return err
+				}
+			}
+		}
+	}
+	if s.store != nil {
+		if err := s.store.DeleteDocuments(ctx, project, db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireDatabase reports NotFound unless the database exists and is live. The
+// child collections under a database (fields, indexes, user creds, change
+// streams, backup schedules) are parented by it, so real Firestore answers
+// NOT_FOUND for them once the parent is gone — including for a named database
+// that was never created — rather than serving an empty list or accepting a
+// create.
+func (s *Service) requireDatabase(ctx context.Context, project, db string) error {
+	_, err := s.GetDatabase(ctx, project, db)
+	return err
 }
 
 // ─── Fields ───────────────────────────────────────────────────────────────────
@@ -1101,6 +1182,9 @@ func collectionGroupOf(name string) string {
 // optionally scoped to one collection group (cg == "-" is the wildcard) and
 // filtered by a substring of the field name, honoring page_size/page_token.
 func (s *Service) ListFields(ctx context.Context, project, db, cg, filter string, page pageParams) ([]fieldDef, string, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return nil, "", err
+	}
 	prefix := "databases/" + db + "/collectionGroups/"
 	if cg != "" && cg != "-" {
 		prefix = "databases/" + db + "/collectionGroups/" + cg + "/fields/"
@@ -1171,6 +1255,9 @@ func fieldMatchesFilter(f fieldDef, filter string) bool {
 // patches cannot lose one another (DC51), and the OUTPUT_ONLY config members are
 // re-derived from the collection-group configuration (DC49).
 func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath string, patch fieldDef, mask []string, maskPresent bool) (fieldDef, string, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return fieldDef{}, "", err
+	}
 	if fieldPath == "" {
 		return fieldDef{}, "", gcpInvalidArgument("field path is required")
 	}
@@ -1268,6 +1355,9 @@ func ensureTtlConfig(f *fieldDef) {
 // CreateUserCredsDef creates a user creds record and returns it with a
 // freshly-minted secret password.
 func (s *Service) CreateUserCredsDef(ctx context.Context, project, db, id string, uc userCredsDef) (userCredsDef, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return userCredsDef{}, err
+	}
 	if id == "" {
 		id = randomHex(20)
 	}
@@ -1297,6 +1387,9 @@ func (s *Service) GetUserCreds(ctx context.Context, project, db, id string) (use
 
 // ListUserCreds returns every user creds record in a database, without secrets.
 func (s *Service) ListUserCreds(ctx context.Context, project, db string) ([]userCredsDef, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return nil, err
+	}
 	ucs, err := listResources[userCredsDef](ctx, s, project, rtUserCreds, "databases/"+db+"/userCreds/")
 	if err != nil {
 		return nil, err
@@ -1353,18 +1446,108 @@ func (s *Service) DeleteUserCreds(ctx context.Context, project, db, id string) e
 
 // ─── Backup schedules ─────────────────────────────────────────────────────────
 
-// CreateBackupScheduleDef creates a backup schedule record.
+// CreateBackupScheduleDef creates a backup schedule record. Firestore allows at
+// most one DAILY and one WEEKLY schedule per database ("For each database, you
+// can configure up to one daily backup schedule and up to one weekly backup
+// schedule"), so a second schedule with the same recurrence is ALREADY_EXISTS.
+// BackupSchedule.name is OUTPUT_ONLY and auto-assigned upstream, so the emulator
+// picks the lowest free positive id; when a concurrent create takes that id the
+// allocator retries with the next one (two legal different-recurrence creates
+// must not collide).
 func (s *Service) CreateBackupScheduleDef(ctx context.Context, project, db, id string, bs backupScheduleDef) (backupScheduleDef, error) {
-	if id == "" {
-		id = "1"
-	}
-	bs.Name = backupScheduleName(project, db, id)
-	now := clock.Now()
-	bs.CreateTime, bs.UpdateTime = now, now
-	if err := s.putResource(ctx, project, rtBackupSchedule, backupScheduleRel(db, id), bs, true); err != nil {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
 		return backupScheduleDef{}, err
 	}
-	return bs, nil
+	if err := validateBackupScheduleCreate(bs); err != nil {
+		return backupScheduleDef{}, err
+	}
+	prefix := "databases/" + db + "/backupSchedules/"
+	for attempt := 0; ; attempt++ {
+		existing, err := listResources[backupScheduleDef](ctx, s, project, rtBackupSchedule, prefix)
+		if err != nil {
+			return backupScheduleDef{}, err
+		}
+		for _, other := range existing {
+			if effectiveRecurrence(other) == effectiveRecurrence(bs) {
+				return backupScheduleDef{}, gcpAlreadyExists("a " + strings.ToLower(effectiveRecurrence(bs)) + " backup schedule")
+			}
+		}
+		candidate := id
+		if candidate == "" {
+			candidate = nextBackupScheduleID(existing)
+		}
+		bs.Name = backupScheduleName(project, db, candidate)
+		now := clock.Now()
+		bs.CreateTime, bs.UpdateTime = now, now
+		bs.Uid = randomHex(12)
+		err = s.putResource(ctx, project, rtBackupSchedule, backupScheduleRel(db, candidate), bs, true)
+		switch {
+		case err == nil:
+			return bs, nil
+		case id != "" || attempt >= 8 || !isAlreadyExists(err):
+			return backupScheduleDef{}, err
+		}
+		// A concurrent system-assigned create took the id: re-list and take the
+		// next free one.
+	}
+}
+
+// maxBackupRetention is the documented maximum retention period: "The maximum
+// supported retention period is 14 weeks."
+const maxBackupRetention = 14 * 7 * 24 * time.Hour
+
+// effectiveRecurrence is the recurrence a schedule is classified as: Firestore
+// stores an unset recurrence as the daily default (the emulator's materializer
+// has always treated an empty recurrence as DAILY), so the one-daily/one-weekly
+// rule must compare the effective value, not the raw oneof.
+func effectiveRecurrence(bs backupScheduleDef) string {
+	if bs.Recurrence == "" {
+		return "DAILY"
+	}
+	return bs.Recurrence
+}
+
+// validateBackupScheduleCreate checks the create-time constraints the API
+// documents: a WEEKLY schedule must name a real weekday ("DAY_OF_WEEK_UNSPECIFIED
+// is not allowed") and the retention period is at most 14 weeks. An unset
+// recurrence is accepted and classified as DAILY (like the materializer), and an
+// omitted retention keeps the emulator's 7-day fallback (defaultBackupRetention):
+// the Discovery document marks neither field REQUIRED, so a lenient request is
+// served rather than rejected.
+func validateBackupScheduleCreate(bs backupScheduleDef) error {
+	if bs.Retention > maxBackupRetention {
+		return gcpInvalidArgument("retention must be at most 14 weeks")
+	}
+	switch bs.Recurrence {
+	case "", "DAILY":
+		if bs.DayOfWeek != 0 {
+			return gcpInvalidArgument("day_of_week is only valid with a weekly recurrence")
+		}
+	case "WEEKLY":
+		if bs.DayOfWeek < 1 || bs.DayOfWeek > 7 {
+			return gcpInvalidArgument("day_of_week must be 1-7 for a weekly recurrence")
+		}
+	default:
+		return gcpInvalidArgument("the recurrence must be DAILY or WEEKLY")
+	}
+	return nil
+}
+
+// nextBackupScheduleID returns the lowest positive integer id not already used
+// by one of the database's schedules.
+func nextBackupScheduleID(existing []backupScheduleDef) string {
+	used := make(map[string]bool, len(existing))
+	for _, other := range existing {
+		if _, id, ok := parseBackupScheduleName(other.Name); ok {
+			used[id] = true
+		}
+	}
+	for i := 1; ; i++ {
+		id := strconv.Itoa(i)
+		if !used[id] {
+			return id
+		}
+	}
 }
 
 // GetBackupSchedule returns a backup schedule record.
@@ -1378,6 +1561,9 @@ func (s *Service) GetBackupSchedule(ctx context.Context, project, db, id string)
 
 // ListBackupSchedules returns every backup schedule for a database.
 func (s *Service) ListBackupSchedules(ctx context.Context, project, db string) ([]backupScheduleDef, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return nil, err
+	}
 	bss, err := listResources[backupScheduleDef](ctx, s, project, rtBackupSchedule, "databases/"+db+"/backupSchedules/")
 	if err != nil {
 		return nil, err
@@ -1390,6 +1576,14 @@ func (s *Service) ListBackupSchedules(ctx context.Context, project, db string) (
 // present-but-empty mask is a no-op and does not write the record. The
 // read-modify-write runs inside the store's atomic primitive so two concurrent
 // patches cannot lose one another (DC51).
+//
+// The recurrence is immutable: Firestore documents that "You can update the
+// retention period of a backup schedule, but you cannot update its recurrence.
+// If you need a backup schedule with a different recurrence, delete the old
+// backup schedule ... and create a new backup schedule with the preferred
+// recurrence." A patch that would change it is INVALID_ARGUMENT, which also
+// keeps the one-daily/one-weekly invariant from being bypassed through an
+// update. A legacy record stored without a recurrence may set one once.
 func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id string, patch backupScheduleDef, mask []string, maskPresent bool) (backupScheduleDef, error) {
 	// An omitted mask is the implied mask of every populated field (AIP-134),
 	// exactly as UpdateFieldDef documents above.
@@ -1401,11 +1595,22 @@ func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id s
 				// Present-but-empty mask: no-op (AIP-134), no write.
 				return cur, false, nil
 			}
+			nextRec, nextDay := backupRecurrenceAfter(cur, patch, mask, maskPresent, replace)
+			if cur.Recurrence != "" && nextRec != cur.Recurrence {
+				return cur, false, gcpInvalidArgument("a backup schedule's recurrence cannot be changed; delete it and create a new one")
+			}
+			if cur.Recurrence == "WEEKLY" && nextRec == "WEEKLY" && nextDay != cur.DayOfWeek {
+				return cur, false, gcpInvalidArgument("a backup schedule's weekly day cannot be changed; delete it and create a new one")
+			}
+			if nextRec == "WEEKLY" && (nextDay < 1 || nextDay > 7) {
+				return cur, false, gcpInvalidArgument("day_of_week must be 1-7 for a weekly recurrence")
+			}
 			if replace {
-				// Explicit `*` is a full replacement, and both retention and the
-				// recurrence oneof are REQUIRED on the resource: a replace that
-				// omits either is the same INVALID_ARGUMENT real GCP returns,
-				// rather than silently keeping the stored value.
+				// An explicit `*` is a full replacement: the recurrence oneof must
+				// be present (a schedule without one cannot be classified against
+				// the one-daily/one-weekly rule) and the retention must be
+				// positive for the replacement to be meaningful, rather than
+				// silently keeping the stored value.
 				if patch.Retention <= 0 {
 					return cur, false, gcpInvalidArgument("retention is required for a full replacement")
 				}
@@ -1413,9 +1618,6 @@ func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id s
 				case "DAILY":
 					cur.Retention, cur.Recurrence, cur.DayOfWeek = patch.Retention, "DAILY", 0
 				case "WEEKLY":
-					if patch.DayOfWeek < 1 || patch.DayOfWeek > 7 {
-						return cur, false, gcpInvalidArgument("day_of_week must be 1-7 for a weekly recurrence")
-					}
 					cur.Retention, cur.Recurrence, cur.DayOfWeek = patch.Retention, "WEEKLY", patch.DayOfWeek
 				default:
 					return cur, false, gcpInvalidArgument("a daily or weekly recurrence is required for a full replacement")
@@ -1455,6 +1657,52 @@ func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id s
 			cur.UpdateTime = clock.Now()
 			return cur, true, nil
 		})
+}
+
+// backupRecurrenceAfter simulates the recurrence half of a backup-schedule
+// update so a recurrence change can be rejected before the write. It mirrors the
+// mask arms below exactly: an absent mask is the implied mask of every populated
+// field, an explicit `*` is a replacement, and a masked path only applies when
+// the patch actually carries that recurrence.
+func backupRecurrenceAfter(cur, patch backupScheduleDef, mask []string, maskPresent, replace bool) (string, int) {
+	rec, day := cur.Recurrence, cur.DayOfWeek
+	apply := func() {
+		switch patch.Recurrence {
+		case "DAILY":
+			rec, day = "DAILY", 0
+		case "WEEKLY":
+			rec, day = "WEEKLY", patch.DayOfWeek
+		}
+	}
+	switch {
+	case maskPresent && len(mask) == 0:
+		return rec, day
+	case replace:
+		apply()
+		return rec, day
+	case !maskPresent:
+		if patch.Recurrence != "" {
+			apply()
+		}
+		return rec, day
+	}
+	for _, path := range mask {
+		switch path {
+		case "*":
+			if patch.Recurrence != "" {
+				apply()
+			}
+		case "daily_recurrence":
+			if patch.Recurrence == "DAILY" {
+				apply()
+			}
+		case "weekly_recurrence":
+			if patch.Recurrence == "WEEKLY" {
+				apply()
+			}
+		}
+	}
+	return rec, day
 }
 
 // DeleteBackupSchedule removes a backup schedule record.
@@ -1524,6 +1772,9 @@ func validateChangeStream(cs changeStreamDef) error {
 // uniqueness rules apply: one database-scoped change stream per database, and
 // one per collection group.
 func (s *Service) CreateChangeStreamDef(ctx context.Context, project, db, id string, cs changeStreamDef) (changeStreamDef, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return changeStreamDef{}, err
+	}
 	if err := ValidateChangeStreamID(id); err != nil {
 		return changeStreamDef{}, err
 	}
@@ -1568,6 +1819,9 @@ func (s *Service) GetChangeStream(ctx context.Context, project, db, id string) (
 // ListChangeStreams returns every change stream of a database, ordered by name
 // so the listing is deterministic across store backends.
 func (s *Service) ListChangeStreams(ctx context.Context, project, db string) ([]changeStreamDef, error) {
+	if err := s.requireDatabase(ctx, project, db); err != nil {
+		return nil, err
+	}
 	css, err := listResources[changeStreamDef](ctx, s, project, rtChangeStream, "databases/"+db+"/changeStreams/")
 	if err != nil {
 		return nil, err
@@ -1766,7 +2020,13 @@ func (s *Service) materializeSchedule(ctx context.Context, project, db, backupLo
 	}
 	for k := first; k <= last; k++ {
 		snapshot := start.Add(time.Duration(k) * interval)
+		// The backup id includes the schedule incarnation when it has one, so a
+		// schedule deleted and re-created with the same id cannot overwrite a
+		// backup Firestore retains from its predecessor.
 		id := fmt.Sprintf("%s-%d", schedID, snapshot.Unix())
+		if bs.Uid != "" {
+			id = fmt.Sprintf("%s-%s-%d", schedID, bs.Uid, snapshot.Unix())
+		}
 		b := backupDef{
 			Name:          backupName(project, backupLoc, id),
 			Database:      databaseName(project, db),
@@ -1919,6 +2179,15 @@ func isNotFound(err error) bool {
 	var perr *model.ProviderError
 	if errors.As(err, &perr) {
 		return perr.Code == "NotFound" || perr.HTTPStatus == 404
+	}
+	return false
+}
+
+// isAlreadyExists reports whether err is the provider AlreadyExists error.
+func isAlreadyExists(err error) bool {
+	var perr *model.ProviderError
+	if errors.As(err, &perr) {
+		return perr.Code == "AlreadyExists" || perr.HTTPStatus == 409
 	}
 	return false
 }

@@ -346,6 +346,19 @@ func TestRESTDatabaseRecreateAfterDelete(t *testing.T) {
 	}
 	cresp, _ := created.Data["response"].(map[string]any)
 
+	// Stage a backup schedule and a user creds record, the resources a
+	// re-created database must not inherit.
+	sched, err := p.CreateBackupSchedule(ctx, adminNR("databases/reuse-db/backupSchedules", map[string]any{
+		"body": map[string]any{"retention": "86400s", "dailyRecurrence": map[string]any{}},
+	}))
+	if err != nil {
+		t.Fatalf("CreateBackupSchedule: %v", err)
+	}
+	schedName, _ := sched.Data["name"].(string)
+	if _, err := p.CreateUserCreds(ctx, adminNR("databases/reuse-db/userCreds", map[string]any{"userCredsId": "reuse-cred"})); err != nil {
+		t.Fatalf("CreateUserCreds: %v", err)
+	}
+
 	deleted, err := p.DeleteDatabase(ctx, adminNR("databases/reuse-db", map[string]any{"etag": cresp["etag"]}))
 	if err != nil {
 		t.Fatalf("DeleteDatabase: %v", err)
@@ -355,6 +368,18 @@ func TestRESTDatabaseRecreateAfterDelete(t *testing.T) {
 	}
 	if _, err := p.GetDatabase(ctx, adminNR("databases/reuse-db", nil)); !isNotFound(err) {
 		t.Fatalf("GetDatabase(deleted) = %v, want NotFound", err)
+	}
+
+	// The database's schedule and user creds are deleted with it, and the
+	// child collections answer NOT_FOUND while the parent is gone.
+	if _, err := p.GetBackupSchedule(ctx, adminNR(strings.TrimPrefix(schedName, "projects/proj/"), nil)); !isNotFound(err) {
+		t.Errorf("GetBackupSchedule after database delete = %v, want NotFound", err)
+	}
+	if _, err := p.GetUserCreds(ctx, adminNR("databases/reuse-db/userCreds/reuse-cred", nil)); !isNotFound(err) {
+		t.Errorf("GetUserCreds after database delete = %v, want NotFound", err)
+	}
+	if _, err := p.ListBackupSchedules(ctx, adminNR("databases/reuse-db/backupSchedules", nil)); !isNotFound(err) {
+		t.Errorf("ListBackupSchedules(deleted db) = %v, want NotFound", err)
 	}
 
 	// showDeleted still lists the tombstone.
@@ -392,6 +417,19 @@ func TestRESTDatabaseRecreateAfterDelete(t *testing.T) {
 	}
 	if _, has := rein["deleteTime"]; has {
 		t.Errorf("recreated record carries deleteTime: %v", rein["deleteTime"])
+	}
+
+	// The re-created database starts clean: a schedule create succeeds again and
+	// the old user creds are not resurrected.
+	if _, err := p.CreateBackupSchedule(ctx, adminNR("databases/reuse-db/backupSchedules", map[string]any{
+		"body": map[string]any{"retention": "86400s", "dailyRecurrence": map[string]any{}},
+	})); err != nil {
+		t.Fatalf("CreateBackupSchedule(after recreate): %v", err)
+	}
+	if list, err := p.ListUserCreds(ctx, adminNR("databases/reuse-db/userCreds", nil)); err != nil {
+		t.Fatalf("ListUserCreds(recreated): %v", err)
+	} else if ucs, _ := list.Data["userCreds"].([]any); len(ucs) != 0 {
+		t.Errorf("re-created database inherited %d user creds", len(ucs))
 	}
 }
 
@@ -974,12 +1012,12 @@ func TestRESTBackupScheduleLifecycle(t *testing.T) {
 	}
 
 	// An omitted updateMask is the implied mask of the populated fields
-	// (AIP-134): the PATCH applies the retention *and* the recurrence oneof,
-	// which the old `*` arm silently dropped.
+	// (AIP-134): the PATCH applies the retention. The recurrence is immutable,
+	// so re-sending the stored MONDAY value is accepted and keeps it.
 	maskless, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
 		"body": map[string]any{
 			"retention":        "10800s",
-			"weeklyRecurrence": map[string]any{"day": "WEDNESDAY"},
+			"weeklyRecurrence": map[string]any{"day": "MONDAY"},
 		},
 	}))
 	if err != nil {
@@ -988,10 +1026,20 @@ func TestRESTBackupScheduleLifecycle(t *testing.T) {
 	if maskless.Data["retention"] != "10800s" {
 		t.Errorf("maskless retention = %v, want 10800s", maskless.Data["retention"])
 	}
-	// WEDNESDAY differs from the create's MONDAY, so the recurrence can only
-	// come from the maskless patch (not from the stored record).
-	if wr, _ := maskless.Data["weeklyRecurrence"].(map[string]any); wr["day"] != "WEDNESDAY" {
-		t.Errorf("maskless weeklyRecurrence = %v, want WEDNESDAY", maskless.Data["weeklyRecurrence"])
+	if wr, _ := maskless.Data["weeklyRecurrence"].(map[string]any); wr["day"] != "MONDAY" {
+		t.Errorf("maskless weeklyRecurrence = %v, want the stored MONDAY", maskless.Data["weeklyRecurrence"])
+	}
+	// A recurrence change is InvalidArgument ("you cannot update its
+	// recurrence"), which also protects the one-daily/one-weekly invariant.
+	if _, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
+		"body": map[string]any{
+			"retention":       "10800s",
+			"dailyRecurrence": map[string]any{},
+		},
+	})); err == nil {
+		t.Error("recurrence change succeeded, want InvalidArgument")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
 	}
 
 	if _, err := p.DeleteBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", nil)); err != nil {
@@ -999,6 +1047,74 @@ func TestRESTBackupScheduleLifecycle(t *testing.T) {
 	}
 	if _, err := p.GetBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", nil)); err == nil {
 		t.Error("GetBackupSchedule after delete succeeded, want NotFound")
+	}
+}
+
+// TestRESTBackupScheduleOnePerRecurrence pins the documented "up to one daily
+// and up to one weekly schedule per database" limit on the JSON wire: the second
+// recurrence is accepted with the next free id (the adapter used to hardcode
+// "1"), while a second schedule of an existing recurrence is ALREADY_EXISTS.
+func TestRESTBackupScheduleOnePerRecurrence(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	create := func(body map[string]any) (map[string]any, error) {
+		resp, err := p.CreateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules", map[string]any{"body": body}))
+		if err != nil {
+			return nil, err
+		}
+		return resp.Data, nil
+	}
+
+	daily, err := create(map[string]any{"retention": "86400s", "dailyRecurrence": map[string]any{}})
+	if err != nil {
+		t.Fatalf("CreateBackupSchedule(daily): %v", err)
+	}
+	if want := "projects/proj/databases/(default)/backupSchedules/1"; daily["name"] != want {
+		t.Errorf("daily name = %v, want %q", daily["name"], want)
+	}
+	weekly, err := create(map[string]any{"retention": "86400s", "weeklyRecurrence": map[string]any{"day": "MONDAY"}})
+	if err != nil {
+		t.Fatalf("CreateBackupSchedule(weekly): %v", err)
+	}
+	if want := "projects/proj/databases/(default)/backupSchedules/2"; weekly["name"] != want {
+		t.Errorf("weekly name = %v, want %q", weekly["name"], want)
+	}
+
+	if _, err := create(map[string]any{"retention": "86400s", "dailyRecurrence": map[string]any{}}); err == nil {
+		t.Error("second daily schedule accepted")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+	if _, err := create(map[string]any{"retention": "86400s", "weeklyRecurrence": map[string]any{"day": "TUESDAY"}}); err == nil {
+		t.Error("second weekly schedule accepted")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	// Both schedules are listed. A recurrence-less create is classified as the
+	// daily default, so it collides with the existing daily; a weekly without a
+	// real day and a retention beyond the documented 14 weeks are
+	// InvalidArgument.
+	if list, err := p.ListBackupSchedules(ctx, adminNR("databases/(default)/backupSchedules", nil)); err != nil {
+		t.Fatalf("ListBackupSchedules: %v", err)
+	} else if items, _ := list.Data["backupSchedules"].([]any); len(items) != 2 {
+		t.Errorf("ListBackupSchedules len = %d, want 2", len(items))
+	}
+	if _, err := create(map[string]any{"retention": "86400s"}); err == nil {
+		t.Error("second (implicit daily) schedule accepted")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+	if _, err := create(map[string]any{"retention": "86400s", "weeklyRecurrence": map[string]any{}}); err == nil {
+		t.Error("weekly create without a day accepted")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
+	}
+	if _, err := create(map[string]any{"retention": "8467201s", "dailyRecurrence": map[string]any{}}); err == nil {
+		t.Error("retention beyond 14 weeks accepted")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
 	}
 }
 
@@ -1384,7 +1500,7 @@ func TestRESTExplicitStarReplaces(t *testing.T) {
 	}
 	bs, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
 		"updateMask": "*",
-		"body":       map[string]any{"retention": "1209600s", "weeklyRecurrence": map[string]any{"day": "WEDNESDAY"}},
+		"body":       map[string]any{"retention": "1209600s", "dailyRecurrence": map[string]any{}},
 	}))
 	if err != nil {
 		t.Fatalf("UpdateBackupSchedule(*): %v", err)
@@ -1392,11 +1508,17 @@ func TestRESTExplicitStarReplaces(t *testing.T) {
 	if bs.Data["retention"] != "1209600s" {
 		t.Errorf("retention = %v, want 1209600s", bs.Data["retention"])
 	}
-	if _, daily := bs.Data["dailyRecurrence"]; daily {
-		t.Errorf("dailyRecurrence survived an explicit * replace: %v", bs.Data["dailyRecurrence"])
+	if _, daily := bs.Data["dailyRecurrence"]; !daily {
+		t.Errorf("dailyRecurrence = %v, want the replaced daily recurrence", bs.Data["dailyRecurrence"])
 	}
-	if _, weekly := bs.Data["weeklyRecurrence"]; !weekly {
-		t.Errorf("weeklyRecurrence = %v, want present", bs.Data["weeklyRecurrence"])
+	// A full replacement cannot change the (immutable) recurrence either.
+	if _, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
+		"updateMask": "*",
+		"body":       map[string]any{"retention": "1209600s", "weeklyRecurrence": map[string]any{"day": "WEDNESDAY"}},
+	})); err == nil {
+		t.Error("UpdateBackupSchedule(*) changing the recurrence succeeded, want InvalidArgument")
+	} else {
+		assertProviderCode(t, err, "InvalidArgument", 400)
 	}
 }
 

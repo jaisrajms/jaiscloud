@@ -2,6 +2,7 @@ package firestoreadmin
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +259,27 @@ func TestDatabaseRecreateAfterDelete(t *testing.T) {
 		t.Errorf("duplicate CreateDatabase = %v, want AlreadyExists", err)
 	}
 
+	// Stage a backup schedule and a user creds record: the re-created database
+	// must not inherit either.
+	if _, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+		Parent: created.GetName(),
+		BackupSchedule: &adminpb.BackupSchedule{
+			Retention:  durationpb.New(24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBackupSchedule: %v", err)
+	}
+	if _, err := client.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+		Parent:      created.GetName(),
+		UserCredsId: "reuse-cred",
+		UserCreds:   &adminpb.UserCreds{},
+	}); err != nil {
+		t.Fatalf("CreateUserCreds: %v", err)
+	}
+	scheduleName := created.GetName() + "/backupSchedules/1"
+	userCredsName := created.GetName() + "/userCreds/reuse-cred"
+
 	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
 		Name: created.GetName(), Etag: created.GetEtag(),
 	}); err != nil {
@@ -265,6 +287,17 @@ func TestDatabaseRecreateAfterDelete(t *testing.T) {
 	}
 	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
 		t.Fatalf("GetDatabase(deleted) = %v, want NotFound", err)
+	}
+	// The database's children went with it, and the parent-scoped lists answer
+	// NOT_FOUND while the database is gone.
+	if _, err := client.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: scheduleName}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetBackupSchedule after database delete = %v, want NotFound", err)
+	}
+	if _, err := client.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: userCredsName}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetUserCreds after database delete = %v, want NotFound", err)
+	}
+	if _, err := client.ListBackupSchedules(ctx, &adminpb.ListBackupSchedulesRequest{Parent: created.GetName()}); status.Code(err) != codes.NotFound {
+		t.Errorf("ListBackupSchedules(deleted db) = %v, want NotFound", err)
 	}
 
 	reOp, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
@@ -291,6 +324,89 @@ func TestDatabaseRecreateAfterDelete(t *testing.T) {
 	}
 	if got.GetLocationId() != "nam5" || got.GetDeleteTime() != nil {
 		t.Errorf("GetDatabase(recreated) = %+v, want the live record", got)
+	}
+
+	// The re-created database starts clean: the first schedule create succeeds
+	// (this is the "409 backup_schedule already exists" the cascade fixes) and
+	// the old user creds are not resurrected.
+	if _, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+		Parent: created.GetName(),
+		BackupSchedule: &adminpb.BackupSchedule{
+			Retention:  durationpb.New(24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBackupSchedule(after recreate): %v", err)
+	}
+	if list, err := client.ListUserCreds(ctx, &adminpb.ListUserCredsRequest{Parent: created.GetName()}); err != nil {
+		t.Fatalf("ListUserCreds(recreated): %v", err)
+	} else if len(list.GetUserCreds()) != 0 {
+		t.Errorf("re-created database inherited %d user creds", len(list.GetUserCreds()))
+	}
+}
+
+// TestBackupScheduleOnePerRecurrence pins the documented one-daily/one-weekly
+// limit on the gRPC surface: with no client-supplied name the server assigns the
+// next free id, so a second recurrence is accepted instead of colliding on "1".
+func TestBackupScheduleOnePerRecurrence(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "sched-db",
+		Database:   &adminpb.Database{LocationId: "us-central1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response: %v", err)
+	}
+	parent := created.GetName()
+
+	create := func(bs *adminpb.BackupSchedule) (string, error) {
+		got, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{Parent: parent, BackupSchedule: bs})
+		if err != nil {
+			return "", err
+		}
+		return got.GetName(), nil
+	}
+	dailyName, err := create(&adminpb.BackupSchedule{
+		Retention:  durationpb.New(24 * time.Hour),
+		Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+	})
+	if err != nil {
+		t.Fatalf("CreateBackupSchedule(daily): %v", err)
+	}
+	if want := parent + "/backupSchedules/1"; dailyName != want {
+		t.Errorf("daily name = %q, want %q", dailyName, want)
+	}
+	weeklyName, err := create(&adminpb.BackupSchedule{
+		Retention: durationpb.New(24 * time.Hour),
+		Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+			WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_MONDAY},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateBackupSchedule(weekly): %v", err)
+	}
+	if want := parent + "/backupSchedules/2"; weeklyName != want {
+		t.Errorf("weekly name = %q, want %q", weeklyName, want)
+	}
+
+	if _, err := create(&adminpb.BackupSchedule{
+		Retention:  durationpb.New(24 * time.Hour),
+		Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+	}); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("second daily schedule = %v, want AlreadyExists", err)
+	}
+	if list, err := client.ListBackupSchedules(ctx, &adminpb.ListBackupSchedulesRequest{Parent: parent}); err != nil {
+		t.Fatalf("ListBackupSchedules: %v", err)
+	} else if len(list.GetBackupSchedules()) != 2 {
+		t.Errorf("ListBackupSchedules len = %d, want 2", len(list.GetBackupSchedules()))
 	}
 }
 
@@ -574,19 +690,19 @@ func TestEmptyUpdateMaskNoop(t *testing.T) {
 
 	// Backup schedule: retention and the recurrence oneof stay as stored.
 	parent := "projects/proj/databases/(default)"
-	schedName := parent + "/backupSchedules/1"
-	if _, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+	createdSched, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
 		Parent: parent,
 		BackupSchedule: &adminpb.BackupSchedule{
-			Name:      schedName,
 			Retention: durationpb.New(7 * 24 * time.Hour),
 			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
 				DailyRecurrence: &adminpb.DailyRecurrence{},
 			},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateBackupSchedule: %v", err)
 	}
+	schedName := createdSched.GetName()
 	bs, err := client.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
 		BackupSchedule: &adminpb.BackupSchedule{
 			Name:      schedName,
@@ -747,11 +863,9 @@ func TestBackupScheduleAdminRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	parent := "projects/proj/databases/(default)"
-	schedName := parent + "/backupSchedules/1"
 	created, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
 		Parent: parent,
 		BackupSchedule: &adminpb.BackupSchedule{
-			Name:      schedName,
 			Retention: durationpb.New(7 * 24 * time.Hour),
 			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
 				DailyRecurrence: &adminpb.DailyRecurrence{},
@@ -761,7 +875,9 @@ func TestBackupScheduleAdminRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBackupSchedule: %v", err)
 	}
-	if created.GetName() != schedName || created.GetDailyRecurrence() == nil {
+	// BackupSchedule.name is OUTPUT_ONLY: the server assigns the id.
+	schedName := created.GetName()
+	if !strings.HasPrefix(schedName, parent+"/backupSchedules/") || created.GetDailyRecurrence() == nil {
 		t.Fatalf("created schedule = %+v", created)
 	}
 
@@ -786,14 +902,15 @@ func TestBackupScheduleAdminRoundTrip(t *testing.T) {
 		t.Fatalf("UpdateBackupSchedule = %+v err=%v", upd, err)
 	}
 
-	// A nil UpdateMask applies every populated field — both the retention and
-	// the recurrence oneof, which the old `*` arm silently dropped.
+	// A nil UpdateMask applies every populated field. The recurrence is
+	// immutable, so the patch re-sends the stored daily one and only the
+	// retention changes; a change to weekly is InvalidArgument.
 	upd, err = client.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
 		BackupSchedule: &adminpb.BackupSchedule{
 			Name:      schedName,
 			Retention: durationpb.New(21 * 24 * time.Hour),
-			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
-				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
+				DailyRecurrence: &adminpb.DailyRecurrence{},
 			},
 		},
 	})
@@ -803,8 +920,19 @@ func TestBackupScheduleAdminRoundTrip(t *testing.T) {
 	if upd.GetRetention().AsDuration() != 21*24*time.Hour {
 		t.Errorf("maskless retention = %v, want 21d", upd.GetRetention())
 	}
-	if upd.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
-		t.Errorf("maskless recurrence = %+v, want weekly Wednesday", upd.GetRecurrence())
+	if upd.GetDailyRecurrence() == nil {
+		t.Errorf("maskless recurrence = %+v, want the stored daily", upd.GetRecurrence())
+	}
+	if _, err := client.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      schedName,
+			Retention: durationpb.New(21 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+			},
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("UpdateBackupSchedule(recurrence change) = %v, want InvalidArgument", err)
 	}
 
 	if _, err := client.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: schedName}); err != nil {

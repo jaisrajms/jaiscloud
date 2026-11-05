@@ -104,6 +104,12 @@ type FirestoreStore interface {
 	// ListDocuments returns every document under the given project+database,
 	// sorted by name. Used by listDocuments/runQuery (slice 2).
 	ListDocuments(ctx context.Context, project, database string) ([]Document, error)
+	// DeleteDocuments removes every document in the given project+database. It
+	// is the store-level primitive behind projects.databases.delete: real
+	// Firestore deletes a database's data with the database, and the purge is
+	// deliberately silent (no per-document change-feed events are published —
+	// deleting a database is not a document-by-document mutation).
+	DeleteDocuments(ctx context.Context, project, database string) error
 	// Commit applies a batch of writes atomically after (1) re-validating the
 	// transaction read-set and (2) validating each write's precondition. It
 	// returns ErrAborted when a read-set entry no longer matches; for a failed

@@ -274,14 +274,14 @@ func (s *PostgresResourceStore) List(ctx context.Context, account, region, resou
 		rows, err = s.pool.Query(ctx, `
 			SELECT account_id, region, resource_type, id, data, seeded, created_at, updated_at
 			FROM jc_resources
-			WHERE resource_type=$1 AND ($2 = '' OR id LIKE '%' || $2 || '%')
+			WHERE resource_type=$1 AND ($2 = '' OR strpos(id, $2) > 0)
 			ORDER BY created_at
 		`, resourceType, prefix)
 	} else {
 		rows, err = s.pool.Query(ctx, `
 			SELECT account_id, region, resource_type, id, data, seeded, created_at, updated_at
 			FROM jc_resources
-			WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND ($4 = '' OR id LIKE '%' || $4 || '%')
+			WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND ($4 = '' OR strpos(id, $4) > 0)
 			ORDER BY created_at
 		`, account, region, resourceType, prefix)
 	}
