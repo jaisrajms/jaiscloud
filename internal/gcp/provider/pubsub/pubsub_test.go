@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"maps"
 	"net"
+	"reflect"
+	"strings"
 	"testing"
 
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
@@ -225,6 +227,119 @@ func TestTopicGetListFieldFidelity(t *testing.T) {
 	labels, _ = found["labels"].(map[string]any)
 	if labels["env"] != "test" || labels["team"] != "platform" {
 		t.Errorf("list labels = %v, want env=test team=platform", labels)
+	}
+}
+
+// moduleTopicBody is the topic body terraform-google-pubsub v8.8.1 sends: the
+// five fields the module exposes. It also echoes the output-only members a
+// client would read back, which create must drop.
+func moduleTopicBody() map[string]any {
+	return map[string]any{
+		"labels":                   map[string]any{"env": "prod", "team": "data"},
+		"kmsKeyName":               "projects/proj/locations/global/keyRings/tf-keyring/cryptoKeys/tf-key",
+		"messageRetentionDuration": "600s",
+		"messageStoragePolicy": map[string]any{
+			"allowedPersistenceRegions": []any{"us-central1", "europe-west1"},
+			"enforceInTransit":          true,
+		},
+		"schemaSettings": map[string]any{
+			"schema":          "projects/proj/schemas/tf-schema",
+			"encoding":        "JSON",
+			"firstRevisionId": "1",
+			"lastRevisionId":  "3",
+		},
+		// Output-only at the topic root: never stored.
+		"state":        "ACTIVE",
+		"satisfiesPzs": true,
+	}
+}
+
+// wantModuleTopicBody is what the stored record reads back as: every mutable
+// module field, canonical duration, and none of the output-only members.
+func wantModuleTopicBody() map[string]any {
+	return map[string]any{
+		"name":                     "projects/proj/topics/tf-topic-fields",
+		"labels":                   map[string]any{"env": "prod", "team": "data"},
+		"kmsKeyName":               "projects/proj/locations/global/keyRings/tf-keyring/cryptoKeys/tf-key",
+		"messageRetentionDuration": "600s",
+		"messageStoragePolicy": map[string]any{
+			"allowedPersistenceRegions": []any{"us-central1", "europe-west1"},
+			"enforceInTransit":          true,
+		},
+		"schemaSettings": map[string]any{
+			"schema":   "projects/proj/schemas/tf-schema",
+			"encoding": "JSON",
+		},
+	}
+}
+
+// TestTopicCreateServesModuleFiveFieldBody is the regression guard for the
+// Terraform module's topic: a create carrying labels + kmsKeyName +
+// messageRetentionDuration + messageStoragePolicy + schemaSettings must serve
+// every one of them back, or the next plan shows a permanent diff. Before PTF1
+// the storage policy and schema settings were dropped on create.
+func TestTopicCreateServesModuleFiveFieldBody(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	created, err := p.TopicCreate(ctx, newNR(map[string]any{
+		"name": "topics/tf-topic-fields",
+		"body": moduleTopicBody(),
+	}))
+	if err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	// The create response is what Terraform records in state, so it must carry
+	// the fields too (labels are a string map here, a JSON object on the wire).
+	for _, field := range []string{"labels", "kmsKeyName", "messageRetentionDuration", "messageStoragePolicy", "schemaSettings"} {
+		if _, ok := created.Data[field]; !ok {
+			t.Errorf("create response is missing %q: %v", field, created.Data)
+		}
+	}
+
+	nr := newNR(map[string]any{"name": "topics/tf-topic-fields"})
+	get, err := p.TopicGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("topic get: %v", err)
+	}
+	if want := wantModuleTopicBody(); !reflect.DeepEqual(get.Data, want) {
+		t.Fatalf("topic get\n got: %#v\nwant: %#v", get.Data, want)
+	}
+
+	// List serves the same stored record.
+	list, err := p.TopicList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("topic list: %v", err)
+	}
+	topics, _ := list.Data["topics"].([]any)
+	if len(topics) != 1 {
+		t.Fatalf("expected 1 topic, got %d", len(topics))
+	}
+	if want := wantModuleTopicBody(); !reflect.DeepEqual(topics[0], want) {
+		t.Fatalf("topic list entry\n got: %#v\nwant: %#v", topics[0], want)
+	}
+}
+
+// TestTopicCreateRejectsInvalidFieldWithoutPersisting pins the REST face of a
+// shared validator: an out-of-range retention is a 400 and the topic is not
+// created.
+func TestTopicCreateRejectsInvalidFieldWithoutPersisting(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	_, err := p.TopicCreate(ctx, newNR(map[string]any{
+		"name": "topics/bad-retention",
+		"body": map[string]any{"messageRetentionDuration": "599s"},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("TopicCreate err = %v, want 400 ProviderError", err)
+	}
+	if !strings.Contains(pe.Message, "messageRetentionDuration must be between 10 minutes") {
+		t.Errorf("message = %q, want the retention-bounds message", pe.Message)
+	}
+	if _, err := p.TopicGet(ctx, newNR(map[string]any{"name": "topics/bad-retention"})); err == nil {
+		t.Fatal("invalid create persisted the topic")
 	}
 }
 

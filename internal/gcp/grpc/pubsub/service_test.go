@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -820,6 +821,179 @@ func assertStoredRetention(t *testing.T, resources store.ResourceStore, id, want
 	}
 	if got, _ := meta["messageRetentionDuration"].(string); got != want {
 		t.Errorf("stored retention = %q, want %q", got, want)
+	}
+}
+
+// grpcTopicWithAllFields builds a Topic carrying every field the
+// terraform-google-pubsub module sets on its topic resource.
+func grpcTopicWithAllFields(name string) *pubsubpb.Topic {
+	return &pubsubpb.Topic{
+		Name:                     name,
+		Labels:                   map[string]string{"env": "prod", "team": "data"},
+		KmsKeyName:               "projects/test/locations/global/keyRings/tf-keyring/cryptoKeys/tf-key",
+		MessageRetentionDuration: durationpb.New(10 * time.Minute),
+		MessageStoragePolicy: &pubsubpb.MessageStoragePolicy{
+			AllowedPersistenceRegions: []string{"us-central1", "europe-west1"},
+			EnforceInTransit:          true,
+		},
+		SchemaSettings: &pubsubpb.SchemaSettings{
+			Schema:   "projects/test/schemas/orders",
+			Encoding: pubsubpb.Encoding_JSON,
+		},
+	}
+}
+
+// assertTopicFieldsEqual compares the mutable Topic surface both transports must
+// round-trip (nil-able getters make an absent field comparable too).
+func assertTopicFieldsEqual(t *testing.T, where string, got, want *pubsubpb.Topic) {
+	t.Helper()
+	if got.GetName() != want.GetName() {
+		t.Errorf("%s: name = %q, want %q", where, got.GetName(), want.GetName())
+	}
+	if !reflect.DeepEqual(got.GetLabels(), want.GetLabels()) {
+		t.Errorf("%s: labels = %v, want %v", where, got.GetLabels(), want.GetLabels())
+	}
+	if got.GetKmsKeyName() != want.GetKmsKeyName() {
+		t.Errorf("%s: kmsKeyName = %q, want %q", where, got.GetKmsKeyName(), want.GetKmsKeyName())
+	}
+	if got.GetMessageRetentionDuration().AsDuration() != want.GetMessageRetentionDuration().AsDuration() {
+		t.Errorf("%s: messageRetentionDuration = %v, want %v", where,
+			got.GetMessageRetentionDuration().AsDuration(), want.GetMessageRetentionDuration().AsDuration())
+	}
+	if !reflect.DeepEqual(got.GetMessageStoragePolicy().GetAllowedPersistenceRegions(),
+		want.GetMessageStoragePolicy().GetAllowedPersistenceRegions()) {
+		t.Errorf("%s: allowedPersistenceRegions = %v, want %v", where,
+			got.GetMessageStoragePolicy().GetAllowedPersistenceRegions(),
+			want.GetMessageStoragePolicy().GetAllowedPersistenceRegions())
+	}
+	if got.GetMessageStoragePolicy().GetEnforceInTransit() != want.GetMessageStoragePolicy().GetEnforceInTransit() {
+		t.Errorf("%s: enforceInTransit = %v, want %v", where,
+			got.GetMessageStoragePolicy().GetEnforceInTransit(), want.GetMessageStoragePolicy().GetEnforceInTransit())
+	}
+	if got.GetSchemaSettings().GetSchema() != want.GetSchemaSettings().GetSchema() {
+		t.Errorf("%s: schemaSettings.schema = %q, want %q", where,
+			got.GetSchemaSettings().GetSchema(), want.GetSchemaSettings().GetSchema())
+	}
+	if got.GetSchemaSettings().GetEncoding() != want.GetSchemaSettings().GetEncoding() {
+		t.Errorf("%s: schemaSettings.encoding = %v, want %v", where,
+			got.GetSchemaSettings().GetEncoding(), want.GetSchemaSettings().GetEncoding())
+	}
+}
+
+// TestCreateTopicFullFieldRoundTripGRPC covers PTF1 on the gRPC side: every
+// module field survives create, get and list. Before PTF1 the transcoder
+// rendered only name/kmsKeyName/labels/retention, so storage policy and schema
+// settings never reached a gRPC client.
+func TestCreateTopicFullFieldRoundTripGRPC(t *testing.T) {
+	pub, _, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	want := grpcTopicWithAllFields("projects/test/topics/full-fields")
+	req := grpcTopicWithAllFields(want.GetName())
+	// An output-only field a client echoes back must be ignored, not stored.
+	req.State = pubsubpb.Topic_ACTIVE
+
+	created, err := pub.CreateTopic(ctx, req)
+	if err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	assertTopicFieldsEqual(t, "CreateTopic", created, want)
+	if created.GetState() != pubsubpb.Topic_STATE_UNSPECIFIED {
+		t.Errorf("CreateTopic state = %v, want STATE_UNSPECIFIED (output-only is stripped)", created.GetState())
+	}
+
+	got, err := pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: want.GetName()})
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	assertTopicFieldsEqual(t, "GetTopic", got, want)
+
+	list, err := pub.ListTopics(ctx, &pubsubpb.ListTopicsRequest{Project: "projects/test"})
+	if err != nil {
+		t.Fatalf("ListTopics: %v", err)
+	}
+	var found *pubsubpb.Topic
+	for _, topic := range list.GetTopics() {
+		if topic.GetName() == want.GetName() {
+			found = topic
+		}
+	}
+	if found == nil {
+		t.Fatalf("ListTopics did not return %q", want.GetName())
+	}
+	assertTopicFieldsEqual(t, "ListTopics", found, want)
+}
+
+// TestTopicRESTGRPCParity asserts both transports serve one topic as the same
+// protobuf-JSON map: a topic created over gRPC reads back identically from the
+// REST provider and the gRPC renderer, so a field can never be visible on only
+// one side.
+func TestTopicRESTGRPCParity(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	enc := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	svc := NewService(resources, messages, enc, "test")
+	rest := restpubsub.New(resources, messages, enc)
+
+	if _, err := svc.CreateTopic(ctx, grpcTopicWithAllFields("projects/test/topics/parity")); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	got, err := svc.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: "projects/test/topics/parity"})
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	grpcMap, err := protoToJSONMap(got)
+	if err != nil {
+		t.Fatalf("protoToJSONMap: %v", err)
+	}
+
+	restResp, err := rest.TopicGet(ctx, &model.NormalizedRequest{
+		AccountID:  "test",
+		Params:     map[string]any{"name": "topics/parity"},
+		ResourceID: resource.ResourceID("test"),
+	})
+	if err != nil {
+		t.Fatalf("REST TopicGet: %v", err)
+	}
+	if !reflect.DeepEqual(restResp.Data, grpcMap) {
+		t.Fatalf("REST and gRPC topic maps differ\n  REST: %#v\n  gRPC: %#v", restResp.Data, grpcMap)
+	}
+}
+
+// TestTopicCreateValidationErrorParity asserts the shared field model's error is
+// the same message on both transports: REST answers 400 with the message, gRPC
+// answers INVALID_ARGUMENT with the identical text.
+func TestTopicCreateValidationErrorParity(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	messages := pubsubstore.NewMemoryMessages()
+	enc := crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore())
+	svc := NewService(resources, messages, enc, "test")
+	rest := restpubsub.New(resources, messages, enc)
+
+	_, restErr := rest.TopicCreate(ctx, &model.NormalizedRequest{
+		AccountID:  "test",
+		Params:     map[string]any{"name": "topics/bad", "body": map[string]any{"messageRetentionDuration": "599s"}},
+		ResourceID: resource.ResourceID("test"),
+	})
+	pe, ok := restErr.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("REST TopicCreate err = %v, want a 400 ProviderError", restErr)
+	}
+
+	_, grpcErr := svc.CreateTopic(ctx, &pubsubpb.Topic{
+		Name:                     "projects/test/topics/bad",
+		MessageRetentionDuration: durationpb.New(599 * time.Second),
+	})
+	st, ok := status.FromError(grpcErr)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Fatalf("gRPC CreateTopic err = %v, want INVALID_ARGUMENT", grpcErr)
+	}
+	if st.Message() != pe.Message {
+		t.Fatalf("validation error text differs\n  REST: %q\n  gRPC: %q", pe.Message, st.Message())
 	}
 }
 
