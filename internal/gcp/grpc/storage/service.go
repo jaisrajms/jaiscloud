@@ -374,7 +374,195 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		}
 	}
 	b.SoftDeletePolicy = sd
+	// The remaining bucket configuration the CFT module round-trips (TGM1-3):
+	// website, logging, autoclass, hierarchical namespace, custom dual-region
+	// placement and IP filtering. Each is rendered only when the stored bucket
+	// record carries it, matching the REST body's presence semantics.
+	if w := bucketSubMap(m, "website"); w != nil {
+		b.Website = &storagepb.Bucket_Website{
+			MainPageSuffix: mapString(w, "mainPageSuffix"),
+			NotFoundPage:   mapString(w, "notFoundPage"),
+		}
+	}
+	if l := bucketSubMap(m, "logging"); l != nil {
+		b.Logging = &storagepb.Bucket_Logging{
+			LogBucket:       mapString(l, "logBucket"),
+			LogObjectPrefix: mapString(l, "logObjectPrefix"),
+		}
+	}
+	if hn := bucketSubMap(m, "hierarchicalNamespace"); hn != nil {
+		enabled, _ := hn["enabled"].(bool)
+		b.HierarchicalNamespace = &storagepb.Bucket_HierarchicalNamespace{Enabled: enabled}
+	}
+	if ac := bucketSubMap(m, "autoclass"); ac != nil {
+		a := &storagepb.Bucket_Autoclass{}
+		a.Enabled, _ = ac["enabled"].(bool)
+		if v := mapString(ac, "terminalStorageClass"); v != "" {
+			a.TerminalStorageClass = &v
+		}
+		a.ToggleTime = mapTime(ac, "toggleTime")
+		a.TerminalStorageClassUpdateTime = mapTime(ac, "terminalStorageClassUpdateTime")
+		b.Autoclass = a
+	}
+	if cp := bucketSubMap(m, "customPlacementConfig"); cp != nil {
+		b.CustomPlacementConfig = &storagepb.Bucket_CustomPlacementConfig{
+			DataLocations: mapStrings(cp["dataLocations"]),
+		}
+	}
+	if f := bucketSubMap(m, "ipFilter"); f != nil {
+		b.IpFilter = ipFilterFromMap(f)
+	}
 	return b
+}
+
+// ─── bucket configuration maps ───────────────────────────────────────────────
+//
+// The proto's bucket sub-messages are stored under the JSON-shaped keys and
+// camelCase members the REST insert body persists, so a bucket created on one
+// transport reads back identically on the other.
+
+func bucketSubMap(meta map[string]any, key string) map[string]any {
+	m, _ := meta[key].(map[string]any)
+	return m
+}
+
+func mapString(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+// mapStrings normalizes a stored string list ([]any after a JSON round-trip, or
+// []string from an in-process writer).
+func mapStrings(v any) []string {
+	switch list := v.(type) {
+	case []any:
+		out := make([]string, 0, len(list))
+		for _, it := range list {
+			if s, ok := it.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return append([]string(nil), list...)
+	default:
+		return nil
+	}
+}
+
+func mapTime(m map[string]any, key string) *timestamppb.Timestamp {
+	s := mapString(m, key)
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return nil
+	}
+	return timestamppb.New(t)
+}
+
+func websiteToMap(w *storagepb.Bucket_Website) map[string]any {
+	m := map[string]any{}
+	if v := w.GetMainPageSuffix(); v != "" {
+		m["mainPageSuffix"] = v
+	}
+	if v := w.GetNotFoundPage(); v != "" {
+		m["notFoundPage"] = v
+	}
+	return m
+}
+
+func loggingToMap(l *storagepb.Bucket_Logging) map[string]any {
+	m := map[string]any{}
+	if v := l.GetLogBucket(); v != "" {
+		m["logBucket"] = v
+	}
+	if v := l.GetLogObjectPrefix(); v != "" {
+		m["logObjectPrefix"] = v
+	}
+	return m
+}
+
+func autoclassToMap(a *storagepb.Bucket_Autoclass) map[string]any {
+	// enabled is the only input member of any consequence: toggle_time and
+	// terminal_storage_class_update_time are OUTPUT_ONLY, so a request value is
+	// not stored. terminal_storage_class is stored when the client sets it.
+	m := map[string]any{"enabled": a.GetEnabled()}
+	if c := a.GetTerminalStorageClass(); c != "" {
+		m["terminalStorageClass"] = c
+	}
+	return m
+}
+
+func ipFilterToMap(f *storagepb.Bucket_IpFilter) map[string]any {
+	m := map[string]any{}
+	if f.Mode != nil {
+		m["mode"] = f.GetMode()
+	}
+	if p := f.GetPublicNetworkSource(); p != nil {
+		m["publicNetworkSource"] = map[string]any{
+			"allowedIpCidrRanges": stringsToAny(p.GetAllowedIpCidrRanges()),
+		}
+	}
+	if vs := f.GetVpcNetworkSources(); len(vs) > 0 {
+		list := make([]any, 0, len(vs))
+		for _, v := range vs {
+			vm := map[string]any{"allowedIpCidrRanges": stringsToAny(v.GetAllowedIpCidrRanges())}
+			if n := v.GetNetwork(); n != "" {
+				vm["network"] = n
+			}
+			list = append(list, vm)
+		}
+		m["vpcNetworkSources"] = list
+	}
+	if f.GetAllowCrossOrgVpcs() {
+		m["allowCrossOrgVpcs"] = true
+	}
+	if f.AllowAllServiceAgentAccess != nil {
+		m["allowAllServiceAgentAccess"] = f.GetAllowAllServiceAgentAccess()
+	}
+	return m
+}
+
+func ipFilterFromMap(m map[string]any) *storagepb.Bucket_IpFilter {
+	f := &storagepb.Bucket_IpFilter{}
+	if v := mapString(m, "mode"); v != "" {
+		f.Mode = &v
+	}
+	if p, ok := m["publicNetworkSource"].(map[string]any); ok {
+		f.PublicNetworkSource = &storagepb.Bucket_IpFilter_PublicNetworkSource{
+			AllowedIpCidrRanges: mapStrings(p["allowedIpCidrRanges"]),
+		}
+	}
+	if vs, ok := m["vpcNetworkSources"].([]any); ok {
+		for _, raw := range vs {
+			vm, _ := raw.(map[string]any)
+			if vm == nil {
+				continue
+			}
+			src := &storagepb.Bucket_IpFilter_VpcNetworkSource{
+				AllowedIpCidrRanges: mapStrings(vm["allowedIpCidrRanges"]),
+			}
+			if n := mapString(vm, "network"); n != "" {
+				src.Network = &n
+			}
+			f.VpcNetworkSources = append(f.VpcNetworkSources, src)
+		}
+	}
+	f.AllowCrossOrgVpcs, _ = m["allowCrossOrgVpcs"].(bool)
+	if v, ok := m["allowAllServiceAgentAccess"].(bool); ok {
+		f.AllowAllServiceAgentAccess = &v
+	}
+	return f
+}
+
+func stringsToAny(in []string) []any {
+	out := make([]any, 0, len(in))
+	for _, s := range in {
+		out = append(out, s)
+	}
+	return out
 }
 
 // protoResourceToMeta converts a WriteObjectSpec's resource (proto Object) plus
@@ -646,6 +834,33 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 		meta["iamConfiguration"] = cfg
 	}
 	meta["defaultEventBasedHold"] = req.GetBucket().GetDefaultEventBasedHold()
+	// The bucket fields the CFT module configures (TGM1-3): website, logging,
+	// autoclass, hierarchicalNamespace, customPlacementConfig and ipFilter. They
+	// are stored under the same keys and shapes the REST insert body persists, so
+	// both transports read one bucket record.
+	if w := req.GetBucket().GetWebsite(); w != nil {
+		meta["website"] = websiteToMap(w)
+	}
+	if l := req.GetBucket().GetLogging(); l != nil {
+		meta["logging"] = loggingToMap(l)
+	}
+	if hn := req.GetBucket().GetHierarchicalNamespace(); hn != nil {
+		meta["hierarchicalNamespace"] = map[string]any{"enabled": hn.GetEnabled()}
+	}
+	if ac := req.GetBucket().GetAutoclass(); ac != nil {
+		meta["autoclass"] = autoclassToMap(ac)
+	}
+	if cp := req.GetBucket().GetCustomPlacementConfig(); cp != nil {
+		locations := make([]any, 0, len(cp.GetDataLocations()))
+		for _, l := range cp.GetDataLocations() {
+			locations = append(locations, l)
+		}
+		meta["customPlacementConfig"] = storageprovider.NormalizeCustomPlacementConfig(
+			map[string]any{"dataLocations": locations})
+	}
+	if ipf := req.GetBucket().GetIpFilter(); ipf != nil {
+		meta["ipFilter"] = ipFilterToMap(ipf)
+	}
 
 	if err := s.objects.CreateBucket(ctx, project, name, meta); err != nil {
 		if errors.Is(err, gcs.ErrAlreadyExists) {
@@ -796,11 +1011,14 @@ func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
 }
 
 // applyBucketMask overlays the request's masked Bucket fields onto the stored
-// bucket metadata. Only the field paths this service models (labels, versioning,
-// storageClass, location, retentionPolicy, iamConfig) are applied; "*" applies
-// all of them. An absent/empty masked field clears the stored key where GCS
-// treats the field as a map/message (labels, versioning, retentionPolicy) and is
-// otherwise left untouched.
+// bucket metadata. The field paths this service models (labels, versioning,
+// storageClass, location, retentionPolicy, iamConfig, website, logging,
+// autoclass, ipFilter) are applied; "*" applies all of them.
+// hierarchical_namespace and custom_placement_config are immutable after create
+// and are ignored, like the REST update. An absent/empty masked field clears the
+// stored key where GCS treats the field as a map/message (labels, versioning,
+// retentionPolicy, website, logging, autoclass, ipFilter) and is otherwise left
+// untouched.
 func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) error {
 	applyBucketLabelsMask(meta, pb, mask)
 	if maskIncludes(mask, "versioning") {
@@ -828,6 +1046,39 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 			meta["defaultEventBasedHold"] = true
 		} else {
 			delete(meta, "defaultEventBasedHold")
+		}
+	}
+	// The mutable CFT-module bucket fields (TGM1-3). A masked message absent from
+	// the request clears the stored block, the same "null clears" contract the
+	// REST PATCH has; hierarchical_namespace and custom_placement_config are
+	// immutable after create and are deliberately not applied here (REST ignores
+	// them on update too).
+	if maskIncludes(mask, "website") {
+		if w := pb.GetWebsite(); w != nil {
+			meta["website"] = websiteToMap(w)
+		} else {
+			delete(meta, "website")
+		}
+	}
+	if maskIncludes(mask, "logging") {
+		if l := pb.GetLogging(); l != nil {
+			meta["logging"] = loggingToMap(l)
+		} else {
+			delete(meta, "logging")
+		}
+	}
+	if maskIncludes(mask, "autoclass") || maskIncludes(mask, "autoclass.enabled") {
+		if a := pb.GetAutoclass(); a != nil {
+			meta["autoclass"] = autoclassToMap(a)
+		} else {
+			delete(meta, "autoclass")
+		}
+	}
+	if maskIncludes(mask, "ip_filter") {
+		if f := pb.GetIpFilter(); f != nil {
+			meta["ipFilter"] = ipFilterToMap(f)
+		} else {
+			delete(meta, "ipFilter")
 		}
 	}
 	return applyBucketIamMask(meta, pb, mask)
