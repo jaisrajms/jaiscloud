@@ -92,9 +92,12 @@ func TestDatabaseCRUD(t *testing.T) {
 		t.Errorf("GetDatabase(missing) err = %v, want NotFound", err)
 	}
 
-	// Create of (default) is AlreadyExists.
+	// The (default) read above materialised it, so a create is AlreadyExists
+	// (create-if-absent for a fresh project is TestDefaultDatabaseCreate).
 	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "(default)", databaseDef{}); err == nil {
 		t.Error("CreateDatabase((default)) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
 	}
 }
 
@@ -196,6 +199,93 @@ func TestDefaultDatabaseOutputFields(t *testing.T) {
 	}
 	if _, _, err := p.DeleteDatabaseDef(ctx, "legacy", "(default)", repaired.Etag); err != nil {
 		t.Errorf("DeleteDatabaseDef(legacy default) with the repaired etag: %v", err)
+	}
+}
+
+// TestDefaultDatabaseCreate pins create-if-absent for the implicit (default)
+// database: real GCP creates it when the project has none (the Firebase
+// Terraform shape, google_firestore_database { name = "(default)" }), records
+// the requested location, answers ALREADY_EXISTS for a live record, and accepts
+// a create after the default was deleted.
+func TestDefaultDatabaseCreate(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	created, op, err := p.CreateDatabaseDef(ctx, "proj", defaultDatabaseID, databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(default): %v", err)
+	}
+	if !strings.Contains(op, "/operations/") {
+		t.Errorf("operation name = %q, want /operations/", op)
+	}
+	if want := "projects/proj/databases/(default)"; created.Name != want {
+		t.Errorf("created name = %q, want %q", created.Name, want)
+	}
+	// The location is echoed verbatim: the Firestore provider has no case
+	// normalisation, so a lowercase region must not be upper-cased.
+	if created.LocationID != "us-central1" {
+		t.Errorf("created location = %q, want us-central1", created.LocationID)
+	}
+	if created.Uid == "" || created.Etag == "" || created.CreateTime.IsZero() || created.UpdateTime.IsZero() {
+		t.Errorf("created default lacks server fields: %+v", created)
+	}
+	if created.Type != "FIRESTORE_NATIVE" || created.ConcurrencyMode != concurrencyPessimistic ||
+		created.DeleteProtectionState != deleteProtectionDisabled || created.Deleted {
+		t.Errorf("created default defaults = %+v", created)
+	}
+
+	got, err := p.GetDatabase(ctx, "proj", defaultDatabaseID)
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if got.LocationID != "us-central1" || got.Uid != created.Uid || got.Etag != created.Etag {
+		t.Errorf("GetDatabase(default) = location %q uid %q, want the created record", got.LocationID, got.Uid)
+	}
+
+	// A live record is ALREADY_EXISTS, whatever location the request carries.
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", defaultDatabaseID, databaseDef{LocationID: "nam5"}); err == nil {
+		t.Error("second CreateDatabaseDef(default) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	// A first read materialises the default too, with no location — there is no
+	// project region to source one from — and that project then has a live
+	// default, so its create is ALREADY_EXISTS.
+	materialised, err := p.GetDatabase(ctx, "lazy", defaultDatabaseID)
+	if err != nil {
+		t.Fatalf("GetDatabase(lazy default): %v", err)
+	}
+	if materialised.LocationID != "" {
+		t.Errorf("materialised default location = %q, want none (no project region)", materialised.LocationID)
+	}
+	if _, _, err := p.CreateDatabaseDef(ctx, "lazy", defaultDatabaseID, databaseDef{LocationID: "us-central1"}); err == nil {
+		t.Error("CreateDatabaseDef(default after GET) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	// A tombstone counts as absent: delete (protection is disabled by default)
+	// then create converges, with the new location and a fresh uid.
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", defaultDatabaseID, got.Etag); err != nil {
+		t.Fatalf("DeleteDatabaseDef(default): %v", err)
+	}
+	if _, err := p.GetDatabase(ctx, "proj", defaultDatabaseID); !isNotFound(err) {
+		t.Fatalf("GetDatabase(deleted default) = %v, want NotFound", err)
+	}
+	recreated, _, err := p.CreateDatabaseDef(ctx, "proj", defaultDatabaseID, databaseDef{LocationID: "nam5"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(default after delete): %v", err)
+	}
+	if recreated.LocationID != "nam5" || recreated.Uid == created.Uid || recreated.Deleted {
+		t.Errorf("recreated default = location %q uid %q, want the new location and a fresh uid", recreated.LocationID, recreated.Uid)
+	}
+	if reread, err := p.GetDatabase(ctx, "proj", defaultDatabaseID); err != nil || reread.LocationID != "nam5" {
+		t.Errorf("GetDatabase(recreated default) = %+v err=%v, want location nam5", reread, err)
+	}
+	// One database, not two: the create replaces the tombstone.
+	if listed, err := p.ListDatabases(ctx, "proj", true); err != nil || len(listed) != 1 || listed[0].LocationID != "nam5" {
+		t.Errorf("ListDatabases(showDeleted) = %+v err=%v, want the single recreated default", listed, err)
 	}
 }
 

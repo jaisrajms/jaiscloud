@@ -694,9 +694,17 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 			},
 		},
 		{
-			Name: "CreateDefaultDatabaseIsAlreadyExists",
+			// The implicit (default) database is create-if-absent (TGM12): once a
+			// read has materialised it, a create is ALREADY_EXISTS. (A create on a
+			// project whose default has never been read succeeds — that is the
+			// Firebase/Terraform shape, covered by the module gate and the
+			// provider/transport tests.)
+			Name: "DuplicateDefaultDatabaseIsAlreadyExists",
 			Want: testdepth.SpecAlreadyExists(),
 			Run: func() error {
+				if _, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName("(default)")}); err != nil {
+					return fmt.Errorf("materialize (default): %w", err)
+				}
 				_, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
 					Parent:     projectName(),
 					DatabaseId: "(default)",

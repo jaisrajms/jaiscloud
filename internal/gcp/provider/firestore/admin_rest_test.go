@@ -234,6 +234,100 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 	}
 }
 
+// TestRESTDatabaseDefaultCreate pins projects.databases.create for the implicit
+// (default) database: a project with no live default accepts the create (the
+// Firebase Terraform shape, google_firestore_database { name = "(default)" }),
+// the terminal operation's Database carries the requested locationId, a
+// following GET echoes it, and a duplicate is ALREADY_EXISTS.
+func TestRESTDatabaseDefaultCreate(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	resp, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "(default)",
+		"body": map[string]any{
+			"locationId":            "us-central1",
+			"deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(default): %v", err)
+	}
+	if resp.Data["done"] != true {
+		t.Errorf("create op done = %v, want true", resp.Data["done"])
+	}
+	inner, _ := resp.Data["response"].(map[string]any)
+	if want := "projects/proj/databases/(default)"; inner["name"] != want {
+		t.Errorf("created default name = %v, want %s", inner["name"], want)
+	}
+	if inner["@type"] != "type.googleapis.com/google.firestore.admin.v1.Database" {
+		t.Errorf("create op @type = %v", inner["@type"])
+	}
+	if inner["locationId"] != "us-central1" {
+		t.Errorf("created default locationId = %v, want us-central1", inner["locationId"])
+	}
+
+	got, err := p.GetDatabase(ctx, adminNR("databases/(default)", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if got.Data["locationId"] != "us-central1" || got.Data["name"] != inner["name"] {
+		t.Errorf("GetDatabase(default) = %v, want the created record", got.Data)
+	}
+
+	// The default's create has the same operation envelope and field set as a
+	// named database's; only the reserved id differs.
+	named, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "named-db",
+		"body":       map[string]any{"locationId": "us-central1"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(named): %v", err)
+	}
+	namedInner, _ := named.Data["response"].(map[string]any)
+	for _, field := range []string{
+		"name", "uid", "createTime", "updateTime", "etag", "type", "concurrencyMode",
+		"deleteProtectionState", "databaseEdition", "versionRetentionPeriod",
+		"earliestVersionTime", "locationId",
+	} {
+		_, haveDefault := inner[field]
+		_, haveNamed := namedInner[field]
+		if haveDefault != haveNamed {
+			t.Errorf("%s present on default=%v named=%v, want the same shape", field, haveDefault, haveNamed)
+		}
+	}
+
+	// A live default is ALREADY_EXISTS, just like a named duplicate.
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "(default)",
+		"body":       map[string]any{"locationId": "nam5"},
+	})); err == nil {
+		t.Error("duplicate CreateDatabase(default) succeeded, want AlreadyExists")
+	} else {
+		assertProviderCode(t, err, "AlreadyExists", 409)
+	}
+
+	// After a delete the create is accepted again (the tombstone is absent).
+	deleted, err := p.DeleteDatabase(ctx, adminNR("databases/(default)", map[string]any{"etag": inner["etag"]}))
+	if err != nil {
+		t.Fatalf("DeleteDatabase(default): %v", err)
+	}
+	if dresp, _ := deleted.Data["response"].(map[string]any); dresp["deleteTime"] == nil {
+		t.Error("delete op response carries no deleteTime")
+	}
+	recreated, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "(default)",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(default after delete): %v", err)
+	}
+	rein, _ := recreated.Data["response"].(map[string]any)
+	if rein["locationId"] != "nam5" {
+		t.Errorf("recreated default locationId = %v, want nam5", rein["locationId"])
+	}
+}
+
 // TestRESTDatabaseServerOwnedFields pins the wire view of database.proto's field
 // ownership: a REST create/patch carrying key_prefix (OUTPUT_ONLY) or a changed
 // database_edition (IMMUTABLE) does not store them, and versionRetentionPeriod is

@@ -437,6 +437,11 @@ func normalizeDatabase(rec databaseDef) databaseDef {
 // project has. It is shaped like a named database — a real UUID4 uid, create and
 // update timestamps and an etag — so the output fields are present and the etag
 // is a usable delete precondition (DC46).
+//
+// It carries no location_id: the emulator has no project region to source one
+// from, and fabricating a location would be a value real GCP would not report.
+// A location is recorded only when a client creates the default through
+// projects.databases.create (CreateDatabaseDef), exactly as on real GCP.
 func newDefaultDatabase(project string) databaseDef {
 	now := clock.Now()
 	return databaseDef{
@@ -463,14 +468,21 @@ var databaseIDRe = regexp.MustCompile(`^[a-z][a-z0-9-]{3,62}$`)
 
 // CreateDatabaseDef creates a database metadata record and returns it with the
 // name of the terminal long-running operation wrapping it.
+//
+// The implicit (default) database is create-if-absent: real GCP creates it for a
+// project that has none — the Firebase Terraform shape,
+// google_firestore_database { name = "(default)" } — and records the requested
+// location. A live record is ALREADY_EXISTS, while a missing or tombstoned one (a
+// deleted default) accepts the create, so a destroy→create cycle converges. The
+// requested location_id is stored verbatim: the Firestore provider applies no
+// case normalisation, so echoing what the client sent keeps the plan clean.
 func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, db databaseDef) (databaseDef, string, error) {
 	if dbID == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database id is required")
 	}
-	if dbID == defaultDatabaseID {
-		return databaseDef{}, "", gcpAlreadyExists("database")
-	}
-	if !databaseIDRe.MatchString(dbID) {
+	// (default) is the one id outside the documented 4-63 lowercase-letter
+	// grammar: it is the reserved name of the implicit database.
+	if dbID != defaultDatabaseID && !databaseIDRe.MatchString(dbID) {
 		return databaseDef{}, "", gcpInvalidArgument("database id must be 4-63 chars, start with a lowercase letter, and contain only lowercase letters, digits, or hyphens")
 	}
 	db.Name = databaseName(project, dbID)
@@ -513,10 +525,45 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	}
 	db.DeleteProtectionState = normalizeDeleteProtection(db.DeleteProtectionState)
 	db.Etag = randomHex(16)
-	if err := s.putResource(ctx, project, rtDatabase, databaseRel(dbID), db, true); err != nil {
+	if dbID == defaultDatabaseID {
+		if err := s.createDefaultDatabase(ctx, project, db); err != nil {
+			return databaseDef{}, "", err
+		}
+	} else if err := s.putResource(ctx, project, rtDatabase, databaseRel(dbID), db, true); err != nil {
 		return databaseDef{}, "", err
 	}
 	return db, databaseOperationName(project, dbID, randomHex(12)), nil
+}
+
+// createDefaultDatabase stores the implicit (default) database on request,
+// treating a missing record or a tombstone as absent and a live record as
+// ALREADY_EXISTS. The read-check-write runs inside the store's atomic
+// UpsertAtomic (mirroring defaultDatabase), so two concurrent creates cannot
+// both succeed, and a create racing the first read's lazy materialisation still
+// answers exactly one of the two outcomes. When no store is attached (unit
+// tests) the create runs without persisting, like putResource.
+func (s *Service) createDefaultDatabase(ctx context.Context, project string, db databaseDef) error {
+	if s.resources == nil {
+		return nil
+	}
+	_, err := s.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtDatabase, databaseRel(defaultDatabaseID),
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			if exists {
+				var cur databaseDef
+				if err := json.Unmarshal(current.Data, &cur); err != nil {
+					return current, model.NewProviderError("Internal", err.Error(), 500)
+				}
+				if !cur.Deleted {
+					return current, gcpAlreadyExists("database")
+				}
+			}
+			data, err := json.Marshal(db)
+			if err != nil {
+				return current, model.NewProviderError("Internal", err.Error(), 500)
+			}
+			return store.ResourceEntry{Type: rtDatabase, ID: databaseRel(defaultDatabaseID), Data: data}, nil
+		})
+	return err
 }
 
 // GetDatabase returns a database record. The implicit (default) database is

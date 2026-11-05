@@ -151,6 +151,83 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDefaultDatabaseCreate pins CreateDatabase for the implicit (default)
+// database on the gRPC surface: a fresh project accepts it (the Firebase
+// Terraform shape), GetDatabase echoes the stored location, and a duplicate is
+// ALREADY_EXISTS.
+func TestDefaultDatabaseCreate(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "(default)",
+		Database:   &adminpb.Database{LocationId: "us-central1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(default): %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("CreateDatabase(default) done = false, want true")
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase(default) response unmarshal: %v", err)
+	}
+	if want := "projects/proj/databases/(default)"; created.GetName() != want {
+		t.Errorf("created name = %q, want %q", created.GetName(), want)
+	}
+	if created.GetLocationId() != "us-central1" || created.GetUid() == "" || created.GetEtag() == "" {
+		t.Errorf("created default = %+v, want the location and server fields", created)
+	}
+
+	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if got.GetLocationId() != "us-central1" || got.GetUid() != created.GetUid() {
+		t.Errorf("GetDatabase(default) = %+v, want the created record", got)
+	}
+
+	// The default's create has no cmek_config unless the request carries one.
+	if got.GetCmekConfig() != nil {
+		t.Errorf("GetDatabase(default) cmek_config = %+v, want unset", got.GetCmekConfig())
+	}
+
+	if _, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "(default)",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	}); status.Code(err) != codes.AlreadyExists {
+		t.Errorf("duplicate CreateDatabase(default) = %v, want AlreadyExists", err)
+	}
+
+	// A tombstoned default accepts the create again, with the new location.
+	delOp, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: created.GetEtag()})
+	if err != nil {
+		t.Fatalf("DeleteDatabase(default): %v", err)
+	}
+	if !delOp.GetDone() {
+		t.Fatal("DeleteDatabase(default) done = false, want true")
+	}
+	reOp, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "(default)",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(default after delete): %v", err)
+	}
+	recreated := &adminpb.Database{}
+	if err := reOp.GetResponse().UnmarshalTo(recreated); err != nil {
+		t.Fatalf("CreateDatabase(default after delete) response unmarshal: %v", err)
+	}
+	if recreated.GetLocationId() != "nam5" {
+		t.Errorf("recreated default location = %q, want nam5", recreated.GetLocationId())
+	}
+}
+
 // TestUpdateDatabaseServerOwnedFields pins database.proto's field ownership on
 // the gRPC surface: key_prefix (OUTPUT_ONLY) and database_edition (IMMUTABLE)
 // are never written by an update, and version_retention_period (OUTPUT_ONLY) is

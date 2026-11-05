@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 #
-# Case: terraform-google-firestore (TGM11)
+# Case: terraform-google-firestore (TGM11, TGM12)
 #
 # The pinned consumer is GoogleCloudPlatform/terraform-google-firestore
 # (commit 50d170b). Its root module creates one `google_firestore_database` and
@@ -30,6 +30,22 @@
 #   mutate a non-ForceNew field (PITR disabled) -> apply -> GET -> No changes
 #   a second module instance with kms_key_name = null -> GET has no cmekConfig
 #   destroy
+#
+# Before TGM12 the emulator answered 409 ALREADY_EXISTS for any
+# `POST …/databases?databaseId=(default)`, even in a project with no database,
+# so the Firebase shape (`google_firestore_database { name = "(default)" }`)
+# could not be created at all. Real GCP creates the implicit default database
+# when the project has none and records the location, which is the phase added
+# below:
+#
+#   (default) apply in its own workdir/state -> GET carries locationId ->
+#   No changes -> destroy
+#
+# It runs FIRST and in its own state because a read of `(default)` (a LIST or a
+# GET, including one in the CMEK phases) materialises it; a materialised default
+# is a live record, so a later create would be ALREADY_EXISTS. The location is
+# us-central1 and is echoed verbatim, and no location is invented for a default
+# that only a read created.
 #
 # The key is created the way a real config creates one (`google_kms_key_ring` +
 # `google_kms_crypto_key`, location us-central1) and its `.id` is passed as the
@@ -139,6 +155,57 @@ module "plain" {
 EOF
 }
 
+# write_default_module generates the root module for the TGM12 phase: one module
+# instance with database_id = "(default)" (the Firebase shape), no CMEK key, in
+# this phase's own working directory.
+write_default_module() {
+  cat >"$DEFAULT_WORK/main.tf" <<EOF
+terraform {
+  required_version = ">= 1.3"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "= 7.46.2"
+    }
+  }
+}
+
+variable "endpoint" {
+  type    = string
+  default = "$ENDPOINT"
+}
+
+variable "project" {
+  type    = string
+  default = "$PROJECT"
+}
+
+provider "google" {
+  project = var.project
+  region  = "us-central1"
+
+  user_project_override = false
+
+  # Versioned API base URL: exactly one trailing slash.
+  firestore_custom_endpoint = "\${var.endpoint}/v1/"
+}
+
+module "firestore" {
+  source = "$MODULE_DIR"
+
+  project_id  = var.project
+  database_id = "(default)"
+  location    = "us-central1"
+
+  kms_key_name = null
+
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = "DELETE"
+}
+EOF
+}
+
 db_url() {
   echo "$ENDPOINT/v1/projects/$PROJECT/databases/$1"
 }
@@ -183,7 +250,47 @@ check_db_absent() {
   pass "$name"
 }
 
+# default_phase drives the Firebase shape — database_id = "(default)" — in its
+# own working directory and state. It runs before any other phase because a read
+# of `(default)` materialises it, and a materialised default is live, so a later
+# create would be ALREADY_EXISTS.
+default_phase() {
+  local saved="$WORK"
+  WORK="$DEFAULT_WORK"
+  mkdir -p "$DEFAULT_WORK"
+  write_default_module
+
+  init_phase
+  plan_phase "plan (implicit (default) database)"
+  apply_phase "apply (implicit (default) database)"
+  assert_no_api_errors
+
+  echo "== spot checks ((default))"
+  check_db "(default) GET carries the created locationId" "$(db_url "(default)")" \
+    '"locationId":"us-central1"'
+
+  echo "== $TF: second plan ((default) permadiff check)"
+  plan_no_changes "re-plan reports no changes ((default) database)"
+
+  # Destroy is this phase's own, in its own state directory: the driver's
+  # destroy_phase (and its DESTROYED latch) belongs to $WORK.
+  echo "== destroy ((default))"
+  if "$TF" -chdir="$DEFAULT_WORK" destroy -input=false -auto-approve -no-color >"$DEFAULT_WORK/destroy.log" 2>&1; then
+    pass "destroy ((default) database)"
+  else
+    cat "$DEFAULT_WORK/destroy.log"
+    fail "destroy ((default) database) (see the log above)"
+  fi
+
+  WORK="$saved"
+}
+
 case_main() {
+  # The (default) phase goes first, in $WORK/default: its own working directory
+  # and state, so no earlier read of this project's default has materialised it.
+  DEFAULT_WORK="$WORK/default"
+  default_phase
+
   write_module '"POINT_IN_TIME_RECOVERY_ENABLED"'
   init_phase
   plan_phase "plan (CMEK database + Google-managed database)"
