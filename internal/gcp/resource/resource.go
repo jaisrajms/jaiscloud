@@ -57,6 +57,9 @@ var formatters = map[string]func(project, name string) string{
 	"gcs-notification": func(_, n string) string { return "projects/_/buckets/" + n },
 	// GCS object IAM policy resourceId: projects/_/buckets/{bucket}/objects/{object}.
 	"gcs-object-policy": func(_, n string) string { return "projects/_/buckets/" + n },
+	// GCS HMAC key metadata name (Storage JSON API HmacKeyMetadata.id):
+	// projects/{project}/hmacKeys/{accessId}.
+	"gcs-hmac-key": func(p, n string) string { return "projects/" + p + "/hmacKeys/" + n },
 	// Cloud Pub/Sub
 	"pubsub-topic":        func(p, n string) string { return fmt.Sprintf("projects/%s/topics/%s", p, n) },
 	"pubsub-subscription": func(p, n string) string { return fmt.Sprintf("projects/%s/subscriptions/%s", p, n) },

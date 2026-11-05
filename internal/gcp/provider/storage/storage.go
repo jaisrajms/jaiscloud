@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
@@ -59,6 +60,9 @@ const (
 	// rtNotificationSeq holds a bucket's notification-ID high-water mark, so
 	// ids stay monotonic per bucket even after the highest config is deleted.
 	rtNotificationSeq = "gcs_notification_seq"
+	// rtHMACKey is the generic-store resource type for a project's GCS HMAC
+	// keys (storage.projects.hmacKeys.*), keyed "{project}/{accessId}".
+	rtHMACKey = "gcs_hmac_key"
 )
 
 // EventPublisher publishes one Cloud Pub/Sub message on behalf of another
@@ -320,6 +324,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.BucketsLockRetentionPolicy":  p.BucketsLockRetentionPolicy,
 		"Storage.BucketsGetStorageLayout":     p.BucketsGetStorageLayout,
 		"Storage.ProjectsServiceAccountGet":   p.ProjectsServiceAccountGet,
+		"Storage.ProjectsHmacKeysCreate":      p.ProjectsHmacKeysCreate,
+		"Storage.ProjectsHmacKeysList":        p.ProjectsHmacKeysList,
+		"Storage.ProjectsHmacKeysGet":         p.ProjectsHmacKeysGet,
+		"Storage.ProjectsHmacKeysUpdate":      p.ProjectsHmacKeysUpdate,
+		"Storage.ProjectsHmacKeysDelete":      p.ProjectsHmacKeysDelete,
 		"Storage.NotificationsInsert":         p.NotificationsInsert,
 		"Storage.NotificationsList":           p.NotificationsList,
 		"Storage.NotificationsGet":            p.NotificationsGet,
@@ -955,6 +964,425 @@ func (p *Provider) ProjectsServiceAccountGet(_ context.Context, nr *model.Normal
 		"kind":          "storage#serviceAccount",
 		"email_address": "service-" + resource.ProjectNumber(project) + "@gs-project-accounts.iam.gserviceaccount.com",
 	}), nil
+}
+
+// ─── HMAC keys (storage.projects.hmacKeys.*) ──────────────────────────────────
+//
+// Terraform's google_storage_hmac_key — created by
+// terraform-google-cloud-storage when set_hmac_access = true — drives this
+// surface: create, then poll GET until the key appears, then PUT
+// state=INACTIVE with the current etag before DELETE. Real GCS keeps a deleted
+// key as a DELETED tombstone that only list?showDeletedKeys=true returns.
+
+// hmacKeyMetadata is a stored GCS HMAC key (the Discovery HmacKeyMetadata
+// schema). The one-time `secret` returned by create is deliberately NOT stored:
+// the emulator has no HMAC data plane to authenticate with it, and the
+// convention for service resources is that the resource store holds metadata
+// only.
+type hmacKeyMetadata struct {
+	Kind                string `json:"kind,omitempty"`
+	ID                  string `json:"id,omitempty"`
+	SelfLink            string `json:"selfLink,omitempty"`
+	AccessID            string `json:"accessId,omitempty"`
+	ProjectID           string `json:"projectId,omitempty"`
+	ServiceAccountEmail string `json:"serviceAccountEmail,omitempty"`
+	State               string `json:"state,omitempty"`
+	TimeCreated         string `json:"timeCreated,omitempty"`
+	Updated             string `json:"updated,omitempty"`
+	Etag                string `json:"etag,omitempty"`
+}
+
+// hmacKeyNotFound / hmacKeyEtagMismatch / hmacKeyActive are returned from an
+// UpsertAtomic mutate callback so the read-check-write happens under one lock;
+// the handlers translate them into the GCS error shapes.
+var (
+	hmacKeyNotFound     = errors.New("storage: hmac key not found")
+	hmacKeyEtagMismatch = errors.New("storage: hmac key etag mismatch")
+	hmacKeyStillActive  = errors.New("storage: hmac key is still active")
+)
+
+// metadataMap renders the key as the flat wire HmacKeyMetadata object. Every
+// documented field is always present, as in real GCS responses.
+func (m hmacKeyMetadata) metadataMap() map[string]any {
+	return map[string]any{
+		"kind":                m.Kind,
+		"id":                  m.ID,
+		"selfLink":            m.SelfLink,
+		"accessId":            m.AccessID,
+		"projectId":           m.ProjectID,
+		"serviceAccountEmail": m.ServiceAccountEmail,
+		"state":               m.State,
+		"timeCreated":         m.TimeCreated,
+		"updated":             m.Updated,
+		"etag":                m.Etag,
+	}
+}
+
+// hmacKeyProject resolves the project for a projects.hmacKeys request: the
+// project in the resource path is authoritative and nr.AccountID is the
+// identity-derived fallback, as for projects.serviceAccount.get. The store
+// account is always nr.AccountID (the emulator's project scope); the path
+// project is part of the entry ID, so projects never shadow each other.
+func hmacKeyProject(nr *model.NormalizedRequest) (project, account string) {
+	project, _ = nr.Params["project"].(string)
+	if project == "" {
+		project = nr.AccountID
+	}
+	return project, nr.AccountID
+}
+
+// hmacKeyEntryID is the generic-store entry ID: "{project}/{accessId}".
+func hmacKeyEntryID(project, accessID string) string { return project + "/" + accessID }
+
+// hmacKeyEtag derives an opaque etag from the key's identity and mutable state.
+// Real GCS etags are opaque; deriving them from state + updated means every
+// update changes the etag, so a client PUTting a stale one gets 412.
+func hmacKeyEtag(accessID, state, updated string) string {
+	sum := sha256.Sum256([]byte(accessID + "\x00" + state + "\x00" + updated))
+	return base64.StdEncoding.EncodeToString(sum[:8])
+}
+
+// newHMACAccessID generates a 24-character URL-safe access ID, the length and
+// shape of a real GCS key ID (server-generated IDs start with "GOOG1").
+func newHMACAccessID() (string, error) {
+	const (
+		prefix   = "GOOG1"
+		alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	)
+	buf := make([]byte, 24-len(prefix))
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	out := make([]byte, 0, 24)
+	out = append(out, prefix...)
+	for _, b := range buf {
+		out = append(out, alphabet[int(b)%len(alphabet)])
+	}
+	return string(out), nil
+}
+
+// newHMACSecret returns the base64 of 40 random bytes, the shape of a real GCS
+// HMAC secret. It is revealed exactly once (in the create response).
+func newHMACSecret() (string, error) {
+	buf := make([]byte, 40)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
+// queryBool reports whether a request option is set truthy. Query parameters
+// arrive as the strings "true"/"false"; in-process dispatchers pass a bool.
+func queryBool(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return t == "true" || t == "1"
+	case bool:
+		return t
+	}
+	return false
+}
+
+// ProjectsHmacKeysCreate implements storage.projects.hmacKeys.create: POST
+// /storage/v1/projects/{projectId}/hmacKeys?serviceAccountEmail={email}. The
+// serviceAccountEmail query parameter is required (Discovery); the body is an
+// HmacKeyMetadata. The response is a storage#hmacKey carrying the one-time
+// `secret` alongside the metadata, and the key is persisted before the response
+// is written because the Terraform provider immediately polls GET for it.
+func (p *Provider) ProjectsHmacKeysCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
+	project, account := hmacKeyProject(nr)
+	if project == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing project", 400)
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	// serviceAccountEmail is a required *query* parameter; the Terraform
+	// provider also puts it in the body ({serviceAccountEmail, state}), so
+	// accept either and insist on one.
+	email, _ := nr.Params["serviceAccountEmail"].(string)
+	if email == "" {
+		email = firstString(body, "serviceAccountEmail")
+	}
+	if email == "" {
+		return nil, model.NewProviderError("InvalidRequest", "Required parameter: serviceAccountEmail", 400).
+			WithData(map[string]any{"reason": "required", "location": "serviceAccountEmail", "locationType": "parameter"})
+	}
+	// The emulator stores HMAC metadata and enforces no IAM, so the email is
+	// not cross-validated against the IAM service-account store (real GCS
+	// rejects an account that does not exist in the project).
+	//
+	// Real GCS always creates an ACTIVE key; the provider sends the Terraform
+	// `state` in the body, so honour ACTIVE/INACTIVE here — that way a
+	// configured state=INACTIVE key is already INACTIVE after apply and the
+	// follow-up plan is clean. DELETED is not a create state.
+	state := "ACTIVE"
+	if s := firstString(body, "state"); s != "" {
+		if s != "ACTIVE" && s != "INACTIVE" {
+			return nil, model.NewProviderError("InvalidArgument",
+				"state must be one of ACTIVE, INACTIVE", 400)
+		}
+		state = s
+	}
+	accessID, err := newHMACAccessID()
+	if err != nil {
+		return nil, err
+	}
+	secret, err := newHMACSecret()
+	if err != nil {
+		return nil, err
+	}
+	now := clock.Now().Format(time.RFC3339Nano)
+	meta := hmacKeyMetadata{
+		Kind:                "storage#hmacKeyMetadata",
+		ID:                  resource.ResourceID(project)("gcs-hmac-key", accessID),
+		SelfLink:            baseURL(nr) + "/storage/v1/projects/" + project + "/hmacKeys/" + accessID,
+		AccessID:            accessID,
+		ProjectID:           project,
+		ServiceAccountEmail: email,
+		State:               state,
+		TimeCreated:         now,
+		Updated:             now,
+		Etag:                hmacKeyEtag(accessID, state, now),
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Create(ctx, account, store.GlobalRegion,
+		store.ResourceEntry{Type: rtHMACKey, ID: hmacKeyEntryID(project, accessID), Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"kind":     "storage#hmacKey",
+		"metadata": meta.metadataMap(),
+		"secret":   secret,
+	}), nil
+}
+
+// ProjectsHmacKeysGet implements storage.projects.hmacKeys.get: GET
+// /storage/v1/projects/{projectId}/hmacKeys/{accessId}, answering the flat
+// HmacKeyMetadata (never the secret). A DELETED key is still returned, so a
+// caller can observe the tombstone; its clients treat that as gone.
+func (p *Provider) ProjectsHmacKeysGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
+	meta, err := p.getHMACKey(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(meta.metadataMap()), nil
+}
+
+// getHMACKey loads one stored key, mapping an absent entry to 404.
+func (p *Provider) getHMACKey(ctx context.Context, nr *model.NormalizedRequest) (hmacKeyMetadata, error) {
+	project, account := hmacKeyProject(nr)
+	accessID, _ := nr.Params["accessId"].(string)
+	if project == "" || accessID == "" {
+		return hmacKeyMetadata{}, model.NewProviderError("InvalidRequest", "missing project or accessId", 400)
+	}
+	e, err := p.resources.Get(ctx, account, store.GlobalRegion, rtHMACKey, hmacKeyEntryID(project, accessID))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return hmacKeyMetadata{}, model.NewProviderError("NotFound", "HMAC key not found", 404)
+		}
+		return hmacKeyMetadata{}, err
+	}
+	var meta hmacKeyMetadata
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		return hmacKeyMetadata{}, err
+	}
+	return meta, nil
+}
+
+// ProjectsHmacKeysList implements storage.projects.hmacKeys.list: GET
+// /storage/v1/projects/{projectId}/hmacKeys, with the optional
+// serviceAccountEmail filter, showDeletedKeys toggle and
+// maxResults/pageToken paging.
+func (p *Provider) ProjectsHmacKeysList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
+	project, account := hmacKeyProject(nr)
+	if project == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing project", 400)
+	}
+	limit, err := maxResults(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	showDeleted := queryBool(nr.Params["showDeletedKeys"])
+	email, _ := nr.Params["serviceAccountEmail"].(string)
+	entries, err := p.resources.List(ctx, account, store.GlobalRegion, rtHMACKey, "")
+	if err != nil {
+		return nil, err
+	}
+	prefix := project + "/"
+	keys := make([]hmacKeyMetadata, 0, len(entries))
+	for _, e := range entries {
+		if !strings.HasPrefix(e.ID, prefix) {
+			continue
+		}
+		var meta hmacKeyMetadata
+		if json.Unmarshal(e.Data, &meta) != nil {
+			continue
+		}
+		if meta.State == "DELETED" && !showDeleted {
+			continue
+		}
+		if email != "" && !strings.EqualFold(meta.ServiceAccountEmail, email) {
+			continue
+		}
+		keys = append(keys, meta)
+	}
+	// Real GCS pages hmacKeys by accessId; mirror paginateBuckets' cursor
+	// semantics (an explicit maxResults=0 is an empty page with no token).
+	sort.Slice(keys, func(i, j int) bool { return keys[i].AccessID < keys[j].AccessID })
+	start := 0
+	if tok, _ := nr.Params["pageToken"].(string); tok != "" {
+		if cursor := decodeCursor(tok); cursor != "" {
+			for start < len(keys) && keys[start].AccessID <= cursor {
+				start++
+			}
+		}
+	}
+	end := start + limit
+	if end > len(keys) {
+		end = len(keys)
+	}
+	page := keys[start:end]
+	items := make([]any, 0, len(page))
+	for _, k := range page {
+		items = append(items, k.metadataMap())
+	}
+	resp := map[string]any{"kind": "storage#hmacKeysMetadata", "items": items}
+	if limit > 0 && end < len(keys) {
+		resp["nextPageToken"] = encodeCursor(page[len(page)-1].AccessID)
+	}
+	return provider.OK(resp), nil
+}
+
+// ProjectsHmacKeysUpdate implements storage.projects.hmacKeys.update: PUT
+// /storage/v1/projects/{projectId}/hmacKeys/{accessId}. Only `state` is
+// writable; the body's etag, when present, makes the update conditional and a
+// mismatch is 412 (the Terraform provider deactivates a key by GETting it and
+// PUTting state=INACTIVE with the etag it just read).
+func (p *Provider) ProjectsHmacKeysUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
+	project, account := hmacKeyProject(nr)
+	accessID, _ := nr.Params["accessId"].(string)
+	if project == "" || accessID == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing project or accessId", 400)
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	if body == nil {
+		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+	}
+	state := firstString(body, "state")
+	// A key is deleted through DELETE (which requires INACTIVE first), never by
+	// writing DELETED through update.
+	if state != "" && state != "ACTIVE" && state != "INACTIVE" {
+		return nil, model.NewProviderError("InvalidArgument", "state must be one of ACTIVE, INACTIVE", 400)
+	}
+	etag := firstString(body, "etag")
+	updated, err := p.resources.UpsertAtomic(ctx, account, store.GlobalRegion, rtHMACKey,
+		hmacKeyEntryID(project, accessID),
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			if !exists {
+				return store.ResourceEntry{}, hmacKeyNotFound
+			}
+			var meta hmacKeyMetadata
+			if err := json.Unmarshal(current.Data, &meta); err != nil {
+				return store.ResourceEntry{}, err
+			}
+			if meta.State == "DELETED" {
+				return store.ResourceEntry{}, hmacKeyNotFound
+			}
+			if etag != "" && etag != meta.Etag {
+				return store.ResourceEntry{}, hmacKeyEtagMismatch
+			}
+			if state != "" {
+				meta.State = state
+			}
+			meta.Updated = clock.Now().Format(time.RFC3339Nano)
+			meta.Etag = hmacKeyEtag(meta.AccessID, meta.State, meta.Updated)
+			data, err := json.Marshal(meta)
+			if err != nil {
+				return store.ResourceEntry{}, err
+			}
+			return store.ResourceEntry{Type: rtHMACKey, ID: hmacKeyEntryID(project, accessID), Data: data}, nil
+		})
+	if err != nil {
+		switch {
+		case errors.Is(err, hmacKeyNotFound):
+			return nil, model.NewProviderError("NotFound", "HMAC key not found", 404)
+		case errors.Is(err, hmacKeyEtagMismatch):
+			return nil, model.NewProviderError("PreconditionFailed",
+				"At least one of the pre-conditions you specified did not hold", 412)
+		}
+		return nil, err
+	}
+	var meta hmacKeyMetadata
+	if err := json.Unmarshal(updated.Data, &meta); err != nil {
+		return nil, err
+	}
+	return provider.OK(meta.metadataMap()), nil
+}
+
+// ProjectsHmacKeysDelete implements storage.projects.hmacKeys.delete: DELETE
+// /storage/v1/projects/{projectId}/hmacKeys/{accessId}. Real GCS refuses to
+// delete an ACTIVE key (400) — the provider deactivates it first — and keeps
+// the deleted key as a DELETED tombstone (returned by get and by
+// list?showDeletedKeys=true) instead of removing the metadata.
+func (p *Provider) ProjectsHmacKeysDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := requireBucketAdmin(nr); err != nil {
+		return nil, err
+	}
+	project, account := hmacKeyProject(nr)
+	accessID, _ := nr.Params["accessId"].(string)
+	if project == "" || accessID == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing project or accessId", 400)
+	}
+	_, err := p.resources.UpsertAtomic(ctx, account, store.GlobalRegion, rtHMACKey,
+		hmacKeyEntryID(project, accessID),
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			if !exists {
+				return store.ResourceEntry{}, hmacKeyNotFound
+			}
+			var meta hmacKeyMetadata
+			if err := json.Unmarshal(current.Data, &meta); err != nil {
+				return store.ResourceEntry{}, err
+			}
+			if meta.State == "DELETED" {
+				return store.ResourceEntry{}, hmacKeyNotFound
+			}
+			if meta.State != "INACTIVE" {
+				return store.ResourceEntry{}, hmacKeyStillActive
+			}
+			meta.State = "DELETED"
+			meta.Updated = clock.Now().Format(time.RFC3339Nano)
+			meta.Etag = hmacKeyEtag(meta.AccessID, meta.State, meta.Updated)
+			data, err := json.Marshal(meta)
+			if err != nil {
+				return store.ResourceEntry{}, err
+			}
+			return store.ResourceEntry{Type: rtHMACKey, ID: hmacKeyEntryID(project, accessID), Data: data}, nil
+		})
+	if err != nil {
+		switch {
+		case errors.Is(err, hmacKeyNotFound):
+			return nil, model.NewProviderError("NotFound", "HMAC key not found", 404)
+		case errors.Is(err, hmacKeyStillActive):
+			return nil, model.NewProviderError("InvalidRequest",
+				"Cannot delete an ACTIVE HMAC key. Set state to INACTIVE first.", 400)
+		}
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

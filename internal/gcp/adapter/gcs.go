@@ -407,13 +407,61 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 				}
 			}
 		}
-	case r.Method == http.MethodGet && len(seg) == 3 && seg[0] == "projects" && seg[2] == "serviceAccount":
-		// /projects/{projectId}/serviceAccount — projects.serviceAccount.get.
-		// No request body; the optional `userProject` billing query param is
-		// captured by queryToParams. Every other projects/... path (the
-		// hmacKeys surface is not implemented) keeps the 404 default.
+	case len(seg) >= 3 && seg[0] == "projects":
+		// /projects/{projectId}/... — the storage.projects.* surface.
+		// Only serviceAccount.get and the hmacKeys collection/item paths exist
+		// in the Discovery document; every other projects/... path keeps the
+		// 404 default.
 		nr.Params["project"] = seg[1]
-		nr.Action = "ProjectsServiceAccountGet"
+		switch {
+		case r.Method == http.MethodGet && len(seg) == 3 && seg[2] == "serviceAccount":
+			// /projects/{projectId}/serviceAccount —
+			// projects.serviceAccount.get. No request body; the optional
+			// `userProject` billing query param is captured by queryToParams.
+			nr.Action = "ProjectsServiceAccountGet"
+		case len(seg) == 3 && seg[2] == "hmacKeys":
+			// /projects/{projectId}/hmacKeys — projects.hmacKeys.create (POST,
+			// body HmacKeyMetadata) or projects.hmacKeys.list (GET). The
+			// required create query param `serviceAccountEmail` and the list
+			// filters (`serviceAccountEmail`, `showDeletedKeys`,
+			// `maxResults`, `pageToken`) are captured by queryToParams.
+			switch r.Method {
+			case http.MethodGet:
+				nr.Action = "ProjectsHmacKeysList"
+			case http.MethodPost:
+				nr.Action = "ProjectsHmacKeysCreate"
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+				}
+				nr.Params["body"] = m
+			default:
+				return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
+			}
+		case len(seg) == 4 && seg[2] == "hmacKeys":
+			// /projects/{projectId}/hmacKeys/{accessId} —
+			// projects.hmacKeys.{get,update,delete}.
+			nr.Params["accessId"] = seg[3]
+			switch r.Method {
+			case http.MethodGet:
+				nr.Action = "ProjectsHmacKeysGet"
+			case http.MethodPut:
+				// Only `state` is writable; the body also carries the etag
+				// the update is conditional on.
+				nr.Action = "ProjectsHmacKeysUpdate"
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+				}
+				nr.Params["body"] = m
+			case http.MethodDelete:
+				nr.Action = "ProjectsHmacKeysDelete"
+			default:
+				return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
+			}
+		default:
+			return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
+		}
 	default:
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
 	}

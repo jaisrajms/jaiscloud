@@ -892,7 +892,7 @@ func TestGCSCodecStorageLayoutRouting(t *testing.T) {
 // TestGCSCodecProjectsServiceAccountRouting covers projects.serviceAccount.get:
 // GET /storage/v1/projects/{projectId}/serviceAccount decodes to the project
 // handler, while any other projects/... path stays an unsupported 404 (the
-// hmacKeys surface is not implemented).
+// hmacKeys surface is covered separately).
 func TestGCSCodecProjectsServiceAccountRouting(t *testing.T) {
 	c := &GCSCodec{}
 	r := httptest.NewRequest("GET", "/storage/v1/projects/terra-proj/serviceAccount?userProject=billing-proj", nil)
@@ -915,10 +915,10 @@ func TestGCSCodecProjectsServiceAccountRouting(t *testing.T) {
 		method string
 		path   string
 	}{
-		{"hmacKeys collection", "GET", "/storage/v1/projects/p/hmacKeys"},
-		{"hmacKeys item", "GET", "/storage/v1/projects/p/hmacKeys/abc"},
 		{"unknown project path", "GET", "/storage/v1/projects/p/badges"},
 		{"serviceAccount is GET-only", "POST", "/storage/v1/projects/p/serviceAccount"},
+		{"hmacKeys item is not POST-able", "POST", "/storage/v1/projects/p/hmacKeys/abc"},
+		{"unknown hmacKeys sub-resource", "GET", "/storage/v1/projects/p/hmacKeys/abc/secrets"},
 	} {
 		r := httptest.NewRequest(tc.method, tc.path, nil)
 		if _, err := c.Decode(r, nil); err == nil {
@@ -926,6 +926,85 @@ func TestGCSCodecProjectsServiceAccountRouting(t *testing.T) {
 		} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 404 {
 			t.Fatalf("%s: err = %v, want ProviderError 404", tc.name, err)
 		}
+	}
+}
+
+// TestGCSCodecProjectsHmacKeysRouting covers the five
+// storage.projects.hmacKeys.* methods: the collection path serves create (POST)
+// and list (GET), the item path serves get (GET), update (PUT) and delete
+// (DELETE), with the path project/accessId in params, the required
+// serviceAccountEmail and the list filters as query params, and the JSON body
+// parsed for create/update.
+func TestGCSCodecProjectsHmacKeysRouting(t *testing.T) {
+	c := &GCSCodec{}
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		body        string
+		wantAction  string
+		wantAccess  string
+		wantBodyKey string
+	}{
+		{"create", "POST",
+			"/storage/v1/projects/terra-proj/hmacKeys?serviceAccountEmail=sa%40terra-proj.iam.gserviceaccount.com",
+			`{"serviceAccountEmail":"sa@terra-proj.iam.gserviceaccount.com","state":"ACTIVE"}`,
+			"ProjectsHmacKeysCreate", "", "serviceAccountEmail"},
+		{"list", "GET",
+			"/storage/v1/projects/terra-proj/hmacKeys?serviceAccountEmail=sa%40terra-proj.iam.gserviceaccount.com&maxResults=2&pageToken=tok&showDeletedKeys=true",
+			"", "ProjectsHmacKeysList", "", ""},
+		{"get", "GET", "/storage/v1/projects/terra-proj/hmacKeys/GOOG1EABC", "", "ProjectsHmacKeysGet", "GOOG1EABC", ""},
+		{"update", "PUT", "/storage/v1/projects/terra-proj/hmacKeys/GOOG1EABC",
+			`{"etag":"abc=","state":"INACTIVE"}`, "ProjectsHmacKeysUpdate", "GOOG1EABC", "state"},
+		{"delete", "DELETE", "/storage/v1/projects/terra-proj/hmacKeys/GOOG1EABC", "", "ProjectsHmacKeysDelete", "GOOG1EABC", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var body []byte
+			if tc.body != "" {
+				body = []byte(tc.body)
+			}
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			nr, err := c.Decode(r, body)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if nr.Action != tc.wantAction {
+				t.Fatalf("action = %q, want %q", nr.Action, tc.wantAction)
+			}
+			if got, _ := nr.Params["project"].(string); got != "terra-proj" {
+				t.Errorf("project = %q, want terra-proj", got)
+			}
+			if got, _ := nr.Params["accessId"].(string); got != tc.wantAccess {
+				t.Errorf("accessId = %q, want %q", got, tc.wantAccess)
+			}
+			if tc.wantBodyKey != "" {
+				m, _ := nr.Params["body"].(map[string]any)
+				if m == nil {
+					t.Fatalf("body param missing, want %q", tc.wantBodyKey)
+				}
+				if _, ok := m[tc.wantBodyKey]; !ok {
+					t.Errorf("body = %v, want key %q", m, tc.wantBodyKey)
+				}
+			}
+			// The collection methods carry their query binding into params.
+			if tc.wantAction == "ProjectsHmacKeysCreate" {
+				if got, _ := nr.Params["serviceAccountEmail"].(string); got != "sa@terra-proj.iam.gserviceaccount.com" {
+					t.Errorf("serviceAccountEmail = %q", got)
+				}
+			}
+			if tc.wantAction == "ProjectsHmacKeysList" {
+				if got, _ := nr.Params["maxResults"].(string); got != "2" {
+					t.Errorf("maxResults = %q, want 2", got)
+				}
+				if got, _ := nr.Params["pageToken"].(string); got != "tok" {
+					t.Errorf("pageToken = %q, want tok", got)
+				}
+				if got, _ := nr.Params["showDeletedKeys"].(string); got != "true" {
+					t.Errorf("showDeletedKeys = %q, want true", got)
+				}
+			}
+		})
 	}
 }
 
