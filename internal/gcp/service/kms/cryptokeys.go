@@ -43,6 +43,96 @@ type CryptoKeyUpdate struct {
 	Labels           map[string]string
 	RotationPeriod   *time.Duration
 	NextRotationTime *time.Time
+	// VersionTemplateAlgorithm is CryptoKey.version_template.algorithm: the
+	// algorithm future CryptoKeyVersions are created with. Existing versions
+	// keep theirs.
+	VersionTemplateAlgorithm *string
+}
+
+// purposeAlgorithms is the CryptoKeyVersionTemplate.algorithm / CryptoKey.purpose
+// pairing from the Cloud KMS algorithm table (the CryptoKeyVersionAlgorithm
+// enum's descriptions carry the same constraints for the HMAC/AES families). A
+// version created from a template whose algorithm does not belong to the key's
+// purpose could never execute, so both create and update reject it.
+var purposeAlgorithms = map[string]map[string]bool{
+	"ENCRYPT_DECRYPT": {
+		"GOOGLE_SYMMETRIC_ENCRYPTION":   true,
+		"EXTERNAL_SYMMETRIC_ENCRYPTION": true,
+	},
+	"ASYMMETRIC_SIGN": {
+		"RSA_SIGN_PSS_2048_SHA256":              true,
+		"RSA_SIGN_PSS_3072_SHA256":              true,
+		"RSA_SIGN_PSS_4096_SHA256":              true,
+		"RSA_SIGN_PSS_4096_SHA512":              true,
+		"RSA_SIGN_PKCS1_2048_SHA256":            true,
+		"RSA_SIGN_PKCS1_3072_SHA256":            true,
+		"RSA_SIGN_PKCS1_4096_SHA256":            true,
+		"RSA_SIGN_PKCS1_4096_SHA512":            true,
+		"RSA_SIGN_RAW_PKCS1_2048":               true,
+		"RSA_SIGN_RAW_PKCS1_3072":               true,
+		"RSA_SIGN_RAW_PKCS1_4096":               true,
+		"EC_SIGN_P256_SHA256":                   true,
+		"EC_SIGN_P384_SHA384":                   true,
+		"EC_SIGN_SECP256K1_SHA256":              true,
+		"EC_SIGN_ED25519":                       true,
+		"PQ_SIGN_ML_DSA_44":                     true,
+		"PQ_SIGN_ML_DSA_65":                     true,
+		"PQ_SIGN_ML_DSA_87":                     true,
+		"PQ_SIGN_SLH_DSA_SHA2_128S":             true,
+		"PQ_SIGN_HASH_SLH_DSA_SHA2_128S_SHA256": true,
+		"PQ_SIGN_ML_DSA_44_EXTERNAL_MU":         true,
+		"PQ_SIGN_ML_DSA_65_EXTERNAL_MU":         true,
+		"PQ_SIGN_ML_DSA_87_EXTERNAL_MU":         true,
+	},
+	"ASYMMETRIC_DECRYPT": {
+		"RSA_DECRYPT_OAEP_2048_SHA256": true,
+		"RSA_DECRYPT_OAEP_3072_SHA256": true,
+		"RSA_DECRYPT_OAEP_4096_SHA256": true,
+		"RSA_DECRYPT_OAEP_4096_SHA512": true,
+		"RSA_DECRYPT_OAEP_2048_SHA1":   true,
+		"RSA_DECRYPT_OAEP_3072_SHA1":   true,
+		"RSA_DECRYPT_OAEP_4096_SHA1":   true,
+	},
+	"RAW_ENCRYPT_DECRYPT": {
+		"AES_128_GCM": true,
+		"AES_256_GCM": true,
+		"AES_128_CBC": true,
+		"AES_256_CBC": true,
+		"AES_128_CTR": true,
+		"AES_256_CTR": true,
+	},
+	"MAC": {
+		"HMAC_SHA256": true,
+		"HMAC_SHA1":   true,
+		"HMAC_SHA384": true,
+		"HMAC_SHA512": true,
+		"HMAC_SHA224": true,
+	},
+	"KEY_ENCAPSULATION": {
+		"ML_KEM_768":    true,
+		"ML_KEM_1024":   true,
+		"KEM_XWING":     true,
+		"KEM_ECDH_P256": true,
+		"KEM_ECDH_P384": true,
+	},
+	"AES_WRAPPING": {
+		"AES_256_KWP": true,
+	},
+}
+
+// validateAlgorithmForPurpose rejects a version-template algorithm that does not
+// belong to the key's purpose. An unrecognised purpose is not validated here (no
+// purpose validation is added by this helper); create defaults the purpose first,
+// so the check always sees a concrete one.
+func validateAlgorithmForPurpose(purpose, algorithm string) error {
+	allowed, known := purposeAlgorithms[purpose]
+	if !known {
+		return nil
+	}
+	if !allowed[algorithm] {
+		return invalidArgument("algorithm " + algorithm + " is not valid for key purpose " + purpose)
+	}
+	return nil
 }
 
 // Rotation-schedule bounds documented on CryptoKey.rotation_period: "Must be at
@@ -61,6 +151,8 @@ func normalizeCryptoKeyMaskPath(path string) string {
 		return "rotation_period"
 	case "nextRotationTime", "next_rotation_time":
 		return "next_rotation_time"
+	case "versionTemplate.algorithm", "version_template.algorithm":
+		return "version_template.algorithm"
 	default:
 		return path
 	}
@@ -195,6 +287,9 @@ func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id
 	if algorithm == "" {
 		algorithm = DefaultAlgorithmForPurpose(purpose)
 	}
+	if err := validateAlgorithmForPurpose(purpose, algorithm); err != nil {
+		return kmsstore.CryptoKey{}, err
+	}
 	protectionLevel := in.ProtectionLevel
 	if protectionLevel == "" {
 		protectionLevel = "SOFTWARE"
@@ -287,11 +382,13 @@ func (s *Service) ListCryptoKeys(ctx context.Context, project, location, kr stri
 // UpdateCryptoKey applies a masked update to a crypto key's mutable fields.
 // Real GCP requires the FieldMask (UpdateCryptoKeyRequest.update_mask is
 // REQUIRED) and validates every path against the resource's writable field set
-// (labels, rotation_period, next_rotation_time); an omitted mask is
-// INVALID_ARGUMENT and any other path is too (AIP-134/AIP-161, the AUD2-7
-// precedent). Only the masked fields are validated and merged; the rotation
-// schedule invariants (purpose, next_rotation_time required with a period) are
-// then enforced on the merged result.
+// (labels, rotation_period, next_rotation_time, version_template.algorithm); an
+// omitted mask is INVALID_ARGUMENT and any other path is too (AIP-134/AIP-161,
+// the AUD2-7 precedent). Only the masked fields are validated and merged; the
+// rotation schedule invariants (purpose, next_rotation_time required with a
+// period) are then enforced on the merged result. version_template.algorithm
+// changes only the template: existing versions keep their algorithm, while
+// versions created afterwards (including rotations) pick up the new one.
 func (s *Service) UpdateCryptoKey(ctx context.Context, project, location, kr, id string, in CryptoKeyUpdate) (kmsstore.CryptoKey, error) {
 	if in.UpdateMask == nil {
 		return kmsstore.CryptoKey{}, invalidArgument("update_mask is required")
@@ -301,7 +398,7 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, project, location, kr, id
 	for _, raw := range in.UpdateMask {
 		path := normalizeCryptoKeyMaskPath(raw)
 		switch path {
-		case "labels", "rotation_period", "next_rotation_time":
+		case "labels", "rotation_period", "next_rotation_time", "version_template.algorithm":
 			if !selected[path] {
 				selected[path] = true
 				paths = append(paths, path)
@@ -341,6 +438,18 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, project, location, kr, id
 					continue
 				}
 				stored.NextRotationTime = *in.NextRotationTime
+			case "version_template.algorithm":
+				// An absent or empty algorithm under the mask resets the
+				// template to the purpose's documented default rather than
+				// leaving a stale value behind.
+				if in.VersionTemplateAlgorithm == nil || *in.VersionTemplateAlgorithm == "" {
+					stored.Algorithm = DefaultAlgorithmForPurpose(stored.Purpose)
+					continue
+				}
+				if err := validateAlgorithmForPurpose(stored.Purpose, *in.VersionTemplateAlgorithm); err != nil {
+					return stored, err
+				}
+				stored.Algorithm = *in.VersionTemplateAlgorithm
 			}
 		}
 		if err := validateRotationSchedule(stored.Purpose, stored.RotationPeriod, stored.NextRotationTime); err != nil {

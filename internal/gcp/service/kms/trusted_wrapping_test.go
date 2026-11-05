@@ -164,10 +164,20 @@ func TestCoreTrustedWrappingKeyValidation(t *testing.T) {
 		{
 			name: "not AES_256_KWP",
 			setup: func(t *testing.T, core *Service) string {
+				// Create now rejects a purpose/algorithm mismatch
+				// (validateAlgorithmForPurpose), so build the mismatched version
+				// directly in the store to keep the trusted-wrapping guard
+				// covered: the importing key's *version* algorithm is what it
+				// checks.
 				mustCreateKey(t, core, "kr", "gcm", CryptoKeyInput{
-					Purpose: "AES_WRAPPING", Algorithm: "AES_256_GCM", ProtectionLevel: "HSM_SINGLE_TENANT",
+					Purpose: "AES_WRAPPING", Algorithm: "AES_256_KWP", ProtectionLevel: "HSM_SINGLE_TENANT",
 				})
-				return VersionName("proj", "global", "kr", "gcm", "1")
+				ver, err := core.keys.CreateVersion(context.Background(), "proj", "global", "kr", "gcm",
+					kmsstore.Version{Algorithm: "AES_256_GCM", ProtectionLevel: "HSM_SINGLE_TENANT"})
+				if err != nil {
+					t.Fatalf("CreateVersion: %v", err)
+				}
+				return VersionName("proj", "global", "kr", "gcm", ver)
 			},
 			code: "FailedPrecondition", status: 400,
 		},

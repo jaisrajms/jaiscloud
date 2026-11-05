@@ -267,7 +267,8 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 // an updateMask query parameter) — the REST update the official clients send,
 // mirroring gRPC UpdateCryptoKey. The shared core requires the mask, validates
 // each path against the resource's writable field set (labels, rotation_period,
-// next_rotation_time) and applies the rotation invariants.
+// next_rotation_time, version_template.algorithm) and applies the rotation
+// invariants.
 func (p *Provider) CryptoKeyUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -317,6 +318,11 @@ func cryptoKeyUpdateFromPatch(nr *model.NormalizedRequest) (kmscore.CryptoKeyUpd
 	}
 	if set {
 		in.NextRotationTime = &nrt
+	}
+	if vt, ok := body["versionTemplate"].(map[string]any); ok {
+		if algorithm, ok := vt["algorithm"].(string); ok {
+			in.VersionTemplateAlgorithm = &algorithm
+		}
 	}
 	return in, nil
 }

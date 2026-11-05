@@ -215,6 +215,10 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, req *kmspb.UpdateCryptoKe
 		}
 	}
 	in := kmscore.CryptoKeyUpdate{UpdateMask: maskPaths, Labels: ck.GetLabels()}
+	if vt := ck.GetVersionTemplate(); vt != nil {
+		algorithm := algorithmFromProto(vt.GetAlgorithm())
+		in.VersionTemplateAlgorithm = &algorithm
+	}
 	if rp := ck.GetRotationPeriod(); rp != nil {
 		d := rp.AsDuration()
 		in.RotationPeriod = &d

@@ -108,8 +108,9 @@ module, and requires the module's lifecycle to converge.
 | `functions` | [`terraform-google-event-function`](https://github.com/terraform-google-modules/terraform-google-event-function) | `9f2e26ae3b73` | `ingressSettings` (`ALLOW_ALL` → `ALLOW_INTERNAL_ONLY`), the event trigger's default `failurePolicy` and `failurePolicy.retry`, and `environment_variables` read back; ingress/env changed and cleared, retry toggled; each phase ends with a `plan` whose only remaining diff is the recorded storage-object gap |
 | `clouddns` | [`terraform-google-cloud-dns`](https://github.com/terraform-google-modules/terraform-google-cloud-dns) | `35cd6de8e647` | `privateVisibilityConfig` (VPC networks + GKE clusters), `forwardingConfig` (targets incl. `forwardingPath`), `peeringConfig` and `dnssecConfig` (state, `nonExistence`, both default key specs) read back; private description/labels/network list changed, then forwarding, peering and public-with-DNSSEC zones created and DNSSEC turned on; each phase ends with `plan` **No changes** |
 | `cloud-operations` | [`terraform-google-cloud-operations`](https://github.com/terraform-google-modules/terraform-google-cloud-operations) (`modules/simple-uptime-check`) | `8c3e37951bb4` | the alert policy's `alertStrategy` (`autoClose`, `notificationRateLimit.period`) and `userLabels` read back alongside the uptime check; `auto_close`/rate limit and labels changed, then the strategy and labels cleared; each phase ends with `plan` **No changes** |
+| `kms` | [`terraform-google-kms`](https://github.com/terraform-google-modules/terraform-google-kms) | `ef6e0eda7032` | the crypto key's `versionTemplate.algorithm` read back (the module always emits the `version_template` block); `key_algorithm` changed `HMAC_SHA256` → `HMAC_SHA512` (mask `versionTemplate.algorithm`) and back, with a `cryptoKeyVersion` created after the change carrying `HMAC_SHA512`; each phase ends with `plan` **No changes** |
 
-The storage, memorystore, functions, clouddns and cloud-operations cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it.
+The storage, memorystore, functions, clouddns, cloud-operations and kms cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -148,13 +149,19 @@ git clone https://github.com/terraform-google-modules/terraform-google-cloud-ope
   "$HOME/.cache/terraform-modules/terraform-google-cloud-operations"
 git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-operations" checkout 8c3e37951bb4
 make test-gcp-terraform-cloud-operations
+
+git clone https://github.com/terraform-google-modules/terraform-google-kms \
+  "$HOME/.cache/terraform-modules/terraform-google-kms"
+git -C "$HOME/.cache/terraform-modules/terraform-google-kms" checkout ef6e0eda7032
+make test-gcp-terraform-kms
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
 (default `$HOME/.cache/terraform-modules/<module repo>`); the Makefile targets
 point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` /
-`TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` respectively.
+`TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` /
+`TF_KMS_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
