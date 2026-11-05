@@ -45,16 +45,53 @@ func functionJSONV1(project string, f functionsstore.Function) map[string]any {
 			"resource":  f.EventTrigger.Resource,
 			"service":   f.EventTrigger.Service,
 		}
+		// failurePolicy is the documented policy message: empty means "ignore
+		// failures" (the v1 default), retry{} enables retries. The API always
+		// answers with the policy message, so the provider's flatten can tell
+		// "retry = false" apart from "no event trigger"; omitting it made every
+		// module with the default retry=false permadiff.
 		if f.EventTrigger.Retry {
-			// v1 signals retry by the presence of an (empty) Retry message.
 			et["failurePolicy"] = map[string]any{"retry": map[string]any{}}
+		} else {
+			et["failurePolicy"] = map[string]any{}
 		}
 		out["eventTrigger"] = et
 	} else if f.HttpsTriggerURL != "" {
+		securityLevel := f.HttpsTriggerSecurityLevel
+		if securityLevel == "" {
+			securityLevel = "SECURE_ALWAYS"
+		}
 		out["httpsTrigger"] = map[string]any{
 			"url":           f.HttpsTriggerURL,
-			"securityLevel": "SECURE_ALWAYS",
+			"securityLevel": securityLevel,
 		}
+	}
+	if f.IngressSettings != "" {
+		out["ingressSettings"] = f.IngressSettings
+	}
+	if f.MaxInstances > 0 {
+		out["maxInstances"] = f.MaxInstances
+	}
+	if f.VPCConnector != "" {
+		out["vpcConnector"] = f.VPCConnector
+	}
+	if f.VPCConnectorEgressSettings != "" {
+		out["vpcConnectorEgressSettings"] = f.VPCConnectorEgressSettings
+	}
+	if len(f.SecretEnvironmentVariables) > 0 {
+		out["secretEnvironmentVariables"] = secretEnvVarsJSON(f.SecretEnvironmentVariables)
+	}
+	if len(f.SecretVolumes) > 0 {
+		out["secretVolumes"] = secretVolumesJSON(f.SecretVolumes)
+	}
+	if f.DockerRegistry != "" {
+		out["dockerRegistry"] = f.DockerRegistry
+	}
+	if f.DockerRepository != "" {
+		out["dockerRepository"] = f.DockerRepository
+	}
+	if f.BuildWorkerPool != "" {
+		out["buildWorkerPool"] = f.BuildWorkerPool
 	}
 	if f.EnvironmentVariables != nil {
 		out["environmentVariables"] = f.EnvironmentVariables
@@ -70,6 +107,51 @@ func functionJSONV1(project string, f functionsstore.Function) map[string]any {
 	}
 	if f.Description != "" {
 		out["description"] = f.Description
+	}
+	return out
+}
+
+// secretEnvVarsJSON renders v1 SecretEnvVar entries in the Discovery shape,
+// omitting empty optional members (protojson omits default strings).
+func secretEnvVarsJSON(vars []functionsstore.SecretEnvVar) []any {
+	out := make([]any, 0, len(vars))
+	for _, v := range vars {
+		entry := map[string]any{"key": v.Key, "secret": v.Secret}
+		if v.ProjectID != "" {
+			entry["projectId"] = v.ProjectID
+		}
+		if v.Version != "" {
+			entry["version"] = v.Version
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// secretVolumesJSON renders v1 SecretVolume entries (including the nested
+// versions list) in the Discovery shape.
+func secretVolumesJSON(vols []functionsstore.SecretVolume) []any {
+	out := make([]any, 0, len(vols))
+	for _, v := range vols {
+		entry := map[string]any{"mountPath": v.MountPath, "secret": v.Secret}
+		if v.ProjectID != "" {
+			entry["projectId"] = v.ProjectID
+		}
+		if len(v.Versions) > 0 {
+			versions := make([]any, 0, len(v.Versions))
+			for _, ver := range v.Versions {
+				vm := map[string]any{}
+				if ver.Path != "" {
+					vm["path"] = ver.Path
+				}
+				if ver.Version != "" {
+					vm["version"] = ver.Version
+				}
+				versions = append(versions, vm)
+			}
+			entry["versions"] = versions
+		}
+		out = append(out, entry)
 	}
 	return out
 }

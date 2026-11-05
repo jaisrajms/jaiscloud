@@ -58,6 +58,33 @@ func (e *EventTrigger) Retries() bool {
 	return e.Retry || e.RetryPolicy == "RETRY_POLICY_RETRY"
 }
 
+// SecretEnvVar is one entry of a v1 CloudFunction.secretEnvironmentVariables:
+// a Secret Manager secret version exposed as an environment variable. ProjectID
+// is the project that holds the secret (the API documents preferring the
+// project number); Version is a numeric version or "latest".
+type SecretEnvVar struct {
+	Key       string `json:"key"`
+	ProjectID string `json:"projectId,omitempty"`
+	Secret    string `json:"secret"`
+	Version   string `json:"version,omitempty"`
+}
+
+// SecretVolume is one entry of a v1 CloudFunction.secretVolumes: a Secret
+// Manager secret mounted as files under MountPath.
+type SecretVolume struct {
+	MountPath string                `json:"mountPath"`
+	ProjectID string                `json:"projectId,omitempty"`
+	Secret    string                `json:"secret"`
+	Versions  []SecretVolumeVersion `json:"versions,omitempty"`
+}
+
+// SecretVolumeVersion is one file of a SecretVolume: the relative Path under
+// the mount and the secret Version to read.
+type SecretVolumeVersion struct {
+	Path    string `json:"path,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
 // Function is Cloud Functions v1 function metadata.
 type Function struct {
 	ID                   string            // function ID (last segment of name)
@@ -76,6 +103,33 @@ type Function struct {
 	AvailableMemoryMB    int
 	Timeout              string // e.g. "60s"
 	Description          string
+
+	// IngressSettings is the v1 CloudFunction.ingressSettings enum
+	// (ALLOW_ALL / ALLOW_INTERNAL_ONLY / ALLOW_INTERNAL_AND_GCLB). "" means the
+	// client did not set it (real GCP's default is ALLOW_ALL).
+	IngressSettings string
+	// MaxInstances is the v1 CloudFunction.maxInstances limit; 0 means unset (no
+	// configured limit). It is distinct from the v2 ServiceConfig
+	// MaxInstanceCount below and renders only in the v1 shape.
+	MaxInstances int
+	// VPCConnector and VPCConnectorEgressSettings are the v1 serverless VPC
+	// access connector configuration. The egress enum is PRIVATE_RANGES_ONLY or
+	// ALL_TRAFFIC.
+	VPCConnector               string
+	VPCConnectorEgressSettings string
+	// SecretEnvironmentVariables and SecretVolumes are the v1 Secret Manager
+	// bindings. They are stored and echoed only; no value is fetched.
+	SecretEnvironmentVariables []SecretEnvVar
+	SecretVolumes              []SecretVolume
+	// DockerRegistry (CONTAINER_REGISTRY / ARTIFACT_REGISTRY), DockerRepository
+	// and BuildWorkerPool are the v1 image-build placement settings.
+	DockerRegistry   string
+	DockerRepository string
+	BuildWorkerPool  string
+	// HttpsTriggerSecurityLevel is the v1 httpsTrigger.securityLevel enum
+	// (SECURE_ALWAYS / SECURE_OPTIONAL) of an HTTP-triggered function. ""
+	// renders the API default (SECURE_ALWAYS).
+	HttpsTriggerSecurityLevel string
 
 	// MinInstanceCount, MaxInstanceCount, MaxInstanceRequestConcurrency, and
 	// AvailableCPU are the Cloud Functions v2 ServiceConfig instance/concurrency

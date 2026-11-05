@@ -77,11 +77,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 	functions := make([]functionRow, 0)
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
-		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
+		SELECT project_id, `+functionSelectColumns+`
 		FROM jc_functions ORDER BY project_id, location, function_id
 	`)
 	if err != nil {
@@ -89,7 +85,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 	for rows.Next() {
 		var r functionRow
-		var eventTrigger, env, labels []byte
+		var eventTrigger, env, labels, secretEnv, secretVolumes []byte
 		if err := rows.Scan(&r.ProjectID, &r.Function.ID, &r.Function.Location, &r.Function.Runtime, &r.Function.EntryPoint,
 			&r.Function.SourceUploadURL, &r.Function.SourceArchiveURL, &r.Function.HttpsTriggerURL, &eventTrigger, &env,
 			&r.Function.Status, &r.Function.CreateTime, &r.Function.UpdateTime, &labels, &r.Function.AvailableMemoryMB,
@@ -98,7 +94,11 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			&r.Function.Revision, &r.Function.UpgradeState, &r.Function.UpgradeRuntime,
 			&r.Function.UpgradeMaxInstances, &r.Function.UpgradeTrafficGen2,
 			&r.Function.MinInstanceCount, &r.Function.MaxInstanceCount,
-			&r.Function.MaxInstanceRequestConcurrency, &r.Function.AvailableCPU); err != nil {
+			&r.Function.MaxInstanceRequestConcurrency, &r.Function.AvailableCPU,
+			&r.Function.IngressSettings, &r.Function.MaxInstances, &r.Function.VPCConnector,
+			&r.Function.VPCConnectorEgressSettings, &secretEnv, &secretVolumes,
+			&r.Function.DockerRegistry, &r.Function.DockerRepository, &r.Function.BuildWorkerPool,
+			&r.Function.HttpsTriggerSecurityLevel); err != nil {
 			rows.Close()
 			return err
 		}
@@ -107,6 +107,12 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		}
 		json.Unmarshal(env, &r.Function.EnvironmentVariables)
 		json.Unmarshal(labels, &r.Function.Labels)
+		if len(secretEnv) > 0 {
+			json.Unmarshal(secretEnv, &r.Function.SecretEnvironmentVariables)
+		}
+		if len(secretVolumes) > 0 {
+			json.Unmarshal(secretVolumes, &r.Function.SecretVolumes)
+		}
 		functions = append(functions, r)
 	}
 	rows.Close()
@@ -228,8 +234,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 				 https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 				 available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
 				 revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
-				 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+				 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu,
+				 ingress_settings, max_instances, vpc_connector, vpc_connector_egress_settings,
+				 secret_environment_variables, secret_volumes, docker_registry, docker_repository,
+				 build_worker_pool, https_trigger_security_level)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
 		`, r.ProjectID, r.Function.Location, r.Function.ID, r.Function.Runtime, r.Function.EntryPoint,
 			r.Function.SourceUploadURL, r.Function.SourceArchiveURL, r.Function.HttpsTriggerURL, nullableJSON(r.Function.EventTrigger),
 			json.RawMessage(env), r.Function.Status, r.Function.CreateTime, r.Function.UpdateTime, json.RawMessage(labels),
@@ -238,7 +247,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			r.Function.Revision, r.Function.UpgradeState, r.Function.UpgradeRuntime,
 			r.Function.UpgradeMaxInstances, r.Function.UpgradeTrafficGen2,
 			r.Function.MinInstanceCount, r.Function.MaxInstanceCount,
-			r.Function.MaxInstanceRequestConcurrency, r.Function.AvailableCPU); err != nil {
+			r.Function.MaxInstanceRequestConcurrency, r.Function.AvailableCPU,
+			r.Function.IngressSettings, r.Function.MaxInstances, r.Function.VPCConnector,
+			r.Function.VPCConnectorEgressSettings, nullableJSONList(r.Function.SecretEnvironmentVariables),
+			nullableJSONList(r.Function.SecretVolumes), r.Function.DockerRegistry, r.Function.DockerRepository,
+			r.Function.BuildWorkerPool, r.Function.HttpsTriggerSecurityLevel); err != nil {
 			return err
 		}
 	}

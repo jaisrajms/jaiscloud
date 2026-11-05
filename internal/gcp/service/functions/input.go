@@ -36,6 +36,33 @@ type FunctionInput struct {
 	AvailableMemoryMB    int
 	EventTrigger         *functionsstore.EventTrigger
 
+	// The v1 CloudFunction fields the terraform-google-event-function module
+	// sends (TGM3). The Has* flags record whether the request body actually
+	// carried the field, so an empty-mask update cannot silently clear a stored
+	// value while an explicit updateMask path still applies an explicit ""/0
+	// (FieldMask semantics, as with the v2 settings below).
+	IngressSettings            string
+	MaxInstances               int
+	VPCConnector               string
+	VPCConnectorEgressSettings string
+	SecretEnvironmentVariables []functionsstore.SecretEnvVar
+	SecretVolumes              []functionsstore.SecretVolume
+	DockerRegistry             string
+	DockerRepository           string
+	BuildWorkerPool            string
+	HttpsTriggerSecurityLevel  string
+
+	HasIngressSettings            bool
+	HasMaxInstances               bool
+	HasVPCConnector               bool
+	HasVPCConnectorEgressSettings bool
+	HasSecretEnvironmentVariables bool
+	HasSecretVolumes              bool
+	HasDockerRegistry             bool
+	HasDockerRepository           bool
+	HasBuildWorkerPool            bool
+	HasHttpsTriggerSecurityLevel  bool
+
 	// The v2 ServiceConfig instance/concurrency settings (FD6). The Has* flags
 	// record whether the request body actually carried the field, so an
 	// empty-mask update cannot silently zero a stored value while an explicit
@@ -75,6 +102,43 @@ func FunctionInputFromMap(body map[string]any, v Version) FunctionInput {
 	}
 	if n, ok := body["availableMemoryMb"].(float64); ok && n > 0 {
 		in.AvailableMemoryMB = int(n)
+	}
+	// v1 CloudFunction fields the CFT event-function module always/optionally
+	// sends. Presence is tracked separately from the value: clearing a masked
+	// path ("" / 0 / []) is meaningful.
+	if s, ok := body["ingressSettings"].(string); ok {
+		in.IngressSettings, in.HasIngressSettings = s, true
+	}
+	if n, ok := bodyInt(body, "maxInstances"); ok {
+		in.MaxInstances, in.HasMaxInstances = n, true
+	}
+	if s, ok := body["vpcConnector"].(string); ok {
+		in.VPCConnector, in.HasVPCConnector = s, true
+	}
+	if s, ok := body["vpcConnectorEgressSettings"].(string); ok {
+		in.VPCConnectorEgressSettings, in.HasVPCConnectorEgressSettings = s, true
+	}
+	if raw, ok := body["secretEnvironmentVariables"]; ok {
+		in.SecretEnvironmentVariables = decodeSecretEnvVars(raw)
+		in.HasSecretEnvironmentVariables = true
+	}
+	if raw, ok := body["secretVolumes"]; ok {
+		in.SecretVolumes = decodeSecretVolumes(raw)
+		in.HasSecretVolumes = true
+	}
+	if s, ok := body["dockerRegistry"].(string); ok {
+		in.DockerRegistry, in.HasDockerRegistry = s, true
+	}
+	if s, ok := body["dockerRepository"].(string); ok {
+		in.DockerRepository, in.HasDockerRepository = s, true
+	}
+	if s, ok := body["buildWorkerPool"].(string); ok {
+		in.BuildWorkerPool, in.HasBuildWorkerPool = s, true
+	}
+	if ht, ok := body["httpsTrigger"].(map[string]any); ok {
+		if s, ok := ht["securityLevel"].(string); ok {
+			in.HttpsTriggerSecurityLevel, in.HasHttpsTriggerSecurityLevel = s, true
+		}
 	}
 	if et, ok := body["eventTrigger"].(map[string]any); ok {
 		in.EventTrigger = &functionsstore.EventTrigger{
@@ -160,6 +224,64 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 	return in
 }
 
+// decodeSecretEnvVars decodes the v1 secretEnvironmentVariables array from the
+// decoded JSON/protojson shape.
+func decodeSecretEnvVars(raw any) []functionsstore.SecretEnvVar {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]functionsstore.SecretEnvVar, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, functionsstore.SecretEnvVar{
+			Key:       stringOf(m["key"]),
+			ProjectID: stringOf(m["projectId"]),
+			Secret:    stringOf(m["secret"]),
+			Version:   stringOf(m["version"]),
+		})
+	}
+	return out
+}
+
+// decodeSecretVolumes decodes the v1 secretVolumes array (including its nested
+// versions list) from the decoded JSON/protojson shape.
+func decodeSecretVolumes(raw any) []functionsstore.SecretVolume {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]functionsstore.SecretVolume, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		vol := functionsstore.SecretVolume{
+			MountPath: stringOf(m["mountPath"]),
+			ProjectID: stringOf(m["projectId"]),
+			Secret:    stringOf(m["secret"]),
+		}
+		if versions, ok := m["versions"].([]any); ok {
+			for _, v := range versions {
+				vm, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				vol.Versions = append(vol.Versions, functionsstore.SecretVolumeVersion{
+					Path:    stringOf(vm["path"]),
+					Version: stringOf(vm["version"]),
+				})
+			}
+		}
+		out = append(out, vol)
+	}
+	return out
+}
+
 // eventFilterValue returns the value of the first v2 eventFilters entry whose
 // attribute matches attr. The filters arrive in the decoded JSON/protojson
 // []any-of-objects shape.
@@ -213,10 +335,25 @@ func newFunction(project, location, id string, in FunctionInput) functionsstore.
 	f.MaxInstanceCount = in.MaxInstanceCount
 	f.MaxInstanceRequestConcurrency = in.MaxInstanceRequestConcurrency
 	f.AvailableCPU = in.AvailableCPU
+	// v1 module fields (TGM3). An unset enum/string is stored as "" so the
+	// renderer omits it; maxInstances 0 is the API's "no configured limit".
+	f.IngressSettings = in.IngressSettings
+	f.MaxInstances = in.MaxInstances
+	f.VPCConnector = in.VPCConnector
+	f.VPCConnectorEgressSettings = in.VPCConnectorEgressSettings
+	f.SecretEnvironmentVariables = in.SecretEnvironmentVariables
+	f.SecretVolumes = in.SecretVolumes
+	f.DockerRegistry = in.DockerRegistry
+	f.DockerRepository = in.DockerRepository
+	f.BuildWorkerPool = in.BuildWorkerPool
 	if in.EventTrigger != nil {
 		f.EventTrigger = in.EventTrigger
 	} else {
 		f.HttpsTriggerURL = defaultHttpsTriggerURL(project, location, id)
+		// Store the security level only when the caller set it; the renderer
+		// falls back to the API default (SECURE_ALWAYS), so an unset field stays
+		// absent rather than fabricated.
+		f.HttpsTriggerSecurityLevel = in.HttpsTriggerSecurityLevel
 	}
 	return f
 }
@@ -241,6 +378,38 @@ var functionUpdateFields = map[string]string{
 	"available_memory_mb":   "availableMemoryMb",
 	"eventtrigger":          "eventTrigger",
 	"event_trigger":         "eventTrigger",
+	// The provider PATCHes an event_trigger change with both the whole
+	// eventTrigger and the nested failurePolicy.retry path (the v1 API's Retry
+	// union member). Accept both so the retry flag applies without wiping the
+	// trigger's eventType/resource.
+	"eventtrigger.failurepolicy":       "eventTriggerRetry",
+	"eventtrigger.failurepolicy.retry": "eventTriggerRetry",
+	// v1 httpsTrigger security level. The resource read renders it as
+	// https_trigger_security_level; the update mask names httpsTrigger and
+	// httpsTrigger.securityLevel.
+	"httpstrigger":               "httpsTriggerSecurityLevel",
+	"httpstrigger.securitylevel": "httpsTriggerSecurityLevel",
+	// v1 fields the CFT event-function module sends (TGM3). The provider uses
+	// camelCase for most and the snake_case proto spelling for
+	// build_worker_pool.
+	"ingresssettings":               "ingressSettings",
+	"ingress_settings":              "ingressSettings",
+	"maxinstances":                  "maxInstances",
+	"max_instances":                 "maxInstances",
+	"vpcconnector":                  "vpcConnector",
+	"vpc_connector":                 "vpcConnector",
+	"vpcconnectoregresssettings":    "vpcConnectorEgressSettings",
+	"vpc_connector_egress_settings": "vpcConnectorEgressSettings",
+	"secretenvironmentvariables":    "secretEnvironmentVariables",
+	"secret_environment_variables":  "secretEnvironmentVariables",
+	"secretvolumes":                 "secretVolumes",
+	"secret_volumes":                "secretVolumes",
+	"dockerregistry":                "dockerRegistry",
+	"docker_registry":               "dockerRegistry",
+	"dockerrepository":              "dockerRepository",
+	"docker_repository":             "dockerRepository",
+	"buildworkerpool":               "buildWorkerPool",
+	"build_worker_pool":             "buildWorkerPool",
 	// Cloud Functions v2 nests the mutable fields under buildConfig and
 	// serviceConfig; accept those mask paths so v2 clients can PATCH them.
 	"buildconfig.runtime":                 "runtime",
@@ -276,6 +445,13 @@ func canonicalMaskField(path string) (string, bool) {
 	p = strings.TrimPrefix(p, "function.")
 	p = strings.ReplaceAll(p, "build_config.", "buildconfig.")
 	p = strings.ReplaceAll(p, "service_config.", "serviceconfig.")
+	// The v1 proto's snake_case nested paths (event_trigger.failure_policy.retry,
+	// https_trigger.security_level) name the same fields as the JSON camelCase
+	// ones, since a FieldMask carries the path verbatim.
+	p = strings.ReplaceAll(p, "event_trigger.", "eventtrigger.")
+	p = strings.ReplaceAll(p, "failure_policy", "failurepolicy")
+	p = strings.ReplaceAll(p, "https_trigger.", "httpstrigger.")
+	p = strings.ReplaceAll(p, "security_level", "securitylevel")
 	f, ok := functionUpdateFields[p]
 	return f, ok
 }
@@ -333,7 +509,11 @@ func ApplyFunctionUpdate(f *functionsstore.Function, in FunctionInput, mask []st
 	if apply("sourceArchiveUrl") && in.SourceArchiveURL != "" {
 		f.SourceArchiveURL = in.SourceArchiveURL
 	}
-	if apply("environmentVariables") && in.EnvironmentVariables != nil {
+	// environmentVariables is clearable: the provider PATCHes an
+	// updateMask=environmentVariables with no map when the config removes every
+	// entry, and a FieldMask path is authoritative in proto3 semantics. An empty
+	// mask still applies only a body that carried the map.
+	if apply("environmentVariables") && (len(mask) > 0 || in.EnvironmentVariables != nil) {
 		f.EnvironmentVariables = in.EnvironmentVariables
 	}
 	if apply("labels") && in.Labels != nil {
@@ -366,6 +546,59 @@ func ApplyFunctionUpdate(f *functionsstore.Function, in FunctionInput, mask []st
 	}
 	if apply("eventTrigger") && in.EventTrigger != nil {
 		f.EventTrigger = in.EventTrigger
+	}
+	// v1 nested failurePolicy.retry path: a mask naming it changes only the retry
+	// flag, so a client that sends just that path cannot wipe the trigger. An
+	// empty mask applies it only when the body carried an eventTrigger.
+	if in.EventTrigger != nil && (len(mask) == 0 || apply("eventTriggerRetry")) {
+		if f.EventTrigger == nil {
+			f.EventTrigger = &functionsstore.EventTrigger{}
+		}
+		f.EventTrigger.Retry = in.EventTrigger.Retry
+	}
+	// v1 httpsTrigger.securityLevel. The mask names the whole httpsTrigger or the
+	// nested security level; either applies the body's value.
+	if apply("httpsTriggerSecurityLevel") && (len(mask) > 0 || in.HasHttpsTriggerSecurityLevel) {
+		if in.HttpsTriggerSecurityLevel == "" {
+			f.HttpsTriggerSecurityLevel = "SECURE_ALWAYS"
+		} else {
+			f.HttpsTriggerSecurityLevel = in.HttpsTriggerSecurityLevel
+		}
+	}
+	// v1 module fields (TGM3). A masked path is authoritative (an explicit ""/0/
+	// [] clears it); an empty mask applies only a field the body carried.
+	v1Apply := func(field string, has bool) bool {
+		if len(mask) == 0 {
+			return has
+		}
+		return apply(field)
+	}
+	if v1Apply("ingressSettings", in.HasIngressSettings) {
+		f.IngressSettings = in.IngressSettings
+	}
+	if v1Apply("maxInstances", in.HasMaxInstances) {
+		f.MaxInstances = in.MaxInstances
+	}
+	if v1Apply("vpcConnector", in.HasVPCConnector) {
+		f.VPCConnector = in.VPCConnector
+	}
+	if v1Apply("vpcConnectorEgressSettings", in.HasVPCConnectorEgressSettings) {
+		f.VPCConnectorEgressSettings = in.VPCConnectorEgressSettings
+	}
+	if v1Apply("secretEnvironmentVariables", in.HasSecretEnvironmentVariables) {
+		f.SecretEnvironmentVariables = in.SecretEnvironmentVariables
+	}
+	if v1Apply("secretVolumes", in.HasSecretVolumes) {
+		f.SecretVolumes = in.SecretVolumes
+	}
+	if v1Apply("dockerRegistry", in.HasDockerRegistry) {
+		f.DockerRegistry = in.DockerRegistry
+	}
+	if v1Apply("dockerRepository", in.HasDockerRepository) {
+		f.DockerRepository = in.DockerRepository
+	}
+	if v1Apply("buildWorkerPool", in.HasBuildWorkerPool) {
+		f.BuildWorkerPool = in.BuildWorkerPool
 	}
 	if apply("source") && in.SourceBucket != "" && in.SourceObject != "" {
 		f.SourceArchiveURL = "gs://" + in.SourceBucket + "/" + in.SourceObject
