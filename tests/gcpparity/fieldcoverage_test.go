@@ -180,7 +180,9 @@ func TestGeneratedFieldCoverageFailsOnPreFixMapping(t *testing.T) {
 		t.Fatal("pre-fix fixture names no omitted blocks")
 	}
 
-	b := newFieldBody("storage", "Bucket", "grpc", nil)
+	b := newFieldBody("storage", "Bucket", "grpc", map[string]string{
+		"kms": "projects/fc-project/locations/us/keyRings/fc-ring/cryptoKeys/fc-key",
+	})
 	if err := b.placeAll(); err != nil {
 		t.Fatalf("place generated bucket fields: %v", err)
 	}

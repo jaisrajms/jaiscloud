@@ -918,11 +918,12 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 		b.StorageClass = "STANDARD"
 	}
 	b.Versioning = bodyMap(body, "versioning")
-	b.RetentionPolicy = bodyMap(body, "retentionPolicy")
+	now := clock.Now().Format(time.RFC3339Nano)
+	b.RetentionPolicy = normalizeRetentionPolicyInput(bodyMap(body, "retentionPolicy"), now)
 	b.Lifecycle = bodyMap(body, "lifecycle")
 	b.Encryption = bodyMap(body, "encryption")
 	b.Cors = bodySlice(body, "cors")
-	b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
+	b.SoftDeletePolicy = normalizeSoftDeletePolicyInput(bodyMap(body, "softDeletePolicy"), now)
 	b.Labels = bodyStringMap(body, "labels")
 	// autoclass and hierarchicalNamespace are sent on every create by the
 	// official storage module (both with enabled=false), and website/logging/
@@ -948,7 +949,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	if h, ok := body["defaultEventBasedHold"].(bool); ok {
 		b.DefaultEventBasedHold = h
 	}
-	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
+	b.TimeCreated = now
 	b.Updated = b.TimeCreated
 	b.Metageneration = "1"
 
@@ -1494,7 +1495,7 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 			b.Versioning = bodyMap(body, "versioning")
 		}
 		if _, ok := body["retentionPolicy"]; ok {
-			newRP := bodyMap(body, "retentionPolicy")
+			newRP := normalizeRetentionPolicyInput(bodyMap(body, "retentionPolicy"), clock.Now().Format(time.RFC3339Nano))
 			oldRP, _ := meta["retentionPolicy"].(map[string]any)
 			if locked, _ := oldRP["isLocked"].(bool); locked {
 				// Once a bucket's retention policy is locked it can be
@@ -1505,10 +1506,8 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 						"Bucket retention policy is locked and cannot be removed or shortened", 400)
 				}
 				newRP["isLocked"] = true
-				if _, ok := newRP["effectiveTime"]; !ok {
-					if et, ok := oldRP["effectiveTime"]; ok {
-						newRP["effectiveTime"] = et
-					}
+				if et, ok := oldRP["effectiveTime"]; ok {
+					newRP["effectiveTime"] = et
 				}
 			}
 			b.RetentionPolicy = newRP
@@ -1523,7 +1522,7 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 			b.Cors = bodySlice(body, "cors")
 		}
 		if _, ok := body["softDeletePolicy"]; ok {
-			b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
+			b.SoftDeletePolicy = normalizeSoftDeletePolicyInput(bodyMap(body, "softDeletePolicy"), clock.Now().Format(time.RFC3339Nano))
 		}
 		if _, ok := body["labels"]; ok {
 			b.Labels = bodyStringMap(body, "labels")

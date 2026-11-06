@@ -367,6 +367,20 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 			b.Versioning = &storagepb.Bucket_Versioning{Enabled: true}
 		}
 	}
+	// project is IMMUTABLE and output values are always the project-number
+	// form, matching the REST projectNumber derived from the same project id.
+	if pid := mapString(m, "projectId"); pid != "" {
+		b.Project = resource.ResourceID(resource.ProjectNumber(pid))("project", "")
+	}
+	if lc := bucketSubMap(m, "lifecycle"); lc != nil {
+		b.Lifecycle = lifecycleFromMap(lc)
+	}
+	if enc := bucketSubMap(m, "encryption"); enc != nil {
+		b.Encryption = encryptionFromMap(enc)
+	}
+	if cors := corsFromMap(m["cors"]); cors != nil {
+		b.Cors = cors
+	}
 	if tc, _ := m["timeCreated"].(string); tc != "" {
 		if t, err := time.Parse(time.RFC3339Nano, tc); err == nil {
 			b.CreateTime = timestamppb.New(t)
@@ -882,6 +896,18 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if rp := bucketRetentionToMap(req.GetBucket().GetRetentionPolicy()); rp != nil {
 		meta["retentionPolicy"] = rp
 	}
+	if lc := lifecycleToMap(req.GetBucket().GetLifecycle()); lc != nil {
+		meta["lifecycle"] = lc
+	}
+	if enc := encryptionToMap(req.GetBucket().GetEncryption()); enc != nil {
+		meta["encryption"] = enc
+	}
+	if cors := corsToMap(req.GetBucket().GetCors()); cors != nil {
+		meta["cors"] = cors
+	}
+	if sd := softDeletePolicyToMap(req.GetBucket().GetSoftDeletePolicy(), now); sd != nil {
+		meta["softDeletePolicy"] = sd
+	}
 	// The bucket's IAM configuration travels as a field of the Bucket resource,
 	// the same way the REST insert body carries it.
 	if ic := req.GetBucket().GetIamConfig(); ic != nil {
@@ -1065,24 +1091,17 @@ func mapBucketMutationError(err error) error {
 // bucketRetentionToMap converts a proto bucket retention policy into the map
 // shape the REST provider persists (decimal-second retentionPeriod string,
 // optional effectiveTime RFC 3339, isLocked bool). Returns nil for a nil policy.
-// GCS populates effectiveTime server-side when a policy is applied, so an
-// absent request value is defaulted to now — the official Go client only
-// surfaces a retention policy whose effectiveTime is set.
+// effective_time and is_locked are OUTPUT_ONLY: a caller-supplied value is
+// ignored and the server stamps the apply time (a lock sets isLocked through
+// LockBucketRetentionPolicy). The official Go client only surfaces a retention
+// policy whose effectiveTime is set, so the server always provides one.
 func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
-	if rp == nil {
+	if rp == nil || rp.GetRetentionDuration() == nil {
 		return nil
 	}
-	out := map[string]any{}
+	out := map[string]any{"effectiveTime": clock.Now().Format(time.RFC3339Nano)}
 	if d := rp.GetRetentionDuration(); d != nil {
 		out["retentionPeriod"] = strconv.FormatInt(int64(d.AsDuration().Seconds()), 10)
-	}
-	if et := rp.GetEffectiveTime(); et != nil {
-		out["effectiveTime"] = et.AsTime().Format(time.RFC3339Nano)
-	} else {
-		out["effectiveTime"] = clock.Now().Format(time.RFC3339Nano)
-	}
-	if rp.GetIsLocked() {
-		out["isLocked"] = true
 	}
 	return out
 }
@@ -1124,6 +1143,22 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 			meta["retentionPolicy"] = rp
 		} else {
 			delete(meta, "retentionPolicy")
+		}
+	}
+	// lifecycle, encryption and soft_delete_policy are whole-message blocks in
+	// the proto; a masked member replaces the stored block (a leaf mask applies
+	// the request's full block, the shape the official clients send).
+	applyMaskedBlock(meta, "lifecycle", "lifecycle", bucketSubMap(meta, "lifecycle"), lifecycleToMap(pb.GetLifecycle()), mask)
+	applyMaskedBlock(meta, "encryption", "encryption", bucketSubMap(meta, "encryption"), encryptionToMap(pb.GetEncryption()), mask)
+	applyMaskedBlock(meta, "softDeletePolicy", "soft_delete_policy", bucketSubMap(meta, "softDeletePolicy"),
+		softDeletePolicyToMap(pb.GetSoftDeletePolicy(), clock.Now().Format(time.RFC3339Nano)), mask)
+	// cors is a repeated message with no field-level update semantics: a masked
+	// cors path replaces the whole rule list (an absent list clears it).
+	if maskIncludes(mask, "cors") {
+		if cors := corsToMap(pb.GetCors()); cors != nil {
+			meta["cors"] = cors
+		} else {
+			delete(meta, "cors")
 		}
 	}
 	if maskIncludes(mask, "default_event_based_hold") {
@@ -1295,6 +1330,15 @@ func (s *Service) UpdateBucket(ctx context.Context, req *storagepb.UpdateBucketR
 		}
 	}
 	updated, err := s.objects.UpdateBucketMetaAtomic(ctx, bucket, func(meta map[string]any) (map[string]any, error) {
+		// Bucket.etag is a documented precondition on UpdateBucket: the
+		// operation is only performed when the supplied etag matches the
+		// bucket's current one. A mismatch is an optimistic-concurrency
+		// failure, the same ABORTED contract the IAM policy etag uses.
+		if etag := req.GetBucket().GetEtag(); etag != "" {
+			if want := storageprovider.BucketEtag(gcs.BucketMetageneration(meta)); etag != want {
+				return nil, model.NewProviderError("Aborted", "the provided etag does not match the current etag of the bucket", 409)
+			}
+		}
 		if !gcs.BucketMetagenerationMatches(meta, pre) {
 			return nil, gcs.ErrPreconditionFailed
 		}
