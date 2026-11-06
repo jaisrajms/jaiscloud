@@ -1574,15 +1574,32 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
-	// Real GCS drops a bucket's notification configs with the bucket. The
-	// notification-ID high-water mark goes too: a recreated bucket starts over.
-	if entries, err := p.listBucketNotifications(ctx, project, name); err == nil {
+	// Real GCS drops every bucket-owned control-plane resource with the
+	// bucket: notification configs, their ID high-water mark, and the bucket's
+	// and its objects' IAM policies. A re-created bucket therefore starts
+	// clean instead of resurrecting the previous incarnation's policy.
+	p.CleanupBucketOwnedState(ctx, project, name)
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// CleanupBucketOwnedState deletes the control-plane resources a bucket owns.
+// It is the single cascade both transports call after the bucket row is gone,
+// so REST and gRPC cannot drift (gRPC used to leak every one of these).
+func (p *Provider) CleanupBucketOwnedState(ctx context.Context, project, bucket string) {
+	if entries, err := p.listBucketNotifications(ctx, project, bucket); err == nil {
 		for _, e := range entries {
 			_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotification, e.ID)
 		}
 	}
-	_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotificationSeq, name)
-	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+	_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotificationSeq, bucket)
+	_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtBucketIAM, bucket)
+	// Object IAM rows are keyed "{bucket}/{object}"; list is a substring match,
+	// so the trailing separator scopes the purge to this bucket.
+	if rows, err := p.resources.List(ctx, project, store.GlobalRegion, rtObjectIAM, bucket+"/"); err == nil {
+		for _, row := range rows {
+			_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtObjectIAM, row.ID)
+		}
+	}
 }
 
 // ─── notification configs ──────────────────────────────────────────────────────
@@ -3962,6 +3979,7 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 		// A versioned delete makes the live version noncurrent, which real GCS
 		// reports as OBJECT_ARCHIVE (not OBJECT_DELETE).
 		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_ARCHIVE", meta, clock.Now(), nil)
+		p.purgeObjectIAM(ctx, bucket, object)
 		return nil
 	}
 
@@ -3987,6 +4005,7 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 		// The bytes stay; the object is gone from the live surface, which real
 		// GCS still reports as OBJECT_DELETE.
 		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", tombstone, clock.Now(), nil)
+		p.purgeObjectIAM(ctx, bucket, object)
 		return nil
 	}
 
@@ -4013,7 +4032,15 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 	}
 	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", meta, clock.Now(), nil)
+	p.purgeObjectIAM(ctx, bucket, object)
 	return nil
+}
+
+// purgeObjectIAM removes an object's IAM policy when the object stops being
+// live. Real GCS ties the policy to the object, so re-creating a same-named
+// object must not inherit it.
+func (p *Provider) purgeObjectIAM(ctx context.Context, bucket, object string) {
+	_ = p.resources.Delete(ctx, p.bucketProject(ctx, bucket), store.GlobalRegion, rtObjectIAM, bucket+"/"+object)
 }
 
 // deleteObjectGeneration removes one specific object revision (the target of
@@ -4061,6 +4088,13 @@ func (p *Provider) deleteObjectGeneration(ctx context.Context, bucket, object, g
 // bucketProject returns the project that owns a bucket (the account scope used
 // for notification storage and envelope encryption), falling back to "" when
 // the bucket metadata cannot be read.
+// BucketProject returns the project that owns a bucket, or "" when the bucket
+// does not exist. It is exported so the gRPC transport can resolve the project
+// before deleting the bucket row.
+func (p *Provider) BucketProject(ctx context.Context, bucket string) string {
+	return p.bucketProject(ctx, bucket)
+}
+
 func (p *Provider) bucketProject(ctx context.Context, bucket string) string {
 	if m, err := p.objects.GetBucket(ctx, bucket); err == nil {
 		if pid, _ := m["projectId"].(string); pid != "" {

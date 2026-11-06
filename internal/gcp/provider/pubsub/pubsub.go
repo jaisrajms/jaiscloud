@@ -182,6 +182,9 @@ func (p *Provider) deleteTopic(ctx context.Context, account, t string) error {
 		return err
 	}
 	topicFull := resource.ResourceID(account)("pubsub-topic", t)
+	// The topic's IAM policy is owned by the topic: a same-name recreate must
+	// not inherit it.
+	_ = p.resources.Delete(ctx, account, store.GlobalRegion, rtTopicPolicy, t)
 	if entries, err := p.resources.List(ctx, account, store.GlobalRegion, rtSubscription, ""); err == nil {
 		for _, e := range entries {
 			var meta map[string]any
@@ -704,7 +707,26 @@ func (p *Provider) SubscriptionDelete(ctx context.Context, nr *model.NormalizedR
 		}
 		return nil, err
 	}
+	// A subscription owns its message backlog and its IAM policy: real Pub/Sub
+	// discards the backlog with the subscription, so a same-name recreate
+	// starts empty instead of resurrecting undelivered messages.
+	_ = p.purgeSubscriptionBacklog(ctx, nr.AccountID, s)
+	_ = p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtSubscriptionPolicy, s)
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// purgeSubscriptionBacklog deletes every message queued for the subscription.
+func (p *Provider) purgeSubscriptionBacklog(ctx context.Context, account, sub string) error {
+	msgs, err := p.messages.List(ctx, sub)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		if err := p.messages.Delete(ctx, sub, m.MessageID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Provider) SubscriptionList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

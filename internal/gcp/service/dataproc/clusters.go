@@ -99,6 +99,14 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	in.VirtualClusterConfig = normalizedVCC
+	// Settle a transitional incarnation before the duplicate check. Dataproc
+	// deletes lazily (`delete` sets DELETING and the next read removes the row),
+	// so a Terraform replace arrives while the old record still exists: creating
+	// the replacement must apply the state machine and succeed, never answer
+	// ALREADY_EXISTS for a name the delete already released.
+	if _, err := s.advanceCluster(ctx, project, region, name); err != nil && !errors.Is(err, dpstore.ErrNoSuchCluster) {
+		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
 	// Reject a duplicate name before any side effect: reconciling node pools and
 	// provisioning the workload namespace both create state that a rejected
 	// create must not leave behind (pools are never deleted), and real Dataproc

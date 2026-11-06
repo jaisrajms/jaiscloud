@@ -279,6 +279,11 @@ func (s *Service) ListAllKeyRings(ctx context.Context, project string) ([]kmssto
 
 // CreateCryptoKey creates a crypto key and its implicit primary version.
 func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id string, in CryptoKeyInput) (kmsstore.CryptoKey, error) {
+	// A crypto key is a child of a key ring: creating one under a ring that does
+	// not exist is NOT_FOUND in real Cloud KMS, not a silently orphaned key.
+	if _, err := s.keys.GetKeyRing(ctx, project, location, kr); err != nil {
+		return kmsstore.CryptoKey{}, keyRingErr(err)
+	}
 	purpose := in.Purpose
 	if purpose == "" {
 		purpose = "ENCRYPT_DECRYPT"

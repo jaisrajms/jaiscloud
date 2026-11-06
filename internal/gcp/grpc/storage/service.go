@@ -893,6 +893,10 @@ func (s *Service) DeleteBucket(ctx context.Context, req *storagepb.DeleteBucketR
 	}
 
 	name := parseBucketName(req.GetName())
+	// Resolve the owning project before the bucket row is gone: the cascade
+	// below is keyed by project, and a re-created bucket must not inherit the
+	// previous incarnation's notification configs or IAM policy.
+	project := s.provider.BucketProject(ctx, name)
 	if err := s.objects.DeleteBucket(ctx, name); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, mapError(model.NewProviderError("NotFound", "bucket not found", 404))
@@ -902,6 +906,9 @@ func (s *Service) DeleteBucket(ctx context.Context, req *storagepb.DeleteBucketR
 		}
 		return nil, mapError(err)
 	}
+	// The REST adapter has always purged these; gRPC did not, so a gRPC-only
+	// client leaked them into a same-name recreate.
+	s.provider.CleanupBucketOwnedState(ctx, project, name)
 	return &emptypb.Empty{}, nil
 }
 
