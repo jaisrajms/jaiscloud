@@ -1,0 +1,63 @@
+{
+  "capturedFrom": "c68a5e08^ (TGM16 pre-fix build)",
+  "capturedWith": "create a database, stage an index/field/user creds/change stream/document, create the first backup schedule (which takes id 1), then projects.databases.delete; the pre-fix delete tombstoned only the database record, so every row below survived",
+  "note": "This is the exact persisted shape the TGM16 report's 409 came from: a deleted database id available for reuse while backupSchedules/1 is still occupied.",
+  "entries": [
+    {
+      "type": "firestore_database",
+      "id": "databases/lc-fixture",
+      "data": {
+        "name": "projects/proj/databases/lc-fixture",
+        "uid": "pre-fix-uid",
+        "locationId": "nam5",
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "OPTIMISTIC",
+        "appEngineIntegrationMode": "DISABLED",
+        "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+        "etag": "pre-fix-etag",
+        "deleted": true,
+        "deleteTime": "2026-11-05T00:00:00Z"
+      }
+    },
+    {
+      "type": "firestore_backup_schedule",
+      "id": "databases/lc-fixture/backupSchedules/1",
+      "data": {
+        "name": "projects/proj/databases/lc-fixture/backupSchedules/1",
+        "retention": 86400000000000,
+        "recurrence": "DAILY",
+        "uid": "pre-fix-schedule-incarnation"
+      }
+    },
+    {
+      "type": "firestore_index",
+      "id": "databases/lc-fixture/collectionGroups/c/indexes/i1",
+      "data": {"name": "projects/proj/databases/lc-fixture/collectionGroups/c/indexes/i1"}
+    },
+    {
+      "type": "firestore_field",
+      "id": "databases/lc-fixture/collectionGroups/c/fields/ttl",
+      "data": {
+        "name": "projects/proj/databases/lc-fixture/collectionGroups/c/fields/ttl",
+        "ttlConfig": {"state": "ACTIVE"}
+      }
+    },
+    {
+      "type": "firestore_user_creds",
+      "id": "databases/lc-fixture/userCreds/cred1",
+      "data": {
+        "name": "projects/proj/databases/lc-fixture/userCreds/cred1",
+        "state": "ACTIVE",
+        "principal": "pre-fix@proj.iam.gserviceaccount.com"
+      }
+    },
+    {
+      "type": "firestore_change_stream",
+      "id": "databases/lc-fixture/changeStreams/cs1",
+      "data": {"name": "projects/proj/databases/lc-fixture/changeStreams/cs1"}
+    }
+  ],
+  "documents": [
+    "projects/proj/databases/lc-fixture/documents/c/pre-fix"
+  ]
+}

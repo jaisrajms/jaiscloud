@@ -1661,8 +1661,12 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 # `docs/fidelity` (any change to a conformance check or an operation's evidence)
 # is the most common red-CI cause and `check-gcp-fidelity-matrix` catches it
 # locally, after regenerating the matrix to be committed.
+test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-process state oracle)
+	go test -race -count=1 ./tests/gcplifecycle/...
+
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
+	$(MAKE) --no-print-directory test-gcp-lifecycle
 	$(MAKE) --no-print-directory test-gcp-coverage
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
 	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...

@@ -391,6 +391,9 @@ jobs:
       - name: Run GCP unit tests
         run: go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 
+      - name: Run GCP lifecycle + ownership harness (FC5)
+        run: make test-gcp-lifecycle
+
       - name: GCP statement-coverage ratchet (per-package floor)
         run: make test-gcp-coverage
 
