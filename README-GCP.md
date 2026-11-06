@@ -89,11 +89,20 @@ mapping, and still pass every operation-level gate (the TGM1-3/TGM6/TGM11-1/TGM1
 class). [`docs/fidelity/field-coverage.csv`](docs/fidelity/field-coverage.csv)
 is the derived field inventory for the pilot resources — one row per field and
 transport, classified `roundtrip`, `derived`, `immutable`, `output-only` or
-`unsupported`, with the evidence pointer (an existing test function that exercises the field's
-resource or stored block), formula, or written reason + future review date each
-class requires. (W2.1/FC3 generates a per-field assertion for every `roundtrip`
-field and upgrades these pointers from "a test that exercises it" to "the test
-that pins it".) Behavior comes from the definition annotations; the vendored
+`unsupported`, with the evidence pointer, formula, or written reason + future
+review date each class requires. The evidence now includes the generated suite
+(`tests/gcpparity/fieldcoverage_test.go`), which sets every `roundtrip` field to a
+type-driven non-default value, reads it back on its transport, and reads the
+same resource over the other transport for every field both classify as
+round-trip — the TGM1-3 class — plus a per-field masked update, a negative write
+per server-owned/create-only field, an absence create per optional block, and
+delete→NOT_FOUND. The dataset is generated from this catalog by
+`make gen-gcp-field-coverage` (`tests/gcpparity/zz_fieldcoverage_generated.go`),
+so a new field cannot enter the catalog without a scenario; a recorded gap is a
+`testdata/fieldcoverage-baseline.json` entry with a reason and an `FC3-n` id, and
+an entry that stops failing fails the suite. The values a wire type cannot
+determine (a real region, a CIDR, a reference that must exist) are pinned in
+[`tools/fieldgen/scenario-values.yaml`](tools/fieldgen/scenario-values.yaml). Behavior comes from the definition annotations; the vendored
 Storage v1 and Cloud DNS v1 Discovery snapshots declare no `readOnly` flags, so
 those rows are classified by review rather than by drift detection. A `roundtrip` row whose
 definition marks the field `OUTPUT_ONLY`/`IMMUTABLE`/`readOnly` must carry a
@@ -107,6 +116,25 @@ a review date has passed. Pilot scope: Storage `Bucket`, Firestore
 `ManagedZone`, Monitoring `AlertPolicy`. The curated scope lives in
 [`tools/fieldgen/scope.yaml`](tools/fieldgen/scope.yaml); the Terraform
 provider-schema join is the documented FC6 hook.
+
+### Reference coverage
+
+A field the API annotates `google.api.resource_reference` names another
+service's resource, and storing the name verbatim is the TGM11-1 defect class.
+[`docs/fidelity/reference-coverage.csv`](docs/fidelity/reference-coverage.csv)
+is the derived inventory — one row per annotated field — classified `validated`
+(existence resolved against the referenced store: Firestore CMEK→KMS, Storage
+notification→Pub/Sub, Pub/Sub subscription/dead-letter→Pub/Sub, Dataproc
+cluster→Metastore, Eventarc trigger→Workflows), `format-only` (the name shape is
+checked, existence is not), `unvalidated` (stored verbatim; a written reason and
+a future review date, a scheduled `FC4-n` gap) or `not-modelled` (the emulator
+does not parse or serve the field). `make check-gcp-field-coverage` fails when an
+annotated field has no row, a row is stale, a target drifts, a
+`validated`/`format-only` row's test no longer resolves, or an `unvalidated`
+review date has passed. The universe is curated in `tools/fieldgen/scope.yaml`
+(`references:` for annotated messages outside the field pilot,
+`documented_references:` for Discovery-only references such as the Storage
+notification topic).
 
 ### Fidelity & testing
 

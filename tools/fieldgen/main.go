@@ -52,6 +52,11 @@ const (
 	defaultScopePath      = "tools/fieldgen/scope.yaml"
 	defaultDiscoveryDir   = "tests/gcpconformance/discovery"
 	defaultExemptionsPath = "tests/gcpconformance/testdata/field-coverage-exemptions.json"
+	// defaultReferenceCSVPath is the FC4 reference-integrity inventory.
+	defaultReferenceCSVPath = "docs/fidelity/reference-coverage.csv"
+	// defaultScenarioValuesPath pins the values that the definition's wire type
+	// does not determine (a real region, a parseable CIDR, a valid runtime).
+	defaultScenarioValuesPath = "tools/fieldgen/scenario-values.yaml"
 )
 
 func main() {
@@ -59,6 +64,9 @@ func main() {
 	scopePath := flag.String("scope", defaultScopePath, "scope manifest naming the enumerated resources")
 	discoveryDir := flag.String("discovery", defaultDiscoveryDir, "vendored Discovery snapshots dir")
 	exemptionsPath := flag.String("exemptions", defaultExemptionsPath, "field-coverage exemptions file")
+	referencePath := flag.String("references", defaultReferenceCSVPath, "reference-coverage CSV to write (with -gen) or check (with -check)")
+	scenarioPath := flag.String("scenarios", defaultScenarioPath, "generated round-trip scenario dataset (written with -gen, staleness-checked with -check)")
+	valuesPath := flag.String("scenario-values", defaultScenarioValuesPath, "per-field value hints the definition's type cannot determine")
 	gen := flag.Bool("gen", false, "regenerate the CSV from the API definitions, preserving existing classifications")
 	check := flag.Bool("check", false, "validate the committed CSV against the API definitions")
 	terraformSchema := flag.String("terraform-schema", "", "optional `terraform providers schema -json` dump (FC6 hook; not yet joined)")
@@ -93,6 +101,9 @@ func main() {
 		ScopePath:      resolvePath(root, *scopePath),
 		DiscoveryDir:   resolvePath(root, *discoveryDir),
 		ExemptionsPath: resolvePath(root, *exemptionsPath),
+		ReferencePath:  resolvePath(root, *referencePath),
+		ScenarioPath:   resolvePath(root, *scenarioPath),
+		ValuesPath:     resolvePath(root, *valuesPath),
 		Gen:            *gen,
 		Check:          *check,
 		Verbose:        *verbose,
@@ -110,6 +121,9 @@ type options struct {
 	ScopePath      string
 	DiscoveryDir   string
 	ExemptionsPath string
+	ReferencePath  string
+	ScenarioPath   string
+	ValuesPath     string
 	Gen            bool
 	Check          bool
 	Verbose        bool
@@ -139,11 +153,55 @@ func run(o options) error {
 	}
 
 	if o.Gen {
-		return Generate(o.CSVPath, universe)
+		if err := Generate(o.CSVPath, universe); err != nil {
+			return err
+		}
 	}
 
 	rows, err := ReadCSV(o.CSVPath)
 	if err != nil {
+		return err
+	}
+	hints, err := LoadValueHints(o.ValuesPath)
+	if err != nil {
+		return err
+	}
+	scenarios, err := BuildScenarios(universe, rows, hints)
+	if err != nil {
+		return err
+	}
+	if err := validateScenarioCoverage(universe, rows, scenarios); err != nil {
+		return err
+	}
+	refs, err := BuildReferences(scope, universe)
+	if err != nil {
+		return err
+	}
+	if o.Gen {
+		if err := GenerateReferences(o.ReferencePath, refs); err != nil {
+			return err
+		}
+	} else {
+		refRows, rerr := ReadReferenceCSV(o.ReferencePath)
+		if rerr != nil {
+			return rerr
+		}
+		validated, rerr := CheckReferences(o.Root, refs, refRows)
+		if rerr != nil {
+			return rerr
+		}
+		fmt.Printf("reference-coverage: %d reference field(s), %d validated against the referenced store\n", len(refs), validated)
+	}
+	if o.Gen {
+		if err := WriteScenarios(o.ScenarioPath, scenarios); err != nil {
+			return err
+		}
+		st := scenarioStats(scenarios)
+		fmt.Printf("field-coverage: wrote %s — %d %s across %d resource(s) (%d update steps, %d reference values), %d negative write(s)\n",
+			o.ScenarioPath, st.Values, plural(st.Values, "generated field value", "generated field values"), st.Resources, st.Updates, st.Refs, st.Attempts)
+		return nil
+	}
+	if err := CheckScenarios(o.ScenarioPath, scenarios); err != nil {
 		return err
 	}
 	exemptions, err := LoadExemptions(o.ExemptionsPath)
@@ -156,6 +214,13 @@ func run(o options) error {
 	}
 	printReport(report, o.Verbose, o.ExemptionsPath, exemptions)
 	return nil
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func resolvePath(root, path string) string {

@@ -1,0 +1,43 @@
+service,resource,field,target_type,status,check,reason,review_by
+dataproc,ClusterConfig,encryption_config.kms_key,cloudkms.googleapis.com/CryptoKey,unvalidated,,the KMS key name is stored on the cluster and used by the CMEK path; cluster create does not resolve it against the KMS store. Follow-up plan row FC4-1.,2027-03-01
+dataproc,ClusterConfig,metastore_config.dataproc_metastore_service,metastore.googleapis.com/Service,validated,internal/gcp/service/dataproc/metastore_test.go#TestCreateCluster_MetastoreValidation,"existence resolved through the metastore seam (seams.Metastore.ValidateMetastoreService); missing service -> NOT_FOUND, malformed/cross-region -> INVALID_ARGUMENT",
+dataproc,WorkflowTemplate,encryption_config.kms_key,cloudkms.googleapis.com/CryptoKey,unvalidated,,stored verbatim on the template; no KMS lookup at create. Follow-up plan row FC4-1.,2027-03-01
+eventarc,Trigger,destination.cloud_function,cloudfunctions.googleapis.com/CloudFunction,format-only,internal/gcp/service/eventarc/delivery_test.go#TestCreateTriggerCloudFunctionDestination,the destination shape is validated; the function is not resolved against the functions store,
+eventarc,Trigger,destination.workflow,workflows.googleapis.com/Workflow,validated,internal/gcp/transport/rest/eventarc/provider_test.go#TestUpdateTriggerInvalidReference,resolved in-process against the workflows store; an unknown workflow is NOT_FOUND,
+eventarc,Trigger,service_account,iam.googleapis.com/ServiceAccount,unvalidated,,stored verbatim; the IAM service-account store is not consulted. Follow-up plan row FC4-2.,2027-03-01
+firestore,Database,source_info.operation,firestore.googleapis.com/Operation,not-modelled,,source_info (clone/restore provenance) is never populated by the emulator; the field is output-only and unmodelled,
+functions,Function,build_config.build,cloudbuild.googleapis.com/Build,not-modelled,,the emulator does not model Cloud Build; the build reference is never populated,
+functions,Function,build_config.docker_repository,artifactregistry.googleapis.com/Repository,not-modelled,,Artifact Registry is not modelled,
+functions,Function,build_config.worker_pool,cloudbuild.googleapis.com/WorkerPool,not-modelled,,Cloud Build worker pools are not modelled,
+functions,Function,event_trigger.channel,eventarc.googleapis.com/Channel,not-modelled,,eventarc channels are not modelled on the functions surface,
+functions,Function,event_trigger.pubsub_topic,pubsub.googleapis.com/Topic,unvalidated,internal/gcp/service/functions/trigger_reference_test.go#TestCreateFunctionEventTriggerReferenceIsNotValidated,the provisioner resolves the topic (NotFound) but CreateFunction logs the failure and still creates the function; real GCP rejects. Follow-up plan row FC4-3.,2027-03-01
+functions,Function,event_trigger.trigger,eventarc.googleapis.com/Trigger,not-modelled,,output-only: populated only when the backing Eventarc trigger is provisioned; the emulator leaves it empty when it is not,
+functions,Function,kms_key_name,cloudkms.googleapis.com/CryptoKey,not-modelled,,the functions KMS CMEK field is not parsed or served,
+functions,Function,service_config.service,run.googleapis.com/Service,not-modelled,,output-only Cloud Run service name; the emulator does not model a Cloud Run deploy,
+functions,Function,service_config.vpc_connector,vpcaccess.googleapis.com/Connector,not-modelled,,Serverless VPC Access connectors are not modelled,
+kms,CryptoKey,crypto_key_backend,*,not-modelled,,external/HSM key backends are not modelled; ref:* has no target store,
+logging,LogSink,destination,*,format-only,internal/gcp/service/logging/config_test.go#TestSinkCreateValidation,the destination is required and the intercept_children rule is enforced; the bucket/dataset/topic is not resolved,
+metastore,Service,network,compute.googleapis.com/Network,unvalidated,,the compute network is stored opaque on the service; no compute lookup. Follow-up plan row FC4-4.,2027-03-01
+pubsub,Snapshot,topic,pubsub.googleapis.com/Topic,unvalidated,,the snapshot stores the topic name; the snapshot path does not resolve it against the topic store. Follow-up plan row FC4-5.,2027-03-01
+pubsub,Subscription,analytics_hub_subscription_info.listing,analyticshub.googleapis.com/Listing,not-modelled,,Analytics Hub is not modelled,
+pubsub,Subscription,dead_letter_policy.dead_letter_topic,pubsub.googleapis.com/Topic,validated,internal/gcp/provider/pubsub/pubsub_extra_test.go#TestPubSubDeadLetterPolicyValidation,normalizeDeadLetterPolicy resolves the topic; an unknown one is NOT_FOUND,
+pubsub,Subscription,topic,pubsub.googleapis.com/Topic,validated,internal/gcp/provider/pubsub/eventarc_test.go#TestSubscriptionUpdateValidation,subscription create/update resolve the topic (topicExists); an unknown one is NOT_FOUND,
+pubsub,Topic,kms_key_name,cloudkms.googleapis.com/CryptoKey,format-only,internal/gcp/service/pubsub/topicmeta_test.go#TestNormalizeTopicInputRejections,the CryptoKey name shape is validated; existence is resolved only when a message is published (crypto.EnvelopeEncryptor). Follow-up plan row FC4-6.,
+run,Service,binary_authorization.policy,binaryauthorization.googleapis.com/Policy,not-modelled,,Binary Authorization is not modelled,
+run,Service,build_config.name,cloudbuild.googleapis.com/Build,not-modelled,,Cloud Build is not modelled,
+run,Service,build_config.worker_pool,cloudbuild.googleapis.com/BuildWorkerPool,not-modelled,,Cloud Build worker pools are not modelled,
+run,Service,latest_created_revision,run.googleapis.com/Revision,not-modelled,,output-only revision name the emulator does not populate,
+run,Service,latest_ready_revision,run.googleapis.com/Revision,not-modelled,,output-only revision name the emulator does not populate,
+run,Service,template.encryption_key,cloudkms.googleapis.com/CryptoKey,unvalidated,,stored on the revision template; the KMS key is not resolved at deploy. Follow-up plan row FC4-1.,2027-03-01
+run,Service,template.revision,run.googleapis.com/Revision,not-modelled,,output-only revision name,
+run,Service,template.service_mesh.mesh,networkservices.googleapis.com/Mesh,not-modelled,,Network Services mesh is not modelled,
+run,Service,template.vpc_access.connector,vpcaccess.googleapis.com/Connector,unvalidated,,stored verbatim; the Serverless VPC Access connector is not resolved. Follow-up plan row FC4-4.,2027-03-01
+run,Service,traffic.revision,run.googleapis.com/Revision,not-modelled,,revision routing is not modelled,
+run,Service,traffic_statuses.revision,run.googleapis.com/Revision,not-modelled,,revision routing is not modelled,
+storage,Bucket,encryption.default_kms_key,cloudkms.googleapis.com/CryptoKey,unvalidated,,"the default KMS key is stored and used by object writes (crypto.EnvelopeEncryptor), but bucket create does not resolve it against the KMS store. Follow-up plan row FC4-1.",2027-03-01
+storage,Bucket,project,cloudresourcemanager.googleapis.com/Project,not-modelled,,identifier echoed from the owning project; never resolved against resource-manager,
+storage,Notification,topic,pubsub.googleapis.com/Topic,validated,internal/gcp/provider/storage/notifications_test.go#TestNotificationUnknownTopicRejected,notificationConfigs.insert resolves the topic through the Pub/Sub seam; an unknown topic is NOT_FOUND,
+workflows,Workflow,all_kms_keys,cloudkms.googleapis.com/CryptoKey,not-modelled,,the workflow KMS fields are not parsed or served,
+workflows,Workflow,all_kms_keys_versions,cloudkms.googleapis.com/CryptoKeyVersion,not-modelled,,the workflow KMS fields are not parsed or served,
+workflows,Workflow,crypto_key_name,cloudkms.googleapis.com/CryptoKey,not-modelled,,the workflow KMS fields are not parsed or served,
+workflows,Workflow,crypto_key_version,cloudkms.googleapis.com/CryptoKeyVersion,not-modelled,,the workflow KMS fields are not parsed or served,

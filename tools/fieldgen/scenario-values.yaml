@@ -1,0 +1,190 @@
+# Value hints for the generated round-trip suite (FC3).
+#
+# The generated value is derived from the field's wire type (a bool becomes
+# true, an enum its second member, a string "fc-<field>", ...). Some fields are
+# type-valid but domain-invalid: a bucket location must be a region name, a
+# duration is bounded below, an IP field must parse, and a reference must name a
+# resource that exists. Those are pinned here, one line of reason each.
+#
+# key: <service>/<transport>/<resource>/<field>, exactly the field-coverage.csv
+# row key. `ref:` asks the parity suite to resolve a real resource of that kind
+# before the create; `value:` is a JSON literal.
+values:
+  # ── storage/Bucket ────────────────────────────────────────────────────────
+  - field: storage/rest/Bucket/location
+    value: '"US"'
+    update_value: '"EU"'
+    reason: a bucket location must be a region or multi-region name ("US" is the multi-region the REST create accepts)
+  - field: storage/grpc/Bucket/location
+    value: '"US"'
+    reason: same domain constraint on the gRPC surface (immutable create value)
+  - field: storage/rest/Bucket/storageClass
+    value: '"STANDARD"'
+    update_value: '"NEARLINE"'
+    reason: storageClass is a free-form string in Discovery, but the API accepts only the documented class names
+  - field: storage/grpc/Bucket/storage_class
+    value: '"STANDARD"'
+    reason: same domain constraint on the gRPC surface
+  - field: storage/rest/Bucket/autoclass.terminalStorageClass
+    value: '"ARCHIVE"'
+    update_value: '"COLDLINE"'
+    reason: terminalStorageClass is one of the documented storage classes, not an arbitrary string
+  - field: storage/grpc/Bucket/autoclass.terminal_storage_class
+    value: '"ARCHIVE"'
+    reason: same domain constraint on the gRPC surface
+  - field: storage/rest/Bucket/iamConfiguration.publicAccessPrevention
+    value: '"enforced"'
+    update_value: '"inherited"'
+    reason: the API accepts only "inherited" or "enforced"
+  - field: storage/grpc/Bucket/iam_config.public_access_prevention
+    value: '"enforced"'
+    update_value: '"inherited"'
+    reason: the API accepts only "inherited" or "enforced"
+  - field: storage/rest/Bucket/ipFilter.publicNetworkSource.allowedIpCidrRanges
+    value: '["10.0.0.0/8"]'
+    update_value: '["10.2.0.0/16"]'
+    reason: a CIDR range must parse as a network, not an arbitrary string
+  - field: storage/grpc/Bucket/ip_filter.public_network_source.allowed_ip_cidr_ranges
+    value: '["10.0.0.0/8"]'
+    update_value: '["10.2.0.0/16"]'
+    reason: a CIDR range must parse as a network, not an arbitrary string
+  - field: storage/rest/Bucket/ipFilter.vpcNetworkSources.allowedIpCidrRanges
+    value: '["10.1.0.0/16"]'
+    update_value: '["10.3.0.0/16"]'
+    reason: a CIDR range must parse as a network, not an arbitrary string
+  - field: storage/grpc/Bucket/ip_filter.vpc_network_sources.allowed_ip_cidr_ranges
+    value: '["10.1.0.0/16"]'
+    update_value: '["10.3.0.0/16"]'
+    reason: a CIDR range must parse as a network, not an arbitrary string
+  - field: storage/rest/Bucket/encryption.defaultKmsKeyName
+    ref: kms
+    reason: a default KMS key must name a key that exists; the suite creates one in the referenced location
+  - field: storage/rest/Bucket/retentionPolicy.isLocked
+    value: 'true'
+    reason: a locked retention policy cannot be unlocked, so the negative update direction is the only meaningful one; one value, no update step
+  - field: storage/grpc/Bucket/retention_policy.is_locked
+    value: 'true'
+    reason: a locked retention policy cannot be unlocked; one value, no update step
+  - field: storage/rest/Bucket/retentionPolicy.retentionPeriod
+    value: '86400'
+    update_value: '172800'
+    reason: a retention period is a seconds count with a one-day floor
+  - field: storage/grpc/Bucket/retention_policy.retention_duration
+    value: '"86400s"'
+    update_value: '"172800s"'
+    reason: a retention period is a seconds count with a one-day floor
+
+  # ── firestore/Database ────────────────────────────────────────────────────
+  - field: firestore/rest/Database/locationId
+    value: '"nam5"'
+    reason: locationId names a database location ("nam5" is the multi-region the emulator documents)
+  - field: firestore/grpc/Database/location_id
+    value: '"nam5"'
+    reason: same domain constraint on the gRPC surface
+  - field: firestore/rest/Database/deleteProtectionState
+    value: '"DELETE_PROTECTION_DISABLED"'
+    reason: a database created delete-protected cannot be deleted by the suite's lifecycle step; the disabled state is the documented default for a non-protected database
+  - field: firestore/grpc/Database/delete_protection_state
+    value: '"DELETE_PROTECTION_DISABLED"'
+    reason: same, on the gRPC surface
+  - field: firestore/rest/Database/cmekConfig.kmsKeyName
+    ref: kms
+    reason: CMEK validation (TGM11-1) resolves the key against the KMS store; it must exist in the database's mapped location (us)
+  - field: firestore/grpc/Database/cmek_config.kms_key_name
+    ref: kms
+    reason: CMEK validation (TGM11-1) resolves the key against the KMS store
+
+  # ── functions/Function ────────────────────────────────────────────────────
+  - field: functions/rest/Function/buildConfig.runtime
+    value: '"nodejs20"'
+    update_value: '"python312"'
+    reason: the runtime must be a documented runtime id
+  - field: functions/grpc/Function/build_config.runtime
+    value: '"nodejs20"'
+    update_value: '"python312"'
+    reason: the runtime must be a documented runtime id
+  - field: functions/rest/Function/serviceConfig.availableCpu
+    value: '"1"'
+    reason: availableCpu is validated against 1/2/4/6/8 or a 0.08..0.99 decimal and must stay compatible with availableMemory; one valid value, so no update step
+  - field: functions/grpc/Function/service_config.available_cpu
+    value: '"1"'
+    reason: availableCpu is validated against 1/2/4/6/8 or a 0.08..0.99 decimal and must stay compatible with availableMemory; one valid value, so no update step
+  - field: functions/rest/Function/serviceConfig.minInstanceCount
+    value: '2'
+    update_value: '5'
+    reason: minInstanceCount must not exceed maxInstanceCount (the generated 47 would)
+  - field: functions/grpc/Function/service_config.min_instance_count
+    value: '2'
+    update_value: '5'
+    reason: minInstanceCount must not exceed maxInstanceCount (the generated 47 would)
+  - field: functions/rest/Function/serviceConfig.maxInstanceCount
+    value: '9'
+    update_value: '12'
+    reason: maxInstanceCount must be at least minInstanceCount
+  - field: functions/grpc/Function/service_config.max_instance_count
+    value: '9'
+    update_value: '12'
+    reason: maxInstanceCount must be at least minInstanceCount
+  - field: functions/rest/Function/serviceConfig.availableMemory
+    value: '"512M"'
+    update_value: '"1024M"'
+    reason: availableMemory must be a documented memory size
+  - field: functions/grpc/Function/service_config.available_memory
+    value: '"512M"'
+    update_value: '"1024M"'
+    reason: availableMemory must be a documented memory size
+  - field: functions/rest/Function/buildConfig.source.storageSource.bucket
+    ref: gcs-bucket
+    reason: a storage source must name an existing bucket (the functions source lookup resolves it)
+  - field: functions/grpc/Function/build_config.source.storage_source.bucket
+    ref: gcs-bucket
+    reason: a storage source must name an existing bucket
+
+  # ── kms/CryptoKey ─────────────────────────────────────────────────────────
+  - field: kms/rest/CryptoKey/versionTemplate.algorithm
+    value: '"GOOGLE_SYMMETRIC_ENCRYPTION"'
+    reason: the only algorithm ENCRYPT_DECRYPT keys accept; the enum's later members are HSM/external algorithms
+  - field: kms/grpc/CryptoKey/version_template.algorithm
+    value: '"GOOGLE_SYMMETRIC_ENCRYPTION"'
+    reason: the only algorithm ENCRYPT_DECRYPT keys accept
+  - field: kms/rest/CryptoKey/rotationPeriod
+    value: '"2592000s"'
+    update_value: '"7776000s"'
+    reason: rotationPeriod has a 24h floor; 30 days is the documented idiom
+  - field: kms/grpc/CryptoKey/rotation_period
+    value: '"2592000s"'
+    update_value: '"7776000s"'
+    reason: rotationPeriod has a 24h floor; 30 days is the documented idiom
+
+  # ── clouddns/ManagedZone ──────────────────────────────────────────────────
+  - field: clouddns/rest/ManagedZone/forwardingConfig.targetNameServers.ipv4Address
+    value: '"10.0.0.1"'
+    update_value: '"10.0.0.2"'
+    reason: an IPv4 address must parse
+  - field: clouddns/rest/ManagedZone/forwardingConfig.targetNameServers.ipv6Address
+    value: '"2001:db8::1"'
+    update_value: '"2001:db8::2"'
+    reason: an IPv6 address must parse
+  - field: clouddns/rest/ManagedZone/forwardingConfig.targetNameServers.domainName
+    value: '"example.com."'
+    update_value: '"example.org."'
+    reason: a forwarding domain name must be an FQDN
+  - field: clouddns/rest/ManagedZone/forwardingConfig.targetNameServers.forwardingPath
+    value: '"private"'
+    update_value: '"default"'
+    reason: the vendored Discovery snapshot types forwardingPath as an enum (default|private), so a free-form FQDN is rejected by the schema validator
+  - field: clouddns/rest/ManagedZone/visibility
+    value: '"private"'
+    reason: privateVisibilityConfig and peeringConfig require visibility "private"; flipping it back to public is rejected by design
+  - field: clouddns/rest/ManagedZone/privateVisibilityConfig.networks.networkUrl
+    value: '"https://www.googleapis.com/compute/v1/projects/fc-project/global/networks/fc-net"'
+    update_value: '"https://www.googleapis.com/compute/v1/projects/fc-project/global/networks/fc-net-2"'
+    reason: networkUrl is a full compute network self-link; the emulator validates its shape, not the network's existence
+  - field: clouddns/rest/ManagedZone/privateVisibilityConfig.gkeClusters.gkeClusterName
+    value: '"projects/fc-project/locations/us-central1/clusters/fc-cluster"'
+    update_value: '"projects/fc-project/locations/us-central1/clusters/fc-cluster-2"'
+    reason: a GKE cluster name is a full resource name, not an arbitrary string
+  - field: clouddns/rest/ManagedZone/peeringConfig.targetNetwork.networkUrl
+    value: '"https://www.googleapis.com/compute/v1/projects/fc-project/global/networks/fc-peer"'
+    update_value: '"https://www.googleapis.com/compute/v1/projects/fc-project/global/networks/fc-peer-2"'
+    reason: networkUrl is a full compute network self-link

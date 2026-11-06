@@ -1053,34 +1053,10 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 	// REST PATCH has; hierarchical_namespace and custom_placement_config are
 	// immutable after create and are deliberately not applied here (REST ignores
 	// them on update too).
-	if maskIncludes(mask, "website") {
-		if w := pb.GetWebsite(); w != nil {
-			meta["website"] = websiteToMap(w)
-		} else {
-			delete(meta, "website")
-		}
-	}
-	if maskIncludes(mask, "logging") {
-		if l := pb.GetLogging(); l != nil {
-			meta["logging"] = loggingToMap(l)
-		} else {
-			delete(meta, "logging")
-		}
-	}
-	if maskIncludes(mask, "autoclass") || maskIncludes(mask, "autoclass.enabled") {
-		if a := pb.GetAutoclass(); a != nil {
-			meta["autoclass"] = autoclassToMap(a)
-		} else {
-			delete(meta, "autoclass")
-		}
-	}
-	if maskIncludes(mask, "ip_filter") {
-		if f := pb.GetIpFilter(); f != nil {
-			meta["ipFilter"] = ipFilterToMap(f)
-		} else {
-			delete(meta, "ipFilter")
-		}
-	}
+	applyMaskedBlock(meta, "website", "website", bucketSubMap(meta, "website"), websiteToMapOrNil(pb.GetWebsite()), mask)
+	applyMaskedBlock(meta, "logging", "logging", bucketSubMap(meta, "logging"), loggingToMapOrNil(pb.GetLogging()), mask)
+	applyMaskedBlock(meta, "autoclass", "autoclass", bucketSubMap(meta, "autoclass"), autoclassToMapOrNil(pb.GetAutoclass()), mask)
+	applyMaskedBlock(meta, "ipFilter", "ip_filter", bucketSubMap(meta, "ipFilter"), ipFilterToMapOrNil(pb.GetIpFilter()), mask)
 	return applyBucketIamMask(meta, pb, mask)
 }
 
@@ -1091,7 +1067,7 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 // accepted too, and "*" applies both. Only the masked member changes, so an
 // update that flips one does not reset the other.
 func applyBucketIamMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) error {
-	whole := maskIncludes(mask, "iam_config")
+	whole := maskHasExact(mask, "iam_config")
 	uniform := whole ||
 		maskIncludes(mask, "iam_config.uniform_bucket_level_access") ||
 		maskIncludes(mask, "iam_config.uniform_bucket_level_access.enabled")
@@ -2459,12 +2435,85 @@ func objectChecksumsFromMeta(m gcs.ObjectMeta) *storagepb.ObjectChecksums {
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
 
-func maskIncludes(mask *fieldmaskpb.FieldMask, path string) bool {
+// maskIncludes reports whether mask selects path. A path is selected by an
+// exact entry, by "*", or by any nested path under it: the API's masks carry
+// leaf paths (website.main_page_suffix, ip_filter.mode), and a block-level
+// apply must not ignore them just because the stored block is whole-message.
+// maskHasExact reports whether mask selects path itself (or "*"), as opposed to
+// one of its members.
+func maskHasExact(mask *fieldmaskpb.FieldMask, path string) bool {
 	if mask == nil {
 		return false
 	}
 	for _, p := range mask.GetPaths() {
 		if p == "*" || p == path {
+			return true
+		}
+	}
+	return false
+}
+
+// applyMaskedBlock overlays a request's block onto its stored map with field-mask
+// semantics: a member the mask names (or the whole block) takes the request's
+// value (an absent member clears), and every other stored member is preserved.
+// Without this a client that PATCHes one leaf (website.main_page_suffix) would
+// silently clear its siblings.
+func applyMaskedBlock(meta map[string]any, metaKey, blockPath string, stored, req map[string]any, mask *fieldmaskpb.FieldMask) {
+	if !maskIncludes(mask, blockPath) {
+		return
+	}
+	whole := maskHasExact(mask, blockPath)
+	if req == nil {
+		delete(meta, metaKey)
+		return
+	}
+	merged := map[string]any{}
+	for k, v := range stored {
+		if whole || maskIncludes(mask, blockPath+"."+k) {
+			continue
+		}
+		merged[k] = v
+	}
+	for k, v := range req {
+		merged[k] = v
+	}
+	meta[metaKey] = merged
+}
+
+func websiteToMapOrNil(w *storagepb.Bucket_Website) map[string]any {
+	if w == nil {
+		return nil
+	}
+	return websiteToMap(w)
+}
+
+func loggingToMapOrNil(l *storagepb.Bucket_Logging) map[string]any {
+	if l == nil {
+		return nil
+	}
+	return loggingToMap(l)
+}
+
+func autoclassToMapOrNil(a *storagepb.Bucket_Autoclass) map[string]any {
+	if a == nil {
+		return nil
+	}
+	return autoclassToMap(a)
+}
+
+func ipFilterToMapOrNil(f *storagepb.Bucket_IpFilter) map[string]any {
+	if f == nil {
+		return nil
+	}
+	return ipFilterToMap(f)
+}
+
+func maskIncludes(mask *fieldmaskpb.FieldMask, path string) bool {
+	if mask == nil {
+		return false
+	}
+	for _, p := range mask.GetPaths() {
+		if p == "*" || p == path || strings.HasPrefix(p, path+".") {
 			return true
 		}
 	}
