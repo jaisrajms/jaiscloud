@@ -125,7 +125,7 @@ func TestKMSDeleteAndRetiredResources(t *testing.T) {
 		t.Fatalf("CreateCryptoKey(reused retired name) err = %v, want AlreadyExists", err)
 	}
 
-	wantName := "projects/test/locations/global/retiredResources/del"
+	wantName := "projects/test/locations/global/retiredResources/kr~del"
 	rr, err := client.GetRetiredResource(ctx, &kmspb.GetRetiredResourceRequest{Name: wantName})
 	if err != nil {
 		t.Fatalf("GetRetiredResource: %v", err)

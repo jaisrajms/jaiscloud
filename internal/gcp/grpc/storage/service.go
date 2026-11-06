@@ -90,6 +90,13 @@ type uploadSession struct {
 	tmpFile        *os.File // open handle for appending spilled bytes
 	length         int64
 	lastAccess     time.Time
+	// invalidated marks a session whose bucket was deleted. It is removed from
+	// the uploads map, but a stream that already adopted it may still hold it:
+	// appendData/finalize refuse an invalidated session, and its spill file is
+	// closed when the last adopting stream releases it (streams reaches zero).
+	// Both fields are guarded by Service.mu.
+	invalidated bool
+	streams     int
 }
 
 // closeSpill closes and removes the session's spill file, if any. It is
@@ -113,13 +120,20 @@ const resumableSpillThreshold = 4 << 20 // 4 MiB
 // provider (generation counter + byte/encryption helpers). defaultProj is the
 // config-default project used when a request carries none.
 func NewService(objects gcs.ObjectStore, resources store.ResourceStore, provider *storageprovider.Provider, defaultProj string) *Service {
-	return &Service{
+	s := &Service{
 		objects:     objects,
 		resources:   resources,
 		provider:    provider,
 		defaultProj: defaultProj,
 		uploads:     make(map[string]*uploadSession),
 	}
+	// A bucket delete over either transport invalidates every resumable session
+	// staged against it: the provider drops its own REST sessions and calls this
+	// hook so the gRPC map is cleared too.
+	if provider != nil {
+		provider.SetBucketDeleteUploadsHook(s.dropBucketUploads)
+	}
+	return s
 }
 
 // Reset closes and removes every in-progress resumable session's spill file
@@ -134,7 +148,51 @@ func (s *Service) Reset(_ context.Context) {
 	s.mu.Unlock()
 }
 
-func mapError(err error) error { return grpcutil.GRPCStatus(err) }
+// dropBucketUploads invalidates every resumable write staged against bucket. A
+// bucket delete invalidates those sessions, so a later resume/finalize answers
+// NotFound instead of writing into a missing bucket. A stream that already
+// adopted a session keeps its bytes until it releases it (see releaseStream);
+// only an unclaimed session's spill file is closed here.
+// REST sessions are held by the provider (InvalidateBucketUploads).
+func (s *Service) dropBucketUploads(bucket string) {
+	s.mu.Lock()
+	for id, sess := range s.uploads {
+		if sess.bucket != bucket {
+			continue
+		}
+		sess.invalidated = true
+		delete(s.uploads, id)
+		if sess.streams == 0 {
+			sess.closeSpill()
+		}
+	}
+	s.mu.Unlock()
+}
+
+// releaseStream drops a stream's claim on an adopted resumable session and
+// closes its spill file once the session is invalidated and no stream is left.
+func (s *Service) releaseStream(sess *uploadSession) {
+	s.mu.Lock()
+	if sess.streams > 0 {
+		sess.streams--
+	}
+	closeSpill := sess.invalidated && sess.streams == 0
+	s.mu.Unlock()
+	if closeSpill {
+		sess.closeSpill()
+	}
+}
+
+// mapError converts a core/store error to a gRPC status. The object store's raw
+// sentinels (gcs.ErrNoSuchBucket, returned by the *Checked write methods) are
+// not provider errors, so without this mapping they fall through to
+// codes.Internal — REST already answers 404 for the same missing bucket.
+func mapError(err error) error {
+	if errors.Is(err, gcs.ErrNoSuchBucket) {
+		return grpcutil.GRPCStatus(model.NewProviderError("NotFound", "bucket not found", 404))
+	}
+	return grpcutil.GRPCStatus(err)
+}
 
 // Documented page-size ceilings for the gRPC list methods: "The service will
 // use this parameter or 1,000 items, whichever is smaller."
@@ -897,18 +955,30 @@ func (s *Service) DeleteBucket(ctx context.Context, req *storagepb.DeleteBucketR
 	// below is keyed by project, and a re-created bucket must not inherit the
 	// previous incarnation's notification configs or IAM policy.
 	project := s.provider.BucketProject(ctx, name)
-	if err := s.objects.DeleteBucket(ctx, name); err != nil {
-		if errors.Is(err, gcs.ErrNoSuchBucket) {
-			return nil, mapError(model.NewProviderError("NotFound", "bucket not found", 404))
+	// if_metageneration_match / if_metageneration_not_match are validated
+	// atomically with the delete (bucketPrecondition-style); a mismatch is
+	// FAILED_PRECONDITION, matching REST's 412.
+	var pre *gcs.Precondition
+	if req.IfMetagenerationMatch != nil || req.IfMetagenerationNotMatch != nil {
+		pre = &gcs.Precondition{
+			MetagenerationMatch:    req.IfMetagenerationMatch,
+			MetagenerationNotMatch: req.IfMetagenerationNotMatch,
 		}
+	}
+	if err := s.objects.DeleteBucketChecked(ctx, name, pre); err != nil {
 		if errors.Is(err, gcs.ErrBucketNotEmpty) {
 			return nil, mapError(model.NewProviderError("FailedPrecondition", "bucket is not empty", 409))
 		}
-		return nil, mapError(err)
+		return nil, mapError(mapBucketMutationError(err))
 	}
 	// The REST adapter has always purged these; gRPC did not, so a gRPC-only
 	// client leaked them into a same-name recreate.
 	s.provider.CleanupBucketOwnedState(ctx, project, name)
+	// A bucket delete invalidates every resumable session staged against it, on
+	// both transports: the provider drops its REST sessions and calls the hook
+	// that clears this service's in-memory map, so finalizing one answers
+	// NotFound rather than a late missing-bucket error.
+	s.provider.InvalidateBucketUploads(ctx, name)
 	return &emptypb.Empty{}, nil
 }
 
@@ -1904,6 +1974,21 @@ func (s *Service) StartResumableWrite(ctx context.Context, req *storagepb.StartR
 		UploadID: id, Bucket: bucket, Name: object, ContentType: sess.contentType, LastAccess: now,
 	})
 
+	// Real GCS rejects an initiation for a missing bucket. The check runs after
+	// registration so it also covers a bucket delete racing this call: the
+	// delete's hook can only invalidate a session it can see.
+	if _, err := s.objects.GetBucket(ctx, bucket); err != nil {
+		s.mu.Lock()
+		delete(s.uploads, id)
+		s.mu.Unlock()
+		sess.closeSpill()
+		_ = s.objects.DeleteResumable(ctx, id)
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, mapError(model.NewProviderError("NotFound", "bucket not found", 404))
+		}
+		return nil, mapError(err)
+	}
+
 	return &storagepb.StartResumableWriteResponse{UploadId: id}, nil
 }
 
@@ -1944,7 +2029,12 @@ func (s *Service) CancelResumableWrite(ctx context.Context, req *storagepb.Cance
 			s.mu.Unlock()
 			return nil, err
 		}
-		sess.closeSpill()
+		// A stream may still hold this session: invalidate it so the stream's
+		// next append fails NotFound, and let releaseStream close the spill.
+		sess.invalidated = true
+		if sess.streams == 0 {
+			sess.closeSpill()
+		}
 		delete(s.uploads, id)
 	}
 	s.mu.Unlock()
@@ -1969,6 +2059,12 @@ func (s *Service) CancelResumableWrite(ctx context.Context, req *storagepb.Cance
 func (s *Service) appendData(sess *uploadSession, writeOffset int64, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if sess.invalidated {
+		// The bucket was deleted under this session: fail the write with the
+		// same NOT_FOUND a missing bucket produces instead of appending to a
+		// session whose spill file may already be gone.
+		return model.NewProviderError("NotFound", "bucket not found", 404)
+	}
 	if writeOffset != sess.length {
 		return model.NewProviderError("OutOfRange", "write offset does not match the persisted size", 400).WithStatus("OUT_OF_RANGE")
 	}
@@ -2043,6 +2139,17 @@ func (s *Service) applyDefaultEventBasedHold(ctx context.Context, bucket string,
 // finalize persists the accumulated bytes as a new object generation and
 // returns its proto form.
 func (s *Service) finalize(ctx context.Context, project string, sess *uploadSession) (*storagepb.Object, error) {
+	s.mu.Lock()
+	invalid := sess.invalidated
+	s.mu.Unlock()
+	if invalid {
+		// A bucket delete invalidated this session: finalizing would commit a
+		// partial or empty object from a session the client was told no longer
+		// exists. (A delete+same-name recreate in the window after this check is
+		// still theoretically possible; the guard closes the window the client
+		// can observe through the session API.)
+		return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+	}
 	versioned := s.provider.BucketVersioned(ctx, sess.bucket)
 	priorBlobKey := ""
 	if !versioned {
@@ -2095,11 +2202,17 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 	// A non-resumable session is local to this stream, so its spill file (if
 	// any) is removed when the stream ends, success or error. A resumable
 	// session stays in the upload map for a later resume and is cleaned up on
-	// finish (below) or Reset.
+	// finish (below) or Reset; its bytes survive until the stream releases it,
+	// even if a bucket delete invalidates it mid-stream.
 	defer func() {
-		if sess != nil && !resumable {
-			sess.closeSpill()
+		if sess == nil {
+			return
 		}
+		if !resumable {
+			sess.closeSpill()
+			return
+		}
+		s.releaseStream(sess)
 	}()
 
 	for {
@@ -2134,6 +2247,9 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 				uploadID = fm.UploadId
 				s.mu.Lock()
 				existing, ok := s.uploads[fm.UploadId]
+				if ok {
+					existing.streams++
+				}
 				s.mu.Unlock()
 				if !ok {
 					return mapError(model.NewProviderError("NotFound", "unknown upload_id", 404))
@@ -2158,10 +2274,14 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 				return mapError(err)
 			}
 			if resumable {
+				// The session is finished; mark it invalid so another stream that
+				// adopted the same upload_id cannot append a truncated tail, and
+				// let the deferred releaseStream close the spill once the last
+				// stream is gone (immediately for the usual single-stream case).
 				s.mu.Lock()
+				sess.invalidated = true
 				delete(s.uploads, uploadID)
 				s.mu.Unlock()
-				sess.closeSpill()
 				_ = s.objects.DeleteResumable(ctx, uploadID)
 			}
 			return stream.SendAndClose(&storagepb.WriteObjectResponse{
@@ -2188,11 +2308,17 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 	// A non-resumable session is local to this stream, so its spill file (if
 	// any) is removed when the stream ends, success or error. A resumable
 	// session stays in the upload map for a later resume and is cleaned up on
-	// finish (below) or Reset.
+	// finish (below) or Reset; its bytes survive until the stream releases it,
+	// even if a bucket delete invalidates it mid-stream.
 	defer func() {
-		if sess != nil && !resumable {
-			sess.closeSpill()
+		if sess == nil {
+			return
 		}
+		if !resumable {
+			sess.closeSpill()
+			return
+		}
+		s.releaseStream(sess)
 	}()
 
 	for {
@@ -2233,6 +2359,7 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 				existing, ok := s.uploads[uploadID]
 				if ok {
 					existing.lastAccess = clock.RealNow()
+					existing.streams++
 				}
 				s.mu.Unlock()
 				if !ok {
@@ -2258,10 +2385,14 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 				return mapError(err)
 			}
 			if resumable {
+				// The session is finished; mark it invalid so another stream that
+				// adopted the same upload_id cannot append a truncated tail, and
+				// let the deferred releaseStream close the spill once the last
+				// stream is gone (immediately for the usual single-stream case).
 				s.mu.Lock()
+				sess.invalidated = true
 				delete(s.uploads, uploadID)
 				s.mu.Unlock()
-				sess.closeSpill()
 				_ = s.objects.DeleteResumable(ctx, uploadID)
 			}
 			return stream.Send(&storagepb.BidiWriteObjectResponse{

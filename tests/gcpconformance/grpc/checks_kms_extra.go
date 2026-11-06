@@ -693,9 +693,11 @@ func checkKMSRawDecrypt(ctx context.Context, cfg Config) error {
 // ─── delete + retired resources ───────────────────────────────────────────────
 
 // kmsRetiredResourceName is the deterministic RetiredResource name the
-// emulator assigns when a CryptoKey is deleted (key id suffix).
+// emulator assigns when a CryptoKey is deleted. The opaque id embeds the key
+// ring (ring~key) so two rings can retire the same key id in one location.
 func kmsRetiredResourceName(cfg Config, kind string) string {
-	return "projects/" + cfg.Project + "/locations/global/retiredResources/" + kmsExtraKeyID(cfg, kind)
+	return "projects/" + cfg.Project + "/locations/global/retiredResources/" +
+		cfg.ResourceName("gcpc-grpc-ring") + "~" + kmsExtraKeyID(cfg, kind)
 }
 
 // kmsDestroyNow destroys a version and drives the emulator clock past its

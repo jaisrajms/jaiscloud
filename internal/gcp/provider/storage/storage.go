@@ -141,6 +141,12 @@ type Provider struct {
 	// dispatcher routes object events to Cloud Functions whose eventTrigger
 	// subscribes to the bucket. Nil disables function delivery.
 	dispatcher eventing.Dispatcher
+
+	// invalidMu guards bucketDeleteHook, the cross-transport fan-out run when a
+	// bucket delete invalidates its resumable sessions (the gRPC service
+	// registers one to drop its own in-memory sessions).
+	invalidMu        sync.Mutex
+	bucketDeleteHook func(bucket string)
 }
 
 // SetEventPublisher wires the Pub/Sub publisher used to fan object events out
@@ -279,6 +285,54 @@ func (p *Provider) sweepSessions() {
 		if now.Sub(done.lastAccess) > resumableSessionTTL {
 			delete(p.completed, id)
 		}
+	}
+}
+
+// SetBucketDeleteUploadsHook registers f to run after a bucket delete
+// invalidates the provider's resumable sessions. The gRPC storage service
+// registers one so a bucket deleted over REST also drops the sessions it holds
+// in its own in-memory map (and vice versa), keeping both transports consistent.
+// It replaces any previous hook: one gRPC service subscribes per process.
+func (p *Provider) SetBucketDeleteUploadsHook(f func(bucket string)) {
+	p.invalidMu.Lock()
+	p.bucketDeleteHook = f
+	p.invalidMu.Unlock()
+}
+
+// InvalidateBucketUploads drops every resumable upload session bound to bucket:
+// the in-memory REST sessions, their completion tombstones, and the durable
+// store rows, then runs the cross-transport hooks. It is called after a bucket
+// delete succeeds, so a client still holding a session's upload_id gets
+// NotFound on the next finalize instead of a late missing-bucket error.
+func (p *Provider) InvalidateBucketUploads(ctx context.Context, bucket string) {
+	p.mu.Lock()
+	for id, sess := range p.uploads {
+		if sess.Bucket != bucket {
+			continue
+		}
+		if sess.tmpFile != nil {
+			sess.tmpFile.Close()
+			os.Remove(sess.tmpPath)
+		}
+		delete(p.uploads, id)
+	}
+	for id, done := range p.completed {
+		if done.Bucket == bucket {
+			delete(p.completed, id)
+		}
+	}
+	p.mu.Unlock()
+	// The durable mirror can hold orphan rows the in-memory map never saw (a
+	// prior process restart). Best-effort and detached from the request: the
+	// bucket delete has already won, and a client that cancels right after the
+	// response must not leave the session rows behind.
+	_ = p.objects.DeleteResumableByBucket(context.WithoutCancel(ctx), bucket)
+
+	p.invalidMu.Lock()
+	hook := p.bucketDeleteHook
+	p.invalidMu.Unlock()
+	if hook != nil {
+		hook(bucket)
 	}
 }
 
@@ -674,23 +728,35 @@ func objectPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 }
 
 // bucketPrecondition parses the bucket-level OCC preconditions GCS honors on
-// buckets.update: ifMetagenerationMatch/ifMetagenerationNotMatch. Returns nil
-// when neither is present (the common case).
-func bucketPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
+// buckets.update and buckets.delete. A present but malformed value is an
+// InvalidRequest rather than a silently dropped precondition (a dropped
+// precondition would let a conditional delete proceed unconditionally). It
+// returns nil when neither is present (the common case).
+func bucketPrecondition(nr *model.NormalizedRequest) (*gcs.Precondition, error) {
 	var pre gcs.Precondition
 	set := false
-	if v, ok := preconditionInt(nr, "ifMetagenerationMatch"); ok {
-		pre.MetagenerationMatch = &v
-		set = true
-	}
-	if v, ok := preconditionInt(nr, "ifMetagenerationNotMatch"); ok {
-		pre.MetagenerationNotMatch = &v
+	for _, f := range []struct {
+		key string
+		dst **int64
+	}{
+		{"ifMetagenerationMatch", &pre.MetagenerationMatch},
+		{"ifMetagenerationNotMatch", &pre.MetagenerationNotMatch},
+	} {
+		raw, ok := preconditionRaw(nr, f.key)
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "Invalid value for "+f.key+": "+raw, 400)
+		}
+		*f.dst = &v
 		set = true
 	}
 	if !set {
-		return nil
+		return nil, nil
 	}
-	return &pre
+	return &pre, nil
 }
 
 // preconditionInt reads a GCS precondition from the request, accepting either
@@ -700,17 +766,33 @@ func bucketPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 // and the XML API generally) use the header form, so honoring only the query
 // params silently dropped a client's conditional read.
 func preconditionInt(nr *model.NormalizedRequest, queryKey string) (int64, bool) {
-	if v, ok := parseInt64Param(nr, queryKey); ok {
-		return v, true
+	raw, ok := preconditionRaw(nr, queryKey)
+	if !ok {
+		return 0, false
 	}
-	if nr.Raw != nil {
-		if s := nr.Raw.Header.Get(googIfHeader(queryKey)); s != "" {
-			if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-				return v, true
-			}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// preconditionRaw returns the raw precondition value and whether the request
+// carried it, accepting both the query-param form and the x-goog-if-* header
+// form the official clients use. Presence, not non-emptiness, is what counts:
+// an explicit empty value is malformed, not an absent precondition.
+func preconditionRaw(nr *model.NormalizedRequest, queryKey string) (string, bool) {
+	if v, ok := nr.Params[queryKey]; ok {
+		if s, isStr := v.(string); isStr {
+			return strings.TrimSpace(s), true
 		}
 	}
-	return 0, false
+	if nr.Raw != nil {
+		if vals := nr.Raw.Header.Values(googIfHeader(queryKey)); len(vals) > 0 {
+			return strings.TrimSpace(vals[0]), true
+		}
+	}
+	return "", false
 }
 
 // googIfHeader maps a camelCase precondition query name to its x-goog header
@@ -729,18 +811,6 @@ func googIfHeader(queryKey string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-func parseInt64Param(nr *model.NormalizedRequest, key string) (int64, bool) {
-	s, ok := nr.Params[key].(string)
-	if !ok || s == "" {
-		return 0, false
-	}
-	v, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return v, true
 }
 
 // ─── buckets ──────────────────────────────────────────────────────────────────
@@ -1395,7 +1465,10 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 	}
 	name, _ := nr.Params["bucket"].(string)
 	body, _ := nr.Params["body"].(map[string]any)
-	pre := bucketPrecondition(nr)
+	pre, err := bucketPrecondition(nr)
+	if err != nil {
+		return nil, err
+	}
 	// The read-modify-write runs atomically in the store: the metageneration
 	// precondition is validated against the bucket's current meta, then the
 	// metageneration is bumped and the requested fields are applied, all under
@@ -1520,7 +1593,11 @@ func (p *Provider) BucketsLockRetentionPolicy(ctx context.Context, nr *model.Nor
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket name", 400)
 	}
 	var pre *gcs.Precondition
-	if v, ok := parseInt64Param(nr, "ifMetagenerationMatch"); ok {
+	if raw, ok := preconditionRaw(nr, "ifMetagenerationMatch"); ok {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "Invalid value for ifMetagenerationMatch: "+raw, 400)
+		}
 		pre = &gcs.Precondition{MetagenerationMatch: &v}
 	}
 	updated, err := p.objects.UpdateBucketMetaAtomic(ctx, name, func(meta map[string]any) (map[string]any, error) {
@@ -1565,9 +1642,18 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 	}
 	name, _ := nr.Params["bucket"].(string)
 	project := p.bucketProject(ctx, name)
-	if err := p.objects.DeleteBucket(ctx, name); err != nil {
+	// buckets.delete honours ifMetagenerationMatch / ifMetagenerationNotMatch;
+	// the store validates them atomically with the delete.
+	pre, err := bucketPrecondition(nr)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.objects.DeleteBucketChecked(ctx, name, pre); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 		if errors.Is(err, gcs.ErrBucketNotEmpty) {
 			return nil, model.NewProviderError("bucketNotEmpty", "bucket is not empty", 409)
@@ -1579,6 +1665,9 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 	// and its objects' IAM policies. A re-created bucket therefore starts
 	// clean instead of resurrecting the previous incarnation's policy.
 	p.CleanupBucketOwnedState(ctx, project, name)
+	// A resumable session bound to the deleted bucket is invalid too: finalizing
+	// it must answer NotFound, not a late missing-bucket error.
+	p.InvalidateBucketUploads(ctx, name)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -5086,6 +5175,14 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
 		return nil, err
 	}
+	// A resumable write is staged against an existing bucket: real GCS rejects
+	// the initiation with NotFound instead of handing out an upload_id.
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	ct, _ := nr.Params[wire.ContentTypeKey].(string)
 	// Object.contentEncoding may arrive on the initiation body (JSON) or as the
 	// request's Content-Encoding (raw XML); carry it through to finalize (J69).
@@ -5117,6 +5214,19 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 		p.mu.Lock()
 		delete(p.uploads, id)
 		p.mu.Unlock()
+		return nil, err
+	}
+
+	// Re-check after registration so a bucket delete racing this call cannot
+	// leave a session (or its durable row) staged against a missing bucket.
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		p.mu.Lock()
+		delete(p.uploads, id)
+		p.mu.Unlock()
+		_ = p.objects.DeleteResumable(context.WithoutCancel(ctx), id)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
 		return nil, err
 	}
 

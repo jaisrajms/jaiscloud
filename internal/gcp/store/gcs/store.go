@@ -226,6 +226,14 @@ type ObjectStore interface {
 	// The returned map is the persisted post-mutation meta.
 	UpdateBucketMetaAtomic(ctx context.Context, name string, mutate func(meta map[string]any) (map[string]any, error)) (map[string]any, error)
 	DeleteBucket(ctx context.Context, name string) error // ErrBucketNotEmpty if objects exist
+	// DeleteBucketChecked deletes the bucket only when p matches its current
+	// metageneration (gcs's ifMetagenerationMatch/ifMetagenerationNotMatch on
+	// buckets.delete), checked atomically with the delete under the same lock /
+	// row-locked transaction as the mutation. Returns ErrPreconditionFailed on a
+	// mismatch and ErrBucketNotEmpty when objects block the delete; the
+	// precondition is checked first, so a stale precondition answers
+	// ErrPreconditionFailed regardless of occupancy.
+	DeleteBucketChecked(ctx context.Context, name string, p *Precondition) error
 	ListBuckets(ctx context.Context, projectID string) ([]map[string]any, error)
 
 	// Objects.
@@ -310,6 +318,10 @@ type ObjectStore interface {
 	GetResumable(ctx context.Context, uploadID string) (ResumableSession, error)
 	UpdateResumable(ctx context.Context, s ResumableSession) error
 	DeleteResumable(ctx context.Context, uploadID string) error
+	// DeleteResumableByBucket drops every session bound to bucket. It is how a
+	// bucket delete invalidates the resumable uploads staged against it, so a
+	// later finalize answers NotFound instead of a late missing-bucket error.
+	DeleteResumableByBucket(ctx context.Context, bucket string) error
 	// ListStaleResumable returns sessions with LastAccess older than cutoff.
 	ListStaleResumable(ctx context.Context, cutoff time.Time) ([]ResumableSession, error)
 

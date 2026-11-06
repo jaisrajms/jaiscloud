@@ -311,8 +311,11 @@ func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id
 		}
 	}
 	// A deleted crypto key leaves a RetiredResource behind; its name cannot be
-	// reused (Cloud KMS RetiredResource semantics).
-	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(location, id)); err == nil {
+	// reused (Cloud KMS RetiredResource semantics). Retirement is scoped to the
+	// key ring, so deleting k in r1 does not retire k in r2.
+	if retired, err := s.cryptoKeyNameRetired(ctx, project, location, kr, id); err != nil {
+		return kmsstore.CryptoKey{}, err
+	} else if retired {
 		return kmsstore.CryptoKey{}, alreadyExists("crypto key name is retired and cannot be reused")
 	}
 	var nrt time.Time
@@ -497,14 +500,14 @@ func (s *Service) DeleteCryptoKey(ctx context.Context, project, location, kr, id
 		return RetiredResource{}, keyErr(err)
 	}
 	rr := RetiredResource{
-		Name:             RetiredResourceName(project, location, id),
+		Name:             RetiredResourceName(project, location, retiredResourcePublicID(kr, id)),
 		OriginalResource: CryptoKeyName(project, location, kr, id),
 		ResourceType:     "CRYPTO_KEY",
 		DeleteTime:       clock.Now(),
 	}
 	data, _ := json.Marshal(rr)
 	if err := s.resources.Upsert(ctx, project, store.GlobalRegion, store.ResourceEntry{
-		Type: rtRetiredResource, ID: retiredResourceID(location, id), Data: data,
+		Type: rtRetiredResource, ID: retiredResourceID(location, kr, id), Data: data,
 	}); err != nil {
 		return RetiredResource{}, err
 	}

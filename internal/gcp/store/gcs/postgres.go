@@ -126,26 +126,53 @@ func (s *PostgresObjectStore) UpdateBucketMetaAtomic(ctx context.Context, name s
 }
 
 func (s *PostgresObjectStore) DeleteBucket(ctx context.Context, name string) error {
-	// Only live and noncurrent generations block deletion; a bucket holding
-	// nothing but soft-deleted objects can be deleted (their rows go with it).
-	var count int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_gcs_objects WHERE bucket=$1 AND NOT soft_deleted`, name).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return ErrBucketNotEmpty
-	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1`, name); err != nil {
-		return err
-	}
-	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_buckets WHERE name=$1`, name)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNoSuchBucket
-	}
-	return nil
+	return s.DeleteBucketChecked(ctx, name, nil)
+}
+
+// DeleteBucketChecked validates the bucket metageneration precondition and
+// deletes the bucket in one Serializable transaction that row-locks the bucket,
+// so a concurrent update cannot slip between the check and the delete (the same
+// discipline as UpdateBucketMetaAtomic and the object *Checked methods).
+func (s *PostgresObjectStore) DeleteBucketChecked(ctx context.Context, name string, p *Precondition) error {
+	return retrySerializableErr(ctx, func() error {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		var raw []byte
+		err = tx.QueryRow(ctx, `SELECT meta FROM jc_gcs_buckets WHERE name=$1 FOR UPDATE`, name).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoSuchBucket
+		}
+		if err != nil {
+			return err
+		}
+		var meta map[string]any
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return err
+		}
+		normalizeBucketMeta(meta)
+		if !BucketMetagenerationMatches(meta, p) {
+			return ErrPreconditionFailed
+		}
+		// Only live and noncurrent generations block deletion; a bucket holding
+		// nothing but soft-deleted objects can be deleted (their rows go with it).
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM jc_gcs_objects WHERE bucket=$1 AND NOT soft_deleted`, name).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return ErrBucketNotEmpty
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_objects WHERE bucket=$1`, name); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM jc_gcs_buckets WHERE name=$1`, name); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	})
 }
 
 // ensureBucketExists returns ErrNoSuchBucket when the named bucket is absent,
@@ -766,6 +793,11 @@ func (s *PostgresObjectStore) UpdateResumable(ctx context.Context, sess Resumabl
 
 func (s *PostgresObjectStore) DeleteResumable(ctx context.Context, uploadID string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_resumable_sessions WHERE upload_id=$1`, uploadID)
+	return err
+}
+
+func (s *PostgresObjectStore) DeleteResumableByBucket(ctx context.Context, bucket string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_gcs_resumable_sessions WHERE bucket=$1`, bucket)
 	return err
 }
 

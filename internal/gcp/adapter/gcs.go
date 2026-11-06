@@ -827,6 +827,10 @@ func gcpReason(code string) string {
 		return "alreadyExists"
 	case "bucketNotEmpty":
 		return "bucketNotEmpty"
+	case "PreconditionFailed":
+		// GCS answers a failed ifGenerationMatch/ifMetagenerationMatch (and an
+		// etag OCC mismatch) with 412 and reason "conditionNotMet".
+		return "conditionNotMet"
 	case "Conflict":
 		return "conflict"
 	case "InvalidRequest":
