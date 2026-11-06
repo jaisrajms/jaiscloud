@@ -787,6 +787,9 @@ jobs:
       - name: Check the fidelity matrix is up to date
         run: make check-gcp-fidelity-matrix
 
+      - name: Check the field-coverage inventory (every definition field classified, evidence resolves)
+        run: make check-gcp-field-coverage
+
       - name: Upload conformance report
         if: always()
         uses: actions/upload-artifact@v4

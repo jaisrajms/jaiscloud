@@ -1,0 +1,17 @@
+{
+  "_comment": "Evidence exemptions for docs/fidelity/field-coverage.csv. Each entry waives ONLY the evidence-pointer requirement for one row; an exemption always carries a written reason. Unsupported rows can never be exempted from their reason/review_by, a derived row needs no exemption, and a stale/unused entry fails the gate. In the style of testdata/coverage-exemptions.json.",
+  "exemptions": [
+    {
+      "field": "storage/rest/Bucket/name",
+      "reason": "identifier: BucketsInsert reads body.name and buckets.get/list echoes it; BucketsUpdate never reads body.name, so an update cannot rename the bucket. No dedicated negative test yet — the generated negative suite lands with FC3 (the plan's W2.1 output-only/immutable write-assertion)."
+    },
+    {
+      "field": "clouddns/rest/ManagedZone/name",
+      "reason": "identifier: CreateManagedZone sets it from the body and PATCH/UPDATE never rewrite it. No dedicated negative test yet; FC3 generates it."
+    },
+    {
+      "field": "clouddns/rest/ManagedZone/dnsName",
+      "reason": "dnsName is create-only: CreateManagedZone canonicalizes it to an FQDN and the PATCH path never rewrites it (the emulator has no zone-rename surface). No dedicated negative test yet; FC3 generates it."
+    }
+  ]
+}
