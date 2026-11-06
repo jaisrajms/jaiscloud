@@ -29,8 +29,11 @@ case_main() {
 terraform {
   required_providers {
     google = {
-      source  = "hashicorp/google"
-      version = ">= 6.2, < 9"
+      source = "hashicorp/google"
+      # Pinned like every other module case: the capture gate's attribute
+      # classification is maintained against one provider schema, and a range
+      # would make the mapping stale for every other case.
+      version = "= 7.46.2"
     }
   }
 }

@@ -1,6 +1,7 @@
 package providerschema
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,5 +110,50 @@ func TestCompactKeepsOnlyRequestedResourcesAndFlags(t *testing.T) {
 	}
 	if !flags["name"].Required || !flags["id"].Computed || !flags["versioning.enabled"].Optional {
 		t.Fatalf("compacted flags lost: %+v", flags)
+	}
+}
+
+func TestParsePrefersGoogleOverBeta(t *testing.T) {
+	// A module that pulls google-beta in must not make the google-provider
+	// attribute set drift: the classification mapping is written against google.
+	const doc = `{"format_version":"1.0","provider_schemas":{
+	  "registry.terraform.io/hashicorp/google-beta":{"resource_schemas":{
+	    "google_dns_managed_zone":{"block":{"attributes":{"name":{"optional":true},"reverse_lookup":{"optional":true}}}}}},
+	  "registry.terraform.io/hashicorp/google":{"resource_schemas":{
+	    "google_dns_managed_zone":{"block":{"attributes":{"name":{"optional":true}}}}}}
+	}}`
+	for i := 0; i < 20; i++ {
+		schema, err := Parse([]byte(doc), "fixture")
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		got := schema.Attributes("google_dns_managed_zone")
+		want := []string{"name"}
+		if len(got) != len(want) || got[0] != want[0] {
+			t.Fatalf("Attributes = %v, want %v (google must win over google-beta)", got, want)
+		}
+	}
+}
+
+func TestCompactSkipsProvidersWithoutRequestedResources(t *testing.T) {
+	const doc = `{"format_version":"1.0","provider_schemas":{
+	  "registry.terraform.io/hashicorp/archive":{"resource_schemas":{"archive_file":{"block":{"attributes":{"source":{"required":true}}}}}},
+	  "registry.terraform.io/hashicorp/google":{"resource_schemas":{"google_storage_bucket":{"block":{"attributes":{"name":{"required":true}}}}}}
+	}}`
+	out, err := Compact([]byte(doc), []string{"google_storage_bucket"})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	var f struct {
+		ProviderSchemas map[string]struct{} `json:"provider_schemas"`
+	}
+	if err := json.Unmarshal(out, &f); err != nil {
+		t.Fatalf("parse compacted snapshot: %v", err)
+	}
+	if len(f.ProviderSchemas) != 1 {
+		t.Fatalf("providers = %v, want only the provider that declared the resource", f.ProviderSchemas)
+	}
+	if _, ok := f.ProviderSchemas["registry.terraform.io/hashicorp/google"]; !ok {
+		t.Fatalf("providers = %v, want the google provider", f.ProviderSchemas)
 	}
 }

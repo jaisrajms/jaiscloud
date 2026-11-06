@@ -302,11 +302,10 @@ capture_phase() {
     fi
   fi
   # Cases whose provider resources are in the capture map must actually
-  # exercise the join; the others (functions, memorystore, cloud-operations)
-  # record the capture but have no mapped resources yet (FC6-2).
+  # exercise the join; the others record the capture without requirement.
   local require=""
   case "$CASE" in
-    storage | pubsub | pubsub-topic | kms | firestore | clouddns) require="-require-resources" ;;
+    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations) require="-require-resources" ;;
   esac
   echo "== capture: provider request bodies vs the field catalog"
   if "$bin" -case "$CASE" $require -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \

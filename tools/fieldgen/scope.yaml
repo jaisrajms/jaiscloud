@@ -79,6 +79,39 @@ sources:
         schema: CryptoKey
         depth: 2
 
+  - service: kms
+    resource: KeyRing
+    transports:
+      grpc:
+        message: google.cloud.kms.v1.KeyRing
+        depth: 2
+      rest:
+        discovery: kms
+        schema: KeyRing
+        depth: 2
+
+  - service: pubsub
+    resource: Topic
+    transports:
+      grpc:
+        message: google.pubsub.v1.Topic
+        depth: 2
+      rest:
+        discovery: pubsub
+        schema: Topic
+        depth: 2
+
+  - service: pubsub
+    resource: Subscription
+    transports:
+      grpc:
+        message: google.pubsub.v1.Subscription
+        depth: 2
+      rest:
+        discovery: pubsub
+        schema: Subscription
+        depth: 2
+
   - service: clouddns
     resource: ManagedZone
     transports:

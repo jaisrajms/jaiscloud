@@ -521,7 +521,47 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		}
 	}
 	if pc := req.GetPushConfig(); pc != nil && pc.GetPushEndpoint() != "" {
-		meta["pushConfig"] = map[string]any{"pushEndpoint": pc.GetPushEndpoint()}
+		// Store the whole PushConfig (attributes, the wrapper oneof and the
+		// OIDC authentication method), not just the endpoint: a REST write must
+		// survive the gRPC read and vice versa.
+		obj, err := protoToJSONMap(pc)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		meta["pushConfig"] = obj
+	}
+	// Store-and-echo delivery targets, mirroring the REST create. `state` is
+	// OUTPUT_ONLY and is stripped.
+	if bq := req.GetBigqueryConfig(); bq != nil {
+		obj, err := protoToJSONMap(bq)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		meta["bigqueryConfig"] = pubsubcore.WithoutStorageConfigState(obj)
+	}
+	if gcs := req.GetCloudStorageConfig(); gcs != nil {
+		obj, err := protoToJSONMap(gcs)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		meta["cloudStorageConfig"] = pubsubcore.WithoutStorageConfigState(obj)
+	}
+	if transforms := req.GetMessageTransforms(); len(transforms) > 0 {
+		list := make([]any, 0, len(transforms))
+		for _, t := range transforms {
+			obj, err := protoToJSONMap(t)
+			if err != nil {
+				return nil, mapError(err)
+			}
+			list = append(list, obj)
+		}
+		meta["messageTransforms"] = list
+	}
+	if req.GetRetainAckedMessages() {
+		meta["retainAckedMessages"] = true
+	}
+	if req.GetDetached() {
+		meta["detached"] = true
 	}
 	data, _ := json.Marshal(meta)
 	if err := s.resources.Create(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: sub, Data: data}); err != nil {
@@ -1370,7 +1410,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, req *pubsubpb.UpdateSu
 			if err != nil {
 				return nil, mapError(err)
 			}
-			meta["bigqueryConfig"] = obj
+			meta["bigqueryConfig"] = pubsubcore.WithoutStorageConfigState(obj)
 		case "cloud_storage_config", "cloudStorageConfig":
 			// Store-and-echo only: delivery to GCS is not executed.
 			if in.GetCloudStorageConfig() == nil {
@@ -1381,7 +1421,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, req *pubsubpb.UpdateSu
 			if err != nil {
 				return nil, mapError(err)
 			}
-			meta["cloudStorageConfig"] = obj
+			meta["cloudStorageConfig"] = pubsubcore.WithoutStorageConfigState(obj)
 		case "message_transforms", "messageTransforms":
 			transforms := in.GetMessageTransforms()
 			if len(transforms) == 0 {
@@ -2093,6 +2133,18 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 						ServiceAccountEmail: email,
 					},
 				}
+			}
+		}
+		// The wrapper oneof is a delivery-format choice: render whichever one
+		// the caller stored so a REST write survives the gRPC read.
+		if nw, ok := pc["noWrapper"].(map[string]any); ok {
+			writeMetadata, _ := nw["writeMetadata"].(bool)
+			p.Wrapper = &pubsubpb.PushConfig_NoWrapper_{
+				NoWrapper: &pubsubpb.PushConfig_NoWrapper{WriteMetadata: writeMetadata},
+			}
+		} else if _, ok := pc["pubsubWrapper"].(map[string]any); ok {
+			p.Wrapper = &pubsubpb.PushConfig_PubsubWrapper_{
+				PubsubWrapper: &pubsubpb.PushConfig_PubsubWrapper{},
 			}
 		}
 		sub.PushConfig = p

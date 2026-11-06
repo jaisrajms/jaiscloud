@@ -17,6 +17,7 @@ import (
 	_ "cloud.google.com/go/functions/apiv2/functionspb"
 	_ "cloud.google.com/go/kms/apiv1/kmspb"
 	_ "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	_ "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 
 	_ "jaiscloud/internal/gcp/grpc/storage/storagepb"
 )

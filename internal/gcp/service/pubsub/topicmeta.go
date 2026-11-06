@@ -171,6 +171,17 @@ func applyTopicUpdatePath(meta, in map[string]any, rawPath string) error {
 	}
 
 	value, present := lookupTopicPath(in, segments)
+	// A repeated field has no per-element mask path: the update replaces the
+	// whole list with the list the request carried (AIP-161 repeated-field
+	// semantics). The nested segments only identify which list to replace.
+	if list, repeated := meta[field.name].([]any); repeated {
+		// The nested segment names an element member; an unknown member is a
+		// bad mask path, not a whole-list replacement.
+		if len(segments) > 1 && !repeatedElementHasKey(list, segments[1]) {
+			return invalidArgument("unsupported update_mask path: " + rawPath)
+		}
+		return storeTopicField(meta, field, value, present)
+	}
 	existing := topicMapValue(meta[field.name])
 	merged := cloneTopicMap(existing)
 	if !present || isEmptyTopicValue(value) {
@@ -263,6 +274,25 @@ func lookupTopicPath(in map[string]any, segments []string) (any, bool) {
 		}
 	}
 	return cur, true
+}
+
+// repeatedElementHasKey reports whether any element of a stored repeated field
+// carries the named member (case/underscore insensitive), so a mask path naming
+// an element member can be told apart from an unknown path.
+func repeatedElementHasKey(list []any, segment string) bool {
+	want := normalizeMaskSegment(segment)
+	for _, el := range list {
+		m, ok := el.(map[string]any)
+		if !ok {
+			continue
+		}
+		for k := range m {
+			if normalizeMaskSegment(k) == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // setTopicPath writes value at a nested path, reusing the object's existing key
@@ -636,6 +666,24 @@ func normalizeTopicTransforms(value any) (any, error) {
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// WithoutStorageConfigState copies a subscription delivery-target config
+// (BigQueryConfig or CloudStorageConfig) without its OUTPUT_ONLY `state`
+// member. Every write path uses it so a caller can echo a subscription it read
+// back without pinning the server-owned delivery state.
+func WithoutStorageConfigState(obj map[string]any) map[string]any {
+	if _, ok := obj["state"]; !ok {
+		return obj
+	}
+	out := make(map[string]any, len(obj))
+	for k, v := range obj {
+		if k == "state" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // validTopicKMSKeyName reports whether s is a Cloud KMS CryptoKey resource name:

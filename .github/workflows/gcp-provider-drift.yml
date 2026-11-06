@@ -106,7 +106,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           bin/tfcapture -schema /tmp/schema/full.json \
             -snapshot docs/fidelity/terraform-provider-schema.json \
-            -resources google_storage_bucket,google_pubsub_topic,google_pubsub_subscription,google_firestore_database,google_kms_key_ring,google_kms_crypto_key,google_dns_managed_zone
+            -resources google_storage_bucket,google_pubsub_topic,google_pubsub_subscription,google_firestore_database,google_kms_key_ring,google_kms_crypto_key,google_dns_managed_zone,google_cloudfunctions_function,google_cloudfunctions2_function,google_redis_instance,google_monitoring_uptime_check_config,google_monitoring_alert_policy
           if git diff --quiet -- docs/fidelity/terraform-provider-schema.json; then
             echo "provider schema unchanged" | tee -a drift-report.md
           else

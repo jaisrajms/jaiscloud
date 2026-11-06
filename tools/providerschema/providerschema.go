@@ -90,8 +90,33 @@ func Parse(raw []byte, path string) (*ProviderSchema, error) {
 		return nil, fmt.Errorf("terraform provider schema (%s): no provider_schemas (is this `terraform providers schema -json`?)", path)
 	}
 	out := &ProviderSchema{FormatVersion: f.FormatVersion, Resources: map[string][]Attribute{}}
-	for _, provider := range f.ProviderSchemas {
+	// A dump can carry hashicorp/google and hashicorp/google-beta together (a
+	// module may pull google-beta in). The classification mapping is written
+	// against the google provider, and google-beta is its superset mirror, so
+	// google wins for a resource both declare; beta only supplies resources
+	// google does not. Doing this by sorted name (not map order) keeps the gate
+	// deterministic across runs.
+	const googleProvider = "registry.terraform.io/hashicorp/google"
+	providers := make([]string, 0, len(f.ProviderSchemas))
+	for name := range f.ProviderSchemas {
+		providers = append(providers, name)
+	}
+	sort.Strings(providers)
+	if _, ok := f.ProviderSchemas[googleProvider]; ok {
+		for i, name := range providers {
+			if name == googleProvider {
+				copy(providers[1:i+1], providers[:i])
+				providers[0] = name
+				break
+			}
+		}
+	}
+	for _, providerName := range providers {
+		provider := f.ProviderSchemas[providerName]
 		for name, res := range provider.ResourceSchemas {
+			if _, exists := out.Resources[name]; exists {
+				continue
+			}
 			attrs := map[string]Attribute{}
 			collect("", res.Block, attrs)
 			list := make([]Attribute, 0, len(attrs))
@@ -192,7 +217,12 @@ func Compact(raw []byte, resources []string) ([]byte, error) {
 			}{Block: compact(res.Block)}
 			total++
 		}
-		out.ProviderSchemas[providerName] = p
+		// A provider that declares none of the requested resources (a module's
+		// archive/null provider) is noise in a committed snapshot: keep only the
+		// providers that actually contributed a resource.
+		if len(p.ResourceSchemas) > 0 {
+			out.ProviderSchemas[providerName] = p
+		}
 	}
 	if total == 0 {
 		return nil, fmt.Errorf("terraform provider schema: none of the requested resources %v are declared", resources)

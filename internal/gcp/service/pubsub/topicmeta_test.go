@@ -575,3 +575,29 @@ func TestApplyTopicUpdateSpellingsAndHelperBranches(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyTopicUpdateReplacesRepeatedMember covers an AIP-161 mask that names a
+// member of a repeated message: the list is replaced wholesale with the request
+// list, and an unknown member stays InvalidArgument.
+func TestApplyTopicUpdateReplacesRepeatedMember(t *testing.T) {
+	meta := mustNormalizedTopic(t)
+	in := map[string]any{"messageTransforms": []any{map[string]any{
+		"javascriptUdf": map[string]any{"code": "exports.fc = (m) => m;", "functionName": "fc"},
+		"enabled":       true,
+	}}}
+	if err := ApplyTopicUpdate(meta, in, []string{"messageTransforms.javascriptUdf.code"}); err != nil {
+		t.Fatalf("ApplyTopicUpdate nested repeated member: %v", err)
+	}
+	list, ok := meta["messageTransforms"].([]any)
+	if !ok || len(list) != 1 {
+		t.Fatalf("messageTransforms = %#v, want the one-element request list", meta["messageTransforms"])
+	}
+	entry := list[0].(map[string]any)
+	udf := entry["javascriptUdf"].(map[string]any)
+	if udf["code"] != "exports.fc = (m) => m;" {
+		t.Errorf("javascriptUdf.code = %v, want the updated code", udf["code"])
+	}
+	if err := ApplyTopicUpdate(meta, in, []string{"messageTransforms.unknownMember.code"}); err == nil {
+		t.Fatal("an unknown repeated element member must be InvalidArgument")
+	}
+}

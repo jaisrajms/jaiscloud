@@ -37,3 +37,9 @@ go run ./tools/tfcapture -init-mapping -schema /tmp/schema.json \
 ```
 
 The classifications are hand-maintained: only the attribute list is generated.
+The mapping is written against the `hashicorp/google` provider schema; when a
+module also pulls `hashicorp/google-beta` in, the loader keeps google's resource
+definition (beta is its superset mirror and its extra attributes are out of the
+mapping's scope). The weekly drift workflow regenerates
+`terraform-provider-schema.json` from the same resource list, so a new provider
+attribute shows up as a diff before it can reach a capture run.

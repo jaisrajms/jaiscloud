@@ -255,6 +255,9 @@ func writeInitialMapping(path string, schema *providerschema.ProviderSchema, res
 			}
 		}
 	}
+	// Flush before reading the writer error: csv.Writer buffers, and the
+	// deferred Flush would run after f.Close and lose the tail of the file.
+	w.Flush()
 	if err := w.Error(); err != nil {
 		f.Close()
 		return err

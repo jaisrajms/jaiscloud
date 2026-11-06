@@ -3,6 +3,572 @@
  "provider_schemas": {
   "registry.terraform.io/hashicorp/google": {
    "resource_schemas": {
+    "google_cloudfunctions2_function": {
+     "block": {
+      "attributes": {
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "description": {
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "environment": {
+        "computed": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "kms_key_name": {
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "location": {
+        "required": true
+       },
+       "name": {
+        "required": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "state": {
+        "computed": true
+       },
+       "terraform_labels": {
+        "computed": true
+       },
+       "update_time": {
+        "computed": true
+       },
+       "url": {
+        "computed": true
+       }
+      },
+      "block_types": {
+       "build_config": {
+        "block": {
+         "attributes": {
+          "build": {
+           "computed": true
+          },
+          "docker_repository": {
+           "computed": true,
+           "optional": true
+          },
+          "entry_point": {
+           "optional": true
+          },
+          "environment_variables": {
+           "computed": true,
+           "optional": true
+          },
+          "runtime": {
+           "optional": true
+          },
+          "service_account": {
+           "computed": true,
+           "optional": true
+          },
+          "worker_pool": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "automatic_update_policy": {
+           "block": {}
+          },
+          "on_deploy_update_policy": {
+           "block": {
+            "attributes": {
+             "runtime_version": {
+              "computed": true
+             }
+            }
+           }
+          },
+          "source": {
+           "block": {
+            "block_types": {
+             "repo_source": {
+              "block": {
+               "attributes": {
+                "branch_name": {
+                 "optional": true
+                },
+                "commit_sha": {
+                 "optional": true
+                },
+                "dir": {
+                 "optional": true
+                },
+                "invert_regex": {
+                 "optional": true
+                },
+                "project_id": {
+                 "optional": true
+                },
+                "repo_name": {
+                 "optional": true
+                },
+                "tag_name": {
+                 "optional": true
+                }
+               }
+              }
+             },
+             "storage_source": {
+              "block": {
+               "attributes": {
+                "bucket": {
+                 "optional": true
+                },
+                "generation": {
+                 "computed": true,
+                 "optional": true
+                },
+                "object": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "event_trigger": {
+        "block": {
+         "attributes": {
+          "event_type": {
+           "required": true
+          },
+          "pubsub_topic": {
+           "computed": true,
+           "optional": true
+          },
+          "retry_policy": {
+           "optional": true
+          },
+          "service_account_email": {
+           "computed": true,
+           "optional": true
+          },
+          "trigger": {
+           "computed": true
+          },
+          "trigger_region": {
+           "computed": true,
+           "optional": true
+          }
+         },
+         "block_types": {
+          "event_filters": {
+           "block": {
+            "attributes": {
+             "attribute": {
+              "required": true
+             },
+             "operator": {
+              "optional": true
+             },
+             "value": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "service_config": {
+        "block": {
+         "attributes": {
+          "all_traffic_on_latest_revision": {
+           "optional": true
+          },
+          "available_cpu": {
+           "computed": true,
+           "optional": true
+          },
+          "available_memory": {
+           "computed": true,
+           "optional": true
+          },
+          "binary_authorization_policy": {
+           "optional": true
+          },
+          "direct_vpc_egress": {
+           "computed": true,
+           "optional": true
+          },
+          "environment_variables": {
+           "computed": true,
+           "optional": true
+          },
+          "gcf_uri": {
+           "computed": true
+          },
+          "ingress_settings": {
+           "optional": true
+          },
+          "max_instance_count": {
+           "computed": true,
+           "optional": true
+          },
+          "max_instance_request_concurrency": {
+           "computed": true,
+           "optional": true
+          },
+          "min_instance_count": {
+           "optional": true
+          },
+          "service": {
+           "computed": true
+          },
+          "service_account_email": {
+           "computed": true,
+           "optional": true
+          },
+          "timeout_seconds": {
+           "computed": true,
+           "optional": true
+          },
+          "uri": {
+           "computed": true
+          },
+          "vpc_connector": {
+           "optional": true
+          },
+          "vpc_connector_egress_settings": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "direct_vpc_network_interface": {
+           "block": {
+            "attributes": {
+             "network": {
+              "optional": true
+             },
+             "subnetwork": {
+              "optional": true
+             },
+             "tags": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "secret_environment_variables": {
+           "block": {
+            "attributes": {
+             "key": {
+              "required": true
+             },
+             "project_id": {
+              "required": true
+             },
+             "secret": {
+              "required": true
+             },
+             "version": {
+              "required": true
+             }
+            }
+           }
+          },
+          "secret_volumes": {
+           "block": {
+            "attributes": {
+             "mount_path": {
+              "required": true
+             },
+             "project_id": {
+              "required": true
+             },
+             "secret": {
+              "required": true
+             }
+            },
+            "block_types": {
+             "versions": {
+              "block": {
+               "attributes": {
+                "path": {
+                 "required": true
+                },
+                "version": {
+                 "required": true
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_cloudfunctions_function": {
+     "block": {
+      "attributes": {
+       "available_memory_mb": {
+        "optional": true
+       },
+       "build_environment_variables": {
+        "optional": true
+       },
+       "build_service_account": {
+        "computed": true,
+        "optional": true
+       },
+       "build_worker_pool": {
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "description": {
+        "optional": true
+       },
+       "docker_registry": {
+        "computed": true,
+        "optional": true
+       },
+       "docker_repository": {
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "entry_point": {
+        "optional": true
+       },
+       "environment_variables": {
+        "optional": true
+       },
+       "https_trigger_security_level": {
+        "computed": true,
+        "optional": true
+       },
+       "https_trigger_url": {
+        "computed": true,
+        "optional": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "ingress_settings": {
+        "optional": true
+       },
+       "kms_key_name": {
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "max_instances": {
+        "computed": true,
+        "optional": true
+       },
+       "min_instances": {
+        "optional": true
+       },
+       "name": {
+        "required": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "region": {
+        "computed": true,
+        "optional": true
+       },
+       "runtime": {
+        "required": true
+       },
+       "service_account_email": {
+        "computed": true,
+        "optional": true
+       },
+       "source_archive_bucket": {
+        "optional": true
+       },
+       "source_archive_object": {
+        "optional": true
+       },
+       "status": {
+        "computed": true
+       },
+       "terraform_labels": {
+        "computed": true
+       },
+       "timeout": {
+        "optional": true
+       },
+       "trigger_http": {
+        "optional": true
+       },
+       "version_id": {
+        "computed": true
+       },
+       "vpc_connector": {
+        "optional": true
+       },
+       "vpc_connector_egress_settings": {
+        "computed": true,
+        "optional": true
+       }
+      },
+      "block_types": {
+       "automatic_update_policy": {
+        "block": {}
+       },
+       "event_trigger": {
+        "block": {
+         "attributes": {
+          "event_type": {
+           "required": true
+          },
+          "resource": {
+           "required": true
+          }
+         },
+         "block_types": {
+          "failure_policy": {
+           "block": {
+            "attributes": {
+             "retry": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "on_deploy_update_policy": {
+        "block": {
+         "attributes": {
+          "runtime_version": {
+           "computed": true
+          }
+         }
+        }
+       },
+       "secret_environment_variables": {
+        "block": {
+         "attributes": {
+          "key": {
+           "required": true
+          },
+          "project_id": {
+           "computed": true,
+           "optional": true
+          },
+          "secret": {
+           "required": true
+          },
+          "version": {
+           "required": true
+          }
+         }
+        }
+       },
+       "secret_volumes": {
+        "block": {
+         "attributes": {
+          "mount_path": {
+           "required": true
+          },
+          "project_id": {
+           "computed": true,
+           "optional": true
+          },
+          "secret": {
+           "required": true
+          }
+         },
+         "block_types": {
+          "versions": {
+           "block": {
+            "attributes": {
+             "path": {
+              "required": true
+             },
+             "version": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "source_repository": {
+        "block": {
+         "attributes": {
+          "deployed_url": {
+           "computed": true
+          },
+          "url": {
+           "required": true
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "read": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
     "google_dns_managed_zone": {
      "block": {
       "attributes": {
@@ -101,6 +667,15 @@
        "forwarding_config": {
         "block": {
          "block_types": {
+          "outbound_endpoints": {
+           "block": {
+            "attributes": {
+             "name": {
+              "required": true
+             }
+            }
+           }
+          },
           "target_name_servers": {
            "block": {
             "attributes": {
@@ -406,6 +981,656 @@
       }
      }
     },
+    "google_monitoring_alert_policy": {
+     "block": {
+      "attributes": {
+       "combiner": {
+        "required": true
+       },
+       "creation_record": {
+        "computed": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "display_name": {
+        "required": true
+       },
+       "enabled": {
+        "optional": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "name": {
+        "computed": true
+       },
+       "notification_channels": {
+        "optional": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "severity": {
+        "optional": true
+       },
+       "user_labels": {
+        "optional": true
+       }
+      },
+      "block_types": {
+       "alert_strategy": {
+        "block": {
+         "attributes": {
+          "auto_close": {
+           "optional": true
+          },
+          "notification_prompts": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "notification_channel_strategy": {
+           "block": {
+            "attributes": {
+             "notification_channel_names": {
+              "optional": true
+             },
+             "renotify_interval": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "notification_rate_limit": {
+           "block": {
+            "attributes": {
+             "period": {
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "conditions": {
+        "block": {
+         "attributes": {
+          "display_name": {
+           "required": true
+          },
+          "name": {
+           "computed": true
+          }
+         },
+         "block_types": {
+          "condition_absent": {
+           "block": {
+            "attributes": {
+             "duration": {
+              "required": true
+             },
+             "filter": {
+              "optional": true
+             }
+            },
+            "block_types": {
+             "aggregations": {
+              "block": {
+               "attributes": {
+                "alignment_period": {
+                 "optional": true
+                },
+                "cross_series_reducer": {
+                 "optional": true
+                },
+                "group_by_fields": {
+                 "optional": true
+                },
+                "per_series_aligner": {
+                 "optional": true
+                }
+               }
+              }
+             },
+             "trigger": {
+              "block": {
+               "attributes": {
+                "count": {
+                 "optional": true
+                },
+                "percent": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "condition_matched_log": {
+           "block": {
+            "attributes": {
+             "filter": {
+              "required": true
+             },
+             "label_extractors": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "condition_monitoring_query_language": {
+           "block": {
+            "attributes": {
+             "duration": {
+              "required": true
+             },
+             "evaluation_missing_data": {
+              "optional": true
+             },
+             "query": {
+              "required": true
+             }
+            },
+            "block_types": {
+             "trigger": {
+              "block": {
+               "attributes": {
+                "count": {
+                 "optional": true
+                },
+                "percent": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "condition_prometheus_query_language": {
+           "block": {
+            "attributes": {
+             "alert_rule": {
+              "optional": true
+             },
+             "disable_metric_validation": {
+              "optional": true
+             },
+             "duration": {
+              "optional": true
+             },
+             "evaluation_interval": {
+              "optional": true
+             },
+             "labels": {
+              "optional": true
+             },
+             "query": {
+              "required": true
+             },
+             "rule_group": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "condition_sql": {
+           "block": {
+            "attributes": {
+             "query": {
+              "required": true
+             }
+            },
+            "block_types": {
+             "boolean_test": {
+              "block": {
+               "attributes": {
+                "column": {
+                 "required": true
+                }
+               }
+              }
+             },
+             "daily": {
+              "block": {
+               "attributes": {
+                "periodicity": {
+                 "required": true
+                }
+               },
+               "block_types": {
+                "execution_time": {
+                 "block": {
+                  "attributes": {
+                   "hours": {
+                    "optional": true
+                   },
+                   "minutes": {
+                    "optional": true
+                   },
+                   "nanos": {
+                    "optional": true
+                   },
+                   "seconds": {
+                    "optional": true
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             },
+             "hourly": {
+              "block": {
+               "attributes": {
+                "minute_offset": {
+                 "optional": true
+                },
+                "periodicity": {
+                 "required": true
+                }
+               }
+              }
+             },
+             "minutes": {
+              "block": {
+               "attributes": {
+                "periodicity": {
+                 "required": true
+                }
+               }
+              }
+             },
+             "row_count_test": {
+              "block": {
+               "attributes": {
+                "comparison": {
+                 "required": true
+                },
+                "threshold": {
+                 "required": true
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "condition_threshold": {
+           "block": {
+            "attributes": {
+             "comparison": {
+              "required": true
+             },
+             "denominator_filter": {
+              "optional": true
+             },
+             "duration": {
+              "required": true
+             },
+             "evaluation_missing_data": {
+              "optional": true
+             },
+             "filter": {
+              "optional": true
+             },
+             "threshold_value": {
+              "optional": true
+             }
+            },
+            "block_types": {
+             "aggregations": {
+              "block": {
+               "attributes": {
+                "alignment_period": {
+                 "optional": true
+                },
+                "cross_series_reducer": {
+                 "optional": true
+                },
+                "group_by_fields": {
+                 "optional": true
+                },
+                "per_series_aligner": {
+                 "optional": true
+                }
+               }
+              }
+             },
+             "denominator_aggregations": {
+              "block": {
+               "attributes": {
+                "alignment_period": {
+                 "optional": true
+                },
+                "cross_series_reducer": {
+                 "optional": true
+                },
+                "group_by_fields": {
+                 "optional": true
+                },
+                "per_series_aligner": {
+                 "optional": true
+                }
+               }
+              }
+             },
+             "forecast_options": {
+              "block": {
+               "attributes": {
+                "forecast_horizon": {
+                 "required": true
+                }
+               }
+              }
+             },
+             "trigger": {
+              "block": {
+               "attributes": {
+                "count": {
+                 "optional": true
+                },
+                "percent": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "documentation": {
+        "block": {
+         "attributes": {
+          "content": {
+           "optional": true
+          },
+          "mime_type": {
+           "optional": true
+          },
+          "subject": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "links": {
+           "block": {
+            "attributes": {
+             "display_name": {
+              "optional": true
+             },
+             "url": {
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_monitoring_uptime_check_config": {
+     "block": {
+      "attributes": {
+       "checker_type": {
+        "computed": true,
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "display_name": {
+        "required": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "log_check_failures": {
+        "optional": true
+       },
+       "name": {
+        "computed": true
+       },
+       "period": {
+        "optional": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "selected_regions": {
+        "optional": true
+       },
+       "timeout": {
+        "required": true
+       },
+       "uptime_check_id": {
+        "computed": true
+       },
+       "user_labels": {
+        "optional": true
+       }
+      },
+      "block_types": {
+       "content_matchers": {
+        "block": {
+         "attributes": {
+          "content": {
+           "required": true
+          },
+          "matcher": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "json_path_matcher": {
+           "block": {
+            "attributes": {
+             "json_matcher": {
+              "optional": true
+             },
+             "json_path": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "http_check": {
+        "block": {
+         "attributes": {
+          "body": {
+           "optional": true
+          },
+          "content_type": {
+           "optional": true
+          },
+          "custom_content_type": {
+           "optional": true
+          },
+          "headers": {
+           "computed": true,
+           "optional": true
+          },
+          "mask_headers": {
+           "optional": true
+          },
+          "path": {
+           "optional": true
+          },
+          "port": {
+           "computed": true,
+           "optional": true
+          },
+          "request_method": {
+           "optional": true
+          },
+          "use_ssl": {
+           "optional": true
+          },
+          "validate_ssl": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "accepted_response_status_codes": {
+           "block": {
+            "attributes": {
+             "status_class": {
+              "optional": true
+             },
+             "status_value": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "auth_info": {
+           "block": {
+            "attributes": {
+             "password": {
+              "optional": true
+             },
+             "password_wo": {
+              "optional": true
+             },
+             "password_wo_version": {
+              "optional": true
+             },
+             "username": {
+              "required": true
+             }
+            }
+           }
+          },
+          "ping_config": {
+           "block": {
+            "attributes": {
+             "pings_count": {
+              "required": true
+             }
+            }
+           }
+          },
+          "service_agent_authentication": {
+           "block": {
+            "attributes": {
+             "type": {
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "monitored_resource": {
+        "block": {
+         "attributes": {
+          "labels": {
+           "required": true
+          },
+          "type": {
+           "required": true
+          }
+         }
+        }
+       },
+       "resource_group": {
+        "block": {
+         "attributes": {
+          "group_id": {
+           "optional": true
+          },
+          "resource_type": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "synthetic_monitor": {
+        "block": {
+         "block_types": {
+          "cloud_function_v2": {
+           "block": {
+            "attributes": {
+             "name": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "tcp_check": {
+        "block": {
+         "attributes": {
+          "port": {
+           "required": true
+          }
+         },
+         "block_types": {
+          "ping_config": {
+           "block": {
+            "attributes": {
+             "pings_count": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
     "google_pubsub_subscription": {
      "block": {
       "attributes": {
@@ -480,6 +1705,50 @@
           },
           "write_metadata": {
            "optional": true
+          }
+         }
+        }
+       },
+       "bigtable_config": {
+        "block": {
+         "attributes": {
+          "app_profile_id": {
+           "optional": true
+          },
+          "service_account_email": {
+           "optional": true
+          },
+          "state": {
+           "computed": true
+          },
+          "table": {
+           "required": true
+          },
+          "write_metadata": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "column_family_mapping": {
+           "block": {
+            "block_types": {
+             "delimited_key": {
+              "block": {
+               "attributes": {
+                "delimiter": {
+                 "optional": true
+                },
+                "key_fields": {
+                 "required": true
+                }
+               }
+              }
+             },
+             "row_key_schema": {
+              "block": {}
+             }
+            }
+           }
           }
          }
         }
@@ -588,6 +1857,18 @@
                 }
                }
               }
+             }
+            }
+           }
+          },
+          "compression": {
+           "block": {
+            "attributes": {
+             "compression_algorithm": {
+              "required": true
+             },
+             "compression_mode": {
+              "required": true
              }
             }
            }
@@ -886,6 +2167,18 @@
             }
            }
           },
+          "compression": {
+           "block": {
+            "attributes": {
+             "compression_algorithm": {
+              "required": true
+             },
+             "compression_mode": {
+              "required": true
+             }
+            }
+           }
+          },
           "javascript_udf": {
            "block": {
             "attributes": {
@@ -915,6 +2208,225 @@
           },
           "schema": {
            "required": true
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_redis_instance": {
+     "block": {
+      "attributes": {
+       "alternative_location_id": {
+        "computed": true,
+        "optional": true
+       },
+       "auth_enabled": {
+        "optional": true
+       },
+       "auth_string": {
+        "computed": true
+       },
+       "authorized_network": {
+        "computed": true,
+        "optional": true
+       },
+       "connect_mode": {
+        "optional": true
+       },
+       "create_time": {
+        "computed": true
+       },
+       "current_location_id": {
+        "computed": true
+       },
+       "customer_managed_key": {
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "deletion_protection": {
+        "optional": true
+       },
+       "display_name": {
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "effective_reserved_ip_range": {
+        "computed": true
+       },
+       "host": {
+        "computed": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "location_id": {
+        "computed": true,
+        "optional": true
+       },
+       "maintenance_schedule": {
+        "computed": true
+       },
+       "maintenance_version": {
+        "computed": true,
+        "optional": true
+       },
+       "memory_size_gb": {
+        "required": true
+       },
+       "name": {
+        "required": true
+       },
+       "nodes": {
+        "computed": true
+       },
+       "persistence_iam_identity": {
+        "computed": true
+       },
+       "port": {
+        "computed": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "read_endpoint": {
+        "computed": true
+       },
+       "read_endpoint_port": {
+        "computed": true
+       },
+       "read_replicas_mode": {
+        "computed": true,
+        "optional": true
+       },
+       "redis_configs": {
+        "optional": true
+       },
+       "redis_version": {
+        "computed": true,
+        "optional": true
+       },
+       "region": {
+        "computed": true,
+        "optional": true
+       },
+       "replica_count": {
+        "computed": true,
+        "optional": true
+       },
+       "reserved_ip_range": {
+        "computed": true,
+        "optional": true
+       },
+       "secondary_ip_range": {
+        "computed": true,
+        "optional": true
+       },
+       "server_ca_certs": {
+        "computed": true
+       },
+       "terraform_labels": {
+        "computed": true
+       },
+       "tier": {
+        "optional": true
+       },
+       "transit_encryption_mode": {
+        "optional": true
+       }
+      },
+      "block_types": {
+       "maintenance_policy": {
+        "block": {
+         "attributes": {
+          "create_time": {
+           "computed": true
+          },
+          "description": {
+           "optional": true
+          },
+          "update_time": {
+           "computed": true
+          }
+         },
+         "block_types": {
+          "weekly_maintenance_window": {
+           "block": {
+            "attributes": {
+             "day": {
+              "required": true
+             },
+             "duration": {
+              "computed": true
+             }
+            },
+            "block_types": {
+             "start_time": {
+              "block": {
+               "attributes": {
+                "hours": {
+                 "optional": true
+                },
+                "minutes": {
+                 "optional": true
+                },
+                "nanos": {
+                 "optional": true
+                },
+                "seconds": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "persistence_config": {
+        "block": {
+         "attributes": {
+          "persistence_mode": {
+           "computed": true,
+           "optional": true
+          },
+          "rdb_next_snapshot_time": {
+           "computed": true
+          },
+          "rdb_snapshot_period": {
+           "optional": true
+          },
+          "rdb_snapshot_start_time": {
+           "computed": true,
+           "optional": true
           }
          }
         }

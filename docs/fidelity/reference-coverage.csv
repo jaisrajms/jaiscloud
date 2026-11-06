@@ -23,6 +23,7 @@ pubsub,Subscription,analytics_hub_subscription_info.listing,analyticshub.googlea
 pubsub,Subscription,dead_letter_policy.dead_letter_topic,pubsub.googleapis.com/Topic,validated,internal/gcp/provider/pubsub/pubsub_extra_test.go#TestPubSubDeadLetterPolicyValidation,normalizeDeadLetterPolicy resolves the topic; an unknown one is NOT_FOUND,
 pubsub,Subscription,topic,pubsub.googleapis.com/Topic,validated,internal/gcp/provider/pubsub/eventarc_test.go#TestSubscriptionUpdateValidation,subscription create/update resolve the topic (topicExists); an unknown one is NOT_FOUND,
 pubsub,Topic,kms_key_name,cloudkms.googleapis.com/CryptoKey,format-only,internal/gcp/service/pubsub/topicmeta_test.go#TestNormalizeTopicInputRejections,the CryptoKey name shape is validated; existence is resolved only when a message is published (crypto.EnvelopeEncryptor). Follow-up plan row FC4-6.,
+pubsub,Topic,schema_settings.schema,pubsub.googleapis.com/Schema,format-only,internal/gcp/service/pubsub/topicmeta_test.go#TestNormalizeTopicInputRejections,validTopicSchemaName validates the Schema resource-name shape; schema existence is not resolved (the emulator serves no schemas API),
 run,Service,binary_authorization.policy,binaryauthorization.googleapis.com/Policy,not-modelled,,Binary Authorization is not modelled,
 run,Service,build_config.name,cloudbuild.googleapis.com/Build,not-modelled,,Cloud Build is not modelled,
 run,Service,build_config.worker_pool,cloudbuild.googleapis.com/BuildWorkerPool,not-modelled,,Cloud Build worker pools are not modelled,

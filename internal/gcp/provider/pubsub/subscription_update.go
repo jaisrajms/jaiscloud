@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -279,9 +280,10 @@ func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedR
 	return provider.OK(meta), nil
 }
 
-// applyStorageConfigUpdate stores in[key] as an object verbatim when it is
-// present and non-null, and deletes meta[key] otherwise (absent or JSON null
-// under the mask clears the target, per AIP-134).
+// applyStorageConfigUpdate stores in[key] as an object when it is present and
+// non-null, and deletes meta[key] otherwise (absent or JSON null under the mask
+// clears the target, per AIP-134). The target's `state` is OUTPUT_ONLY in the
+// Subscription proto, so a caller-supplied value is dropped rather than stored.
 func applyStorageConfigUpdate(meta, in map[string]any, key string) error {
 	raw, present := in[key]
 	if !present || raw == nil {
@@ -292,7 +294,7 @@ func applyStorageConfigUpdate(meta, in map[string]any, key string) error {
 	if !isObject {
 		return model.NewProviderError("InvalidArgument", key+" must be an object", 400)
 	}
-	meta[key] = obj
+	meta[key] = pubsubcore.WithoutStorageConfigState(obj)
 	return nil
 }
 

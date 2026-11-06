@@ -1034,6 +1034,16 @@ test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one t
 	@mv -f report.json bin/gcp-mutation-report.json
 	@echo "Mutation report: bin/gcp-mutation-report.json"
 
+test-gcp-mutation-ratchet: ## Gate one target's mutation score (MSI) against its recorded floor (PKG=…)
+	$(MAKE) --no-print-directory test-gcp-mutation PKG=$(PKG)
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -mutation-ratchet -mutation-report bin/gcp-mutation-report.json -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)"
+
+test-gcp-mutation-update: ## Raise one target's recorded mutation floor from a fresh run (PKG=…; ALLOW_LOWER=1 to drop)
+	$(MAKE) --no-print-directory test-gcp-mutation PKG=$(PKG)
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -mutation-floor-update -mutation-report bin/gcp-mutation-report.json -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)" $(if $(ALLOW_LOWER),-allow-lower,)
+
 gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provider + internal/gcp/grpc (local/weekly, not PR CI)
 	@set -e; \
 	  pkgs="$(PKG)"; \

@@ -100,10 +100,10 @@ google_pubsub_topic,,,ingestion_data_source_settings.confluent_cloud.gcp_service
 google_pubsub_topic,,,ingestion_data_source_settings.confluent_cloud.identity_pool_id,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_topic,,,ingestion_data_source_settings.confluent_cloud.topic,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_topic,,,ingestion_data_source_settings.platform_logs_settings.severity,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_topic,,,kms_key_name,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_topic,,,labels,labels,no-catalog,served by the emulator; the topic is outside the FC1 catalog scope (FC6-n)
-google_pubsub_topic,,,message_retention_duration,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_topic,,,message_storage_policy.allowed_persistence_regions,,not-exercised,the pinned module cases do not configure this attribute
+google_pubsub_topic,pubsub,Topic,kms_key_name,kmsKeyName,served,
+google_pubsub_topic,pubsub,Topic,labels,labels,served,
+google_pubsub_topic,pubsub,Topic,message_retention_duration,messageRetentionDuration,served,
+google_pubsub_topic,pubsub,Topic,message_storage_policy.allowed_persistence_regions,messageStoragePolicy.allowedPersistenceRegions,served,
 google_pubsub_topic,,,message_storage_policy.enforce_in_transit,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_topic,,,message_transforms.ai_inference.endpoint,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_topic,,,message_transforms.ai_inference.service_account_email,,not-exercised,the pinned module cases do not configure this attribute
@@ -113,16 +113,16 @@ google_pubsub_topic,,,message_transforms.javascript_udf.code,,not-exercised,the 
 google_pubsub_topic,,,message_transforms.javascript_udf.function_name,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_topic,,,name,,client-side,"carried in the request URL, not a body field"
 google_pubsub_topic,,,project,,client-side,provider routing attribute; carried in the URL/parent
-google_pubsub_topic,,,schema_settings.encoding,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_topic,,,schema_settings.first_revision_id,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_topic,,,schema_settings.last_revision_id,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_topic,,,schema_settings.schema,,not-exercised,the pinned module cases do not configure this attribute
+google_pubsub_topic,pubsub,Topic,schema_settings.encoding,schemaSettings.encoding,served,
+google_pubsub_topic,,,schema_settings.first_revision_id,,output-only,computed-only attribute; never part of a request body
+google_pubsub_topic,,,schema_settings.last_revision_id,,output-only,computed-only attribute; never part of a request body
+google_pubsub_topic,pubsub,Topic,schema_settings.schema,schemaSettings.schema,served,
 google_pubsub_topic,,,tags,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_topic,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
 google_pubsub_topic,,,timeouts.create,,client-side,"provider-local behaviour, never sent to the API"
 google_pubsub_topic,,,timeouts.delete,,client-side,"provider-local behaviour, never sent to the API"
 google_pubsub_topic,,,timeouts.update,,client-side,"provider-local behaviour, never sent to the API"
-google_pubsub_subscription,,,ack_deadline_seconds,ackDeadlineSeconds,no-catalog,served by the emulator; the subscription is outside the FC1 catalog scope (FC6-n)
+google_pubsub_subscription,pubsub,Subscription,ack_deadline_seconds,ackDeadlineSeconds,served,
 google_pubsub_subscription,,,bigquery_config.drop_unknown_fields,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,bigquery_config.service_account_email,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,bigquery_config.table,,not-exercised,the pinned module cases do not configure this attribute
@@ -141,17 +141,17 @@ google_pubsub_subscription,,,cloud_storage_config.max_messages,,not-exercised,th
 google_pubsub_subscription,,,cloud_storage_config.service_account_email,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,cloud_storage_config.state,,output-only,computed-only attribute; never part of a request body
 google_pubsub_subscription,,,cloud_storage_config.text_config.state,,output-only,computed-only attribute; never part of a request body
-google_pubsub_subscription,,,dead_letter_policy.dead_letter_topic,deadLetterPolicy.deadLetterTopic,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
-google_pubsub_subscription,,,dead_letter_policy.max_delivery_attempts,deadLetterPolicy.maxDeliveryAttempts,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
+google_pubsub_subscription,pubsub,Subscription,dead_letter_policy.dead_letter_topic,deadLetterPolicy.deadLetterTopic,served,
+google_pubsub_subscription,pubsub,Subscription,dead_letter_policy.max_delivery_attempts,deadLetterPolicy.maxDeliveryAttempts,served,
 google_pubsub_subscription,,,deletion_policy,,client-side,"provider-local behaviour, never sent to the API"
 google_pubsub_subscription,,,effective_labels,,output-only,computed-only attribute; never part of a request body
 google_pubsub_subscription,,,enable_exactly_once_delivery,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,enable_message_ordering,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_subscription,,,expiration_policy.ttl,expirationPolicy.ttl,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
+google_pubsub_subscription,pubsub,Subscription,expiration_policy.ttl,expirationPolicy.ttl,served,
 google_pubsub_subscription,,,filter,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,id,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_subscription,,,labels,labels,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
-google_pubsub_subscription,,,message_retention_duration,messageRetentionDuration,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
+google_pubsub_subscription,pubsub,Subscription,labels,labels,served,
+google_pubsub_subscription,pubsub,Subscription,message_retention_duration,messageRetentionDuration,served,
 google_pubsub_subscription,,,message_transforms.ai_inference.endpoint,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,message_transforms.ai_inference.service_account_email,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,message_transforms.ai_inference.unstructured_inference.parameters,,not-exercised,the pinned module cases do not configure this attribute
@@ -166,14 +166,14 @@ google_pubsub_subscription,,,push_config.oidc_token.audience,,not-exercised,the 
 google_pubsub_subscription,,,push_config.oidc_token.service_account_email,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,push_config.push_endpoint,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,retain_acked_messages,,not-exercised,the pinned module cases do not configure this attribute
-google_pubsub_subscription,,,retry_policy.maximum_backoff,retryPolicy.maximumBackoff,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
-google_pubsub_subscription,,,retry_policy.minimum_backoff,retryPolicy.minimumBackoff,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
+google_pubsub_subscription,pubsub,Subscription,retry_policy.maximum_backoff,retryPolicy.maximumBackoff,served,
+google_pubsub_subscription,pubsub,Subscription,retry_policy.minimum_backoff,retryPolicy.minimumBackoff,served,
 google_pubsub_subscription,,,tags,,not-exercised,the pinned module cases do not configure this attribute
 google_pubsub_subscription,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
 google_pubsub_subscription,,,timeouts.create,,client-side,"provider-local behaviour, never sent to the API"
 google_pubsub_subscription,,,timeouts.delete,,client-side,"provider-local behaviour, never sent to the API"
 google_pubsub_subscription,,,timeouts.update,,client-side,"provider-local behaviour, never sent to the API"
-google_pubsub_subscription,,,topic,topic,no-catalog,served by the emulator; outside the FC1 catalog scope (FC6-n)
+google_pubsub_subscription,pubsub,Subscription,topic,topic,served,
 google_firestore_database,,,app_engine_integration_mode,,not-exercised,the pinned module cases do not configure this attribute
 google_firestore_database,,,cmek_config.active_key_version,,output-only,computed-only attribute; never part of a request body
 google_firestore_database,,,cmek_config.kms_key_name,,not-exercised,the pinned module cases do not configure this attribute
@@ -258,3 +258,303 @@ google_dns_managed_zone,,,timeouts.create,,client-side,"provider-local behaviour
 google_dns_managed_zone,,,timeouts.delete,,client-side,"provider-local behaviour, never sent to the API"
 google_dns_managed_zone,,,timeouts.update,,client-side,"provider-local behaviour, never sent to the API"
 google_dns_managed_zone,clouddns,ManagedZone,visibility,visibility,served,
+google_cloudfunctions2_function,,,build_config.build,buildConfig.build,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,build_config.docker_repository,buildConfig.dockerRepository,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.entry_point,buildConfig.entryPoint,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.environment_variables,buildConfig.environmentVariables,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.on_deploy_update_policy.runtime_version,buildConfig.onDeployUpdatePolicy.runtimeVersion,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,build_config.runtime,buildConfig.runtime,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.service_account,buildConfig.serviceAccount,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.branch_name,buildConfig.source.repoSource.branchName,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.commit_sha,buildConfig.source.repoSource.commitSha,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.dir,buildConfig.source.repoSource.dir,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.invert_regex,buildConfig.source.repoSource.invertRegex,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.project_id,buildConfig.source.repoSource.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.repo_name,buildConfig.source.repoSource.repoName,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.repo_source.tag_name,buildConfig.source.repoSource.tagName,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.storage_source.bucket,buildConfig.source.storageSource.bucket,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.storage_source.generation,buildConfig.source.storageSource.generation,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.source.storage_source.object,buildConfig.source.storageSource.object,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,build_config.worker_pool,buildConfig.workerPool,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,deletion_policy,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,description,description,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,effective_labels,effectiveLabels,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,environment,environment,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,event_trigger.event_filters.attribute,eventTrigger.eventFilters.attribute,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.event_filters.operator,eventTrigger.eventFilters.operator,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.event_filters.value,eventTrigger.eventFilters.value,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.event_type,eventTrigger.eventType,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.pubsub_topic,eventTrigger.pubsubTopic,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.retry_policy,eventTrigger.retryPolicy,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.service_account_email,eventTrigger.serviceAccountEmail,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,event_trigger.trigger,eventTrigger.trigger,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,event_trigger.trigger_region,eventTrigger.triggerRegion,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,id,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,kms_key_name,kmsKeyName,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,labels,labels,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,location,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,name,name,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,project,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,service_config.all_traffic_on_latest_revision,serviceConfig.allTrafficOnLatestRevision,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.available_cpu,serviceConfig.availableCpu,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.available_memory,serviceConfig.availableMemory,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.binary_authorization_policy,serviceConfig.binaryAuthorizationPolicy,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.direct_vpc_egress,serviceConfig.directVpcEgress,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.direct_vpc_network_interface.network,serviceConfig.directVpcNetworkInterface.network,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.direct_vpc_network_interface.subnetwork,serviceConfig.directVpcNetworkInterface.subnetwork,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.direct_vpc_network_interface.tags,serviceConfig.directVpcNetworkInterface.tags,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.environment_variables,serviceConfig.environmentVariables,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.gcf_uri,serviceConfig.gcfUri,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,service_config.ingress_settings,serviceConfig.ingressSettings,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.max_instance_count,serviceConfig.maxInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.max_instance_request_concurrency,serviceConfig.maxInstanceRequestConcurrency,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.min_instance_count,serviceConfig.minInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_environment_variables.key,serviceConfig.secretEnvironmentVariables.key,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_environment_variables.project_id,serviceConfig.secretEnvironmentVariables.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_environment_variables.secret,serviceConfig.secretEnvironmentVariables.secret,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_environment_variables.version,serviceConfig.secretEnvironmentVariables.version,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_volumes.mount_path,serviceConfig.secretVolumes.mountPath,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_volumes.project_id,serviceConfig.secretVolumes.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_volumes.secret,serviceConfig.secretVolumes.secret,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_volumes.versions.path,serviceConfig.secretVolumes.versions.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.secret_volumes.versions.version,serviceConfig.secretVolumes.versions.version,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.service,serviceConfig.service,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,service_config.service_account_email,serviceConfig.serviceAccountEmail,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.timeout_seconds,serviceConfig.timeoutSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.uri,serviceConfig.uri,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,service_config.vpc_connector,serviceConfig.vpcConnector,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,service_config.vpc_connector_egress_settings,serviceConfig.vpcConnectorEgressSettings,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions2_function,,,state,state,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,terraform_labels,terraformLabels,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,timeouts.create,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,timeouts.delete,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,timeouts.update,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions2_function,,,update_time,updateTime,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions2_function,,,url,url,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions_function,,,available_memory_mb,availableMemoryMb,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,build_environment_variables,buildEnvironmentVariables,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,build_service_account,buildServiceAccount,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,build_worker_pool,buildWorkerPool,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,deletion_policy,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,description,description,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,docker_registry,dockerRegistry,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,docker_repository,dockerRepository,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,effective_labels,effectiveLabels,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions_function,,,entry_point,entryPoint,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,environment_variables,environmentVariables,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,event_trigger.event_type,eventTrigger.eventType,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,event_trigger.failure_policy.retry,eventTrigger.failurePolicy.retry,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,event_trigger.resource,eventTrigger.resource,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,https_trigger_security_level,httpsTriggerSecurityLevel,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,https_trigger_url,httpsTriggerUrl,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,id,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,ingress_settings,ingressSettings,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,kms_key_name,kmsKeyName,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,labels,labels,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,max_instances,maxInstances,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,min_instances,minInstances,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,name,name,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,on_deploy_update_policy.runtime_version,onDeployUpdatePolicy.runtimeVersion,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions_function,,,project,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,region,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,runtime,runtime,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,secret_environment_variables.key,secretEnvironmentVariables.key,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_environment_variables.project_id,secretEnvironmentVariables.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_environment_variables.secret,secretEnvironmentVariables.secret,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_environment_variables.version,secretEnvironmentVariables.version,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_volumes.mount_path,secretVolumes.mountPath,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_volumes.project_id,secretVolumes.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_volumes.secret,secretVolumes.secret,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_volumes.versions.path,secretVolumes.versions.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,secret_volumes.versions.version,secretVolumes.versions.version,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,service_account_email,serviceAccountEmail,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,source_archive_bucket,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,source_archive_object,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,source_repository.deployed_url,sourceRepository.deployedUrl,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions_function,,,source_repository.url,sourceRepository.url,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,status,status,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,terraform_labels,terraformLabels,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions_function,,,timeout,timeout,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloudfunctions_function,,,timeouts.create,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,timeouts.delete,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,timeouts.read,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,timeouts.update,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,trigger_http,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_cloudfunctions_function,,,version_id,versionId,output-only,computed-only attribute; never part of a request body
+google_cloudfunctions_function,,,vpc_connector,vpcConnector,not-exercised,the pinned module cases do not configure this attribute
+google_cloudfunctions_function,,,vpc_connector_egress_settings,vpcConnectorEgressSettings,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,monitoring,AlertPolicy,alert_strategy.auto_close,alertStrategy.autoClose,served,
+google_monitoring_alert_policy,,,alert_strategy.notification_channel_strategy.notification_channel_names,alertStrategy.notificationChannelStrategy.notificationChannelNames,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,alert_strategy.notification_channel_strategy.renotify_interval,alertStrategy.notificationChannelStrategy.renotifyInterval,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,alert_strategy.notification_prompts,alertStrategy.notificationPrompts,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,alert_strategy.notification_rate_limit.period,alertStrategy.notificationRateLimit.period,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,monitoring,AlertPolicy,combiner,combiner,served,
+google_monitoring_alert_policy,,,conditions.condition_absent.aggregations.alignment_period,conditions.conditionAbsent.aggregations.alignmentPeriod,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.aggregations.cross_series_reducer,conditions.conditionAbsent.aggregations.crossSeriesReducer,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.aggregations.group_by_fields,conditions.conditionAbsent.aggregations.groupByFields,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.aggregations.per_series_aligner,conditions.conditionAbsent.aggregations.perSeriesAligner,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.duration,conditions.conditionAbsent.duration,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.filter,conditions.conditionAbsent.filter,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.trigger.count,conditions.conditionAbsent.trigger.count,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_absent.trigger.percent,conditions.conditionAbsent.trigger.percent,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_matched_log.filter,conditions.conditionMatchedLog.filter,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_matched_log.label_extractors,conditions.conditionMatchedLog.labelExtractors,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_monitoring_query_language.duration,conditions.conditionMonitoringQueryLanguage.duration,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_monitoring_query_language.evaluation_missing_data,conditions.conditionMonitoringQueryLanguage.evaluationMissingData,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_monitoring_query_language.query,conditions.conditionMonitoringQueryLanguage.query,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_monitoring_query_language.trigger.count,conditions.conditionMonitoringQueryLanguage.trigger.count,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_monitoring_query_language.trigger.percent,conditions.conditionMonitoringQueryLanguage.trigger.percent,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.alert_rule,conditions.conditionPrometheusQueryLanguage.alertRule,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.disable_metric_validation,conditions.conditionPrometheusQueryLanguage.disableMetricValidation,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.duration,conditions.conditionPrometheusQueryLanguage.duration,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.evaluation_interval,conditions.conditionPrometheusQueryLanguage.evaluationInterval,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.labels,conditions.conditionPrometheusQueryLanguage.labels,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.query,conditions.conditionPrometheusQueryLanguage.query,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_prometheus_query_language.rule_group,conditions.conditionPrometheusQueryLanguage.ruleGroup,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.boolean_test.column,conditions.conditionSql.booleanTest.column,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.daily.execution_time.hours,conditions.conditionSql.daily.executionTime.hours,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.daily.execution_time.minutes,conditions.conditionSql.daily.executionTime.minutes,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.daily.execution_time.nanos,conditions.conditionSql.daily.executionTime.nanos,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.daily.execution_time.seconds,conditions.conditionSql.daily.executionTime.seconds,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.daily.periodicity,conditions.conditionSql.daily.periodicity,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.hourly.minute_offset,conditions.conditionSql.hourly.minuteOffset,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.hourly.periodicity,conditions.conditionSql.hourly.periodicity,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.minutes.periodicity,conditions.conditionSql.minutes.periodicity,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.query,conditions.conditionSql.query,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.row_count_test.comparison,conditions.conditionSql.rowCountTest.comparison,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_sql.row_count_test.threshold,conditions.conditionSql.rowCountTest.threshold,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.aggregations.alignment_period,conditions.conditionThreshold.aggregations.alignmentPeriod,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.aggregations.cross_series_reducer,conditions.conditionThreshold.aggregations.crossSeriesReducer,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.aggregations.group_by_fields,conditions.conditionThreshold.aggregations.groupByFields,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.aggregations.per_series_aligner,conditions.conditionThreshold.aggregations.perSeriesAligner,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.comparison,conditions.conditionThreshold.comparison,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.denominator_aggregations.alignment_period,conditions.conditionThreshold.denominatorAggregations.alignmentPeriod,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.denominator_aggregations.cross_series_reducer,conditions.conditionThreshold.denominatorAggregations.crossSeriesReducer,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.denominator_aggregations.group_by_fields,conditions.conditionThreshold.denominatorAggregations.groupByFields,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.denominator_aggregations.per_series_aligner,conditions.conditionThreshold.denominatorAggregations.perSeriesAligner,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.denominator_filter,conditions.conditionThreshold.denominatorFilter,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.duration,conditions.conditionThreshold.duration,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.evaluation_missing_data,conditions.conditionThreshold.evaluationMissingData,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.filter,conditions.conditionThreshold.filter,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.forecast_options.forecast_horizon,conditions.conditionThreshold.forecastOptions.forecastHorizon,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,conditions.condition_threshold.threshold_value,conditions.conditionThreshold.thresholdValue,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.trigger.count,conditions.conditionThreshold.trigger.count,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_alert_policy,,,conditions.condition_threshold.trigger.percent,conditions.conditionThreshold.trigger.percent,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,monitoring,AlertPolicy,conditions.display_name,conditions.displayName,served,
+google_monitoring_alert_policy,,,conditions.name,conditions.name,output-only,computed-only attribute; never part of a request body
+google_monitoring_alert_policy,,,creation_record,creationRecord,output-only,computed-only attribute; never part of a request body
+google_monitoring_alert_policy,,,deletion_policy,deletionPolicy,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,monitoring,AlertPolicy,display_name,displayName,served,
+google_monitoring_alert_policy,,,documentation.content,documentation.content,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,documentation.links.display_name,documentation.links.displayName,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,documentation.links.url,documentation.links.url,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,documentation.mime_type,documentation.mimeType,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,documentation.subject,documentation.subject,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,monitoring,AlertPolicy,enabled,enabled,served,
+google_monitoring_alert_policy,,,id,id,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,name,name,output-only,computed-only attribute; never part of a request body
+google_monitoring_alert_policy,,,notification_channels,notificationChannels,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,project,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_alert_policy,,,severity,severity,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_alert_policy,,,timeouts.create,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_alert_policy,,,timeouts.delete,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_alert_policy,,,timeouts.update,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_alert_policy,monitoring,AlertPolicy,user_labels,userLabels,served,
+google_monitoring_uptime_check_config,,,checker_type,checkerType,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,content_matchers.content,contentMatchers.content,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,content_matchers.json_path_matcher.json_matcher,contentMatchers.jsonPathMatcher.jsonMatcher,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,content_matchers.json_path_matcher.json_path,contentMatchers.jsonPathMatcher.jsonPath,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,content_matchers.matcher,contentMatchers.matcher,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,deletion_policy,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,display_name,displayName,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,http_check.accepted_response_status_codes.status_class,httpCheck.acceptedResponseStatusCodes.statusClass,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.accepted_response_status_codes.status_value,httpCheck.acceptedResponseStatusCodes.statusValue,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.auth_info.password,httpCheck.authInfo.password,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.auth_info.password_wo,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,http_check.auth_info.password_wo_version,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,http_check.auth_info.username,httpCheck.authInfo.username,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.body,httpCheck.body,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.content_type,httpCheck.contentType,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.custom_content_type,httpCheck.customContentType,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.headers,httpCheck.headers,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.mask_headers,httpCheck.maskHeaders,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.path,httpCheck.path,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,http_check.ping_config.pings_count,httpCheck.pingConfig.pingsCount,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.port,httpCheck.port,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,http_check.request_method,httpCheck.requestMethod,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,http_check.service_agent_authentication.type,httpCheck.serviceAgentAuthentication.type,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,http_check.use_ssl,httpCheck.useSsl,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,http_check.validate_ssl,httpCheck.validateSsl,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,id,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,log_check_failures,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,monitored_resource.labels,monitoredResource.labels,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,monitored_resource.type,monitoredResource.type,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,name,name,output-only,computed-only attribute; never part of a request body
+google_monitoring_uptime_check_config,,,period,period,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,project,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,resource_group.group_id,resourceGroup.groupId,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,resource_group.resource_type,resourceGroup.resourceType,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,selected_regions,selectedRegions,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,synthetic_monitor.cloud_function_v2.name,syntheticMonitor.cloudFunctionV2.name,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,tcp_check.ping_config.pings_count,tcpCheck.pingConfig.pingsCount,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,tcp_check.port,tcpCheck.port,not-exercised,the pinned module cases do not configure this attribute
+google_monitoring_uptime_check_config,,,timeout,timeout,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_monitoring_uptime_check_config,,,timeouts.create,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,timeouts.delete,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,timeouts.update,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_monitoring_uptime_check_config,,,uptime_check_id,uptimeCheckId,output-only,computed-only attribute; never part of a request body
+google_monitoring_uptime_check_config,,,user_labels,userLabels,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,alternative_location_id,alternativeLocationId,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,auth_enabled,authEnabled,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,auth_string,authString,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,authorized_network,authorizedNetwork,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,connect_mode,connectMode,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,create_time,createTime,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,current_location_id,currentLocationId,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,customer_managed_key,customerManagedKey,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,deletion_policy,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,deletion_protection,deletionProtection,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,display_name,displayName,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,effective_labels,effectiveLabels,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,effective_reserved_ip_range,effectiveReservedIpRange,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,host,host,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,id,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,labels,labels,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,location_id,locationId,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,maintenance_policy.create_time,maintenancePolicy.createTime,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,maintenance_policy.description,maintenancePolicy.description,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,maintenance_policy.update_time,maintenancePolicy.updateTime,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,maintenance_policy.weekly_maintenance_window.day,maintenancePolicy.weeklyMaintenanceWindow.day,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,maintenance_policy.weekly_maintenance_window.duration,maintenancePolicy.weeklyMaintenanceWindow.duration,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,maintenance_policy.weekly_maintenance_window.start_time.hours,maintenancePolicy.weeklyMaintenanceWindow.startTime.hours,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,maintenance_policy.weekly_maintenance_window.start_time.minutes,maintenancePolicy.weeklyMaintenanceWindow.startTime.minutes,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,maintenance_policy.weekly_maintenance_window.start_time.nanos,maintenancePolicy.weeklyMaintenanceWindow.startTime.nanos,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,maintenance_policy.weekly_maintenance_window.start_time.seconds,maintenancePolicy.weeklyMaintenanceWindow.startTime.seconds,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,maintenance_schedule,maintenanceSchedule,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,maintenance_version,maintenanceVersion,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,memory_size_gb,memorySizeGb,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,name,name,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,nodes,nodes,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,persistence_config.persistence_mode,persistenceConfig.persistenceMode,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,persistence_config.rdb_next_snapshot_time,persistenceConfig.rdbNextSnapshotTime,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,persistence_config.rdb_snapshot_period,persistenceConfig.rdbSnapshotPeriod,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,persistence_config.rdb_snapshot_start_time,persistenceConfig.rdbSnapshotStartTime,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,persistence_iam_identity,persistenceIamIdentity,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,port,port,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,project,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,read_endpoint,readEndpoint,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,read_endpoint_port,readEndpointPort,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,read_replicas_mode,readReplicasMode,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,redis_configs,redisConfigs,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,redis_version,redisVersion,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,region,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,replica_count,replicaCount,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,reserved_ip_range,reservedIpRange,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,secondary_ip_range,secondaryIpRange,not-exercised,the pinned module cases do not configure this attribute
+google_redis_instance,,,server_ca_certs,serverCaCerts,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,terraform_labels,terraformLabels,output-only,computed-only attribute; never part of a request body
+google_redis_instance,,,tier,tier,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_redis_instance,,,timeouts.create,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,timeouts.delete,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,timeouts.update,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
+google_redis_instance,,,transit_encryption_mode,transitEncryptionMode,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
