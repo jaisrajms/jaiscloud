@@ -1,0 +1,81 @@
+name: GCP mutation testing
+
+# FC6 — the weekly mutation gate.
+#
+# Mutation testing measures whether the suite would *catch* a changed behaviour:
+# a surviving mutant means an assertion is missing, which is exactly how the
+# TGM defects shipped. A full run costs minutes per package, so this is
+# scheduled (and dispatchable) rather than a pull_request check. The target is
+# diff-scoped: only the provider/grpc packages that changed in the last seven
+# days are mutated.
+on:
+  schedule:
+    - cron: '41 5 * * 1' # Mondays 05:41 UTC
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Comma-separated package dirs (empty = diff-scoped)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mutation:
+    name: Mutation (internal/gcp/provider + internal/gcp/grpc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            bin
+          key: ${{ runner.os }}-go-mutation-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-mutation-
+
+      - name: Run the diff-scoped mutation target
+        env:
+          PKG: ${{ github.event.inputs.scope }}
+        run: |
+          set -euo pipefail
+          base="$(git rev-list -1 --before='7 days ago' HEAD || true)"
+          [ -n "$base" ] || base="HEAD~1"
+          echo "mutation base: $base"
+          make gcp-mutation MUTATION_BASE="$base"
+
+      - name: Upload the mutation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-mutation-reports
+          path: bin/gcp-mutation-*.json
+          if-no-files-found: ignore
+
+      - name: Open (or update) a mutation issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="GCP mutation survivors ($(date +%F))"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length' | grep -q '^0$'; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The weekly mutation run failed or a target survived above its floor. See the workflow run's report artifacts: a target with a recorded floor survived above it, or the run itself failed. Add the missing assertion, or record the survivor as intentional in docs/gcp-mutation-floor.yaml (targets without a floor are reported only — see FC6-3)."
+          else
+            echo "an open mutation issue already exists; see the run log"
+          fi

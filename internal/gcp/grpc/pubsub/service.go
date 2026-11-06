@@ -291,6 +291,9 @@ func (s *Service) DeleteTopic(ctx context.Context, req *pubsubpb.DeleteTopicRequ
 		}
 		return nil, mapError(err)
 	}
+	// The topic's IAM policy is owned by the topic: a same-name recreate must
+	// not inherit it.
+	_ = s.resources.Delete(ctx, project, store.GlobalRegion, rtTopicPolicy, t)
 	// Existing subscriptions are not deleted; their topic is set to the
 	// sentinel "_deleted-topic_" (real Pub/Sub behaviour).
 	topicFull := topicName(project, t)
@@ -578,6 +581,14 @@ func (s *Service) DeleteSubscription(ctx context.Context, req *pubsubpb.DeleteSu
 		}
 		return nil, mapError(err)
 	}
+	// The subscription owns its backlog and its IAM policy; both go with it so a
+	// same-name recreate starts empty (matching the REST adapter).
+	if msgs, err := s.messages.List(ctx, sub); err == nil {
+		for _, m := range msgs {
+			_ = s.messages.Delete(ctx, sub, m.MessageID)
+		}
+	}
+	_ = s.resources.Delete(ctx, project, store.GlobalRegion, rtSubscriptionPolicy, sub)
 	return &emptypb.Empty{}, nil
 }
 

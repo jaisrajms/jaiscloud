@@ -426,3 +426,23 @@ external compat repo). It is now an independent Terraform/OpenTofu provider
 conformance suite; floci-gcp is not its spec (real GCP is). See
 `plan_docs/gcp-terraform-compat-2026-09-22.md` for the findings that motivated
 it.
+
+## Provider request capture (FC6)
+
+Every module gate captures the provider's outgoing requests and joins them to
+the field catalog, so a field the provider sends but the emulator does not serve
+fails the gate instead of being chased as a mysterious plan diff:
+
+- `run-module.sh` runs `terraform providers schema -json` after `init`, then sets
+  `TF_LOG=DEBUG TF_LOG_PATH=$WORK/tf-debug.log` for the apply phases;
+- `tools/tfcapture` parses the `---[ REQUEST ]---` blocks, maps each write to its
+  provider resource, and joins the body attributes to
+  `docs/fidelity/provider-attributes.csv` and `docs/fidelity/field-coverage.csv`;
+- a sent-but-unsupported attribute, a sent attribute with no mapping row, and a
+  mapping row the provider no longer declares all fail the case.
+
+`JC_TF_CAPTURE=0` disables the capture for local debugging; `JC_TF_KEEP=1` keeps
+`$WORK` (debug log, schema, captured bodies) after the run. The weekly
+`.github/workflows/gcp-provider-drift.yml` job re-runs the gates, diffs the
+provider schema against `docs/fidelity/terraform-provider-schema.json`, and opens
+an issue with the schema diff.

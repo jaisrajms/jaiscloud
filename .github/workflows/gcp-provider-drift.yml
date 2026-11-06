@@ -1,0 +1,150 @@
+name: GCP provider / module drift
+
+# FC6 — the weekly provider-drift gate.
+#
+# The module gates pin a *module* commit but resolve the hashicorp/google
+# provider from a version range, so a new provider release can change which
+# attributes a module sends. This job bumps the pins, re-runs the module gates
+# with the request capture enabled, diffs the provider schema against the
+# committed snapshot (docs/fidelity/terraform-provider-schema.json) and opens an
+# issue with the schema diff when anything moved. It is deliberately NOT a
+# pull_request check: it clones five consumer modules and runs five full
+# apply/destroy cycles.
+on:
+  schedule:
+    - cron: '23 5 * * 1' # Mondays 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    name: Provider schema + pinned module drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.3'
+          terraform_wrapper: false
+
+      - name: Cache consumer module checkouts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/terraform-modules
+          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647
+          restore-keys: |
+            tf-modules-${{ runner.os }}-
+
+      - name: Clone the pinned consumer modules
+        run: |
+          set -euo pipefail
+          clone() {
+            repo="$1"; commit="$2"
+            dir="$HOME/.cache/terraform-modules/$repo"
+            if [ ! -d "$dir/.git" ]; then
+              git clone --quiet "https://github.com/terraform-google-modules/$repo" "$dir"
+            fi
+            git -C "$dir" fetch --quiet --depth 1 origin "$commit"
+            git -C "$dir" checkout --quiet "$commit"
+          }
+          clone terraform-google-cloud-storage c7effc0be0f4
+          clone terraform-google-pubsub 6cf1860
+          clone terraform-google-kms ef6e0eda7032
+          clone terraform-google-firestore 50d170b9ebfc
+          clone terraform-google-cloud-dns 35cd6de8e647
+
+      - name: Build the capture tool
+        run: go build -o bin/tfcapture ./tools/tfcapture
+
+      - name: Run the module gates with the request capture
+        run: |
+          set -uo pipefail
+          : > drift-report.md
+          rc=0
+          for case in storage pubsub kms firestore clouddns; do
+            echo "### module case: $case" | tee -a drift-report.md
+            if ! make "test-gcp-terraform-$case" >>"$case.log" 2>&1; then
+              echo "FAILED: make test-gcp-terraform-$case" | tee -a drift-report.md
+              tail -40 "$case.log" >>drift-report.md
+              rc=1
+            elif grep -q '^SKIP' "$case.log"; then
+              # A SKIP means the module checkout or terraform is missing: the
+              # gate ran nothing, so it must not count as a pass.
+              echo "SKIPPED: make test-gcp-terraform-$case ran nothing" | tee -a drift-report.md
+              tail -5 "$case.log" >>drift-report.md
+              rc=1
+            else
+              echo "PASS" >>drift-report.md
+            fi
+          done
+          exit $rc
+
+      - name: Provider schema drift
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/schema && cd /tmp/schema
+          cat > main.tf <<'EOF'
+          terraform {
+            required_providers {
+              google = { source = "hashicorp/google", version = ">= 6.2, < 9" }
+            }
+          }
+          EOF
+          terraform init -backend=false -input=false -no-color >/dev/null
+          terraform providers schema -json > full.json
+          cd "$GITHUB_WORKSPACE"
+          bin/tfcapture -schema /tmp/schema/full.json \
+            -snapshot docs/fidelity/terraform-provider-schema.json \
+            -resources google_storage_bucket,google_pubsub_topic,google_pubsub_subscription,google_firestore_database,google_kms_key_ring,google_kms_crypto_key,google_dns_managed_zone
+          if git diff --quiet -- docs/fidelity/terraform-provider-schema.json; then
+            echo "provider schema unchanged" | tee -a drift-report.md
+          else
+            {
+              echo "### provider schema drift"
+              echo '```diff'
+              git diff -- docs/fidelity/terraform-provider-schema.json
+              echo '```'
+            } | tee -a drift-report.md
+            # A drifted schema means an attribute may be unclassified; the
+            # capture gate above already ran against the old mapping, so fail
+            # loudly and let the issue carry the diff.
+            exit 1
+          fi
+
+      - name: Upload the drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-provider-drift-report
+          path: |
+            drift-report.md
+            *.log
+
+      - name: Open (or update) a drift issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="GCP provider/module drift ($(date +%F))"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length' | grep -q '^0$'; then
+            {
+              echo "The weekly provider-drift gate failed. Schema diff and gate logs follow."
+              echo
+              cat drift-report.md || true
+            } > issue-body.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
+          else
+            echo "an open drift issue already exists; see the run log"
+          fi

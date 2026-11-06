@@ -471,7 +471,7 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
 
 test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow)
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/...
 
 test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
 	go test -count=1 -tags release ./tests/release/...
@@ -1034,13 +1034,55 @@ test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one t
 	@mv -f report.json bin/gcp-mutation-report.json
 	@echo "Mutation report: bin/gcp-mutation-report.json"
 
-test-gcp-mutation-ratchet: test-gcp-mutation ## Mutation score + committed floor gate for PKG (local; PKG=…, default datastore-core)
-	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -mutation-ratchet -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)"
+gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provider + internal/gcp/grpc (local/weekly, not PR CI)
+	@set -e; \
+	  pkgs="$(PKG)"; \
+	  base="$(MUTATION_BASE)"; \
+	  if [ -z "$$pkgs" ]; then \
+	    if ! git rev-parse --verify -q "$$base" >/dev/null; then base=HEAD~1; fi; \
+	    echo "gcp-mutation: changed packages under $(MUTATION_SCOPE) since $$base"; \
+	    pkgs=$$(git diff --name-only "$$base"...HEAD -- $(MUTATION_SCOPE) \
+	      | grep -E '\.go$$' | xargs -r -n1 dirname | sort -u \
+	      | while read -r d; do \
+	          case "$$d" in *pb) continue;; esac; \
+	          ls "$$d"/*_test.go >/dev/null 2>&1 && echo "$$d"; \
+	        done); \
+	  fi; \
+	  if [ -z "$$pkgs" ]; then echo "gcp-mutation: nothing to mutate"; exit 0; fi; \
+	  for pkg in $$pkgs; do \
+	    pkg="$${pkg#./}"; \
+	    [ -d "$$pkg" ] || continue; \
+	    if [ -z "$(MUTATION_FORCE)" ] && [ -n "$$(git status --porcelain -- "$$pkg" | grep -v '^??')" ]; then \
+	      echo "refusing: uncommitted tracked changes under $$pkg (go-mutesting rewrites files in place; commit/stash or MUTATION_FORCE=1)"; exit 1; \
+	    fi; \
+	  done; \
+	  mkdir -p bin; rc=0; \
+	  restore() { for f in $$(find $$pkgs -name '*.tmp' 2>/dev/null); do echo ">> restoring $$f"; mv -f "$$f" "$${f%.tmp}"; done; }; \
+	  trap 'restore; exit 130' INT TERM; \
+	  for pkg in $$pkgs; do \
+	    pkg="$${pkg#./}"; \
+	    [ -d "$$pkg" ] || { echo "  skip (no such package): $$pkg"; continue; }; \
+	    echo "== mutation: $$pkg"; \
+	    rm -f report.json; \
+	    if $(MUTESTING_BIN) --exec-timeout=$(MUTATION_TIMEOUT) $(MUTATION_EXTRA) "./$$pkg"; then \
+	      restore; \
+	      name=$$(echo "$$pkg" | tr '/' '-'); \
+	      mv -f report.json "bin/gcp-mutation-$$name.json"; \
+	      echo "  report: bin/gcp-mutation-$$name.json"; \
+	      if grep -qE "^[[:space:]]*- package: $$pkg$$" docs/gcp-mutation-floor.yaml 2>/dev/null; then \
+	        go build -o bin/gcpstatus ./tools/gcpstatus; \
+	        bin/gcpstatus -mutation-ratchet -mutation-report "bin/gcp-mutation-$$name.json" -mutation-floor docs/gcp-mutation-floor.yaml -mutation-target "$$pkg" || rc=1; \
+	      else \
+	        echo "  no mutation floor for $$pkg (FC6-3); reported only"; \
+	      fi; \
+	    else \
+	      echo "  mutation run failed for $$pkg"; restore; rc=1; \
+	    fi; \
+	  done; \
+	  exit $$rc
 
-test-gcp-mutation-update: test-gcp-mutation ## Rewrite the mutation floor for PKG from a fresh run (ratchet up; ALLOW_LOWER=1 to drop)
-	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -mutation-floor-update -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)" $(if $(ALLOW_LOWER),-allow-lower,)
+test-gcp-provider-capture: ## FC6 capture-gate self-test (parser, empty-label fixture, mapping/catalog join)
+	go test -race -count=1 ./tools/tfcapture/... ./tools/providerschema/...
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
@@ -1661,11 +1703,15 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 # `docs/fidelity` (any change to a conformance check or an operation's evidence)
 # is the most common red-CI cause and `check-gcp-fidelity-matrix` catches it
 # locally, after regenerating the matrix to be committed.
+test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-process state oracle)
+	go test -race -count=1 ./tests/gcplifecycle/...
+
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
+	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/...
 	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 	$(MAKE) --no-print-directory check-gcp-field-coverage
 	$(MAKE) --no-print-directory check-gcp-fidelity-matrix

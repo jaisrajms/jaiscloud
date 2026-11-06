@@ -1,0 +1,26 @@
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: ---[ REQUEST ]---------------------------------------
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: POST /storage/v1/b?alt=json&prettyPrint=false&project=probe-project HTTP/1.1
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: Host: localhost:18080
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: User-Agent: google-api-go-client/0.5 Terraform/1.16.3 (+https://www.terraform.io) Terraform-Plugin-SDK/2.40.1 terraform-provider-google/7.46.2
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: Content-Length: 221
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: Content-Type: application/json
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: X-Goog-Api-Client: gl-go/1.26.10 gdcl/0.293.0
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: Accept-Encoding: gzip
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: {
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  "iamConfiguration": {
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:   "uniformBucketLevelAccess": {
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:    "enabled": false
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:   }
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  },
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  "labels": {
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:   "env": "probe",
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:   "goog-terraform-provisioned": "true"
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  },
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  "lifecycle": {
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:   "rule": []
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  },
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  "location": "US",
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  "name": "jc-probe-bucket2",
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5:  "storageClass": "STANDARD"
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: }
+2026-11-05T18:04:17.408-0800 [DEBUG] provider.terraform-provider-google_v7.46.2_x5: -----------------------------------------------------
