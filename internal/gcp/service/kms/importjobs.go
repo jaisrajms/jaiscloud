@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -42,29 +43,70 @@ type RetiredResource struct {
 	DeleteTime       time.Time
 }
 
-func retiredResourceID(location, keyID string) string { return location + "/" + keyID }
+// retiredResourceID is the store key for a retired crypto key. It includes the
+// key ring: a crypto key id is only unique within its ring, so a location-only
+// key ("global/k") would let deleting k in ring r1 retire k in ring r2 as well.
+// The public RetiredResource name stays location-scoped
+// (projects/*/locations/*/retiredResources/*); store keys are not resource names.
+func retiredResourceID(location, keyRing, keyID string) string {
+	return location + "/" + keyRing + "/" + keyID
+}
 
-// GetRetiredResource returns a retired resource by location-qualified id.
-func (s *Service) GetRetiredResource(ctx context.Context, project, location, id string) (RetiredResource, error) {
-	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(location, id))
+// retiredResourcePublicID is the opaque last segment of a RetiredResource name.
+// It embeds the key ring because the public id must be unique within the
+// location: two rings may both retire a key called k. "~" is not in the
+// documented KMS id alphabet ([a-zA-Z0-9_-]{1,63}), so the join is unambiguous
+// for ids that respect it (the emulator does not enforce the charset, matching
+// its existing create paths).
+func retiredResourcePublicID(keyRing, keyID string) string { return keyRing + "~" + keyID }
+
+// legacyRetiredResourceID is the pre-ring-aware store key ("location/key").
+// Rows written before the key became ring-scoped stay readable: the code that
+// looks up a retirement also consults this id and compares the record's
+// OriginalResource, which always carried the ring.
+func legacyRetiredResourceID(location, keyID string) string { return location + "/" + keyID }
+
+// cryptoKeyNameRetired reports whether the crypto key (keyRing, keyID) is
+// already retired. It checks the ring-scoped row first, then a legacy
+// location-scoped row whose originalResource names this exact key (a legacy row
+// for a different ring's key must not block this one).
+func (s *Service) cryptoKeyNameRetired(ctx context.Context, project, location, keyRing, keyID string) (bool, error) {
+	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(location, keyRing, keyID)); err == nil {
+		return true, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, legacyRetiredResourceID(location, keyID))
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
 	if err != nil {
-		return RetiredResource{}, notFound("retired resource not found")
+		return false, err
 	}
 	var rr RetiredResource
 	if err := json.Unmarshal(e.Data, &rr); err != nil {
-		return RetiredResource{}, err
+		// An unreadable legacy record cannot prove which ring it retired; keep
+		// the conservative pre-fix behavior and treat the name as retired.
+		return true, nil
 	}
-	return rr, nil
+	return rr.OriginalResource == CryptoKeyName(project, location, keyRing, keyID), nil
 }
 
-// ListRetiredResources lists a location's retired resources.
-func (s *Service) ListRetiredResources(ctx context.Context, project, location string) ([]RetiredResource, error) {
+// locationRetiredResources lists every retired-resource record stored under a
+// location. ResourceStore.List is an unanchored substring match, so the result
+// is re-anchored on the location to keep a location like "us" from matching
+// "us-central1/r/k". Rows whose payload cannot be decoded are skipped.
+func (s *Service) locationRetiredResources(ctx context.Context, project, location string) ([]RetiredResource, error) {
 	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtRetiredResource, location+"/")
 	if err != nil {
 		return nil, err
 	}
+	prefix := location + "/"
 	out := make([]RetiredResource, 0, len(entries))
 	for _, e := range entries {
+		if !strings.HasPrefix(e.ID, prefix) {
+			continue
+		}
 		var rr RetiredResource
 		if err := json.Unmarshal(e.Data, &rr); err != nil {
 			continue
@@ -72,6 +114,29 @@ func (s *Service) ListRetiredResources(ctx context.Context, project, location st
 		out = append(out, rr)
 	}
 	return out, nil
+}
+
+// GetRetiredResource returns a retired resource by its location-scoped public
+// id (the last segment of the name). Store rows are ring-keyed, so the
+// location's records are matched by their public name; a legacy record written
+// before the id embedded the ring is still addressable by its old name.
+func (s *Service) GetRetiredResource(ctx context.Context, project, location, id string) (RetiredResource, error) {
+	want := RetiredResourceName(project, location, id)
+	rrs, err := s.locationRetiredResources(ctx, project, location)
+	if err != nil {
+		return RetiredResource{}, err
+	}
+	for _, rr := range rrs {
+		if rr.Name == want {
+			return rr, nil
+		}
+	}
+	return RetiredResource{}, notFound("retired resource not found")
+}
+
+// ListRetiredResources lists a location's retired resources.
+func (s *Service) ListRetiredResources(ctx context.Context, project, location string) ([]RetiredResource, error) {
+	return s.locationRetiredResources(ctx, project, location)
 }
 
 // ImportJob is the domain view of a Cloud KMS import job. PublicKeyPEM is set

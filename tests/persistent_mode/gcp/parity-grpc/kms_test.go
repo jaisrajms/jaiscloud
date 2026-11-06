@@ -45,7 +45,7 @@ func seedKMS(d *driver, suffix string) (func() error, func() error, func() error
 	ringName := parent + "/keyRings/" + ringID
 	keyName := ringName + "/cryptoKeys/" + keyID
 	jobName := ringName + "/importJobs/" + jobID
-	retiredName := parent + "/retiredResources/" + keyID
+	retiredName := parent + "/retiredResources/" + ringID + "~" + keyID
 
 	seed := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

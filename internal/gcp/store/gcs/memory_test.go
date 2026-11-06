@@ -205,3 +205,61 @@ func TestMemoryObjectStoreDeleteObjectMetaChecked(t *testing.T) {
 		t.Fatalf("expected ErrNoSuchObject after delete, got %v", err)
 	}
 }
+
+func TestMemoryObjectStoreDeleteBucketChecked(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryObjectStore()
+	if err := s.CreateBucket(ctx, "proj", "bkt", map[string]any{"location": "US"}); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	// A stale metageneration is rejected and the bucket survives; the same id
+	// then deletes once the precondition matches.
+	stale := int64(999)
+	if err := s.DeleteBucketChecked(ctx, "bkt", &Precondition{MetagenerationMatch: &stale}); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("stale metageneration = %v, want ErrPreconditionFailed", err)
+	}
+	if _, err := s.GetBucket(ctx, "bkt"); err != nil {
+		t.Fatalf("bucket must survive a rejected conditional delete: %v", err)
+	}
+	current := int64(1)
+	if err := s.DeleteBucketChecked(ctx, "bkt", &Precondition{MetagenerationNotMatch: &current}); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("matching metageneration_not_match = %v, want ErrPreconditionFailed", err)
+	}
+	if err := s.DeleteBucketChecked(ctx, "bkt", &Precondition{MetagenerationMatch: &current}); err != nil {
+		t.Fatalf("delete with matching metageneration: %v", err)
+	}
+	if _, err := s.GetBucket(ctx, "bkt"); !errors.Is(err, ErrNoSuchBucket) {
+		t.Fatalf("bucket still present after conditional delete: %v", err)
+	}
+	if err := s.DeleteBucketChecked(ctx, "bkt", nil); !errors.Is(err, ErrNoSuchBucket) {
+		t.Fatalf("delete of a missing bucket = %v, want ErrNoSuchBucket", err)
+	}
+}
+
+func TestMemoryObjectStoreDeleteResumableByBucket(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryObjectStore()
+	base := time.Now()
+	for _, sess := range []ResumableSession{
+		{UploadID: "u1", Bucket: "bkt", Name: "a", LastAccess: base},
+		{UploadID: "u2", Bucket: "bkt", Name: "b", LastAccess: base},
+		{UploadID: "u3", Bucket: "other", Name: "c", LastAccess: base},
+	} {
+		if err := s.InitResumable(ctx, sess); err != nil {
+			t.Fatalf("init %s: %v", sess.UploadID, err)
+		}
+	}
+	if err := s.DeleteResumableByBucket(ctx, "bkt"); err != nil {
+		t.Fatalf("delete by bucket: %v", err)
+	}
+	for _, want := range []struct {
+		id      string
+		deleted bool
+	}{{"u1", true}, {"u2", true}, {"u3", false}} {
+		_, err := s.GetResumable(ctx, want.id)
+		if got := errors.Is(err, ErrNoSuchUpload); got != want.deleted {
+			t.Errorf("session %s deleted=%v, want %v (err=%v)", want.id, got, want.deleted, err)
+		}
+	}
+}

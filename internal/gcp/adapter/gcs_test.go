@@ -1048,3 +1048,28 @@ func TestGCSCodecNotificationConfigsRouting(t *testing.T) {
 		})
 	}
 }
+
+// TestGCSCodecEncodeErrorPreconditionReason pins the documented GCS reason for
+// a 412 (a failed ifMetagenerationMatch on buckets.delete, or an etag OCC
+// mismatch): it used to fall through to "internalError".
+func TestGCSCodecEncodeErrorPreconditionReason(t *testing.T) {
+	c := &GCSCodec{}
+	perr := model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+	status, _, body := c.EncodeError(nil, perr)
+	if status != 412 {
+		t.Fatalf("expected status 412, got %d", status)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	errObj, _ := env["error"].(map[string]any)
+	errorsArr, _ := errObj["errors"].([]any)
+	if len(errorsArr) == 0 {
+		t.Fatal("expected errors[] array")
+	}
+	first, _ := errorsArr[0].(map[string]any)
+	if first["reason"] != "conditionNotMet" {
+		t.Fatalf("reason = %v, want conditionNotMet", first["reason"])
+	}
+}

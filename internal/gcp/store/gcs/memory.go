@@ -98,11 +98,19 @@ func (s *MemoryObjectStore) UpdateBucketMetaAtomic(_ context.Context, name strin
 	)
 }
 
-func (s *MemoryObjectStore) DeleteBucket(_ context.Context, name string) error {
+func (s *MemoryObjectStore) DeleteBucket(ctx context.Context, name string) error {
+	return s.DeleteBucketChecked(ctx, name, nil)
+}
+
+func (s *MemoryObjectStore) DeleteBucketChecked(_ context.Context, name string, p *Precondition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.buckets[name]; !ok {
+	meta, ok := s.buckets[name]
+	if !ok {
 		return ErrNoSuchBucket
+	}
+	if !BucketMetagenerationMatches(meta, p) {
+		return ErrPreconditionFailed
 	}
 	// GCS allows deleting a bucket that only holds soft-deleted objects (the
 	// delete succeeds and the soft-deleted objects are retained with the
@@ -593,6 +601,17 @@ func (s *MemoryObjectStore) DeleteResumable(_ context.Context, uploadID string) 
 		return ErrNoSuchUpload
 	}
 	delete(s.uploads, uploadID)
+	return nil
+}
+
+func (s *MemoryObjectStore) DeleteResumableByBucket(_ context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, sess := range s.uploads {
+		if sess.Bucket == bucket {
+			delete(s.uploads, id)
+		}
+	}
 	return nil
 }
 

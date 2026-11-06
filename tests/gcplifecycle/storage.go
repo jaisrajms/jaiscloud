@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -190,9 +191,9 @@ func (a *storageAdapter) remove(ctx context.Context, tr transport, id string) er
 }
 
 func (a *storageAdapter) blockedDelete(ctx context.Context, tr transport, id string) []blockedResult {
-	// GCS has no etag precondition on bucket delete in the emulator; the
-	// documented block is a non-empty bucket. Stage an object, attempt the
-	// delete, and leave the bucket as it was.
+	// Two documented blocks survive on a bucket delete: the bucket is not empty,
+	// and an unsatisfied ifMetagenerationMatch preprocessing precondition. Stage
+	// an object, attempt the delete, and leave the bucket as it was.
 	if err := a.putObject(ctx, id, "blocked-obj"); err != nil {
 		return []blockedResult{{name: "stage-object", err: err, wantCode: "FailedPrecondition"}}
 	}
@@ -206,6 +207,45 @@ func (a *storageAdapter) blockedDelete(ctx context.Context, tr transport, id str
 	if err := a.objects.DeleteObjectMeta(ctx, id, "blocked-obj"); err != nil {
 		res = append(res, blockedResult{name: "cleanup-object", err: err})
 	}
+
+	// An unsatisfied ifMetagenerationMatch must be rejected (412 REST /
+	// FAILED_PRECONDITION gRPC) and the bucket must survive. Derive a value that
+	// cannot match from the bucket's current metageneration so the probe does
+	// not depend on how many updates ran before it.
+	var stale int64
+	if tr == grpcT {
+		b, err := a.client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: "projects/_/buckets/" + id})
+		if err != nil {
+			return append(res, blockedResult{name: "read-metageneration", err: err})
+		}
+		stale = b.GetMetageneration() + 1
+	} else {
+		resp, err := a.prov.BucketsGet(ctx, a.bucketNR(id, nil))
+		if err != nil {
+			return append(res, blockedResult{name: "read-metageneration", err: err})
+		}
+		current, err := strconv.ParseInt(fmt.Sprint(resp.Data["metageneration"]), 10, 64)
+		if err != nil {
+			return append(res, blockedResult{name: "read-metageneration", err: err})
+		}
+		stale = current + 1
+	}
+	wantPre := "PreconditionFailed"
+	if tr == grpcT {
+		wantPre = "FailedPrecondition"
+	}
+	var perr error
+	if tr == grpcT {
+		_, perr = a.client.DeleteBucket(ctx, &storagepb.DeleteBucketRequest{
+			Name:                  "projects/_/buckets/" + id,
+			IfMetagenerationMatch: &stale,
+		})
+	} else {
+		nr := a.bucketNR(id, nil)
+		nr.Params["ifMetagenerationMatch"] = strconv.FormatInt(stale, 10)
+		_, perr = a.prov.BucketsDelete(ctx, nr)
+	}
+	res = append(res, blockedResult{name: "stale-metageneration", err: perr, wantCode: wantPre})
 	return res
 }
 

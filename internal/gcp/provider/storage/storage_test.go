@@ -1423,6 +1423,14 @@ func TestResumableSessionValidation(t *testing.T) {
 		t.Errorf("expected 400 ProviderError, got %v", err)
 	}
 
+	// Start against a missing bucket → 404 NotFound.
+	nr = bucketParams()
+	nr.Params["bucket"] = "missing"
+	nr.Params["object"] = "x.bin"
+	if _, err := p.ObjectsInsertStartResumable(ctx, nr); !isNotFoundProviderError(err) {
+		t.Errorf("expected 404 NotFound on a missing bucket, got %v", err)
+	}
+
 	// Chunk for an unknown upload_id → 404.
 	nr = bucketParams()
 	nr.Params["upload_id"] = "nope"
@@ -2720,4 +2728,159 @@ func TestBucketLabelsKeepEmptyValues(t *testing.T) {
 	if _, present := labels["project"]; present {
 		t.Fatalf("project should be replaced away by the label-set PATCH: %v", labels)
 	}
+}
+
+// TestBucketsDeleteInvalidatesResumableSessions pins FC5-1 on the REST path: a
+// resumable upload staged against a bucket dies with it — the in-memory and
+// durable session records are dropped, and a finalize answers NotFound instead
+// of writing into a missing bucket or surfacing a late ErrNoSuchBucket.
+func TestBucketsDeleteInvalidatesResumableSessions(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "big.bin"
+	start, err := p.ObjectsInsertStartResumable(ctx, nr)
+	if err != nil {
+		t.Fatalf("start resumable: %v", err)
+	}
+	uploadID := extractUploadID(t, start)
+	if _, err := p.objects.GetResumable(ctx, uploadID); err != nil {
+		t.Fatalf("session must be mirrored to the durable store: %v", err)
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	if _, err := p.BucketsDelete(ctx, nr); err != nil {
+		t.Fatalf("delete bucket: %v", err)
+	}
+
+	if _, err := p.objects.GetResumable(ctx, uploadID); !errors.Is(err, gcs.ErrNoSuchUpload) {
+		t.Fatalf("durable session survived the bucket delete: %v", err)
+	}
+	p.mu.Lock()
+	_, inMemory := p.uploads[uploadID]
+	p.mu.Unlock()
+	if inMemory {
+		t.Fatal("in-memory resumable session survived the bucket delete")
+	}
+
+	// Finalizing the dead session is NotFound (unknown upload_id), not a
+	// missing-bucket/internal error.
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-4/5"
+	nr.Params[wire.MediaKey] = []byte("hello")
+	_, err = p.ObjectsInsertResumable(ctx, nr)
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "NotFound" || perr.HTTPStatus != 404 {
+		t.Fatalf("finalize after bucket delete = %v, want NotFound/404", err)
+	}
+}
+
+// TestBucketsDeleteHonoursMetagenerationPreconditions pins FC5-5 on the REST
+// path: buckets.delete's ifMetagenerationMatch/NotMatch are enforced atomically
+// with the delete (412 on a mismatch, the bucket survives).
+func TestBucketsDeleteHonoursMetagenerationPreconditions(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	for _, name := range []string{"pre-match", "pre-notmatch"} {
+		nr := bucketParams()
+		nr.Params["body"] = map[string]any{"name": name}
+		if _, err := p.BucketsInsert(ctx, nr); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "pre-match"
+	nr.Params["ifMetagenerationMatch"] = "999"
+	if _, err := p.BucketsDelete(ctx, nr); !isPreconditionFailure(err) {
+		t.Fatalf("stale ifMetagenerationMatch = %v, want 412 PreconditionFailed", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-match"
+	if _, err := p.BucketsGet(ctx, nr); err != nil {
+		t.Fatalf("bucket must survive a rejected conditional delete: %v", err)
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-notmatch"
+	nr.Params["ifMetagenerationNotMatch"] = "1"
+	if _, err := p.BucketsDelete(ctx, nr); !isPreconditionFailure(err) {
+		t.Fatalf("matching ifMetagenerationNotMatch = %v, want 412 PreconditionFailed", err)
+	}
+
+	// A present but malformed precondition is rejected instead of silently
+	// dropping the condition (which would delete unconditionally).
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-notmatch"
+	nr.Params["ifMetagenerationMatch"] = "abc"
+	if _, err := p.BucketsDelete(ctx, nr); !isInvalidRequest(err) {
+		t.Fatalf("malformed ifMetagenerationMatch = %v, want 400 InvalidRequest", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-notmatch"
+	if _, err := p.BucketsGet(ctx, nr); err != nil {
+		t.Fatalf("bucket must survive a rejected malformed precondition: %v", err)
+	}
+
+	// A stale precondition outranks the non-empty condition: 412, not 409.
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-match"
+	nr.Params["object"] = "stage"
+	nr.Params[wire.MediaKey] = []byte("x")
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("stage object: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-match"
+	nr.Params["ifMetagenerationMatch"] = "999"
+	if _, err := p.BucketsDelete(ctx, nr); !isPreconditionFailure(err) {
+		t.Fatalf("stale precondition on a non-empty bucket = %v, want 412 (not 409)", err)
+	}
+	if _, err := p.ObjectsDelete(ctx, bucketParamsWithObj("pre-match", "stage")); err != nil {
+		t.Fatalf("delete staged object: %v", err)
+	}
+
+	// A matching precondition deletes.
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-match"
+	nr.Params["ifMetagenerationMatch"] = "1"
+	if _, err := p.BucketsDelete(ctx, nr); err != nil {
+		t.Fatalf("delete with matching metageneration: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-match"
+	if _, err := p.BucketsGet(ctx, nr); !isNotFoundProviderError(err) {
+		t.Fatalf("bucket still present after conditional delete: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "pre-notmatch"
+	if _, err := p.BucketsGet(ctx, nr); err != nil {
+		t.Fatalf("bucket must survive a rejected metageneration_not_match: %v", err)
+	}
+}
+
+// isPreconditionFailure reports whether err is the 412 PreconditionFailed
+// provider error the bucket-delete preconditions produce.
+func isPreconditionFailure(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.HTTPStatus == 412
+}
+
+func isNotFoundProviderError(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound" && perr.HTTPStatus == 404
+}
+
+func isInvalidRequest(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "InvalidRequest" && perr.HTTPStatus == 400
 }

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +19,11 @@ import (
 	gcpcrypto "jaiscloud/internal/gcp/crypto"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/wire"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
 	"google.golang.org/grpc"
@@ -1823,5 +1827,297 @@ func TestGRPCListObjectsVersionsPageWalk(t *testing.T) {
 	want := []string{"dup#3", "dup#2", "dup#1", "other#1", "zzz#1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("versions walk = %v, want %v", got, want)
+	}
+}
+
+// TestDeleteBucketPreconditions pins FC5-5 on the gRPC path: the proto's
+// if_metageneration_match / not_match are enforced atomically with the delete
+// (FAILED_PRECONDITION on a mismatch) and the bucket survives.
+func TestDeleteBucketPreconditions(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	stale := int64(999)
+	if _, err := client.DeleteBucket(ctx, &storagepb.DeleteBucketRequest{Name: testBucket, IfMetagenerationMatch: &stale}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale if_metageneration_match = %v, want FailedPrecondition", err)
+	}
+	if _, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucket}); err != nil {
+		t.Fatalf("bucket must survive a rejected conditional delete: %v", err)
+	}
+	current := int64(1)
+	if _, err := client.DeleteBucket(ctx, &storagepb.DeleteBucketRequest{Name: testBucket, IfMetagenerationNotMatch: &current}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("matching if_metageneration_not_match = %v, want FailedPrecondition", err)
+	}
+	if _, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucket}); err != nil {
+		t.Fatalf("bucket must survive a rejected metageneration_not_match: %v", err)
+	}
+	if _, err := client.DeleteBucket(ctx, &storagepb.DeleteBucketRequest{Name: testBucket, IfMetagenerationMatch: &current}); err != nil {
+		t.Fatalf("delete with matching metageneration: %v", err)
+	}
+	if _, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucket}); status.Code(err) != codes.NotFound {
+		t.Fatalf("bucket still present after conditional delete: %v", err)
+	}
+}
+
+// TestWriteObjectMissingBucketIsNotFound pins FC5-2: the raw gcs.ErrNoSuchBucket
+// from the store must map to NOT_FOUND on the write/finalize path, exactly as
+// REST answers 404 (it used to fall through to codes.Internal).
+func TestWriteObjectMissingBucketIsNotFound(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	restNR := &model.NormalizedRequest{
+		AccountID:  "test-project",
+		Params:     map[string]any{"bucket": "missing", "object": "o", "body": map[string]any{"name": "o"}},
+		ResourceID: resource.ResourceID("test-project"),
+	}
+	if _, err := svc.provider.ObjectsInsert(ctx, restNR); !isHTTPNotFound(err) {
+		t.Fatalf("REST insert into a missing bucket = %v, want 404 NotFound", err)
+	}
+	startNR := &model.NormalizedRequest{
+		AccountID:  "test-project",
+		Params:     map[string]any{"bucket": "missing", "object": "o"},
+		ResourceID: resource.ResourceID("test-project"),
+	}
+	if _, err := svc.provider.ObjectsInsertStartResumable(ctx, startNR); !isHTTPNotFound(err) {
+		t.Fatalf("REST resumable start into a missing bucket = %v, want 404 NotFound", err)
+	}
+	if _, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Bucket: "projects/_/buckets/missing", Name: "o"},
+		},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("gRPC resumable start into a missing bucket = %v, want NotFound", err)
+	}
+
+	stream, err := client.WriteObject(ctx)
+	if err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.WriteObjectRequest{
+		FirstMessage: &storagepb.WriteObjectRequest_WriteObjectSpec{
+			WriteObjectSpec: &storagepb.WriteObjectSpec{
+				Resource: &storagepb.Object{Bucket: "projects/_/buckets/missing", Name: "o"},
+			},
+		},
+		Data:        &storagepb.WriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: []byte("x")}},
+		FinishWrite: true,
+	}); err != nil {
+		t.Fatalf("WriteObject Send: %v", err)
+	}
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.NotFound {
+		t.Fatalf("gRPC write into a missing bucket = %v, want NotFound", err)
+	}
+}
+
+// TestDeleteBucketInvalidatesResumableSession pins FC5-1 on the gRPC path: a
+// resumable write staged against a bucket is dropped when the bucket is
+// deleted, so resuming it answers NotFound.
+func TestDeleteBucketInvalidatesResumableSession(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Bucket: testBucket, Name: "big.bin", ContentType: "application/octet-stream"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+	if uploadID == "" {
+		t.Fatal("StartResumableWrite returned an empty upload_id")
+	}
+	svc.mu.Lock()
+	_, present := svc.uploads[uploadID]
+	svc.mu.Unlock()
+	if !present {
+		t.Fatal("session was not registered")
+	}
+
+	if _, err := client.DeleteBucket(ctx, &storagepb.DeleteBucketRequest{Name: testBucket}); err != nil {
+		t.Fatalf("DeleteBucket: %v", err)
+	}
+
+	svc.mu.Lock()
+	_, present = svc.uploads[uploadID]
+	svc.mu.Unlock()
+	if present {
+		t.Fatal("gRPC resumable session survived the bucket delete")
+	}
+	if _, err := svc.objects.GetResumable(ctx, uploadID); !errors.Is(err, gcs.ErrNoSuchUpload) {
+		t.Fatalf("durable session survived the bucket delete: %v", err)
+	}
+
+	stream, err := client.WriteObject(ctx)
+	if err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.WriteObjectRequest{
+		FirstMessage: &storagepb.WriteObjectRequest_UploadId{UploadId: uploadID},
+		Data:         &storagepb.WriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: []byte("x")}},
+	}); err != nil {
+		t.Fatalf("WriteObject Send: %v", err)
+	}
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.NotFound {
+		t.Fatalf("resume after bucket delete = %v, want NotFound", err)
+	}
+}
+
+// isHTTPNotFound reports whether err is a REST-transport 404 provider error.
+func isHTTPNotFound(err error) bool {
+	var pe *model.ProviderError
+	return errors.As(err, &pe) && pe.HTTPStatus == 404
+}
+
+// TestRESTBucketDeleteDropsGRPCSessions pins the cross-transport half of FC5-1:
+// deleting the bucket over REST invalidates a resumable session started over
+// gRPC, not only the sessions each transport holds itself.
+func TestRESTBucketDeleteDropsGRPCSessions(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Bucket: testBucket, Name: "big.bin"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+
+	nr := &model.NormalizedRequest{
+		AccountID:  "test-project",
+		Params:     map[string]any{"bucket": "bucket-a"},
+		ResourceID: resource.ResourceID("test-project"),
+	}
+	if _, err := svc.provider.BucketsDelete(ctx, nr); err != nil {
+		t.Fatalf("REST DeleteBucket: %v", err)
+	}
+
+	svc.mu.Lock()
+	_, present := svc.uploads[uploadID]
+	svc.mu.Unlock()
+	if present {
+		t.Fatal("gRPC resumable session survived a REST bucket delete")
+	}
+	if _, err := svc.objects.GetResumable(ctx, uploadID); !errors.Is(err, gcs.ErrNoSuchUpload) {
+		t.Fatalf("durable session survived a REST bucket delete: %v", err)
+	}
+}
+
+// TestGRPCBucketDeleteDropsRESTSessions pins the other direction of the
+// cross-transport hook: a resumable session started over REST is invalidated by
+// a bucket delete driven over gRPC.
+func TestGRPCBucketDeleteDropsRESTSessions(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	start, err := svc.provider.ObjectsInsertStartResumable(ctx, &model.NormalizedRequest{
+		AccountID:  "test-project",
+		Params:     map[string]any{"bucket": "bucket-a", "object": "big.bin"},
+		ResourceID: resource.ResourceID("test-project"),
+	})
+	if err != nil {
+		t.Fatalf("REST StartResumable: %v", err)
+	}
+	loc, _ := start.Data[wire.LocationKey].(string)
+	uploadID := ""
+	if loc != "" {
+		if _, query, ok := strings.Cut(loc, "?"); ok {
+			for _, q := range strings.Split(query, "&") {
+				if k, v, ok := strings.Cut(q, "="); ok && k == "upload_id" {
+					uploadID = v
+				}
+			}
+		}
+	}
+	if uploadID == "" {
+		t.Fatalf("no upload_id in Location %q", loc)
+	}
+
+	if _, err := client.DeleteBucket(ctx, &storagepb.DeleteBucketRequest{Name: testBucket}); err != nil {
+		t.Fatalf("DeleteBucket: %v", err)
+	}
+
+	if _, err := svc.objects.GetResumable(ctx, uploadID); !errors.Is(err, gcs.ErrNoSuchUpload) {
+		t.Fatalf("durable REST session survived the gRPC bucket delete: %v", err)
+	}
+	finalize, err := svc.provider.ObjectsInsertResumable(ctx, &model.NormalizedRequest{
+		AccountID:  "test-project",
+		Params:     map[string]any{"upload_id": uploadID, "contentRange": "bytes 0-0/1"},
+		ResourceID: resource.ResourceID("test-project"),
+	})
+	if err == nil {
+		t.Fatalf("finalize after bucket delete succeeded: %+v", finalize)
+	}
+	if !isHTTPNotFound(err) {
+		t.Fatalf("finalize after bucket delete = %v, want NotFound/404", err)
+	}
+}
+
+// TestInvalidatedResumableSessionRefusesWrite pins the mid-stream guard: a
+// session invalidated by a bucket delete never appends or finalizes, even if
+// the bucket is re-created, so a client cannot receive a truncated object.
+func TestInvalidatedResumableSessionRefusesWrite(t *testing.T) {
+	_, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	sess := &uploadSession{bucket: "bucket-a", object: "o", invalidated: true}
+	if err := svc.appendData(sess, 0, []byte("x")); !isHTTPNotFound(err) {
+		t.Fatalf("appendData on an invalidated session = %v, want NotFound", err)
+	}
+	if sess.length != 0 {
+		t.Fatalf("appendData wrote %d bytes to an invalidated session", sess.length)
+	}
+	if _, err := svc.finalize(context.Background(), "test-project", sess); !isHTTPNotFound(err) {
+		t.Fatalf("finalize on an invalidated session = %v, want NotFound", err)
+	}
+}
+
+// TestDropBucketUploadsSpillLifecycle pins spill-file ownership: an unclaimed
+// invalidated session's spill is removed immediately, while a session a stream
+// still holds keeps its bytes until the stream releases it.
+func TestDropBucketUploadsSpillLifecycle(t *testing.T) {
+	_, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+
+	unclaimed := &uploadSession{bucket: "bucket-a", object: "a"}
+	if err := spillUploadSession(unclaimed); err != nil {
+		t.Fatalf("spill unclaimed: %v", err)
+	}
+	claimed := &uploadSession{bucket: "bucket-a", object: "b", streams: 1}
+	if err := spillUploadSession(claimed); err != nil {
+		t.Fatalf("spill claimed: %v", err)
+	}
+	svc.mu.Lock()
+	svc.uploads["u1"] = unclaimed
+	svc.uploads["u2"] = claimed
+	svc.mu.Unlock()
+
+	svc.dropBucketUploads("bucket-a")
+
+	if _, err := os.Stat(unclaimed.tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("unclaimed session spill survived invalidation (stat err=%v)", err)
+	}
+	if _, err := os.Stat(claimed.tmpPath); err != nil {
+		t.Fatalf("a stream-claimed session's spill must survive until release: %v", err)
+	}
+	if err := svc.appendData(claimed, 0, []byte("x")); !isHTTPNotFound(err) {
+		t.Fatalf("appendData on an invalidated claimed session = %v, want NotFound", err)
+	}
+	svc.releaseStream(claimed)
+	if _, err := os.Stat(claimed.tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("claimed session spill survived release (stat err=%v)", err)
 	}
 }
