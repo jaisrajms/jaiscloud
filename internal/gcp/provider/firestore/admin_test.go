@@ -1063,6 +1063,154 @@ func TestDatabaseServerOwnedFields(t *testing.T) {
 	}
 }
 
+// TestDatabaseUpdateRejectsLocationChange pins FC2-7: a database's location is
+// fixed at creation (Firestore documents that "once you provision a database
+// instance, you cannot change its location setting"). A masked write that would
+// change location_id is INVALID_ARGUMENT/400 and leaves the record untouched;
+// resending the stored value is a no-op on the explicit path, on an explicit `*`
+// replacement and on an implied `*` (a maskless patch) alike.
+func TestDatabaseUpdateRejectsLocationChange(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "pinned", databaseDef{LocationID: "nam5"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+
+	// A different location is refused on each mask shape.
+	for _, mask := range [][]string{{"location_id"}, {"*"}} {
+		_, _, err := p.UpdateDatabaseDef(ctx, "proj", "pinned",
+			databaseDef{LocationID: "us-central1"}, mask, true, created.Etag)
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("location change (mask %v) = %v, want InvalidArgument/400", mask, err)
+		}
+	}
+	// The implied mask (`*` from an omitted update_mask) is guarded too.
+	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "pinned",
+		databaseDef{LocationID: "us-central1"}, nil, false, created.Etag); err == nil {
+		t.Error("implied-mask location change succeeded, want InvalidArgument")
+	} else {
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("implied-mask location change = %v, want InvalidArgument/400", err)
+		}
+	}
+
+	// A rejected patch left the record untouched (same values, same etag).
+	after, err := p.GetDatabase(ctx, "proj", "pinned")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if after.LocationID != "nam5" || after.Etag != created.Etag {
+		t.Fatalf("rejected patches changed the record: %+v", after)
+	}
+
+	// Resending the stored location is a no-op, not a rejection, on the explicit
+	// path and on an explicit `*` replacement (which must restate the mutable
+	// fields it keeps).
+	noop, _, err := p.UpdateDatabaseDef(ctx, "proj", "pinned",
+		databaseDef{LocationID: "nam5"}, []string{"location_id"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("resend of the immutable location: %v", err)
+	}
+	starred, _, err := p.UpdateDatabaseDef(ctx, "proj", "pinned", databaseDef{
+		LocationID:                    "nam5",
+		ConcurrencyMode:               "PESSIMISTIC",
+		PointInTimeRecoveryEnablement: pitrDisabled,
+	}, []string{"*"}, true, noop.Etag)
+	if err != nil {
+		t.Fatalf("`*` patch that resends the immutable location: %v", err)
+	}
+	if starred.LocationID != "nam5" {
+		t.Errorf("`*` patch changed the immutable location: %q", starred.LocationID)
+	}
+	if starred.ConcurrencyMode != "PESSIMISTIC" {
+		t.Errorf("`*` patch dropped the mutable concurrency_mode: %q", starred.ConcurrencyMode)
+	}
+	// A mask that does not name it ignores a differing body value (AIP-134).
+	unmasked, _, err := p.UpdateDatabaseDef(ctx, "proj", "pinned",
+		databaseDef{LocationID: "us-central1", ConcurrencyMode: "OPTIMISTIC"},
+		[]string{"concurrency_mode"}, true, starred.Etag)
+	if err != nil {
+		t.Fatalf("unmasked immutable value: %v", err)
+	}
+	if unmasked.LocationID != "nam5" {
+		t.Errorf("unmasked patch changed the immutable location: %q", unmasked.LocationID)
+	}
+}
+
+// TestDatabaseTypeSwitchRequiresEmptyDatabase pins FC2-8: database.proto
+// documents on DatabaseType that "mode changes are only allowed if the database
+// is empty". A Native/Datastore switch therefore applies while the database
+// holds no documents, resending the stored mode is always a no-op, and a change
+// with documents present is INVALID_ARGUMENT/400 and leaves the record alone.
+func TestDatabaseTypeSwitchRequiresEmptyDatabase(t *testing.T) {
+	ctx := context.Background()
+	p := newService(firestorestore.NewMemoryStore(), store.NewMemoryResourceStore())
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "mode-db", databaseDef{LocationID: "nam5"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+
+	// Empty database: the documented mode change is applied.
+	switched, _, err := p.UpdateDatabaseDef(ctx, "proj", "mode-db",
+		databaseDef{Type: "DATASTORE_MODE"}, []string{"type"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("mode change on an empty database: %v", err)
+	}
+	if switched.Type != "DATASTORE_MODE" {
+		t.Fatalf("type = %q after an empty-database switch, want DATASTORE_MODE", switched.Type)
+	}
+
+	// With data in the database, the mode is pinned; a resend still no-ops.
+	if err := p.store.CreateDocument(ctx, firestorestore.Document{
+		Name: "projects/proj/databases/mode-db/documents/cities/SF",
+	}); err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+	noop, _, err := p.UpdateDatabaseDef(ctx, "proj", "mode-db",
+		databaseDef{Type: "DATASTORE_MODE"}, []string{"type"}, true, switched.Etag)
+	if err != nil {
+		t.Fatalf("resend of the stored type: %v", err)
+	}
+	for _, mask := range [][]string{{"type"}, {"*"}} {
+		_, _, err := p.UpdateDatabaseDef(ctx, "proj", "mode-db",
+			databaseDef{Type: "FIRESTORE_NATIVE"}, mask, true, noop.Etag)
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("mode change with data (mask %v) = %v, want InvalidArgument/400", mask, err)
+		}
+	}
+	// The implied mask is guarded too.
+	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "mode-db",
+		databaseDef{Type: "FIRESTORE_NATIVE"}, nil, false, noop.Etag); err == nil {
+		t.Error("implied-mask mode change with data succeeded, want InvalidArgument")
+	} else {
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("implied-mask mode change = %v, want InvalidArgument/400", err)
+		}
+	}
+	got, err := p.GetDatabase(ctx, "proj", "mode-db")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.Type != "DATASTORE_MODE" || got.Etag != noop.Etag {
+		t.Fatalf("rejected mode changes altered the record: type %q etag %q", got.Type, got.Etag)
+	}
+	// A mask that does not name type ignores a differing body value (AIP-134).
+	unmasked, _, err := p.UpdateDatabaseDef(ctx, "proj", "mode-db",
+		databaseDef{Type: "FIRESTORE_NATIVE", ConcurrencyMode: "PESSIMISTIC"},
+		[]string{"concurrency_mode"}, true, got.Etag)
+	if err != nil {
+		t.Fatalf("unmasked type value: %v", err)
+	}
+	if unmasked.Type != "DATASTORE_MODE" {
+		t.Errorf("unmasked patch changed the type to %q", unmasked.Type)
+	}
+}
+
 // TestDatabaseCmekConfig pins Database.cmek_config (TGM11). A create that
 // carries the block stores and echoes the KMS key on get/list; a database
 // created without one never grows a block (the field's presence is the CMEK

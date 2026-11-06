@@ -1089,14 +1089,25 @@ func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
 
 // applyBucketMask overlays the request's masked Bucket fields onto the stored
 // bucket metadata. The field paths this service models (labels, versioning,
-// storageClass, location, retentionPolicy, iamConfig, website, logging,
-// autoclass, ipFilter) are applied; "*" applies all of them.
-// hierarchical_namespace and custom_placement_config are immutable after create
-// and are ignored, like the REST update. An absent/empty masked field clears the
-// stored key where GCS treats the field as a map/message (labels, versioning,
-// retentionPolicy, website, logging, autoclass, ipFilter) and is otherwise left
-// untouched.
+// storageClass, retentionPolicy, iamConfig, website, logging, autoclass,
+// ipFilter) are applied; "*" applies all of them. location is validated but
+// never written: it is IMMUTABLE, so a masked resend is a no-op and a different
+// value is INVALID_ARGUMENT. hierarchical_namespace and custom_placement_config
+// are immutable after create and are ignored, like the REST update. An
+// absent/empty masked field clears the stored key where GCS treats the field as
+// a map/message (labels, versioning, retentionPolicy, website, logging,
+// autoclass, ipFilter) and is otherwise left untouched.
 func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) error {
+	// location is creation-only (see CheckBucketLocationUpdate): a masked resend
+	// of the stored location is a no-op, any other value is INVALID_ARGUMENT.
+	// Checked before any masked field is applied so a rejection never touches
+	// even the map the store handed this callback.
+	if loc := pb.GetLocation(); maskIncludes(mask, "location") {
+		current, _ := meta["location"].(string)
+		if err := storageprovider.CheckBucketLocationUpdate(current, loc); err != nil {
+			return err
+		}
+	}
 	applyBucketLabelsMask(meta, pb, mask)
 	if maskIncludes(mask, "versioning") {
 		if v := pb.GetVersioning(); v != nil && v.GetEnabled() {
@@ -1107,9 +1118,6 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 	}
 	if sc := pb.GetStorageClass(); sc != "" && maskIncludes(mask, "storage_class") {
 		meta["storageClass"] = sc
-	}
-	if loc := storageprovider.BucketLocationCanonical(pb.GetLocation()); loc != "" && maskIncludes(mask, "location") {
-		meta["location"] = loc
 	}
 	if maskIncludes(mask, "retention_policy") {
 		if rp := bucketRetentionToMap(pb.GetRetentionPolicy()); rp != nil {

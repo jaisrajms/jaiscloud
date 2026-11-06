@@ -403,6 +403,13 @@ func validateDatabaseEnumFields(body map[string]any) error {
 	return nil
 }
 
+// databaseTypeUnspecified is the zero value of Database.DatabaseType. proto3
+// JSON serializes it as the name, and the gRPC surface maps enum 0 to "", so
+// the REST reader normalizes it to "unset" too — otherwise a create would store
+// the sentinel instead of defaulting to FIRESTORE_NATIVE, and an update would
+// look like a mode change to the guard.
+const databaseTypeUnspecified = "DATABASE_TYPE_UNSPECIFIED"
+
 // databaseFromREST reads the mutable Database fields from a request body.
 func databaseFromREST(body map[string]any) (databaseDef, error) {
 	if err := validateDatabaseEnumFields(body); err != nil {
@@ -412,7 +419,7 @@ func databaseFromREST(body map[string]any) (databaseDef, error) {
 	if s, _ := body["locationId"].(string); s != "" {
 		d.LocationID = s
 	}
-	if s, _ := body["type"].(string); s != "" {
+	if s, _ := body["type"].(string); s != "" && s != databaseTypeUnspecified {
 		d.Type = s
 	}
 	if s, _ := body["concurrencyMode"].(string); s != "" {

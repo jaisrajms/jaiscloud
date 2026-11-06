@@ -1480,8 +1480,12 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		b := mapToBucket(meta)
 		// Preserve timeCreated; update only fields present in the request body.
-		if loc, _ := body["location"].(string); BucketLocationCanonical(loc) != "" {
-			b.Location = BucketLocationCanonical(loc)
+		// location is creation-only (see CheckBucketLocationUpdate): a PATCH that
+		// resends the stored location is a no-op, any other value is
+		// INVALID_ARGUMENT and leaves the bucket untouched.
+		loc, _ := body["location"].(string)
+		if err := CheckBucketLocationUpdate(b.Location, loc); err != nil {
+			return nil, err
 		}
 		if sc, _ := body["storageClass"].(string); sc != "" {
 			b.StorageClass = sc
@@ -4366,6 +4370,22 @@ func notificationToMap(cfg notificationConfig) map[string]any {
 // GCS's default multi-region supply "US".
 func BucketLocationCanonical(location string) string {
 	return strings.ToUpper(strings.TrimSpace(location))
+}
+
+// CheckBucketLocationUpdate rejects a bucket metadata update whose requested
+// location differs from the stored one. storage.v2 declares Bucket.location
+// IMMUTABLE ("attempting to update this field after the bucket is created
+// results in an error"), so a resend of the stored location — in any case, since
+// GCS serves it uppercase — is a no-op and any other value is INVALID_ARGUMENT.
+// An absent/empty requested location is not a change and returns nil. Both
+// transports call this so the rule (and its message) cannot drift.
+func CheckBucketLocationUpdate(stored, requested string) error {
+	req := BucketLocationCanonical(requested)
+	if req == "" || req == BucketLocationCanonical(stored) {
+		return nil
+	}
+	return model.NewProviderError("InvalidArgument",
+		"The location of the bucket cannot be changed after creation", 400)
 }
 
 // predefinedDualRegions are GCS's predefined dual-region location codes.

@@ -154,6 +154,153 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 	}
 }
 
+// TestUpdateDatabaseLocationRule is the gRPC transport check for FC2-7:
+// UpdateDatabase with a mask naming location_id and a value that differs from
+// the stored one is INVALID_ARGUMENT and leaves the record untouched. Resending
+// the stored location is accepted, and a mask naming another field ignores the
+// body value (AIP-134).
+func TestUpdateDatabaseLocationRule(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "pinned-db",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+
+	for _, mask := range [][]string{{"location_id"}, {"*"}} {
+		_, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database:   &adminpb.Database{Name: created.GetName(), Etag: created.GetEtag(), LocationId: "us-central1"},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: mask},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("UpdateDatabase(location_id, mask %v) code = %v, want InvalidArgument", mask, status.Code(err))
+		}
+	}
+	// The implied mask (an omitted update_mask) is guarded too.
+	if _, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{Name: created.GetName(), Etag: created.GetEtag(), LocationId: "us-central1"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("implied-mask location change code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.GetLocationId() != "nam5" || got.GetEtag() != created.GetEtag() {
+		t.Fatalf("rejected updates changed the record: %+v", got)
+	}
+
+	// Resending the stored location is a no-op; a mask naming another field
+	// ignores a differing value.
+	noopOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database:   &adminpb.Database{Name: created.GetName(), Etag: created.GetEtag(), LocationId: "nam5"},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"location_id"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(resend location_id): %v", err)
+	}
+	noop := &adminpb.Database{}
+	if err := noopOp.GetResponse().UnmarshalTo(noop); err != nil {
+		t.Fatalf("resend response unmarshal: %v", err)
+	}
+	unmaskedOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:            created.GetName(),
+			Etag:            noop.GetEtag(),
+			ConcurrencyMode: adminpb.Database_PESSIMISTIC,
+			LocationId:      "us-central1",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"concurrency_mode"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(unmasked location_id): %v", err)
+	}
+	unmasked := &adminpb.Database{}
+	if err := unmaskedOp.GetResponse().UnmarshalTo(unmasked); err != nil {
+		t.Fatalf("unmasked response unmarshal: %v", err)
+	}
+	if unmasked.GetLocationId() != "nam5" {
+		t.Errorf("unmasked update changed location_id: %q", unmasked.GetLocationId())
+	}
+	if unmasked.GetConcurrencyMode() != adminpb.Database_PESSIMISTIC {
+		t.Errorf("concurrency_mode = %v, want PESSIMISTIC", unmasked.GetConcurrencyMode())
+	}
+}
+
+// TestUpdateDatabaseTypeSwitchOnEmptyDatabase is the gRPC transport check for
+// FC2-8: database.proto allows a Native/Datastore mode change only while the
+// database is empty, so UpdateDatabase with a type mask is applied on a
+// document-free database (the parity harness switches it this way) and a
+// resend of the stored mode is a no-op.
+func TestUpdateDatabaseTypeSwitchOnEmptyDatabase(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "mode-db",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+
+	switchedOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name: created.GetName(),
+			Etag: created.GetEtag(),
+			Type: adminpb.Database_DATASTORE_MODE,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"type"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(mode change on an empty database): %v", err)
+	}
+	switched := &adminpb.Database{}
+	if err := switchedOp.GetResponse().UnmarshalTo(switched); err != nil {
+		t.Fatalf("mode change response unmarshal: %v", err)
+	}
+	if switched.GetType() != adminpb.Database_DATASTORE_MODE {
+		t.Fatalf("type = %v after an empty-database switch, want DATASTORE_MODE", switched.GetType())
+	}
+
+	// Resending the stored mode is a no-op.
+	noopOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name: switched.GetName(),
+			Etag: switched.GetEtag(),
+			Type: adminpb.Database_DATASTORE_MODE,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"type"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(resend type): %v", err)
+	}
+	noop := &adminpb.Database{}
+	if err := noopOp.GetResponse().UnmarshalTo(noop); err != nil {
+		t.Fatalf("resend response unmarshal: %v", err)
+	}
+	if noop.GetType() != adminpb.Database_DATASTORE_MODE {
+		t.Errorf("resend changed type: %v", noop.GetType())
+	}
+}
+
 // TestDefaultDatabaseCreate pins CreateDatabase for the implicit (default)
 // database on the gRPC surface: a fresh project accepts it (the Firebase
 // Terraform shape), GetDatabase echoes the stored location, and a duplicate is

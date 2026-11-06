@@ -1870,13 +1870,13 @@ func TestBucketsUpdatePreservesTimeCreated(t *testing.T) {
 
 	nr = bucketParams()
 	nr.Params["bucket"] = "bkt"
-	nr.Params["body"] = map[string]any{"location": "EU", "storageClass": "NEARLINE"}
+	nr.Params["body"] = map[string]any{"location": "US", "storageClass": "NEARLINE"}
 	updated, err := p.BucketsUpdate(ctx, nr)
 	if err != nil {
 		t.Fatalf("update bucket: %v", err)
 	}
-	if updated.Data["location"] != "EU" {
-		t.Errorf("expected location EU, got %v", updated.Data["location"])
+	if updated.Data["location"] != "US" {
+		t.Errorf("expected location US, got %v", updated.Data["location"])
 	}
 	if updated.Data["storageClass"] != "NEARLINE" {
 		t.Errorf("expected storageClass NEARLINE, got %v", updated.Data["storageClass"])

@@ -155,6 +155,27 @@ func TestMemoryStoreCRUD(t *testing.T) {
 		t.Errorf("unexpected list order: %+v", list)
 	}
 
+	// HasDocuments is scoped by project+database too: it backs the mode-change
+	// precondition, so a document in another database (or project) must not
+	// count.
+	for _, tc := range []struct {
+		project, database string
+		want              bool
+	}{
+		{"p", "(default)", true},
+		{"q", "(default)", true},
+		{"p", "other", false},
+		{"r", "(default)", false},
+	} {
+		has, err := s.HasDocuments(ctx, tc.project, tc.database)
+		if err != nil {
+			t.Fatalf("HasDocuments(%s, %s): %v", tc.project, tc.database, err)
+		}
+		if has != tc.want {
+			t.Errorf("HasDocuments(%s, %s) = %v, want %v", tc.project, tc.database, has, tc.want)
+		}
+	}
+
 	// Delete is idempotent.
 	if err := s.DeleteDocument(ctx, name); err != nil {
 		t.Fatalf("delete: %v", err)
