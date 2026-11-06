@@ -398,7 +398,7 @@ jobs:
         run: make test-gcp-coverage
 
       - name: Run GCP dev-tool tests
-        run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
+        run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/...
 
       - name: Behavioral-coverage gate (every `ga` service has a suite or reasoned exemption)
         run: make gcp-status-behavioral-gate

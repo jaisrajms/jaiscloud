@@ -1,0 +1,1303 @@
+{
+ "format_version": "1.0",
+ "provider_schemas": {
+  "registry.terraform.io/hashicorp/google": {
+   "resource_schemas": {
+    "google_dns_managed_zone": {
+     "block": {
+      "attributes": {
+       "creation_time": {
+        "computed": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "description": {
+        "optional": true
+       },
+       "dns_name": {
+        "required": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "force_destroy": {
+        "optional": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "managed_zone_id": {
+        "computed": true
+       },
+       "name": {
+        "required": true
+       },
+       "name_servers": {
+        "computed": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "terraform_labels": {
+        "computed": true
+       },
+       "visibility": {
+        "optional": true
+       }
+      },
+      "block_types": {
+       "cloud_logging_config": {
+        "block": {
+         "attributes": {
+          "enable_logging": {
+           "required": true
+          }
+         }
+        }
+       },
+       "dnssec_config": {
+        "block": {
+         "attributes": {
+          "kind": {
+           "optional": true
+          },
+          "non_existence": {
+           "computed": true,
+           "optional": true
+          },
+          "state": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "default_key_specs": {
+           "block": {
+            "attributes": {
+             "algorithm": {
+              "optional": true
+             },
+             "key_length": {
+              "optional": true
+             },
+             "key_type": {
+              "optional": true
+             },
+             "kind": {
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "forwarding_config": {
+        "block": {
+         "block_types": {
+          "target_name_servers": {
+           "block": {
+            "attributes": {
+             "domain_name": {
+              "optional": true
+             },
+             "forwarding_path": {
+              "optional": true
+             },
+             "ipv4_address": {
+              "optional": true
+             },
+             "ipv6_address": {
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "peering_config": {
+        "block": {
+         "block_types": {
+          "target_network": {
+           "block": {
+            "attributes": {
+             "network_url": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "private_visibility_config": {
+        "block": {
+         "block_types": {
+          "gke_clusters": {
+           "block": {
+            "attributes": {
+             "gke_cluster_name": {
+              "required": true
+             }
+            }
+           }
+          },
+          "networks": {
+           "block": {
+            "attributes": {
+             "network_url": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_firestore_database": {
+     "block": {
+      "attributes": {
+       "app_engine_integration_mode": {
+        "computed": true,
+        "optional": true
+       },
+       "concurrency_mode": {
+        "computed": true,
+        "optional": true
+       },
+       "create_time": {
+        "computed": true
+       },
+       "database_edition": {
+        "computed": true,
+        "optional": true
+       },
+       "delete_protection_state": {
+        "computed": true,
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "earliest_version_time": {
+        "computed": true
+       },
+       "etag": {
+        "computed": true
+       },
+       "firestore_data_access_mode": {
+        "computed": true,
+        "optional": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "key_prefix": {
+        "computed": true
+       },
+       "location_id": {
+        "required": true
+       },
+       "mongodb_compatible_data_access_mode": {
+        "computed": true,
+        "optional": true
+       },
+       "name": {
+        "required": true
+       },
+       "point_in_time_recovery_enablement": {
+        "optional": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "realtime_updates_mode": {
+        "computed": true,
+        "optional": true
+       },
+       "tags": {
+        "optional": true
+       },
+       "type": {
+        "required": true
+       },
+       "uid": {
+        "computed": true
+       },
+       "update_time": {
+        "computed": true
+       },
+       "version_retention_period": {
+        "computed": true
+       }
+      },
+      "block_types": {
+       "cmek_config": {
+        "block": {
+         "attributes": {
+          "active_key_version": {
+           "computed": true
+          },
+          "kms_key_name": {
+           "required": true
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_kms_crypto_key": {
+     "block": {
+      "attributes": {
+       "crypto_key_backend": {
+        "computed": true,
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "destroy_scheduled_duration": {
+        "computed": true,
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "import_only": {
+        "computed": true,
+        "optional": true
+       },
+       "key_ring": {
+        "required": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "name": {
+        "required": true
+       },
+       "primary": {
+        "computed": true
+       },
+       "purpose": {
+        "optional": true
+       },
+       "rotation_period": {
+        "optional": true
+       },
+       "skip_initial_version_creation": {
+        "optional": true
+       },
+       "terraform_labels": {
+        "computed": true
+       }
+      },
+      "block_types": {
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "version_template": {
+        "block": {
+         "attributes": {
+          "algorithm": {
+           "required": true
+          },
+          "protection_level": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_kms_key_ring": {
+     "block": {
+      "attributes": {
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "location": {
+        "required": true
+       },
+       "name": {
+        "required": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       }
+      },
+      "block_types": {
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_pubsub_subscription": {
+     "block": {
+      "attributes": {
+       "ack_deadline_seconds": {
+        "computed": true,
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "enable_exactly_once_delivery": {
+        "optional": true
+       },
+       "enable_message_ordering": {
+        "optional": true
+       },
+       "filter": {
+        "optional": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "message_retention_duration": {
+        "optional": true
+       },
+       "name": {
+        "required": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "retain_acked_messages": {
+        "optional": true
+       },
+       "tags": {
+        "optional": true
+       },
+       "terraform_labels": {
+        "computed": true
+       },
+       "topic": {
+        "required": true
+       }
+      },
+      "block_types": {
+       "bigquery_config": {
+        "block": {
+         "attributes": {
+          "drop_unknown_fields": {
+           "optional": true
+          },
+          "service_account_email": {
+           "optional": true
+          },
+          "table": {
+           "required": true
+          },
+          "use_table_schema": {
+           "optional": true
+          },
+          "use_topic_schema": {
+           "optional": true
+          },
+          "write_metadata": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "cloud_storage_config": {
+        "block": {
+         "attributes": {
+          "bucket": {
+           "required": true
+          },
+          "filename_datetime_format": {
+           "optional": true
+          },
+          "filename_prefix": {
+           "optional": true
+          },
+          "filename_suffix": {
+           "optional": true
+          },
+          "max_bytes": {
+           "optional": true
+          },
+          "max_duration": {
+           "optional": true
+          },
+          "max_messages": {
+           "optional": true
+          },
+          "service_account_email": {
+           "optional": true
+          },
+          "state": {
+           "computed": true
+          }
+         },
+         "block_types": {
+          "avro_config": {
+           "block": {
+            "attributes": {
+             "use_topic_schema": {
+              "optional": true
+             },
+             "write_metadata": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "text_config": {
+           "block": {
+            "attributes": {
+             "state": {
+              "computed": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "dead_letter_policy": {
+        "block": {
+         "attributes": {
+          "dead_letter_topic": {
+           "optional": true
+          },
+          "max_delivery_attempts": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "expiration_policy": {
+        "block": {
+         "attributes": {
+          "ttl": {
+           "required": true
+          }
+         }
+        }
+       },
+       "message_transforms": {
+        "block": {
+         "attributes": {
+          "disabled": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "ai_inference": {
+           "block": {
+            "attributes": {
+             "endpoint": {
+              "required": true
+             },
+             "service_account_email": {
+              "optional": true
+             }
+            },
+            "block_types": {
+             "unstructured_inference": {
+              "block": {
+               "attributes": {
+                "parameters": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "javascript_udf": {
+           "block": {
+            "attributes": {
+             "code": {
+              "required": true
+             },
+             "function_name": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "push_config": {
+        "block": {
+         "attributes": {
+          "attributes": {
+           "optional": true
+          },
+          "push_endpoint": {
+           "required": true
+          }
+         },
+         "block_types": {
+          "no_wrapper": {
+           "block": {
+            "attributes": {
+             "write_metadata": {
+              "required": true
+             }
+            }
+           }
+          },
+          "oidc_token": {
+           "block": {
+            "attributes": {
+             "audience": {
+              "optional": true
+             },
+             "service_account_email": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "retry_policy": {
+        "block": {
+         "attributes": {
+          "maximum_backoff": {
+           "computed": true,
+           "optional": true
+          },
+          "minimum_backoff": {
+           "computed": true,
+           "optional": true
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_pubsub_topic": {
+     "block": {
+      "attributes": {
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "kms_key_name": {
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "message_retention_duration": {
+        "optional": true
+       },
+       "name": {
+        "required": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "tags": {
+        "optional": true
+       },
+       "terraform_labels": {
+        "computed": true
+       }
+      },
+      "block_types": {
+       "ingestion_data_source_settings": {
+        "block": {
+         "block_types": {
+          "aws_kinesis": {
+           "block": {
+            "attributes": {
+             "aws_role_arn": {
+              "required": true
+             },
+             "consumer_arn": {
+              "required": true
+             },
+             "gcp_service_account": {
+              "required": true
+             },
+             "stream_arn": {
+              "required": true
+             }
+            }
+           }
+          },
+          "aws_msk": {
+           "block": {
+            "attributes": {
+             "aws_role_arn": {
+              "required": true
+             },
+             "cluster_arn": {
+              "required": true
+             },
+             "gcp_service_account": {
+              "required": true
+             },
+             "topic": {
+              "required": true
+             }
+            }
+           }
+          },
+          "azure_event_hubs": {
+           "block": {
+            "attributes": {
+             "client_id": {
+              "optional": true
+             },
+             "event_hub": {
+              "optional": true
+             },
+             "gcp_service_account": {
+              "optional": true
+             },
+             "namespace": {
+              "optional": true
+             },
+             "resource_group": {
+              "optional": true
+             },
+             "subscription_id": {
+              "optional": true
+             },
+             "tenant_id": {
+              "optional": true
+             }
+            }
+           }
+          },
+          "cloud_storage": {
+           "block": {
+            "attributes": {
+             "bucket": {
+              "required": true
+             },
+             "match_glob": {
+              "optional": true
+             },
+             "minimum_object_create_time": {
+              "optional": true
+             }
+            },
+            "block_types": {
+             "avro_format": {
+              "block": {}
+             },
+             "pubsub_avro_format": {
+              "block": {}
+             },
+             "text_format": {
+              "block": {
+               "attributes": {
+                "delimiter": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "confluent_cloud": {
+           "block": {
+            "attributes": {
+             "bootstrap_server": {
+              "required": true
+             },
+             "cluster_id": {
+              "optional": true
+             },
+             "gcp_service_account": {
+              "required": true
+             },
+             "identity_pool_id": {
+              "required": true
+             },
+             "topic": {
+              "required": true
+             }
+            }
+           }
+          },
+          "platform_logs_settings": {
+           "block": {
+            "attributes": {
+             "severity": {
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "message_storage_policy": {
+        "block": {
+         "attributes": {
+          "allowed_persistence_regions": {
+           "required": true
+          },
+          "enforce_in_transit": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "message_transforms": {
+        "block": {
+         "attributes": {
+          "disabled": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "ai_inference": {
+           "block": {
+            "attributes": {
+             "endpoint": {
+              "required": true
+             },
+             "service_account_email": {
+              "optional": true
+             }
+            },
+            "block_types": {
+             "unstructured_inference": {
+              "block": {
+               "attributes": {
+                "parameters": {
+                 "optional": true
+                }
+               }
+              }
+             }
+            }
+           }
+          },
+          "javascript_udf": {
+           "block": {
+            "attributes": {
+             "code": {
+              "required": true
+             },
+             "function_name": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "schema_settings": {
+        "block": {
+         "attributes": {
+          "encoding": {
+           "optional": true
+          },
+          "first_revision_id": {
+           "optional": true
+          },
+          "last_revision_id": {
+           "optional": true
+          },
+          "schema": {
+           "required": true
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "delete": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "google_storage_bucket": {
+     "block": {
+      "attributes": {
+       "default_event_based_hold": {
+        "optional": true
+       },
+       "deletion_policy": {
+        "computed": true,
+        "optional": true
+       },
+       "effective_labels": {
+        "computed": true
+       },
+       "enable_object_retention": {
+        "optional": true
+       },
+       "force_destroy": {
+        "optional": true
+       },
+       "id": {
+        "computed": true,
+        "optional": true
+       },
+       "labels": {
+        "optional": true
+       },
+       "location": {
+        "required": true
+       },
+       "name": {
+        "required": true
+       },
+       "project": {
+        "computed": true,
+        "optional": true
+       },
+       "project_number": {
+        "computed": true
+       },
+       "public_access_prevention": {
+        "computed": true,
+        "optional": true
+       },
+       "requester_pays": {
+        "optional": true
+       },
+       "rpo": {
+        "computed": true,
+        "optional": true
+       },
+       "self_link": {
+        "computed": true
+       },
+       "storage_class": {
+        "optional": true
+       },
+       "terraform_labels": {
+        "computed": true
+       },
+       "time_created": {
+        "computed": true
+       },
+       "uniform_bucket_level_access": {
+        "computed": true,
+        "optional": true
+       },
+       "updated": {
+        "computed": true
+       },
+       "url": {
+        "computed": true
+       }
+      },
+      "block_types": {
+       "autoclass": {
+        "block": {
+         "attributes": {
+          "enabled": {
+           "required": true
+          },
+          "terminal_storage_class": {
+           "computed": true,
+           "optional": true
+          }
+         }
+        }
+       },
+       "cors": {
+        "block": {
+         "attributes": {
+          "max_age_seconds": {
+           "optional": true
+          },
+          "method": {
+           "optional": true
+          },
+          "origin": {
+           "optional": true
+          },
+          "response_header": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "custom_placement_config": {
+        "block": {
+         "attributes": {
+          "data_locations": {
+           "required": true
+          }
+         }
+        }
+       },
+       "encryption": {
+        "block": {
+         "attributes": {
+          "default_kms_key_name": {
+           "optional": true
+          }
+         },
+         "block_types": {
+          "customer_managed_encryption_enforcement_config": {
+           "block": {
+            "attributes": {
+             "effective_time": {
+              "computed": true
+             },
+             "restriction_mode": {
+              "required": true
+             }
+            }
+           }
+          },
+          "customer_supplied_encryption_enforcement_config": {
+           "block": {
+            "attributes": {
+             "effective_time": {
+              "computed": true
+             },
+             "restriction_mode": {
+              "required": true
+             }
+            }
+           }
+          },
+          "google_managed_encryption_enforcement_config": {
+           "block": {
+            "attributes": {
+             "effective_time": {
+              "computed": true
+             },
+             "restriction_mode": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "hierarchical_namespace": {
+        "block": {
+         "attributes": {
+          "enabled": {
+           "required": true
+          }
+         }
+        }
+       },
+       "ip_filter": {
+        "block": {
+         "attributes": {
+          "allow_all_service_agent_access": {
+           "optional": true
+          },
+          "allow_cross_org_vpcs": {
+           "optional": true
+          },
+          "mode": {
+           "required": true
+          }
+         },
+         "block_types": {
+          "public_network_source": {
+           "block": {
+            "attributes": {
+             "allowed_ip_cidr_ranges": {
+              "required": true
+             }
+            }
+           }
+          },
+          "vpc_network_sources": {
+           "block": {
+            "attributes": {
+             "allowed_ip_cidr_ranges": {
+              "required": true
+             },
+             "network": {
+              "required": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "lifecycle_rule": {
+        "block": {
+         "block_types": {
+          "action": {
+           "block": {
+            "attributes": {
+             "storage_class": {
+              "optional": true
+             },
+             "type": {
+              "required": true
+             }
+            }
+           }
+          },
+          "condition": {
+           "block": {
+            "attributes": {
+             "age": {
+              "optional": true
+             },
+             "created_before": {
+              "optional": true
+             },
+             "custom_time_before": {
+              "optional": true
+             },
+             "days_since_custom_time": {
+              "optional": true
+             },
+             "days_since_noncurrent_time": {
+              "optional": true
+             },
+             "matches_prefix": {
+              "optional": true
+             },
+             "matches_storage_class": {
+              "optional": true
+             },
+             "matches_suffix": {
+              "optional": true
+             },
+             "noncurrent_time_before": {
+              "optional": true
+             },
+             "num_newer_versions": {
+              "optional": true
+             },
+             "send_age_if_zero": {
+              "optional": true
+             },
+             "send_days_since_custom_time_if_zero": {
+              "optional": true
+             },
+             "send_days_since_noncurrent_time_if_zero": {
+              "optional": true
+             },
+             "send_num_newer_versions_if_zero": {
+              "optional": true
+             },
+             "size_above_bytes": {
+              "optional": true
+             },
+             "size_below_bytes": {
+              "optional": true
+             },
+             "with_state": {
+              "computed": true,
+              "optional": true
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "logging": {
+        "block": {
+         "attributes": {
+          "log_bucket": {
+           "required": true
+          },
+          "log_object_prefix": {
+           "computed": true,
+           "optional": true
+          }
+         }
+        }
+       },
+       "retention_policy": {
+        "block": {
+         "attributes": {
+          "is_locked": {
+           "optional": true
+          },
+          "retention_period": {
+           "required": true
+          }
+         }
+        }
+       },
+       "soft_delete_policy": {
+        "block": {
+         "attributes": {
+          "effective_time": {
+           "computed": true
+          },
+          "retention_duration_seconds": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true
+          },
+          "read": {
+           "optional": true
+          },
+          "update": {
+           "optional": true
+          }
+         }
+        }
+       },
+       "versioning": {
+        "block": {
+         "attributes": {
+          "enabled": {
+           "required": true
+          }
+         }
+        }
+       },
+       "website": {
+        "block": {
+         "attributes": {
+          "main_page_suffix": {
+           "optional": true
+          },
+          "not_found_page": {
+           "optional": true
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

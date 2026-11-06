@@ -471,7 +471,7 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
 
 test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow)
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/...
 
 test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
 	go test -count=1 -tags release ./tests/release/...
@@ -1041,6 +1041,47 @@ test-gcp-mutation-ratchet: test-gcp-mutation ## Mutation score + committed floor
 test-gcp-mutation-update: test-gcp-mutation ## Rewrite the mutation floor for PKG from a fresh run (ratchet up; ALLOW_LOWER=1 to drop)
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -mutation-floor-update -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)" $(if $(ALLOW_LOWER),-allow-lower,)
+
+# FC6: diff-scoped mutation over the surfaces the defect classes lived in. A
+# surviving mutant means the suite does not pin that behaviour; a per-PR run is
+# too expensive (minutes per package), so this is scheduled/weekly, not a PR
+# gate. PKG=… narrows it to one package or file for a local smoke run.
+MUTATION_SCOPE ?= internal/gcp/provider internal/gcp/grpc
+MUTATION_BASE  ?= $(shell git merge-base HEAD upstream/main 2>/dev/null || echo HEAD~1)
+
+gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provider + internal/gcp/grpc (local/weekly, not PR CI)
+	@set -e; \
+	  pkgs="$(PKG)"; \
+	  base="$(MUTATION_BASE)"; \
+	  if [ -z "$$pkgs" ]; then \
+	    if ! git rev-parse --verify -q "$$base" >/dev/null; then base=HEAD~1; fi; \
+	    echo "gcp-mutation: changed packages under $(MUTATION_SCOPE) since $$base"; \
+	    pkgs=$$(git diff --name-only "$$base"...HEAD -- $(MUTATION_SCOPE) \
+	      | grep -E '\.go$$' | xargs -r -n1 dirname | sort -u \
+	      | while read -r d; do \
+	          case "$$d" in *pb) continue;; esac; \
+	          ls "$$d"/*_test.go >/dev/null 2>&1 && echo "$$d"; \
+	        done); \
+	  fi; \
+	  if [ -z "$$pkgs" ]; then echo "gcp-mutation: nothing to mutate"; exit 0; fi; \
+	  mkdir -p bin; rc=0; \
+	  for pkg in $$pkgs; do \
+	    pkg="$${pkg#./}"; \
+	    [ -d "$$pkg" ] || { echo "  skip (no such package): $$pkg"; continue; }; \
+	    echo "== mutation: $$pkg"; \
+	    rm -f report.json; \
+	    if $(MUTESTING_BIN) --exec-timeout=$(MUTATION_TIMEOUT) $(MUTATION_EXTRA) "./$$pkg"; then \
+	      name=$$(echo "$$pkg" | tr '/' '-'); \
+	      mv -f report.json "bin/gcp-mutation-$$name.json"; \
+	      echo "  report: bin/gcp-mutation-$$name.json"; \
+	    else \
+	      echo "  mutation run failed for $$pkg"; rc=1; \
+	    fi; \
+	  done; \
+	  exit $$rc
+
+test-gcp-provider-capture: ## FC6 capture-gate self-test (parser, empty-label fixture, mapping/catalog join)
+	go test -count=1 ./tools/tfcapture/... ./tools/providerschema/...
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
@@ -1666,10 +1707,10 @@ test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-pr
 
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
-	$(MAKE) --no-print-directory test-gcp-lifecycle
+	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/...
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/...
 	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 	$(MAKE) --no-print-directory check-gcp-field-coverage
 	$(MAKE) --no-print-directory check-gcp-fidelity-matrix

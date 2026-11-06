@@ -147,7 +147,13 @@ destroy_work() {
 }
 cleanup() {
   destroy_work
-  rm -rf "$WORK"
+  # JC_TF_KEEP=1 keeps the work dir (debug logs, captured request bodies) for
+  # local investigation; the default removes it.
+  if [[ "${JC_TF_KEEP:-0}" != "1" ]]; then
+    rm -rf "$WORK"
+  else
+    echo "kept work dir: $WORK"
+  fi
 }
 trap 'cleanup' EXIT INT TERM
 
@@ -171,6 +177,13 @@ summary() {
 init_phase() {
   if tf init -input=false -no-color >"$WORK/init.log" 2>&1; then
     pass "init (provider resolved from the registry/local cache)"
+    # FC6: the provider's own schema is the definition the capture is joined to.
+    if ! tf providers schema -json >"$WORK/schema.json" 2>"$WORK/schema.err"; then
+      rm -f "$WORK/schema.json"
+    fi
+    # Record every outgoing provider request for the capture gate. TF_LOG_PATH
+    # keeps the plugin log out of the phase logs the gates grep.
+    export TF_LOG=DEBUG TF_LOG_PATH="$WORK/tf-debug.log"
   else
     cat "$WORK/init.log"
     fail "init (see the log above)"
@@ -266,8 +279,40 @@ destroy_phase() {
   fi
 }
 
+# capture_phase joins the provider's outgoing request bodies to its schema and
+# the field catalog (FC6). JC_TF_CAPTURE=0 disables it for local debugging.
+capture_phase() {
+  [[ "${JC_TF_CAPTURE:-1}" == "1" ]] || return 0
+  if [[ ! -s "$WORK/schema.json" ]]; then
+    echo "== capture: SKIP (no provider schema; is terraform init working?)"
+    return 0
+  fi
+  if [[ ! -s "$WORK/tf-debug.log" ]]; then
+    fail "capture (no TF_LOG output at $WORK/tf-debug.log)"
+    return 0
+  fi
+  local root bin
+  root="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+  bin="${TFCAPTURE_BIN:-$root/bin/tfcapture}"
+  if [[ ! -x "$bin" ]]; then
+    if ! (cd "$root" && go build -o "$bin" ./tools/tfcapture); then
+      fail "capture (could not build tools/tfcapture)"
+      return 0
+    fi
+  fi
+  echo "== capture: provider request bodies vs the field catalog"
+  if "$bin" -case "$CASE" -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \
+      -mapping "$root/docs/fidelity/provider-attributes.csv" \
+      -catalog "$root/docs/fidelity/field-coverage.csv"; then
+    pass "capture (every sent provider attribute is served)"
+  else
+    fail "capture (see the report above)"
+  fi
+}
+
 echo "== $TF: consumer module $MODULE_DIR (case=$CASE endpoint=$ENDPOINT project=$PROJECT)"
 
 case_main
+capture_phase
 
 summary
