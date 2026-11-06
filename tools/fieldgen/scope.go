@@ -19,6 +19,31 @@ import (
 // and their pilot waves schedule them (see plan_docs/gcp-defect-coverage-wave-plan.md).
 type Scope struct {
 	Sources []ScopeSource `yaml:"sources"`
+	// References names messages whose google.api.resource_reference fields are
+	// inventoried even though the resource itself is outside the field-coverage
+	// pilot (FC4: Pub/Sub, Dataproc, Metastore, Logging, Workflows, ...).
+	References []ScopeReference `yaml:"references"`
+	// DocumentedReferences lists fields a Discovery document documents as a
+	// reference but cannot annotate (Discovery has no resource_reference).
+	DocumentedReferences []DocumentedReference `yaml:"documented_references"`
+}
+
+// ScopeReference is one message walked for reference annotations.
+type ScopeReference struct {
+	Service  string `yaml:"service"`
+	Resource string `yaml:"resource"`
+	Message  string `yaml:"message"`
+	Depth    int    `yaml:"depth"`
+}
+
+// DocumentedReference is a hand-declared reference documented by a Discovery
+// description.
+type DocumentedReference struct {
+	Service  string `yaml:"service"`
+	Resource string `yaml:"resource"`
+	Field    string `yaml:"field"`
+	Target   string `yaml:"target"`
+	Reason   string `yaml:"reason"`
 }
 
 // ScopeSource is one resource and the definitions that describe it per
@@ -48,12 +73,37 @@ type Universe struct {
 }
 
 // Field is one definition field on one transport.
+//
+// Name/Behavior drive the inventory (FC1/FC2). Type, Repeated, ElemType,
+// EnumValues and Segments drive the generated round-trip scenarios (FC3): they
+// are the definition's wire type, which is what lets a scenario set a
+// type-driven non-default value without a hand-written per-field table.
 type Field struct {
 	Service   string
 	Transport string
 	Resource  string
 	Name      string
 	Behavior  string
+
+	// Type is the field's wire type token: string, int32, int64, uint32,
+	// uint64, bool, double, float, bytes, enum, duration, timestamp, map,
+	// message, struct or any (a google.protobuf.Any).
+	Type string
+	// Repeated is true for a list or a map: the scenario writes an array/object.
+	Repeated bool
+	// ElemType is the element type for a repeated field or map value.
+	ElemType string
+	// EnumValues lists the definition's enum value names, in definition order.
+	EnumValues []string
+	// Segments is the full path from the resource root, with per-segment
+	// repetition, so a generated value can be placed in the right shape.
+	Segments []PathSegment
+}
+
+// PathSegment is one level of a definition field's path.
+type PathSegment struct {
+	Name     string
+	Repeated bool
 }
 
 // Key is the CSV row identity. Transport is part of the key: the REST JSON and
@@ -100,6 +150,19 @@ func LoadScope(path string) (*Scope, error) {
 				return nil, fmt.Errorf("scope (%s): duplicate source %s", path, k)
 			}
 			seen[k] = true
+		}
+	}
+	for i, r := range s.References {
+		if r.Service == "" || r.Resource == "" || r.Message == "" {
+			return nil, fmt.Errorf("scope (%s): reference %d is missing service, resource or message", path, i+1)
+		}
+		if r.Depth < 1 {
+			return nil, fmt.Errorf("scope (%s): reference %s/%s needs depth >= 1", path, r.Service, r.Resource)
+		}
+	}
+	for i, d := range s.DocumentedReferences {
+		if d.Service == "" || d.Resource == "" || d.Field == "" || d.Target == "" || d.Reason == "" {
+			return nil, fmt.Errorf("scope (%s): documented reference %d needs service, resource, field, target and reason", path, i+1)
 		}
 	}
 	return &s, nil

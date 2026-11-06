@@ -98,3 +98,59 @@ sources:
         discovery: monitoring
         schema: AlertPolicy
         depth: 2
+
+# Reference inventory (FC4). These messages carry google.api.resource_reference
+# annotations for services outside the field-coverage pilot; the reference gate
+# derives one row per annotated field and joins it to
+# docs/fidelity/reference-coverage.csv. One entry per owning message.
+references:
+  - service: pubsub
+    resource: Topic
+    message: google.pubsub.v1.Topic
+    depth: 1
+  - service: pubsub
+    resource: Subscription
+    message: google.pubsub.v1.Subscription
+    depth: 2
+  - service: pubsub
+    resource: Snapshot
+    message: google.pubsub.v1.Snapshot
+    depth: 1
+  - service: dataproc
+    resource: ClusterConfig
+    message: google.cloud.dataproc.v1.ClusterConfig
+    depth: 2
+  - service: dataproc
+    resource: WorkflowTemplate
+    message: google.cloud.dataproc.v1.WorkflowTemplate
+    depth: 3
+  - service: metastore
+    resource: Service
+    message: google.cloud.metastore.v1.Service
+    depth: 2
+  - service: logging
+    resource: LogSink
+    message: google.logging.v2.LogSink
+    depth: 1
+  - service: workflows
+    resource: Workflow
+    message: google.cloud.workflows.v1.Workflow
+    depth: 1
+  - service: eventarc
+    resource: Trigger
+    message: google.cloud.eventarc.v1.Trigger
+    depth: 2
+  - service: run
+    resource: Service
+    message: google.cloud.run.v2.Service
+    depth: 3
+
+# Fields a Discovery description documents as a reference. Discovery has no
+# resource_reference annotation, so these are declared here (the description is
+# the authority and is quoted in the reason).
+documented_references:
+  - service: storage
+    resource: Notification
+    field: topic
+    target: pubsub.googleapis.com/Topic
+    reason: 'Discovery Notification.topic is documented as "The Cloud Pub/Sub topic to which this subscription publishes."'

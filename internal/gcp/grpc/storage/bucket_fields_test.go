@@ -186,3 +186,55 @@ func TestGRPCUpdateBucketModuleFields(t *testing.T) {
 		t.Errorf("ipFilter after a masked clear = %+v, want nil", got.GetIpFilter())
 	}
 }
+
+// TestGRPCUpdateBucketNestedMaskPaths pins that an update mask naming a leaf
+// inside a block is applied. The API's field masks carry leaf paths
+// (website.main_page_suffix, logging.log_bucket, ip_filter.mode); a block-level
+// apply that only matched the block name silently ignored them, so a client
+// could PATCH a nested field and read back the old value (FC3).
+func TestGRPCUpdateBucketNestedMaskPaths(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
+		Parent:   "projects/_",
+		BucketId: "bucket-nested-mask",
+		Bucket: &storagepb.Bucket{
+			Project: "projects/test-project", Location: "us-central1",
+			Website: &storagepb.Bucket_Website{MainPageSuffix: "index.html", NotFoundPage: "404.html"},
+			Logging: &storagepb.Bucket_Logging{LogBucket: "logs", LogObjectPrefix: "access/"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	name := "projects/_/buckets/bucket-nested-mask"
+	mode := "Disabled"
+
+	if _, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket: &storagepb.Bucket{
+			Name:     name,
+			Website:  &storagepb.Bucket_Website{MainPageSuffix: "home.html"},
+			Logging:  &storagepb.Bucket_Logging{LogBucket: "audit-logs"},
+			IpFilter: &storagepb.Bucket_IpFilter{Mode: &mode},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+			"website.main_page_suffix", "logging.log_bucket", "ip_filter.mode",
+		}},
+	}); err != nil {
+		t.Fatalf("UpdateBucket(nested masks): %v", err)
+	}
+	got, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetBucket: %v", err)
+	}
+	if got.GetWebsite().GetMainPageSuffix() != "home.html" {
+		t.Errorf("website.main_page_suffix = %q, want home.html", got.GetWebsite().GetMainPageSuffix())
+	}
+	if got.GetLogging().GetLogBucket() != "audit-logs" {
+		t.Errorf("logging.log_bucket = %q, want audit-logs", got.GetLogging().GetLogBucket())
+	}
+	if got.GetIpFilter().GetMode() != "Disabled" {
+		t.Errorf("ip_filter.mode = %q, want Disabled", got.GetIpFilter().GetMode())
+	}
+}

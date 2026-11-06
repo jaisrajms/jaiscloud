@@ -1,47 +1,47 @@
 service,transport,resource,field,behavior,coverage,evidence,reason,review_by
-clouddns,rest,ManagedZone,cloudLoggingConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesDNSSECConfig,,
-clouddns,rest,ManagedZone,cloudLoggingConfig.enableLogging,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesDNSSECConfig,,
-clouddns,rest,ManagedZone,cloudLoggingConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesDNSSECConfig,defaulted to dns#managedZoneCloudLoggingConfig when the block is absent; a supplied kind is preserved,
-clouddns,rest,ManagedZone,creationTime,,output-only,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip,server clock at create,
-clouddns,rest,ManagedZone,description,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip,,
-clouddns,rest,ManagedZone,dnsName,,immutable,,the zone's DNS name is create-only; the emulator never rewrites it on update,
-clouddns,rest,ManagedZone,dnssecConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.algorithm,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.keyLength,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.keyType,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed; it is not synthesized when absent",
-clouddns,rest,ManagedZone,dnssecConfig.nonExistence,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,dnssecConfig.state,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed; it is not synthesized when absent",
-clouddns,rest,ManagedZone,forwardingConfig.targetNameServers,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.domainName,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.forwardingPath,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.ipv4Address,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.ipv6Address,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,,
-clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
+clouddns,rest,ManagedZone,cloudLoggingConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesDNSSECConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,cloudLoggingConfig.enableLogging,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesDNSSECConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,cloudLoggingConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesDNSSECConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,defaulted to dns#managedZoneCloudLoggingConfig when the block is absent; a supplied kind is preserved,
+clouddns,rest,ManagedZone,creationTime,,output-only,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
+clouddns,rest,ManagedZone,description,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnsName,,immutable,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,the zone's DNS name is create-only; the emulator never rewrites it on update,
+clouddns,rest,ManagedZone,dnssecConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.algorithm,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.keyLength,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.keyType,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.defaultKeySpecs.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed; it is not synthesized when absent",
+clouddns,rest,ManagedZone,dnssecConfig.nonExistence,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,dnssecConfig.state,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneDNSSECConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed; it is not synthesized when absent",
+clouddns,rest,ManagedZone,forwardingConfig.targetNameServers,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.domainName,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.forwardingPath,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.ipv4Address,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.ipv6Address,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,forwardingConfig.targetNameServers.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneForwardingConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
 clouddns,rest,ManagedZone,id,,derived,internal/gcp/provider/clouddns/clouddns_test.go#TestNumericIDStableAndFQDN,numeric id derived from the project + zone name,
-clouddns,rest,ManagedZone,kind,,output-only,,server-assigned constant (dns#managedZone),
-clouddns,rest,ManagedZone,labels,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip,,
-clouddns,rest,ManagedZone,name,,immutable,,"the resource identifier: set at create, never applied by a PATCH",
+clouddns,rest,ManagedZone,kind,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server-assigned constant (dns#managedZone),
+clouddns,rest,ManagedZone,labels,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,name,,immutable,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the resource identifier: set at create, never applied by a PATCH",
 clouddns,rest,ManagedZone,nameServerSet,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
 clouddns,rest,ManagedZone,nameServers,,derived,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneRoundTrip,synthesized delegation set (nameServers),
-clouddns,rest,ManagedZone,peeringConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip,,
-clouddns,rest,ManagedZone,peeringConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed; it is not synthesized when absent",
-clouddns,rest,ManagedZone,peeringConfig.targetNetwork,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip,,
-clouddns,rest,ManagedZone,peeringConfig.targetNetwork.deactivateTime,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip,"the block is stored verbatim, so a supplied value is echoed; the emulator never sets it server-side",
-clouddns,rest,ManagedZone,peeringConfig.targetNetwork.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
-clouddns,rest,ManagedZone,peeringConfig.targetNetwork.networkUrl,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip,,
-clouddns,rest,ManagedZone,privateVisibilityConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesPrivateVisibilityConfig,,
-clouddns,rest,ManagedZone,privateVisibilityConfig.gkeClusters,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,,
-clouddns,rest,ManagedZone,privateVisibilityConfig.gkeClusters.gkeClusterName,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,,
-clouddns,rest,ManagedZone,privateVisibilityConfig.gkeClusters.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
-clouddns,rest,ManagedZone,privateVisibilityConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
-clouddns,rest,ManagedZone,privateVisibilityConfig.networks,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,,
-clouddns,rest,ManagedZone,privateVisibilityConfig.networks.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
-clouddns,rest,ManagedZone,privateVisibilityConfig.networks.networkUrl,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,,
+clouddns,rest,ManagedZone,peeringConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,peeringConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed; it is not synthesized when absent",
+clouddns,rest,ManagedZone,peeringConfig.targetNetwork,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,peeringConfig.targetNetwork.deactivateTime,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied value is echoed; the emulator never sets it server-side",
+clouddns,rest,ManagedZone,peeringConfig.targetNetwork.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
+clouddns,rest,ManagedZone,peeringConfig.targetNetwork.networkUrl,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePeeringConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,privateVisibilityConfig,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZoneUpdateReplacesPrivateVisibilityConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,privateVisibilityConfig.gkeClusters,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,privateVisibilityConfig.gkeClusters.gkeClusterName,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,privateVisibilityConfig.gkeClusters.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
+clouddns,rest,ManagedZone,privateVisibilityConfig.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
+clouddns,rest,ManagedZone,privateVisibilityConfig.networks,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+clouddns,rest,ManagedZone,privateVisibilityConfig.networks.kind,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the block is stored verbatim, so a supplied kind is echoed",
+clouddns,rest,ManagedZone,privateVisibilityConfig.networks.networkUrl,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 clouddns,rest,ManagedZone,reverseLookupConfig,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
 clouddns,rest,ManagedZone,reverseLookupConfig.kind,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
 clouddns,rest,ManagedZone,serviceDirectoryConfig,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
@@ -50,89 +50,89 @@ clouddns,rest,ManagedZone,serviceDirectoryConfig.namespace,,unsupported,,dns#man
 clouddns,rest,ManagedZone,serviceDirectoryConfig.namespace.deletionTime,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
 clouddns,rest,ManagedZone,serviceDirectoryConfig.namespace.kind,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
 clouddns,rest,ManagedZone,serviceDirectoryConfig.namespace.namespaceUrl,,unsupported,,dns#managedZone field is not modelled by the emulator's ManagedZone struct (configured blocks it does not support),2027-06-30
-clouddns,rest,ManagedZone,visibility,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip,,
-firestore,grpc,BackupSchedule,create_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,server clock at create,
-firestore,grpc,BackupSchedule,daily_recurrence,,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip,,
+clouddns,rest,ManagedZone,visibility,,roundtrip,internal/gcp/provider/clouddns/clouddns_test.go#TestManagedZonePrivateVisibilityConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,BackupSchedule,create_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
+firestore,grpc,BackupSchedule,daily_recurrence,,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 firestore,grpc,BackupSchedule,name,output_only,derived,,server-assigned resource name (BackupSchedule): derived from the parent path and id,
-firestore,grpc,BackupSchedule,retention,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip,,
-firestore,grpc,BackupSchedule,update_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,server clock of the last mutation,
-firestore,grpc,BackupSchedule,weekly_recurrence,,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip,,
-firestore,grpc,BackupSchedule,weekly_recurrence.day,,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip,,
-firestore,grpc,Database,app_engine_integration_mode,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip,,
-firestore,grpc,Database,cmek_config,optional,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseCmekConfig,,
+firestore,grpc,BackupSchedule,retention,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,BackupSchedule,update_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock of the last mutation,
+firestore,grpc,BackupSchedule,weekly_recurrence,,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,BackupSchedule,weekly_recurrence.day,,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestBackupScheduleAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,Database,app_engine_integration_mode,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,Database,cmek_config,optional,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseCmekConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 firestore,grpc,Database,cmek_config.active_key_version,output_only,derived,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseCmekActiveKeyVersions,"the referenced KMS key's ENABLED versions, read from the attached KMS store per response",
-firestore,grpc,Database,cmek_config.kms_key_name,required,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseCmekConfig,,
-firestore,grpc,Database,concurrency_mode,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip,,
-firestore,grpc,Database,create_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,server clock at create,
-firestore,grpc,Database,database_edition,immutable,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,,
-firestore,grpc,Database,delete_protection_state,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip,,
-firestore,grpc,Database,delete_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,set when the database is soft-deleted,
+firestore,grpc,Database,cmek_config.kms_key_name,required,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseCmekConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,Database,concurrency_mode,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,Database,create_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
+firestore,grpc,Database,database_edition,immutable,immutable,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,Database,delete_protection_state,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,grpc,Database,delete_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,set when the database is soft-deleted,
 firestore,grpc,Database,earliest_version_time,output_only,derived,internal/gcp/provider/firestore/admin_test.go#TestDatabaseEarliestVersionTime,now - version_retention_period (database.proto),
 firestore,grpc,Database,etag,,derived,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,fresh per mutation: OCC token derived from the record's revision,
 firestore,grpc,Database,firestore_data_access_mode,optional,unsupported,,google.firestore.admin.v1.Database field is not stored or rendered by the emulator's databaseDef,2027-06-30
 firestore,grpc,Database,free_tier,output_only,unsupported,,free-tier output metadata is not modelled (there is no billing tier),2027-06-30
-firestore,grpc,Database,key_prefix,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,OUTPUT_ONLY; a create/patch that supplies it is ignored,
-firestore,grpc,Database,location_id,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip,FC2-7: applyDatabaseField applies location_id; Firestore pins a database's location at creation,
+firestore,grpc,Database,key_prefix,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,OUTPUT_ONLY; a create/patch that supplies it is ignored,
+firestore,grpc,Database,location_id,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-7: applyDatabaseField applies location_id; Firestore pins a database's location at creation,
 firestore,grpc,Database,mongodb_compatible_data_access_mode,optional,unsupported,,google.firestore.admin.v1.Database field is not stored or rendered by the emulator's databaseDef,2027-06-30
 firestore,grpc,Database,name,,derived,,server-assigned resource name (Database): derived from the parent path and id,
-firestore,grpc,Database,point_in_time_recovery_enablement,,roundtrip,internal/gcp/provider/firestore/admin_test.go#TestDatabaseEarliestVersionTime,,
+firestore,grpc,Database,point_in_time_recovery_enablement,,roundtrip,internal/gcp/provider/firestore/admin_test.go#TestDatabaseEarliestVersionTime;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 firestore,grpc,Database,previous_id,output_only,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,grpc,Database,realtime_updates_mode,immutable,unsupported,,realtime update mode (Firestore realtime) is not implemented; the field is IMMUTABLE in the proto and cannot be stored,2027-06-30
 firestore,grpc,Database,source_info,output_only,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,grpc,Database,source_info.backup,,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,grpc,Database,source_info.operation,ref:firestore.googleapis.com/Operation,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,grpc,Database,tags,input_only|immutable|optional,unsupported,,input-only IMMUTABLE tags are not stored by the emulator (no tag surface),2027-06-30
-firestore,grpc,Database,type,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip,FC2-8: applyDatabaseField applies type; Firestore pins Native/Datastore mode at creation,
-firestore,grpc,Database,uid,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,server-assigned UUID4,
-firestore,grpc,Database,update_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields,server clock of the last mutation,
+firestore,grpc,Database,type,,roundtrip,internal/gcp/grpc/firestoreadmin/admin_test.go#TestDatabaseAdminRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-8: applyDatabaseField applies type; Firestore pins Native/Datastore mode at creation,
+firestore,grpc,Database,uid,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server-assigned UUID4,
+firestore,grpc,Database,update_time,output_only,output-only,internal/gcp/grpc/firestoreadmin/admin_test.go#TestUpdateDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock of the last mutation,
 firestore,grpc,Database,version_retention_period,output_only,derived,internal/gcp/provider/firestore/admin_test.go#TestDatabaseEarliestVersionTime,"7 days when point-in-time recovery is enabled, 1 hour otherwise (databaseRetentionPeriod)",
-firestore,rest,BackupSchedule,createTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,server clock at create,
-firestore,rest,BackupSchedule,dailyRecurrence,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle,,
+firestore,rest,BackupSchedule,createTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
+firestore,rest,BackupSchedule,dailyRecurrence,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 firestore,rest,BackupSchedule,name,read_only,derived,,server-assigned resource name (BackupSchedule): derived from the parent path and id,
-firestore,rest,BackupSchedule,retention,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle,,
-firestore,rest,BackupSchedule,updateTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,server clock of the last mutation,
-firestore,rest,BackupSchedule,weeklyRecurrence,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle,,
-firestore,rest,BackupSchedule,weeklyRecurrence.day,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle,,
-firestore,rest,Database,appEngineIntegrationMode,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,,
-firestore,rest,Database,cmekConfig,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseCmekConfig,,
+firestore,rest,BackupSchedule,retention,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,BackupSchedule,updateTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock of the last mutation,
+firestore,rest,BackupSchedule,weeklyRecurrence,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,BackupSchedule,weeklyRecurrence.day,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTBackupScheduleLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,Database,appEngineIntegrationMode,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,Database,cmekConfig,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseCmekConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 firestore,rest,Database,cmekConfig.activeKeyVersion,read_only,derived,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseCmekActiveKeyVersion,"the referenced KMS key's ENABLED versions, read from the attached KMS store per response",
-firestore,rest,Database,cmekConfig.kmsKeyName,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseCmekConfig,,
-firestore,rest,Database,concurrencyMode,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,,
-firestore,rest,Database,createTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,server clock at create,
-firestore,rest,Database,databaseEdition,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,,
-firestore,rest,Database,deleteProtectionState,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,,
-firestore,rest,Database,deleteTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,set when the database is soft-deleted,
+firestore,rest,Database,cmekConfig.kmsKeyName,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseCmekConfig;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,Database,concurrencyMode,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,Database,createTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
+firestore,rest,Database,databaseEdition,,immutable,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,Database,deleteProtectionState,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+firestore,rest,Database,deleteTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,set when the database is soft-deleted,
 firestore,rest,Database,earliestVersionTime,read_only,derived,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,now - version_retention_period (database.proto),
 firestore,rest,Database,etag,,derived,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,fresh per mutation: OCC token derived from the record's revision,
 firestore,rest,Database,firestoreDataAccessMode,,unsupported,,google.firestore.admin.v1.Database field is not stored or rendered by the emulator's databaseDef,2027-06-30
 firestore,rest,Database,freeTier,read_only,unsupported,,free-tier output metadata is not modelled (there is no billing tier),2027-06-30
-firestore,rest,Database,keyPrefix,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,OUTPUT_ONLY; a create/patch that supplies it is ignored,
-firestore,rest,Database,locationId,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,FC2-7: applyDatabaseField applies location_id; Firestore pins a database's location at creation,
+firestore,rest,Database,keyPrefix,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,OUTPUT_ONLY; a create/patch that supplies it is ignored,
+firestore,rest,Database,locationId,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-7: applyDatabaseField applies location_id; Firestore pins a database's location at creation,
 firestore,rest,Database,mongodbCompatibleDataAccessMode,,unsupported,,google.firestore.admin.v1.Database field is not stored or rendered by the emulator's databaseDef,2027-06-30
 firestore,rest,Database,name,,derived,,server-assigned resource name (Database): derived from the parent path and id,
-firestore,rest,Database,pointInTimeRecoveryEnablement,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,,
+firestore,rest,Database,pointInTimeRecoveryEnablement,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 firestore,rest,Database,previousId,read_only,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,rest,Database,realtimeUpdatesMode,,unsupported,,realtime update mode (Firestore realtime) is not implemented; the field is IMMUTABLE in the proto and cannot be stored,2027-06-30
 firestore,rest,Database,sourceInfo,read_only,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,rest,Database,sourceInfo.backup,,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,rest,Database,sourceInfo.operation,,unsupported,,"output-only, populated only for imported/restored/cloned databases, which this emulator does not create",2027-06-30
 firestore,rest,Database,tags,,unsupported,,input-only IMMUTABLE tags are not stored by the emulator (no tag surface),2027-06-30
-firestore,rest,Database,type,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,FC2-8: applyDatabaseField applies type; Firestore pins Native/Datastore mode at creation,
-firestore,rest,Database,uid,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,server-assigned UUID4,
-firestore,rest,Database,updateTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields,server clock of the last mutation,
+firestore,rest,Database,type,,roundtrip,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-8: applyDatabaseField applies type; Firestore pins Native/Datastore mode at creation,
+firestore,rest,Database,uid,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server-assigned UUID4,
+firestore,rest,Database,updateTime,read_only,output-only,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseServerOwnedFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock of the last mutation,
 firestore,rest,Database,versionRetentionPeriod,read_only,derived,internal/gcp/provider/firestore/admin_rest_test.go#TestRESTDatabaseLifecycle,"7 days when point-in-time recovery is enabled, 1 hour otherwise (databaseRetentionPeriod)",
-functions,grpc,Function,build_config,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,build_config,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.automatic_update_policy,,unsupported,,google.cloud.functions.v2 build automatic-update policy is not parsed or rendered,2027-06-30
 functions,grpc,Function,build_config.build,output_only|ref:cloudbuild.googleapis.com/Build,unsupported,,the backing Cloud Build record is not modelled (no build runs),2027-06-30
 functions,grpc,Function,build_config.docker_registry,,unsupported,,"defined on the v2 BuildConfig, but the emulator's v2 parse/render path ignores it (only the v1 shape stores an image registry)",2027-06-30
 functions,grpc,Function,build_config.docker_repository,ref:artifactregistry.googleapis.com/Repository,unsupported,,"defined on the v2 BuildConfig, but the emulator's v2 parse/render path ignores it (only the v1 shape stores an image repository)",2027-06-30
-functions,grpc,Function,build_config.entry_point,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,build_config.environment_variables,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,build_config.entry_point,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,build_config.environment_variables,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.on_deploy_update_policy,,unsupported,,google.cloud.functions.v2 on-deploy update policy is not parsed or rendered,2027-06-30
 functions,grpc,Function,build_config.on_deploy_update_policy.runtime_version,output_only,unsupported,,google.cloud.functions.v2 on-deploy update policy is not parsed or rendered,2027-06-30
-functions,grpc,Function,build_config.runtime,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,build_config.runtime,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.service_account,,unsupported,,runtime service account is not modelled (function execution uses the emulator's own identity),2027-06-30
-functions,grpc,Function,build_config.source,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,build_config.source,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.source.git_uri,,unsupported,,only buildConfig.source.storageSource is parsed; Git-backed sources are not,2027-06-30
 functions,grpc,Function,build_config.source.repo_source,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
 functions,grpc,Function,build_config.source.repo_source.branch_name,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
@@ -142,11 +142,11 @@ functions,grpc,Function,build_config.source.repo_source.invert_regex,,unsupporte
 functions,grpc,Function,build_config.source.repo_source.project_id,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
 functions,grpc,Function,build_config.source.repo_source.repo_name,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
 functions,grpc,Function,build_config.source.repo_source.tag_name,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
-functions,grpc,Function,build_config.source.storage_source,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,build_config.source.storage_source.bucket,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,build_config.source.storage_source,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,build_config.source.storage_source.bucket,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.source.storage_source.generation,,unsupported,,"StorageSource.generation is not parsed or rendered: the emulator reads the whole archive, not a specific object generation",2027-06-30
-functions,grpc,Function,build_config.source.storage_source.object,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,build_config.source.storage_source.source_upload_url,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,build_config.source.storage_source.object,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,build_config.source.storage_source.source_upload_url,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.source_provenance,output_only,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,grpc,Function,build_config.source_provenance.git_uri,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,grpc,Function,build_config.source_provenance.resolved_repo_source,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
@@ -163,36 +163,36 @@ functions,grpc,Function,build_config.source_provenance.resolved_storage_source.g
 functions,grpc,Function,build_config.source_provenance.resolved_storage_source.object,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,grpc,Function,build_config.source_provenance.resolved_storage_source.source_upload_url,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,grpc,Function,build_config.worker_pool,ref:cloudbuild.googleapis.com/WorkerPool,unsupported,,"defined on the v2 BuildConfig, but the emulator's v2 parse/render path ignores it",2027-06-30
-functions,grpc,Function,create_time,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,description,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,environment,,output-only,,every emulated v2 function runs on Cloud Run (GEN_2),
-functions,grpc,Function,event_trigger,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,create_time,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,description,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,environment,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,every emulated v2 function runs on Cloud Run (GEN_2),
+functions,grpc,Function,event_trigger,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,event_trigger.channel,optional|ref:eventarc.googleapis.com/Channel,unsupported,,Eventarc channel references are not modelled (triggers target the default channel),2027-06-30
-functions,grpc,Function,event_trigger.event_filters,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,event_trigger.event_filters.attribute,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,event_trigger.event_filters,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,event_trigger.event_filters.attribute,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,event_trigger.event_filters.operator,optional,unsupported,,FC2-15: only the bucket event filter is carried; protojson filter operators are not parsed or rendered,2027-06-30
-functions,grpc,Function,event_trigger.event_filters.value,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,event_trigger.event_type,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,event_trigger.pubsub_topic,optional|ref:pubsub.googleapis.com/Topic,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,event_trigger.retry_policy,optional,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,event_trigger.event_filters.value,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,event_trigger.event_type,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,event_trigger.pubsub_topic,optional|ref:pubsub.googleapis.com/Topic,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,event_trigger.retry_policy,optional,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,event_trigger.service,optional,unsupported,,v2 EventTrigger.service (documented as 1st-gen only) is not parsed or rendered,2027-06-30
 functions,grpc,Function,event_trigger.service_account_email,optional,unsupported,,the trigger's invoking service account is not modelled,2027-06-30
-functions,grpc,Function,event_trigger.trigger,output_only|ref:eventarc.googleapis.com/Trigger,output-only,,"the backing Eventarc trigger, materialized by the emulator; set only when a trigger is provisioned",
+functions,grpc,Function,event_trigger.trigger,output_only|ref:eventarc.googleapis.com/Trigger,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Eventarc trigger, materialized by the emulator; set only when a trigger is provisioned",
 functions,grpc,Function,event_trigger.trigger_region,,unsupported,,trigger region is not modelled (triggers are location-scoped),2027-06-30
 functions,grpc,Function,kms_key_name,ref:cloudkms.googleapis.com/CryptoKey,unsupported,,FC2-11: the function's CMEK key is not stored (no envelope encryption of function resources),2027-06-30
-functions,grpc,Function,labels,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
+functions,grpc,Function,labels,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,name,,derived,,resource name derived from the parent path + function id,
-functions,grpc,Function,satisfies_pzs,output_only,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,grpc,Function,service_config,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
+functions,grpc,Function,satisfies_pzs,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,grpc,Function,service_config,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,service_config.all_traffic_on_latest_revision,,derived,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,mirrors the 1st->2nd gen upgrade traffic state,
-functions,grpc,Function,service_config.available_cpu,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
-functions,grpc,Function,service_config.available_memory,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
+functions,grpc,Function,service_config.available_cpu,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,service_config.available_memory,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,service_config.binary_authorization_policy,optional,unsupported,,binary authorization is not modelled,2027-06-30
-functions,grpc,Function,service_config.environment_variables,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
-functions,grpc,Function,service_config.ingress_settings,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
-functions,grpc,Function,service_config.max_instance_count,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
-functions,grpc,Function,service_config.max_instance_request_concurrency,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
-functions,grpc,Function,service_config.min_instance_count,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
+functions,grpc,Function,service_config.environment_variables,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,service_config.ingress_settings,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,service_config.max_instance_count,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,service_config.max_instance_request_concurrency,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,service_config.min_instance_count,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,service_config.revision,output_only,derived,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,derived from the persisted revision counter + source hash,
 functions,grpc,Function,service_config.secret_environment_variables,,unsupported,,FC2-11: v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
 functions,grpc,Function,service_config.secret_environment_variables.key,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
@@ -207,31 +207,31 @@ functions,grpc,Function,service_config.secret_volumes.versions,,unsupported,,v1 
 functions,grpc,Function,service_config.secret_volumes.versions.path,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
 functions,grpc,Function,service_config.secret_volumes.versions.version,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
 functions,grpc,Function,service_config.security_level,,unsupported,,v1 HTTPS security level; the v2 surface does not parse or render it,2027-06-30
-functions,grpc,Function,service_config.service,output_only|ref:run.googleapis.com/Service,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,"the backing Cloud Run service name, derived from the function",
+functions,grpc,Function,service_config.service,output_only|ref:run.googleapis.com/Service,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Cloud Run service name, derived from the function",
 functions,grpc,Function,service_config.service_account_email,,unsupported,,runtime service account is not modelled,2027-06-30
-functions,grpc,Function,service_config.timeout_seconds,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6,,
-functions,grpc,Function,service_config.uri,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,derived deployed HTTPS URL,
+functions,grpc,Function,service_config.timeout_seconds,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,service_config.uri,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,derived deployed HTTPS URL,
 functions,grpc,Function,service_config.vpc_connector,ref:vpcaccess.googleapis.com/Connector,unsupported,,FC2-11: v1 serverless VPC connector; the v2 surface does not parse or render it,2027-06-30
 functions,grpc,Function,service_config.vpc_connector_egress_settings,,unsupported,,FC2-11: v1 serverless VPC connector egress; the v2 surface does not parse or render it,2027-06-30
-functions,grpc,Function,state,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,state_messages,output_only,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,grpc,Function,state_messages.message,,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,grpc,Function,state_messages.severity,,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,grpc,Function,state_messages.type,,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,grpc,Function,update_time,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,,
-functions,grpc,Function,url,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,derived deployed HTTPS URL,
-functions,rest,Function,buildConfig,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,grpc,Function,state,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,state_messages,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,grpc,Function,state_messages.message,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,grpc,Function,state_messages.severity,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,grpc,Function,state_messages.type,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,grpc,Function,update_time,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,url,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,derived deployed HTTPS URL,
+functions,rest,Function,buildConfig,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.automaticUpdatePolicy,,unsupported,,google.cloud.functions.v2 build automatic-update policy is not parsed or rendered,2027-06-30
 functions,rest,Function,buildConfig.build,output_only|ref:cloudbuild.googleapis.com/Build,unsupported,,the backing Cloud Build record is not modelled (no build runs),2027-06-30
 functions,rest,Function,buildConfig.dockerRegistry,,unsupported,,"defined on the v2 BuildConfig, but the emulator's v2 parse/render path ignores it (only the v1 shape stores an image registry)",2027-06-30
 functions,rest,Function,buildConfig.dockerRepository,ref:artifactregistry.googleapis.com/Repository,unsupported,,"defined on the v2 BuildConfig, but the emulator's v2 parse/render path ignores it (only the v1 shape stores an image repository)",2027-06-30
-functions,rest,Function,buildConfig.entryPoint,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,buildConfig.environmentVariables,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,buildConfig.entryPoint,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,buildConfig.environmentVariables,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.onDeployUpdatePolicy,,unsupported,,google.cloud.functions.v2 on-deploy update policy is not parsed or rendered,2027-06-30
 functions,rest,Function,buildConfig.onDeployUpdatePolicy.runtimeVersion,output_only,unsupported,,google.cloud.functions.v2 on-deploy update policy is not parsed or rendered,2027-06-30
-functions,rest,Function,buildConfig.runtime,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,buildConfig.runtime,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.serviceAccount,,unsupported,,runtime service account is not modelled (function execution uses the emulator's own identity),2027-06-30
-functions,rest,Function,buildConfig.source,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,buildConfig.source,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.source.gitUri,,unsupported,,only buildConfig.source.storageSource is parsed; Git-backed sources are not,2027-06-30
 functions,rest,Function,buildConfig.source.repoSource,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
 functions,rest,Function,buildConfig.source.repoSource.branchName,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
@@ -241,11 +241,11 @@ functions,rest,Function,buildConfig.source.repoSource.invertRegex,,unsupported,,
 functions,rest,Function,buildConfig.source.repoSource.projectId,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
 functions,rest,Function,buildConfig.source.repoSource.repoName,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
 functions,rest,Function,buildConfig.source.repoSource.tagName,,unsupported,,only buildConfig.source.storageSource is parsed; Cloud Source Repositories sources are not,2027-06-30
-functions,rest,Function,buildConfig.source.storageSource,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,buildConfig.source.storageSource.bucket,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,buildConfig.source.storageSource,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,buildConfig.source.storageSource.bucket,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.source.storageSource.generation,,unsupported,,"StorageSource.generation is not parsed or rendered: the emulator reads the whole archive, not a specific object generation",2027-06-30
-functions,rest,Function,buildConfig.source.storageSource.object,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,buildConfig.source.storageSource.sourceUploadUrl,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,buildConfig.source.storageSource.object,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,buildConfig.source.storageSource.sourceUploadUrl,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.sourceProvenance,output_only,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,rest,Function,buildConfig.sourceProvenance.gitUri,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,rest,Function,buildConfig.sourceProvenance.resolvedRepoSource,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
@@ -262,36 +262,36 @@ functions,rest,Function,buildConfig.sourceProvenance.resolvedStorageSource.gener
 functions,rest,Function,buildConfig.sourceProvenance.resolvedStorageSource.object,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,rest,Function,buildConfig.sourceProvenance.resolvedStorageSource.sourceUploadUrl,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,rest,Function,buildConfig.workerPool,ref:cloudbuild.googleapis.com/WorkerPool,unsupported,,"defined on the v2 BuildConfig, but the emulator's v2 parse/render path ignores it",2027-06-30
-functions,rest,Function,createTime,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,description,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,environment,,output-only,,every emulated v2 function runs on Cloud Run (GEN_2),
-functions,rest,Function,eventTrigger,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,createTime,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,description,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,environment,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,every emulated v2 function runs on Cloud Run (GEN_2),
+functions,rest,Function,eventTrigger,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,eventTrigger.channel,optional|ref:eventarc.googleapis.com/Channel,unsupported,,Eventarc channel references are not modelled (triggers target the default channel),2027-06-30
-functions,rest,Function,eventTrigger.eventFilters,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,eventTrigger.eventFilters.attribute,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,eventTrigger.eventFilters,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,eventTrigger.eventFilters.attribute,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,eventTrigger.eventFilters.operator,optional,unsupported,,FC2-15: only the bucket event filter is carried; protojson filter operators are not parsed or rendered,2027-06-30
-functions,rest,Function,eventTrigger.eventFilters.value,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,eventTrigger.eventType,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,eventTrigger.pubsubTopic,optional|ref:pubsub.googleapis.com/Topic,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,eventTrigger.retryPolicy,optional,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,eventTrigger.eventFilters.value,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,eventTrigger.eventType,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,eventTrigger.pubsubTopic,optional|ref:pubsub.googleapis.com/Topic,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,eventTrigger.retryPolicy,optional,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,eventTrigger.service,optional,unsupported,,v2 EventTrigger.service (documented as 1st-gen only) is not parsed or rendered,2027-06-30
 functions,rest,Function,eventTrigger.serviceAccountEmail,optional,unsupported,,the trigger's invoking service account is not modelled,2027-06-30
-functions,rest,Function,eventTrigger.trigger,output_only|ref:eventarc.googleapis.com/Trigger,output-only,,"the backing Eventarc trigger, materialized by the emulator; set only when a trigger is provisioned",
+functions,rest,Function,eventTrigger.trigger,output_only|ref:eventarc.googleapis.com/Trigger,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Eventarc trigger, materialized by the emulator; set only when a trigger is provisioned",
 functions,rest,Function,eventTrigger.triggerRegion,,unsupported,,trigger region is not modelled (triggers are location-scoped),2027-06-30
 functions,rest,Function,kmsKeyName,ref:cloudkms.googleapis.com/CryptoKey,unsupported,,FC2-11: the function's CMEK key is not stored (no envelope encryption of function resources),2027-06-30
-functions,rest,Function,labels,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
+functions,rest,Function,labels,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,name,,derived,,resource name derived from the parent path + function id,
-functions,rest,Function,satisfiesPzs,output_only,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,rest,Function,serviceConfig,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
+functions,rest,Function,satisfiesPzs,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,rest,Function,serviceConfig,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,serviceConfig.allTrafficOnLatestRevision,,derived,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,mirrors the 1st->2nd gen upgrade traffic state,
-functions,rest,Function,serviceConfig.availableCpu,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
-functions,rest,Function,serviceConfig.availableMemory,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
+functions,rest,Function,serviceConfig.availableCpu,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,serviceConfig.availableMemory,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,serviceConfig.binaryAuthorizationPolicy,optional,unsupported,,binary authorization is not modelled,2027-06-30
-functions,rest,Function,serviceConfig.environmentVariables,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
-functions,rest,Function,serviceConfig.ingressSettings,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
-functions,rest,Function,serviceConfig.maxInstanceCount,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
-functions,rest,Function,serviceConfig.maxInstanceRequestConcurrency,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
-functions,rest,Function,serviceConfig.minInstanceCount,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
+functions,rest,Function,serviceConfig.environmentVariables,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,serviceConfig.ingressSettings,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,serviceConfig.maxInstanceCount,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,serviceConfig.maxInstanceRequestConcurrency,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,serviceConfig.minInstanceCount,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,serviceConfig.revision,output_only,derived,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,derived from the persisted revision counter + source hash,
 functions,rest,Function,serviceConfig.secretEnvironmentVariables,,unsupported,,FC2-11: v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
 functions,rest,Function,serviceConfig.secretEnvironmentVariables.key,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
@@ -306,153 +306,153 @@ functions,rest,Function,serviceConfig.secretVolumes.versions,,unsupported,,v1 Se
 functions,rest,Function,serviceConfig.secretVolumes.versions.path,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
 functions,rest,Function,serviceConfig.secretVolumes.versions.version,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
 functions,rest,Function,serviceConfig.securityLevel,,unsupported,,v1 HTTPS security level; the v2 surface does not parse or render it,2027-06-30
-functions,rest,Function,serviceConfig.service,output_only|ref:run.googleapis.com/Service,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,"the backing Cloud Run service name, derived from the function",
+functions,rest,Function,serviceConfig.service,output_only|ref:run.googleapis.com/Service,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Cloud Run service name, derived from the function",
 functions,rest,Function,serviceConfig.serviceAccountEmail,,unsupported,,runtime service account is not modelled,2027-06-30
-functions,rest,Function,serviceConfig.timeoutSeconds,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2,,
-functions,rest,Function,serviceConfig.uri,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,derived deployed HTTPS URL,
+functions,rest,Function,serviceConfig.timeoutSeconds,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,serviceConfig.uri,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,derived deployed HTTPS URL,
 functions,rest,Function,serviceConfig.vpcConnector,ref:vpcaccess.googleapis.com/Connector,unsupported,,FC2-11: v1 serverless VPC connector; the v2 surface does not parse or render it,2027-06-30
 functions,rest,Function,serviceConfig.vpcConnectorEgressSettings,,unsupported,,FC2-11: v1 serverless VPC connector egress; the v2 surface does not parse or render it,2027-06-30
-functions,rest,Function,state,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,stateMessages,output_only,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,rest,Function,stateMessages.message,,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,rest,Function,stateMessages.severity,,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,rest,Function,stateMessages.type,,output-only,,output-only in the proto and never populated by the emulator (no source for the value),
-functions,rest,Function,updateTime,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,,
-functions,rest,Function,url,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,derived deployed HTTPS URL,
-kms,grpc,CryptoKey,create_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,server clock at create,
+functions,rest,Function,state,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,stateMessages,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,rest,Function,stateMessages.message,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,rest,Function,stateMessages.severity,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,rest,Function,stateMessages.type,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
+functions,rest,Function,updateTime,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,url,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,derived deployed HTTPS URL,
+kms,grpc,CryptoKey,create_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
 kms,grpc,CryptoKey,crypto_key_backend,immutable|ref:*,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
 kms,grpc,CryptoKey,destroy_scheduled_duration,immutable,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
-kms,grpc,CryptoKey,import_only,immutable,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks,,
+kms,grpc,CryptoKey,import_only,immutable,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,grpc,CryptoKey,key_access_justifications_policy,optional,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
 kms,grpc,CryptoKey,key_access_justifications_policy.allowed_access_reasons,,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
-kms,grpc,CryptoKey,labels,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyLabelsAndRotation,,
+kms,grpc,CryptoKey,labels,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyLabelsAndRotation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,grpc,CryptoKey,name,output_only,derived,,resource name derived from the parent path + key id (the proto declares it OUTPUT_ONLY),
-kms,grpc,CryptoKey,next_rotation_time,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyRotationExecutesOnRead,,
-kms,grpc,CryptoKey,primary,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,"the ENABLED primary version summary, derived from the version store",
-kms,grpc,CryptoKey,primary.algorithm,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,,
+kms,grpc,CryptoKey,next_rotation_time,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyRotationExecutesOnRead;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,primary,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the ENABLED primary version summary, derived from the version store",
+kms,grpc,CryptoKey,primary.algorithm,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,grpc,CryptoKey,primary.attestation,output_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
-kms,grpc,CryptoKey,primary.create_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,,
-kms,grpc,CryptoKey,primary.destroy_event_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,set only once the version is DESTROYED,
-kms,grpc,CryptoKey,primary.destroy_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,set only while the version is DESTROY_SCHEDULED,
+kms,grpc,CryptoKey,primary.create_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,primary.destroy_event_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,set only once the version is DESTROYED,
+kms,grpc,CryptoKey,primary.destroy_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,set only while the version is DESTROY_SCHEDULED,
 kms,grpc,CryptoKey,primary.external_destruction_failure_reason,output_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
 kms,grpc,CryptoKey,primary.external_protection_level_options,,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
-kms,grpc,CryptoKey,primary.generate_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,,
+kms,grpc,CryptoKey,primary.generate_time,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,grpc,CryptoKey,primary.generation_failure_reason,output_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
 kms,grpc,CryptoKey,primary.hsm_trusted,output_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
 kms,grpc,CryptoKey,primary.import_failure_reason,output_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
 kms,grpc,CryptoKey,primary.import_job,output_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
 kms,grpc,CryptoKey,primary.import_time,output_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
-kms,grpc,CryptoKey,primary.name,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,,
-kms,grpc,CryptoKey,primary.protection_level,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,,
+kms,grpc,CryptoKey,primary.name,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,primary.protection_level,output_only,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,grpc,CryptoKey,primary.reimport_eligible,output_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
-kms,grpc,CryptoKey,primary.state,,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD,,
+kms,grpc,CryptoKey,primary.state,,output-only,internal/gcp/transport/grpc/kms/service_test.go#TestKMSKeyRingKeyVersionCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,grpc,CryptoKey,primary.trusted_wrapping_enabled,immutable,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
-kms,grpc,CryptoKey,purpose,immutable,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks,,
-kms,grpc,CryptoKey,rotation_period,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyRotationExecutesOnRead,,
-kms,grpc,CryptoKey,version_template,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyVersionTemplateAlgorithmUpdate,,
-kms,grpc,CryptoKey,version_template.algorithm,required,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyVersionTemplateAlgorithmUpdate,,
-kms,grpc,CryptoKey,version_template.protection_level,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyVersionTemplateAlgorithm,,
-kms,rest,CryptoKey,createTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyVersionUpdate,server clock at create,
+kms,grpc,CryptoKey,purpose,immutable,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,rotation_period,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyRotationExecutesOnRead;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,version_template,,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyVersionTemplateAlgorithmUpdate;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,version_template.algorithm,required,roundtrip,internal/gcp/transport/grpc/kms/service_test.go#TestKMSCryptoKeyVersionTemplateAlgorithmUpdate;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,grpc,CryptoKey,version_template.protection_level,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyVersionTemplateAlgorithm;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,createTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyVersionUpdate;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
 kms,rest,CryptoKey,cryptoKeyBackend,,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
 kms,rest,CryptoKey,destroyScheduledDuration,,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
-kms,rest,CryptoKey,importOnly,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks,,
+kms,rest,CryptoKey,importOnly,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,rest,CryptoKey,keyAccessJustificationsPolicy,,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
 kms,rest,CryptoKey,keyAccessJustificationsPolicy.allowedAccessReasons,,unsupported,,google.cloud.kms.v1.CryptoKey field is not stored by the KMS core and not rendered by either transport,2027-06-30
-kms,rest,CryptoKey,labels,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyLabelsKeepEmptyValues,,
+kms,rest,CryptoKey,labels,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyLabelsKeepEmptyValues;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,rest,CryptoKey,name,read_only,derived,,resource name derived from the parent path + key id (the proto declares it OUTPUT_ONLY),
-kms,rest,CryptoKey,nextRotationTime,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestKMSRotation,,
-kms,rest,CryptoKey,primary,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,"the ENABLED primary version summary, derived from the version store",
-kms,rest,CryptoKey,primary.algorithm,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,,
+kms,rest,CryptoKey,nextRotationTime,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestKMSRotation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,primary,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the ENABLED primary version summary, derived from the version store",
+kms,rest,CryptoKey,primary.algorithm,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,rest,CryptoKey,primary.attestation,read_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
-kms,rest,CryptoKey,primary.createTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,,
-kms,rest,CryptoKey,primary.destroyEventTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,set only once the version is DESTROYED,
-kms,rest,CryptoKey,primary.destroyTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,set only while the version is DESTROY_SCHEDULED,
+kms,rest,CryptoKey,primary.createTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,primary.destroyEventTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,set only once the version is DESTROYED,
+kms,rest,CryptoKey,primary.destroyTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,set only while the version is DESTROY_SCHEDULED,
 kms,rest,CryptoKey,primary.externalDestructionFailureReason,read_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
 kms,rest,CryptoKey,primary.externalProtectionLevelOptions,,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
-kms,rest,CryptoKey,primary.generateTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,,
+kms,rest,CryptoKey,primary.generateTime,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,rest,CryptoKey,primary.generationFailureReason,read_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
 kms,rest,CryptoKey,primary.hsmTrusted,read_only,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
 kms,rest,CryptoKey,primary.importFailureReason,read_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
 kms,rest,CryptoKey,primary.importJob,read_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
 kms,rest,CryptoKey,primary.importTime,read_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
-kms,rest,CryptoKey,primary.name,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,,
-kms,rest,CryptoKey,primary.protectionLevel,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,,
+kms,rest,CryptoKey,primary.name,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,primary.protectionLevel,read_only,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,rest,CryptoKey,primary.reimportEligible,read_only,unsupported,,"populated only for ImportJob-managed versions, which the emulator models on the version's import path but not on the key's primary summary",2027-06-30
-kms,rest,CryptoKey,primary.state,,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes,,
+kms,rest,CryptoKey,primary.state,,output-only,internal/gcp/transport/rest/kms/kms_extra_test.go#TestPrimaryVersionTimes;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 kms,rest,CryptoKey,primary.trustedWrappingEnabled,,unsupported,,CryptoKeyVersion field is not populated for the primary: the emulator models name/state/algorithm/protectionLevel/create+generate+destroy times only,2027-06-30
-kms,rest,CryptoKey,purpose,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks,,
-kms,rest,CryptoKey,rotationPeriod,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestKMSRotation,,
-kms,rest,CryptoKey,versionTemplate,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyUpdateVersionTemplateAlgorithm,,
-kms,rest,CryptoKey,versionTemplate.algorithm,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyUpdateVersionTemplateAlgorithm,,
-kms,rest,CryptoKey,versionTemplate.protectionLevel,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyVersionTemplateAlgorithm,,
-monitoring,grpc,AlertPolicy,alert_strategy,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
-monitoring,grpc,AlertPolicy,alert_strategy.auto_close,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip,,
-monitoring,grpc,AlertPolicy,alert_strategy.notification_channel_strategy,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip,,
-monitoring,grpc,AlertPolicy,alert_strategy.notification_prompts,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
-monitoring,grpc,AlertPolicy,alert_strategy.notification_rate_limit,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip,,
-monitoring,grpc,AlertPolicy,combiner,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,conditions,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,conditions.condition_absent,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.condition_matched_log,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.condition_monitoring_query_language,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.condition_prometheus_query_language,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.condition_sql,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.condition_threshold,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.display_name,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,grpc,AlertPolicy,conditions.name,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,FC2-20: the condition name is stored only if the client sends it (the proto/monitoring docs assign it server-side on create; the emulator does not synthesize one),
-monitoring,grpc,AlertPolicy,creation_record,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,grpc,AlertPolicy,creation_record.mutate_time,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,grpc,AlertPolicy,creation_record.mutated_by,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,grpc,AlertPolicy,display_name,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,documentation,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,documentation.content,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,documentation.links,optional,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,documentation.mime_type,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,documentation.subject,optional,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,enabled,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,mutation_record,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,grpc,AlertPolicy,mutation_record.mutate_time,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,grpc,AlertPolicy,mutation_record.mutated_by,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+kms,rest,CryptoKey,purpose,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyMasks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,rotationPeriod,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestKMSRotation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,versionTemplate,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyUpdateVersionTemplateAlgorithm;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,versionTemplate.algorithm,,roundtrip,internal/gcp/transport/rest/kms/kms_extra_test.go#TestCryptoKeyUpdateVersionTemplateAlgorithm;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+kms,rest,CryptoKey,versionTemplate.protectionLevel,,immutable,internal/gcp/service/kms/cryptokeys_update_test.go#TestCoreUpdateCryptoKeyVersionTemplateAlgorithm;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,alert_strategy,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
+monitoring,grpc,AlertPolicy,alert_strategy.auto_close,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,alert_strategy.notification_channel_strategy,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,alert_strategy.notification_prompts,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
+monitoring,grpc,AlertPolicy,alert_strategy.notification_rate_limit,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,combiner,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,conditions,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,conditions.condition_absent,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.condition_matched_log,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.condition_monitoring_query_language,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.condition_prometheus_query_language,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.condition_sql,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.condition_threshold,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.display_name,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,grpc,AlertPolicy,conditions.name,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-20: the condition name is stored only if the client sends it (the proto/monitoring docs assign it server-side on create; the emulator does not synthesize one),
+monitoring,grpc,AlertPolicy,creation_record,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,grpc,AlertPolicy,creation_record.mutate_time,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,grpc,AlertPolicy,creation_record.mutated_by,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,grpc,AlertPolicy,display_name,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,documentation,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,documentation.content,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,documentation.links,optional,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,documentation.mime_type,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,documentation.subject,optional,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,enabled,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,mutation_record,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,grpc,AlertPolicy,mutation_record.mutate_time,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,grpc,AlertPolicy,mutation_record.mutated_by,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
 monitoring,grpc,AlertPolicy,name,identifier,derived,,resource name derived from the project + policy id,
-monitoring,grpc,AlertPolicy,notification_channels,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
-monitoring,grpc,AlertPolicy,severity,optional,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip,,
-monitoring,grpc,AlertPolicy,user_labels,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD,,
+monitoring,grpc,AlertPolicy,notification_channels,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,severity,optional,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,grpc,AlertPolicy,user_labels,,roundtrip,internal/gcp/transport/grpc/monitoring/service_test.go#TestAlertPolicyCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 monitoring,grpc,AlertPolicy,validity,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
 monitoring,grpc,AlertPolicy,validity.code,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
 monitoring,grpc,AlertPolicy,validity.details,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
 monitoring,grpc,AlertPolicy,validity.message,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
-monitoring,rest,AlertPolicy,alertStrategy,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
-monitoring,rest,AlertPolicy,alertStrategy.autoClose,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip,,
-monitoring,rest,AlertPolicy,alertStrategy.notificationChannelStrategy,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip,,
-monitoring,rest,AlertPolicy,alertStrategy.notificationPrompts,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
-monitoring,rest,AlertPolicy,alertStrategy.notificationRateLimit,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip,,
-monitoring,rest,AlertPolicy,combiner,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,conditions,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,conditions.conditionAbsent,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.conditionMatchedLog,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.conditionMonitoringQueryLanguage,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.conditionPrometheusQueryLanguage,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.conditionSql,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.conditionThreshold,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.displayName,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
-monitoring,rest,AlertPolicy,conditions.name,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,FC2-20: the condition name is stored only if the client sends it (the proto/monitoring docs assign it server-side on create; the emulator does not synthesize one),
-monitoring,rest,AlertPolicy,creationRecord,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,rest,AlertPolicy,creationRecord.mutateTime,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,rest,AlertPolicy,creationRecord.mutatedBy,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,rest,AlertPolicy,displayName,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,documentation,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,documentation.content,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,documentation.links,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,documentation.mimeType,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,documentation.subject,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,enabled,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,mutationRecord,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,rest,AlertPolicy,mutationRecord.mutateTime,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
-monitoring,rest,AlertPolicy,mutationRecord.mutatedBy,,output-only,,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,rest,AlertPolicy,alertStrategy,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
+monitoring,rest,AlertPolicy,alertStrategy.autoClose,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,alertStrategy.notificationChannelStrategy,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,alertStrategy.notificationPrompts,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored alertStrategy JSON object (opaque passthrough),
+monitoring,rest,AlertPolicy,alertStrategy.notificationRateLimit,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,combiner,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,conditions,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,conditions.conditionAbsent,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.conditionMatchedLog,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.conditionMonitoringQueryLanguage,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.conditionPrometheusQueryLanguage,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.conditionSql,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.conditionThreshold,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.displayName,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,rendered from the stored conditions JSON object (opaque passthrough; condition-type sub-bodies are not re-typed),
+monitoring,rest,AlertPolicy,conditions.name,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-20: the condition name is stored only if the client sends it (the proto/monitoring docs assign it server-side on create; the emulator does not synthesize one),
+monitoring,rest,AlertPolicy,creationRecord,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,rest,AlertPolicy,creationRecord.mutateTime,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,rest,AlertPolicy,creationRecord.mutatedBy,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,rest,AlertPolicy,displayName,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,documentation,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,documentation.content,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,documentation.links,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,documentation.mimeType,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,documentation.subject,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,enabled,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,mutationRecord,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,rest,AlertPolicy,mutationRecord.mutateTime,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
+monitoring,rest,AlertPolicy,mutationRecord.mutatedBy,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"output-only and never populated: neither alertPolicyToJSON nor alertPolicyToProto renders the policy's audit records, and the store keeps no caller identity (FC2-18)",
 monitoring,rest,AlertPolicy,name,,derived,,resource name derived from the project + policy id,
-monitoring,rest,AlertPolicy,notificationChannels,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
-monitoring,rest,AlertPolicy,severity,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip,,
-monitoring,rest,AlertPolicy,userLabels,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip,,
+monitoring,rest,AlertPolicy,notificationChannels,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,severity,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyStrategyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+monitoring,rest,AlertPolicy,userLabels,,roundtrip,internal/gcp/transport/rest/monitoring/provider_test.go#TestRESTAlertPolicyRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 monitoring,rest,AlertPolicy,validity,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
 monitoring,rest,AlertPolicy,validity.code,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
 monitoring,rest,AlertPolicy,validity.details,,unsupported,,UpdateAlertPolicy rejects the validity mask with 501 Unimplemented; the proto documents validity as output-only and the emulator does not compute it,2027-06-30
@@ -469,23 +469,23 @@ storage,grpc,Bucket,acl.project_team,optional,unsupported,,legacy bucket-body AC
 storage,grpc,Bucket,acl.project_team.project_number,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
 storage,grpc,Bucket,acl.project_team.team,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
 storage,grpc,Bucket,acl.role,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
-storage,grpc,Bucket,autoclass,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,autoclass.enabled,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,autoclass.terminal_storage_class,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,autoclass.terminal_storage_class_update_time,output_only,output-only,,"not written by the gRPC path (autoclassToMap drops it), but rendered on read when REST stored a value (FC2-16)",
-storage,grpc,Bucket,autoclass.toggle_time,output_only,output-only,,"not written by the gRPC path (autoclassToMap drops it), but rendered on read when REST stored a value (FC2-16)",
+storage,grpc,Bucket,autoclass,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,autoclass.enabled,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,autoclass.terminal_storage_class,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,autoclass.terminal_storage_class_update_time,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"not written by the gRPC path (autoclassToMap drops it), but rendered on read when REST stored a value (FC2-16)",
+storage,grpc,Bucket,autoclass.toggle_time,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"not written by the gRPC path (autoclassToMap drops it), but rendered on read when REST stored a value (FC2-16)",
 storage,grpc,Bucket,billing,optional,unsupported,,"metadata-only field with no emulator source: neither stored nor rendered, and the emulator's own REST surface does not serve it either (real GCS does)",2027-06-30
 storage,grpc,Bucket,billing.requester_pays,optional,unsupported,,"metadata-only field with no emulator source: neither stored nor rendered, and the emulator's own REST surface does not serve it either (real GCS does)",2027-06-30
-storage,grpc,Bucket,bucket_id,output_only,output-only,,the bucket id (last segment of the resource name),
+storage,grpc,Bucket,bucket_id,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,the bucket id (last segment of the resource name),
 storage,grpc,Bucket,cors,optional,unsupported,,"FC2-3: google.storage.v2 Bucket.cors is not mapped: bucketToProto ignores it and CreateBucket/UpdateBucket never store it, so a gRPC client cannot set or read CORS rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,cors.max_age_seconds,optional,unsupported,,"FC2-3: google.storage.v2 Bucket.cors is not mapped: bucketToProto ignores it and CreateBucket/UpdateBucket never store it, so a gRPC client cannot set or read CORS rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,cors.method,optional,unsupported,,"FC2-3: google.storage.v2 Bucket.cors is not mapped: bucketToProto ignores it and CreateBucket/UpdateBucket never store it, so a gRPC client cannot set or read CORS rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,cors.origin,optional,unsupported,,"FC2-3: google.storage.v2 Bucket.cors is not mapped: bucketToProto ignores it and CreateBucket/UpdateBucket never store it, so a gRPC client cannot set or read CORS rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,cors.response_header,optional,unsupported,,"FC2-3: google.storage.v2 Bucket.cors is not mapped: bucketToProto ignores it and CreateBucket/UpdateBucket never store it, so a gRPC client cannot set or read CORS rules (REST v1 does)",2027-06-30
-storage,grpc,Bucket,create_time,output_only,output-only,,server clock at create,
-storage,grpc,Bucket,custom_placement_config,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields,,
-storage,grpc,Bucket,custom_placement_config.data_locations,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields,,
-storage,grpc,Bucket,default_event_based_hold,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD,,
+storage,grpc,Bucket,create_time,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at create,
+storage,grpc,Bucket,custom_placement_config,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,custom_placement_config.data_locations,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,default_event_based_hold,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,grpc,Bucket,default_object_acl,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
 storage,grpc,Bucket,default_object_acl.domain,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
 storage,grpc,Bucket,default_object_acl.email,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
@@ -510,33 +510,33 @@ storage,grpc,Bucket,encryption.google_managed_encryption_enforcement_config,opti
 storage,grpc,Bucket,encryption.google_managed_encryption_enforcement_config.effective_time,,unsupported,,"FC2-2: google.storage.v2 Bucket.encryption is not mapped: bucketToProto/applyBucketMask ignore it, so a gRPC client cannot set or read the CMEK default key (REST v1 does)",2027-06-30
 storage,grpc,Bucket,encryption.google_managed_encryption_enforcement_config.restriction_mode,,unsupported,,"FC2-2: google.storage.v2 Bucket.encryption is not mapped: bucketToProto/applyBucketMask ignore it, so a gRPC client cannot set or read the CMEK default key (REST v1 does)",2027-06-30
 storage,grpc,Bucket,etag,,derived,,"BucketEtag(metageneration): base64 of the metageneration integer, per the GCS etag contract; the documented UpdateBucket etag precondition is not enforced (FC2-19)",
-storage,grpc,Bucket,hierarchical_namespace,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields,,
-storage,grpc,Bucket,hierarchical_namespace.enabled,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields,,
-storage,grpc,Bucket,iam_config,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip,,
-storage,grpc,Bucket,iam_config.public_access_prevention,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip,,
-storage,grpc,Bucket,iam_config.uniform_bucket_level_access,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip,,
-storage,grpc,Bucket,iam_config.uniform_bucket_level_access.enabled,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip,,
-storage,grpc,Bucket,iam_config.uniform_bucket_level_access.lock_time,optional,output-only,,deliberately unset: the emulator does not track the 90-day window in which the setting can be disabled,
-storage,grpc,Bucket,ip_filter,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.allow_all_service_agent_access,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.allow_cross_org_vpcs,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.mode,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.public_network_source,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.public_network_source.allowed_ip_cidr_ranges,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.vpc_network_sources,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.vpc_network_sources.allowed_ip_cidr_ranges,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,ip_filter.vpc_network_sources.network,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,labels,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestUpdateBucketLabelsAndPrecondition,,
+storage,grpc,Bucket,hierarchical_namespace,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,hierarchical_namespace.enabled,optional,immutable,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCUpdateBucketModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,iam_config,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,iam_config.public_access_prevention,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,iam_config.uniform_bucket_level_access,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,iam_config.uniform_bucket_level_access.enabled,optional,roundtrip,internal/gcp/grpc/storage/iam_config_test.go#TestGRPCBucketIamConfigRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,iam_config.uniform_bucket_level_access.lock_time,optional,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,deliberately unset: the emulator does not track the 90-day window in which the setting can be disabled,
+storage,grpc,Bucket,ip_filter,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.allow_all_service_agent_access,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.allow_cross_org_vpcs,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.mode,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.public_network_source,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.public_network_source.allowed_ip_cidr_ranges,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.vpc_network_sources,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.vpc_network_sources.allowed_ip_cidr_ranges,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,ip_filter.vpc_network_sources.network,,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,labels,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestUpdateBucketLabelsAndPrecondition;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,grpc,Bucket,lifecycle,optional,unsupported,,"FC2-1: google.storage.v2 Bucket.lifecycle is not mapped: bucketToProto/applyBucketMask ignore it, so a gRPC client cannot set or read lifecycle rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,lifecycle.rule,optional,unsupported,,"FC2-1: google.storage.v2 Bucket.lifecycle is not mapped: bucketToProto/applyBucketMask ignore it, so a gRPC client cannot set or read lifecycle rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,lifecycle.rule.action,optional,unsupported,,"FC2-1: google.storage.v2 Bucket.lifecycle is not mapped: bucketToProto/applyBucketMask ignore it, so a gRPC client cannot set or read lifecycle rules (REST v1 does)",2027-06-30
 storage,grpc,Bucket,lifecycle.rule.condition,optional,unsupported,,"FC2-1: google.storage.v2 Bucket.lifecycle is not mapped: bucketToProto/applyBucketMask ignore it, so a gRPC client cannot set or read lifecycle rules (REST v1 does)",2027-06-30
-storage,grpc,Bucket,location,immutable,roundtrip,internal/gcp/grpc/storage/location_test.go#TestBucketToProtoCanonicalLocation,FC2-4: UpdateBucket applies the location mask; the proto declares location IMMUTABLE and GCS rejects a relocation,
+storage,grpc,Bucket,location,immutable,roundtrip,internal/gcp/grpc/storage/location_test.go#TestBucketToProtoCanonicalLocation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-4: UpdateBucket applies the location mask; the proto declares location IMMUTABLE and GCS rejects a relocation,
 storage,grpc,Bucket,location_type,output_only,derived,internal/gcp/grpc/storage/location_test.go#TestBucketToProtoCanonicalLocation,derived from the location code by bucketLocationType,
-storage,grpc,Bucket,logging,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,logging.log_bucket,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,logging.log_object_prefix,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,metageneration,output_only,output-only,,"server-assigned, bumped by every metadata write",
+storage,grpc,Bucket,logging,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,logging.log_bucket,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,logging.log_object_prefix,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,metageneration,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"server-assigned, bumped by every metadata write",
 storage,grpc,Bucket,name,identifier,derived,,resource name derived from the bucket id (the supplied name is ignored; the proto declares it IDENTIFIER),
 storage,grpc,Bucket,object_retention,optional,unsupported,,"metadata-only field with no emulator source: neither stored nor rendered, and the emulator's own REST surface does not serve it either (real GCS does)",2027-06-30
 storage,grpc,Bucket,object_retention.enabled,optional|output_only,unsupported,,"metadata-only field with no emulator source: neither stored nor rendered, and the emulator's own REST surface does not serve it either (real GCS does)",2027-06-30
@@ -544,22 +544,22 @@ storage,grpc,Bucket,owner,output_only,unsupported,,legacy bucket-body ACL/owner 
 storage,grpc,Bucket,owner.entity,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
 storage,grpc,Bucket,owner.entity_id,optional,unsupported,,legacy bucket-body ACL/owner block: not modelled on either transport; ACLs are served by the acl subresource (bucketAccessControls) and object ownership through iamConfiguration,2027-06-30
 storage,grpc,Bucket,project,immutable|ref:cloudresourcemanager.googleapis.com/Project,unsupported,,consumed to resolve the bucket's project but never rendered; real GCP echoes the project resource name (FC2-5),2027-06-30
-storage,grpc,Bucket,retention_policy,optional,roundtrip,internal/gcp/grpc/storage/service_regression_test.go#TestCreateBucketRetentionPolicy,,
-storage,grpc,Bucket,retention_policy.effective_time,optional,roundtrip,internal/gcp/grpc/storage/service_regression_test.go#TestCreateBucketRetentionPolicy,"FC2-16: bucketRetentionToMap copies the request's effective_time, so a client-supplied OUTPUT_ONLY member is stored",
-storage,grpc,Bucket,retention_policy.is_locked,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestLockBucketRetentionPolicy,"FC2-16: bucketRetentionToMap copies the request's is_locked, so a client-supplied OUTPUT_ONLY member is stored",
-storage,grpc,Bucket,retention_policy.retention_duration,optional,roundtrip,internal/gcp/grpc/storage/service_regression_test.go#TestCreateBucketRetentionPolicy,,
+storage,grpc,Bucket,retention_policy,optional,roundtrip,internal/gcp/grpc/storage/service_regression_test.go#TestCreateBucketRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,retention_policy.effective_time,optional,roundtrip,internal/gcp/grpc/storage/service_regression_test.go#TestCreateBucketRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"FC2-16: bucketRetentionToMap copies the request's effective_time, so a client-supplied OUTPUT_ONLY member is stored",
+storage,grpc,Bucket,retention_policy.is_locked,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestLockBucketRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"FC2-16: bucketRetentionToMap copies the request's is_locked, so a client-supplied OUTPUT_ONLY member is stored",
+storage,grpc,Bucket,retention_policy.retention_duration,optional,roundtrip,internal/gcp/grpc/storage/service_regression_test.go#TestCreateBucketRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,grpc,Bucket,rpo,optional,unsupported,,"metadata-only field with no emulator source: neither stored nor rendered, and the emulator's own REST surface does not serve it either (real GCS does)",2027-06-30
 storage,grpc,Bucket,satisfies_pzs,optional,unsupported,,"metadata-only field with no emulator source: neither stored nor rendered, and the emulator's own REST surface does not serve it either (real GCS does)",2027-06-30
-storage,grpc,Bucket,soft_delete_policy,optional,output-only,,"server-populated on gRPC: CreateBucket/applyBucketMask ignore the supplied policy, and a read reports a stored policy (set over REST v1) or the 7-day default (FC2-17)",2027-06-30
+storage,grpc,Bucket,soft_delete_policy,optional,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"server-populated on gRPC: CreateBucket/applyBucketMask ignore the supplied policy, and a read reports a stored policy (set over REST v1) or the 7-day default (FC2-17)",2027-06-30
 storage,grpc,Bucket,soft_delete_policy.effective_time,,derived,,defaults to the bucket's create_time when no explicit policy is set (a REST-stored value is preserved),
-storage,grpc,Bucket,soft_delete_policy.retention_duration,,output-only,,"server-populated on gRPC: CreateBucket/applyBucketMask ignore the supplied policy, and a read reports a stored policy (set over REST v1) or the 7-day default (FC2-17)",2027-06-30
-storage,grpc,Bucket,storage_class,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD,,
-storage,grpc,Bucket,update_time,output_only,output-only,,server clock of the last metadata write,
-storage,grpc,Bucket,versioning,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD,,
-storage,grpc,Bucket,versioning.enabled,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD,,
-storage,grpc,Bucket,website,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,website.main_page_suffix,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
-storage,grpc,Bucket,website.not_found_page,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip,,
+storage,grpc,Bucket,soft_delete_policy.retention_duration,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"server-populated on gRPC: CreateBucket/applyBucketMask ignore the supplied policy, and a read reports a stored policy (set over REST v1) or the 7-day default (FC2-17)",2027-06-30
+storage,grpc,Bucket,storage_class,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,update_time,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock of the last metadata write,
+storage,grpc,Bucket,versioning,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,versioning.enabled,optional,roundtrip,internal/gcp/grpc/storage/service_test.go#TestBucketCRUD;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,website,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,website.main_page_suffix,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,grpc,Bucket,website.not_found_page,optional,roundtrip,internal/gcp/grpc/storage/bucket_fields_test.go#TestGRPCBucketModuleFieldsRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,rest,Bucket,acl,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,acl.bucket,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,acl.domain,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
@@ -574,21 +574,21 @@ storage,rest,Bucket,acl.projectTeam.projectNumber,,unsupported,,"bucket-body ACL
 storage,rest,Bucket,acl.projectTeam.team,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,acl.role,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,acl.selfLink,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
-storage,rest,Bucket,autoclass,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,autoclass.enabled,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,autoclass.terminalStorageClass,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,autoclass.terminalStorageClassUpdateTime,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,autoclass.toggleTime,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
+storage,rest,Bucket,autoclass,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,autoclass.enabled,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,autoclass.terminalStorageClass,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,autoclass.terminalStorageClassUpdateTime,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,autoclass.toggleTime,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,rest,Bucket,billing,,unsupported,,requester-pays billing is not modelled (no project billing account to charge),2027-06-30
 storage,rest,Bucket,billing.requesterPays,,unsupported,,requester-pays billing is not modelled (no project billing account to charge),2027-06-30
-storage,rest,Bucket,cors,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip,,
-storage,rest,Bucket,cors.maxAgeSeconds,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip,,
-storage,rest,Bucket,cors.method,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip,,
-storage,rest,Bucket,cors.origin,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip,,
-storage,rest,Bucket,cors.responseHeader,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip,,
-storage,rest,Bucket,customPlacementConfig,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks,,
-storage,rest,Bucket,customPlacementConfig.dataLocations,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks,,
-storage,rest,Bucket,defaultEventBasedHold,,roundtrip,internal/gcp/provider/storage/holds_version_test.go#TestBucketDefaultEventBasedHoldInherited,,
+storage,rest,Bucket,cors,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,cors.maxAgeSeconds,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,cors.method,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,cors.origin,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,cors.responseHeader,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketCORSRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,customPlacementConfig,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,customPlacementConfig.dataLocations,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,defaultEventBasedHold,,roundtrip,internal/gcp/provider/storage/holds_version_test.go#TestBucketDefaultEventBasedHoldInherited;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,rest,Bucket,defaultObjectAcl,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,defaultObjectAcl.bucket,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,defaultObjectAcl.domain,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
@@ -605,76 +605,76 @@ storage,rest,Bucket,defaultObjectAcl.projectTeam.projectNumber,,unsupported,,"bu
 storage,rest,Bucket,defaultObjectAcl.projectTeam.team,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,defaultObjectAcl.role,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
 storage,rest,Bucket,defaultObjectAcl.selfLink,,unsupported,,"bucket-body ACLs are legacy: the acl subresource (bucketAccessControls) is served, but a create/update body's acl/defaultObjectAcl member is not stored or echoed",2027-06-30
-storage,rest,Bucket,encryption,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.customerManagedEncryptionEnforcementConfig,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.customerManagedEncryptionEnforcementConfig.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.customerManagedEncryptionEnforcementConfig.restrictionMode,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.customerSuppliedEncryptionEnforcementConfig,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.customerSuppliedEncryptionEnforcementConfig.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.customerSuppliedEncryptionEnforcementConfig.restrictionMode,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.defaultKmsKeyName,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.googleManagedEncryptionEnforcementConfig,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.googleManagedEncryptionEnforcementConfig.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
-storage,rest,Bucket,encryption.googleManagedEncryptionEnforcementConfig.restrictionMode,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip,,
+storage,rest,Bucket,encryption,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.customerManagedEncryptionEnforcementConfig,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.customerManagedEncryptionEnforcementConfig.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.customerManagedEncryptionEnforcementConfig.restrictionMode,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.customerSuppliedEncryptionEnforcementConfig,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.customerSuppliedEncryptionEnforcementConfig.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.customerSuppliedEncryptionEnforcementConfig.restrictionMode,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.defaultKmsKeyName,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.googleManagedEncryptionEnforcementConfig,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.googleManagedEncryptionEnforcementConfig.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,encryption.googleManagedEncryptionEnforcementConfig.restrictionMode,,roundtrip,internal/gcp/provider/storage/storage_cmek_test.go#TestGCSCMEKRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,rest,Bucket,etag,,derived,internal/gcp/provider/storage/etag_test.go#TestBucketEtagMatchesRealGCS,"BucketEtag(metageneration): base64 of the metageneration integer, per the GCS etag contract",
-storage,rest,Bucket,generation,,output-only,,"always ""1"" for a bucket (objects carry the real generation)",
+storage,rest,Bucket,generation,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"always ""1"" for a bucket (objects carry the real generation)",
 storage,rest,Bucket,hardDeleteTime,,unsupported,,soft/hard delete timestamps are output-only in GCS and the emulator's soft-delete policy keeps no per-object delete clock,2027-06-30
-storage,rest,Bucket,hierarchicalNamespace,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks,,
-storage,rest,Bucket,hierarchicalNamespace.enabled,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks,,
-storage,rest,Bucket,iamConfiguration,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration,,
-storage,rest,Bucket,iamConfiguration.bucketPolicyOnly,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketIamConfigurationBucketPolicyOnlyAlias,,
-storage,rest,Bucket,iamConfiguration.bucketPolicyOnly.enabled,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketIamConfigurationBucketPolicyOnlyAlias,,
-storage,rest,Bucket,iamConfiguration.bucketPolicyOnly.lockedTime,,output-only,,output-only and never populated by the emulator (no source for the value),
-storage,rest,Bucket,iamConfiguration.publicAccessPrevention,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration,,
-storage,rest,Bucket,iamConfiguration.uniformBucketLevelAccess,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration,,
-storage,rest,Bucket,iamConfiguration.uniformBucketLevelAccess.enabled,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration,,
-storage,rest,Bucket,iamConfiguration.uniformBucketLevelAccess.lockedTime,,output-only,,output-only and never populated by the emulator (no source for the value),
-storage,rest,Bucket,id,,output-only,,server-assigned: the bucket name,
-storage,rest,Bucket,ipFilter,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.allowAllServiceAgentAccess,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.allowCrossOrgVpcs,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.mode,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.publicNetworkSource,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.publicNetworkSource.allowedIpCidrRanges,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.vpcNetworkSources,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.vpcNetworkSources.allowedIpCidrRanges,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,ipFilter.vpcNetworkSources.network,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,kind,,output-only,,server-assigned constant (storage#bucket),
-storage,rest,Bucket,labels,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketLabels,,
-storage,rest,Bucket,lifecycle,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete,,
-storage,rest,Bucket,lifecycle.rule,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete,,
-storage,rest,Bucket,lifecycle.rule.action,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete,,
-storage,rest,Bucket,lifecycle.rule.condition,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete,,
-storage,rest,Bucket,location,,roundtrip,internal/gcp/provider/storage/location_test.go#TestBucketsUpdateCanonicalisesLocation,FC2-4: BucketsUpdate applies the location; GCS documents a bucket's location as unchangeable,
+storage,rest,Bucket,hierarchicalNamespace,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,hierarchicalNamespace.enabled,,immutable,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsImmutableBlocks;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration.bucketPolicyOnly,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketIamConfigurationBucketPolicyOnlyAlias;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration.bucketPolicyOnly.enabled,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketIamConfigurationBucketPolicyOnlyAlias;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration.bucketPolicyOnly.lockedTime,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only and never populated by the emulator (no source for the value),
+storage,rest,Bucket,iamConfiguration.publicAccessPrevention,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration.uniformBucketLevelAccess,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration.uniformBucketLevelAccess.enabled,,roundtrip,internal/gcp/provider/storage/bucket_iam_test.go#TestBucketInsertRoundTripsIamConfiguration;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,iamConfiguration.uniformBucketLevelAccess.lockedTime,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only and never populated by the emulator (no source for the value),
+storage,rest,Bucket,id,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server-assigned: the bucket name,
+storage,rest,Bucket,ipFilter,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.allowAllServiceAgentAccess,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.allowCrossOrgVpcs,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.mode,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.publicNetworkSource,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.publicNetworkSource.allowedIpCidrRanges,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.vpcNetworkSources,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.vpcNetworkSources.allowedIpCidrRanges,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,ipFilter.vpcNetworkSources.network,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,kind,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server-assigned constant (storage#bucket),
+storage,rest,Bucket,labels,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketLabels;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,lifecycle,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,lifecycle.rule,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,lifecycle.rule.action,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,lifecycle.rule.condition,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestLifecycleConfigPersistAndLazyDelete;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,location,,roundtrip,internal/gcp/provider/storage/location_test.go#TestBucketsUpdateCanonicalisesLocation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,FC2-4: BucketsUpdate applies the location; GCS documents a bucket's location as unchangeable,
 storage,rest,Bucket,locationType,,derived,internal/gcp/provider/storage/location_test.go#TestBucketLocationType,derived from the location code by bucketLocationType,
-storage,rest,Bucket,logging,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,logging.logBucket,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,logging.logObjectPrefix,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,metageneration,,output-only,,"server-assigned, bumped by every metadata write",
-storage,rest,Bucket,name,,immutable,,"the resource identifier: set at insert, never read by BucketsUpdate",
+storage,rest,Bucket,logging,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,logging.logBucket,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,logging.logObjectPrefix,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,metageneration,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"server-assigned, bumped by every metadata write",
+storage,rest,Bucket,name,,immutable,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the resource identifier: set at insert, never read by BucketsUpdate",
 storage,rest,Bucket,objectRetention,,unsupported,,object retention is an object-level setting in GCS; the bucket-body block is not stored,2027-06-30
 storage,rest,Bucket,objectRetention.mode,,unsupported,,object retention is an object-level setting in GCS; the bucket-body block is not stored,2027-06-30
 storage,rest,Bucket,owner,,unsupported,,legacy bucket owner block: the emulator does not model object ownership at the bucket level (uniform bucket-level access lives in iamConfiguration),2027-06-30
 storage,rest,Bucket,owner.entity,,unsupported,,legacy bucket owner block: the emulator does not model object ownership at the bucket level (uniform bucket-level access lives in iamConfiguration),2027-06-30
 storage,rest,Bucket,owner.entityId,,unsupported,,legacy bucket owner block: the emulator does not model object ownership at the bucket level (uniform bucket-level access lives in iamConfiguration),2027-06-30
 storage,rest,Bucket,projectNumber,,derived,,derived from the project id (resource.ProjectNumber),
-storage,rest,Bucket,retentionPolicy,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy,,
-storage,rest,Bucket,retentionPolicy.effectiveTime,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy,"FC2-16: the policy block is stored verbatim, so a client-supplied OUTPUT_ONLY member is echoed",
-storage,rest,Bucket,retentionPolicy.isLocked,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy,"FC2-16: the policy block is stored verbatim, so a client-supplied OUTPUT_ONLY member is echoed",
-storage,rest,Bucket,retentionPolicy.retentionPeriod,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy,,
+storage,rest,Bucket,retentionPolicy,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,retentionPolicy.effectiveTime,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"FC2-16: the policy block is stored verbatim, so a client-supplied OUTPUT_ONLY member is echoed",
+storage,rest,Bucket,retentionPolicy.isLocked,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"FC2-16: the policy block is stored verbatim, so a client-supplied OUTPUT_ONLY member is echoed",
+storage,rest,Bucket,retentionPolicy.retentionPeriod,,roundtrip,internal/gcp/provider/storage/rest_verbs_test.go#TestBucketsLockRetentionPolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,rest,Bucket,rpo,,unsupported,,dual-region RPO metadata is not modelled (metadata-only DNS/bucket config; no replication engine),2027-06-30
 storage,rest,Bucket,satisfiesPZI,,unsupported,,satisfiesPZS/satisfiesPZI is zonal-separation metadata with no source in the emulator,2027-06-30
 storage,rest,Bucket,satisfiesPZS,,unsupported,,satisfiesPZS/satisfiesPZI is zonal-separation metadata with no source in the emulator,2027-06-30
 storage,rest,Bucket,selfLink,,derived,,derived from the request origin and the bucket name,
-storage,rest,Bucket,softDeletePolicy,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketSoftDeletePolicy,,
-storage,rest,Bucket,softDeletePolicy.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketSoftDeletePolicy,"FC2-16: stored verbatim (defaulted to timeCreated when absent), so a client-supplied OUTPUT_ONLY member is echoed",
-storage,rest,Bucket,softDeletePolicy.retentionDurationSeconds,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketSoftDeletePolicy,,
+storage,rest,Bucket,softDeletePolicy,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketSoftDeletePolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,softDeletePolicy.effectiveTime,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketSoftDeletePolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"FC2-16: stored verbatim (defaulted to timeCreated when absent), so a client-supplied OUTPUT_ONLY member is echoed",
+storage,rest,Bucket,softDeletePolicy.retentionDurationSeconds,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketSoftDeletePolicy;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 storage,rest,Bucket,softDeleteTime,,unsupported,,soft/hard delete timestamps are output-only in GCS and the emulator's soft-delete policy keeps no per-object delete clock,2027-06-30
-storage,rest,Bucket,storageClass,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketRoundTrip,,
-storage,rest,Bucket,timeCreated,,output-only,internal/gcp/provider/storage/storage_test.go#TestBucketsUpdatePreservesTimeCreated,server clock at insert; preserved across updates,
-storage,rest,Bucket,updated,,output-only,internal/gcp/provider/storage/storage_test.go#TestBucketsUpdatePreservesTimeCreated,server clock of the last metadata write,
-storage,rest,Bucket,versioning,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestVersioningRetainReadGenerationAndListVersions,,
-storage,rest,Bucket,versioning.enabled,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestVersioningRetainReadGenerationAndListVersions,,
-storage,rest,Bucket,website,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,website.mainPageSuffix,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
-storage,rest,Bucket,website.notFoundPage,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields,,
+storage,rest,Bucket,storageClass,,roundtrip,internal/gcp/provider/storage/storage_test.go#TestBucketRoundTrip;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,timeCreated,,output-only,internal/gcp/provider/storage/storage_test.go#TestBucketsUpdatePreservesTimeCreated;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock at insert; preserved across updates,
+storage,rest,Bucket,updated,,output-only,internal/gcp/provider/storage/storage_test.go#TestBucketsUpdatePreservesTimeCreated;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,server clock of the last metadata write,
+storage,rest,Bucket,versioning,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestVersioningRetainReadGenerationAndListVersions;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,versioning.enabled,,roundtrip,internal/gcp/provider/storage/depth_test.go#TestVersioningRetainReadGenerationAndListVersions;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,website,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,website.mainPageSuffix,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+storage,rest,Bucket,website.notFoundPage,,roundtrip,internal/gcp/provider/storage/bucket_module_fields_test.go#TestBucketInsertRoundTripsModuleFields;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,

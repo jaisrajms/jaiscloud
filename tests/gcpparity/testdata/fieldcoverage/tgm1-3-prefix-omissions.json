@@ -1,0 +1,4 @@
+{
+  "_comment": "Fields the storage.v2 mapper omitted before TGM1-3 (commit 165c9927). The generated field assertions run against a bucket body with these blocks removed; a failure means the suite would have caught the defect. Kept as a fixture, not a live test resource.",
+  "omitted_blocks": ["website", "logging", "autoclass", "ip_filter"]
+}

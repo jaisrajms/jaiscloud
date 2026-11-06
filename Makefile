@@ -202,7 +202,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
         test-gcp-terraform test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gen-gcp-field-coverage check-gcp-field-coverage \
+        gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
 
@@ -1569,14 +1569,17 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
 
-gen-gcp-field-coverage: ## Regenerate docs/fidelity/field-coverage.csv from the API definitions (preserves classifications)
+gen-gcp-field-coverage: ## Regenerate docs/fidelity/field-coverage.csv + the generated field scenarios from the API definitions (preserves classifications)
 	go run -tags gcp_conformance ./tools/fieldgen -gen
+
+gen-gcp-reference-coverage: ## Regenerate docs/fidelity/reference-coverage.csv from the annotated reference fields (preserves classifications)
+	go run -tags gcp_conformance ./tools/fieldgen -gen -references docs/fidelity/reference-coverage.csv
 
 # The check re-derives the field universe (row set + definition behavior) from the
 # definitions itself, so unlike check-gcp-fidelity-matrix it does not need a
 # regenerate-and-diff step: a missing/stale row or behavior drift is reported by
 # name. The coverage/evidence/reason columns are hand-authored by design.
-check-gcp-field-coverage: ## Fail if a definition field is unclassified/stale or a classified row lacks evidence/reason
+check-gcp-field-coverage: ## Fail if a definition field/reference is unclassified/stale, the generated scenarios are stale, or a row lacks evidence/reason
 	go test -count=1 -tags gcp_conformance ./tools/fieldgen/
 	go run -tags gcp_conformance ./tools/fieldgen -check
 
