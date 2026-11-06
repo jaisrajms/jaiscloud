@@ -58,6 +58,15 @@
     {
       "resource": "storage/Bucket",
       "transport": "grpc",
+      "band": "absence",
+      "field": "soft_delete_policy",
+      "reason": "the block is always rendered with API defaults (versioning/iamConfiguration/softDeletePolicy/serviceConfig/cloudLoggingConfig/versionTemplate); an absence create cannot assert absence for a documented default. Follow-up plan row FC3-5.",
+      "id": "FC3-5",
+      "review_by": "2027-03-01"
+    },
+    {
+      "resource": "storage/Bucket",
+      "transport": "grpc",
       "band": "update",
       "field": "ip_filter.allow_cross_org_vpcs",
       "reason": "a false allow_cross_org_vpcs has no representation on the gRPC surface: the proto3 zero is indistinguishable from unset and an absent flag renders as the true default, while the REST field is explicit. Follow-up plan row FC3-7.",
@@ -89,15 +98,6 @@
       "field": "versioning",
       "reason": "the block is always rendered with API defaults (versioning/iamConfiguration/softDeletePolicy/serviceConfig/cloudLoggingConfig/versionTemplate); an absence create cannot assert absence for a documented default. Follow-up plan row FC3-5.",
       "id": "FC3-5",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "storage/Bucket",
-      "transport": "rest",
-      "band": "update",
-      "field": "iamConfiguration.bucketPolicyOnly.enabled",
-      "reason": "bucketPolicyOnly is the deprecated alias mirrored from uniformBucketLevelAccess; the update writes the alias while the canonical flag keeps its value. Assert the canonical field and reclassify the alias. Follow-up plan row FC3-6.",
-      "id": "FC3-6",
       "review_by": "2027-03-01"
     }
   ]

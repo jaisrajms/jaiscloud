@@ -275,8 +275,9 @@ func TestNormalizeFoldsDatastoreSnapshotVersion(t *testing.T) {
 
 // TestStorageBucketProjectionReconcilesEncodings proves the bucket projection
 // equalizes the REST and protojson renderings of one Bucket and the
-// buckets.list envelope: the REST-only members (kind/id/selfLink/projectNumber/
-// generation), the gRPC-only bucketId, the iamConfiguration→iamConfig key, the
+// buckets.list envelope: the REST-only members (kind/id/selfLink/generation),
+// projectNumber folded into the proto project (both as the bare number), the
+// gRPC-only bucketId, the iamConfiguration→iamConfig key, the
 // timestamp key names, the soft-delete retention shape
 // (retentionDurationSeconds vs a "…s" Duration), the name prefix and the
 // items[]→buckets[] envelope — leaving a real dropped field failing.
@@ -293,6 +294,7 @@ func TestStorageBucketProjectionReconcilesEncodings(t *testing.T) {
 		"defaultEventBasedHold":false}`)
 	grpc := json.RawMessage(`{
 		"name":"projects/_/buckets/b","bucketId":"b","etag":"CAE=","metageneration":"1",
+		"project":"projects/123",
 		"location":"US","locationType":"multi-region","storageClass":"STANDARD",
 		"createTime":"2024-01-01T00:00:00Z","updateTime":"2024-01-01T00:00:00Z",
 		"iamConfig":{"uniformBucketLevelAccess":{},"publicAccessPrevention":"inherited"},

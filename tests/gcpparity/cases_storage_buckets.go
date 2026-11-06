@@ -34,7 +34,12 @@ func storageBucketsScenario() Scenario {
 		// compares a non-default iamConfiguration across the two transports
 		// (DGD10). The hashicorp/google provider sends exactly this shape: the
 		// iamConfiguration field on insert and in the PATCH body on update.
+		// The lifecycle/CORS/CMEK blocks exercise the storage.v2 ↔ v1 mapping
+		// (FC2-1/2/3).
 		return fmt.Sprintf(`{"name":%q,"location":"US","storageClass":"STANDARD",`+
+			`"lifecycle":{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]},`+
+			`"cors":[{"origin":["https://example.com"],"method":["GET"],"responseHeader":["Content-Type"],"maxAgeSeconds":3600}],`+
+			`"encryption":{"defaultKmsKeyName":"projects/test-project/locations/us/keyRings/r/cryptoKeys/k"},`+
 			`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true},"publicAccessPrevention":"enforced"}}`, bkt(e))
 	}
 	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
@@ -49,14 +54,20 @@ func storageBucketsScenario() Scenario {
 	updateREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
 		// The update toggles uniform bucket-level access off and public access
 		// prevention back to inherited through the PATCH body — the write path
-		// google_storage_bucket uses to change either setting.
+		// google_storage_bucket uses to change either setting. It also replaces
+		// the lifecycle/CORS/CMEK blocks so their update path is compared.
 		return e.Rest(ctx, http.MethodPatch, "/storage/v1/b/"+bkt(e),
-			`{"labels":{"marker":"v2"},"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},"publicAccessPrevention":"inherited"}}`)
+			`{"labels":{"marker":"v2"},`+
+				`"lifecycle":{"rule":[{"action":{"type":"SetStorageClass","storageClass":"NEARLINE"},"condition":{"age":7}}]},`+
+				`"cors":[{"origin":["*"],"method":["GET"],"maxAgeSeconds":60}],`+
+				`"encryption":{"defaultKmsKeyName":"projects/test-project/locations/us/keyRings/r/cryptoKeys/k2"},`+
+				`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},"publicAccessPrevention":"inherited"}}`)
 	}
 	deleteREST := func(ctx context.Context, e *Env) error {
 		return e.RestDelete(ctx, "/storage/v1/b/"+bkt(e))
 	}
 	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		age := int32(30)
 		var out *storagepb.Bucket
 		err := storageDial(ctx, e, func(c storagepb.StorageClient) error {
 			var cerr error
@@ -66,6 +77,19 @@ func storageBucketsScenario() Scenario {
 				Bucket: &storagepb.Bucket{
 					Location:     "US",
 					StorageClass: "STANDARD",
+					Lifecycle: &storagepb.Bucket_Lifecycle{Rule: []*storagepb.Bucket_Lifecycle_Rule{{
+						Action:    &storagepb.Bucket_Lifecycle_Rule_Action{Type: "Delete"},
+						Condition: &storagepb.Bucket_Lifecycle_Rule_Condition{AgeDays: &age},
+					}}},
+					Cors: []*storagepb.Bucket_Cors{{
+						Origin:         []string{"https://example.com"},
+						Method:         []string{"GET"},
+						ResponseHeader: []string{"Content-Type"},
+						MaxAgeSeconds:  3600,
+					}},
+					Encryption: &storagepb.Bucket_Encryption{
+						DefaultKmsKey: "projects/test-project/locations/us/keyRings/r/cryptoKeys/k",
+					},
 					IamConfig: &storagepb.Bucket_IamConfig{
 						UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: true},
 						PublicAccessPrevention:   "enforced",
@@ -104,6 +128,7 @@ func storageBucketsScenario() Scenario {
 		return out, nil
 	}
 	updateBucketGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		age := int32(7)
 		var out *storagepb.Bucket
 		err := storageDial(ctx, e, func(c storagepb.StorageClient) error {
 			var cerr error
@@ -111,6 +136,18 @@ func storageBucketsScenario() Scenario {
 				Bucket: &storagepb.Bucket{
 					Name:   "projects/_/buckets/" + bkt(e),
 					Labels: map[string]string{"marker": "v2"},
+					Lifecycle: &storagepb.Bucket_Lifecycle{Rule: []*storagepb.Bucket_Lifecycle_Rule{{
+						Action:    &storagepb.Bucket_Lifecycle_Rule_Action{Type: "SetStorageClass", StorageClass: "NEARLINE"},
+						Condition: &storagepb.Bucket_Lifecycle_Rule_Condition{AgeDays: &age},
+					}}},
+					Cors: []*storagepb.Bucket_Cors{{
+						Origin:        []string{"*"},
+						Method:        []string{"GET"},
+						MaxAgeSeconds: 60,
+					}},
+					Encryption: &storagepb.Bucket_Encryption{
+						DefaultKmsKey: "projects/test-project/locations/us/keyRings/r/cryptoKeys/k2",
+					},
 					IamConfig: &storagepb.Bucket_IamConfig{
 						UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: false},
 						PublicAccessPrevention:   "inherited",
@@ -118,6 +155,9 @@ func storageBucketsScenario() Scenario {
 				},
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					"labels",
+					"lifecycle",
+					"cors",
+					"encryption",
 					"iam_config.uniform_bucket_level_access.enabled",
 					"iam_config.public_access_prevention",
 				}},
@@ -187,7 +227,8 @@ func storageBucketsScenario() Scenario {
 // protojson rendering, leaving any genuine logical difference intact.
 //
 //   - REST-only members with no proto Bucket field (`kind`, `id`, `selfLink`,
-//     `projectNumber`, `generation`);
+//     `projectNumber`, `generation`); projectNumber folds to the proto
+//     `project` (both rendered as the bare project number);
 //   - the gRPC-only `bucketId` (the REST equivalent is `id`, dropped above);
 //   - the REST key `iamConfiguration` vs the proto `iamConfig`;
 //   - timestamp key names: REST `timeCreated`/`updated` vs proto
@@ -229,9 +270,20 @@ func canonicalizeStorageBucket(m map[string]any) {
 	delete(m, "kind")
 	delete(m, "id")
 	delete(m, "selfLink")
-	delete(m, "projectNumber")
 	delete(m, "generation")
 	delete(m, "bucketId")
+	// REST reports projectNumber (a bare number) where the proto reports
+	// project ("projects/{number}"). Fold both to the bare number so the same
+	// bucket compares equal across transports (FC2-5).
+	if v, ok := m["projectNumber"]; ok {
+		delete(m, "projectNumber")
+		if _, ok := m["project"]; !ok {
+			m["project"] = v
+		}
+	}
+	if p, ok := m["project"].(string); ok {
+		m["project"] = strings.TrimPrefix(p, "projects/")
+	}
 	if v, ok := m["timeCreated"]; ok {
 		delete(m, "timeCreated")
 		m["createTime"] = v
@@ -249,6 +301,27 @@ func canonicalizeStorageBucket(m map[string]any) {
 	// field, so the alias carries no information the uniform flag does not.
 	if ic, ok := m["iamConfig"].(map[string]any); ok {
 		delete(ic, "bucketPolicyOnly")
+	}
+	// lifecycle/encryption member names differ between JSON v1 and
+	// storage.v2: the lifecycle condition "age" is proto "ageDays", and
+	// encryption "defaultKmsKeyName" is proto "defaultKmsKey".
+	if lc, ok := m["lifecycle"].(map[string]any); ok {
+		if rules, ok := lc["rule"].([]any); ok {
+			for _, r := range rules {
+				rm, _ := r.(map[string]any)
+				cm, _ := rm["condition"].(map[string]any)
+				if v, ok := cm["age"]; ok {
+					delete(cm, "age")
+					cm["ageDays"] = v
+				}
+			}
+		}
+	}
+	if enc, ok := m["encryption"].(map[string]any); ok {
+		if v, ok := enc["defaultKmsKeyName"]; ok {
+			delete(enc, "defaultKmsKeyName")
+			enc["defaultKmsKey"] = v
+		}
 	}
 	if n, ok := m["name"].(string); ok {
 		m["name"] = strings.TrimPrefix(n, "projects/_/buckets/")

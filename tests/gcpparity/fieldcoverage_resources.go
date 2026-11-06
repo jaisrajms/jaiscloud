@@ -1248,13 +1248,18 @@ func (storageBucket) fill(b *fieldBody, phase string) {
 	}
 	// The lifecycle rules are messages the catalog stops at (their action and
 	// condition members are messages, not scalars), so they are shaped here.
+	// REST v1 and storage.v2 spell the condition members differently (age vs
+	// age_days, camelCase vs snake_case), so the shape follows the transport.
 	for _, field := range []string{"lifecycle.rule.action", "lifecycle.rule.condition"} {
 		if _, ok := b.field(field); !ok {
-			continue // not declared on this transport (lifecycle is REST-only today)
+			continue // not declared on this transport
 		}
 		value := map[string]any{"type": "Delete"}
 		if strings.HasSuffix(field, "condition") {
 			value = map[string]any{"age": 30, "isLive": true, "matchesPrefix": []any{"fc-prefix/"}}
+			if b.transport == "grpc" {
+				value = map[string]any{"age_days": 30, "is_live": true, "matches_prefix": []any{"fc-prefix/"}}
+			}
 		}
 		if err := b.shapeAt(field, 0, value); err != nil && b.placeErr == nil {
 			b.placeErr = err

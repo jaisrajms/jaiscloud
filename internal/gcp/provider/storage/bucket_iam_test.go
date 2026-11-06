@@ -139,6 +139,27 @@ func TestBucketIamConfigurationBucketPolicyOnlyAlias(t *testing.T) {
 	if pap != "inherited" {
 		t.Errorf("publicAccessPrevention = %q, want inherited", pap)
 	}
+
+	// The alias is derived: a PATCH carrying both the canonical flag and the
+	// alias writes only the canonical member, and the alias keeps mirroring it
+	// (FC3-6). A client must never see the two disagree.
+	data = patchBucket(t, p, "alias-bucket", map[string]any{
+		"iamConfiguration": map[string]any{
+			"uniformBucketLevelAccess": map[string]any{"enabled": true},
+			"bucketPolicyOnly":         map[string]any{"enabled": false},
+		},
+	})
+	if uniform, policyOnly, _ := bucketIamFlags(t, data); !uniform || !policyOnly {
+		t.Errorf("after a conflicting patch: uniform %v / policyOnly %v, want true/true (the alias is derived)", uniform, policyOnly)
+	}
+	data = patchBucket(t, p, "alias-bucket", map[string]any{
+		"iamConfiguration": map[string]any{
+			"uniformBucketLevelAccess": map[string]any{"enabled": false},
+		},
+	})
+	if uniform, policyOnly, _ := bucketIamFlags(t, data); uniform || policyOnly {
+		t.Errorf("after disabling the canonical flag: uniform %v / policyOnly %v, want false/false", uniform, policyOnly)
+	}
 }
 
 // TestBucketsUpdateIamConfiguration covers the write path the hashicorp/google
