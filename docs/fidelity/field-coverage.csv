@@ -146,7 +146,7 @@ functions,grpc,Function,build_config.source.storage_source,,roundtrip,internal/g
 functions,grpc,Function,build_config.source.storage_source.bucket,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,build_config.source.storage_source.generation,,unsupported,,"StorageSource.generation is not parsed or rendered: the emulator reads the whole archive, not a specific object generation",2027-06-30
 functions,grpc,Function,build_config.source.storage_source.object,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,grpc,Function,build_config.source.storage_source.source_upload_url,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,build_config.source.storage_source.source_upload_url,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,build_config.source_provenance,output_only,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,grpc,Function,build_config.source_provenance.git_uri,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,grpc,Function,build_config.source_provenance.resolved_repo_source,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
@@ -168,18 +168,18 @@ functions,grpc,Function,description,,roundtrip,internal/gcp/transport/grpc/funct
 functions,grpc,Function,environment,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,every emulated v2 function runs on Cloud Run (GEN_2),
 functions,grpc,Function,event_trigger,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,event_trigger.channel,optional|ref:eventarc.googleapis.com/Channel,unsupported,,Eventarc channel references are not modelled (triggers target the default channel),2027-06-30
-functions,grpc,Function,event_trigger.event_filters,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,grpc,Function,event_trigger.event_filters.attribute,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,grpc,Function,event_trigger.event_filters.operator,optional,unsupported,,FC2-15: only the bucket event filter is carried; protojson filter operators are not parsed or rendered,2027-06-30
-functions,grpc,Function,event_trigger.event_filters.value,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,grpc,Function,event_trigger.event_type,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,event_trigger.event_filters,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,event_trigger.event_filters.attribute,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,event_trigger.event_filters.operator,optional,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,event_trigger.event_filters.value,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,event_trigger.event_type,required,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,event_trigger.pubsub_topic,optional|ref:pubsub.googleapis.com/Topic,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,grpc,Function,event_trigger.retry_policy,optional,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,grpc,Function,event_trigger.retry_policy,optional,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,event_trigger.service,optional,unsupported,,v2 EventTrigger.service (documented as 1st-gen only) is not parsed or rendered,2027-06-30
 functions,grpc,Function,event_trigger.service_account_email,optional,unsupported,,the trigger's invoking service account is not modelled,2027-06-30
 functions,grpc,Function,event_trigger.trigger,output_only|ref:eventarc.googleapis.com/Trigger,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Eventarc trigger, materialized by the emulator; set only when a trigger is provisioned",
 functions,grpc,Function,event_trigger.trigger_region,,unsupported,,trigger region is not modelled (triggers are location-scoped),2027-06-30
-functions,grpc,Function,kms_key_name,ref:cloudkms.googleapis.com/CryptoKey,unsupported,,FC2-11: the function's CMEK key is not stored (no envelope encryption of function resources),2027-06-30
+functions,grpc,Function,kms_key_name,ref:cloudkms.googleapis.com/CryptoKey,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,labels,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,name,,derived,,resource name derived from the parent path + function id,
 functions,grpc,Function,satisfies_pzs,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
@@ -194,25 +194,25 @@ functions,grpc,Function,service_config.max_instance_count,,roundtrip,internal/gc
 functions,grpc,Function,service_config.max_instance_request_concurrency,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,service_config.min_instance_count,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,service_config.revision,output_only,derived,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation,derived from the persisted revision counter + source hash,
-functions,grpc,Function,service_config.secret_environment_variables,,unsupported,,FC2-11: v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_environment_variables.key,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_environment_variables.project_id,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_environment_variables.secret,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_environment_variables.version,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes,,unsupported,,FC2-11: v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes.mount_path,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes.project_id,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes.secret,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes.versions,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes.versions.path,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,grpc,Function,service_config.secret_volumes.versions.version,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
+functions,grpc,Function,service_config.secret_environment_variables,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_environment_variables.key,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_environment_variables.project_id,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_environment_variables.secret,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_environment_variables.version,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes.mount_path,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes.project_id,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes.secret,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes.versions,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes.versions.path,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.secret_volumes.versions.version,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,service_config.security_level,,unsupported,,v1 HTTPS security level; the v2 surface does not parse or render it,2027-06-30
 functions,grpc,Function,service_config.service,output_only|ref:run.googleapis.com/Service,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Cloud Run service name, derived from the function",
-functions,grpc,Function,service_config.service_account_email,,unsupported,,runtime service account is not modelled,2027-06-30
+functions,grpc,Function,service_config.service_account_email,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,service_config.timeout_seconds,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestInstanceConfigV2_FD6;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,service_config.uri,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,derived deployed HTTPS URL,
-functions,grpc,Function,service_config.vpc_connector,ref:vpcaccess.googleapis.com/Connector,unsupported,,FC2-11: v1 serverless VPC connector; the v2 surface does not parse or render it,2027-06-30
-functions,grpc,Function,service_config.vpc_connector_egress_settings,,unsupported,,FC2-11: v1 serverless VPC connector egress; the v2 surface does not parse or render it,2027-06-30
+functions,grpc,Function,service_config.vpc_connector,ref:vpcaccess.googleapis.com/Connector,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
+functions,grpc,Function,service_config.vpc_connector_egress_settings,,roundtrip,internal/gcp/transport/grpc/functions/service_test.go#TestV2FieldFollowups,,
 functions,grpc,Function,state,output_only,output-only,internal/gcp/transport/grpc/functions/service_test.go#TestCreateFunctionV2_TypedOperation;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,grpc,Function,state_messages,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
 functions,grpc,Function,state_messages.message,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
@@ -245,7 +245,7 @@ functions,rest,Function,buildConfig.source.storageSource,,roundtrip,internal/gcp
 functions,rest,Function,buildConfig.source.storageSource.bucket,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,buildConfig.source.storageSource.generation,,unsupported,,"StorageSource.generation is not parsed or rendered: the emulator reads the whole archive, not a specific object generation",2027-06-30
 functions,rest,Function,buildConfig.source.storageSource.object,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,rest,Function,buildConfig.source.storageSource.sourceUploadUrl,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,buildConfig.source.storageSource.sourceUploadUrl,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups;internal/gcp/service/functions/service_test.go#TestV2FieldFollowups,,
 functions,rest,Function,buildConfig.sourceProvenance,output_only,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,rest,Function,buildConfig.sourceProvenance.gitUri,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
 functions,rest,Function,buildConfig.sourceProvenance.resolvedRepoSource,,unsupported,,output-only build provenance is not produced (no build runs),2027-06-30
@@ -267,18 +267,18 @@ functions,rest,Function,description,,roundtrip,internal/gcp/transport/rest/funct
 functions,rest,Function,environment,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,every emulated v2 function runs on Cloud Run (GEN_2),
 functions,rest,Function,eventTrigger,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,eventTrigger.channel,optional|ref:eventarc.googleapis.com/Channel,unsupported,,Eventarc channel references are not modelled (triggers target the default channel),2027-06-30
-functions,rest,Function,eventTrigger.eventFilters,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,rest,Function,eventTrigger.eventFilters.attribute,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,rest,Function,eventTrigger.eventFilters.operator,optional,unsupported,,FC2-15: only the bucket event filter is carried; protojson filter operators are not parsed or rendered,2027-06-30
-functions,rest,Function,eventTrigger.eventFilters.value,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,rest,Function,eventTrigger.eventType,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,eventTrigger.eventFilters,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,eventTrigger.eventFilters.attribute,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,eventTrigger.eventFilters.operator,optional,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,eventTrigger.eventFilters.value,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,eventTrigger.eventType,required,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
 functions,rest,Function,eventTrigger.pubsubTopic,optional|ref:pubsub.googleapis.com/Topic,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
-functions,rest,Function,eventTrigger.retryPolicy,optional,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
+functions,rest,Function,eventTrigger.retryPolicy,optional,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip;internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
 functions,rest,Function,eventTrigger.service,optional,unsupported,,v2 EventTrigger.service (documented as 1st-gen only) is not parsed or rendered,2027-06-30
 functions,rest,Function,eventTrigger.serviceAccountEmail,optional,unsupported,,the trigger's invoking service account is not modelled,2027-06-30
 functions,rest,Function,eventTrigger.trigger,output_only|ref:eventarc.googleapis.com/Trigger,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Eventarc trigger, materialized by the emulator; set only when a trigger is provisioned",
 functions,rest,Function,eventTrigger.triggerRegion,,unsupported,,trigger region is not modelled (triggers are location-scoped),2027-06-30
-functions,rest,Function,kmsKeyName,ref:cloudkms.googleapis.com/CryptoKey,unsupported,,FC2-11: the function's CMEK key is not stored (no envelope encryption of function resources),2027-06-30
+functions,rest,Function,kmsKeyName,ref:cloudkms.googleapis.com/CryptoKey,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
 functions,rest,Function,labels,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,name,,derived,,resource name derived from the parent path + function id,
 functions,rest,Function,satisfiesPzs,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
@@ -293,25 +293,25 @@ functions,rest,Function,serviceConfig.maxInstanceCount,,roundtrip,internal/gcp/t
 functions,rest,Function,serviceConfig.maxInstanceRequestConcurrency,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,serviceConfig.minInstanceCount,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,serviceConfig.revision,output_only,derived,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2,derived from the persisted revision counter + source hash,
-functions,rest,Function,serviceConfig.secretEnvironmentVariables,,unsupported,,FC2-11: v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretEnvironmentVariables.key,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretEnvironmentVariables.projectId,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretEnvironmentVariables.secret,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretEnvironmentVariables.version,,unsupported,,v1 Secret Manager bindings; v2 serviceConfig secret bindings are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes,,unsupported,,FC2-11: v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes.mountPath,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes.projectId,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes.secret,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes.versions,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes.versions.path,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
-functions,rest,Function,serviceConfig.secretVolumes.versions.version,,unsupported,,v1 Secret Manager volumes; v2 serviceConfig secret volumes are not parsed,2027-06-30
+functions,rest,Function,serviceConfig.secretEnvironmentVariables,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretEnvironmentVariables.key,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretEnvironmentVariables.projectId,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretEnvironmentVariables.secret,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretEnvironmentVariables.version,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes.mountPath,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes.projectId,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes.secret,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes.versions,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes.versions.path,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.secretVolumes.versions.version,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
 functions,rest,Function,serviceConfig.securityLevel,,unsupported,,v1 HTTPS security level; the v2 surface does not parse or render it,2027-06-30
 functions,rest,Function,serviceConfig.service,output_only|ref:run.googleapis.com/Service,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,"the backing Cloud Run service name, derived from the function",
-functions,rest,Function,serviceConfig.serviceAccountEmail,,unsupported,,runtime service account is not modelled,2027-06-30
+functions,rest,Function,serviceConfig.serviceAccountEmail,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
 functions,rest,Function,serviceConfig.timeoutSeconds,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionInstanceConfigV2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,serviceConfig.uri,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,derived deployed HTTPS URL,
-functions,rest,Function,serviceConfig.vpcConnector,ref:vpcaccess.googleapis.com/Connector,unsupported,,FC2-11: v1 serverless VPC connector; the v2 surface does not parse or render it,2027-06-30
-functions,rest,Function,serviceConfig.vpcConnectorEgressSettings,,unsupported,,FC2-11: v1 serverless VPC connector egress; the v2 surface does not parse or render it,2027-06-30
+functions,rest,Function,serviceConfig.vpcConnector,ref:vpcaccess.googleapis.com/Connector,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
+functions,rest,Function,serviceConfig.vpcConnectorEgressSettings,,roundtrip,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionV2FieldFollowups,,
 functions,rest,Function,state,output_only,output-only,internal/gcp/transport/rest/functions/provider_test.go#TestFunctionCRUDv2;tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,,
 functions,rest,Function,stateMessages,output_only,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),
 functions,rest,Function,stateMessages.message,,output-only,tests/gcpparity/fieldcoverage_test.go#TestGeneratedFieldRoundTrip,output-only in the proto and never populated by the emulator (no source for the value),

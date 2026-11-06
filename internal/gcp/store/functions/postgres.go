@@ -36,7 +36,8 @@ const functionSelectColumns = `function_id, location, runtime, entry_point, sour
 	       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu,
 	       ingress_settings, max_instances, vpc_connector, vpc_connector_egress_settings,
 	       secret_environment_variables, secret_volumes, docker_registry, docker_repository,
-	       build_worker_pool, https_trigger_security_level`
+	       build_worker_pool, https_trigger_security_level,
+	       kms_key_name, service_account_email, source_storage_upload_url`
 
 // nullableJSONList marshals a slice to JSONB, or returns SQL NULL when it is
 // nil/empty. Used for the v1 Secret Manager bindings (TGM3).
@@ -82,8 +83,9 @@ func (s *PostgresStore) CreateFunction(ctx context.Context, projectID, location,
 			 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu,
 			 ingress_settings, max_instances, vpc_connector, vpc_connector_egress_settings,
 			 secret_environment_variables, secret_volumes, docker_registry, docker_repository,
-			 build_worker_pool, https_trigger_security_level)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
+			 build_worker_pool, https_trigger_security_level,
+			 kms_key_name, service_account_email, source_storage_upload_url)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42)
 	`, projectID, location, id, f.Runtime, f.EntryPoint, f.SourceUploadURL, f.SourceArchiveURL,
 		f.HttpsTriggerURL, nullableJSON(f.EventTrigger), json.RawMessage(env), f.Status, f.CreateTime, f.UpdateTime,
 		json.RawMessage(labels), f.AvailableMemoryMB, f.Timeout, f.Description,
@@ -92,7 +94,8 @@ func (s *PostgresStore) CreateFunction(ctx context.Context, projectID, location,
 		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU,
 		f.IngressSettings, f.MaxInstances, f.VPCConnector, f.VPCConnectorEgressSettings,
 		nullableJSONList(f.SecretEnvironmentVariables), nullableJSONList(f.SecretVolumes),
-		f.DockerRegistry, f.DockerRepository, f.BuildWorkerPool, f.HttpsTriggerSecurityLevel)
+		f.DockerRegistry, f.DockerRepository, f.BuildWorkerPool, f.HttpsTriggerSecurityLevel,
+		f.KmsKeyName, f.ServiceAccountEmail, f.SourceStorageUploadURL)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -114,7 +117,8 @@ func scanFunction(row pgx.Row) (Function, error) {
 		&f.MinInstanceCount, &f.MaxInstanceCount, &f.MaxInstanceRequestConcurrency, &f.AvailableCPU,
 		&f.IngressSettings, &f.MaxInstances, &f.VPCConnector, &f.VPCConnectorEgressSettings,
 		&secretEnv, &secretVolumes, &f.DockerRegistry, &f.DockerRepository,
-		&f.BuildWorkerPool, &f.HttpsTriggerSecurityLevel)
+		&f.BuildWorkerPool, &f.HttpsTriggerSecurityLevel,
+		&f.KmsKeyName, &f.ServiceAccountEmail, &f.SourceStorageUploadURL)
 	if err != nil {
 		return Function{}, err
 	}
@@ -155,7 +159,8 @@ func (s *PostgresStore) UpdateFunction(ctx context.Context, projectID, location,
 		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28,
 		       ingress_settings=$29, max_instances=$30, vpc_connector=$31, vpc_connector_egress_settings=$32,
 		       secret_environment_variables=$33, secret_volumes=$34, docker_registry=$35, docker_repository=$36,
-		       build_worker_pool=$37, https_trigger_security_level=$38
+		       build_worker_pool=$37, https_trigger_security_level=$38,
+		       kms_key_name=$39, service_account_email=$40, source_storage_upload_url=$41
 		WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id, f.Runtime, f.EntryPoint, f.SourceUploadURL, f.SourceArchiveURL,
 		f.HttpsTriggerURL, nullableJSON(f.EventTrigger), json.RawMessage(env), f.Status, f.UpdateTime,
@@ -165,7 +170,8 @@ func (s *PostgresStore) UpdateFunction(ctx context.Context, projectID, location,
 		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU,
 		f.IngressSettings, f.MaxInstances, f.VPCConnector, f.VPCConnectorEgressSettings,
 		nullableJSONList(f.SecretEnvironmentVariables), nullableJSONList(f.SecretVolumes),
-		f.DockerRegistry, f.DockerRepository, f.BuildWorkerPool, f.HttpsTriggerSecurityLevel)
+		f.DockerRegistry, f.DockerRepository, f.BuildWorkerPool, f.HttpsTriggerSecurityLevel,
+		f.KmsKeyName, f.ServiceAccountEmail, f.SourceStorageUploadURL)
 	if err != nil {
 		return err
 	}
@@ -223,7 +229,8 @@ func (s *PostgresStore) updateFunctionAtomicOnce(ctx context.Context, projectID,
 		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28,
 		       ingress_settings=$29, max_instances=$30, vpc_connector=$31, vpc_connector_egress_settings=$32,
 		       secret_environment_variables=$33, secret_volumes=$34, docker_registry=$35, docker_repository=$36,
-		       build_worker_pool=$37, https_trigger_security_level=$38
+		       build_worker_pool=$37, https_trigger_security_level=$38,
+		       kms_key_name=$39, service_account_email=$40, source_storage_upload_url=$41
 		WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id, next.Runtime, next.EntryPoint, next.SourceUploadURL, next.SourceArchiveURL,
 		next.HttpsTriggerURL, nullableJSON(next.EventTrigger), json.RawMessage(env), next.Status, next.UpdateTime,
@@ -233,7 +240,8 @@ func (s *PostgresStore) updateFunctionAtomicOnce(ctx context.Context, projectID,
 		next.MinInstanceCount, next.MaxInstanceCount, next.MaxInstanceRequestConcurrency, next.AvailableCPU,
 		next.IngressSettings, next.MaxInstances, next.VPCConnector, next.VPCConnectorEgressSettings,
 		nullableJSONList(next.SecretEnvironmentVariables), nullableJSONList(next.SecretVolumes),
-		next.DockerRegistry, next.DockerRepository, next.BuildWorkerPool, next.HttpsTriggerSecurityLevel)
+		next.DockerRegistry, next.DockerRepository, next.BuildWorkerPool, next.HttpsTriggerSecurityLevel,
+		next.KmsKeyName, next.ServiceAccountEmail, next.SourceStorageUploadURL)
 	if err != nil {
 		return Function{}, err
 	}

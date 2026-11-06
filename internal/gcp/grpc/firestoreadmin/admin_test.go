@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const testDBParent = "projects/proj"
@@ -577,6 +578,9 @@ func TestUpdateDatabaseServerOwnedFields(t *testing.T) {
 			KeyPrefix:                     "client-supplied",
 			VersionRetentionPeriod:        durationpb.New(2 * time.Hour),
 			PointInTimeRecoveryEnablement: adminpb.Database_POINT_IN_TIME_RECOVERY_ENABLED,
+			// Server-owned: only a soft delete sets it, so a client value must be
+			// ignored rather than seeded into the create record (FC3-4).
+			DeleteTime: timestamppb.New(time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)),
 		},
 	})
 	if err != nil {
@@ -591,6 +595,9 @@ func TestUpdateDatabaseServerOwnedFields(t *testing.T) {
 	}
 	if created.GetKeyPrefix() != "" {
 		t.Errorf("create stored the OUTPUT_ONLY keyPrefix = %q", created.GetKeyPrefix())
+	}
+	if created.GetDeleteTime() != nil {
+		t.Errorf("create stored the server-owned deleteTime = %v", created.GetDeleteTime())
 	}
 	if got := created.GetVersionRetentionPeriod().AsDuration(); got != 7*24*time.Hour {
 		t.Errorf("create retention = %v, want 168h (PITR enabled)", got)

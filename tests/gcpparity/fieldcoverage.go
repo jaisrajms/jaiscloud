@@ -419,56 +419,45 @@ func insertPath(root map[string]any, path string, value any, idx int) error {
 // A repeated ancestor requires every element to carry the leaf (an assertion on
 // the whole array), returning the first element's value for comparison.
 func lookupPath(body map[string]any, path string) (any, bool) {
-	segs := strings.Split(path, ".")
-	var cur any = body
-	for i, seg := range segs {
-		repeated := strings.HasSuffix(seg, "[]")
-		name := strings.TrimSuffix(seg, "[]")
-		last := i == len(segs)-1
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		v, ok := m[name]
-		if !ok {
-			return nil, false
-		}
-		if repeated && !last {
-			arr, ok := v.([]any)
-			if !ok || len(arr) == 0 {
-				return nil, false
-			}
-			var first any
-			for j, el := range arr {
-				got, ok := lookupWithin(el, segs[i+1:])
-				if !ok {
-					return nil, false
-				}
-				if j == 0 {
-					first = got
-				}
-			}
-			return first, true
-		}
-		cur = v
-	}
-	return cur, true
+	return lookupSegs(body, strings.Split(path, "."))
 }
 
-func lookupWithin(v any, segs []string) (any, bool) {
+// lookupSegs walks the path segments. A `[]` suffix descends into every element
+// of an array (which may itself sit inside another array, e.g.
+// secretVolumes[].versions[].path), so a nested repeated message is asserted on
+// every element rather than being unreadable.
+func lookupSegs(cur any, segs []string) (any, bool) {
 	if len(segs) == 0 {
-		return v, true
+		return cur, true
 	}
-	m, ok := v.(map[string]any)
+	m, ok := cur.(map[string]any)
 	if !ok {
 		return nil, false
 	}
-	name := strings.TrimSuffix(segs[0], "[]")
-	child, ok := m[name]
+	seg := segs[0]
+	repeated := strings.HasSuffix(seg, "[]")
+	v, ok := m[strings.TrimSuffix(seg, "[]")]
 	if !ok {
 		return nil, false
 	}
-	return lookupWithin(child, segs[1:])
+	if !repeated {
+		return lookupSegs(v, segs[1:])
+	}
+	arr, ok := v.([]any)
+	if !ok || len(arr) == 0 {
+		return nil, false
+	}
+	var first any
+	for j, el := range arr {
+		got, ok := lookupSegs(el, segs[1:])
+		if !ok {
+			return nil, false
+		}
+		if j == 0 {
+			first = got
+		}
+	}
+	return first, true
 }
 
 // equalField compares a sent value with a served one. It folds the encodings the

@@ -244,3 +244,48 @@ func TestPostgresFunctionV1ModuleFields(t *testing.T) {
 	assertV1Fields(t, restored)
 	s.Reset(ctx)
 }
+
+// TestPostgresFunctionFollowupFields exercises the --dsn round-trip of the
+// fields the functions field follow-up wave added (FC2-11, FC3-1, FC3-2),
+// including the JSONB-stored eventFilters list, plus snapshot/restore.
+func TestPostgresFunctionFollowupFields(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres store test")
+	}
+	ctx := context.Background()
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	if err := s.CreateFunction(ctx, "proj", "us-central1", "fu", followupFieldsFunction()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetFunction(ctx, "proj", "us-central1", "fu")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	assertFollowupFields(t, got)
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	restored, err := s.GetFunction(ctx, "proj", "us-central1", "fu")
+	if err != nil {
+		t.Fatalf("get after restore: %v", err)
+	}
+	assertFollowupFields(t, restored)
+	s.Reset(ctx)
+}

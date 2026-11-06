@@ -98,7 +98,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			&r.Function.IngressSettings, &r.Function.MaxInstances, &r.Function.VPCConnector,
 			&r.Function.VPCConnectorEgressSettings, &secretEnv, &secretVolumes,
 			&r.Function.DockerRegistry, &r.Function.DockerRepository, &r.Function.BuildWorkerPool,
-			&r.Function.HttpsTriggerSecurityLevel); err != nil {
+			&r.Function.HttpsTriggerSecurityLevel,
+			&r.Function.KmsKeyName, &r.Function.ServiceAccountEmail, &r.Function.SourceStorageUploadURL); err != nil {
 			rows.Close()
 			return err
 		}
@@ -237,8 +238,9 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 				 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu,
 				 ingress_settings, max_instances, vpc_connector, vpc_connector_egress_settings,
 				 secret_environment_variables, secret_volumes, docker_registry, docker_repository,
-				 build_worker_pool, https_trigger_security_level)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
+				 build_worker_pool, https_trigger_security_level,
+				 kms_key_name, service_account_email, source_storage_upload_url)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42)
 		`, r.ProjectID, r.Function.Location, r.Function.ID, r.Function.Runtime, r.Function.EntryPoint,
 			r.Function.SourceUploadURL, r.Function.SourceArchiveURL, r.Function.HttpsTriggerURL, nullableJSON(r.Function.EventTrigger),
 			json.RawMessage(env), r.Function.Status, r.Function.CreateTime, r.Function.UpdateTime, json.RawMessage(labels),
@@ -251,7 +253,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			r.Function.IngressSettings, r.Function.MaxInstances, r.Function.VPCConnector,
 			r.Function.VPCConnectorEgressSettings, nullableJSONList(r.Function.SecretEnvironmentVariables),
 			nullableJSONList(r.Function.SecretVolumes), r.Function.DockerRegistry, r.Function.DockerRepository,
-			r.Function.BuildWorkerPool, r.Function.HttpsTriggerSecurityLevel); err != nil {
+			r.Function.BuildWorkerPool, r.Function.HttpsTriggerSecurityLevel,
+			r.Function.KmsKeyName, r.Function.ServiceAccountEmail, r.Function.SourceStorageUploadURL); err != nil {
 			return err
 		}
 	}

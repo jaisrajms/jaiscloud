@@ -388,10 +388,18 @@ func TestPrimaryVersionTimes(t *testing.T) {
 	created, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
 		"name":        "locations/global/keyRings/times-kr",
 		"cryptoKeyId": "times-key",
-		"body":        map[string]any{"purpose": "ENCRYPT_DECRYPT"},
+		"body": map[string]any{
+			"purpose": "ENCRYPT_DECRYPT",
+			// primary.state is server-owned: a client value must be ignored and
+			// the version's actual state (ENABLED) served (FC3-4).
+			"primary": map[string]any{"state": "DESTROYED"},
+		},
 	}))
 	if err != nil {
 		t.Fatalf("cryptokey create: %v", err)
+	}
+	if primary, _ := created.Data["primary"].(map[string]any); primary["state"] != "ENABLED" {
+		t.Fatalf("create primary.state = %v, want ENABLED (server-owned)", created.Data["primary"])
 	}
 
 	assertTimes := func(where string, data map[string]any) {

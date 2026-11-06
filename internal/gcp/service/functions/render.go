@@ -93,6 +93,15 @@ func functionJSONV1(project string, f functionsstore.Function) map[string]any {
 	if f.BuildWorkerPool != "" {
 		out["buildWorkerPool"] = f.BuildWorkerPool
 	}
+	// CloudFunction.kms_key_name and service_account_email (FC2-11): the v1
+	// shape carries the same stored values the v2 shape nests under
+	// serviceConfig.
+	if f.KmsKeyName != "" {
+		out["kmsKeyName"] = f.KmsKeyName
+	}
+	if f.ServiceAccountEmail != "" {
+		out["serviceAccountEmail"] = f.ServiceAccountEmail
+	}
 	if f.EnvironmentVariables != nil {
 		out["environmentVariables"] = f.EnvironmentVariables
 	}
@@ -107,6 +116,20 @@ func functionJSONV1(project string, f functionsstore.Function) map[string]any {
 	}
 	if f.Description != "" {
 		out["description"] = f.Description
+	}
+	return out
+}
+
+// eventFiltersJSON renders a stored v2 eventFilters list in the Discovery /
+// protojson shape, omitting an unset operator (a proto3 default string).
+func eventFiltersJSON(filters []functionsstore.EventFilter) []any {
+	out := make([]any, 0, len(filters))
+	for _, f := range filters {
+		entry := map[string]any{"attribute": f.Attribute, "value": f.Value}
+		if f.Operator != "" {
+			entry["operator"] = f.Operator
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -157,28 +180,26 @@ func secretVolumesJSON(vols []functionsstore.SecretVolume) []any {
 }
 
 // functionSourceV2 renders the v2 BuildConfig.source oneof from the stored
-// source reference. A gs:// archive becomes a storageSource; a stored signed
-// sourceUploadUrl becomes a sourceUploadUrl; anything else yields nil (the
-// field is omitted).
+// source reference. A gs:// archive becomes a storageSource (bucket/object,
+// plus the 1st-gen upload URL when one was supplied); a function whose only
+// source member is a storageSource.sourceUploadUrl becomes a storageSource
+// carrying that member alone. Anything else yields nil (the field is omitted).
 func functionSourceV2(f functionsstore.Function) map[string]any {
-	ref := f.SourceArchiveURL
-	if !hasGSPrefix(ref) {
-		if f.SourceUploadURL != "" {
-			return map[string]any{"sourceUploadUrl": f.SourceUploadURL}
+	storage := map[string]any{}
+	if f.SourceStorageUploadURL != "" {
+		storage["sourceUploadUrl"] = f.SourceStorageUploadURL
+	}
+	if hasGSPrefix(f.SourceArchiveURL) {
+		rest := f.SourceArchiveURL[len("gs://"):]
+		if i := indexByte(rest, '/'); i > 0 && i < len(rest)-1 {
+			storage["bucket"] = rest[:i]
+			storage["object"] = rest[i+1:]
 		}
+	}
+	if len(storage) == 0 {
 		return nil
 	}
-	rest := ref[len("gs://"):]
-	i := indexByte(rest, '/')
-	if i <= 0 || i >= len(rest)-1 {
-		return nil
-	}
-	return map[string]any{
-		"storageSource": map[string]any{
-			"bucket": rest[:i],
-			"object": rest[i+1:],
-		},
-	}
+	return map[string]any{"storageSource": storage}
 }
 
 // functionJSONV2 renders the Cloud Functions v2 Function shape: state,
@@ -192,6 +213,9 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		// Cloud Functions v2 runs on Cloud Run (GEN_2); the field is
 		// output-only and every emulated v2 function is GEN_2.
 		"environment": "GEN_2",
+	}
+	if f.KmsKeyName != "" {
+		out["kmsKeyName"] = f.KmsKeyName
 	}
 	if !f.CreateTime.IsZero() {
 		out["createTime"] = formatTimestamp(f.CreateTime)
@@ -270,6 +294,24 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	if f.IngressSettings != "" {
 		svc["ingressSettings"] = f.IngressSettings
 	}
+	// v2 ServiceConfig parity fields (FC2-11): the serverless VPC connector,
+	// Secret Manager bindings and runtime service account render on the same
+	// stored values the v1 shape carries at the top level.
+	if f.VPCConnector != "" {
+		svc["vpcConnector"] = f.VPCConnector
+	}
+	if f.VPCConnectorEgressSettings != "" {
+		svc["vpcConnectorEgressSettings"] = f.VPCConnectorEgressSettings
+	}
+	if len(f.SecretEnvironmentVariables) > 0 {
+		svc["secretEnvironmentVariables"] = secretEnvVarsJSON(f.SecretEnvironmentVariables)
+	}
+	if len(f.SecretVolumes) > 0 {
+		svc["secretVolumes"] = secretVolumesJSON(f.SecretVolumes)
+	}
+	if f.ServiceAccountEmail != "" {
+		svc["serviceAccountEmail"] = f.ServiceAccountEmail
+	}
 	if len(svc) > 0 {
 		out["serviceConfig"] = svc
 	}
@@ -281,14 +323,27 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	}
 	if f.EventTrigger != nil {
 		et := map[string]any{"eventType": f.EventTrigger.EventType}
-		if eventing.IsStorageEventType(f.EventTrigger.EventType) {
-			// A v2 Cloud Storage trigger expresses its source as an event_filters
-			// bucket; pubsubTopic is valid only for a Pub/Sub trigger.
-			if bucket := eventing.ResourceID(f.EventTrigger.Resource); bucket != "" {
-				et["eventFilters"] = []any{map[string]any{"attribute": "bucket", "value": bucket}}
+		if len(f.EventTrigger.EventFilters) > 0 {
+			// The caller's full filter list (attribute, value, operator) is
+			// rendered verbatim, so a non-storage trigger filter round-trips
+			// (FC3-1, FC2-15).
+			et["eventFilters"] = eventFiltersJSON(f.EventTrigger.EventFilters)
+		}
+		if f.EventTrigger.PubsubTopic != "" {
+			// A proto message echoes every field the caller set; a body may carry
+			// both a pubsubTopic and an eventFilters list.
+			et["pubsubTopic"] = f.EventTrigger.PubsubTopic
+		}
+		if len(f.EventTrigger.EventFilters) == 0 && f.EventTrigger.PubsubTopic == "" {
+			if eventing.IsStorageEventType(f.EventTrigger.EventType) {
+				// A v2 Cloud Storage trigger expresses its source as an event_filters
+				// bucket; pubsubTopic is valid only for a Pub/Sub trigger.
+				if bucket := eventing.ResourceID(f.EventTrigger.Resource); bucket != "" {
+					et["eventFilters"] = []any{map[string]any{"attribute": "bucket", "value": bucket}}
+				}
+			} else {
+				et["pubsubTopic"] = f.EventTrigger.Resource
 			}
-		} else {
-			et["pubsubTopic"] = f.EventTrigger.Resource
 		}
 		if f.EventTrigger.RetryPolicy != "" {
 			et["retryPolicy"] = f.EventTrigger.RetryPolicy

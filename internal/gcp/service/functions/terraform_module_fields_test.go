@@ -285,12 +285,12 @@ func TestV1HTTPSecurityLevelUpdate(t *testing.T) {
 	}
 }
 
-func TestV1UnknownMaskStillUnimplemented(t *testing.T) {
+func TestV1UnknownMaskRejectedInvalidArgument(t *testing.T) {
 	f := functionsstore.Function{Runtime: "nodejs20"}
 	err := ApplyFunctionUpdate(&f, FunctionInput{}, []string{"madeUpField"})
 	var perr *model.ProviderError
-	if !errors.As(err, &perr) || perr.HTTPStatus != 501 || perr.Code != "Unimplemented" {
-		t.Fatalf("unknown mask error = %v, want Unimplemented/501", err)
+	if !errors.As(err, &perr) || perr.HTTPStatus != 400 || perr.Code != "InvalidArgument" {
+		t.Fatalf("unknown mask error = %v, want InvalidArgument/400", err)
 	}
 }
 
