@@ -1,10 +1,13 @@
 package storage
 
 import (
+	"context"
 	"testing"
 
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -48,15 +51,78 @@ func TestBucketToProtoCanonicalLocation(t *testing.T) {
 	}
 }
 
-// TestApplyBucketMaskCanonicalisesLocation covers UpdateBucket: a masked
-// lowercase location is stored in the canonical uppercase form.
-func TestApplyBucketMaskCanonicalisesLocation(t *testing.T) {
-	meta := map[string]any{"location": "US"}
-	mask := &fieldmaskpb.FieldMask{Paths: []string{"location"}}
-	if err := applyBucketMask(meta, &storagepb.Bucket{Location: "europe-west1"}, mask); err != nil {
-		t.Fatalf("applyBucketMask: %v", err)
+// TestGRPCUpdateBucketRejectsLocationChange is the gRPC half of FC2-4: a
+// masked UpdateBucket that changes the location is INVALID_ARGUMENT and leaves
+// the bucket untouched. Resending the stored location (in any case, since GCS
+// serves it uppercase) is a no-op and the rest of the mask still applies.
+func TestGRPCUpdateBucketRejectsLocationChange(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-loc", "US")
+	before, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucketLoc})
+	if err != nil {
+		t.Fatalf("GetBucket: %v", err)
 	}
-	if got, _ := meta["location"].(string); got != "EUROPE-WEST1" {
-		t.Errorf("masked location = %q, want EUROPE-WEST1", got)
+
+	for _, tc := range []struct {
+		location string
+		label    string
+		mask     []string
+	}{
+		{"EU", "", []string{"location"}},
+		{"europe-west1", "", []string{"location"}},
+		{"nam4", "", []string{"*"}},
+		// A rejected request must not apply the fields that came before the
+		// location check either: the whole update is refused.
+		{"EU", "storage", []string{"location", "labels"}},
+	} {
+		bucket := &storagepb.Bucket{Name: testBucketLoc, Location: tc.location}
+		if tc.label != "" {
+			bucket.Labels = map[string]string{"team": tc.label}
+		}
+		_, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+			Bucket:     bucket,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: tc.mask},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("UpdateBucket(location=%q, mask %v) err = %v, want InvalidArgument", tc.location, tc.mask, err)
+		}
+		got, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucketLoc})
+		if err != nil {
+			t.Fatalf("GetBucket: %v", err)
+		}
+		if got.GetLocation() != "US" {
+			t.Fatalf("rejected update of location=%q changed the bucket to %q", tc.location, got.GetLocation())
+		}
+		if len(got.GetLabels()) != 0 {
+			t.Fatalf("rejected update of location=%q applied labels: %v", tc.location, got.GetLabels())
+		}
+		if got.GetMetageneration() != before.GetMetageneration() {
+			t.Fatalf("rejected update of location=%q bumped the metageneration %d -> %d",
+				tc.location, before.GetMetageneration(), got.GetMetageneration())
+		}
+	}
+
+	// The stored location in a different case is a no-op; the labels in the
+	// same request still apply.
+	updated, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket: &storagepb.Bucket{
+			Name:     testBucketLoc,
+			Location: " us ",
+			Labels:   map[string]string{"team": "storage"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"location", "labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBucket(same location): %v", err)
+	}
+	if updated.GetLocation() != "US" {
+		t.Errorf("same-location update = %q, want US", updated.GetLocation())
+	}
+	if updated.GetLabels()["team"] != "storage" {
+		t.Errorf("same-location update did not apply labels: %v", updated.GetLabels())
 	}
 }
+
+const testBucketLoc = "projects/_/buckets/bucket-loc"

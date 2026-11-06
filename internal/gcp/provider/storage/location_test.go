@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"jaiscloud/internal/model"
 )
 
 // locationOf / locationTypeOf pull the two fields out of a bucket or
@@ -83,21 +86,64 @@ func TestBucketInsertCanonicalisesLocation(t *testing.T) {
 	}
 }
 
-// TestBucketsUpdateCanonicalisesLocation covers a PATCH carrying a lowercase
-// location: the response (and a fresh GET) must report the canonical form.
-func TestBucketsUpdateCanonicalisesLocation(t *testing.T) {
+// TestBucketsUpdateRejectsLocationChange is the FC2-4 guard: GCS documents that
+// a bucket's location "cannot be changed after creation", so a PATCH carrying a
+// different location is INVALID_ARGUMENT/400 and leaves the bucket untouched.
+// A resend of the stored location is a no-op instead, which is what keeps a
+// client that PATCHes the whole bucket body (the hashicorp/google provider
+// does) working — the comparison is canonical, because GCS serves the location
+// uppercase and accepts it case-insensitively.
+func TestBucketsUpdateRejectsLocationChange(t *testing.T) {
 	p := newTestProvider()
 	insertBucket(t, p, map[string]any{"name": "loc-update", "location": "US"})
+	before := getBucket(t, p, "loc-update")
 
-	patched := patchBucket(t, p, "loc-update", map[string]any{"location": " europe-west1 "})
-	if got := locationOf(patched); got != "EUROPE-WEST1" {
-		t.Errorf("PATCH location = %q, want EUROPE-WEST1", got)
+	for _, tc := range []struct {
+		location string
+		body     map[string]any
+	}{
+		{"europe-west1", map[string]any{"location": "europe-west1"}},
+		{"EU", map[string]any{"location": "EU"}},
+		{"nam4", map[string]any{"location": "nam4"}},
+		// A rejected request must not apply the fields that came before the
+		// location check either: the whole PATCH is refused.
+		{"EU with labels", map[string]any{"location": "EU", "labels": map[string]any{"team": "storage"}}},
+	} {
+		nr := bucketParams()
+		nr.Params["bucket"] = "loc-update"
+		nr.Params["body"] = tc.body
+		_, err := p.BucketsUpdate(context.Background(), nr)
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Fatalf("PATCH location=%q = %v, want InvalidArgument/400", tc.location, err)
+		}
+		after := getBucket(t, p, "loc-update")
+		if got := locationOf(after); got != "US" {
+			t.Fatalf("rejected PATCH location=%q changed the stored location to %q", tc.location, got)
+		}
+		if _, ok := after["labels"]; ok {
+			t.Fatalf("rejected PATCH location=%q applied other fields: %v", tc.location, after["labels"])
+		}
+		if after["metageneration"] != before["metageneration"] {
+			t.Fatalf("rejected PATCH location=%q bumped the metageneration %v -> %v",
+				tc.location, before["metageneration"], after["metageneration"])
+		}
 	}
-	if got := locationTypeOf(patched); got != "region" {
-		t.Errorf("PATCH locationType = %q, want region", got)
+
+	// The same location in any case is a no-op: the rest of the PATCH still
+	// applies, and the stored location keeps its canonical form.
+	patched := patchBucket(t, p, "loc-update", map[string]any{
+		"location": " us ",
+		"labels":   map[string]any{"team": "storage"},
+	})
+	if got := locationOf(patched); got != "US" {
+		t.Errorf("same-location PATCH = %q, want US", got)
 	}
-	if got := locationOf(getBucket(t, p, "loc-update")); got != "EUROPE-WEST1" {
-		t.Errorf("GET after PATCH location = %q, want EUROPE-WEST1", got)
+	if got := locationOf(getBucket(t, p, "loc-update")); got != "US" {
+		t.Errorf("same-location PATCH changed the stored location to %q", got)
+	}
+	if labels, _ := patched["labels"].(map[string]string); labels["team"] != "storage" {
+		t.Errorf("same-location PATCH did not apply the rest of the body: %v", patched["labels"])
 	}
 }
 

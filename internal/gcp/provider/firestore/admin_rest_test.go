@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -233,6 +234,167 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 	// data-plane verbs are rejected before dispatch (invalid path here).
 	if _, err := p.CreateDatabase(ctx, adminNR("databases/test-db", nil)); err == nil {
 		t.Error("CreateDatabase on a database resource succeeded, want InvalidArgument")
+	}
+}
+
+// TestRESTDatabaseImmutableLocation is the REST transport check for FC2-7:
+// projects.databases.patch with updateMask=locationId and a value that differs
+// from the stored one is INVALID_ARGUMENT/400 (so the Discovery surface answers
+// the same 400 the gRPC UpdateDatabase maps to codes.InvalidArgument) and the
+// record is left untouched. A resend of the stored location is accepted, and a
+// mask that does not name it ignores the body value (AIP-134).
+func TestRESTDatabaseImmutableLocation(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "pinned-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	inner, _ := created.Data["response"].(map[string]any)
+	etag, _ := inner["etag"].(string)
+
+	bad := []struct {
+		name string
+		mask string
+	}{
+		{"explicit", "locationId"},
+		{"star", "*"},
+	}
+	for _, tc := range bad {
+		_, err := p.UpdateDatabase(ctx, adminNR("databases/pinned-db", map[string]any{
+			"updateMask": tc.mask,
+			"body":       map[string]any{"locationId": "us-central1"},
+		}))
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("UpdateDatabase(locationId, %s mask) = %v, want InvalidArgument/400", tc.name, err)
+		}
+	}
+	got, err := p.GetDatabase(ctx, adminNR("databases/pinned-db", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.Data["locationId"] != "nam5" || got.Data["etag"] != etag {
+		t.Fatalf("rejected patches changed the record: %v", got.Data)
+	}
+
+	// An absent updateMask is an implied `*` and is guarded too.
+	_, err = p.UpdateDatabase(ctx, adminNR("databases/pinned-db", map[string]any{
+		"body": map[string]any{"locationId": "us-central1"},
+	}))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+		t.Errorf("UpdateDatabase(implied-mask location change) = %v, want InvalidArgument/400", err)
+	}
+
+	// Resending the stored location is a no-op.
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/pinned-db", map[string]any{
+		"updateMask": "locationId",
+		"body":       map[string]any{"locationId": "nam5"},
+	})); err != nil {
+		t.Fatalf("UpdateDatabase(resend locationId): %v", err)
+	}
+	// A mask naming another field ignores a differing location value.
+	updated, err := p.UpdateDatabase(ctx, adminNR("databases/pinned-db", map[string]any{
+		"updateMask": "concurrencyMode",
+		"body":       map[string]any{"concurrencyMode": "PESSIMISTIC", "locationId": "us-central1"},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(unmasked locationId): %v", err)
+	}
+	uin, _ := updated.Data["response"].(map[string]any)
+	if uin["locationId"] != "nam5" {
+		t.Errorf("unmasked patch changed locationId: %v", uin["locationId"])
+	}
+	if uin["concurrencyMode"] != "PESSIMISTIC" {
+		t.Errorf("concurrencyMode = %v, want PESSIMISTIC", uin["concurrencyMode"])
+	}
+}
+
+// TestRESTDatabaseTypeSwitchRequiresEmptyDatabase is the REST transport check
+// for FC2-8: database.proto documents that a Native/Datastore mode change is
+// "only allowed if the database is empty". projects.databases.patch therefore
+// applies the switch on an empty database and answers INVALID_ARGUMENT/400 once
+// the database holds documents, leaving the record alone.
+func TestRESTDatabaseTypeSwitchRequiresEmptyDatabase(t *testing.T) {
+	ctx := context.Background()
+	docs := firestorestore.NewMemoryStore()
+	p := New(docs, store.NewMemoryResourceStore())
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "mode-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	})); err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	etagOf := func(resp *model.ProviderResponse) string {
+		inner, _ := resp.Data["response"].(map[string]any)
+		etag, _ := inner["etag"].(string)
+		return etag
+	}
+
+	// Empty database: the switch applies.
+	switched, err := p.UpdateDatabase(ctx, adminNR("databases/mode-db", map[string]any{
+		"updateMask": "type",
+		"body":       map[string]any{"type": "DATASTORE_MODE"},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(mode change on an empty database): %v", err)
+	}
+	sin, _ := switched.Data["response"].(map[string]any)
+	if sin["type"] != "DATASTORE_MODE" {
+		t.Fatalf("type = %v after an empty-database switch, want DATASTORE_MODE", sin["type"])
+	}
+
+	// With a document present, the mode is pinned.
+	if err := docs.CreateDocument(ctx, firestorestore.Document{
+		Name: "projects/proj/databases/mode-db/documents/cities/SF",
+	}); err != nil {
+		t.Fatalf("CreateDocument: %v", err)
+	}
+	noop, err := p.UpdateDatabase(ctx, adminNR("databases/mode-db", map[string]any{
+		"updateMask": "type",
+		"body":       map[string]any{"type": "DATASTORE_MODE"},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(resend type): %v", err)
+	}
+	for _, mask := range []string{"type", "*"} {
+		_, err := p.UpdateDatabase(ctx, adminNR("databases/mode-db", map[string]any{
+			"updateMask": mask,
+			"body":       map[string]any{"type": "FIRESTORE_NATIVE"},
+		}))
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("UpdateDatabase(mode change with data, mask %q) = %v, want InvalidArgument/400", mask, err)
+		}
+	}
+	// An absent updateMask is an implied `*` and is guarded too.
+	_, err = p.UpdateDatabase(ctx, adminNR("databases/mode-db", map[string]any{
+		"body": map[string]any{"type": "FIRESTORE_NATIVE"},
+	}))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+		t.Errorf("UpdateDatabase(implied-mask mode change with data) = %v, want InvalidArgument/400", err)
+	}
+	got, err := p.GetDatabase(ctx, adminNR("databases/mode-db", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.Data["type"] != "DATASTORE_MODE" || got.Data["etag"] != etagOf(noop) {
+		t.Fatalf("rejected mode changes altered the record: %v", got.Data)
+	}
+
+	// DATABASE_TYPE_UNSPECIFIED is the enum's zero value: proto3 JSON serializes
+	// it by name, so it means "unset" (the gRPC surface maps enum 0 to ""), not a
+	// request to switch back to Native mode.
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/mode-db", map[string]any{
+		"updateMask": "type",
+		"body":       map[string]any{"type": "DATABASE_TYPE_UNSPECIFIED"},
+	})); err != nil {
+		t.Fatalf("UpdateDatabase(type=DATABASE_TYPE_UNSPECIFIED) = %v, want a no-op", err)
 	}
 }
 

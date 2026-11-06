@@ -104,6 +104,11 @@ type FirestoreStore interface {
 	// ListDocuments returns every document under the given project+database,
 	// sorted by name. Used by listDocuments/runQuery (slice 2).
 	ListDocuments(ctx context.Context, project, database string) ([]Document, error)
+	// HasDocuments reports whether the given project+database holds at least one
+	// document, without materialising the document set. It backs the
+	// "mode changes are only allowed if the database is empty" precondition on
+	// Database.type.
+	HasDocuments(ctx context.Context, project, database string) (bool, error)
 	// DeleteDocuments removes every document in the given project+database. It
 	// is the store-level primitive behind projects.databases.delete: real
 	// Firestore deletes a database's data with the database, and the purge is

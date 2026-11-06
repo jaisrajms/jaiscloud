@@ -123,6 +123,18 @@ func (s *PostgresStore) ListDocuments(ctx context.Context, project, database str
 	return result, rows.Err()
 }
 
+// HasDocuments reports whether the project+database has at least one document.
+func (s *PostgresStore) HasDocuments(ctx context.Context, project, database string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM jc_firestore_documents WHERE project=$1 AND database=$2)
+	`, project, database).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // Commit applies a batch of writes atomically inside a serializable transaction
 // with row locking, mirroring the memory store's read-set + precondition
 // semantics.

@@ -14,10 +14,11 @@ values:
   - field: storage/rest/Bucket/location
     value: '"US"'
     update_value: '"EU"'
-    reason: a bucket location must be a region or multi-region name ("US" is the multi-region the REST create accepts)
+    reason: a bucket location must be a region or multi-region name ("US" is the multi-region the REST create accepts; "EU" is a distinct one for the immutable-update negative)
   - field: storage/grpc/Bucket/location
     value: '"US"'
-    reason: same domain constraint on the gRPC surface (immutable create value)
+    update_value: '"EU"'
+    reason: same domain constraint on the gRPC surface (immutable create value, with a distinct value for the update negative)
   - field: storage/rest/Bucket/storageClass
     value: '"STANDARD"'
     update_value: '"NEARLINE"'
@@ -77,10 +78,12 @@ values:
   # ── firestore/Database ────────────────────────────────────────────────────
   - field: firestore/rest/Database/locationId
     value: '"nam5"'
-    reason: locationId names a database location ("nam5" is the multi-region the emulator documents)
+    update_value: '"us-central1"'
+    reason: locationId names a database location ("nam5" is the multi-region the emulator documents; "us-central1" is a distinct location for the immutable-update negative)
   - field: firestore/grpc/Database/location_id
     value: '"nam5"'
-    reason: same domain constraint on the gRPC surface
+    update_value: '"us-central1"'
+    reason: same domain constraint on the gRPC surface (immutable create value, with a distinct location for the update negative)
   - field: firestore/rest/Database/deleteProtectionState
     value: '"DELETE_PROTECTION_DISABLED"'
     reason: a database created delete-protected cannot be deleted by the suite's lifecycle step; the disabled state is the documented default for a non-protected database

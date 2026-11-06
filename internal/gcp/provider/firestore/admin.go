@@ -914,7 +914,10 @@ func applyDatabaseReplace(cur *databaseDef, patch databaseDef) {
 // The server-owned fields follow their proto annotations: an OUTPUT_ONLY field
 // (key_prefix, version_retention_period) in the mask is ignored as AIP-161
 // requires, but a masked write that would *change* the IMMUTABLE database_edition
-// is INVALID_ARGUMENT (AIP-203); resending the current value is a no-op.
+// or location_id is INVALID_ARGUMENT (AIP-203); resending the current value is a
+// no-op. `type` is mutable only under the DatabaseType precondition database.proto
+// documents ("Mode changes are only allowed if the database is empty"): a change
+// is INVALID_ARGUMENT while the database holds documents.
 //
 // cmek_config is create-only in practice: Firestore documents that CMEK can only
 // be set when the database is created and that "you can't change a key for a
@@ -933,14 +936,20 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 	// it is irrelevant (AIP-134); `*` covers every populated field.
 	editionMasked := false
 	cmekMasked := false
+	locationMasked := false
+	typeMasked := false
 	for _, path := range mask {
 		switch path {
 		case "*":
-			editionMasked, cmekMasked = true, true
+			editionMasked, cmekMasked, locationMasked, typeMasked = true, true, true, true
 		case "database_edition":
 			editionMasked = true
 		case "cmek_config", "cmek_config.kms_key_name":
 			cmekMasked = true
+		case "location_id":
+			locationMasked = true
+		case "type":
+			typeMasked = true
 		}
 	}
 	updated, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
@@ -952,6 +961,21 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 		}
 		if editionMasked && patch.DatabaseEdition != "" && patch.DatabaseEdition != cur.DatabaseEdition {
 			return databaseDef{}, gcpInvalidArgument("database_edition is immutable and cannot be changed")
+		}
+		// location_id is fixed at creation (Firestore documents that a
+		// provisioned database's location cannot be changed): a masked resend of
+		// the stored value is a no-op and any other supplied value is
+		// INVALID_ARGUMENT.
+		if locationMasked && patch.LocationID != "" && patch.LocationID != cur.LocationID {
+			return databaseDef{}, gcpInvalidArgument("location_id is immutable and cannot be changed: a database's location is fixed at creation")
+		}
+		// type may change only while the database is empty, the precondition
+		// database.proto documents on DatabaseType ("Mode changes are only
+		// allowed if the database is empty"). A populated database pins its mode.
+		if typeMasked && patch.Type != "" && patch.Type != cur.Type {
+			if err := s.requireEmptyDatabaseForTypeChange(ctx, project, db); err != nil {
+				return databaseDef{}, err
+			}
 		}
 		if cmekMasked && patch.CmekConfig != nil && strings.TrimSpace(patch.CmekConfig.KmsKeyName) != "" {
 			switch {
@@ -982,6 +1006,26 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 	}
 	s.resolveActiveCMEKVersions(ctx, &updated)
 	return updated, databaseOperationName(project, db, randomHex(12)), nil
+}
+
+// requireEmptyDatabaseForTypeChange enforces the precondition database.proto
+// documents on DatabaseType: "Mode changes are only allowed if the database is
+// empty." A database holds data once any document exists under it. With no
+// document store attached (unit tests that model only the admin plane) the
+// database is treated as empty, which is what lets the conditional rule be
+// tested without a data plane.
+func (s *Service) requireEmptyDatabaseForTypeChange(ctx context.Context, project, db string) error {
+	if s.store == nil {
+		return nil
+	}
+	has, err := s.store.HasDocuments(ctx, project, db)
+	if err != nil {
+		return model.NewProviderError("Internal", err.Error(), 500)
+	}
+	if has {
+		return gcpInvalidArgument("type can only be changed while the database is empty: a Native/Datastore mode change is not allowed once the database has documents")
+	}
+	return nil
 }
 
 // mutateDatabase runs load → mutate → store for a database inside the store's
@@ -1092,6 +1136,15 @@ func mutateOne[T any](ctx context.Context, s *Service, project, rt, id string, c
 // (database.proto), so a request that carries one never writes it. The
 // retention window is re-derived from the PITR toggle by the caller.
 //
+// location_id and database_edition have no arm: both are immutable (a
+// database's location and edition are fixed at creation), and the caller's
+// guard already rejects an attempt to change either, so a masked write here is
+// a resend of the stored value (a no-op). There is no path that clears them.
+//
+// type has an arm because the API permits a Native/Datastore mode change while
+// the database is empty; the caller's guard rejects the change once documents
+// exist, so only the documented case reaches this write.
+//
 // cmek_config has no arm either, on purpose: it is create-only, and the caller's
 // immutability guard already rejects an attempt to enable or change it, so a
 // masked write here is a resend of the stored key (a no-op). There is no path
@@ -1101,10 +1154,8 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 	case "*":
 		// Apply the mutable fields only; the output-only fields (name, uid,
 		// create/update/delete time, etag, key_prefix, version_retention_period)
-		// and the immutable database_edition stay under the server's control.
-		if patch.LocationID != "" {
-			cur.LocationID = patch.LocationID
-		}
+		// and the immutable location_id/database_edition stay under the
+		// server's control.
 		if patch.Type != "" {
 			cur.Type = patch.Type
 		}
@@ -1128,8 +1179,6 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 		cur.PointInTimeRecoveryEnablement = patch.PointInTimeRecoveryEnablement
 	case "delete_protection_state":
 		cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
-	case "location_id":
-		cur.LocationID = patch.LocationID
 	case "type":
 		cur.Type = patch.Type
 	}

@@ -308,7 +308,13 @@ func (firestoreDatabase) prepare(ctx context.Context, e *Env) (map[string]string
 	return preparedRefs(ctx, e, "firestore", "Database", "rest", nil)
 }
 
-func (firestoreDatabase) baseBody(e *Env, id string) map[string]any { return map[string]any{} }
+func (firestoreDatabase) baseBody(e *Env, id string) map[string]any {
+	// location_id is immutable (an update negative), so the generated values no
+	// longer carry it; the twin still needs one at create, as real Firestore
+	// requires (and so the immutable negative compares against a non-empty
+	// stored location).
+	return map[string]any{"locationId": "nam5"}
+}
 func (firestoreDatabase) absenceBody(e *Env, id string) map[string]any {
 	return map[string]any{"locationId": "nam5"}
 }

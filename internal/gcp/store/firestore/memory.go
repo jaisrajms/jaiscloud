@@ -74,6 +74,19 @@ func (s *MemoryStore) ListDocuments(_ context.Context, project, database string)
 	return result, nil
 }
 
+// HasDocuments reports whether the project+database has at least one document.
+func (s *MemoryStore) HasDocuments(_ context.Context, project, database string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := "projects/" + project + "/databases/" + database + "/documents/"
+	for name := range s.docs {
+		if strings.HasPrefix(name, prefix) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // DeleteDocuments removes every document under the given project+database.
 func (s *MemoryStore) DeleteDocuments(_ context.Context, project, database string) error {
 	s.mu.Lock()
