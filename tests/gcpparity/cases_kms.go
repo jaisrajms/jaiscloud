@@ -21,8 +21,18 @@ func kmsScenario() Scenario {
 	ringID := "parity-ring"
 	keyID := "parity-key"
 	location := "global"
+	// The key ring must be stable across steps but unique per transport side:
+	// e.Resource() embeds the step tag, so a step-scoped ring name would create
+	// a different ring per step and cryptoKeys.create would (correctly) answer
+	// NOT_FOUND for a missing parent.
+	ringIDFor := func(e *Env) string {
+		if e.Side != "" {
+			return ringID + "-" + e.Side + "-" + e.Cfg.Suffix
+		}
+		return e.Cfg.ResourceName(ringID)
+	}
 	ringName := func(e *Env) string {
-		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s", e.Cfg.Project, location, e.Resource(ringID))
+		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s", e.Cfg.Project, location, ringIDFor(e))
 	}
 	keyName := func(e *Env) string { return ringName(e) + "/cryptoKeys/" + e.Resource(keyID) }
 	parent := func(e *Env) string { return fmt.Sprintf("projects/%s/locations/%s", e.Cfg.Project, location) }
@@ -36,10 +46,10 @@ func kmsScenario() Scenario {
 			return nil, err
 		}
 		defer c.Close()
-		return c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: parent(e), KeyRingId: e.Resource(ringID)})
+		return c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: parent(e), KeyRingId: ringIDFor(e)})
 	}
 	createRingREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
-		return e.Rest(ctx, "POST", "/v1/"+parent(e)+"/keyRings?keyRingId="+e.Resource(ringID), `{}`)
+		return e.Rest(ctx, "POST", "/v1/"+parent(e)+"/keyRings?keyRingId="+ringIDFor(e), `{}`)
 	}
 	createKeyGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
 		c, err := newClient(ctx, e)
@@ -66,7 +76,7 @@ func kmsScenario() Scenario {
 					return err
 				}
 				defer c.Close()
-				_, err = c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: parent(e), KeyRingId: e.Resource(ringID)})
+				_, err = c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: parent(e), KeyRingId: ringIDFor(e)})
 				return err
 			},
 		},
