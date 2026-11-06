@@ -4,8 +4,8 @@ package gcpparity
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,50 +253,19 @@ func fieldBaselinePath() string {
 // field,behavior,coverage,evidence,reason,review_by).
 func readFieldCoverageCSV(t *testing.T) [][]string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "fidelity", "field-coverage.csv"))
+	f, err := os.Open(filepath.Join("..", "..", "docs", "fidelity", "field-coverage.csv"))
 	if err != nil {
 		t.Fatalf("read field-coverage catalog: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	var out [][]string
-	for i, line := range lines {
-		if i == 0 {
-			continue
-		}
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		out = append(out, splitCSVLine(line))
+	defer f.Close()
+	records, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		t.Fatalf("parse field-coverage catalog: %v", err)
 	}
-	return out
-}
-
-// splitCSVLine splits one catalog line; the catalog has no quoted commas (no
-// reason text contains one), and a comma inside a reason is escaped by the
-// writer, so a minimal parser that respects double quotes is enough.
-func splitCSVLine(line string) []string {
-	var fields []string
-	var cur strings.Builder
-	inQuotes := false
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		switch {
-		case c == '"':
-			if inQuotes && i+1 < len(line) && line[i+1] == '"' {
-				cur.WriteByte('"')
-				i++
-				continue
-			}
-			inQuotes = !inQuotes
-		case c == ',' && !inQuotes:
-			fields = append(fields, cur.String())
-			cur.Reset()
-		default:
-			cur.WriteByte(c)
-		}
+	if len(records) == 0 {
+		t.Fatal("field-coverage catalog is empty")
 	}
-	fields = append(fields, cur.String())
-	return fields
+	return records[1:]
 }
 
 func isZeroValueLiteral(raw string) bool {
@@ -331,5 +300,3 @@ func dedupeStrings(in []string) []string {
 	}
 	return out
 }
-
-var _ = fmt.Sprintf

@@ -170,7 +170,6 @@ type fieldBody struct {
 	body      map[string]any
 	used      map[string]bool
 	skipped   map[string]string
-	index     map[string]int // repeated-ancestor path -> instance index chosen by the driver
 	placeErr  error
 }
 
@@ -184,7 +183,6 @@ func newFieldBody(service, resource, transport string, refs map[string]string) *
 		body:      map[string]any{},
 		used:      map[string]bool{},
 		skipped:   map[string]string{},
-		index:     map[string]int{},
 	}
 }
 
