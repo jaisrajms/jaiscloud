@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	providerschema "jaiscloud/tools/providerschema"
@@ -181,5 +183,33 @@ func TestNestedArrayPathIsSent(t *testing.T) {
 	}}}
 	if !hasJSONPath(body, "lifecycle.rule.action.type") {
 		t.Fatal("hasJSONPath missed a path through a JSON array")
+	}
+}
+
+// TestInitMappingFlushesTheWholeFile pins the csv.Writer flush: with more rows
+// than the writer's buffer, the tail used to be lost because the deferred
+// Flush ran after the file was closed.
+func TestInitMappingFlushesTheWholeFile(t *testing.T) {
+	specs := make([]providerschema.Attribute, 0, 500)
+	for i := 0; i < 500; i++ {
+		specs = append(specs, providerschema.Attribute{Path: fmt.Sprintf("attribute_%03d", i), Optional: true})
+	}
+	schema := &providerschema.ProviderSchema{Resources: map[string][]providerschema.Attribute{
+		"google_test_resource": specs,
+	}}
+	path := filepath.Join(t.TempDir(), "mapping.csv")
+	if err := writeInitialMapping(path, schema, []string{"google_test_resource"}); err != nil {
+		t.Fatalf("writeInitialMapping: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read mapping: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != len(specs)+1 {
+		t.Fatalf("mapping has %d lines, want header + %d rows (the writer tail was dropped)", len(lines), len(specs))
+	}
+	if !strings.Contains(lines[len(lines)-1], "attribute_499") {
+		t.Fatalf("last mapping row = %q, want attribute_499", lines[len(lines)-1])
 	}
 }

@@ -20,6 +20,8 @@ import (
 	"cloud.google.com/go/kms/apiv1/kmspb"
 	monitoring "cloud.google.com/go/monitoring/apiv3"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	pubsubapi "cloud.google.com/go/pubsub/v2/apiv1"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 
 	conf "jaiscloud/tests/gcpconformance"
@@ -1386,6 +1388,518 @@ func (storageBucket) delete(ctx context.Context, e *Env, transport, id string) e
 	return fmt.Errorf("storage: unknown transport %q", transport)
 }
 
+// ─── Pub/Sub Topic (REST + gRPC) ─────────────────────────────────────────────
+
+type pubsubTopic struct{}
+
+func (pubsubTopic) resourceID() string { return "pubsub/Topic" }
+func (pubsubTopic) transports() []string {
+	return []string{"rest", "grpc"}
+}
+
+func (pubsubTopic) prepare(ctx context.Context, e *Env) (map[string]string, error) {
+	// The REST Discovery schema carries no resource_reference annotations, so
+	// the reference fields are resolved from both transports' generated sets.
+	refs := map[string]string{}
+	for _, transport := range []string{"rest", "grpc"} {
+		r, err := preparedRefs(ctx, e, "pubsub", "Topic", transport, refs)
+		if err != nil {
+			return nil, err
+		}
+		refs = r
+	}
+	return refs, nil
+}
+
+func (pubsubTopic) baseBody(e *Env, id string) map[string]any { return map[string]any{} }
+func (pubsubTopic) absenceBody(e *Env, id string) map[string]any {
+	return map[string]any{}
+}
+
+// phases: the ingestion source is a oneof and the transform list is a repeated
+// oneof, so each source and each transform variant gets its own create (the
+// catalog stops at depth 2, where those members are messages).
+func (pubsubTopic) phases() []string {
+	return []string{"", "aws-kinesis", "aws-msk", "azure", "cloud-storage", "confluent", "compression", "ai-inference"}
+}
+
+func (pubsubTopic) deletable() bool { return true }
+
+func (pubsubTopic) fill(b *fieldBody, phase string) {
+	switch phase {
+	case "":
+		// Everything except the ingestion block and the non-javascript transform
+		// variants (those are oneof members and get their own phase).
+		for _, f := range b.fields {
+			if f.Kind == "message" {
+				continue
+			}
+			np := normalizeFieldPath(f.Path)
+			switch {
+			case strings.HasPrefix(np, "ingestiondatasourcesettings"):
+				continue
+			case strings.HasPrefix(np, "messagetransforms"):
+				if strings.Contains(np, "compression") || strings.Contains(np, "aiinference") {
+					continue
+				}
+			}
+			if err := b.place(f.Field); err != nil && b.placeErr == nil {
+				b.placeErr = err
+			}
+		}
+		shape(b, "messageTransforms.javascriptUdf", map[string]any{
+			"functionName": "fc-transform",
+			"code":         "function fcTransform(m) { return m; }",
+		})
+	case "compression":
+		shape(b, "messageTransforms.compression", map[string]any{
+			"compressionAlgorithm": "ZLIB",
+			"compressionMode":      "COMPRESS",
+		})
+	case "ai-inference":
+		shape(b, "messageTransforms.aiInference", map[string]any{
+			"endpoint":              "projects/fc-project/locations/us-central1/endpoints/fc-endpoint",
+			"serviceAccountEmail":   "fc-inference@fc-project.iam.gserviceaccount.com",
+			"unstructuredInference": map[string]any{},
+		})
+	case "aws-kinesis":
+		b.placePrefix("ingestionDataSourceSettings.awsKinesis")
+		shape(b, "ingestionDataSourceSettings.awsKinesis", map[string]any{
+			"awsRoleArn":        "arn:aws:iam::123456789012:role/fc",
+			"consumerArn":       "arn:aws:kinesis:us-east-1:123456789012:stream/fc/consumer/fc:1",
+			"gcpServiceAccount": "fc-ingest@fc-project.iam.gserviceaccount.com",
+			"streamArn":         "arn:aws:kinesis:us-east-1:123456789012:stream/fc",
+		})
+		shape(b, "ingestionDataSourceSettings.platformLogsSettings", map[string]any{"severity": "INFO"})
+	case "aws-msk":
+		shape(b, "ingestionDataSourceSettings.awsMsk", map[string]any{
+			"awsRoleArn":        "arn:aws:iam::123456789012:role/fc",
+			"clusterArn":        "arn:aws:kafka:us-east-1:123456789012:cluster/fc/1",
+			"gcpServiceAccount": "fc-ingest@fc-project.iam.gserviceaccount.com",
+			"topic":             b.refs["pubsub-topic"],
+		})
+	case "azure":
+		shape(b, "ingestionDataSourceSettings.azureEventHubs", map[string]any{
+			"clientId":          "fc-client",
+			"eventHub":          "fc-hub",
+			"gcpServiceAccount": "fc-ingest@fc-project.iam.gserviceaccount.com",
+			"namespace":         "fc-namespace",
+			"resourceGroup":     "fc-resource-group",
+			"subscriptionId":    "fc-subscription",
+			"tenantId":          "fc-tenant",
+		})
+	case "cloud-storage":
+		shape(b, "ingestionDataSourceSettings.cloudStorage", map[string]any{
+			"bucket":                  "fc-ingest-bucket",
+			"matchGlob":               "*.txt",
+			"minimumObjectCreateTime": "2030-01-01T00:00:00Z",
+		})
+	case "confluent":
+		shape(b, "ingestionDataSourceSettings.confluentCloud", map[string]any{
+			"bootstrapServer":   "fc.confluent.cloud:9092",
+			"clusterId":         "fc-cluster",
+			"gcpServiceAccount": "fc-ingest@fc-project.iam.gserviceaccount.com",
+			"identityPoolId":    "fc-pool",
+			"topic":             "fc-confluent-topic",
+		})
+	}
+}
+
+// shape places a message row the catalog stops at with the sub-fields the API
+// requires, ignoring a field that this transport does not declare. The name may
+// be given in either transport's spelling; the generated field is resolved by
+// its normalized path.
+func shape(b *fieldBody, field string, value map[string]any) {
+	want := normalizeFieldPath(field)
+	for _, f := range b.fields {
+		if f.Kind != "message" || normalizeFieldPath(f.Field) != want {
+			continue
+		}
+		if err := b.shape(f.Field, value); err != nil && b.placeErr == nil {
+			b.placeErr = err
+		}
+		return
+	}
+}
+
+// placeField places a scalar field by its normalized name, so a driver can name
+// a field once for both transports.
+func placeField(b *fieldBody, field string) {
+	want := normalizeFieldPath(field)
+	for _, f := range b.fields {
+		if normalizeFieldPath(f.Field) != want {
+			continue
+		}
+		if err := b.place(f.Field); err != nil && b.placeErr == nil {
+			b.placeErr = err
+		}
+		return
+	}
+}
+
+func pubsubTopicName(e *Env, id string) string {
+	return fmt.Sprintf("projects/%s/topics/%s", e.Cfg.Project, id)
+}
+
+func (pubsubTopic) create(ctx context.Context, e *Env, transport, id string, body map[string]any) error {
+	raw, err := marshalMerge(body)
+	if err != nil {
+		return err
+	}
+	switch transport {
+	case "rest":
+		_, err = e.Rest(ctx, http.MethodPut, "/v1/"+pubsubTopicName(e, id), string(raw))
+		return err
+	case "grpc":
+		msg := &pubsubpb.Topic{}
+		if err := protojson.Unmarshal(raw, msg); err != nil {
+			return fmt.Errorf("decode topic: %w", err)
+		}
+		msg.Name = pubsubTopicName(e, id)
+		c, err := pubsubapi.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		_, err = c.CreateTopic(ctx, msg)
+		return err
+	}
+	return fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubTopic) read(ctx context.Context, e *Env, transport, id string) (map[string]any, error) {
+	name := pubsubTopicName(e, id)
+	switch transport {
+	case "rest":
+		raw, err := e.Rest(ctx, http.MethodGet, "/v1/"+name, "")
+		return decodeJSONMap(raw, err)
+	case "grpc":
+		c, err := pubsubapi.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		msg, err := c.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: name})
+		if err != nil {
+			return nil, err
+		}
+		return protoMap(msg)
+	}
+	return nil, fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubTopic) listContains(ctx context.Context, e *Env, transport, id string) (bool, error) {
+	name := pubsubTopicName(e, id)
+	switch transport {
+	case "rest":
+		raw, err := e.Rest(ctx, http.MethodGet, "/v1/projects/"+e.Cfg.Project+"/topics", "")
+		if err != nil {
+			return false, err
+		}
+		return jsonListContains(raw, "topics", "name", name)
+	case "grpc":
+		c, err := pubsubapi.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return false, err
+		}
+		defer c.Close()
+		it := c.ListTopics(ctx, &pubsubpb.ListTopicsRequest{Project: "projects/" + e.Cfg.Project})
+		for {
+			t, err := it.Next()
+			if err == iterator.Done {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			if t.GetName() == name {
+				return true, nil
+			}
+		}
+	}
+	return false, fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubTopic) update(ctx context.Context, e *Env, transport, id, mask string, body map[string]any) error {
+	name := pubsubTopicName(e, id)
+	raw, err := marshalMerge(body)
+	if err != nil {
+		return err
+	}
+	switch transport {
+	case "rest":
+		_, err = e.Rest(ctx, http.MethodPatch, "/v1/"+name+"?updateMask="+url.QueryEscape(mask), string(raw))
+		return err
+	case "grpc":
+		msg := &pubsubpb.Topic{}
+		if err := protojson.Unmarshal(raw, msg); err != nil {
+			return fmt.Errorf("decode topic update: %w", err)
+		}
+		msg.Name = name
+		c, err := pubsubapi.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		_, err = c.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+			Topic:      msg,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{mask}},
+		})
+		return err
+	}
+	return fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubTopic) delete(ctx context.Context, e *Env, transport, id string) error {
+	name := pubsubTopicName(e, id)
+	switch transport {
+	case "rest":
+		return e.RestDelete(ctx, "/v1/"+name)
+	case "grpc":
+		c, err := pubsubapi.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		return c.DeleteTopic(ctx, &pubsubpb.DeleteTopicRequest{Topic: name})
+	}
+	return fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+// ─── Pub/Sub Subscription (REST + gRPC) ──────────────────────────────────────
+
+type pubsubSubscription struct{}
+
+func (pubsubSubscription) resourceID() string { return "pubsub/Subscription" }
+func (pubsubSubscription) transports() []string {
+	return []string{"rest", "grpc"}
+}
+
+func (pubsubSubscription) prepare(ctx context.Context, e *Env) (map[string]string, error) {
+	refs := map[string]string{}
+	for _, transport := range []string{"rest", "grpc"} {
+		r, err := preparedRefs(ctx, e, "pubsub", "Subscription", transport, refs)
+		if err != nil {
+			return nil, err
+		}
+		refs = r
+	}
+	return refs, nil
+}
+
+func (pubsubSubscription) topicName(e *Env) string {
+	return fmt.Sprintf("projects/%s/topics/%s", e.Cfg.Project, e.Resource("fc-ref-topic"))
+}
+
+func (s pubsubSubscription) baseBody(e *Env, id string) map[string]any {
+	return map[string]any{"topic": s.topicName(e)}
+}
+
+// absenceBody carries the two API defaults the emulator always renders (a
+// subscription without an explicit policy expires after 31 days); every other
+// optional block must stay absent.
+func (s pubsubSubscription) absenceBody(e *Env, id string) map[string]any {
+	return map[string]any{
+		"topic":            s.topicName(e),
+		"expirationPolicy": map[string]any{"ttl": "2678400s"},
+	}
+}
+
+// phases: the Cloud Storage output format and the push wrapper are oneofs, and
+// the transform list is a repeated oneof, so each variant gets its own create.
+func (pubsubSubscription) phases() []string {
+	return []string{"", "avro", "no-wrapper", "pubsub-wrapper"}
+}
+
+func (pubsubSubscription) deletable() bool { return true }
+
+func (pubsubSubscription) fill(b *fieldBody, phase string) {
+	switch phase {
+	case "":
+		// Pull subscription: everything except the push and Cloud Storage output
+		// blocks (each is a oneof, and exactly-once delivery is rejected on a
+		// push subscription), plus the javascript transform variant.
+		for _, f := range b.fields {
+			if f.Kind == "message" {
+				continue
+			}
+			np := normalizeFieldPath(f.Path)
+			switch {
+			case strings.HasPrefix(np, "pushconfig"):
+				continue
+			case strings.HasPrefix(np, "cloudstorageconfigavroconfig"):
+				continue
+			case strings.HasPrefix(np, "messagetransforms"):
+				if strings.Contains(np, "compression") || strings.Contains(np, "aiinference") {
+					continue
+				}
+			}
+			if err := b.place(f.Field); err != nil && b.placeErr == nil {
+				b.placeErr = err
+			}
+		}
+		shape(b, "messageTransforms.javascriptUdf", map[string]any{
+			"functionName": "fc-transform",
+			"code":         "function fcTransform(m) { return m; }",
+		})
+		shape(b, "cloudStorageConfig.textConfig", map[string]any{})
+	case "avro":
+		placeField(b, "cloudStorageConfig.bucket")
+		shape(b, "cloudStorageConfig.avroConfig", map[string]any{})
+	case "no-wrapper":
+		// A push subscription cannot also enable exactly-once delivery, so the
+		// push fields live in their own create phase.
+		placeField(b, "pushConfig.pushEndpoint")
+		placeField(b, "pushConfig.attributes")
+		shape(b, "pushConfig.oidcToken", map[string]any{
+			"audience":            "fc-audience",
+			"serviceAccountEmail": "fc-push@fc-project.iam.gserviceaccount.com",
+		})
+		shape(b, "pushConfig.noWrapper", map[string]any{"writeMetadata": true})
+		shape(b, "messageTransforms.compression", map[string]any{
+			"compressionAlgorithm": "ZLIB",
+			"compressionMode":      "COMPRESS",
+		})
+	case "pubsub-wrapper":
+		placeField(b, "pushConfig.pushEndpoint")
+		shape(b, "pushConfig.pubsubWrapper", map[string]any{})
+		shape(b, "messageTransforms.aiInference", map[string]any{
+			"endpoint":              "projects/fc-project/locations/us-central1/endpoints/fc-endpoint",
+			"serviceAccountEmail":   "fc-inference@fc-project.iam.gserviceaccount.com",
+			"unstructuredInference": map[string]any{},
+		})
+	}
+}
+
+func pubsubSubscriptionName(e *Env, id string) string {
+	return fmt.Sprintf("projects/%s/subscriptions/%s", e.Cfg.Project, id)
+}
+
+func (pubsubSubscription) create(ctx context.Context, e *Env, transport, id string, body map[string]any) error {
+	raw, err := marshalMerge(body)
+	if err != nil {
+		return err
+	}
+	switch transport {
+	case "rest":
+		_, err = e.Rest(ctx, http.MethodPut, "/v1/"+pubsubSubscriptionName(e, id), string(raw))
+		return err
+	case "grpc":
+		msg := &pubsubpb.Subscription{}
+		if err := protojson.Unmarshal(raw, msg); err != nil {
+			return fmt.Errorf("decode subscription: %w", err)
+		}
+		msg.Name = pubsubSubscriptionName(e, id)
+		c, err := pubsubapi.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		_, err = c.CreateSubscription(ctx, msg)
+		return err
+	}
+	return fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubSubscription) read(ctx context.Context, e *Env, transport, id string) (map[string]any, error) {
+	name := pubsubSubscriptionName(e, id)
+	switch transport {
+	case "rest":
+		raw, err := e.Rest(ctx, http.MethodGet, "/v1/"+name, "")
+		return decodeJSONMap(raw, err)
+	case "grpc":
+		c, err := pubsubapi.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		msg, err := c.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: name})
+		if err != nil {
+			return nil, err
+		}
+		return protoMap(msg)
+	}
+	return nil, fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubSubscription) listContains(ctx context.Context, e *Env, transport, id string) (bool, error) {
+	name := pubsubSubscriptionName(e, id)
+	switch transport {
+	case "rest":
+		raw, err := e.Rest(ctx, http.MethodGet, "/v1/projects/"+e.Cfg.Project+"/subscriptions", "")
+		if err != nil {
+			return false, err
+		}
+		return jsonListContains(raw, "subscriptions", "name", name)
+	case "grpc":
+		c, err := pubsubapi.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return false, err
+		}
+		defer c.Close()
+		it := c.ListSubscriptions(ctx, &pubsubpb.ListSubscriptionsRequest{Project: "projects/" + e.Cfg.Project})
+		for {
+			s, err := it.Next()
+			if err == iterator.Done {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			if s.GetName() == name {
+				return true, nil
+			}
+		}
+	}
+	return false, fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubSubscription) update(ctx context.Context, e *Env, transport, id, mask string, body map[string]any) error {
+	name := pubsubSubscriptionName(e, id)
+	raw, err := marshalMerge(body)
+	if err != nil {
+		return err
+	}
+	switch transport {
+	case "rest":
+		_, err = e.Rest(ctx, http.MethodPatch, "/v1/"+name+"?updateMask="+url.QueryEscape(mask), string(raw))
+		return err
+	case "grpc":
+		msg := &pubsubpb.Subscription{}
+		if err := protojson.Unmarshal(raw, msg); err != nil {
+			return fmt.Errorf("decode subscription update: %w", err)
+		}
+		msg.Name = name
+		c, err := pubsubapi.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		_, err = c.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+			Subscription: msg,
+			UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{mask}},
+		})
+		return err
+	}
+	return fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
+func (pubsubSubscription) delete(ctx context.Context, e *Env, transport, id string) error {
+	name := pubsubSubscriptionName(e, id)
+	switch transport {
+	case "rest":
+		return e.RestDelete(ctx, "/v1/"+name)
+	case "grpc":
+		c, err := pubsubapi.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		return c.DeleteSubscription(ctx, &pubsubpb.DeleteSubscriptionRequest{Subscription: name})
+	}
+	return fmt.Errorf("pubsub: unknown transport %q", transport)
+}
+
 // ─── shared plumbing ─────────────────────────────────────────────────────────
 
 func marshalMerge(body map[string]any) ([]byte, error) {
@@ -1449,6 +1963,8 @@ func fieldResources() []fieldResource {
 		functionsFunction{},
 		monitoringAlertPolicy{},
 		clouddnsManagedZone{},
+		pubsubTopic{},
+		pubsubSubscription{},
 		storageBucket{},
 	}
 }

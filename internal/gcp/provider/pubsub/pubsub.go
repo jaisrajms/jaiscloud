@@ -662,6 +662,28 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		meta["pushConfig"] = pc
 	}
+	// Delivery targets other than push are store-and-echo (no delivery is
+	// executed), but a create must persist them: a create that dropped them
+	// would make a read-back lose the caller's configuration. `state` on each is
+	// OUTPUT_ONLY and is stripped.
+	for _, key := range []string{"bigqueryConfig", "cloudStorageConfig"} {
+		if obj, ok := body[key].(map[string]any); ok {
+			meta[key] = pubsubcore.WithoutStorageConfigState(obj)
+		}
+	}
+	if transforms, ok := body["messageTransforms"].([]any); ok && len(transforms) > 0 {
+		meta["messageTransforms"] = transforms
+	}
+	// retainAckedMessages is a create-time setting (the update path already
+	// honours its mask): a read-back must carry it.
+	if retain, _ := body["retainAckedMessages"].(bool); retain {
+		meta["retainAckedMessages"] = true
+	}
+	// detached is a create-time flag: a detached subscription is created
+	// without a topic backlog and Pull answers FailedPrecondition.
+	if detached, _ := body["detached"].(bool); detached {
+		meta["detached"] = true
+	}
 	// Labels are stored as a string map, matching TopicCreate. An absent or
 	// empty map leaves no key at all, so GET never echoes "labels": null.
 	if labels := stringMap(body, "labels"); len(labels) > 0 {

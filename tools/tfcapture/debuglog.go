@@ -133,6 +133,27 @@ var pathRules = []struct {
 	{method: "POST", re: regexp.MustCompile(`^/dns/v1/projects/[^/]+/managedZones/?$`), res: "google_dns_managed_zone"},
 	{method: "PATCH", re: regexp.MustCompile(`^/dns/v1/projects/[^/]+/managedZones/[^/?]+`), res: "google_dns_managed_zone"},
 	{method: "PUT", re: regexp.MustCompile(`^/dns/v1/projects/[^/]+/managedZones/[^/?]+`), res: "google_dns_managed_zone"},
+	// Cloud Functions v1 (google_cloudfunctions_function) and v2
+	// (google_cloudfunctions2_function) create with the resource under the
+	// location parent; both update in place with PATCH + updateMask.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/functions/?$`), res: "google_cloudfunctions_function"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/functions/[^/?]+`), res: "google_cloudfunctions_function"},
+	{method: "PUT", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/functions/[^/?]+`), res: "google_cloudfunctions_function"},
+	{method: "POST", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/functions/?$`), res: "google_cloudfunctions2_function"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/functions/[^/?]+`), res: "google_cloudfunctions2_function"},
+	{method: "PUT", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/functions/[^/?]+`), res: "google_cloudfunctions2_function"},
+	// Memorystore (google_redis_instance).
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/instances/?$`), res: "google_redis_instance"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/instances/[^/?]+`), res: "google_redis_instance"},
+	{method: "PUT", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/instances/[^/?]+`), res: "google_redis_instance"},
+	// Cloud Monitoring (google_monitoring_uptime_check_config and
+	// google_monitoring_alert_policy) share the /v3 project surface.
+	{method: "POST", re: regexp.MustCompile(`^/v3/projects/[^/]+/uptimeCheckConfigs/?$`), res: "google_monitoring_uptime_check_config"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v3/projects/[^/]+/uptimeCheckConfigs/[^/?]+`), res: "google_monitoring_uptime_check_config"},
+	{method: "PUT", re: regexp.MustCompile(`^/v3/projects/[^/]+/uptimeCheckConfigs/[^/?]+`), res: "google_monitoring_uptime_check_config"},
+	{method: "POST", re: regexp.MustCompile(`^/v3/projects/[^/]+/alertPolicies/?$`), res: "google_monitoring_alert_policy"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v3/projects/[^/]+/alertPolicies/[^/?]+`), res: "google_monitoring_alert_policy"},
+	{method: "PUT", re: regexp.MustCompile(`^/v3/projects/[^/]+/alertPolicies/[^/?]+`), res: "google_monitoring_alert_policy"},
 }
 
 // ResourceForPath returns the provider resource type a captured request writes,

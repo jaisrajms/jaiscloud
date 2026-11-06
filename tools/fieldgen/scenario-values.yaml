@@ -188,3 +188,45 @@ values:
     value: '"https://www.googleapis.com/compute/v1/projects/fc-project/global/networks/fc-peer"'
     update_value: '"https://www.googleapis.com/compute/v1/projects/fc-project/global/networks/fc-peer-2"'
     reason: networkUrl is a full compute network self-link
+
+  # ── pubsub/Topic ──────────────────────────────────────────────────────────
+  - field: pubsub/grpc/Topic/schema_settings.schema
+    value: '"projects/fc-project/schemas/fc-schema"'
+    update_value: '"projects/fc-project/schemas/fc-schema-2"'
+    reason: a schema name must be a Pub/Sub Schema resource name; the emulator validates the shape, not the schema's existence
+  - field: pubsub/rest/Topic/schemaSettings.schema
+    value: '"projects/fc-project/schemas/fc-schema"'
+    update_value: '"projects/fc-project/schemas/fc-schema-2"'
+    reason: a schema name must be a Pub/Sub Schema resource name; the emulator validates the shape, not the schema's existence
+
+  - field: pubsub/rest/Topic/kmsKeyName
+    ref: kms
+    reason: the Discovery schema has no resource_reference annotation, so the CryptoKey name it types as a free-form string must still be a real key
+  - field: pubsub/rest/Subscription/deadLetterPolicy.deadLetterTopic
+    ref: pubsub-topic
+    reason: the Discovery schema has no resource_reference annotation; a dead-letter topic must exist (the emulator resolves it)
+  # ── pubsub/Subscription ───────────────────────────────────────────────────
+  - field: pubsub/grpc/Subscription/expiration_policy.ttl
+    value: '"86400s"'
+    update_value: '"172800s"'
+    reason: an expiration TTL has a 1-day floor, so the type-driven 3600s is rejected
+  - field: pubsub/rest/Subscription/expirationPolicy.ttl
+    value: '"86400s"'
+    update_value: '"172800s"'
+    reason: an expiration TTL has a 1-day floor, so the type-driven 3600s is rejected
+  - field: pubsub/grpc/Subscription/retry_policy.minimum_backoff
+    value: '"30s"'
+    update_value: '"45s"'
+    reason: a retry backoff is bounded at 600s, so the type-driven 3600s is rejected
+  - field: pubsub/grpc/Subscription/retry_policy.maximum_backoff
+    value: '"60s"'
+    update_value: '"90s"'
+    reason: a retry backoff is bounded at 600s, so the type-driven 3600s is rejected
+  - field: pubsub/rest/Subscription/retryPolicy.minimumBackoff
+    value: '"30s"'
+    update_value: '"45s"'
+    reason: a retry backoff is bounded at 600s, so the type-driven 3600s is rejected
+  - field: pubsub/rest/Subscription/retryPolicy.maximumBackoff
+    value: '"60s"'
+    update_value: '"90s"'
+    reason: a retry backoff is bounded at 600s, so the type-driven 3600s is rejected

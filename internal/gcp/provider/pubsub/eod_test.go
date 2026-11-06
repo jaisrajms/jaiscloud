@@ -331,3 +331,68 @@ func TestSubscriptionExactlyOnceAckIDExpired(t *testing.T) {
 		assertEODFailure(t, err, ack)
 	}
 }
+
+// TestSubscriptionCreateStoresCreateOnlyFields pins the create path for the
+// fields the update path already supported: delivery targets, transforms,
+// retainAckedMessages and detached must survive a create/read-back, and the
+// OUTPUT_ONLY delivery state must be stripped. A create that dropped them made
+// a Terraform module's read lose the caller's configuration.
+func TestSubscriptionCreateStoresCreateOnlyFields(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/create-fields"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/create-fields",
+		"body": map[string]any{
+			"topic":               "projects/proj/topics/create-fields",
+			"retainAckedMessages": true,
+			"detached":            true,
+			"bigqueryConfig": map[string]any{
+				"table": "proj.dataset.table", "useTableSchema": true, "state": "ACTIVE",
+			},
+			"cloudStorageConfig": map[string]any{
+				"bucket": "jc-bucket", "maxMessages": float64(1000), "state": "ACTIVE",
+			},
+			"messageTransforms": []any{map[string]any{
+				"javascriptUdf": map[string]any{"code": "exports.fc = (m) => m;", "functionName": "fc"},
+			}},
+		},
+	})); err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+	got, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/create-fields"}))
+	if err != nil {
+		t.Fatalf("subscription get: %v", err)
+	}
+	if v, _ := got.Data["retainAckedMessages"].(bool); !v {
+		t.Errorf("retainAckedMessages = %v, want true", got.Data["retainAckedMessages"])
+	}
+	if v, _ := got.Data["detached"].(bool); !v {
+		t.Errorf("detached = %v, want true", got.Data["detached"])
+	}
+	bq, _ := got.Data["bigqueryConfig"].(map[string]any)
+	if bq["table"] != "proj.dataset.table" || bq["useTableSchema"] != true {
+		t.Errorf("bigqueryConfig = %#v, want the created table and useTableSchema", bq)
+	}
+	if _, present := bq["state"]; present {
+		t.Errorf("bigqueryConfig.state = %v, want it stripped (OUTPUT_ONLY)", bq["state"])
+	}
+	gcs, _ := got.Data["cloudStorageConfig"].(map[string]any)
+	if gcs["bucket"] != "jc-bucket" {
+		t.Errorf("cloudStorageConfig = %#v, want the created bucket", gcs)
+	}
+	if _, present := gcs["state"]; present {
+		t.Errorf("cloudStorageConfig.state = %v, want it stripped (OUTPUT_ONLY)", gcs["state"])
+	}
+	transforms, _ := got.Data["messageTransforms"].([]any)
+	if len(transforms) != 1 {
+		t.Fatalf("messageTransforms = %#v, want the created transform", got.Data["messageTransforms"])
+	}
+	entry, _ := transforms[0].(map[string]any)
+	udf, _ := entry["javascriptUdf"].(map[string]any)
+	if udf["functionName"] != "fc" {
+		t.Errorf("messageTransforms[0].javascriptUdf = %#v, want functionName fc", udf)
+	}
+}
