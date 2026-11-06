@@ -178,6 +178,7 @@ func Compact(raw []byte, resources []string) ([]byte, error) {
 		FormatVersion   string                 `json:"format_version"`
 		ProviderSchemas map[string]providerOut `json:"provider_schemas"`
 	}{FormatVersion: f.FormatVersion, ProviderSchemas: map[string]providerOut{}}
+	total := 0
 	for providerName, provider := range f.ProviderSchemas {
 		p := providerOut{ResourceSchemas: map[string]struct {
 			Block compactBlock `json:"block"`
@@ -189,8 +190,12 @@ func Compact(raw []byte, resources []string) ([]byte, error) {
 			p.ResourceSchemas[name] = struct {
 				Block compactBlock `json:"block"`
 			}{Block: compact(res.Block)}
+			total++
 		}
 		out.ProviderSchemas[providerName] = p
+	}
+	if total == 0 {
+		return nil, fmt.Errorf("terraform provider schema: none of the requested resources %v are declared", resources)
 	}
 	return json.MarshalIndent(out, "", " ")
 }

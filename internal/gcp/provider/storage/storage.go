@@ -1584,7 +1584,9 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 
 // CleanupBucketOwnedState deletes the control-plane resources a bucket owns.
 // It is the single cascade both transports call after the bucket row is gone,
-// so REST and gRPC cannot drift (gRPC used to leak every one of these).
+// so REST and gRPC cannot drift (gRPC used to leak every one of these). It is
+// best-effort: the bucket delete has already succeeded, and real GCS does not
+// fail the delete when a derived record cannot be cleaned up.
 func (p *Provider) CleanupBucketOwnedState(ctx context.Context, project, bucket string) {
 	if entries, err := p.listBucketNotifications(ctx, project, bucket); err == nil {
 		for _, e := range entries {
@@ -1593,10 +1595,16 @@ func (p *Provider) CleanupBucketOwnedState(ctx context.Context, project, bucket 
 	}
 	_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotificationSeq, bucket)
 	_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtBucketIAM, bucket)
-	// Object IAM rows are keyed "{bucket}/{object}"; list is a substring match,
-	// so the trailing separator scopes the purge to this bucket.
+	// Object IAM rows are keyed "{bucket}/{object}". ResourceStore.List is an
+	// unanchored substring match, so re-anchor with HasPrefix: deleting bucket
+	// "b" must never purge an object policy under "ab" (id "ab/b/..." contains
+	// "b/").
 	if rows, err := p.resources.List(ctx, project, store.GlobalRegion, rtObjectIAM, bucket+"/"); err == nil {
+		prefix := bucket + "/"
 		for _, row := range rows {
+			if !strings.HasPrefix(row.ID, prefix) {
+				continue
+			}
 			_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtObjectIAM, row.ID)
 		}
 	}
@@ -3979,7 +3987,8 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 		// A versioned delete makes the live version noncurrent, which real GCS
 		// reports as OBJECT_ARCHIVE (not OBJECT_DELETE).
 		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_ARCHIVE", meta, clock.Now(), nil)
-		p.purgeObjectIAM(ctx, bucket, object)
+		// The revision still exists (noncurrent), so its IAM policy stays: a
+		// later restore must not silently lose it.
 		return nil
 	}
 
@@ -4005,7 +4014,8 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 		// The bytes stay; the object is gone from the live surface, which real
 		// GCS still reports as OBJECT_DELETE.
 		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", tombstone, clock.Now(), nil)
-		p.purgeObjectIAM(ctx, bucket, object)
+		// A soft-deleted object is restorable, so its policy is kept until the
+		// generation is permanently purged.
 		return nil
 	}
 
@@ -4036,9 +4046,10 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 	return nil
 }
 
-// purgeObjectIAM removes an object's IAM policy when the object stops being
-// live. Real GCS ties the policy to the object, so re-creating a same-named
-// object must not inherit it.
+// purgeObjectIAM removes an object's IAM policy once the object is permanently
+// gone (hard delete, or the last generation removed). Real GCS ties the policy
+// to the object, so a same-name recreate must not inherit it; a soft-deleted or
+// archived revision keeps its policy because it can be restored.
 func (p *Provider) purgeObjectIAM(ctx context.Context, bucket, object string) {
 	_ = p.resources.Delete(ctx, p.bucketProject(ctx, bucket), store.GlobalRegion, rtObjectIAM, bucket+"/"+object)
 }
@@ -4082,19 +4093,33 @@ func (p *Provider) deleteObjectGeneration(ctx context.Context, bucket, object, g
 	}
 	_ = p.blobs.Delete(ctx, blobsNamespace, blobKey(bucket, object, removed.Generation))
 	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", removed, clock.Now(), nil)
+	// If that was the last revision the object is gone for good, so its policy
+	// goes with it (an archived/soft-deleted survivor keeps it).
+	if gens, err := p.objects.ListObjectVersions(ctx, bucket); err == nil {
+		remaining := false
+		for _, g := range gens {
+			if g.Name == object {
+				remaining = true
+				break
+			}
+		}
+		if !remaining {
+			p.purgeObjectIAM(ctx, bucket, object)
+		}
+	}
 	return nil
+}
+
+// BucketProject returns the project that owns a bucket, or "" when the bucket
+// does not exist or its metadata cannot be read. It is exported so the gRPC
+// transport can resolve the project before deleting the bucket row.
+func (p *Provider) BucketProject(ctx context.Context, bucket string) string {
+	return p.bucketProject(ctx, bucket)
 }
 
 // bucketProject returns the project that owns a bucket (the account scope used
 // for notification storage and envelope encryption), falling back to "" when
 // the bucket metadata cannot be read.
-// BucketProject returns the project that owns a bucket, or "" when the bucket
-// does not exist. It is exported so the gRPC transport can resolve the project
-// before deleting the bucket row.
-func (p *Provider) BucketProject(ctx context.Context, bucket string) string {
-	return p.bucketProject(ctx, bucket)
-}
-
 func (p *Provider) bucketProject(ctx context.Context, bucket string) string {
 	if m, err := p.objects.GetBucket(ctx, bucket); err == nil {
 		if pid, _ := m["projectId"].(string); pid != "" {

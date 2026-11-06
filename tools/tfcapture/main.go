@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -41,7 +42,8 @@ func main() {
 		initMapping = flag.Bool("init-mapping", false, "write a fresh mapping file from the schema (defaults, then classify)")
 		snapshot    = flag.String("snapshot", "", "write a compacted provider-schema snapshot of -resources and exit")
 		resources   = flag.String("resources", "", "comma-separated provider resource types for -init-mapping/-snapshot")
-		strict      = flag.Bool("strict", false, "fail on an unclassified attribute as well as on sent-but-unsupported")
+		requireRes  = flag.Bool("require-resources", false, "fail when no captured request maps to a provider resource (the case must exercise the join)")
+		force       = flag.Bool("force", false, "with -init-mapping: overwrite an existing mapping file")
 	)
 	flag.Parse()
 
@@ -71,6 +73,9 @@ func main() {
 		schema, err := providerschema.Load(*schemaPath)
 		if err != nil {
 			fatalf("%v", err)
+		}
+		if _, err := os.Stat(*mappingPath); err == nil && !*force {
+			fatalf("%s already exists; refusing to truncate the hand-maintained classifications (pass -force to regenerate)", *mappingPath)
 		}
 		if err := writeInitialMapping(*mappingPath, schema, strings.Split(*resources, ",")); err != nil {
 			fatalf("%v", err)
@@ -103,7 +108,7 @@ func main() {
 		fatalf("no provider request blocks in %s (was TF_LOG=DEBUG set?)", *logPath)
 	}
 
-	report := Check(*caseName, requests, schema, mapping, catalog, *strict)
+	report := Check(*caseName, requests, schema, mapping, catalog, *requireRes)
 	fmt.Print(report.Render())
 	if report.Failed() {
 		os.Exit(1)
@@ -219,11 +224,14 @@ func loadMapping(path string) (map[mappingKey]mappingRow, error) {
 }
 
 func writeInitialMapping(path string, schema *providerschema.ProviderSchema, resourceTypes []string) error {
-	f, err := os.Create(path)
+	// Write to a sibling temp file and rename, so an interrupted regeneration
+	// cannot leave a truncated mapping behind.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".provider-attributes-*.csv")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer os.Remove(tmp.Name())
+	f := tmp
 	w := csv.NewWriter(f)
 	defer w.Flush()
 	if err := w.Write([]string{"provider_resource", "catalog_service", "catalog_resource", "attribute", "api_field", "classification", "reason"}); err != nil {
@@ -247,7 +255,14 @@ func writeInitialMapping(path string, schema *providerschema.ProviderSchema, res
 			}
 		}
 	}
-	return w.Error()
+	if err := w.Error(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // ─── catalog ─────────────────────────────────────────────────────────────────
@@ -276,6 +291,11 @@ func loadCatalog(path string) (map[catalogKey]string, error) {
 	idx := map[string]int{}
 	for i, h := range rows[0] {
 		idx[strings.TrimSpace(h)] = i
+	}
+	for _, col := range []string{"service", "resource", "field", "coverage"} {
+		if _, ok := idx[col]; !ok {
+			return nil, fmt.Errorf("catalog (%s) missing column %q", path, col)
+		}
 	}
 	out := map[catalogKey]string{}
 	for _, row := range rows[1:] {
@@ -355,7 +375,7 @@ func (r *Report) Render() string {
 }
 
 // Check joins the captured requests to the provider schema and the catalog.
-func Check(caseName string, requests []Request, schema *providerschema.ProviderSchema, mapping map[mappingKey]mappingRow, catalog map[catalogKey]string, strict bool) *Report {
+func Check(caseName string, requests []Request, schema *providerschema.ProviderSchema, mapping map[mappingKey]mappingRow, catalog map[catalogKey]string, requireResources bool) *Report {
 	report := &Report{
 		Case:      caseName,
 		Requests:  len(requests),
@@ -392,8 +412,52 @@ func Check(caseName string, requests []Request, schema *providerschema.ProviderS
 	}
 	sort.Strings(report.Resources)
 
-	for _, res := range report.Resources {
+	if requireResources && len(report.Resources) == 0 {
+		report.Violations = append(report.Violations, Violation{Detail: "no captured request mapped to a provider resource; the case must exercise the join (or JC_TF_CAPTURE=0 for local debugging)"})
+	}
+
+	// A mapping row the provider no longer declares is stale, whether or not
+	// this capture touched its resource. Resources absent from the extracted
+	// schema cannot be judged (the fixture schema is trimmed) and are skipped.
+	declaredByResource := map[string]map[string]bool{}
+	for res := range schema.Resources {
+		set := map[string]bool{}
+		for _, a := range schema.AttributeSpecs(res) {
+			set[a.Path] = true
+		}
+		declaredByResource[res] = set
+	}
+	for key := range mapping {
+		declared, ok := declaredByResource[key.resource]
+		if !ok || declared[key.attr] {
+			continue
+		}
+		report.Stale = append(report.Stale, fmt.Sprintf("%s.%s", key.resource, key.attr))
+	}
+
+	// Check every mapping-covered resource the schema declares, not only the
+	// ones this capture touched: a provider release that adds an attribute must
+	// be classified even when the running module case does not set it.
+	mapped := map[string]bool{}
+	for key := range mapping {
+		mapped[key.resource] = true
+	}
+	var checkResources []string
+	for res := range mapped {
+		if _, ok := schema.Resources[res]; ok {
+			checkResources = append(checkResources, res)
+		}
+	}
+	sort.Strings(checkResources)
+
+	for _, res := range checkResources {
 		specs := schema.AttributeSpecs(res)
+		touchedResource := false
+		for _, r := range report.Resources {
+			if r == res {
+				touchedResource = true
+			}
+		}
 		if len(specs) == 0 {
 			report.Violations = append(report.Violations, Violation{Resource: res, Detail: "provider resource is not in the extracted schema (wrong provider version?)"})
 			continue
@@ -404,10 +468,12 @@ func Check(caseName string, requests []Request, schema *providerschema.ProviderS
 			key := mappingKey{res, spec.Path}
 			row, ok := mapping[key]
 			isSent := sent[key]
-			if isSent {
-				report.Sent[res]++
-			} else {
-				report.NeverSent[res]++
+			if touchedResource {
+				if isSent {
+					report.Sent[res]++
+				} else {
+					report.NeverSent[res]++
+				}
 			}
 			if !ok {
 				if spec.Computed && !spec.Optional && !spec.Required {
@@ -415,9 +481,7 @@ func Check(caseName string, requests []Request, schema *providerschema.ProviderS
 				}
 				msg := fmt.Sprintf("%s.%s", res, spec.Path)
 				report.Unclassified = append(report.Unclassified, msg)
-				if strict {
-					report.Violations = append(report.Violations, Violation{Resource: res, Attr: spec.Path, Detail: "unclassified attribute (add a mapping row)"})
-				}
+				report.Violations = append(report.Violations, Violation{Resource: res, Attr: spec.Path, Detail: "unclassified attribute (add a mapping row)"})
 				continue
 			}
 			switch row.class {
@@ -451,15 +515,6 @@ func Check(caseName string, requests []Request, schema *providerschema.ProviderS
 				}
 			}
 		}
-		// Rows for attributes the provider no longer declares are stale.
-		for key := range mapping {
-			if key.resource != res {
-				continue
-			}
-			if !declared[key.attr] {
-				report.Stale = append(report.Stale, fmt.Sprintf("%s.%s", key.resource, key.attr))
-			}
-		}
 	}
 
 	// TGM15 calibration note: a labels map carrying fewer keys than the module
@@ -491,17 +546,29 @@ func Check(caseName string, requests []Request, schema *providerschema.ProviderS
 
 // hasJSONPath reports whether a decoded JSON body carries the dotted path.
 func hasJSONPath(body map[string]any, path string) bool {
-	cur := any(body)
-	for _, seg := range strings.Split(path, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return false
-		}
-		next, ok := m[seg]
-		if !ok {
-			return false
-		}
-		cur = next
+	return hasPath(any(body), strings.Split(path, "."))
+}
+
+func hasPath(cur any, segs []string) bool {
+	if len(segs) == 0 {
+		return true
 	}
-	return true
+	switch v := cur.(type) {
+	case map[string]any:
+		next, ok := v[segs[0]]
+		if !ok {
+			return false
+		}
+		return hasPath(next, segs[1:])
+	case []any:
+		// A JSON array stands in for the provider's block list; any element
+		// carrying the rest of the path proves it was sent.
+		for _, elem := range v {
+			if hasPath(elem, segs) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }

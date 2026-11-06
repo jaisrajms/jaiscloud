@@ -1034,21 +1034,6 @@ test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one t
 	@mv -f report.json bin/gcp-mutation-report.json
 	@echo "Mutation report: bin/gcp-mutation-report.json"
 
-test-gcp-mutation-ratchet: test-gcp-mutation ## Mutation score + committed floor gate for PKG (local; PKG=…, default datastore-core)
-	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -mutation-ratchet -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)"
-
-test-gcp-mutation-update: test-gcp-mutation ## Rewrite the mutation floor for PKG from a fresh run (ratchet up; ALLOW_LOWER=1 to drop)
-	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -mutation-floor-update -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)" $(if $(ALLOW_LOWER),-allow-lower,)
-
-# FC6: diff-scoped mutation over the surfaces the defect classes lived in. A
-# surviving mutant means the suite does not pin that behaviour; a per-PR run is
-# too expensive (minutes per package), so this is scheduled/weekly, not a PR
-# gate. PKG=… narrows it to one package or file for a local smoke run.
-MUTATION_SCOPE ?= internal/gcp/provider internal/gcp/grpc
-MUTATION_BASE  ?= $(shell git merge-base HEAD upstream/main 2>/dev/null || echo HEAD~1)
-
 gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provider + internal/gcp/grpc (local/weekly, not PR CI)
 	@set -e; \
 	  pkgs="$(PKG)"; \
@@ -1064,24 +1049,40 @@ gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provi
 	        done); \
 	  fi; \
 	  if [ -z "$$pkgs" ]; then echo "gcp-mutation: nothing to mutate"; exit 0; fi; \
+	  for pkg in $$pkgs; do \
+	    pkg="$${pkg#./}"; \
+	    [ -d "$$pkg" ] || continue; \
+	    if [ -z "$(MUTATION_FORCE)" ] && [ -n "$$(git status --porcelain -- "$$pkg" | grep -v '^??')" ]; then \
+	      echo "refusing: uncommitted tracked changes under $$pkg (go-mutesting rewrites files in place; commit/stash or MUTATION_FORCE=1)"; exit 1; \
+	    fi; \
+	  done; \
 	  mkdir -p bin; rc=0; \
+	  restore() { for f in $$(find $$pkgs -name '*.tmp' 2>/dev/null); do echo ">> restoring $$f"; mv -f "$$f" "$${f%.tmp}"; done; }; \
+	  trap 'restore; exit 130' INT TERM; \
 	  for pkg in $$pkgs; do \
 	    pkg="$${pkg#./}"; \
 	    [ -d "$$pkg" ] || { echo "  skip (no such package): $$pkg"; continue; }; \
 	    echo "== mutation: $$pkg"; \
 	    rm -f report.json; \
 	    if $(MUTESTING_BIN) --exec-timeout=$(MUTATION_TIMEOUT) $(MUTATION_EXTRA) "./$$pkg"; then \
+	      restore; \
 	      name=$$(echo "$$pkg" | tr '/' '-'); \
 	      mv -f report.json "bin/gcp-mutation-$$name.json"; \
 	      echo "  report: bin/gcp-mutation-$$name.json"; \
+	      if grep -qE "^[[:space:]]*- package: $$pkg$$" docs/gcp-mutation-floor.yaml 2>/dev/null; then \
+	        go build -o bin/gcpstatus ./tools/gcpstatus; \
+	        bin/gcpstatus -mutation-ratchet -mutation-report "bin/gcp-mutation-$$name.json" -mutation-floor docs/gcp-mutation-floor.yaml -mutation-target "$$pkg" || rc=1; \
+	      else \
+	        echo "  no mutation floor for $$pkg (FC6-3); reported only"; \
+	      fi; \
 	    else \
-	      echo "  mutation run failed for $$pkg"; rc=1; \
+	      echo "  mutation run failed for $$pkg"; restore; rc=1; \
 	    fi; \
 	  done; \
 	  exit $$rc
 
 test-gcp-provider-capture: ## FC6 capture-gate self-test (parser, empty-label fixture, mapping/catalog join)
-	go test -count=1 ./tools/tfcapture/... ./tools/providerschema/...
+	go test -race -count=1 ./tools/tfcapture/... ./tools/providerschema/...
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/

@@ -12,6 +12,7 @@ import (
 
 	"jaiscloud/internal/gcp/grpc/firestoreadmin"
 	fsprovider "jaiscloud/internal/gcp/provider/firestore"
+	"jaiscloud/internal/gcp/resource"
 	fsstore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -93,7 +94,7 @@ func (a *firestoreAdapter) create(ctx context.Context, tr transport, id string) 
 		}
 		return db.GetUid(), nil
 	}
-	resp, err := a.prov.CreateDatabase(ctx, a.nr("databases", id, map[string]any{
+	resp, err := a.prov.CreateDatabase(ctx, a.nr("databases", map[string]any{
 		"databaseId": id,
 		"body":       map[string]any{"locationId": "nam5"},
 	}))
@@ -117,7 +118,7 @@ func (a *firestoreAdapter) get(ctx context.Context, tr transport, id string) (bo
 		}
 		return true, nil
 	}
-	_, err := a.prov.GetDatabase(ctx, a.nr("databases/"+id, id, nil))
+	_, err := a.prov.GetDatabase(ctx, a.nr("databases/"+id, nil))
 	if err != nil {
 		if isNotFound(err) {
 			return false, nil
@@ -139,7 +140,7 @@ func (a *firestoreAdapter) list(ctx context.Context, tr transport) ([]string, er
 		}
 		return out, nil
 	}
-	resp, err := a.prov.ListDatabases(ctx, a.nr("databases", "", nil))
+	resp, err := a.prov.ListDatabases(ctx, a.nr("databases", nil))
 	if err != nil {
 		return nil, err
 	}
@@ -156,17 +157,36 @@ func (a *firestoreAdapter) list(ctx context.Context, tr transport) ([]string, er
 func (a *firestoreAdapter) update(ctx context.Context, tr transport, id string) error {
 	name := "projects/" + a.project + "/databases/" + id
 	if tr == grpcT {
-		_, err := a.client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		if _, err := a.client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
 			Database:   &adminpb.Database{Name: name, ConcurrencyMode: adminpb.Database_PESSIMISTIC},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"concurrency_mode"}},
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		got, err := a.client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name})
+		if err != nil {
+			return err
+		}
+		if got.GetConcurrencyMode() != adminpb.Database_PESSIMISTIC {
+			return fmt.Errorf("concurrencyMode did not round-trip over gRPC: %v", got.GetConcurrencyMode())
+		}
+		return nil
 	}
-	_, err := a.prov.UpdateDatabase(ctx, a.nr("databases/"+id, id, map[string]any{
+	_, err := a.prov.UpdateDatabase(ctx, a.nr("databases/"+id, map[string]any{
 		"updateMask": "concurrencyMode",
 		"body":       map[string]any{"concurrencyMode": "PESSIMISTIC"},
 	}))
-	return err
+	if err != nil {
+		return err
+	}
+	got, err := a.prov.GetDatabase(ctx, a.nr("databases/"+id, nil))
+	if err != nil {
+		return err
+	}
+	if got.Data["concurrencyMode"] != "PESSIMISTIC" {
+		return fmt.Errorf("concurrencyMode did not round-trip over REST: %v", got.Data["concurrencyMode"])
+	}
+	return nil
 }
 
 func (a *firestoreAdapter) remove(ctx context.Context, tr transport, id string) error {
@@ -183,7 +203,7 @@ func (a *firestoreAdapter) deleteWithEtag(ctx context.Context, tr transport, id,
 		_, err := a.client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: etag})
 		return err
 	}
-	_, err := a.prov.DeleteDatabase(ctx, a.nr("databases/"+id, id, map[string]any{"etag": etag}))
+	_, err := a.prov.DeleteDatabase(ctx, a.nr("databases/"+id, map[string]any{"etag": etag}))
 	return err
 }
 
@@ -196,7 +216,7 @@ func (a *firestoreAdapter) currentEtag(ctx context.Context, tr transport, id str
 		}
 		return db.GetEtag(), nil
 	}
-	resp, err := a.prov.GetDatabase(ctx, a.nr("databases/"+id, id, nil))
+	resp, err := a.prov.GetDatabase(ctx, a.nr("databases/"+id, nil))
 	if err != nil {
 		return "", err
 	}
@@ -208,7 +228,7 @@ func (a *firestoreAdapter) setProtection(ctx context.Context, tr transport, id, 
 	name := "projects/" + a.project + "/databases/" + id
 	if tr == grpcT {
 		enum := adminpb.Database_DELETE_PROTECTION_DISABLED
-		if state == "ENABLE_DELETE_PROTECTION" {
+		if state == "DELETE_PROTECTION_ENABLED" {
 			enum = adminpb.Database_DELETE_PROTECTION_ENABLED
 		}
 		_, err := a.client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
@@ -217,7 +237,7 @@ func (a *firestoreAdapter) setProtection(ctx context.Context, tr transport, id, 
 		})
 		return err
 	}
-	_, err := a.prov.UpdateDatabase(ctx, a.nr("databases/"+id, id, map[string]any{
+	_, err := a.prov.UpdateDatabase(ctx, a.nr("databases/"+id, map[string]any{
 		"updateMask": "deleteProtectionState",
 		"body":       map[string]any{"deleteProtectionState": state},
 	}))
@@ -228,7 +248,7 @@ func (a *firestoreAdapter) blockedDelete(ctx context.Context, tr transport, id s
 	var out []blockedResult
 	etag, err := a.currentEtag(ctx, tr, id)
 	if err != nil {
-		return []blockedResult{{name: "read-etag", err: err, wantCode: "FailedPrecondition"}}
+		return []blockedResult{{name: "read-etag (staging must succeed)", err: err}}
 	}
 	out = append(out, blockedResult{
 		name:     "stale-etag",
@@ -236,13 +256,13 @@ func (a *firestoreAdapter) blockedDelete(ctx context.Context, tr transport, id s
 		wantCode: "FailedPrecondition",
 	})
 
-	if err := a.setProtection(ctx, tr, id, "ENABLE_DELETE_PROTECTION"); err != nil {
-		out = append(out, blockedResult{name: "enable-delete-protection", err: err, wantCode: "FailedPrecondition"})
+	if err := a.setProtection(ctx, tr, id, "DELETE_PROTECTION_ENABLED"); err != nil {
+		out = append(out, blockedResult{name: "enable-delete-protection (staging must succeed)", err: err})
 		return out
 	}
 	etag, err = a.currentEtag(ctx, tr, id)
 	if err != nil {
-		out = append(out, blockedResult{name: "read-etag-protected", err: err, wantCode: "FailedPrecondition"})
+		out = append(out, blockedResult{name: "read-etag-protected (staging must succeed)", err: err})
 		return out
 	}
 	out = append(out, blockedResult{
@@ -251,8 +271,8 @@ func (a *firestoreAdapter) blockedDelete(ctx context.Context, tr transport, id s
 		wantCode: "FailedPrecondition",
 	})
 	// Leave the database deletable for the rest of the sequence.
-	if err := a.setProtection(ctx, tr, id, "DISABLE_DELETE_PROTECTION"); err != nil {
-		out = append(out, blockedResult{name: "disable-delete-protection", err: err, wantCode: "FailedPrecondition"})
+	if err := a.setProtection(ctx, tr, id, "DELETE_PROTECTION_DISABLED"); err != nil {
+		out = append(out, blockedResult{name: "disable-delete-protection (staging must succeed)", err: err})
 	}
 	return out
 }
@@ -361,12 +381,12 @@ func (a *firestoreAdapter) extra(t *testing.T, ctx context.Context, tr transport
 }
 
 // nr builds the REST adapter's NormalizedRequest for a database-scoped path.
-func (a *firestoreAdapter) nr(name, _ string, extra map[string]any) *model.NormalizedRequest {
+func (a *firestoreAdapter) nr(name string, extra map[string]any) *model.NormalizedRequest {
 	params := map[string]any{"name": name}
 	for k, v := range extra {
 		params[k] = v
 	}
-	return &model.NormalizedRequest{AccountID: a.project, Params: params}
+	return &model.NormalizedRequest{AccountID: a.project, Params: params, ResourceID: resource.ResourceID(a.project)}
 }
 
 // shortName trims a full resource name to its last path segment.

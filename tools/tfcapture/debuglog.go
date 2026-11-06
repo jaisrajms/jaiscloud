@@ -116,8 +116,11 @@ var pathRules = []struct {
 	res    string
 }{
 	{method: "POST", re: regexp.MustCompile(`^/storage/v1/b/?$`), res: "google_storage_bucket"},
-	{method: "PATCH", re: regexp.MustCompile(`^/storage/v1/b/[^/?]+`), res: "google_storage_bucket"},
-	{method: "PUT", re: regexp.MustCompile(`^/storage/v1/b/[^/?]+`), res: "google_storage_bucket"},
+	// Bucket update only: /storage/v1/b/{bucket}/o/{object} is objects.update
+	// and /storage/v1/b/{bucket}/iam is setIamPolicy, which must not be
+	// attributed to the bucket resource.
+	{method: "PATCH", re: regexp.MustCompile(`^/storage/v1/b/[^/?]+/?$`), res: "google_storage_bucket"},
+	{method: "PUT", re: regexp.MustCompile(`^/storage/v1/b/[^/?]+/?$`), res: "google_storage_bucket"},
 	{method: "PUT", re: regexp.MustCompile(`^/v1/projects/[^/]+/topics/[^/?]+`), res: "google_pubsub_topic"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/topics/[^/?]+`), res: "google_pubsub_topic"},
 	{method: "PUT", re: regexp.MustCompile(`^/v1/projects/[^/]+/subscriptions/[^/?]+`), res: "google_pubsub_subscription"},

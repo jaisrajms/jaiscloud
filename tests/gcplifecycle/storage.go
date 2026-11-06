@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
@@ -39,6 +40,7 @@ var storageManifest = manifest{
 		{"objects", RejectIfNonEmpty},
 		{"notifications", Cascade},
 		{"bucketIAM", Cascade},
+		{"objectIAM", Cascade},
 	},
 	note: "objects (including noncurrent generations) block the delete with 409; soft-deleted generations do not block it but go with the bucket",
 }
@@ -73,7 +75,7 @@ func (a *storageAdapter) name() string { return "storage bucket" }
 
 func (a *storageAdapter) create(ctx context.Context, tr transport, id string) (string, error) {
 	if tr == grpcT {
-		b, err := a.client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
+		_, err := a.client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
 			Parent:   "projects/_",
 			BucketId: id,
 			Bucket:   &storagepb.Bucket{Project: "projects/" + a.project},
@@ -81,14 +83,22 @@ func (a *storageAdapter) create(ctx context.Context, tr transport, id string) (s
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%d", b.GetMetageneration()), nil
+		return "", nil
 	}
-	resp, err := a.prov.BucketsInsert(ctx, a.bucketNR(id, map[string]any{"name": id}))
-	if err != nil {
+	return a.createBucket(ctx, id, map[string]any{"name": id})
+}
+
+// createBucket creates a bucket over REST with an explicit body (used by the
+// extra step to disable soft delete).
+func (a *storageAdapter) createBucket(ctx context.Context, id string, body map[string]any) (string, error) {
+	if body == nil {
+		body = map[string]any{}
+	}
+	body["name"] = id
+	if _, err := a.prov.BucketsInsert(ctx, a.bucketNR(id, body)); err != nil {
 		return "", err
 	}
-	metageneration, _ := resp.Data["metageneration"].(string)
-	return metageneration, nil
+	return "", nil
 }
 
 func (a *storageAdapter) get(ctx context.Context, tr transport, id string) (bool, error) {
@@ -142,14 +152,32 @@ func (a *storageAdapter) list(ctx context.Context, tr transport) ([]string, erro
 
 func (a *storageAdapter) update(ctx context.Context, tr transport, id string) error {
 	if tr == grpcT {
-		_, err := a.client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		if _, err := a.client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
 			Bucket:     &storagepb.Bucket{Name: "projects/_/buckets/" + id, Labels: map[string]string{"lifecycle": "update"}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-		})
+		}); err != nil {
+			return err
+		}
+		b, err := a.client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: "projects/_/buckets/" + id})
+		if err != nil {
+			return err
+		}
+		if b.GetLabels()["lifecycle"] != "update" {
+			return fmt.Errorf("update was not read back over gRPC: labels=%v", b.GetLabels())
+		}
+		return nil
+	}
+	if _, err := a.prov.BucketsUpdate(ctx, a.bucketNR(id, map[string]any{"labels": map[string]any{"lifecycle": "update"}})); err != nil {
 		return err
 	}
-	_, err := a.prov.BucketsUpdate(ctx, a.bucketNR(id, map[string]any{"labels": map[string]any{"lifecycle": "update"}}))
-	return err
+	resp, err := a.prov.BucketsGet(ctx, a.bucketNR(id, nil))
+	if err != nil {
+		return err
+	}
+	if stringMap(resp.Data["labels"])["lifecycle"] != "update" {
+		return fmt.Errorf("update was not read back over REST: labels=%v", resp.Data["labels"])
+	}
+	return nil
 }
 
 func (a *storageAdapter) remove(ctx context.Context, tr transport, id string) error {
@@ -173,8 +201,10 @@ func (a *storageAdapter) blockedDelete(ctx context.Context, tr transport, id str
 		want = "FailedPrecondition"
 	}
 	res := []blockedResult{{name: "non-empty", err: a.remove(ctx, tr, id), wantCode: want}}
+	// The staged object must be removable so the rest of the sequence can
+	// delete the bucket; wantCode "" means "this step must succeed".
 	if err := a.objects.DeleteObjectMeta(ctx, id, "blocked-obj"); err != nil {
-		res = append(res, blockedResult{name: "cleanup-object", err: err, wantCode: ""})
+		res = append(res, blockedResult{name: "cleanup-object", err: err})
 	}
 	return res
 }
@@ -193,10 +223,18 @@ func (a *storageAdapter) populate(ctx context.Context, id string) error {
 	}); err != nil {
 		return err
 	}
-	// A bucket IAM policy is stored under the bucket name.
-	return a.resources.Upsert(ctx, a.project, store.GlobalRegion, store.ResourceEntry{
+	// A bucket IAM policy is stored under the bucket name; an object IAM policy
+	// under "{bucket}/{object}".
+	if err := a.resources.Upsert(ctx, a.project, store.GlobalRegion, store.ResourceEntry{
 		Type: gcsTypeBucketIAM,
 		ID:   id,
+		Data: []byte(`{"bindings":[]}`),
+	}); err != nil {
+		return err
+	}
+	return a.resources.Upsert(ctx, a.project, store.GlobalRegion, store.ResourceEntry{
+		Type: gcsTypeObjectIAM,
+		ID:   id + "/obj1",
 		Data: []byte(`{"bindings":[]}`),
 	})
 }
@@ -213,7 +251,13 @@ func (a *storageAdapter) counts(ctx context.Context, id string) (map[string]chil
 	if err != nil {
 		return nil, err
 	}
-	out["notifications"] = childCount{total: len(notifications), attached: len(notifications)}
+	out["notifications"] = childCount{total: countPrefixed(notifications, id+"/"), attached: countPrefixed(notifications, id+"/")}
+
+	objectIAM, err := a.resources.List(ctx, a.project, store.GlobalRegion, gcsTypeObjectIAM, id+"/")
+	if err != nil {
+		return nil, err
+	}
+	out["objectIAM"] = childCount{total: countPrefixed(objectIAM, id+"/"), attached: countPrefixed(objectIAM, id+"/")}
 
 	_, err = a.resources.Get(ctx, a.project, store.GlobalRegion, gcsTypeBucketIAM, id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -248,30 +292,70 @@ func (a *storageAdapter) clearRejecting(ctx context.Context, id string) error {
 // old policy.
 func (a *storageAdapter) extra(t *testing.T, ctx context.Context, tr transport, id string) {
 	t.Helper()
-	if _, err := a.create(ctx, tr, id); err != nil {
-		t.Fatalf("create bucket before object recreate: %v", err)
+	// A permanently deleted object drops its IAM policy. Disable soft delete so
+	// objects.delete is a hard delete; a soft-deleted or archived revision is
+	// restorable and deliberately keeps its policy.
+	hardID := id + "-hard"
+	if _, err := a.createBucket(ctx, hardID, map[string]any{
+		"name":             hardID,
+		"softDeletePolicy": map[string]any{"retentionDurationSeconds": "0"},
+	}); err != nil {
+		t.Fatalf("create bucket with soft delete disabled: %v", err)
 	}
-	if err := a.putObject(ctx, id, "iam-obj"); err != nil {
+	if err := a.putObject(ctx, hardID, "iam-obj"); err != nil {
 		t.Fatalf("put object: %v", err)
 	}
 	if err := a.resources.Upsert(ctx, a.project, store.GlobalRegion, store.ResourceEntry{
 		Type: gcsTypeObjectIAM,
-		ID:   id + "/iam-obj",
+		ID:   hardID + "/iam-obj",
 		Data: []byte(`{"bindings":[]}`),
 	}); err != nil {
 		t.Fatalf("stage object IAM: %v", err)
 	}
 	if _, err := a.prov.ObjectsDelete(ctx, &model.NormalizedRequest{
 		AccountID: a.project,
-		Params:    map[string]any{"bucket": id, "object": "iam-obj"},
+		Params:    map[string]any{"bucket": hardID, "object": "iam-obj"},
 	}); err != nil {
 		t.Fatalf("delete object: %v", err)
 	}
-	if _, err := a.resources.Get(ctx, a.project, store.GlobalRegion, gcsTypeObjectIAM, id+"/iam-obj"); err == nil {
-		t.Errorf("object IAM policy survived the object delete; a same-name recreate would inherit it")
+	if _, err := a.resources.Get(ctx, a.project, store.GlobalRegion, gcsTypeObjectIAM, hardID+"/iam-obj"); err == nil {
+		t.Errorf("object IAM policy survived a hard object delete; a same-name recreate would inherit it")
 	} else if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("get object IAM: %v", err)
 	}
+	if _, err := a.prov.BucketsDelete(ctx, a.bucketNR(hardID, nil)); err != nil {
+		t.Fatalf("delete hard-delete bucket: %v", err)
+	}
+}
+
+// stringMap normalizes a rendered label map: the REST providers hand back
+// map[string]string while JSON-decoded stores yield map[string]any.
+func stringMap(v any) map[string]string {
+	switch m := v.(type) {
+	case map[string]string:
+		return m
+	case map[string]any:
+		out := make(map[string]string, len(m))
+		for k, val := range m {
+			if s, ok := val.(string); ok {
+				out[k] = s
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// countPrefixed counts rows whose key starts with prefix. ResourceStore.List is
+// an unanchored substring match, so every child oracle re-anchors the result.
+func countPrefixed(rows []store.ResourceEntry, prefix string) int {
+	n := 0
+	for _, row := range rows {
+		if strings.HasPrefix(row.ID, prefix) {
+			n++
+		}
+	}
+	return n
 }
 
 func (a *storageAdapter) putObject(ctx context.Context, bucket, object string) error {
@@ -281,7 +365,7 @@ func (a *storageAdapter) putObject(ctx context.Context, bucket, object string) e
 		Generation:     "1",
 		Metageneration: "1",
 		StorageClass:   "STANDARD",
-		TimeCreated:    time.Now(),
+		TimeCreated:    clock.Now(),
 	})
 }
 

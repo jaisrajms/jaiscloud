@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
@@ -59,6 +59,7 @@ var pubsubSubscriptionManifest = manifest{
 
 type pubsubAdapter struct {
 	seq       int
+	populated []string
 	parent    string
 	prov      *pubsubprovider.Provider
 	resources store.ResourceStore
@@ -115,16 +116,16 @@ func (a *pubsubAdapter) create(ctx context.Context, tr transport, id string) (st
 		return a.createSubscription(ctx, tr, id)
 	}
 	if tr == grpcT {
-		topic, err := a.pub.CreateTopic(ctx, &pubsubpb.Topic{Name: a.topicName(id)})
+		_, err := a.pub.CreateTopic(ctx, &pubsubpb.Topic{Name: a.topicName(id)})
 		if err != nil {
 			return "", err
 		}
-		return topic.GetName(), nil
+		return "", nil
 	}
 	if _, err := a.prov.TopicCreate(ctx, a.nr("topics/"+id, nil)); err != nil {
 		return "", err
 	}
-	return a.topicName(id), nil
+	return "", nil
 }
 
 func (a *pubsubAdapter) createSubscription(ctx context.Context, tr transport, id string) (string, error) {
@@ -136,16 +137,16 @@ func (a *pubsubAdapter) createSubscription(ctx context.Context, tr transport, id
 	}
 	topic := a.topicName("lc-parent")
 	if tr == grpcT {
-		sub, err := a.sub.CreateSubscription(ctx, &pubsubpb.Subscription{Name: a.subName(id), Topic: topic})
+		_, err := a.sub.CreateSubscription(ctx, &pubsubpb.Subscription{Name: a.subName(id), Topic: topic})
 		if err != nil {
 			return "", err
 		}
-		return sub.GetName(), nil
+		return "", nil
 	}
 	if _, err := a.prov.SubscriptionCreate(ctx, a.nr("subscriptions/"+id, map[string]any{"topic": topic})); err != nil {
 		return "", err
 	}
-	return a.subName(id), nil
+	return "", nil
 }
 
 func (a *pubsubAdapter) get(ctx context.Context, tr transport, id string) (bool, error) {
@@ -221,30 +222,68 @@ func (a *pubsubAdapter) list(ctx context.Context, tr transport) ([]string, error
 func (a *pubsubAdapter) update(ctx context.Context, tr transport, id string) error {
 	if a.parent == "subscription" {
 		if tr == grpcT {
-			_, err := a.sub.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+			if _, err := a.sub.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
 				Subscription: &pubsubpb.Subscription{Name: a.subName(id), Labels: map[string]string{"lifecycle": "update"}},
 				UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-			})
-			return err
+			}); err != nil {
+				return err
+			}
+			got, err := a.sub.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: a.subName(id)})
+			if err != nil {
+				return err
+			}
+			if got.GetLabels()["lifecycle"] != "update" {
+				return fmt.Errorf("subscription update was not read back over gRPC: labels=%v", got.GetLabels())
+			}
+			return nil
 		}
-		_, err := a.prov.SubscriptionUpdate(ctx, a.nr("subscriptions/"+id, map[string]any{
+		if _, err := a.prov.SubscriptionUpdate(ctx, a.nr("subscriptions/"+id, map[string]any{
 			"subscription": map[string]any{"labels": map[string]any{"lifecycle": "update"}},
 			"updateMask":   "labels",
-		}))
-		return err
+		})); err != nil {
+			return err
+		}
+		resp, err := a.prov.SubscriptionGet(ctx, a.nr("subscriptions/"+id, nil))
+		if err != nil {
+			return err
+		}
+		labels, _ := resp.Data["labels"].(map[string]any)
+		if labels["lifecycle"] != "update" {
+			return fmt.Errorf("subscription update was not read back over REST: labels=%v", labels)
+		}
+		return nil
 	}
 	if tr == grpcT {
-		_, err := a.pub.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+		if _, err := a.pub.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
 			Topic:      &pubsubpb.Topic{Name: a.topicName(id), Labels: map[string]string{"lifecycle": "update"}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		got, err := a.pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: a.topicName(id)})
+		if err != nil {
+			return err
+		}
+		if got.GetLabels()["lifecycle"] != "update" {
+			return fmt.Errorf("topic update was not read back over gRPC: labels=%v", got.GetLabels())
+		}
+		return nil
 	}
-	_, err := a.prov.TopicUpdate(ctx, a.nr("topics/"+id, map[string]any{
+	if _, err := a.prov.TopicUpdate(ctx, a.nr("topics/"+id, map[string]any{
 		"labels":     map[string]any{"lifecycle": "update"},
 		"updateMask": "labels",
-	}))
-	return err
+	})); err != nil {
+		return err
+	}
+	resp, err := a.prov.TopicGet(ctx, a.nr("topics/"+id, nil))
+	if err != nil {
+		return err
+	}
+	labels, _ := resp.Data["labels"].(map[string]any)
+	if labels["lifecycle"] != "update" {
+		return fmt.Errorf("topic update was not read back over REST: labels=%v", labels)
+	}
+	return nil
 }
 
 func (a *pubsubAdapter) remove(ctx context.Context, tr transport, id string) error {
@@ -264,11 +303,16 @@ func (a *pubsubAdapter) remove(ctx context.Context, tr transport, id string) err
 	return err
 }
 
-// blockedDelete: the Pub/Sub API defines no delete precondition, so the only
-// negative is a second delete answering NotFound. The adapter reports it under
-// the "no-precondition" name and the harness asserts it is NotFound.
+// blockedDelete: the Pub/Sub API defines no delete precondition, so the
+// documented negative is a delete of a resource that does not exist answering
+// NotFound. It runs against a sibling id, so the live parent stays intact (the
+// harness re-reads it after every blocked attempt).
 func (a *pubsubAdapter) blockedDelete(ctx context.Context, tr transport, id string) []blockedResult {
-	return nil
+	return []blockedResult{{
+		name:     "delete-missing",
+		err:      a.remove(ctx, tr, id+"-missing"),
+		wantCode: "NotFound",
+	}}
 }
 
 func (a *pubsubAdapter) populate(ctx context.Context, id string) error {
@@ -280,7 +324,7 @@ func (a *pubsubAdapter) populate(ctx context.Context, id string) error {
 			Subscription: id,
 			Topic:        a.topicName("lc-parent"),
 			Data:         "aGk=",
-			PublishTime:  time.Now(),
+			PublishTime:  clock.Now(),
 		}); err != nil {
 			return err
 		}
@@ -289,9 +333,11 @@ func (a *pubsubAdapter) populate(ctx context.Context, id string) error {
 		})
 	}
 	// A subscription plus a topic IAM policy.
-	if _, err := a.prov.SubscriptionCreate(ctx, a.nr("subscriptions/lc-sub-"+n, map[string]any{"topic": a.topicName(id)})); err != nil {
+	sub := "lc-sub-" + n
+	if _, err := a.prov.SubscriptionCreate(ctx, a.nr("subscriptions/"+sub, map[string]any{"topic": a.topicName(id)})); err != nil {
 		return err
 	}
+	a.populated = append(a.populated, sub)
 	return a.resources.Upsert(ctx, a.project, store.GlobalRegion, store.ResourceEntry{
 		Type: pubsubTypeTopicPolicy, ID: id, Data: []byte(`{"bindings":[]}`),
 	})
@@ -317,13 +363,19 @@ func (a *pubsubAdapter) counts(ctx context.Context, id string) (map[string]child
 		return out, nil
 	}
 
-	subs, err := a.resources.List(ctx, a.project, store.GlobalRegion, pubsubTypeSubscription, "")
-	if err != nil {
-		return nil, err
-	}
 	full := a.topicName(id)
 	total, attached := 0, 0
-	for _, row := range subs {
+	// Count only the subscriptions this adapter created: every detached
+	// subscription in the store carries the same "_deleted-topic_" sentinel, so
+	// scanning all of them could hide a wrongly deleted one.
+	for _, subID := range a.populated {
+		row, err := a.resources.Get(ctx, a.project, store.GlobalRegion, pubsubTypeSubscription, subID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
 		var meta map[string]any
 		if json.Unmarshal(row.Data, &meta) != nil {
 			meta = map[string]any{}
@@ -339,7 +391,7 @@ func (a *pubsubAdapter) counts(ctx context.Context, id string) (map[string]child
 	}
 	out["subscriptions"] = childCount{total: total, attached: attached}
 
-	_, err = a.resources.Get(ctx, a.project, store.GlobalRegion, pubsubTypeTopicPolicy, id)
+	_, err := a.resources.Get(ctx, a.project, store.GlobalRegion, pubsubTypeTopicPolicy, id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}

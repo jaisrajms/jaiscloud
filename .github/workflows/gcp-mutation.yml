@@ -75,7 +75,7 @@ jobs:
           title="GCP mutation survivors ($(date +%F))"
           if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length' | grep -q '^0$'; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The weekly mutation run failed or a target survived above its floor. See the workflow run's report artifacts, then either add the missing assertion or record the survivor as intentional in docs/gcp-mutation-floor.yaml."
+              --body "The weekly mutation run failed or a target survived above its floor. See the workflow run's report artifacts: a target with a recorded floor survived above it, or the run itself failed. Add the missing assertion, or record the survivor as intentional in docs/gcp-mutation-floor.yaml (targets without a floor are reported only — see FC6-3)."
           else
             echo "an open mutation issue already exists; see the run log"
           fi

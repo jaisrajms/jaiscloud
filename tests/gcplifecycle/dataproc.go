@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"jaiscloud/internal/gcp/resource"
 	dpcore "jaiscloud/internal/gcp/service/dataproc"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
@@ -89,7 +90,7 @@ func (a *dataprocAdapter) create(ctx context.Context, tr transport, id string) (
 	if err != nil {
 		return "", err
 	}
-	return id, nil
+	return "", nil
 }
 
 func (a *dataprocAdapter) get(ctx context.Context, tr transport, id string) (bool, error) {
@@ -130,21 +131,38 @@ func (a *dataprocAdapter) list(ctx context.Context, tr transport) ([]string, err
 
 func (a *dataprocAdapter) update(ctx context.Context, tr transport, id string) error {
 	if tr == grpcT {
-		op, err := a.client.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		if _, err := a.client.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
 			ProjectId:   a.proj,
 			Region:      dpRegion,
 			ClusterName: id,
 			Cluster:     &dataprocpb.Cluster{Labels: map[string]string{"lifecycle": "update"}},
 			UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-		})
-		_ = op
-		return err
+		}); err != nil {
+			return err
+		}
+		got, err := a.client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: a.proj, Region: dpRegion, ClusterName: id})
+		if err != nil {
+			return err
+		}
+		if got.GetLabels()["lifecycle"] != "update" {
+			return fmt.Errorf("cluster labels did not round-trip over gRPC: %v", got.GetLabels())
+		}
+		return nil
 	}
-	_, err := a.rest.UpdateCluster(ctx, a.nr(id, map[string]any{
+	if _, err := a.rest.UpdateCluster(ctx, a.nr(id, map[string]any{
 		"labels":     map[string]any{"lifecycle": "update"},
 		"updateMask": "labels",
-	}))
-	return err
+	})); err != nil {
+		return err
+	}
+	got, err := a.rest.GetCluster(ctx, a.nr(id, nil))
+	if err != nil {
+		return err
+	}
+	if stringMap(got.Data["labels"])["lifecycle"] != "update" {
+		return fmt.Errorf("cluster labels did not round-trip over REST: %v", got.Data["labels"])
+	}
+	return nil
 }
 
 func (a *dataprocAdapter) remove(ctx context.Context, tr transport, id string) error {
@@ -233,5 +251,5 @@ func (a *dataprocAdapter) nr(name string, body map[string]any) *model.Normalized
 	if body != nil {
 		params["body"] = body
 	}
-	return &model.NormalizedRequest{AccountID: a.proj, Params: params}
+	return &model.NormalizedRequest{AccountID: a.proj, Params: params, ResourceID: resource.ResourceID(a.proj)}
 }

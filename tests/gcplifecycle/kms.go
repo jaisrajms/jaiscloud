@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/clock"
+
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	"google.golang.org/grpc"
 
@@ -28,10 +30,7 @@ var kmsManifest = manifest{
 	parent:   "kms key ring",
 	policy:   NoDelete,
 	noUpdate: true,
-	children: []childSpec{
-		{"cryptoKeys", Cascade},
-	},
-	note: "Cloud KMS key rings are undeletable; the crypto-key lifecycle (versions block a delete) is the ownership edge",
+	note:     "Cloud KMS key rings are undeletable, so there is no ring->key cascade to assert; ownership is exercised one level down (versions block a crypto-key delete) in the extra step",
 }
 
 type kmsAdapter struct {
@@ -63,19 +62,19 @@ func (a *kmsAdapter) name() string { return "kms key ring" }
 
 func (a *kmsAdapter) create(ctx context.Context, tr transport, id string) (string, error) {
 	if tr == grpcT {
-		kr, err := a.grpc.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
+		_, err := a.grpc.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
 			Parent:    "projects/" + a.proj + "/locations/" + kmsLocation,
 			KeyRingId: id,
 		})
 		if err != nil {
 			return "", err
 		}
-		return kr.GetName(), nil
+		return "", nil
 	}
 	if _, err := a.rest.KeyRingCreate(ctx, a.nr(map[string]any{"location": kmsLocation, "keyRingId": id})); err != nil {
 		return "", err
 	}
-	return a.keyRingName(id), nil
+	return "", nil
 }
 
 func (a *kmsAdapter) get(ctx context.Context, tr transport, id string) (bool, error) {
@@ -174,7 +173,7 @@ func (a *kmsAdapter) extra(t *testing.T, ctx context.Context, tr transport, id s
 		// A destroy is scheduled 30 days out (Cloud KMS default); the emulator
 		// promotes lazily, so stand in for the passage of time and then delete the
 		// DESTROYED version.
-		if _, err := a.keys.PromoteDestroyed(ctx, a.proj, kmsLocation, id, "key1", time.Now().Add(31*24*time.Hour)); err != nil {
+		if _, err := a.keys.PromoteDestroyed(ctx, a.proj, kmsLocation, id, "key1", clock.Now().Add(31*24*time.Hour)); err != nil {
 			t.Fatalf("promote destroyed version %s: %v", version, err)
 		}
 		if err := a.deleteVersion(ctx, tr, id, "key1", version); err != nil {

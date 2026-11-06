@@ -47,7 +47,16 @@ func TestRecreateOverPreFixStateFixture(t *testing.T) {
 
 	resources := store.NewMemoryResourceStore()
 	docs := firestorestore.NewMemoryStore()
+	known := map[string]bool{
+		rtDatabase: true, rtIndex: true, rtField: true, rtUserCreds: true,
+		rtBackupSchedule: true, rtChangeStream: true, rtBackup: true,
+	}
 	for _, e := range state.Entries {
+		if !known[e.Type] {
+			// A resource-type rename must not silently turn the fixture into a
+			// no-op (the seeded rows would never be read by the cascade).
+			t.Fatalf("fixture entry type %q is not a known Firestore store type", e.Type)
+		}
 		if err := resources.Upsert(ctx, tgm16FixtureProject, store.GlobalRegion, store.ResourceEntry{
 			Type: e.Type,
 			ID:   e.ID,

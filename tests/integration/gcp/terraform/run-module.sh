@@ -284,7 +284,7 @@ destroy_phase() {
 capture_phase() {
   [[ "${JC_TF_CAPTURE:-1}" == "1" ]] || return 0
   if [[ ! -s "$WORK/schema.json" ]]; then
-    echo "== capture: SKIP (no provider schema; is terraform init working?)"
+    fail "capture (no provider schema at $WORK/schema.json; terraform providers schema -json failed)"
     return 0
   fi
   if [[ ! -s "$WORK/tf-debug.log" ]]; then
@@ -294,14 +294,22 @@ capture_phase() {
   local root bin
   root="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
   bin="${TFCAPTURE_BIN:-$root/bin/tfcapture}"
-  if [[ ! -x "$bin" ]]; then
+  # Rebuild every run: a stale binary would silently miss new flags/rules.
+  if [[ -z "${TFCAPTURE_BIN:-}" ]]; then
     if ! (cd "$root" && go build -o "$bin" ./tools/tfcapture); then
       fail "capture (could not build tools/tfcapture)"
       return 0
     fi
   fi
+  # Cases whose provider resources are in the capture map must actually
+  # exercise the join; the others (functions, memorystore, cloud-operations)
+  # record the capture but have no mapped resources yet (FC6-2).
+  local require=""
+  case "$CASE" in
+    storage | pubsub | pubsub-topic | kms | firestore | clouddns) require="-require-resources" ;;
+  esac
   echo "== capture: provider request bodies vs the field catalog"
-  if "$bin" -case "$CASE" -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \
+  if "$bin" -case "$CASE" $require -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \
       -mapping "$root/docs/fidelity/provider-attributes.csv" \
       -catalog "$root/docs/fidelity/field-coverage.csv"; then
     pass "capture (every sent provider attribute is served)"

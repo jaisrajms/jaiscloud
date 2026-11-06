@@ -160,7 +160,6 @@ type extraRunner interface {
 func runCase(t *testing.T, m manifest, newAdapter func(t *testing.T) adapter) {
 	t.Helper()
 	for _, tr := range []transport{restT, grpcT} {
-		tr := tr
 		t.Run(string(tr), func(t *testing.T) {
 			a := newAdapter(t)
 			runSequence(t, m, a, tr)
@@ -171,8 +170,9 @@ func runCase(t *testing.T, m manifest, newAdapter func(t *testing.T) adapter) {
 func runSequence(t *testing.T, m manifest, a adapter, tr transport) {
 	t.Helper()
 	ctx := context.Background()
-	id := "lc-" + strings.ReplaceAll(string(tr), "_", "-")
+	id := "lc-" + string(tr)
 
+	var firstIdentity string
 	t.Run("create/get/list", func(t *testing.T) {
 		identity, err := a.create(ctx, tr, id)
 		if err != nil {
@@ -185,6 +185,7 @@ func runSequence(t *testing.T, m manifest, a adapter, tr transport) {
 		}
 		assertFound(t, a, ctx, tr, id)
 		assertListed(t, a, ctx, tr, id, true)
+		firstIdentity = identity
 		if identity == "" {
 			t.Logf("%s: create returned no identity token; recreate freshness not asserted", a.name())
 		}
@@ -231,7 +232,12 @@ func runSequence(t *testing.T, m manifest, a adapter, tr transport) {
 		if m.policy == NoDelete {
 			return
 		}
-		_, err := a.create(ctx, tr, id)
+		recreated, err := a.create(ctx, tr, id)
+		defer func() {
+			if firstIdentity != "" && recreated != "" && recreated == firstIdentity {
+				t.Errorf("%s recreate(%s) reused identity %q; a recreate must start a fresh incarnation", a.name(), id, recreated)
+			}
+		}()
 		if m.recreateFails {
 			if !isAlreadyExists(err) {
 				t.Fatalf("%s recreate(%s) = %v, want the documented AlreadyExists", a.name(), id, err)
@@ -367,11 +373,9 @@ func runRace(t *testing.T, m manifest, a adapter, ctx context.Context, tr transp
 
 	// The parent may be live (create won last) or absent (delete won last); the
 	// ownership invariant holds either way.
-	found, err := a.get(ctx, tr, id)
-	if err != nil {
+	if _, err := a.get(ctx, tr, id); err != nil {
 		t.Fatalf("%s: get after race: %v", a.name(), err)
 	}
-	_ = found
 	after, err := a.counts(ctx, id)
 	if err != nil {
 		t.Fatalf("%s: counts after race: %v", a.name(), err)
@@ -452,17 +456,21 @@ func codeOf(err error) (string, int) {
 
 func codeMatches(code string, httpStatus int, want string) bool {
 	if want == "" {
-		return true
+		return code == "" && httpStatus == 0
 	}
 	if strings.EqualFold(code, want) {
 		return true
 	}
-	// Transport-specific spellings of the same documented outcome.
+	// Two transports spell some outcomes differently; only accept the exact
+	// documented aliases, never "any 409" (a bucketNotEmpty or an etag conflict
+	// must not satisfy an AlreadyExists expectation).
 	switch want {
 	case "AlreadyExists":
-		return httpStatus == 409 || strings.EqualFold(code, "Conflict")
+		return strings.EqualFold(code, "Conflict")
 	case "FailedPrecondition":
-		return httpStatus == 409 || httpStatus == 400 || strings.EqualFold(code, "bucketNotEmpty")
+		return strings.EqualFold(code, "bucketNotEmpty")
+	case "NotFound":
+		return strings.EqualFold(code, "NotFound") || httpStatus == 404
 	}
 	return false
 }

@@ -50,7 +50,7 @@ func TestEmptyLabelIsDroppedClientSide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load catalog: %v", err)
 	}
-	report := Check("tgm15-empty-label", requests, schema, mapping, catalog, true)
+	report := Check("tgm15-empty-label", requests, schema, mapping, catalog, false)
 	if report.Failed() {
 		t.Fatalf("empty-label capture failed the gate; the provider drop is client-side, not an emulator gap:\n%s", report.Render())
 	}
@@ -84,5 +84,102 @@ func TestParseDebugLogReadsBodyAfterHeaders(t *testing.T) {
 	}
 	if ResourceForPath(reqs[0].Method, reqs[0].Path) != "google_pubsub_topic" {
 		t.Fatalf("path mapping failed for %s", reqs[0].Path)
+	}
+}
+
+// ─── gate failure modes ─────────────────────────────────────────────────────
+
+func testSchema(attrs ...string) *providerschema.ProviderSchema {
+	specs := make([]providerschema.Attribute, 0, len(attrs))
+	for _, a := range attrs {
+		specs = append(specs, providerschema.Attribute{Path: a, Optional: true})
+	}
+	return &providerschema.ProviderSchema{Resources: map[string][]providerschema.Attribute{
+		"google_storage_bucket": specs,
+	}}
+}
+
+func testCatalog(t *testing.T, coverage string) map[catalogKey]string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "catalog.csv")
+	body := "service,transport,resource,field,behavior,coverage\nstorage,rest,Bucket,labels,,roundtrip\n"
+	if coverage != "" {
+		body = "service,transport,resource,field,behavior,coverage\nstorage,rest,Bucket,labels,," + coverage + "\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := loadCatalog(path)
+	if err != nil {
+		t.Fatalf("loadCatalog: %v", err)
+	}
+	return catalog
+}
+
+func TestSentButUnsupportedFails(t *testing.T) {
+	reqs := []Request{{Method: "POST", Path: "/storage/v1/b", Body: map[string]any{"labels": map[string]any{"a": "b"}}}}
+	mapping := map[mappingKey]mappingRow{
+		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", apiField: "labels", class: Unsupported, reason: "not modelled"},
+	}
+	report := Check("x", reqs, testSchema("labels"), mapping, testCatalog(t, ""), false)
+	if !report.Failed() {
+		t.Fatalf("sent-but-unsupported capture passed:\n%s", report.Render())
+	}
+}
+
+func TestSentWithMissingCatalogRowFails(t *testing.T) {
+	reqs := []Request{{Method: "POST", Path: "/storage/v1/b", Body: map[string]any{"labels": map[string]any{"a": "b"}}}}
+	mapping := map[mappingKey]mappingRow{
+		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", catalogService: "storage", catalogResource: "OtherResource", attribute: "labels", apiField: "labels", class: Served},
+	}
+	report := Check("x", reqs, testSchema("labels"), mapping, testCatalog(t, ""), false)
+	if !report.Failed() {
+		t.Fatalf("sent field with no catalog row passed:\n%s", report.Render())
+	}
+}
+
+func TestUnclassifiedAttributeFails(t *testing.T) {
+	report := Check("x", []Request{{Method: "GET", Path: "/v1/projects/p/topics/t"}}, testSchema("labels", "new_field"), map[mappingKey]mappingRow{
+		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
+	}, map[catalogKey]string{}, false)
+	if !report.Failed() {
+		t.Fatalf("unclassified attribute passed:\n%s", report.Render())
+	}
+}
+
+func TestStaleMappingRowFails(t *testing.T) {
+	report := Check("x", []Request{}, testSchema("labels"), map[mappingKey]mappingRow{
+		{"google_storage_bucket", "removed_by_provider"}: {providerResource: "google_storage_bucket", attribute: "removed_by_provider", class: NotExercised, reason: "x"},
+	}, map[catalogKey]string{}, false)
+	if !report.Failed() {
+		t.Fatalf("stale mapping row passed:\n%s", report.Render())
+	}
+}
+
+func TestRequireResourcesFailsWhenNothingMapped(t *testing.T) {
+	report := Check("x", []Request{{Method: "GET", Path: "/v1/unknown"}}, testSchema("labels"), map[mappingKey]mappingRow{
+		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
+	}, map[catalogKey]string{}, true)
+	if !report.Failed() {
+		t.Fatalf("a capture with no mapped resources passed with -require-resources:\n%s", report.Render())
+	}
+}
+
+func TestCatalogMissingColumnIsLoud(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.csv")
+	if err := os.WriteFile(path, []byte("service,resource,field\nstorage,Bucket,labels\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCatalog(path); err == nil {
+		t.Fatal("loadCatalog accepted a catalog without the coverage column")
+	}
+}
+
+func TestNestedArrayPathIsSent(t *testing.T) {
+	body := map[string]any{"lifecycle": map[string]any{"rule": []any{
+		map[string]any{"action": map[string]any{"type": "Delete"}},
+	}}}
+	if !hasJSONPath(body, "lifecycle.rule.action.type") {
+		t.Fatal("hasJSONPath missed a path through a JSON array")
 	}
 }

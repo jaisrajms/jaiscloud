@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/terraform-modules
-          key: tf-modules-${{ runner.os }}-${{ github.run_id }}
+          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647
           restore-keys: |
             tf-modules-${{ runner.os }}-
 
@@ -68,8 +68,6 @@ jobs:
         run: go build -o bin/tfcapture ./tools/tfcapture
 
       - name: Run the module gates with the request capture
-        env:
-          JC_TF_KEEP: '1'
         run: |
           set -uo pipefail
           : > drift-report.md
@@ -79,6 +77,12 @@ jobs:
             if ! make "test-gcp-terraform-$case" >>"$case.log" 2>&1; then
               echo "FAILED: make test-gcp-terraform-$case" | tee -a drift-report.md
               tail -40 "$case.log" >>drift-report.md
+              rc=1
+            elif grep -q '^SKIP' "$case.log"; then
+              # A SKIP means the module checkout or terraform is missing: the
+              # gate ran nothing, so it must not count as a pass.
+              echo "SKIPPED: make test-gcp-terraform-$case ran nothing" | tee -a drift-report.md
+              tail -5 "$case.log" >>drift-report.md
               rc=1
             else
               echo "PASS" >>drift-report.md
