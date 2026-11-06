@@ -2,9 +2,11 @@ package functions
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -375,6 +377,40 @@ func TestV2FieldFollowups(t *testing.T) {
 		v1["serviceAccountEmail"] != "sa@p.iam.gserviceaccount.com" {
 		t.Fatalf("v1 view = %+v", v1)
 	}
+}
+
+// TestEventFilterOperatorValidation pins the EventFilter.operator domain: the
+// v2 proto documents match-path-pattern as the only allowed value, so anything
+// else is InvalidArgument rather than an echoed unknown value.
+func TestEventFilterOperatorValidation(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	body := func(operator string) map[string]any {
+		return map[string]any{
+			"buildConfig": map[string]any{"runtime": "nodejs20"},
+			"eventTrigger": map[string]any{
+				"eventType":    "google.cloud.storage.object.v1.finalized",
+				"eventFilters": []any{map[string]any{"attribute": "bucket", "value": "b", "operator": operator}},
+			},
+		}
+	}
+	_, _, err := s.CreateFunction(ctx, "p", "us-central1", "bad", FunctionInputFromMap(body("match-prefix"), V2), V2)
+	if perr := providerErrorOf(t, err); perr.Code != "InvalidArgument" {
+		t.Fatalf("operator create code = %q, want InvalidArgument", perr.Code)
+	}
+	if _, _, err := s.CreateFunction(ctx, "p", "us-central1", "ok", FunctionInputFromMap(body("match-path-pattern"), V2), V2); err != nil {
+		t.Fatalf("match-path-pattern create: %v", err)
+	}
+}
+
+// providerErrorOf returns the *model.ProviderError in err.
+func providerErrorOf(t *testing.T, err error) *model.ProviderError {
+	t.Helper()
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) {
+		t.Fatalf("error %v is not a ProviderError", err)
+	}
+	return perr
 }
 
 func TestServiceReset(t *testing.T) {

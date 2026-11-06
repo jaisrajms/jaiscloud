@@ -32,6 +32,10 @@ var validV1MemoryMB = map[int]bool{
 	2048: true, 4096: true, 8192: true,
 }
 
+// eventFilterOperatorMatchPathPattern is the only EventFilter.operator value the
+// v2 proto documents ("The only allowed value is match-path-pattern").
+const eventFilterOperatorMatchPathPattern = "match-path-pattern"
+
 // validateConfigInput validates caller-supplied instance/concurrency values
 // against the real Cloud Functions ranges. It runs on create and update before
 // the merge; a zero value means "unset" and is always valid.
@@ -127,6 +131,8 @@ func effectiveConcurrencyLimit(f functionsstore.Function) int64 {
 // limit", so the min≤max relation is not checked against it — a function may
 // set provisioned concurrency without a reserved cap, matching real Cloud
 // Functions.
+// validateConfigRelations validates cross-field relationships and documented
+// enum domains that a single-field check cannot see.
 func validateConfigRelations(f functionsstore.Function) error {
 	if f.MaxInstanceCount > 0 && f.MinInstanceCount > f.MaxInstanceCount {
 		return invalidArgument("minInstanceCount must not exceed maxInstanceCount")
@@ -137,6 +143,15 @@ func validateConfigRelations(f functionsstore.Function) error {
 	if f.AvailableCPU != "" {
 		if cpu, ok := parseAvailableCPU(f.AvailableCPU); ok && cpu < 1 && f.MaxInstanceRequestConcurrency > 1 {
 			return invalidArgument("maxInstanceRequestConcurrency must be 1 when availableCpu is less than 1")
+		}
+	}
+	// EventFilter.operator documents match-path-pattern as its only allowed
+	// value; anything else is rejected up front rather than echoed back.
+	if f.EventTrigger != nil {
+		for _, filter := range f.EventTrigger.EventFilters {
+			if filter.Operator != "" && filter.Operator != eventFilterOperatorMatchPathPattern {
+				return invalidArgument("eventTrigger.eventFilters.operator must be match-path-pattern")
+			}
 		}
 	}
 	return nil
