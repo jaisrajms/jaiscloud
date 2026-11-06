@@ -613,6 +613,8 @@ func TestRESTDatabaseServerOwnedFields(t *testing.T) {
 			"keyPrefix":                     "client-supplied",
 			"versionRetentionPeriod":        "7200s",
 			"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_ENABLED",
+			// Server-owned: only a soft delete sets it (FC3-4).
+			"deleteTime": "2031-02-03T04:05:06Z",
 		},
 	}))
 	if err != nil {
@@ -624,6 +626,9 @@ func TestRESTDatabaseServerOwnedFields(t *testing.T) {
 	}
 	if _, ok := cresp["keyPrefix"]; ok {
 		t.Errorf("create stored the OUTPUT_ONLY keyPrefix = %v", cresp["keyPrefix"])
+	}
+	if _, ok := cresp["deleteTime"]; ok {
+		t.Errorf("create stored the server-owned deleteTime = %v", cresp["deleteTime"])
 	}
 	if cresp["versionRetentionPeriod"] != "604800s" {
 		t.Errorf("create versionRetentionPeriod = %v, want 604800s (PITR enabled)", cresp["versionRetentionPeriod"])

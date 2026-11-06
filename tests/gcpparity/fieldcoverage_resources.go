@@ -105,15 +105,19 @@ func ensureRefBucket(ctx context.Context, e *Env) (string, error) {
 		return "", fmt.Errorf("create reference bucket: %w", err)
 	}
 	// The functions source fetcher reads the object the generated value names.
-	object := "fc-object"
-	_, status, _, err := e.RestRaw(ctx, http.MethodPost,
-		"/upload/storage/v1/b/"+url.PathEscape(id)+"/o?uploadType=media&name="+url.QueryEscape(object),
-		[]byte("exports.handler = () => {};"), "application/javascript", nil)
-	if err != nil {
-		return "", fmt.Errorf("upload reference object: %w", err)
-	}
-	if status < 200 || status >= 300 {
-		return "", fmt.Errorf("upload reference object: HTTP %d", status)
+	// Two archives exist: the create value (fc-object) and the update value
+	// (fc2-object), because a masked update that changes storageSource.object
+	// re-resolves the archive and must find it.
+	for _, object := range []string{"fc-object", "fc2-object"} {
+		_, status, _, err := e.RestRaw(ctx, http.MethodPost,
+			"/upload/storage/v1/b/"+url.PathEscape(id)+"/o?uploadType=media&name="+url.QueryEscape(object),
+			[]byte("exports.handler = () => {};"), "application/javascript", nil)
+		if err != nil {
+			return "", fmt.Errorf("upload reference object %s: %w", object, err)
+		}
+		if status < 200 || status >= 300 {
+			return "", fmt.Errorf("upload reference object %s: HTTP %d", object, status)
+		}
 	}
 	return id, nil
 }

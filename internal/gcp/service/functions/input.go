@@ -23,6 +23,12 @@ type FunctionInput struct {
 	SourceArchiveURL string
 	SourceBucket     string
 	SourceObject     string
+	// SourceStorageUploadURL is the v2
+	// buildConfig.source.storageSource.sourceUploadUrl member: the generated
+	// upload URL of a 1st-gen upload bucket, carried by the same storage source
+	// as bucket/object (FC3-2). It is stored and rendered inside storageSource,
+	// not as a top-level v1 sourceUploadUrl.
+	SourceStorageUploadURL string
 	// SourceArchive is an in-memory source archive supplied directly to the
 	// core rather than referenced over GCS. It is set only by the console UI's
 	// inline-source create path; FunctionInputFromMap and the gRPC transport
@@ -35,6 +41,13 @@ type FunctionInput struct {
 	Timeout              string // canonical duration string, e.g. "60s"
 	AvailableMemoryMB    int
 	EventTrigger         *functionsstore.EventTrigger
+
+	// KmsKeyName is the function's CMEK key (CloudFunction.kms_key_name / v2
+	// Function.kms_key_name) and ServiceAccountEmail its runtime service account
+	// (v2 ServiceConfig.service_account_email). Both are echoed; the emulator has
+	// no key-encryption or per-function identity plane (FC2-11).
+	KmsKeyName          string
+	ServiceAccountEmail string
 
 	// The v1 CloudFunction fields the terraform-google-event-function module
 	// sends (TGM3). The Has* flags record whether the request body actually
@@ -62,6 +75,9 @@ type FunctionInput struct {
 	HasDockerRepository           bool
 	HasBuildWorkerPool            bool
 	HasHttpsTriggerSecurityLevel  bool
+	HasKmsKeyName                 bool
+	HasServiceAccountEmail        bool
+	HasSourceStorageUploadURL     bool
 
 	// The v2 ServiceConfig instance/concurrency settings (FD6). The Has* flags
 	// record whether the request body actually carried the field, so an
@@ -135,6 +151,12 @@ func FunctionInputFromMap(body map[string]any, v Version) FunctionInput {
 	if s, ok := body["buildWorkerPool"].(string); ok {
 		in.BuildWorkerPool, in.HasBuildWorkerPool = s, true
 	}
+	if s, ok := body["kmsKeyName"].(string); ok {
+		in.KmsKeyName, in.HasKmsKeyName = s, true
+	}
+	if s, ok := body["serviceAccountEmail"].(string); ok {
+		in.ServiceAccountEmail, in.HasServiceAccountEmail = s, true
+	}
 	if ht, ok := body["httpsTrigger"].(map[string]any); ok {
 		if s, ok := ht["securityLevel"].(string); ok {
 			in.HttpsTriggerSecurityLevel, in.HasHttpsTriggerSecurityLevel = s, true
@@ -190,6 +212,31 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 	if s, ok := sc["availableCpu"].(string); ok {
 		in.AvailableCPU, in.HasAvailableCPU = s, true
 	}
+	// v2 ServiceConfig mirrors of the v1 serverless VPC / Secret Manager /
+	// runtime-identity fields (FC2-11): the store holds one value per field, so a
+	// v2 create and a v1 create of the same configuration are indistinguishable
+	// on read.
+	if s, ok := sc["vpcConnector"].(string); ok {
+		in.VPCConnector, in.HasVPCConnector = s, true
+	}
+	if s, ok := sc["vpcConnectorEgressSettings"].(string); ok {
+		in.VPCConnectorEgressSettings, in.HasVPCConnectorEgressSettings = s, true
+	}
+	if raw, ok := sc["secretEnvironmentVariables"]; ok {
+		in.SecretEnvironmentVariables = decodeSecretEnvVars(raw)
+		in.HasSecretEnvironmentVariables = true
+	}
+	if raw, ok := sc["secretVolumes"]; ok {
+		in.SecretVolumes = decodeSecretVolumes(raw)
+		in.HasSecretVolumes = true
+	}
+	if s, ok := sc["serviceAccountEmail"].(string); ok {
+		in.ServiceAccountEmail, in.HasServiceAccountEmail = s, true
+	}
+	// Function.kms_key_name is a top-level (not ServiceConfig) member.
+	if s, ok := body["kmsKeyName"].(string); ok {
+		in.KmsKeyName, in.HasKmsKeyName = s, true
+	}
 	// ServiceConfig.ingressSettings (the v1 view carries the same value at the
 	// top level). The Terraform provider always sends its ALLOW_ALL default, so
 	// storing and echoing it is what keeps the v2 resource from permadiffing.
@@ -203,8 +250,11 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 			if in.SourceBucket != "" && in.SourceObject != "" {
 				in.SourceArchiveURL = "gs://" + in.SourceBucket + "/" + in.SourceObject
 			}
-			if in.SourceUploadURL == "" {
-				in.SourceUploadURL = bodyString(ss, "sourceUploadUrl")
+			// sourceUploadUrl is a member of the same storageSource alternative
+			// (the upload target of a 1st-gen upload bucket), not a source of its
+			// own: store it next to bucket/object and render it there (FC3-2).
+			if s, ok := ss["sourceUploadUrl"].(string); ok {
+				in.SourceStorageUploadURL, in.HasSourceStorageUploadURL = s, true
 			}
 		}
 	}
@@ -222,12 +272,39 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 			src = resource.ResourceID("")("gcs-bucket-policy", bucket)
 		}
 		in.EventTrigger = &functionsstore.EventTrigger{
-			EventType:   stringOf(et["eventType"]),
-			Resource:    src,
-			RetryPolicy: stringOf(et["retryPolicy"]),
+			EventType:    stringOf(et["eventType"]),
+			Resource:     src,
+			RetryPolicy:  stringOf(et["retryPolicy"]),
+			EventFilters: decodeEventFilters(et["eventFilters"]),
+			PubsubTopic:  stringOf(et["pubsubTopic"]),
 		}
 	}
 	return in
+}
+
+// decodeEventFilters decodes the v2 eventFilters list from the decoded
+// JSON/protojson shape. The full list (attribute, value, operator) is preserved
+// so a non-storage trigger filter round-trips (FC3-1, FC2-15); the storage
+// bucket filter is additionally resolved into EventTrigger.Resource by the
+// caller for the delivery engine.
+func decodeEventFilters(raw any) []functionsstore.EventFilter {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]functionsstore.EventFilter, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, functionsstore.EventFilter{
+			Attribute: stringOf(m["attribute"]),
+			Value:     stringOf(m["value"]),
+			Operator:  stringOf(m["operator"]),
+		})
+	}
+	return out
 }
 
 // decodeSecretEnvVars decodes the v1 secretEnvironmentVariables array from the
@@ -316,20 +393,23 @@ func durationString(seconds int) string {
 func newFunction(project, location, id string, in FunctionInput) functionsstore.Function {
 	t := now()
 	f := functionsstore.Function{
-		ID:                   id,
-		Location:             location,
-		Runtime:              in.Runtime,
-		EntryPoint:           in.EntryPoint,
-		SourceUploadURL:      in.SourceUploadURL,
-		SourceArchiveURL:     in.SourceArchiveURL,
-		EnvironmentVariables: in.EnvironmentVariables,
-		Status:               "ACTIVE",
-		CreateTime:           t,
-		UpdateTime:           t,
-		Labels:               in.Labels,
-		AvailableMemoryMB:    defaultMemoryMB,
-		Timeout:              defaultTimeout,
-		Description:          in.Description,
+		ID:                     id,
+		Location:               location,
+		Runtime:                in.Runtime,
+		EntryPoint:             in.EntryPoint,
+		SourceUploadURL:        in.SourceUploadURL,
+		SourceArchiveURL:       in.SourceArchiveURL,
+		SourceStorageUploadURL: in.SourceStorageUploadURL,
+		EnvironmentVariables:   in.EnvironmentVariables,
+		Status:                 "ACTIVE",
+		CreateTime:             t,
+		UpdateTime:             t,
+		Labels:                 in.Labels,
+		AvailableMemoryMB:      defaultMemoryMB,
+		Timeout:                defaultTimeout,
+		Description:            in.Description,
+		KmsKeyName:             in.KmsKeyName,
+		ServiceAccountEmail:    in.ServiceAccountEmail,
 	}
 	if in.AvailableMemoryMB > 0 {
 		f.AvailableMemoryMB = in.AvailableMemoryMB
@@ -443,6 +523,37 @@ var functionUpdateFields = map[string]string{
 	// stored value at the top level).
 	"serviceconfig.ingresssettings":  "ingressSettings",
 	"serviceconfig.ingress_settings": "ingressSettings",
+	// v2 ServiceConfig parity fields (FC2-11): the serverless VPC connector,
+	// Secret Manager bindings and runtime service account are the same stored
+	// values the v1 top-level paths name. The secretEnvironmentVariables /
+	// secretVolumes families are repeated blocks, handled by
+	// repeatedBlockMaskFields below.
+	"serviceconfig.vpcconnector":                  "vpcConnector",
+	"serviceconfig.vpc_connector":                 "vpcConnector",
+	"serviceconfig.vpcconnectoregresssettings":    "vpcConnectorEgressSettings",
+	"serviceconfig.vpc_connector_egress_settings": "vpcConnectorEgressSettings",
+	"serviceconfig.serviceaccountemail":           "serviceAccountEmail",
+	"serviceconfig.service_account_email":         "serviceAccountEmail",
+	// Function.kms_key_name (v2) and CloudFunction.kms_key_name (v1).
+	"kmskeyname":   "kmsKeyName",
+	"kms_key_name": "kmsKeyName",
+	// v1 CloudFunction.service_account_email (the v2 spelling is
+	// serviceConfig.serviceAccountEmail above).
+	"serviceaccountemail":   "serviceAccountEmail",
+	"service_account_email": "serviceAccountEmail",
+	// buildConfig.source is a oneof alternative; its storageSource members are
+	// individually patchable (FC3-3).
+	"buildconfig.source.storagesource.bucket":          "sourceBucket",
+	"buildconfig.source.storagesource.object":          "sourceObject",
+	"buildconfig.source.storagesource.sourceuploadurl": "sourceStorageUploadUrl",
+	// v2 eventTrigger nested paths (FC3-3). They compose with the whole
+	// eventTrigger path: a mask naming only a nested member changes just it.
+	// canonicalMaskField normalizes the proto's event_type/retry_policy/
+	// pubsub_topic spellings onto these entries; the event_filters family is
+	// handled as a repeated block below.
+	"eventtrigger.eventtype":   "eventType",
+	"eventtrigger.retrypolicy": "retryPolicy",
+	"eventtrigger.pubsubtopic": "pubsubTopic",
 }
 
 // canonicalMaskField normalizes an updateMask path to its canonical field name.
@@ -462,8 +573,36 @@ func canonicalMaskField(path string) (string, bool) {
 	p = strings.ReplaceAll(p, "failure_policy", "failurepolicy")
 	p = strings.ReplaceAll(p, "https_trigger.", "httpstrigger.")
 	p = strings.ReplaceAll(p, "security_level", "securitylevel")
+	// The v2 proto spells the nested members snake_case; normalize the segments
+	// a FieldMask may name so one canonical entry covers both spellings.
+	p = strings.ReplaceAll(p, "storage_source", "storagesource")
+	p = strings.ReplaceAll(p, "event_filters", "eventfilters")
+	p = strings.ReplaceAll(p, "event_type", "eventtype")
+	p = strings.ReplaceAll(p, "retry_policy", "retrypolicy")
+	p = strings.ReplaceAll(p, "pubsub_topic", "pubsubtopic")
+	p = strings.ReplaceAll(p, "source_upload_url", "sourceuploadurl")
+	// A mask may name any member of a repeated block (secretEnvironmentVariables.key,
+	// secretVolumes.versions.path); the whole block is applied from the body, as
+	// FieldMask semantics for a repeated message require.
+	for prefix, field := range repeatedBlockMaskFields {
+		if p == prefix || strings.HasPrefix(p, prefix+".") {
+			return field, true
+		}
+	}
 	f, ok := functionUpdateFields[p]
 	return f, ok
+}
+
+// repeatedBlockMaskFields maps a repeated block's mask-path prefix to the
+// canonical field it applies. A FieldMask path naming one member of a repeated
+// message addresses the elements, not a single sub-field, so the body's whole
+// list is authoritative.
+var repeatedBlockMaskFields = map[string]string{
+	"serviceconfig.secretenvironmentvariables":   "secretEnvironmentVariables",
+	"serviceconfig.secret_environment_variables": "secretEnvironmentVariables",
+	"serviceconfig.secretvolumes":                "secretVolumes",
+	"serviceconfig.secret_volumes":               "secretVolumes",
+	"eventtrigger.eventfilters":                  "eventFilters",
 }
 
 // maskAppliesSource reports whether an update mask selects any source field
@@ -477,7 +616,7 @@ func maskAppliesSource(mask []string) bool {
 	for _, m := range mask {
 		if c, ok := canonicalMaskField(m); ok {
 			switch c {
-			case "source", "sourceArchiveUrl", "sourceUploadUrl":
+			case "source", "sourceArchiveUrl", "sourceUploadUrl", "sourceBucket", "sourceObject":
 				return true
 			}
 		}
@@ -489,11 +628,11 @@ func maskAppliesSource(mask []string) bool {
 // paths to overlay (masked paths take the incoming body value, unmasked paths
 // retain the stored value); an empty mask overlays every mutable field present
 // in the body. Every masked path is validated up front so an unsupported field
-// fails loud with Unimplemented instead of being silently no-op-ed.
+// fails loud with InvalidArgument instead of being silently no-op-ed.
 func ApplyFunctionUpdate(f *functionsstore.Function, in FunctionInput, mask []string) error {
 	for _, m := range mask {
 		if _, ok := canonicalMaskField(m); !ok {
-			return model.NewProviderError("Unimplemented", "unsupported updateMask field "+m, 501)
+			return model.NewProviderError("InvalidArgument", "unsupported updateMask field "+m, 400)
 		}
 	}
 	apply := func(field string) bool {
@@ -554,8 +693,43 @@ func ApplyFunctionUpdate(f *functionsstore.Function, in FunctionInput, mask []st
 	if apply("availableCpu") && (len(mask) > 0 || in.HasAvailableCPU) {
 		f.AvailableCPU = in.AvailableCPU
 	}
-	if apply("eventTrigger") && in.EventTrigger != nil {
-		f.EventTrigger = in.EventTrigger
+	// The event trigger. A mask naming the whole eventTrigger replaces it; a mask
+	// naming only a nested v2 path (eventType, retryPolicy, pubsubTopic,
+	// eventFilters) changes just that member so the rest of the trigger
+	// survives (FC3-3). An empty mask replaces it with whatever the body
+	// carried.
+	if len(mask) == 0 {
+		if in.EventTrigger != nil {
+			f.EventTrigger = in.EventTrigger
+		}
+	} else if in.EventTrigger != nil {
+		if apply("eventTrigger") {
+			f.EventTrigger = in.EventTrigger
+		} else {
+			touch := func() *functionsstore.EventTrigger {
+				if f.EventTrigger == nil {
+					f.EventTrigger = &functionsstore.EventTrigger{}
+				}
+				return f.EventTrigger
+			}
+			if apply("eventType") {
+				touch().EventType = in.EventTrigger.EventType
+			}
+			if apply("retryPolicy") {
+				touch().RetryPolicy = in.EventTrigger.RetryPolicy
+			}
+			if apply("eventFilters") {
+				touch().EventFilters = in.EventTrigger.EventFilters
+			}
+			if apply("pubsubTopic") {
+				// pubsubTopic is both the stored v2 field and the Resource of a
+				// Pub/Sub trigger; a body that also carries filters leaves Resource
+				// as the resolved source.
+				t := touch()
+				t.PubsubTopic = in.EventTrigger.PubsubTopic
+				t.Resource = in.EventTrigger.Resource
+			}
+		}
 	}
 	// v1 nested failurePolicy.retry path: a mask naming it changes only the retry
 	// flag, so a client that sends just that path cannot wipe the trigger. An
@@ -610,8 +784,45 @@ func ApplyFunctionUpdate(f *functionsstore.Function, in FunctionInput, mask []st
 	if v1Apply("buildWorkerPool", in.HasBuildWorkerPool) {
 		f.BuildWorkerPool = in.BuildWorkerPool
 	}
-	if apply("source") && in.SourceBucket != "" && in.SourceObject != "" {
-		f.SourceArchiveURL = "gs://" + in.SourceBucket + "/" + in.SourceObject
+	// Function.kms_key_name / CloudFunction.kms_key_name and the runtime service
+	// account (FC2-11). Both are echoed, never used to encrypt or invoke.
+	if v1Apply("kmsKeyName", in.HasKmsKeyName) {
+		f.KmsKeyName = in.KmsKeyName
+	}
+	if v1Apply("serviceAccountEmail", in.HasServiceAccountEmail) {
+		f.ServiceAccountEmail = in.ServiceAccountEmail
+	}
+	// buildConfig.source is one storageSource alternative. A mask naming the
+	// whole source applies bucket/object together; a mask naming one member
+	// changes only it, keeping the rest of the stored source reference (FC3-3).
+	if len(mask) == 0 {
+		if in.SourceBucket != "" && in.SourceObject != "" {
+			f.SourceArchiveURL = "gs://" + in.SourceBucket + "/" + in.SourceObject
+		}
+		if in.HasSourceStorageUploadURL {
+			f.SourceStorageUploadURL = in.SourceStorageUploadURL
+		}
+	} else {
+		bucket, object := splitGSURL(f.SourceArchiveURL)
+		bucketMasked, objectMasked := apply("sourceBucket"), apply("sourceObject")
+		if apply("source") {
+			if in.SourceBucket != "" && in.SourceObject != "" {
+				f.SourceArchiveURL = "gs://" + in.SourceBucket + "/" + in.SourceObject
+			}
+		} else if bucketMasked || objectMasked {
+			if bucketMasked && in.SourceBucket != "" {
+				bucket = in.SourceBucket
+			}
+			if objectMasked && in.SourceObject != "" {
+				object = in.SourceObject
+			}
+			if bucket != "" && object != "" {
+				f.SourceArchiveURL = "gs://" + bucket + "/" + object
+			}
+		}
+		if (apply("source") || apply("sourceStorageUploadUrl")) && in.HasSourceStorageUploadURL {
+			f.SourceStorageUploadURL = in.SourceStorageUploadURL
+		}
 	}
 	f.UpdateTime = now()
 	return nil

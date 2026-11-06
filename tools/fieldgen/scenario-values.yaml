@@ -142,6 +142,28 @@ values:
   - field: functions/grpc/Function/build_config.source.storage_source.bucket
     ref: gcs-bucket
     reason: a storage source must name an existing bucket
+  - field: functions/rest/Function/serviceConfig.vpcConnector
+    value: '"fc-vpc-connector"'
+    update_value: '"fc2-vpc-connector"'
+    reason: vpcaccess.googleapis.com/Connector has no scenario resolver; the emulator echoes the reference without resolving it (existence checks belong to the reference-integrity plan)
+  - field: functions/grpc/Function/service_config.vpc_connector
+    value: '"fc-vpc-connector"'
+    update_value: '"fc2-vpc-connector"'
+    reason: same, on the gRPC surface
+  - field: functions/rest/Function/eventTrigger.eventFilters.operator
+    value: '"match-path-pattern"'
+    reason: EventFilter.operator admits only the documented match-path-pattern value; the emulator stores it verbatim
+  - field: functions/grpc/Function/event_trigger.event_filters.operator
+    value: '"match-path-pattern"'
+    reason: same, on the gRPC surface
+  - field: functions/rest/Function/environment
+    value: '"GEN_2"'
+    update_value: '"GEN_1"'
+    reason: environment is output-only and the emulator always serves GEN_2; the negative-write value must be GEN_1 so ignoring it is observable
+  - field: functions/grpc/Function/environment
+    value: '"GEN_2"'
+    update_value: '"GEN_1"'
+    reason: same, on the gRPC surface
 
   # ── kms/CryptoKey ─────────────────────────────────────────────────────────
   - field: kms/rest/CryptoKey/versionTemplate.algorithm
@@ -158,6 +180,14 @@ values:
     value: '"2592000s"'
     update_value: '"7776000s"'
     reason: rotationPeriod has a 24h floor; 30 days is the documented idiom
+  - field: kms/rest/CryptoKey/primary.state
+    value: '"ENABLED"'
+    update_value: '"DESTROYED"'
+    reason: primary.state is server-owned and a new key's primary version is ENABLED; the negative-write value must differ from the served value so ignoring it is observable
+  - field: kms/grpc/CryptoKey/primary.state
+    value: '"ENABLED"'
+    update_value: '"DESTROYED"'
+    reason: same, on the gRPC surface
 
   # ── clouddns/ManagedZone ──────────────────────────────────────────────────
   - field: clouddns/rest/ManagedZone/forwardingConfig.targetNameServers.ipv4Address

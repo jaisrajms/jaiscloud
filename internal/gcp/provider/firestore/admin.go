@@ -597,6 +597,10 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	db.Uid = randomUUID4()
 	now := clock.Now()
 	db.CreateTime, db.UpdateTime = now, now
+	// delete_time is server-owned: it is set only when the database is
+	// soft-deleted, so a create body that carries one (the gRPC Database message
+	// is decoded whole) must not seed the record with a client value (FC3-4).
+	db.DeleteTime = time.Time{}
 	if db.Type == "" {
 		db.Type = "FIRESTORE_NATIVE"
 	}

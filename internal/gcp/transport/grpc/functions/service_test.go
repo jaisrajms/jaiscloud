@@ -147,6 +147,166 @@ func TestCreateFunctionV2_TypedOperation(t *testing.T) {
 	}
 }
 
+// TestV2FieldFollowups pins the FC2-11/FC3-1/FC3-2 wire shape over gRPC: the
+// protojson round-trip carries kmsKeyName, ServiceConfig VPC/Secret
+// Manager/runtime-service-account fields, eventTrigger.eventFilters (a
+// non-storage filter plus its operator) and storageSource.sourceUploadUrl, and
+// the nested updateMask paths apply.
+func TestV2FieldFollowups(t *testing.T) {
+	s := newTestV2()
+	ctx := context.Background()
+	name := "projects/proj/locations/us-central1/functions/fields"
+	op, err := s.CreateFunction(ctx, &apiv2functionspb.CreateFunctionRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		FunctionId: "fields",
+		Function: &apiv2functionspb.Function{
+			KmsKeyName: "projects/proj/locations/global/keyRings/r/cryptoKeys/k",
+			BuildConfig: &apiv2functionspb.BuildConfig{
+				Runtime: "nodejs20",
+				Source: &apiv2functionspb.Source{Source: &apiv2functionspb.Source_StorageSource{
+					StorageSource: &apiv2functionspb.StorageSource{
+						Bucket: "b", Object: "o.zip", SourceUploadUrl: "https://upload.example/x.zip",
+					},
+				}},
+			},
+			ServiceConfig: &apiv2functionspb.ServiceConfig{
+				VpcConnector:               "projects/proj/locations/us-central1/connectors/c",
+				VpcConnectorEgressSettings: apiv2functionspb.ServiceConfig_ALL_TRAFFIC,
+				ServiceAccountEmail:        "sa@proj.iam.gserviceaccount.com",
+				SecretEnvironmentVariables: []*apiv2functionspb.SecretEnvVar{
+					{Key: "K", Secret: "S", ProjectId: "proj", Version: "1"},
+				},
+				SecretVolumes: []*apiv2functionspb.SecretVolume{
+					{MountPath: "/etc/secrets", Secret: "S", ProjectId: "proj",
+						Versions: []*apiv2functionspb.SecretVolume_SecretVersion{{Path: "f", Version: "2"}}},
+				},
+			},
+			EventTrigger: &apiv2functionspb.EventTrigger{
+				EventType:   "google.cloud.pubsub.topic.v1.messagePublished",
+				PubsubTopic: "projects/proj/topics/t",
+				RetryPolicy: apiv2functionspb.EventTrigger_RETRY_POLICY_DO_NOT_RETRY,
+				EventFilters: []*apiv2functionspb.EventFilter{
+					{Attribute: "type", Value: "v", Operator: "match-path-pattern"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	var created apiv2functionspb.Function
+	if err := op.GetResponse().UnmarshalTo(&created); err != nil {
+		t.Fatalf("response UnmarshalTo: %v", err)
+	}
+	if created.GetKmsKeyName() != "projects/proj/locations/global/keyRings/r/cryptoKeys/k" {
+		t.Errorf("kmsKeyName = %q", created.GetKmsKeyName())
+	}
+	ss := created.GetBuildConfig().GetSource().GetStorageSource()
+	if ss.GetBucket() != "b" || ss.GetObject() != "o.zip" || ss.GetSourceUploadUrl() != "https://upload.example/x.zip" {
+		t.Errorf("storageSource = %+v", ss)
+	}
+	sc := created.GetServiceConfig()
+	if sc.GetVpcConnector() != "projects/proj/locations/us-central1/connectors/c" ||
+		sc.GetVpcConnectorEgressSettings() != apiv2functionspb.ServiceConfig_ALL_TRAFFIC ||
+		sc.GetServiceAccountEmail() != "sa@proj.iam.gserviceaccount.com" {
+		t.Errorf("serviceConfig = %+v", sc)
+	}
+	if len(sc.GetSecretEnvironmentVariables()) != 1 || sc.GetSecretEnvironmentVariables()[0].GetKey() != "K" ||
+		sc.GetSecretEnvironmentVariables()[0].GetSecret() != "S" {
+		t.Errorf("secretEnvironmentVariables = %+v", sc.GetSecretEnvironmentVariables())
+	}
+	if vols := sc.GetSecretVolumes(); len(vols) != 1 || vols[0].GetMountPath() != "/etc/secrets" ||
+		len(vols[0].GetVersions()) != 1 || vols[0].GetVersions()[0].GetPath() != "f" {
+		t.Errorf("secretVolumes = %+v", vols)
+	}
+	et := created.GetEventTrigger()
+	if len(et.GetEventFilters()) != 1 {
+		t.Fatalf("eventFilters = %+v", et.GetEventFilters())
+	}
+	if f := et.GetEventFilters()[0]; f.GetAttribute() != "type" || f.GetValue() != "v" || f.GetOperator() != "match-path-pattern" {
+		t.Errorf("event filter = %+v", f)
+	}
+	if et.GetPubsubTopic() != "projects/proj/topics/t" {
+		t.Errorf("pubsubTopic = %q, want the stored topic alongside the filters", et.GetPubsubTopic())
+	}
+
+	// Get serves the stored values.
+	got, err := s.GetFunction(ctx, &apiv2functionspb.GetFunctionRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetFunction: %v", err)
+	}
+	if got.GetKmsKeyName() != created.GetKmsKeyName() ||
+		got.GetServiceConfig().GetVpcConnector() != sc.GetVpcConnector() ||
+		got.GetServiceConfig().GetServiceAccountEmail() != sc.GetServiceAccountEmail() ||
+		len(got.GetEventTrigger().GetEventFilters()) != 1 {
+		t.Fatalf("get = %+v", got)
+	}
+
+	// Nested eventTrigger.retryPolicy mask applies without wiping the trigger.
+	upd, err := s.UpdateFunction(ctx, &apiv2functionspb.UpdateFunctionRequest{
+		Function: &apiv2functionspb.Function{
+			Name:         name,
+			EventTrigger: &apiv2functionspb.EventTrigger{RetryPolicy: apiv2functionspb.EventTrigger_RETRY_POLICY_RETRY},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"eventTrigger.retryPolicy"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateFunction retryPolicy: %v", err)
+	}
+	var updated apiv2functionspb.Function
+	if err := upd.GetResponse().UnmarshalTo(&updated); err != nil {
+		t.Fatalf("update response UnmarshalTo: %v", err)
+	}
+	if updated.GetEventTrigger().GetRetryPolicy() != apiv2functionspb.EventTrigger_RETRY_POLICY_RETRY {
+		t.Errorf("retryPolicy = %v", updated.GetEventTrigger().GetRetryPolicy())
+	}
+	if len(updated.GetEventTrigger().GetEventFilters()) != 1 ||
+		updated.GetEventTrigger().GetEventType() != "google.cloud.pubsub.topic.v1.messagePublished" {
+		t.Errorf("trigger members lost on nested mask: %+v", updated.GetEventTrigger())
+	}
+
+	// Nested buildConfig.source.storageSource.object mask keeps bucket/upload URL.
+	upd, err = s.UpdateFunction(ctx, &apiv2functionspb.UpdateFunctionRequest{
+		Function: &apiv2functionspb.Function{
+			Name: name,
+			BuildConfig: &apiv2functionspb.BuildConfig{Source: &apiv2functionspb.Source{
+				Source: &apiv2functionspb.Source_StorageSource{
+					StorageSource: &apiv2functionspb.StorageSource{Object: "o2.zip"},
+				},
+			}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"buildConfig.source.storageSource.object"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateFunction source.object: %v", err)
+	}
+	var reupdated apiv2functionspb.Function
+	if err := upd.GetResponse().UnmarshalTo(&reupdated); err != nil {
+		t.Fatalf("update response UnmarshalTo: %v", err)
+	}
+	updatedSS := reupdated.GetBuildConfig().GetSource().GetStorageSource()
+	if updatedSS.GetObject() != "o2.zip" || updatedSS.GetBucket() != "b" ||
+		updatedSS.GetSourceUploadUrl() != "https://upload.example/x.zip" {
+		t.Errorf("storageSource after nested mask = %+v", updatedSS)
+	}
+
+	// An unknown nested path is InvalidArgument, not Unimplemented (FC3-3).
+	_, err = s.UpdateFunction(ctx, &apiv2functionspb.UpdateFunctionRequest{
+		Function: &apiv2functionspb.Function{
+			Name: name,
+			BuildConfig: &apiv2functionspb.BuildConfig{Source: &apiv2functionspb.Source{
+				Source: &apiv2functionspb.Source_StorageSource{
+					StorageSource: &apiv2functionspb.StorageSource{Generation: 7},
+				},
+			}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"buildConfig.source.storageSource.generation"}},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown nested mask = %v, want InvalidArgument", err)
+	}
+}
+
 // TestInstanceConfigV2_FD6 pins the v2 ServiceConfig instance/concurrency
 // settings over gRPC: they survive the protojson round-trip on create and get,
 // and an out-of-range value maps to InvalidArgument.

@@ -17,12 +17,35 @@ var (
 	ErrNoSuchDelivery  = errors.New("NoSuchDelivery")
 )
 
+// EventFilter is one entry of a v2 EventTrigger.eventFilters: a CloudEvents
+// attribute matched against a value, optionally with the match-path-pattern
+// operator. The emulator stores the caller's filter list verbatim so a
+// non-storage trigger filter (and its operator) round-trips; Resource remains
+// the resolved lookup source the delivery engine and Eventarc provisioning use.
+type EventFilter struct {
+	Attribute string `json:"attribute"`
+	Value     string `json:"value"`
+	Operator  string `json:"operator,omitempty"`
+}
+
 // EventTrigger is a source that fires events in response to a condition in
 // another service (mirrors the CloudFunction.eventTrigger wire shape).
 type EventTrigger struct {
 	EventType string `json:"eventType"`
 	Resource  string `json:"resource"`
 	Service   string `json:"service,omitempty"`
+
+	// EventFilters is the v2 EventTrigger.eventFilters list as supplied by the
+	// caller (attribute, value, operator). It is rendered verbatim for a v2
+	// read; when it is empty the renderer derives the documented storage
+	// bucket filter (or pubsubTopic) from Resource/EventType. It is not rendered
+	// for v1, whose trigger has no filter list.
+	EventFilters []EventFilter `json:"eventFilters,omitempty"`
+	// PubsubTopic is the v2 EventTrigger.pubsubTopic as supplied by the caller.
+	// It is stored separately from Resource because a v2 body may carry both a
+	// pubsubTopic and an eventFilters list, and a proto message echoes every
+	// field it was sent. Empty means the body did not set it.
+	PubsubTopic string `json:"pubsubTopic,omitempty"`
 
 	// Retry is the v1 failurePolicy.retry flag: true when the create/update body
 	// carried a failurePolicy.retry object, meaning a failed invocation is
@@ -87,22 +110,37 @@ type SecretVolumeVersion struct {
 
 // Function is Cloud Functions v1 function metadata.
 type Function struct {
-	ID                   string            // function ID (last segment of name)
-	Location             string            // region
-	Runtime              string            // e.g. "nodejs20"
-	EntryPoint           string            // the source function to execute
-	SourceUploadURL      string            // generated upload URL (fake)
-	SourceArchiveURL     string            // gs:// source archive
-	HttpsTriggerURL      string            // derived deployed URL (output-only)
-	EventTrigger         *EventTrigger     // nil for HTTP-triggered functions
-	EnvironmentVariables map[string]string // env vars available during execution
-	Status               string            // e.g. "ACTIVE"
-	CreateTime           time.Time
-	UpdateTime           time.Time
-	Labels               map[string]string
-	AvailableMemoryMB    int
-	Timeout              string // e.g. "60s"
-	Description          string
+	ID               string // function ID (last segment of name)
+	Location         string // region
+	Runtime          string // e.g. "nodejs20"
+	EntryPoint       string // the source function to execute
+	SourceUploadURL  string // generated upload URL (fake)
+	SourceArchiveURL string // gs:// source archive
+	// SourceStorageUploadURL is the v2 BuildConfig.Source.StorageSource
+	// sourceUploadUrl member: a 1st-gen upload URL supplied alongside the
+	// bucket/object of the same storage source (FC3-2). It is stored and
+	// rendered inside storageSource; it is distinct from the v1 top-level
+	// SourceUploadURL above.
+	SourceStorageUploadURL string
+	HttpsTriggerURL        string            // derived deployed URL (output-only)
+	EventTrigger           *EventTrigger     // nil for HTTP-triggered functions
+	EnvironmentVariables   map[string]string // env vars available during execution
+	Status                 string            // e.g. "ACTIVE"
+	CreateTime             time.Time
+	UpdateTime             time.Time
+	Labels                 map[string]string
+	AvailableMemoryMB      int
+	Timeout                string // e.g. "60s"
+	Description            string
+	// KmsKeyName is the CMEK key that encrypts the function's resources
+	// (CloudFunction.kms_key_name / v2 Function.kms_key_name). It is echoed,
+	// never used to encrypt anything: the emulator has no envelope-encryption
+	// plane.
+	KmsKeyName string
+	// ServiceAccountEmail is the runtime service account
+	// (CloudFunction.service_account_email / v2
+	// ServiceConfig.service_account_email).
+	ServiceAccountEmail string
 
 	// IngressSettings is the v1 CloudFunction.ingressSettings enum
 	// (ALLOW_ALL / ALLOW_INTERNAL_ONLY / ALLOW_INTERNAL_AND_GCLB). "" means the

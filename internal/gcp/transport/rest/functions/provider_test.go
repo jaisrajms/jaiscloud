@@ -387,6 +387,160 @@ func TestFunctionInstanceConfigV2(t *testing.T) {
 	}
 }
 
+// TestFunctionV2FieldFollowups pins the FC2-11/FC3-1/FC3-2 wire shape over REST:
+// kmsKeyName, ServiceConfig VPC/Secret Manager/runtime-service-account fields,
+// eventTrigger.eventFilters (including a non-storage filter and its operator)
+// and storageSource.sourceUploadUrl are created, served and patched through the
+// nested updateMask paths.
+func TestFunctionV2FieldFollowups(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	resp, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"functionId": "fields",
+		"body": map[string]any{
+			"kmsKeyName": "projects/proj/locations/global/keyRings/r/cryptoKeys/k",
+			"buildConfig": map[string]any{
+				"runtime": "nodejs20",
+				"source": map[string]any{"storageSource": map[string]any{
+					"bucket": "b", "object": "o.zip", "sourceUploadUrl": "https://upload.example/x.zip",
+				}},
+			},
+			"serviceConfig": map[string]any{
+				"vpcConnector":               "projects/proj/locations/us-central1/connectors/c",
+				"vpcConnectorEgressSettings": "ALL_TRAFFIC",
+				"serviceAccountEmail":        "sa@proj.iam.gserviceaccount.com",
+				"secretEnvironmentVariables": []any{
+					map[string]any{"key": "K", "secret": "S", "projectId": "proj", "version": "1"},
+				},
+				"secretVolumes": []any{
+					map[string]any{"mountPath": "/etc/secrets", "secret": "S", "projectId": "proj",
+						"versions": []any{map[string]any{"path": "f", "version": "2"}}},
+				},
+			},
+			"eventTrigger": map[string]any{
+				"eventType":   "google.cloud.pubsub.topic.v1.messagePublished",
+				"pubsubTopic": "projects/proj/topics/t",
+				"retryPolicy": "RETRY_POLICY_DO_NOT_RETRY",
+				"eventFilters": []any{
+					map[string]any{"attribute": "type", "value": "v", "operator": "match-path-pattern"},
+				},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+	created := operationResponseV2(t, resp)
+	if created["kmsKeyName"] != "projects/proj/locations/global/keyRings/r/cryptoKeys/k" {
+		t.Errorf("kmsKeyName = %v", created["kmsKeyName"])
+	}
+	bc, _ := created["buildConfig"].(map[string]any)
+	src, _ := bc["source"].(map[string]any)
+	ss, _ := src["storageSource"].(map[string]any)
+	if ss["bucket"] != "b" || ss["object"] != "o.zip" || ss["sourceUploadUrl"] != "https://upload.example/x.zip" {
+		t.Errorf("storageSource = %+v", ss)
+	}
+	if _, ok := src["sourceUploadUrl"]; ok {
+		t.Errorf("sourceUploadUrl must be inside storageSource, got %+v", src)
+	}
+	sc, _ := created["serviceConfig"].(map[string]any)
+	if sc["vpcConnector"] != "projects/proj/locations/us-central1/connectors/c" ||
+		sc["vpcConnectorEgressSettings"] != "ALL_TRAFFIC" ||
+		sc["serviceAccountEmail"] != "sa@proj.iam.gserviceaccount.com" {
+		t.Errorf("serviceConfig = %+v", sc)
+	}
+	if got, _ := sc["secretEnvironmentVariables"].([]any); len(got) != 1 {
+		t.Errorf("secretEnvironmentVariables = %+v", sc["secretEnvironmentVariables"])
+	} else if m, _ := got[0].(map[string]any); m["key"] != "K" || m["projectId"] != "proj" || m["secret"] != "S" || m["version"] != "1" {
+		t.Errorf("secret env var = %+v", got[0])
+	}
+	if got, _ := sc["secretVolumes"].([]any); len(got) != 1 {
+		t.Errorf("secretVolumes = %+v", sc["secretVolumes"])
+	} else if m, _ := got[0].(map[string]any); m["mountPath"] != "/etc/secrets" || m["secret"] != "S" {
+		t.Errorf("secret volume = %+v", got[0])
+	}
+	et, _ := created["eventTrigger"].(map[string]any)
+	filters, _ := et["eventFilters"].([]any)
+	if len(filters) != 1 {
+		t.Fatalf("eventFilters = %+v", et["eventFilters"])
+	}
+	if f, _ := filters[0].(map[string]any); f["attribute"] != "type" || f["value"] != "v" || f["operator"] != "match-path-pattern" {
+		t.Errorf("event filter = %+v", filters[0])
+	}
+	if et["pubsubTopic"] != "projects/proj/topics/t" {
+		t.Errorf("pubsubTopic = %v, want the stored topic alongside the filters", et["pubsubTopic"])
+	}
+
+	// Get serves the same shape.
+	resp, err = p.GetFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/fields",
+	}))
+	if err != nil {
+		t.Fatalf("get v2: %v", err)
+	}
+	got := resp.Data
+	if got["kmsKeyName"] != created["kmsKeyName"] {
+		t.Errorf("get kmsKeyName = %v", got["kmsKeyName"])
+	}
+	gsc, _ := got["serviceConfig"].(map[string]any)
+	if gsc["vpcConnector"] != sc["vpcConnector"] || gsc["serviceAccountEmail"] != sc["serviceAccountEmail"] {
+		t.Errorf("get serviceConfig = %+v", gsc)
+	}
+
+	// A nested eventTrigger.eventType mask changes only the event type; the
+	// filter list survives.
+	resp, err = p.UpdateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/fields",
+		"updateMask": "eventTrigger.eventType",
+		"body": map[string]any{"eventTrigger": map[string]any{
+			"eventType": "google.cloud.storage.object.v1.finalized",
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("update eventType: %v", err)
+	}
+	uet, _ := operationResponseV2(t, resp)["eventTrigger"].(map[string]any)
+	if uet["eventType"] != "google.cloud.storage.object.v1.finalized" {
+		t.Errorf("eventType = %v", uet["eventType"])
+	}
+	if got, _ := uet["eventFilters"].([]any); len(got) != 1 {
+		t.Errorf("eventFilters must survive an eventType update: %+v", uet)
+	}
+
+	// A nested buildConfig.source.storageSource.object mask changes the object
+	// and keeps the bucket plus the upload URL.
+	resp, err = p.UpdateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/fields",
+		"updateMask": "buildConfig.source.storageSource.object",
+		"body": map[string]any{"buildConfig": map[string]any{"source": map[string]any{
+			"storageSource": map[string]any{"object": "o2.zip"},
+		}}},
+	}))
+	if err != nil {
+		t.Fatalf("update source.object: %v", err)
+	}
+	ubc, _ := operationResponseV2(t, resp)["buildConfig"].(map[string]any)
+	uss, _ := ubc["source"].(map[string]any)["storageSource"].(map[string]any)
+	if uss["object"] != "o2.zip" || uss["bucket"] != "b" || uss["sourceUploadUrl"] != "https://upload.example/x.zip" {
+		t.Errorf("storageSource after nested mask = %+v", uss)
+	}
+
+	// An unknown nested path is InvalidArgument, not Unimplemented (FC3-3).
+	_, err = p.UpdateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/fields",
+		"updateMask": "buildConfig.source.storageSource.generation",
+		"body":       map[string]any{"buildConfig": map[string]any{"source": map[string]any{"storageSource": map[string]any{"generation": float64(7)}}}},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Errorf("unknown nested mask code = %q, want InvalidArgument", perr.Code)
+	}
+}
+
 // TestOperationsV2 pins the v2 LRO surface: mutations persist an operation that
 // get/list/wait read back with the typed response, unknown ids are NotFound, and
 // cancel/delete operate on the store.
@@ -1002,8 +1156,8 @@ func TestUpdateFunctionUpdateMask(t *testing.T) {
 	})
 	_, err = p.UpdateFunction(ctx, bad)
 	perr := providerError(t, err)
-	if perr.Code != "Unimplemented" || perr.HTTPStatus != 501 {
-		t.Errorf("unsupported mask: code=%q status=%d, want Unimplemented/501", perr.Code, perr.HTTPStatus)
+	if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Errorf("unsupported mask: code=%q status=%d, want InvalidArgument/400", perr.Code, perr.HTTPStatus)
 	}
 	cur, err := p.GetFunction(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/f"}))
 	if err != nil {

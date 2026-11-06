@@ -11,15 +11,6 @@
       "review_by": "2027-03-01"
     },
     {
-      "resource": "firestore/Database",
-      "transport": "grpc",
-      "band": "negative-write",
-      "field": "delete_time",
-      "reason": "output-only field accepted the caller's value at create; server-owned members must be ignored on the create path. Follow-up plan row FC3-4.",
-      "id": "FC3-4",
-      "review_by": "2027-03-01"
-    },
-    {
       "resource": "functions/Function",
       "transport": "grpc",
       "band": "absence",
@@ -30,245 +21,11 @@
     },
     {
       "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "cross-transport",
-      "field": "build_config.source.storage_source.source_upload_url",
-      "reason": "sourceUploadUrl is an alternative encoding of the same source oneof storageSource{bucket,object} fills; the emulator renders the storageSource form. Reclassify in the follow-up plan row FC3-2.",
-      "id": "FC3-2",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "cross-transport",
-      "field": "event_trigger.event_filters.attribute",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "cross-transport",
-      "field": "event_trigger.event_filters.value",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "negative-write",
-      "field": "environment",
-      "reason": "output-only field accepted the caller's value at create; server-owned members must be ignored on the create path. Follow-up plan row FC3-4.",
-      "id": "FC3-4",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "serve",
-      "field": "build_config.source.storage_source.source_upload_url",
-      "reason": "sourceUploadUrl is an alternative encoding of the same source oneof storageSource{bucket,object} fills; the emulator renders the storageSource form. Reclassify in the follow-up plan row FC3-2.",
-      "id": "FC3-2",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "serve",
-      "field": "event_trigger.event_filters.attribute",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "serve",
-      "field": "event_trigger.event_filters.value",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "update",
-      "field": "build_config.source.storage_source.object",
-      "reason": "the updateMask contract does not accept nested buildConfig.source / eventTrigger paths (501 Unimplemented); nested mask support is the follow-up plan row FC3-3.",
-      "id": "FC3-3",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "update",
-      "field": "build_config.source.storage_source.source_upload_url",
-      "reason": "sourceUploadUrl is an alternative encoding of the same source oneof storageSource{bucket,object} fills; the emulator renders the storageSource form. Reclassify in the follow-up plan row FC3-2.",
-      "id": "FC3-2",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "update",
-      "field": "event_trigger.event_filters.attribute",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "update",
-      "field": "event_trigger.event_filters.value",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "update",
-      "field": "event_trigger.event_type",
-      "reason": "the updateMask contract does not accept nested buildConfig.source / eventTrigger paths (501 Unimplemented); nested mask support is the follow-up plan row FC3-3.",
-      "id": "FC3-3",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "grpc",
-      "band": "update",
-      "field": "event_trigger.retry_policy",
-      "reason": "the updateMask contract does not accept nested buildConfig.source / eventTrigger paths (501 Unimplemented); nested mask support is the follow-up plan row FC3-3.",
-      "id": "FC3-3",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
       "transport": "rest",
       "band": "absence",
       "field": "serviceConfig",
       "reason": "the block is always rendered with API defaults (versioning/iamConfiguration/softDeletePolicy/serviceConfig/cloudLoggingConfig/versionTemplate); an absence create cannot assert absence for a documented default. Follow-up plan row FC3-5.",
       "id": "FC3-5",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "cross-transport",
-      "field": "buildConfig.source.storageSource.sourceUploadUrl",
-      "reason": "sourceUploadUrl is an alternative encoding of the same source oneof storageSource{bucket,object} fills; the emulator renders the storageSource form. Reclassify in the follow-up plan row FC3-2.",
-      "id": "FC3-2",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "cross-transport",
-      "field": "eventTrigger.eventFilters.attribute",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "cross-transport",
-      "field": "eventTrigger.eventFilters.value",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "negative-write",
-      "field": "environment",
-      "reason": "output-only field accepted the caller's value at create; server-owned members must be ignored on the create path. Follow-up plan row FC3-4.",
-      "id": "FC3-4",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "serve",
-      "field": "buildConfig.source.storageSource.sourceUploadUrl",
-      "reason": "sourceUploadUrl is an alternative encoding of the same source oneof storageSource{bucket,object} fills; the emulator renders the storageSource form. Reclassify in the follow-up plan row FC3-2.",
-      "id": "FC3-2",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "serve",
-      "field": "eventTrigger.eventFilters.attribute",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "serve",
-      "field": "eventTrigger.eventFilters.value",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "update",
-      "field": "buildConfig.source.storageSource.object",
-      "reason": "the updateMask contract does not accept nested buildConfig.source / eventTrigger paths (501 Unimplemented); nested mask support is the follow-up plan row FC3-3.",
-      "id": "FC3-3",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "update",
-      "field": "buildConfig.source.storageSource.sourceUploadUrl",
-      "reason": "sourceUploadUrl is an alternative encoding of the same source oneof storageSource{bucket,object} fills; the emulator renders the storageSource form. Reclassify in the follow-up plan row FC3-2.",
-      "id": "FC3-2",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "update",
-      "field": "eventTrigger.eventFilters.attribute",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "update",
-      "field": "eventTrigger.eventFilters.value",
-      "reason": "the functions model stores one event source (eventType + the resolved resource); arbitrary event filters are not stored, so attribute/value are derived rather than round-tripped. Reclassify in the follow-up plan row FC3-1.",
-      "id": "FC3-1",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "update",
-      "field": "eventTrigger.eventType",
-      "reason": "the updateMask contract does not accept nested buildConfig.source / eventTrigger paths (501 Unimplemented); nested mask support is the follow-up plan row FC3-3.",
-      "id": "FC3-3",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "functions/Function",
-      "transport": "rest",
-      "band": "update",
-      "field": "eventTrigger.retryPolicy",
-      "reason": "the updateMask contract does not accept nested buildConfig.source / eventTrigger paths (501 Unimplemented); nested mask support is the follow-up plan row FC3-3.",
-      "id": "FC3-3",
       "review_by": "2027-03-01"
     },
     {
@@ -282,29 +39,11 @@
     },
     {
       "resource": "kms/CryptoKey",
-      "transport": "grpc",
-      "band": "negative-write",
-      "field": "primary.state",
-      "reason": "output-only field accepted the caller's value at create; server-owned members must be ignored on the create path. Follow-up plan row FC3-4.",
-      "id": "FC3-4",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "kms/CryptoKey",
       "transport": "rest",
       "band": "absence",
       "field": "versionTemplate",
       "reason": "the block is always rendered with API defaults (versioning/iamConfiguration/softDeletePolicy/serviceConfig/cloudLoggingConfig/versionTemplate); an absence create cannot assert absence for a documented default. Follow-up plan row FC3-5.",
       "id": "FC3-5",
-      "review_by": "2027-03-01"
-    },
-    {
-      "resource": "kms/CryptoKey",
-      "transport": "rest",
-      "band": "negative-write",
-      "field": "primary.state",
-      "reason": "output-only field accepted the caller's value at create; server-owned members must be ignored on the create path. Follow-up plan row FC3-4.",
-      "id": "FC3-4",
       "review_by": "2027-03-01"
     },
     {

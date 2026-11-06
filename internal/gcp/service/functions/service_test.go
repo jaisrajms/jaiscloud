@@ -90,7 +90,7 @@ func TestApplyFunctionUpdateMask(t *testing.T) {
 		t.Fatalf("masked update = %+v", f)
 	}
 	if err := ApplyFunctionUpdate(&f, FunctionInput{}, []string{"bogus"}); err == nil {
-		t.Fatal("expected Unimplemented for unknown mask path")
+		t.Fatal("expected InvalidArgument for unknown mask path")
 	}
 	// v2 nested mask paths are accepted in both the proto's snake_case and the
 	// JSON shape's camelCase.
@@ -214,15 +214,166 @@ func TestFunctionInputV2SourceUploadURL(t *testing.T) {
 			"source":  map[string]any{"storageSource": map[string]any{"sourceUploadUrl": "https://upload.example/x.zip"}},
 		},
 	}, V2)
-	if in.SourceUploadURL != "https://upload.example/x.zip" {
-		t.Fatalf("sourceUploadUrl = %q", in.SourceUploadURL)
+	if in.SourceStorageUploadURL != "https://upload.example/x.zip" {
+		t.Fatalf("sourceUploadUrl = %q", in.SourceStorageUploadURL)
 	}
-	// It round-trips back through the v2 renderer as a sourceUploadUrl.
-	out := FunctionJSON(V2, "p", functionsstore.Function{ID: "f1", Location: "l", SourceUploadURL: in.SourceUploadURL, Status: "ACTIVE"})
+	// It round-trips back through the v2 renderer as a storageSource member, not
+	// as a top-level source alternative (FC3-2).
+	out := FunctionJSON(V2, "p", functionsstore.Function{ID: "f1", Location: "l", SourceStorageUploadURL: in.SourceStorageUploadURL, Status: "ACTIVE"})
 	bc, _ := out["buildConfig"].(map[string]any)
 	src, _ := bc["source"].(map[string]any)
-	if src["sourceUploadUrl"] != in.SourceUploadURL {
+	ss, _ := src["storageSource"].(map[string]any)
+	if ss["sourceUploadUrl"] != in.SourceStorageUploadURL {
 		t.Fatalf("rendered source = %+v", src)
+	}
+	if _, ok := src["sourceUploadUrl"]; ok {
+		t.Fatalf("sourceUploadUrl must be inside storageSource, got %+v", src)
+	}
+}
+
+// TestV2FieldFollowups covers the FC2-11/FC3-1/FC3-2/FC3-3 core contract: the
+// v2 Function CMEK key, ServiceConfig VPC/Secret Manager/runtime-service-account
+// fields, eventTrigger.eventFilters (including a non-storage filter and its
+// operator) and storageSource.sourceUploadUrl parse, persist and render; the
+// nested buildConfig.source / eventTrigger update-mask paths apply only the
+// member they name.
+func TestV2FieldFollowups(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	in := FunctionInputFromMap(map[string]any{
+		"kmsKeyName": "projects/p/locations/global/keyRings/r/cryptoKeys/k",
+		// environment is output-only: a client value must be ignored and the
+		// server value (GEN_2) served (FC3-4).
+		"environment": "GEN_1",
+		"buildConfig": map[string]any{
+			"runtime": "nodejs20",
+			"source": map[string]any{"storageSource": map[string]any{
+				"bucket": "b", "object": "o.zip", "sourceUploadUrl": "https://upload.example/x.zip",
+			}},
+		},
+		"serviceConfig": map[string]any{
+			"vpcConnector":               "projects/p/locations/us-central1/connectors/c",
+			"vpcConnectorEgressSettings": "ALL_TRAFFIC",
+			"serviceAccountEmail":        "sa@p.iam.gserviceaccount.com",
+			"secretEnvironmentVariables": []any{
+				map[string]any{"key": "K", "secret": "S", "projectId": "p", "version": "1"},
+			},
+			"secretVolumes": []any{
+				map[string]any{"mountPath": "/etc/secrets", "secret": "S", "projectId": "p",
+					"versions": []any{map[string]any{"path": "f", "version": "2"}}},
+			},
+		},
+		"eventTrigger": map[string]any{
+			"eventType":   "google.cloud.pubsub.topic.v1.messagePublished",
+			"pubsubTopic": "projects/p/topics/t",
+			"retryPolicy": "RETRY_POLICY_DO_NOT_RETRY",
+			"eventFilters": []any{
+				map[string]any{"attribute": "type", "value": "v", "operator": "match-path-pattern"},
+			},
+		},
+	}, V2)
+	f, _, err := s.CreateFunction(ctx, "p", "us-central1", "fn", in, V2)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	out := FunctionJSON(V2, "p", f)
+	if out["kmsKeyName"] != "projects/p/locations/global/keyRings/r/cryptoKeys/k" {
+		t.Fatalf("kmsKeyName = %v", out["kmsKeyName"])
+	}
+	if out["environment"] != "GEN_2" {
+		t.Fatalf("environment = %v, want the server value GEN_2 (a client value is ignored)", out["environment"])
+	}
+	bc, _ := out["buildConfig"].(map[string]any)
+	src, _ := bc["source"].(map[string]any)
+	ss, _ := src["storageSource"].(map[string]any)
+	if ss["bucket"] != "b" || ss["object"] != "o.zip" || ss["sourceUploadUrl"] != "https://upload.example/x.zip" {
+		t.Fatalf("storageSource = %+v", ss)
+	}
+	sc, _ := out["serviceConfig"].(map[string]any)
+	if sc["vpcConnector"] != "projects/p/locations/us-central1/connectors/c" ||
+		sc["vpcConnectorEgressSettings"] != "ALL_TRAFFIC" ||
+		sc["serviceAccountEmail"] != "sa@p.iam.gserviceaccount.com" {
+		t.Fatalf("serviceConfig = %+v", sc)
+	}
+	secrets, _ := sc["secretEnvironmentVariables"].([]any)
+	if len(secrets) != 1 {
+		t.Fatalf("secretEnvironmentVariables = %+v", sc["secretEnvironmentVariables"])
+	}
+	if m, _ := secrets[0].(map[string]any); m["key"] != "K" || m["secret"] != "S" || m["version"] != "1" || m["projectId"] != "p" {
+		t.Fatalf("secret env var = %+v", secrets[0])
+	}
+	vols, _ := sc["secretVolumes"].([]any)
+	if len(vols) != 1 {
+		t.Fatalf("secretVolumes = %+v", sc["secretVolumes"])
+	}
+	vol, _ := vols[0].(map[string]any)
+	if vol["mountPath"] != "/etc/secrets" || vol["secret"] != "S" {
+		t.Fatalf("secret volume = %+v", vol)
+	}
+	if vers, _ := vol["versions"].([]any); len(vers) != 1 {
+		t.Fatalf("secret volume versions = %+v", vol["versions"])
+	}
+	et, _ := out["eventTrigger"].(map[string]any)
+	filters, _ := et["eventFilters"].([]any)
+	if len(filters) != 1 {
+		t.Fatalf("eventFilters = %+v", et["eventFilters"])
+	}
+	filter, _ := filters[0].(map[string]any)
+	if filter["attribute"] != "type" || filter["value"] != "v" || filter["operator"] != "match-path-pattern" {
+		t.Fatalf("event filter = %+v", filter)
+	}
+	if et["pubsubTopic"] != "projects/p/topics/t" {
+		t.Fatalf("pubsubTopic = %v (a proto message echoes every field the caller set)", et["pubsubTopic"])
+	}
+
+	// A nested buildConfig.source.storageSource.object mask changes only the
+	// object; bucket and the upload URL survive.
+	upd, _, err := s.UpdateFunction(ctx, "p", "us-central1", "fn", FunctionInputFromMap(map[string]any{
+		"buildConfig": map[string]any{"source": map[string]any{"storageSource": map[string]any{"object": "o2.zip"}}},
+	}, V2), []string{"buildConfig.source.storageSource.object"}, V2)
+	if err != nil {
+		t.Fatalf("update source.object: %v", err)
+	}
+	ubc, _ := FunctionJSON(V2, "p", upd)["buildConfig"].(map[string]any)
+	uss, _ := ubc["source"].(map[string]any)["storageSource"].(map[string]any)
+	if uss["object"] != "o2.zip" || uss["bucket"] != "b" || uss["sourceUploadUrl"] != "https://upload.example/x.zip" {
+		t.Fatalf("source after nested mask = %+v", uss)
+	}
+
+	// eventTrigger.eventType and eventTrigger.retryPolicy are individually
+	// patchable; the filter list survives an eventType change.
+	upd, _, err = s.UpdateFunction(ctx, "p", "us-central1", "fn", FunctionInputFromMap(map[string]any{
+		"eventTrigger": map[string]any{
+			"eventType":   "google.cloud.storage.object.v1.finalized",
+			"retryPolicy": "RETRY_POLICY_RETRY",
+		},
+	}, V2), []string{"eventTrigger.eventType"}, V2)
+	if err != nil {
+		t.Fatalf("update eventType: %v", err)
+	}
+	et, _ = FunctionJSON(V2, "p", upd)["eventTrigger"].(map[string]any)
+	if et["eventType"] != "google.cloud.storage.object.v1.finalized" {
+		t.Fatalf("eventType = %v", et["eventType"])
+	}
+	if filters, _ := et["eventFilters"].([]any); len(filters) != 1 {
+		t.Fatalf("eventFilters must survive an eventType update: %+v", et)
+	}
+	upd, _, err = s.UpdateFunction(ctx, "p", "us-central1", "fn", FunctionInputFromMap(map[string]any{
+		"eventTrigger": map[string]any{"retryPolicy": "RETRY_POLICY_RETRY"},
+	}, V2), []string{"eventTrigger.retryPolicy"}, V2)
+	if err != nil {
+		t.Fatalf("update retryPolicy: %v", err)
+	}
+	et, _ = FunctionJSON(V2, "p", upd)["eventTrigger"].(map[string]any)
+	if et["retryPolicy"] != "RETRY_POLICY_RETRY" {
+		t.Fatalf("retryPolicy = %v", et["retryPolicy"])
+	}
+
+	// The v1 view carries the same stored kmsKeyName/serviceAccountEmail.
+	v1 := FunctionJSON(V1, "p", upd)
+	if v1["kmsKeyName"] != "projects/p/locations/global/keyRings/r/cryptoKeys/k" ||
+		v1["serviceAccountEmail"] != "sa@p.iam.gserviceaccount.com" {
+		t.Fatalf("v1 view = %+v", v1)
 	}
 }
 
