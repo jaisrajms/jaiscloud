@@ -1463,7 +1463,6 @@ func (pubsubTopic) fill(b *fieldBody, phase string) {
 			"unstructuredInference": map[string]any{},
 		})
 	case "aws-kinesis":
-		b.placePrefix("ingestionDataSourceSettings.awsKinesis")
 		shape(b, "ingestionDataSourceSettings.awsKinesis", map[string]any{
 			"awsRoleArn":        "arn:aws:iam::123456789012:role/fc",
 			"consumerArn":       "arn:aws:kinesis:us-east-1:123456789012:stream/fc/consumer/fc:1",
