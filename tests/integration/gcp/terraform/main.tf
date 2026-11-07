@@ -3,8 +3,8 @@
 # Scope: only services jaiscloud-gcp implements. Adding a resource whose service
 # is unimplemented (Cloud Run Jobs/WorkerPools, Artifact Registry, ...) makes
 # `apply` fail and aborts the whole run — keep this file in sync with the
-# emulator's supported surface. Cloud Run v2 services are served but not declared
-# here yet (wave-plan W2.2). See README.md.
+# emulator's supported surface. Cloud Run v2 services are served and declared
+# here (the module case is in module-cases/cloudrun.sh); see README.md.
 
 # ── Cloud Storage ─────────────────────────────────────────────────────────────
 resource "google_storage_bucket" "compat" {
@@ -393,6 +393,60 @@ resource "google_project" "billing" {
   billing_account = "0X0X0X-0X0X0X-0X0X0X"
 }
 
+# ── Cloud Run (v2 service) ────────────────────────────────────────────────────
+# The v2 service/revision control plane is served over both transports; Jobs,
+# WorkerPools and the v1 surface (google_cloud_run_service, domain mappings) are
+# not, so this declares only the service. The consumer path is the official
+# module gate (module-cases/cloudrun.sh); this raw resource exists for the field
+# the module's v2 submodule does not expose — a container `readiness_probe` —
+# and for the in-place env update run.sh drives. Traffic targets are
+# deliberately not set: the emulator stores them and reflects them in
+# `trafficStatuses`, but does not enforce the split (wire-contract §5).
+resource "google_cloud_run_v2_service" "compat" {
+  project             = var.project
+  name                = "jaiscloud-tf-run"
+  location            = var.region
+  description         = "jaiscloud terraform compat cloud run service"
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  deletion_protection = false
+
+  labels = {
+    env = "compat-test"
+  }
+
+  template {
+    service_account = google_service_account.compat.email
+    timeout         = "300s"
+
+    containers {
+      name  = "app"
+      image = "us-docker.pkg.dev/cloudrun/container/hello"
+
+      env {
+        name  = "MODE"
+        value = var.run_env_value
+      }
+
+      ports {
+        container_port = 8080
+      }
+
+      # The module's v2 submodule exposes startup_probe/liveness_probe but not
+      # readiness_probe: this is the raw-only field the fixture exists for.
+      readiness_probe {
+        period_seconds    = 10
+        timeout_seconds   = 5
+        failure_threshold = 2
+        success_threshold = 2
+        http_get {
+          path = "/ready"
+          port = 8080
+        }
+      }
+    }
+  }
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -485,6 +539,10 @@ output "billing_account" {
 # name (run.sh asserts both).
 output "project_billing_account" {
   value = google_project.billing.billing_account
+}
+
+output "run_service_name" {
+  value = google_cloud_run_v2_service.compat.name
 }
 
 # ── BigQuery: dataset-scoped routine + table-scoped row access policy (NF31) ──

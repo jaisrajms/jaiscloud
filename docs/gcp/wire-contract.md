@@ -577,8 +577,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   Cloud Functions by design (run operations remain reachable by their prefixed id). Terraform/gcloud
   reach the same surface under a `/run` path prefix; the gRPC surface is the same core, so the
   transports cannot drift, and the stock `run/apiv2` client is gated by the gRPC conformance suite.
-  Jobs, WorkerPools, autoscaling/scale-to-zero, sidecars, volumes, custom domains,
-  probes and IAM invocation enforcement are not modelled. Traffic targets are stored and reflected in
+  Jobs, WorkerPools, autoscaling/scale-to-zero, sidecars, volumes, custom domains and IAM
+  invocation enforcement are not modelled. Container probes are stored and echoed verbatim with
+  the revision template (a Terraform `google_cloud_run_v2_service` re-reads a `readiness_probe`
+  with no diff; `make test-gcp-terraform-cloudrun`), but neither runtime executes them — the mock
+  runtime never starts a container. Traffic targets are stored and reflected in
   `trafficStatuses`, but the split is not enforced for invocation (the mock/k8s runtime always
   proxies to the latest ready revision). The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
   in `internal/k8shelpers` with Managed Kafka; the docker executor (`JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker`)

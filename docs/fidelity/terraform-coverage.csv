@@ -51,7 +51,7 @@ google_cloud_run_v2_job,run,unsupported,none,unsupported,Cloud Run Jobs are not 
 google_cloud_run_v2_job_iam_binding,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
 google_cloud_run_v2_job_iam_member,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
 google_cloud_run_v2_job_iam_policy,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
-google_cloud_run_v2_service,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_run_v2_service,run,served,fixture:compat,served,,2027-06-30
 google_cloud_run_v2_service_iam_binding,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
 google_cloud_run_v2_service_iam_member,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
 google_cloud_run_v2_service_iam_policy,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30

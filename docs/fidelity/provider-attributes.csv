@@ -558,3 +558,162 @@ google_redis_instance,,,timeouts.create,,client-side,provider routing/identity o
 google_redis_instance,,,timeouts.delete,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
 google_redis_instance,,,timeouts.update,,client-side,provider routing/identity or provider-local attribute; not sent as a resource field
 google_redis_instance,,,transit_encryption_mode,transitEncryptionMode,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,annotations,annotations,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,binary_authorization.breakglass_justification,binaryAuthorization.breakglassJustification,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,binary_authorization.policy,binaryAuthorization.policy,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,binary_authorization.use_default,binaryAuthorization.useDefault,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.base_image,buildConfig.baseImage,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.enable_automatic_updates,buildConfig.enableAutomaticUpdates,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.environment_variables,buildConfig.environmentVariables,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.function_target,buildConfig.functionTarget,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.image_uri,buildConfig.imageUri,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.name,buildConfig.name,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,build_config.service_account,buildConfig.serviceAccount,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.source_location,buildConfig.sourceLocation,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,build_config.worker_pool,buildConfig.workerPool,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,client,client,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,client_version,clientVersion,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,conditions,conditions,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,create_time,createTime,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,creator,creator,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,custom_audiences,customAudiences,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,default_uri_disabled,defaultUriDisabled,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,delete_time,deleteTime,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,deletion_policy,deletionPolicy,client-side,provider-local destructive-action policy; never part of a request body
+google_cloud_run_v2_service,,,deletion_protection,deletionProtection,client-side,provider-local destroy guard; the API field is not sent by the pinned provider version
+google_cloud_run_v2_service,,,description,description,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,effective_annotations,effectiveAnnotations,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,effective_labels,effectiveLabels,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,etag,etag,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,expire_time,expireTime,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,generation,generation,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,iap_enabled,iapEnabled,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,id,id,client-side,"provider routing/identity attribute; the resource name is in the request path, not a body field"
+google_cloud_run_v2_service,,,ingress,ingress,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,invoker_iam_disabled,invokerIamDisabled,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,labels,labels,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,last_modifier,lastModifier,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,latest_created_revision,latestCreatedRevision,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,latest_ready_revision,latestReadyRevision,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,launch_stage,launchStage,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,location,location,client-side,"provider routing/identity attribute; the location is in the request path, not a body field"
+google_cloud_run_v2_service,,,multi_region_settings.multi_region_id,multiRegionSettings.multiRegionId,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,multi_region_settings.regions,multiRegionSettings.regions,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,name,name,client-side,"sent as the create request serviceId query parameter, not a body field"
+google_cloud_run_v2_service,,,observed_generation,observedGeneration,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,project,project,client-side,"provider routing/identity attribute; the project is in the request path, not a body field"
+google_cloud_run_v2_service,,,reconciling,reconciling,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,scaling.manual_instance_count,scaling.manualInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,scaling.max_instance_count,scaling.maxInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,scaling.min_instance_count,scaling.minInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,scaling.scaling_mode,scaling.scalingMode,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,tags,tags,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.annotations,template.annotations,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.args,template.containers.args,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.base_image_uri,template.containers.baseImageUri,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.build_info,template.containers.buildInfo,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,template.containers.command,template.containers.command,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.depends_on,template.containers.dependsOn,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.env.name,template.containers.env.name,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.env.value,template.containers.env.value,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.env.value_source.secret_key_ref.secret,template.containers.env.valueSource.secretKeyRef.secret,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.env.value_source.secret_key_ref.version,template.containers.env.valueSource.secretKeyRef.version,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.image,template.containers.image,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.liveness_probe.failure_threshold,template.containers.livenessProbe.failureThreshold,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.grpc.port,template.containers.livenessProbe.grpc.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.grpc.service,template.containers.livenessProbe.grpc.service,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.http_get.http_headers.name,template.containers.livenessProbe.httpGet.httpHeaders.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.http_get.http_headers.value,template.containers.livenessProbe.httpGet.httpHeaders.value,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.http_get.path,template.containers.livenessProbe.httpGet.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.http_get.port,template.containers.livenessProbe.httpGet.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.initial_delay_seconds,template.containers.livenessProbe.initialDelaySeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.period_seconds,template.containers.livenessProbe.periodSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.tcp_socket.port,template.containers.livenessProbe.tcpSocket.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.liveness_probe.timeout_seconds,template.containers.livenessProbe.timeoutSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.name,template.containers.name,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.ports.container_port,template.containers.ports.containerPort,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.ports.name,template.containers.ports.name,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.readiness_probe.failure_threshold,template.containers.readinessProbe.failureThreshold,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.grpc.port,template.containers.readinessProbe.grpc.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.grpc.service,template.containers.readinessProbe.grpc.service,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.http_get.path,template.containers.readinessProbe.httpGet.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.http_get.port,template.containers.readinessProbe.httpGet.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.period_seconds,template.containers.readinessProbe.periodSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.success_threshold,template.containers.readinessProbe.successThreshold,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.readiness_probe.timeout_seconds,template.containers.readinessProbe.timeoutSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.resources.cpu_idle,template.containers.resources.cpuIdle,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.containers.resources.limits,template.containers.resources.limits,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.resources.startup_cpu_boost,template.containers.resources.startupCpuBoost,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.sandbox_launcher,template.containers.sandboxLauncher,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.failure_threshold,template.containers.startupProbe.failureThreshold,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.grpc.port,template.containers.startupProbe.grpc.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.grpc.service,template.containers.startupProbe.grpc.service,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.http_get.http_headers.name,template.containers.startupProbe.httpGet.httpHeaders.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.http_get.http_headers.value,template.containers.startupProbe.httpGet.httpHeaders.value,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.http_get.path,template.containers.startupProbe.httpGet.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.http_get.port,template.containers.startupProbe.httpGet.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.initial_delay_seconds,template.containers.startupProbe.initialDelaySeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.period_seconds,template.containers.startupProbe.periodSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.tcp_socket.port,template.containers.startupProbe.tcpSocket.port,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.startup_probe.timeout_seconds,template.containers.startupProbe.timeoutSeconds,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.volume_mounts.mount_path,template.containers.volumeMounts.mountPath,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.volume_mounts.name,template.containers.volumeMounts.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.volume_mounts.sub_path,template.containers.volumeMounts.subPath,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.containers.working_dir,template.containers.workingDir,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.encryption_key,template.encryptionKey,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.execution_environment,template.executionEnvironment,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.gpu_zonal_redundancy_disabled,template.gpuZonalRedundancyDisabled,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.health_check_disabled,template.healthCheckDisabled,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.labels,template.labels,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.max_instance_request_concurrency,template.maxInstanceRequestConcurrency,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.node_selector.accelerator,template.nodeSelector.accelerator,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.revision,template.revision,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.args,template.sandboxes.templates.args,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.command,template.sandboxes.templates.command,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.env.name,template.sandboxes.templates.env.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.env.value,template.sandboxes.templates.env.value,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.image,template.sandboxes.templates.image,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.name,template.sandboxes.templates.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.volume_mounts.mount_path,template.sandboxes.templates.volumeMounts.mountPath,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.volume_mounts.name,template.sandboxes.templates.volumeMounts.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.volume_mounts.sub_path,template.sandboxes.templates.volumeMounts.subPath,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.sandboxes.templates.working_dir,template.sandboxes.templates.workingDir,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.scaling.max_instance_count,template.scaling.maxInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.scaling.min_instance_count,template.scaling.minInstanceCount,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.service_account,template.serviceAccount,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_cloud_run_v2_service,,,template.session_affinity,template.sessionAffinity,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.timeout,template.timeout,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.cloud_sql_instance.instances,template.volumes.cloudSqlInstance.instances,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.empty_dir.medium,template.volumes.emptyDir.medium,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.empty_dir.size_limit,template.volumes.emptyDir.sizeLimit,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.gcs.bucket,template.volumes.gcs.bucket,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.gcs.mount_options,template.volumes.gcs.mountOptions,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.gcs.read_only,template.volumes.gcs.readOnly,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.name,template.volumes.name,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.nfs.path,template.volumes.nfs.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.nfs.read_only,template.volumes.nfs.readOnly,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.nfs.server,template.volumes.nfs.server,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.secret.default_mode,template.volumes.secret.defaultMode,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.secret.items.mode,template.volumes.secret.items.mode,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.secret.items.path,template.volumes.secret.items.path,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.secret.items.version,template.volumes.secret.items.version,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.volumes.secret.secret,template.volumes.secret.secret,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.vpc_access.connector,template.vpcAccess.connector,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.vpc_access.egress,template.vpcAccess.egress,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.vpc_access.network_interfaces.network,template.vpcAccess.networkInterfaces.network,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.vpc_access.network_interfaces.subnetwork,template.vpcAccess.networkInterfaces.subnetwork,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,template.vpc_access.network_interfaces.tags,template.vpcAccess.networkInterfaces.tags,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,terminal_condition,terminalCondition,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,terraform_labels,terraformLabels,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,timeouts.create,,client-side,provider-local operation timeout; never part of a request body
+google_cloud_run_v2_service,,,timeouts.delete,,client-side,provider-local operation timeout; never part of a request body
+google_cloud_run_v2_service,,,timeouts.update,,client-side,provider-local operation timeout; never part of a request body
+google_cloud_run_v2_service,,,traffic.percent,traffic.percent,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,traffic.revision,traffic.revision,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,traffic.tag,traffic.tag,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,traffic.type,traffic.type,not-exercised,the pinned module cases do not configure this attribute
+google_cloud_run_v2_service,,,traffic_statuses,trafficStatuses,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,uid,uid,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,update_time,updateTime,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,uri,uri,output-only,computed-only attribute; never part of a request body
+google_cloud_run_v2_service,,,urls,urls,output-only,computed-only attribute; never part of a request body

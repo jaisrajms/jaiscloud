@@ -11,8 +11,8 @@ make test-gcp-terraform-all STRICT=1                 # Terraform
 make test-gcp-terraform-all TF_BIN=tofu STRICT=1     # OpenTofu
 ```
 
-The aggregate starts one emulator, runs the fixture and all nine pinned module
-cases against it, and writes `summary.md`, `summary.tsv` and one log per case to
+The aggregate starts one emulator, runs the fixture and every pinned module
+case against it, and writes `summary.md`, `summary.tsv` and one log per case to
 `/tmp/jaiscloud-gcp-terraform-all/` (override with `LOG_DIR=`). `STRICT=1` makes
 a `SKIP` — a missing binary or module checkout — a failure, which is what the
 nightly and drift workflows use.
@@ -75,15 +75,34 @@ the full runs below are green.
 
 ## What a PASS means
 
-- **Fixture**: `init` → `validate` → `plan` → `apply` → 59 REST spot checks →
+- **Fixture**: `init` → `validate` → `plan` → `apply` → the REST spot checks →
   second `plan` (no changes) → in-place update phases (uptime check, BigQuery
-  routine/row access policy) → `destroy` → absence checks.
+  routine/row access policy, Cloud Run container env) → `destroy` → absence
+  checks.
 - **Module case**: `init` → `plan` → `apply` → read-back assertions → `plan`
   **No changes** → mutate → `plan` No changes → clear → `plan` No changes →
   `destroy`, plus the FC6 capture gate over the provider's outgoing request
   bodies joined to the field catalog.
 - Every module checkout in the table is at the commit the case pins; a moved
   checkout is visible in `summary.tsv` via its `module_head` column.
+
+## TF3-1 — Cloud Run v2 consumer case (2026-11-07)
+
+The `cloudrun` case pins `GoogleCloudPlatform/terraform-google-cloud-run`
+`4ce640a2a519` and drives its `modules/v2` submodule (the repo root is the v1
+service, which is not served). Both runs below are green on the session commit:
+
+| binary | result | case |
+|---|---|---|
+| Terraform 1.16.3 | PASS (20 passed, 0 failed) | `cloudrun` (`TF_MODULE_DIR=…/terraform-google-cloud-run`) |
+| OpenTofu 1.12.6 | PASS (20 passed, 0 failed) | `cloudrun` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (68 passed, 0 failed) | `fixture` (includes the raw `google_cloud_run_v2_service` with a `readiness_probe`) |
+
+The module's service account is created by the module itself
+(`create_service_account = true`) because the default-account data source needs
+the unserved `compute.projects.get` (TF2-1); `cloud_run_deletion_protection` is
+disabled because it is a provider-side destroy guard. Jobs, WorkerPools, the v1
+surface and traffic targets are outside the served surface.
 
 ## What this does not prove
 

@@ -31,15 +31,21 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Cloud Billing — the `data "google_project"` `billing_account` read
   (`projects.getBillingInfo`) and `google_project`'s `billing_account`
   association round-trip (`projects.updateBillingInfo`)
+- Cloud Run (a `google_cloud_run_v2_service`: the service + revision control
+  plane, with a container `readiness_probe` — the field the pinned module's v2
+  submodule does not expose; the consumer module case is
+  `module-cases/cloudrun.sh`)
 
-Deliberately **not declared yet** because the fixture cannot apply it cleanly
-(one unimplemented resource aborts the whole run):
+Deliberately **not declared** because the emulator does not serve them:
 
-- **Cloud Run v2** — the control plane is implemented (README-GCP and
-  `docs/gcp/wire-contract.md` §5), but the suite has no case for it yet; the
-  Terraform wave plan schedules one (W2.2 / TF3-1). Cloud Run **Jobs**,
-  WorkerPools and traffic splitting are not served, so a case must stay on the
-  service/revision/IAM surface.
+- **Cloud Run Jobs, WorkerPools and the v1 surface** (`google_cloud_run_service`,
+  v1 IAM, domain mappings). The v2 service/revision control plane is served over
+  both transports (README-GCP and `docs/gcp/wire-contract.md` §5). A request to
+  `/v2/.../jobs` or `/v2/.../workerPools` is not claimed by the emulator (404
+  `UnknownService`), and a v1 domain-mapping request answers 404 "unsupported
+  operation"; those are recorded boundaries, not untested gaps. Traffic targets
+  are stored and reflected in `trafficStatuses`, but the split is not enforced,
+  so the case leaves `traffic` empty (TF1-6 records the v1 boundary).
 
 `google_container_cluster` was excluded until DPG37: the provider's cluster read
 dereferences `legacyAbac.enabled`, `networkConfig.network`,
@@ -116,8 +122,9 @@ module, and requires the module's lifecycle to converge.
 | `cloud-operations` | [`terraform-google-cloud-operations`](https://github.com/terraform-google-modules/terraform-google-cloud-operations) (`modules/simple-uptime-check`) | `8c3e37951bb4` | the alert policy's `alertStrategy` (`autoClose`, `notificationRateLimit.period`) and `userLabels` read back alongside the uptime check; `auto_close`/rate limit and labels changed, then the strategy and labels cleared; each phase ends with `plan` **No changes** |
 | `kms` | [`terraform-google-kms`](https://github.com/terraform-google-modules/terraform-google-kms) | `ef6e0eda7032` | the crypto key's `versionTemplate.algorithm` read back (the module always emits the `version_template` block); `key_algorithm` changed `HMAC_SHA256` → `HMAC_SHA512` (mask `versionTemplate.algorithm`) and back, with a `cryptoKeyVersion` created after the change carrying `HMAC_SHA512`; each phase ends with `plan` **No changes** |
 | `firestore` | [`terraform-google-firestore`](https://github.com/GoogleCloudPlatform/terraform-google-firestore) | `50d170b9ebfc` | the database's `cmekConfig.kmsKeyName` read back (the module emits `cmek_config` only when `kms_key_name != null`), so the ForceNew block stops forcing a replacement; a non-ForceNew PITR change re-applies, and a second module instance with `kms_key_name = null` reports no `cmekConfig` at all; a third phase in its own working directory/state creates the implicit `(default)` database (`database_id = "(default)"`, the Firebase shape) and reads `locationId` back; a fourth phase destroys a database and re-applies the same id (TGM13: immediate reuse, where real GCP blocks it for ~5 minutes); each phase ends with `plan` **No changes** |
+| `cloudrun` | [`terraform-google-cloud-run`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-run) (`modules/v2`) | `4ce640a2a519` | the v2 service, its module-created service account and the `roles/run.invoker` IAM member apply; the service reads back labels/ingress/description, the container image/env/port and the service account; `revisions.list` carries revision `00001`; a second `plan` is **No changes**; changing ingress, a service label and the container env PATCHes in place, mints revision `00002` and re-plans **No changes**; destroy leaves the service and its revisions `404` |
 
-The storage, memorystore, functions, clouddns, cloud-operations, kms and firestore cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
+The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore and cloudrun cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -166,6 +173,11 @@ git clone https://github.com/GoogleCloudPlatform/terraform-google-firestore \
   "$HOME/.cache/terraform-modules/terraform-google-firestore"
 git -C "$HOME/.cache/terraform-modules/terraform-google-firestore" checkout 50d170b9ebfc
 make test-gcp-terraform-firestore
+
+git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-run \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-run"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-run" checkout 4ce640a2a519
+make test-gcp-terraform-cloudrun
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
@@ -173,7 +185,8 @@ make test-gcp-terraform-firestore
 point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` /
 `TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` /
-`TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` respectively.
+`TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` / `TF_CLOUD_RUN_MODULE_DIR`
+respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -377,6 +390,30 @@ The provider's `monitoring_custom_endpoint` is the API **base** URL — it appen
 same change added has no module variable, so it is covered by the service,
 store, REST and gRPC tests rather than this gate.
 
+**cloudrun** — the pinned module is driven through its `modules/v2` submodule
+(the repo's ROOT module still creates the v1 `google_cloud_run_service`, which
+the emulator does not serve). It creates the service plus its own service
+account and an `allUsers` invoker member, and the gate:
+
+1. `apply` the module with `INGRESS_TRAFFIC_ALL`, a service label, a container
+   image/env/port; assert through REST that the service, its template and the
+   revision `00001` read back, and that the service IAM carries
+   `roles/run.invoker`; the apply log must contain no `400`, `501` or
+   `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change `ingress` to `INGRESS_TRAFFIC_INTERNAL_ONLY`, add a label and change
+   the container env; `apply`; assert the new values, that the template change
+   minted revision `00002`, and `plan` → **no changes**
+4. `destroy`; the service and its `revisions` list are `404`
+
+`create_service_account = true` (the module default) is deliberate: the other
+path reads `data.google_compute_default_service_account`, which needs the
+unserved `compute.projects.get` (TF2-1). `cloud_run_deletion_protection` is set
+to `false` because the module default is a provider-side destroy guard (real GCP
+refuses the delete too). IAP, custom domains (v1), Jobs, WorkerPools and traffic
+targets are outside the served surface and are not configured; the case header
+records each boundary.
+
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
 
@@ -421,6 +458,11 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
   (`GET /container/v1/…/nodePools`): the caller-shaped one with `machineType`
   `n1-standard-4`, `maxNodeCount: 3` and the `goog-dataproc-cluster-name` label,
   the named-only one with the 1/10 autoscaler defaults
+- The Cloud Run v2 service exists with its labels, `INGRESS_TRAFFIC_INTERNAL_ONLY`
+  ingress, container image/service account and the container `readiness_probe`
+  (the raw-only field; revision `00001` is listed); an in-place env change
+  updates it, preserves the probe, mints revision `00002` and re-plans clean,
+  and `destroy` leaves the service and its revisions `404`
 - After the virtual cluster alone is destroyed (`destroy -target`), the pool is
   still readable — real Dataproc does not delete a virtual cluster's node pools
 

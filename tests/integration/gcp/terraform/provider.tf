@@ -4,9 +4,9 @@
 # custom endpoints. The endpoint values come from one artifact,
 # terraform-endpoints.yaml: run.sh asks tools/tfcorpus for a generated
 # `endpoints` tfvars file, and the locals below are the offline defaults for a
-# bare `terraform plan` in this directory. Cloud Run v2 is served but its
-# consumer case arrives in wave-plan W2.2; Service Usage and Cloud Resource
-# Manager project-level IAM are included (google_project_service,
+# bare `terraform plan` in this directory. Cloud Run v2 is served and declared
+# here (and driven by module-cases/cloudrun.sh); Service Usage and Cloud
+# Resource Manager project-level IAM are included (google_project_service,
 # google_project_iam_member).
 #
 # Credentials: the emulator ignores auth, but the provider needs *some* token,
@@ -67,6 +67,12 @@ variable "row_access_policy_predicate" {
   type        = string
   description = "BigQuery row access policy filter predicate; changing it drives an in-place rowAccessPolicies.update."
   default     = "region = \"EU\""
+}
+
+variable "run_env_value" {
+  type        = string
+  description = "Cloud Run container env value; changing it drives an in-place services.update and a new revision."
+  default     = "compat"
 }
 
 variable "endpoints" {
