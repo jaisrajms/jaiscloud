@@ -213,3 +213,24 @@ func TestInitMappingFlushesTheWholeFile(t *testing.T) {
 		t.Fatalf("last mapping row = %q, want attribute_499", lines[len(lines)-1])
 	}
 }
+
+// TestCloudRunV2PathRules pins the Cloud Run resource attribution: the create
+// (collection POST) and update (PATCH one service) carry the provider's write
+// bodies, while the service IAM custom methods are POSTs under the same
+// service name and must not be attributed to the resource.
+func TestCloudRunV2PathRules(t *testing.T) {
+	cases := []struct {
+		method, path, want string
+	}{
+		{"POST", "/v2/projects/p/locations/us-central1/services?alt=json&serviceId=svc", "google_cloud_run_v2_service"},
+		{"PATCH", "/v2/projects/p/locations/us-central1/services/svc?alt=json", "google_cloud_run_v2_service"},
+		{"POST", "/v2/projects/p/locations/us-central1/services/svc:setIamPolicy?alt=json", ""},
+		{"POST", "/v2/projects/p/locations/us-central1/services/svc:getIamPolicy?alt=json", ""},
+		{"POST", "/v2/projects/p/locations/us-central1/jobs?jobId=job", ""},
+	}
+	for _, c := range cases {
+		if got := ResourceForPath(c.method, c.path); got != c.want {
+			t.Errorf("ResourceForPath(%s %s) = %q, want %q", c.method, c.path, got, c.want)
+		}
+	}
+}

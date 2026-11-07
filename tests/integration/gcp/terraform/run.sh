@@ -184,6 +184,8 @@ BQ_ROUTINE="$(out bigquery_routine_id)"
 BQ_POLICY="$(out bigquery_row_access_policy_id)"
 BILLING_ACCOUNT="$(out billing_account)"
 PROJECT_BILLING="$(out project_billing_account)"
+RUN_SERVICE="$(out run_service_name)"
+RUN_BASE="$ENDPOINT/v2/projects/$PROJECT/locations/$REGION/services/$RUN_SERVICE"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -373,6 +375,22 @@ check "Compute-Engine cluster reads back the default instance groups" \
   "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
   '"numInstances":1' '"numInstances":2'
 
+# ── Cloud Run: the v2 service the module gate also drives ────────────────────
+# The raw resource exists for container readiness_probe (the v2 submodule has
+# only startup/liveness probes). labels/env/ingress are plain served fields;
+# the service account is the fixture's IAM SA, so this also proves the provider
+# can point a revision at an existing account.
+check "Cloud Run service created" "$RUN_BASE" \
+  "\"name\":\"projects/$PROJECT/locations/$REGION/services/$RUN_SERVICE\"" \
+  '"ingress":"INGRESS_TRAFFIC_INTERNAL_ONLY"' \
+  '"env":"compat-test"' \
+  '"image":"us-docker.pkg.dev/cloudrun/container/hello"' \
+  '"serviceAccount":"'"$SA_EMAIL"'"'
+check "Cloud Run container readiness probe read back" "$RUN_BASE" \
+  '"readinessProbe"' '"path":"/ready"' '"periodSeconds":10' '"successThreshold":2'
+check "Cloud Run revision created" "$RUN_BASE/revisions" \
+  '"revisions"' "services/$RUN_SERVICE/revisions/$RUN_SERVICE-00001"
+
 # An in-place update: changing the variable makes the provider PATCH the config
 # with an updateMask. The declaration must change and nothing else.
 echo "== $TF: in-place update of the uptime check"
@@ -445,6 +463,29 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ── Cloud Run: in-place services.update (new revision) ────────────────────────
+# Changing the container env makes the provider PATCH the service; the template
+# change must mint revision 00002 and still re-plan clean. The readiness probe
+# is not part of the update, so it must survive the PATCH untouched.
+echo "== $TF: in-place update of the Cloud Run service env"
+TF_VARS_RUN=("${TF_VARS[@]}" -var="uptime_display_name=jaiscloud-tf-uptime-v2" \
+  -var="routine_body=x * 3" -var="row_access_policy_predicate=region = \"US\"" \
+  -var="run_env_value=compat-v2")
+tf apply -input=false -auto-approve -no-color "${TF_VARS_RUN[@]}" >/dev/null
+check "Cloud Run container env updated in place" "$RUN_BASE" \
+  '"name":"MODE"' '"value":"compat-v2"'
+check "Cloud Run update preserved the readiness probe" "$RUN_BASE" \
+  '"readinessProbe"' '"path":"/ready"'
+check "Cloud Run update minted the next revision" "$RUN_BASE/revisions" \
+  "services/$RUN_SERVICE/revisions/$RUN_SERVICE-00002"
+if tf plan -input=false -no-color -detailed-exitcode "${TF_VARS_RUN[@]}" >/dev/null 2>&1; then
+  printf '  [PASS] re-plan after the Cloud Run update reports no changes\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] re-plan after the Cloud Run update reports changes\n'
+  FAIL=$((FAIL + 1))
+fi
+
 echo "== destroy (the virtual cluster only, to prove the pools survive it)"
 tf destroy -input=false -auto-approve -no-color \
   -target=google_dataproc_cluster.gke "${TF_VARS[@]}" >/dev/null
@@ -479,6 +520,19 @@ for pair in "routines/$BQ_ROUTINE" "tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLIC
     PASS=$((PASS + 1))
   else
     printf '  [FAIL] %s get after destroy = HTTP %s, want 404\n' "$pair" "$BQ_STATUS"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
+# Destroy removed the Cloud Run service; the service and its revisions are 404.
+for path in "$RUN_BASE" "$RUN_BASE/revisions"; do
+  RUN_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$path" 2>/dev/null || true)"
+  if [[ "$RUN_STATUS" == "404" ]]; then
+    printf '  [PASS] %s deleted on destroy\n' "${path#"$ENDPOINT"}"
+    PASS=$((PASS + 1))
+  else
+    printf '  [FAIL] %s get after destroy = HTTP %s, want 404\n' "${path#"$ENDPOINT"}" "$RUN_STATUS"
     FAIL=$((FAIL + 1))
   fi
 done

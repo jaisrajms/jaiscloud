@@ -154,6 +154,12 @@ var pathRules = []struct {
 	{method: "POST", re: regexp.MustCompile(`^/v3/projects/[^/]+/alertPolicies/?$`), res: "google_monitoring_alert_policy"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v3/projects/[^/]+/alertPolicies/[^/?]+`), res: "google_monitoring_alert_policy"},
 	{method: "PUT", re: regexp.MustCompile(`^/v3/projects/[^/]+/alertPolicies/[^/?]+`), res: "google_monitoring_alert_policy"},
+	// Cloud Run v2 (google_cloud_run_v2_service). The collection POST creates a
+	// service; PATCH updates one. The service IAM custom methods are POSTs on
+	// .../services/{name}:getIamPolicy and :setIamPolicy, so the POST rule must
+	// anchor on the collection and the PATCH rule must exclude ':' and '/'.
+	{method: "POST", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/services/?$`), res: "google_cloud_run_v2_service"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/services/[^/:?]+/?$`), res: "google_cloud_run_v2_service"},
 }
 
 // ResourceForPath returns the provider resource type a captured request writes,
