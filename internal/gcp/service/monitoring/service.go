@@ -39,12 +39,14 @@ package monitoring
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/identity"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
@@ -332,6 +334,9 @@ func (s *Service) ListAlertPolicies(ctx context.Context, project string, pageSiz
 		return nil, 0, "", mapStoreError(err)
 	}
 	page, next := pageSlice(policies, pageSize, pageToken)
+	for i := range page {
+		page[i] = withConditionNames(project, page[i])
+	}
 	return page, len(policies), next, nil
 }
 
@@ -340,7 +345,7 @@ func (s *Service) GetAlertPolicy(ctx context.Context, project, id string) (monit
 	if err != nil {
 		return monitoringstore.AlertPolicy{}, mapStoreError(err)
 	}
-	return p, nil
+	return withConditionNames(project, p), nil
 }
 
 func (s *Service) CreateAlertPolicy(ctx context.Context, project string, p monitoringstore.AlertPolicy) (monitoringstore.AlertPolicy, error) {
@@ -351,7 +356,11 @@ func (s *Service) CreateAlertPolicy(ctx context.Context, project string, p monit
 		enabled := true
 		p.Enabled = &enabled
 	}
+	now := clock.Now()
 	p.ID = uuid.NewString()
+	p.CreateTime = now
+	p.UpdateTime = now
+	assignConditionNames(project, &p, false)
 	if err := s.store.CreateAlertPolicy(ctx, project, p); err != nil {
 		return monitoringstore.AlertPolicy{}, mapStoreError(err)
 	}
@@ -362,13 +371,34 @@ func (s *Service) CreateAlertPolicy(ctx context.Context, project string, p monit
 // empty/nil update mask is a full replace; a non-empty mask merges field-by-field
 // inside the store's locked section so a concurrent masked update touching
 // different fields cannot be lost.
+//
+// The policy's creation time is immutable and the mutation time always advances
+// to the server clock, whatever the request carried: both are output-only. A
+// condition that names an existing condition keeps that name
+// (alert.proto AlertPolicy.Condition.name: "including a condition name causes
+// the existing condition to be updated"); an unnamed condition is named by the
+// server.
 func (s *Service) UpdateAlertPolicy(ctx context.Context, project, id string, incoming monitoringstore.AlertPolicy, updateMask []string) (monitoringstore.AlertPolicy, error) {
 	incoming.ID = id
+	now := clock.Now()
 	p, err := s.store.UpdateAlertPolicyAtomic(ctx, project, id, func(stored monitoringstore.AlertPolicy) (monitoringstore.AlertPolicy, error) {
-		if len(updateMask) == 0 {
-			return incoming, nil
+		next := incoming
+		if len(updateMask) > 0 {
+			merged, err := applyAlertPolicyMask(stored, incoming, updateMask)
+			if err != nil {
+				return stored, err
+			}
+			next = merged
 		}
-		return applyAlertPolicyMask(stored, incoming, updateMask)
+		next.ID = id
+		next.CreateTime = stored.CreateTime
+		next.UpdateTime = now
+		// The update is retried on a serialization conflict, and the memory
+		// store shares the incoming slice, so name a copy rather than mutating
+		// the request.
+		next.Conditions = cloneConditions(next.Conditions)
+		assignConditionNames(project, &next, true)
+		return next, nil
 	})
 	if err != nil {
 		return monitoringstore.AlertPolicy{}, mapStoreError(err)
@@ -378,6 +408,90 @@ func (s *Service) UpdateAlertPolicy(ctx context.Context, project, id string, inc
 
 func (s *Service) DeleteAlertPolicy(ctx context.Context, project, id string) error {
 	return mapStoreError(s.store.DeleteAlertPolicy(ctx, project, id))
+}
+
+// MutationActorEmail is the identity rendered as
+// MutationRecord.mutated_by on an alert policy. The transport-neutral core has
+// no request principal, so the emulator records the documented default service
+// account — the same identity the gateway falls back to when a request carries
+// no credential.
+const MutationActorEmail = identity.DefaultServiceAccount
+
+// assignConditionNames sets each condition's server-assigned resource name.
+// Cloud Monitoring names a condition itself when it is created
+// (alert.proto AlertPolicy.Condition.name), so a name supplied at create is
+// ignored. On update (keep) a supplied name identifies an existing condition
+// and is preserved when it is a name of this policy and no other condition in
+// the request claims it; anything else gets a server-assigned name. An unnamed
+// condition takes the lowest free position-derived name, so two conditions
+// never share an id.
+//
+// Conditions are stored as opaque JSON, so the name is written into that object
+// rather than held in a parallel field. A condition that is not a JSON object is
+// left untouched (the transports pass it through verbatim).
+func assignConditionNames(project string, p *monitoringstore.AlertPolicy, keep bool) {
+	prefix := AlertPolicyName(project, p.ID) + "/conditions/"
+	decoded := make([]map[string]any, len(p.Conditions))
+	claimed := make(map[string]bool, len(p.Conditions))
+	kept := make([]bool, len(p.Conditions))
+	for i, raw := range p.Conditions {
+		var cond map[string]any
+		if err := json.Unmarshal(raw, &cond); err != nil || cond == nil {
+			continue
+		}
+		decoded[i] = cond
+		if !keep {
+			continue
+		}
+		// A name Cloud Monitoring would not have assigned for this policy (a
+		// foreign resource name, an empty condition id, or one already used by
+		// an earlier condition) does not identify an existing condition here.
+		if name, ok := cond["name"].(string); ok && strings.HasPrefix(name, prefix) && len(name) > len(prefix) && !claimed[name] {
+			claimed[name] = true
+			kept[i] = true
+		}
+	}
+	next := 0
+	for i, cond := range decoded {
+		if cond == nil || kept[i] {
+			continue
+		}
+		for claimed[AlertPolicyConditionName(project, p.ID, next)] {
+			next++
+		}
+		name := AlertPolicyConditionName(project, p.ID, next)
+		claimed[name] = true
+		next++
+		cond["name"] = name
+		b, err := json.Marshal(cond)
+		if err != nil {
+			continue
+		}
+		p.Conditions[i] = b
+	}
+}
+
+// withConditionNames returns p with a name on every condition. Conditions are
+// named when written; this heals a record written before FC2-20 (a policy from
+// an upgraded database or an older snapshot) so every read serves the name real
+// Monitoring assigns. The slice is copied because assignConditionNames must not
+// mutate the store's copy — the memory store's Get returns a struct that shares
+// its condition slice.
+func withConditionNames(project string, p monitoringstore.AlertPolicy) monitoringstore.AlertPolicy {
+	p.Conditions = cloneConditions(p.Conditions)
+	assignConditionNames(project, &p, true)
+	return p
+}
+
+// cloneConditions returns a copy of conds whose elements do not share the
+// caller's backing array.
+func cloneConditions(conds []json.RawMessage) []json.RawMessage {
+	if conds == nil {
+		return nil
+	}
+	out := make([]json.RawMessage, len(conds))
+	copy(out, conds)
+	return out
 }
 
 // alertPolicyMaskFields is the full update_mask field set of a Cloud Monitoring

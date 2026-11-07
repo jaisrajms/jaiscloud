@@ -151,7 +151,10 @@ type TimeSeries struct {
 // notificationChannelStrategy, notificationPrompts) exactly as the client sent
 // it, so a nested update-mask path can be applied as the root message.
 // Severity is the `severity` enum name (SEVERITY_UNSPECIFIED, CRITICAL, ERROR,
-// WARNING); an empty string means the client never set it.
+// WARNING); an empty string means the client never set it. CreateTime and
+// UpdateTime are the server clock values rendered as the policy's
+// creationRecord/mutationRecord audit messages; they are not settable by a
+// client.
 type AlertPolicy struct {
 	ID                   string            `json:"id,omitempty"`
 	DisplayName          string            `json:"displayName,omitempty"`
@@ -163,6 +166,8 @@ type AlertPolicy struct {
 	UserLabels           map[string]string `json:"userLabels,omitempty"`
 	AlertStrategy        json.RawMessage   `json:"alertStrategy,omitempty"`
 	Severity             string            `json:"severity,omitempty"`
+	CreateTime           time.Time         `json:"createTime,omitempty"`
+	UpdateTime           time.Time         `json:"updateTime,omitempty"`
 }
 
 // NotificationChannel is a stored notification destination (the CloudWatch
@@ -279,6 +284,8 @@ type Store interface {
 	CreateAlertPolicy(ctx context.Context, project string, p AlertPolicy) error
 	GetAlertPolicy(ctx context.Context, project, id string) (AlertPolicy, error)
 	ListAlertPolicies(ctx context.Context, project string) ([]AlertPolicy, error)
+	// UpdateAlertPolicy replaces the whole record, including the server-owned
+	// CreateTime/UpdateTime (the caller supplies them; the service owns them).
 	UpdateAlertPolicy(ctx context.Context, project string, p AlertPolicy) error
 	// UpdateAlertPolicyAtomic performs a locked get-mutate-set cycle: mutate
 	// receives the current policy and returns the version to persist, or an

@@ -1,6 +1,7 @@
 package monitoring
 
 import (
+	"strconv"
 	"strings"
 
 	"jaiscloud/internal/gcp/resource"
@@ -137,6 +138,18 @@ func SplitAlertPolicyName(name string) (project, id string, ok bool) {
 		return "", "", false
 	}
 	return parts[1], parts[3], true
+}
+
+// AlertPolicyConditionName is the server-assigned resource name of one
+// condition inside an alert policy:
+// "projects/{p}/alertPolicies/{policy}/conditions/{condition}".
+// Cloud Monitoring assigns it when a policy is created or a condition is added
+// (alert.proto AlertPolicy.Condition.name); the emulator derives the condition
+// id from the condition's position so the name is stable across a read-modify-
+// write update. A name already carrying this policy's prefix (a condition the
+// caller read back) is preserved on update, never chosen at create.
+func AlertPolicyConditionName(project, policyID string, index int) string {
+	return AlertPolicyName(project, policyID) + "/conditions/" + strconv.Itoa(index)
 }
 
 // MonitoredResourceDescriptorName is the Cloud Monitoring resource name for a
