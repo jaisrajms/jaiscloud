@@ -452,3 +452,33 @@ fails the gate instead of being chased as a mysterious plan diff:
 `.github/workflows/gcp-provider-drift.yml` job re-runs the gates, diffs the
 provider schema against `docs/fidelity/terraform-provider-schema.json`, and opens
 an issue with the schema diff.
+
+## Coverage inventory (TF1)
+
+The suite is a curated snapshot, so `tools/tfcoverage` measures it against the
+whole provider: one row per `hashicorp/google` resource type that maps to an
+emulated service, with `service`, `emulator_state` (`served` / `limited` /
+`unsupported` / `client-side`), `exercised_by` (`fixture:<name>`,
+`module:<case>`, `plan-only:<case>` or `none`), `classification`, `reason` and
+a `review_after` date. The committed output is
+`docs/fidelity/terraform-coverage.csv`.
+
+The hand-maintained half is `tools/tfcoverage/scope.yaml`: it maps resource-type
+globs to services, exempts whole unserved subsystems (`out_of_scope`, wave-plan
+§6), and records the fidelity-matrix state each service had when its rules were
+reviewed. `exercised_by` is derived from the `resource` blocks in `main.tf` and
+`module-cases/*.sh` — a module's *internal* resources are the module gate's
+contract, not this inventory's.
+
+```bash
+make check-gcp-terraform-coverage   # offline PR gate; also in gcp-ci-preflight
+make gen-gcp-terraform-coverage     # rewrite the CSV after adding a resource/case
+make gen-gcp-terraform-provider-schema-full  # new provider -> new snapshot
+```
+
+The gate fails when a provider resource type is neither classified nor
+out of scope, a rule matches nothing (a removed resource type), the CSV does not
+match a fresh computation, an unexercised/unsupported row in a `ga` service has
+no reason or an expired review date, or a service the rules recorded as
+`limited`/`unsupported` gains `ga` cells in the fidelity matrix (reclassify
+instead of keeping a stale reason).

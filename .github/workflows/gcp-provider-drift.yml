@@ -125,6 +125,32 @@ jobs:
             exit 1
           fi
 
+      - name: Terraform coverage inventory drift
+        run: |
+          set -uo pipefail
+          # Regenerate the *full* snapshot the coverage gate reads, then check
+          # the committed inventory against it. A new provider resource type
+          # with no scope rule makes the check fail (an unclassified type must
+          # not disappear from the measurement).
+          go run ./tools/tfcoverage -raw-schema /tmp/schema/full.json \
+            -write-snapshot docs/fidelity/terraform-provider-schema-full.json
+          set +e
+          out="$(go run ./tools/tfcoverage -check 2>&1)"; rc=$?
+          set -e
+          if [ "$rc" -eq 0 ] && git diff --quiet -- docs/fidelity/terraform-provider-schema-full.json; then
+            echo "terraform coverage inventory unchanged" | tee -a drift-report.md
+            exit 0
+          fi
+          {
+            echo "### terraform coverage inventory drift"
+            echo '```'
+            git diff --stat -- docs/fidelity/terraform-provider-schema-full.json || true
+            echo "$out"
+            echo '```'
+            echo "Regenerate with 'make gen-gcp-terraform-provider-schema-full' and 'make gen-gcp-terraform-coverage', then classify any new resource type in tools/tfcoverage/scope.yaml."
+          } | tee -a drift-report.md
+          exit 1
+
       - name: Upload the drift report
         if: always()
         uses: actions/upload-artifact@v4
