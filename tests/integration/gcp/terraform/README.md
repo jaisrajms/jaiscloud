@@ -123,8 +123,9 @@ module, and requires the module's lifecycle to converge.
 | `kms` | [`terraform-google-kms`](https://github.com/terraform-google-modules/terraform-google-kms) | `ef6e0eda7032` | the crypto key's `versionTemplate.algorithm` read back (the module always emits the `version_template` block); `key_algorithm` changed `HMAC_SHA256` → `HMAC_SHA512` (mask `versionTemplate.algorithm`) and back, with a `cryptoKeyVersion` created after the change carrying `HMAC_SHA512`; each phase ends with `plan` **No changes** |
 | `firestore` | [`terraform-google-firestore`](https://github.com/GoogleCloudPlatform/terraform-google-firestore) | `50d170b9ebfc` | the database's `cmekConfig.kmsKeyName` read back (the module emits `cmek_config` only when `kms_key_name != null`), so the ForceNew block stops forcing a replacement; a non-ForceNew PITR change re-applies, and a second module instance with `kms_key_name = null` reports no `cmekConfig` at all; a third phase in its own working directory/state creates the implicit `(default)` database (`database_id = "(default)"`, the Firebase shape) and reads `locationId` back; a fourth phase destroys a database and re-applies the same id (TGM13: immediate reuse, where real GCP blocks it for ~5 minutes); each phase ends with `plan` **No changes** |
 | `cloudrun` | [`terraform-google-cloud-run`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-run) (`modules/v2`) | `4ce640a2a519` | the v2 service, its module-created service account and the `roles/run.invoker` IAM member apply; the service reads back labels/ingress/description, the container image/env/port and the service account; `revisions.list` carries revision `00001`; a second `plan` is **No changes**; changing ingress, a service label and the container env PATCHes in place, mints revision `00002` and re-plans **No changes**; destroy leaves the service and its revisions `404` |
+| `bigquery` | [`terraform-google-bigquery`](https://github.com/terraform-google-modules/terraform-google-bigquery) | `e11db0dcd597` | the dataset + table create with the module's defaults and the `access` ACL; the dataset reads back its description, location, labels, `defaultTableExpirationMs` and the OWNER/`projectOwners` entry, the table its reference, friendly name, labels and schema; a second `plan` is **No changes**; a new schema column, dataset/table labels, the description and a second ACL entry (READER/`projectReaders`) update in place and re-plan **No changes**; destroy leaves the dataset and table `404` |
 
-The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore and cloudrun cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
+The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun and bigquery cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -178,6 +179,11 @@ git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-run \
   "$HOME/.cache/terraform-modules/terraform-google-cloud-run"
 git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-run" checkout 4ce640a2a519
 make test-gcp-terraform-cloudrun
+
+git clone https://github.com/terraform-google-modules/terraform-google-bigquery \
+  "$HOME/.cache/terraform-modules/terraform-google-bigquery"
+git -C "$HOME/.cache/terraform-modules/terraform-google-bigquery" checkout e11db0dcd597
+make test-gcp-terraform-bigquery
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
@@ -185,8 +191,8 @@ make test-gcp-terraform-cloudrun
 point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` /
 `TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` /
-`TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` / `TF_CLOUD_RUN_MODULE_DIR`
-respectively.
+`TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` / `TF_CLOUD_RUN_MODULE_DIR` /
+`TF_BIGQUERY_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -413,6 +419,29 @@ to `false` because the module default is a provider-side destroy guard (real GCP
 refuses the delete too). IAP, custom domains (v1), Jobs, WorkerPools and traffic
 targets are outside the served surface and are not configured; the case header
 records each boundary.
+
+**bigquery** — the pinned module is the CFT `terraform-google-bigquery` root
+module, which creates one `google_bigquery_dataset` and one
+`google_bigquery_table` per `tables` entry. The gate:
+
+1. `apply` the dataset with a description, `US` location, labels, a
+   `default_table_expiration_ms` and the `access` ACL (OWNER/`projectOwners`),
+   and one table with a two-column schema and labels; assert through REST that
+   the dataset and table read back (`datasetReference`, `tableReference`,
+   `friendlyName`, labels, `defaultTableExpirationMs`, the schema fields); the
+   apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. add a schema column, change the dataset and table labels and the dataset
+   description, and add a READER/`projectReaders` ACL entry; `apply`; assert the
+   new values; `plan` → **no changes**
+4. `destroy`; the dataset and table are `404`
+
+Dataset and table IAM (`google_bigquery_dataset_iam_*` /
+`google_bigquery_table_iam_*`) is not served — `getIamPolicy`/`setIamPolicy` are
+not in the operation registry (TF1-1, `fix/gcp-bigquery-resource-iam`) — so the
+case drives the served dataset ACL through the module's `access` input instead.
+Views, materialized/external tables, routines, CMEK and resource tags stay at
+their defaults; the case header records each boundary.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
