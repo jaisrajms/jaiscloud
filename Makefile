@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam test-gcp-terraform-sql-db test-gcp-terraform-gke test-gcp-terraform-datastore test-gcp-terraform-plan-only \
+        test-gcp-terraform test-gcp-terraform-all test-gcp-terraform-lifecycle test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam test-gcp-terraform-sql-db test-gcp-terraform-gke test-gcp-terraform-datastore test-gcp-terraform-plan-only \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
@@ -1301,6 +1301,26 @@ test-gcp-terraform-all: ## Run the Terraform fixture + every pinned module case 
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-all.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-all.sh http://localhost:8080 test-project
+
+# Lifecycle depth (TF5): import, refresh-only, -replace, out-of-band drift,
+# negative paths and parallel IAM, one representative case per service plus the
+# Terraform-native `.tftest.hcl` assertions. A full apply/destroy run, so it is
+# nightly-only (not in gcp-ci-preflight). Pass STRICT=1 in CI: a SKIP is a
+# broken gate, not a pass. TF_BIN=tofu runs the same cases under OpenTofu.
+test-gcp-terraform-lifecycle: ## Lifecycle gate: import/refresh/replace/drift/negative/parallel (TF_BIN=tofu, STRICT=1)
+	@set -e; \
+	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-lifecycle.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-lifecycle.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-lifecycle.sh http://localhost:8080 test-project
 
 # The demo module's own gate (../demo/dpgke-lifecycle/terraform/run.sh): apply,
 # re-plan for permadiffs, the provider's job submit/read, destroy ordering and
