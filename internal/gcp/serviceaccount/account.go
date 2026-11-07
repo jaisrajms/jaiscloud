@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -38,10 +39,32 @@ func AccountNotFound() error {
 // resolves an account without importing the IAM provider.
 type Exister struct{ Resources store.ResourceStore }
 
+// ImplicitDefault reports whether email names a Google-managed service account
+// every project has without an explicit create: the App Engine default
+// ({project}@appspot.gserviceaccount.com), the Compute Engine default
+// ({number}-compute@developer.gserviceaccount.com), and the Google APIs service
+// agent ({number}@cloudservices.gserviceaccount.com). Real GCP resolves them,
+// so a reference check must not report one missing just because the emulator
+// never materialized the record.
+func ImplicitDefault(project, email string) bool {
+	number := resource.ProjectNumber(project)
+	switch email {
+	case project + "@appspot.gserviceaccount.com",
+		number + "-compute@developer.gserviceaccount.com",
+		number + "@cloudservices.gserviceaccount.com":
+		return true
+	}
+	return false
+}
+
 // ServiceAccountExists reports whether identifier names a live service account
-// in project. A malformed or unknown account is (false, nil); a store failure
-// is returned.
+// in project. The Google-managed defaults count as live without a store
+// record; a malformed or unknown account is (false, nil) and a store failure is
+// returned.
 func (e Exister) ServiceAccountExists(ctx context.Context, project, identifier string) (bool, error) {
+	if ImplicitDefault(project, identifier) {
+		return true, nil
+	}
 	_, _, err := LookupAccount(ctx, e.Resources, project, identifier)
 	if err == nil {
 		return true, nil
