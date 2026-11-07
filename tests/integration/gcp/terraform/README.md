@@ -737,7 +737,7 @@ is a failure, not a pass.
 |---|---|
 | `storage` | import (clean plan), `refresh-only`, `-replace` (new `timeCreated`/metageneration), ForceNew rename (old bucket 404), out-of-band label drift, label-import artifact, duplicate 409 / invalid name 400 / provider-surfaced 409 |
 | `pubsub` | import (topic + subscription), `refresh-only`, `-replace` the subscription, ForceNew rename (old subscription 404), out-of-band label drift through `updateMask=labels`, label-import artifact, duplicate 409 / unsupported mask 400 / invalid duration 400 / provider-surfaced 409 |
-| `kms` | import (key ring + crypto key), `refresh-only`, out-of-band label drift, crypto-key `-replace` as an **expected 409** (the API cannot delete a key) with re-import and rotation repair, duplicate 409 / invalid algorithm 400 / unsupported mask 400, and the post-destroy "key ring and key survive, version is `DESTROY_SCHEDULED`" assertions |
+| `kms` | import (key ring + crypto key), `refresh-only`, out-of-band label drift, crypto-key `-replace` as an **expected 409** (the provider never calls the documented delete) with re-import and rotation repair, duplicate 409 / invalid algorithm 400 / unsupported mask 400 / live-version `cryptoKeys.delete` 400, and the post-destroy "key ring and key survive, version is `DESTROY_SCHEDULED`" assertions |
 | `iam-parallel` | 10 service accounts + 10 project bindings at `-parallelism=10`; the policy must hold all 10 (a lost update fails), re-plan clean, destroy at parallelism 10 |
 | `tftest` | `terraform test` over `lifecycle-tftest/`: provider-visible computed ids, self links, nested objects |
 
@@ -769,10 +769,12 @@ replaces the other.
 
 - `google_storage_bucket`'s `-replace` re-creates the same name; its server-side
   `timeCreated`/`metageneration` are the proof the object was re-created.
-- A Cloud KMS key ring and crypto key cannot be deleted (real KMS has no delete
-  method; the provider destroys versions and drops the objects from state), so
-  `-replace` on a crypto key is an expected 409. The emulator matches that
-  behaviour; the gate asserts it and repairs rotation after re-import.
+- The provider never calls Cloud KMS's documented delete methods: a key-ring
+  delete is state-only and a crypto-key delete destroys the versions, so
+  `-replace` on a crypto key is an expected 409 (re-create under the same name).
+  The gate asserts that failure and repairs rotation after re-import;
+  `cryptoKeys.delete` itself is served and enforces the live-version 400 (TF5-4
+  is the unimplemented key-ring delete).
 - An unmanaged extra label key is filtered out of `labels` by the provider's
   `SetLabels` (only keys already in state are planned) and preserved by the
   update; the gate asserts the managed key converges and records the extra key.

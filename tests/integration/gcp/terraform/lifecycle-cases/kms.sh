@@ -11,15 +11,17 @@
 #     neither; the provider only destroys versions)
 #
 # Two constraints are recorded, not worked around:
-#   - A Cloud KMS key ring and crypto key cannot be deleted. The provider's
-#     delete removes the key ring from state without calling the API and destroys
-#     every crypto-key version (scheduling them DESTROY_SCHEDULED); the objects
-#     remain readable. `terraform apply -replace` therefore cannot recreate a
-#     key under the same name: it fails 409 on the create. That is real GCP
-#     behaviour, so the replace gate is an expected-failure gate (TF5-3), and
-#     recoveries re-import the key and re-enable its rotation schedule.
-#   - A DELETE on a key ring has no API method (real KMS has no delete route).
-#     The emulator answers 501; the provider never sends it. Recorded as TF5-4.
+#   - The provider never deletes a key ring or crypto key: the key-ring delete is
+#     state-only (no API call) and the crypto-key delete destroys every version
+#     (scheduling them DESTROY_SCHEDULED). The Cloud KMS Discovery does define
+#     both delete methods, but the provider does not call them, so `terraform
+#     apply -replace` on a crypto key fails 409 on the re-create. That is the
+#     behaviour a real-GCP user sees with this provider (TF5-3); the gate asserts
+#     the failure, re-imports the key and re-enables its rotation schedule.
+#   - `projects.locations.keyRings.delete` is a documented method but the
+#     emulator answers 501 UNIMPLEMENTED (TF5-4, fix). `cryptoKeys.delete` is
+#     served and enforces the documented child precondition (400
+#     FAILED_PRECONDITION while a version exists); the gate asserts that path.
 #
 # The empty-labels refresh artifact is the same provider normalisation as the
 # storage and pubsub cases.
@@ -156,6 +158,14 @@ case_main() {
     '{"purpose":"ENCRYPT_DECRYPT","versionTemplate":{"algorithm":"BOGUS"}}' 400
   expect_http_error "unsupported update mask" PATCH \
     "$ENDPOINT/v1/$KEY_ID?updateMask=purpose" '{"purpose":"MAC"}' 400
+  # cryptoKeys.delete is served and enforces the documented precondition: a key
+  # with a live version cannot be deleted (real KMS: FAILED_PRECONDITION).
+  curl -s -o /dev/null -X POST -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    -H 'Content-Type: application/json' -d '{"purpose":"ENCRYPT_DECRYPT"}' \
+    "$ENDPOINT/v1/projects/$PROJECT/locations/global/keyRings/$KEYRING/cryptoKeys?cryptoKeyId=lc-kms-delprobe" 2>/dev/null || true
+  expect_http_error "crypto key delete with a live version" DELETE \
+    "$ENDPOINT/v1/projects/$PROJECT/locations/global/keyRings/$KEYRING/cryptoKeys/lc-kms-delprobe" \
+    '' 400
   curl -s -o /dev/null -X POST -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
     -H 'Content-Type: application/json' -d '{}' \
     "$ENDPOINT/v1/projects/$PROJECT/locations/global/keyRings?keyRingId=lc-kms-dup" 2>/dev/null || true
@@ -168,20 +178,24 @@ case_main() {
     "409"
 
   destroy_phase
-  # Cloud KMS deletes neither object: the key ring has no delete method and a
-  # crypto key can only have its versions scheduled for destruction.
-  check_status "the key ring survives destroy (no API delete method)" \
+  # The provider does not call the documented delete methods, so the objects it
+  # "destroyed" are still there: the key ring is state-only and a crypto key can
+  # only have its versions scheduled for destruction.
+  check_status "the key ring survives destroy (the provider never calls delete)" \
     "$ENDPOINT/v1/projects/$PROJECT/locations/global/keyRings/$KEYRING" 200
   check_status "the crypto key survives destroy" "$ENDPOINT/v1/$KEY_ID" 200
   check "the destroyed version is DESTROY_SCHEDULED" \
     "$ENDPOINT/v1/$KEY_ID/cryptoKeyVersions" '"state":"DESTROY_SCHEDULED"'
-  # Cloud KMS has no key-ring delete method at all; the provider never issues
-  # one. The emulator answers 501 UNIMPLEMENTED. Recorded (TF5-4) rather than
-  # gated, because any 4xx/5xx is defensible for a method real GCP does not
-  # define and no consumer depends on it.
+  # Cloud KMS documents projects.locations.keyRings.delete; the emulator answers
+  # 501 UNIMPLEMENTED. Recorded as TF5-4 (fix) rather than gated, so the fix can
+  # land without editing this case.
   local del_code
   del_code="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
     -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
     "$ENDPOINT/v1/projects/$PROJECT/locations/global/keyRings/$KEYRING" 2>/dev/null || true)"
-  note "key-ring DELETE returns HTTP $del_code (real KMS has no delete method; provider never sends it)"
+  if [[ "$del_code" == "200" ]]; then
+    pass "documented keyRings.delete is served (HTTP 200)"
+  else
+    note "documented keyRings.delete returns HTTP $del_code (recorded gap TF5-4)"
+  fi
 }
