@@ -52,7 +52,7 @@ func TestEmptyLabelIsDroppedClientSide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load catalog: %v", err)
 	}
-	report := Check("tgm15-empty-label", requests, schema, mapping, catalog, false)
+	report := Check("tgm15-empty-label", requests, schema, mapping, catalog, false, false)
 	if report.Failed() {
 		t.Fatalf("empty-label capture failed the gate; the provider drop is client-side, not an emulator gap:\n%s", report.Render())
 	}
@@ -123,7 +123,7 @@ func TestSentButUnsupportedFails(t *testing.T) {
 	mapping := map[mappingKey]mappingRow{
 		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", apiField: "labels", class: Unsupported, reason: "not modelled"},
 	}
-	report := Check("x", reqs, testSchema("labels"), mapping, testCatalog(t, ""), false)
+	report := Check("x", reqs, testSchema("labels"), mapping, testCatalog(t, ""), false, false)
 	if !report.Failed() {
 		t.Fatalf("sent-but-unsupported capture passed:\n%s", report.Render())
 	}
@@ -134,7 +134,7 @@ func TestSentWithMissingCatalogRowFails(t *testing.T) {
 	mapping := map[mappingKey]mappingRow{
 		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", catalogService: "storage", catalogResource: "OtherResource", attribute: "labels", apiField: "labels", class: Served},
 	}
-	report := Check("x", reqs, testSchema("labels"), mapping, testCatalog(t, ""), false)
+	report := Check("x", reqs, testSchema("labels"), mapping, testCatalog(t, ""), false, false)
 	if !report.Failed() {
 		t.Fatalf("sent field with no catalog row passed:\n%s", report.Render())
 	}
@@ -143,7 +143,7 @@ func TestSentWithMissingCatalogRowFails(t *testing.T) {
 func TestUnclassifiedAttributeFails(t *testing.T) {
 	report := Check("x", []Request{{Method: "GET", Path: "/v1/projects/p/topics/t"}}, testSchema("labels", "new_field"), map[mappingKey]mappingRow{
 		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
-	}, map[catalogKey]string{}, false)
+	}, map[catalogKey]string{}, false, false)
 	if !report.Failed() {
 		t.Fatalf("unclassified attribute passed:\n%s", report.Render())
 	}
@@ -152,16 +152,65 @@ func TestUnclassifiedAttributeFails(t *testing.T) {
 func TestStaleMappingRowFails(t *testing.T) {
 	report := Check("x", []Request{}, testSchema("labels"), map[mappingKey]mappingRow{
 		{"google_storage_bucket", "removed_by_provider"}: {providerResource: "google_storage_bucket", attribute: "removed_by_provider", class: NotExercised, reason: "x"},
-	}, map[catalogKey]string{}, false)
+	}, map[catalogKey]string{}, false, false)
 	if !report.Failed() {
 		t.Fatalf("stale mapping row passed:\n%s", report.Render())
+	}
+}
+
+// TestAllowMissingAttributesDowngradesStaleRows pins the escape hatch for a
+// case whose consumer module pins an older provider: an attribute the newer
+// mapping carries is absent from that case's schema and must stay a note, while
+// an unclassified attribute under the same case's schema still fails.
+func TestAllowMissingAttributesDowngradesStaleRows(t *testing.T) {
+	mapping := map[mappingKey]mappingRow{
+		{"google_storage_bucket", "labels"}:               {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
+		{"google_storage_bucket", "added_by_provider_v8"}: {providerResource: "google_storage_bucket", attribute: "added_by_provider_v8", class: NotExercised, reason: "x"},
+	}
+	report := Check("x", []Request{}, testSchema("labels"), mapping, map[catalogKey]string{}, false, true)
+	if report.Failed() {
+		t.Fatalf("an older-provider case failed on a post-dated attribute:\n%s", report.Render())
+	}
+	if len(report.Notes) == 0 {
+		t.Fatalf("the absent mapping row was dropped silently; want a note:\n%s", report.Render())
+	}
+
+	// The same flag must not hide an attribute the case's schema *does* declare
+	// but the mapping does not classify.
+	report = Check("x", []Request{}, testSchema("labels", "new_field"),
+		map[mappingKey]mappingRow{
+			{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
+		}, map[catalogKey]string{}, false, true)
+	if !report.Failed() {
+		t.Fatalf("a declared-but-unclassified attribute passed with -allow-missing-attributes:\n%s", report.Render())
+	}
+}
+
+// TestScopeMappingKeepsOnlyNamedResources pins -only-resources: another
+// resource's rows (and its stale-row failure) must not reach a case that never
+// drives it.
+func TestScopeMappingKeepsOnlyNamedResources(t *testing.T) {
+	mapping := map[mappingKey]mappingRow{
+		{"google_storage_bucket", "labels"}:              {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
+		{"google_workflows_workflow", "source_contents"}: {providerResource: "google_workflows_workflow", attribute: "source_contents", class: NotExercised, reason: "x"},
+	}
+	scoped := scopeMapping(mapping, []string{" google_workflows_workflow "})
+	if len(scoped) != 1 {
+		t.Fatalf("scoped mapping has %d rows, want 1", len(scoped))
+	}
+	if _, ok := scoped[mappingKey{"google_workflows_workflow", "source_contents"}]; !ok {
+		t.Fatalf("scoped mapping dropped the named resource: %v", scoped)
+	}
+	report := Check("x", []Request{}, testSchema("labels"), scoped, map[catalogKey]string{}, false, false)
+	if report.Failed() {
+		t.Fatalf("a scoped case failed on an unscoped resource:\n%s", report.Render())
 	}
 }
 
 func TestRequireResourcesFailsWhenNothingMapped(t *testing.T) {
 	report := Check("x", []Request{{Method: "GET", Path: "/v1/unknown"}}, testSchema("labels"), map[mappingKey]mappingRow{
 		{"google_storage_bucket", "labels"}: {providerResource: "google_storage_bucket", attribute: "labels", class: NotExercised, reason: "x"},
-	}, map[catalogKey]string{}, true)
+	}, map[catalogKey]string{}, true, false)
 	if !report.Failed() {
 		t.Fatalf("a capture with no mapped resources passed with -require-resources:\n%s", report.Render())
 	}
@@ -231,6 +280,32 @@ func TestBigQueryPathRules(t *testing.T) {
 		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/t/insertAll", ""},
 		{"POST", "/bigquery/v2/projects/p/datasets/d/routines", ""},
 		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/t/rowAccessPolicies", ""},
+	}
+	for _, c := range cases {
+		if got := ResourceForPath(c.method, c.path); got != c.want {
+			t.Errorf("ResourceForPath(%s %s) = %q, want %q", c.method, c.path, got, c.want)
+		}
+	}
+}
+
+// TestSecretManagerAndWorkflowsPathRules pins the Secret Manager and Cloud
+// Workflows attribution: the create/update bodies are the metadata writes, a
+// version is the :addVersion custom method, the IAM binding is :setIamPolicy,
+// and the read-only custom methods are not attributed.
+func TestSecretManagerAndWorkflowsPathRules(t *testing.T) {
+	cases := []struct {
+		method, path, want string
+	}{
+		{"POST", "/v1/projects/p/secrets?alt=json&secretId=s", "google_secret_manager_secret"},
+		{"PATCH", "/v1/projects/p/secrets/s?alt=json&updateMask=labels", "google_secret_manager_secret"},
+		{"POST", "/v1/projects/p/secrets/s:addVersion?alt=json", "google_secret_manager_secret_version"},
+		{"POST", "/v1/projects/p/secrets/s:setIamPolicy?alt=json", "google_secret_manager_secret_iam_binding"},
+		{"POST", "/v1/projects/p/secrets/s:getIamPolicy?alt=json", ""},
+		{"GET", "/v1/projects/p/secrets/s/versions/latest:access?alt=json", ""},
+		{"POST", "/v1/projects/p/locations/us-central1/workflows?alt=json&workflowId=w", "google_workflows_workflow"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/workflows/w?alt=json&updateMask=sourceContents", "google_workflows_workflow"},
+		{"POST", "/v1/projects/p/locations/us-central1/workflows/w/executions", ""},
+		{"GET", "/v1/projects/p/locations/us-central1/workflows/w:listRevisions", ""},
 	}
 	for _, c := range cases {
 		if got := ResourceForPath(c.method, c.path); got != c.want {

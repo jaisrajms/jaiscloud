@@ -35,6 +35,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
   plane, with a container `readiness_probe` — the field the pinned module's v2
   submodule does not expose; the consumer module case is
   `module-cases/cloudrun.sh`)
+- Cloud Workflows (a `google_workflows_workflow`; the consumer module case is
+  `module-cases/workflows.sh`)
 
 Deliberately **not declared** because the emulator does not serve them:
 
@@ -124,8 +126,10 @@ module, and requires the module's lifecycle to converge.
 | `firestore` | [`terraform-google-firestore`](https://github.com/GoogleCloudPlatform/terraform-google-firestore) | `50d170b9ebfc` | the database's `cmekConfig.kmsKeyName` read back (the module emits `cmek_config` only when `kms_key_name != null`), so the ForceNew block stops forcing a replacement; a non-ForceNew PITR change re-applies, and a second module instance with `kms_key_name = null` reports no `cmekConfig` at all; a third phase in its own working directory/state creates the implicit `(default)` database (`database_id = "(default)"`, the Firebase shape) and reads `locationId` back; a fourth phase destroys a database and re-applies the same id (TGM13: immediate reuse, where real GCP blocks it for ~5 minutes); each phase ends with `plan` **No changes** |
 | `cloudrun` | [`terraform-google-cloud-run`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-run) (`modules/v2`) | `4ce640a2a519` | the v2 service, its module-created service account and the `roles/run.invoker` IAM member apply; the service reads back labels/ingress/description, the container image/env/port and the service account; `revisions.list` carries revision `00001`; a second `plan` is **No changes**; changing ingress, a service label and the container env PATCHes in place, mints revision `00002` and re-plans **No changes**; destroy leaves the service and its revisions `404` |
 | `bigquery` | [`terraform-google-bigquery`](https://github.com/terraform-google-modules/terraform-google-bigquery) | `e11db0dcd597` | the dataset + table create with the module's defaults and the `access` ACL; the dataset reads back its description, location, labels, `defaultTableExpirationMs` and the OWNER/`projectOwners` entry, the table its reference, friendly name, labels and schema; a second `plan` is **No changes**; a new schema column, dataset/table labels, the description and a second ACL entry (READER/`projectReaders`) update in place and re-plan **No changes**; destroy leaves the dataset and table `404` |
+| `secret-manager` | [`terraform-google-secret-manager`](https://github.com/GoogleCloudPlatform/terraform-google-secret-manager) | `77fca80ccd6a` | two module secrets: one automatic-replication secret with a `global` CMEK key, a rotation schedule and its Pub/Sub topic, one user-managed secret with two replicas (one with a regional CMEK key), a version each and an authoritative IAM binding with two members; GET reads back the replication arm/keys, labels, topics, rotation and the version payload, `getIamPolicy` reads the members; a second `plan` is **No changes**; labels, the rotation period, the automatic secret's payload (a version replacement) and the IAM member list update in place and re-plan **No changes**; destroy leaves the secrets and versions `404` |
+| `workflows` | [`terraform-google-cloud-workflows`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows) (`modules/simple_workflow`) | `4c431381b5d8` | the workflow applies with a description, labels, source and a root-module-owned service account + `roles/workflows.invoker` project grant; GET reads back name, `state: ACTIVE`, description, labels, source, service account and revision `000001`; a second `plan` is **No changes**; a new source, description and label update in place, mint revision `000002` and re-plan **No changes**; the workflow is deleted through the API (the submodule exposes no `deletion_protection`) and the service account and grant are destroyed |
 
-The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun and bigquery cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator). The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
+The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery and secret-manager cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `workflows` case pins `= 6.49.3` instead: the pinned module declares `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy it. The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -184,6 +188,16 @@ git clone https://github.com/terraform-google-modules/terraform-google-bigquery 
   "$HOME/.cache/terraform-modules/terraform-google-bigquery"
 git -C "$HOME/.cache/terraform-modules/terraform-google-bigquery" checkout e11db0dcd597
 make test-gcp-terraform-bigquery
+
+git clone https://github.com/GoogleCloudPlatform/terraform-google-secret-manager \
+  "$HOME/.cache/terraform-modules/terraform-google-secret-manager"
+git -C "$HOME/.cache/terraform-modules/terraform-google-secret-manager" checkout 77fca80ccd6a
+make test-gcp-terraform-secret-manager
+
+git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-workflows"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-workflows" checkout 4c431381b5d8
+make test-gcp-terraform-workflows
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
@@ -192,7 +206,8 @@ point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_MEMORYSTORE_MODULE_DIR` / `TF_FUNCTIONS_MODULE_DIR` /
 `TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` /
 `TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` / `TF_CLOUD_RUN_MODULE_DIR` /
-`TF_BIGQUERY_MODULE_DIR` respectively.
+`TF_BIGQUERY_MODULE_DIR` / `TF_SECRET_MANAGER_MODULE_DIR` /
+`TF_WORKFLOWS_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -443,6 +458,65 @@ case drives the served dataset ACL through the module's `access` input instead.
 Views, materialized/external tables, routines, CMEK and resource tags stay at
 their defaults; the case header records each boundary.
 
+**secret-manager** — the CFT `terraform-google-secret-manager` root module is
+applied with two secrets and drives the full gate:
+
+1. `apply` with
+   - `jc-tf-sm-auto`: automatic replication with a `global` CMEK key, a
+     `86400s` rotation schedule and the Pub/Sub topic the schedule requires,
+     one label and one version payload;
+   - `jc-tf-sm-user`: user-managed replication with two replicas
+     (`us-central1` using a regional CMEK key, `us-east1` unencrypted), one
+     version payload;
+   - one authoritative `google_secret_manager_secret_iam_binding` per secret
+     carrying a `roles/secretmanager.secretAccessor` reader;
+
+   assert through REST that each secret reads back its replication arm and keys,
+   the automatic secret reads back its label, rotation schedule and topic, the
+   user-managed secret both replica locations, and each `versions.access` call
+   returns the expected payload; `getIamPolicy` must carry the reader; the apply
+   log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change the label, the rotation period to `172800s`, the automatic secret's
+   payload (a version replacement) and the IAM member list to two members;
+   `apply`; assert the new values and `versions.access` on `latest`; `plan` →
+   **no changes**
+4. `destroy`; both secrets and the versions are `404`
+
+`add_kms_permissions`/`add_pubsub_permissions` stay empty because both drive
+`google_project_service_identity` (google-beta), whose Service Usage
+`generateServiceIdentity` surface is not served; the CMEK keys are passed
+directly, which is the part the secret API validates. Regional secrets are not
+served (TF1-4); the case only creates global `projects.secrets` resources.
+
+**workflows** — the CFT `terraform-google-cloud-workflows` root module has no
+default for `workflow_trigger` and always creates a Scheduler or Eventarc
+trigger, so the case drives its `modules/simple_workflow` submodule (the
+blueprint's standalone workflow resource) and the generated root module supplies
+what the blueprint's root would create through the registry service-accounts
+module: a `google_service_account` and a project-level
+`roles/workflows.invoker` grant. The gate:
+
+1. `apply` the workflow with a description, labels, a YAML source and the
+   service account; assert through REST that it reads back with
+   `state: ACTIVE`, the description, labels, source, service account and
+   revision `000001`; assert the service account exists and the project IAM
+   policy carries the invoker grant; the apply log must contain no `400`, `501`
+   or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change the source, description and a second label; `apply`; assert the new
+   values and revision `000002`; `plan` → **no changes**
+4. delete the workflow through the API, then `destroy` the service account and
+   grant; all are `404`
+
+The module pins `hashicorp/google < 7.0`, so the case resolves 6.49.3 and scopes
+the capture to `google_workflows_workflow` (see the provider-version note
+above). The submodule does not expose `deletion_protection`, whose provider
+default is `true`, so the case removes the workflow from state and issues the
+DELETE the provider guards; that is an upstream module limitation, not an
+emulator gap. Workflow CMEK and resource-level IAM are not implemented
+(README-GCP) and the provider has no workflow IAM resource type.
+
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
 
@@ -517,6 +591,15 @@ fails the gate instead of being chased as a mysterious plan diff:
   `docs/fidelity/provider-attributes.csv` and `docs/fidelity/field-coverage.csv`;
 - a sent-but-unsupported attribute, a sent attribute with no mapping row, and a
   mapping row the provider no longer declares all fail the case.
+
+A case whose pinned module requires an older provider (the `workflows` case
+pins 6.49.3) sets `CAPTURE_RESOURCES` to the provider resources it drives and
+`CAPTURE_ALLOW_MISSING=1`. The first scopes the gate with
+`tfcapture -only-resources`; the second downgrades a mapping row the case's
+schema does not declare to a note (`-allow-missing-attributes`) instead of a
+stale-row failure. Both are narrow: a sent-but-unsupported attribute, an
+unclassified attribute the case's own schema declares, and a sent attribute
+with no catalog row still fail.
 
 `JC_TF_CAPTURE=0` disables the capture for local debugging; `JC_TF_KEEP=1` keeps
 `$WORK` (debug log, schema, captured bodies) after the run. The weekly

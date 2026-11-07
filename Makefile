@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery \
+        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
@@ -1610,6 +1610,64 @@ test-gcp-terraform-bigquery: ## Opt-in terraform-google-bigquery module gate (sk
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-bigquery.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_MODULE_DIR="$(TF_BIGQUERY_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh bigquery http://localhost:8080 test-project
+
+# The same driver with the terraform-google-secret-manager case (TF3-3). The CFT
+# blueprint's root module creates the served global secret surface (secrets,
+# versions, authoritative IAM binding) with automatic and user-managed
+# replication, CMEK and a rotation schedule. Regional secrets are a recorded gap
+# (TF1-4). Opt-in for the same reasons (one-time module clone, provider from the
+# registry) and SKIPs cleanly when either is missing.
+TF_SECRET_MANAGER_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-secret-manager
+test-gcp-terraform-secret-manager: ## Opt-in terraform-google-secret-manager module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_SECRET_MANAGER_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_SECRET_MANAGER_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/GoogleCloudPlatform/terraform-google-secret-manager \"$(TF_SECRET_MANAGER_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_SECRET_MANAGER_MODULE_DIR)\" checkout 77fca80ccd6a"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-secret-manager.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-secret-manager.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_SECRET_MANAGER_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh secret-manager http://localhost:8080 test-project
+
+# The same driver with the terraform-google-cloud-workflows case (TF3-3). The
+# module's ROOT blueprint always creates a Scheduler or Eventarc trigger, so the
+# case drives its `modules/simple_workflow` submodule (the workflow resource
+# alone) and the generated root module supplies the service account and the
+# project `roles/workflows.invoker` grant. The module pins google < 7.0, so this
+# case resolves 6.49.3 and scopes the FC6 capture to google_workflows_workflow.
+# Opt-in for the same reasons (one-time module clone, provider from the
+# registry) and SKIPs cleanly when either is missing.
+TF_WORKFLOWS_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-cloud-workflows
+test-gcp-terraform-workflows: ## Opt-in terraform-google-cloud-workflows module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_WORKFLOWS_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_WORKFLOWS_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows \"$(TF_WORKFLOWS_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_WORKFLOWS_MODULE_DIR)\" checkout 4c431381b5d8"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-workflows.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-workflows.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_WORKFLOWS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh workflows http://localhost:8080 test-project
 
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \

@@ -43,6 +43,8 @@ func main() {
 		snapshot    = flag.String("snapshot", "", "write a compacted provider-schema snapshot of -resources and exit")
 		resources   = flag.String("resources", "", "comma-separated provider resource types for -init-mapping/-snapshot")
 		requireRes  = flag.Bool("require-resources", false, "fail when no captured request maps to a provider resource (the case must exercise the join)")
+		onlyRes     = flag.String("only-resources", "", "comma-separated mapping resources to check (default: every mapped resource in the schema)")
+		allowMiss   = flag.Bool("allow-missing-attributes", false, "downgrade mapping rows the case's provider does not declare to notes (a case pinned to an older provider)")
 		force       = flag.Bool("force", false, "with -init-mapping: overwrite an existing mapping file")
 	)
 	flag.Parse()
@@ -95,6 +97,9 @@ func main() {
 	if err != nil {
 		fatalf("%v", err)
 	}
+	if *onlyRes != "" {
+		mapping = scopeMapping(mapping, strings.Split(*onlyRes, ","))
+	}
 	catalog, err := loadCatalog(*catalogPath)
 	if err != nil {
 		fatalf("%v", err)
@@ -108,7 +113,7 @@ func main() {
 		fatalf("no provider request blocks in %s (was TF_LOG=DEBUG set?)", *logPath)
 	}
 
-	report := Check(*caseName, requests, schema, mapping, catalog, *requireRes)
+	report := Check(*caseName, requests, schema, mapping, catalog, *requireRes, *allowMiss)
 	fmt.Print(report.Render())
 	if report.Failed() {
 		os.Exit(1)
@@ -377,8 +382,30 @@ func (r *Report) Render() string {
 	return b.String()
 }
 
+// scopeMapping keeps only the rows for the named provider resources. A module
+// case whose pinned module requires an older provider cannot be checked against
+// the whole mapping: attributes added to *other* resources after that provider
+// release are absent from the case's schema and would be reported as stale by a
+// gate that never meant to measure them. Scoping keeps the join on the resources
+// the case actually drives.
+func scopeMapping(mapping map[mappingKey]mappingRow, resources []string) map[mappingKey]mappingRow {
+	want := make(map[string]bool, len(resources))
+	for _, r := range resources {
+		if r = strings.TrimSpace(r); r != "" {
+			want[r] = true
+		}
+	}
+	out := make(map[mappingKey]mappingRow, len(mapping))
+	for k, v := range mapping {
+		if want[k.resource] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // Check joins the captured requests to the provider schema and the catalog.
-func Check(caseName string, requests []Request, schema *providerschema.ProviderSchema, mapping map[mappingKey]mappingRow, catalog map[catalogKey]string, requireResources bool) *Report {
+func Check(caseName string, requests []Request, schema *providerschema.ProviderSchema, mapping map[mappingKey]mappingRow, catalog map[catalogKey]string, requireResources, allowMissing bool) *Report {
 	report := &Report{
 		Case:      caseName,
 		Requests:  len(requests),
@@ -435,7 +462,15 @@ func Check(caseName string, requests []Request, schema *providerschema.ProviderS
 		if !ok || declared[key.attr] {
 			continue
 		}
-		report.Stale = append(report.Stale, fmt.Sprintf("%s.%s", key.resource, key.attr))
+		name := fmt.Sprintf("%s.%s", key.resource, key.attr)
+		if allowMissing {
+			// The case pins an older provider (a consumer module's version
+			// constraint); the attribute postdates it. Keep the observation
+			// visible without failing a gate that cannot measure it.
+			report.Notes = append(report.Notes, "mapping row absent from this provider: "+name)
+			continue
+		}
+		report.Stale = append(report.Stale, name)
 	}
 
 	// Check every mapping-covered resource the schema declares, not only the

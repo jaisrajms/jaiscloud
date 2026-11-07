@@ -24,7 +24,7 @@ nightly and drift workflows use.
 | base | `main` at `35d62a1c` (runs include this commit's TF0 changes) |
 | Terraform | 1.16.3 |
 | OpenTofu | 1.12.6 |
-| hashicorp/google | 7.46.2 (module cases pin `= 7.46.2`; the fixture's `~> 7.36` resolved to 7.46.2) |
+| hashicorp/google | 7.46.2 (module cases pin `= 7.46.2` except `workflows`, which pins `= 6.49.3` because its module declares `< 7.0`; the fixture's `~> 7.36` resolved to 7.46.2) |
 | OS | linux/amd64 |
 | module checkouts | `$HOME/.cache/terraform-modules/<repo>` at the pinned commits in the table |
 
@@ -119,6 +119,46 @@ Dataset- and table-level IAM is a recorded gap (TF1-1): the
 `getIamPolicy`/`setIamPolicy` operations are not in the registry, so the module
 case drives the served dataset ACL (`access`) instead. Views, materialized and
 external tables, routines, CMEK and resource tags stay at their defaults.
+
+## TF3-3 — Secret Manager and Workflows consumer cases (2026-11-07)
+
+Two cases were added on one branch:
+
+| case | module | pinned commit | what it drives |
+|---|---|---|---|
+| `secret-manager` | `GoogleCloudPlatform/terraform-google-secret-manager` | `77fca80ccd6a` | automatic + user-managed replication, CMEK (global and per-replica), rotation + topic, versions, authoritative IAM binding |
+| `workflows` | `GoogleCloudPlatform/terraform-google-cloud-workflows` (`modules/simple_workflow`) | `4c431381b5d8` | the workflow resource with a root-module-owned service account and project `roles/workflows.invoker` grant |
+
+Both runs below are green on the session commit (each run against a fresh
+ephemeral emulator). The full aggregate — the fixture plus all thirteen module
+cases — is also green under both binaries (`14 passed, 0 failed, 0 skipped`):
+
+| binary | result | case |
+|---|---|---|
+| Terraform 1.16.3 | PASS (25 passed, 0 failed) | `secret-manager` |
+| OpenTofu 1.12.6 | PASS (25 passed, 0 failed) | `secret-manager` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (20 passed, 0 failed) | `workflows` |
+| OpenTofu 1.12.6 | PASS (20 passed, 0 failed) | `workflows` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (14 passed, 0 failed) | full aggregate (`make test-gcp-terraform-all STRICT=1`) |
+| OpenTofu 1.12.6 | PASS (14 passed, 0 failed) | full aggregate (`TF_BIN=tofu`) |
+
+Three boundaries are recorded, not worked around:
+
+- The workflows module declares `hashicorp/google < 7.0`, so that case pins
+  6.49.3. The FC6 capture is scoped to `google_workflows_workflow` and absent
+  mapping rows (attributes postdating 6.x) are notes; the mapping carries the
+  union of both provider versions.
+- The module's `modules/simple_workflow` does not expose
+  `deletion_protection`, whose provider default is `true`; the case removes the
+  workflow from state and issues the DELETE the provider guards, then destroys
+  the service account and IAM grant through Terraform.
+- Secret Manager's `add_kms_permissions`/`add_pubsub_permissions` inputs drive
+  `google_project_service_identity` (google-beta), which needs the unserved
+  Service Usage `generateServiceIdentity`; the CMEK keys are passed directly.
+
+Workflow CMEK and resource-level IAM are not implemented (README-GCP), and the
+provider exposes no workflow IAM resource type; regional Secret Manager secrets
+remain the recorded TF1-4 gap.
 
 ## What this does not prove
 

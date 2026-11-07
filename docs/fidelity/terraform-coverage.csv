@@ -327,7 +327,7 @@ google_iam_workload_identity_pool_managed_identity,iam,unsupported,none,unsuppor
 google_iam_workload_identity_pool_namespace,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
 google_iam_workload_identity_pool_provider,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
 google_kms_autokey_config,kms,unsupported,none,unsupported,AutokeyAdmin (autokeyConfig) is a separate surface; the emulator registers no autokeyConfig operation.,2027-06-30
-google_kms_crypto_key,kms,served,"fixture:compat,fixture:compat_global,module:firestore",served,,2027-06-30
+google_kms_crypto_key,kms,served,"fixture:compat,fixture:compat_global,module:firestore,module:secret-manager",served,,2027-06-30
 google_kms_crypto_key_iam_binding,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
 google_kms_crypto_key_iam_member,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
 google_kms_crypto_key_iam_policy,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -337,7 +337,7 @@ google_kms_ekm_connection_iam_binding,kms,unsupported,none,unsupported,EKM (ekmC
 google_kms_ekm_connection_iam_member,kms,unsupported,none,unsupported,EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.,2027-06-30
 google_kms_ekm_connection_iam_policy,kms,unsupported,none,unsupported,EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.,2027-06-30
 google_kms_key_handle,kms,unsupported,none,unsupported,Key handles are an AutokeyAdmin surface; the emulator registers no autokey operation.,2027-06-30
-google_kms_key_ring,kms,served,"fixture:compat,fixture:compat_global,module:firestore",served,,2027-06-30
+google_kms_key_ring,kms,served,"fixture:compat,fixture:compat_global,module:firestore,module:secret-manager",served,,2027-06-30
 google_kms_key_ring_iam_binding,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
 google_kms_key_ring_iam_member,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
 google_kms_key_ring_iam_policy,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -390,7 +390,7 @@ google_project_default_service_accounts,resourcemanager,served,none,served,resou
 google_project_iam_audit_config,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_project_iam_binding,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_project_iam_custom_role,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
-google_project_iam_member,iam,served,fixture:publisher,served,,2027-06-30
+google_project_iam_member,iam,served,"fixture:publisher,module:workflows",served,,2027-06-30
 google_project_iam_member_remove,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_project_iam_policy,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_project_organization_policy,resourcemanager,unsupported,none,unsupported,Organization Policy is a separate API; the emulator models project-level IAM only (wire-contract §8).,2027-06-30
@@ -404,7 +404,7 @@ google_pubsub_subscription,pubsub,served,fixture:compat,served,,2027-06-30
 google_pubsub_subscription_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
 google_pubsub_subscription_iam_member,pubsub,served,fixture:subscriber,served,,2027-06-30
 google_pubsub_subscription_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
-google_pubsub_topic,pubsub,served,"fixture:compat,module:functions,module:pubsub-topic",served,,2027-06-30
+google_pubsub_topic,pubsub,served,"fixture:compat,module:functions,module:pubsub-topic,module:secret-manager",served,,2027-06-30
 google_pubsub_topic_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
 google_pubsub_topic_iam_member,pubsub,served,"fixture:publisher,fixture:viewer",served,,2027-06-30
 google_pubsub_topic_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -424,7 +424,7 @@ google_secret_manager_secret_iam_binding,secretmanager,served,none,served,secret
 google_secret_manager_secret_iam_member,secretmanager,served,fixture:accessor,served,,2027-06-30
 google_secret_manager_secret_iam_policy,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
 google_secret_manager_secret_version,secretmanager,served,fixture:compat,served,,2027-06-30
-google_service_account,iam,served,"fixture:compat,module:storage",served,,2027-06-30
+google_service_account,iam,served,"fixture:compat,module:secret-manager,module:storage,module:workflows",served,,2027-06-30
 google_service_account_iam_binding,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_service_account_iam_member,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_service_account_iam_policy,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
