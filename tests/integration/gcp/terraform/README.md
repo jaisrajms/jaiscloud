@@ -93,6 +93,8 @@ make test-gcp-terraform     # requires terraform
 make test-gcp-opentofu      # requires tofu
 make test-gcp-terraform-all # fixture + every pinned module case, one emulator
 make test-gcp-terraform-all TF_BIN=tofu STRICT=1  # same set under OpenTofu; a SKIP fails
+make test-gcp-terraform-lifecycle            # import/refresh/replace/drift/negative/parallel (TF5)
+make test-gcp-terraform-lifecycle TF_BIN=tofu STRICT=1
 make test-gcp-terraform-plan-only CASE=gke        # plan-only tier: no apply, no destroy
 ```
 
@@ -712,7 +714,86 @@ served by the emulator (recorded as TF3-6-1). The client-side `local` and
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
 
+## Lifecycle-depth gate (TF5)
 
+`run.sh` and the module cases prove `apply -> re-plan -> update -> destroy`.
+`run-lifecycle.sh` proves the operations a real Terraform user performs on
+existing state. It is a second driver with one case per representative service
+under `lifecycle-cases/` (a case is sourced and supplies `case_main`, like
+`run-module.sh`), plus a committed `terraform test` module.
+
+```bash
+make test-gcp-terraform-lifecycle                    # Terraform, ephemeral emulator
+make test-gcp-terraform-lifecycle TF_BIN=tofu STRICT=1
+tests/integration/gcp/terraform/run-lifecycle.sh http://localhost:8080 test-project
+CASES="storage kms" tests/integration/gcp/terraform/run-lifecycle.sh
+```
+
+It runs a full apply/destroy cycle, so it is **nightly-only**; it is not part of
+`gcp-ci-preflight`. `STRICT=1` is what the nightly uses: a SKIP (missing binary)
+is a failure, not a pass.
+
+| case | phases |
+|---|---|
+| `storage` | import (clean plan), `refresh-only`, `-replace` (new `timeCreated`/metageneration), ForceNew rename (old bucket 404), out-of-band label drift, label-import artifact, duplicate 409 / invalid name 400 / provider-surfaced 409 |
+| `pubsub` | import (topic + subscription), `refresh-only`, `-replace` the subscription, ForceNew rename (old subscription 404), out-of-band label drift through `updateMask=labels`, label-import artifact, duplicate 409 / unsupported mask 400 / invalid duration 400 / provider-surfaced 409 |
+| `kms` | import (key ring + crypto key), `refresh-only`, out-of-band label drift, crypto-key `-replace` as an **expected 409** (the provider never calls the documented delete) with re-import and rotation repair, duplicate 409 / invalid algorithm 400 / unsupported mask 400 / live-version `cryptoKeys.delete` 400, and the post-destroy "key ring and key survive, version is `DESTROY_SCHEDULED`" assertions |
+| `iam-parallel` | 10 service accounts + 10 project bindings at `-parallelism=10`; the policy must hold all 10 (a lost update fails), re-plan clean, destroy at parallelism 10 |
+| `tftest` | `terraform test` over `lifecycle-tftest/`: provider-visible computed ids, self links, nested objects |
+
+**Import support.** The driver records one row per imported address in
+`<LOG_DIR>/<case>-import.tsv` (the nightly artifact keeps them), and the
+nightly log is the source of the table in
+[`docs/fidelity/terraform-scorecard.md`](../../../../docs/fidelity/terraform-scorecard.md).
+A clean plan after import is the strong form: the emulator's GET is fed back into
+state and re-planned. Import is not universal upstream, so two classifications
+are recorded instead of failing:
+
+- **provider-label-artifact**: `tpgresource.SetLabels` filters the response's
+  labels against the labels already in state, and an import starts from an empty
+  map, so the next plan reconstructs `labels`/`terraform_labels`. The gate
+  accepts exactly those attributes (and nothing else); every other changed
+  attribute fails.
+- **empty-labels normalization**: a `refresh-only` plan reports `labels = {}` for
+  a resource with no managed labels (the provider normalizes an absent map).
+  `refresh_phase labels-artifact` accepts that one attribute.
+
+**Both assertion layers exist on purpose.** `terraform test` conditions see what
+a configuration can observe (computed ids, `self_link`, `url`, nested objects);
+the shell cases use the REST API for the wire fields the provider hides or
+normalizes (`metageneration`, `locationType`, `primary.state`,
+`DESTROY_SCHEDULED`, policy etags, the raw 409/400 bodies). Neither layer
+replaces the other.
+
+**Recorded boundaries (not worked around):**
+
+- `google_storage_bucket`'s `-replace` re-creates the same name; its server-side
+  `timeCreated`/`metageneration` are the proof the object was re-created.
+- The provider never calls Cloud KMS's documented delete methods: a key-ring
+  delete is state-only and a crypto-key delete destroys the versions, so
+  `-replace` on a crypto key is an expected 409 (re-create under the same name).
+  The gate asserts that failure and repairs rotation after re-import;
+  `cryptoKeys.delete` itself is served and enforces the live-version 400 (TF5-4
+  is the unimplemented key-ring delete).
+- An unmanaged extra label key is filtered out of `labels` by the provider's
+  `SetLabels` (only keys already in state are planned) and preserved by the
+  update; the gate asserts the managed key converges and records the extra key.
+- The storage bucket's invalid `storageClass`/`publicAccessPrevention`/`location`
+  are accepted today (real GCS rejects them) — TF5-1; the case records the
+  measurement and uses the invalid-bucket-name 400 that GCS does validate.
+
+**Expansion list (the next services, in order).** Each needs an import id and,
+where the API supports it, a ForceNew identity change:
+
+| service | resource(s) | import | replace |
+|---|---|---|---|
+| `secretmanager` | `google_secret_manager_secret` + version | secret resource name | name is ForceNew |
+| `bigquery` | `google_bigquery_dataset` / `_table` | `projects/p/datasets/d`, `…/tables/t` | dataset/table id ForceNew |
+| `cloudrun` | `google_cloud_run_v2_service` | `projects/p/locations/l/services/s` | location/name ForceNew |
+| `dataproc` | `google_dataproc_cluster` | `projects/p/regions/r/clusters/c` | cluster name ForceNew |
+| `cloudsql` | `google_sql_database_instance` | `projects/p/instances/i` | name ForceNew |
+| `firestore` | `google_firestore_database` | `projects/p/databases/d` | database id ForceNew |
+| `clouddns` | `google_dns_managed_zone` | `projects/p/managedZones/z` | name ForceNew |
 
 ## What it does
 

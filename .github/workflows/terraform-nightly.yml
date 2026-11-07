@@ -3,10 +3,12 @@ name: GCP Terraform nightly
 # TF0 — the scheduled aggregate of the Terraform/OpenTofu compatibility suite.
 #
 # Not a pull_request check: it downloads the hashicorp/google provider and runs
-# the fixture plus every pinned module case (twenty-one), twice (Terraform and
-# OpenTofu). The per-PR signal stays offline (`make gcp-ci-preflight`, the
-# provider-capture self-test, the static coverage gate); this job catches
-# provider-registry drift and module/gate regressions on a schedule.
+# the fixture plus every pinned module case (twenty-one), then the lifecycle
+# depth gate (TF5: import/refresh/replace/drift/negative/parallel), twice
+# (Terraform and OpenTofu). The per-PR signal stays offline
+# (`make gcp-ci-preflight`, the provider-capture self-test, the static coverage
+# gate); this job catches provider-registry drift and module/gate regressions on
+# a schedule.
 #
 # STRICT=1 is deliberate: a SKIP (missing terraform/tofu or a module checkout)
 # is a broken gate, not a pass.
@@ -21,7 +23,7 @@ permissions:
 
 jobs:
   terraform:
-    name: Terraform (fixture + 21 module cases)
+    name: Terraform (fixture + 21 module cases + lifecycle)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -97,6 +99,9 @@ jobs:
       - name: Run the Terraform aggregate
         run: make test-gcp-terraform-all STRICT=1
 
+      - name: Run the lifecycle depth gate
+        run: make test-gcp-terraform-lifecycle STRICT=1
+
       - name: Upload the per-case logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -107,6 +112,11 @@ jobs:
             /tmp/jaiscloud-gcp-terraform-all/summary.tsv
             /tmp/jaiscloud-gcp-terraform-all/*.log
             /tmp/jaiscloud-gcp-terraform-all.log
+            /tmp/jaiscloud-gcp-terraform-lifecycle/summary.md
+            /tmp/jaiscloud-gcp-terraform-lifecycle/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-lifecycle/*.log
+            /tmp/jaiscloud-gcp-terraform-lifecycle/*-import.tsv
+            /tmp/jaiscloud-gcp-terraform-lifecycle.log
           if-no-files-found: ignore
 
       - name: Open or update the failure issue
@@ -134,7 +144,7 @@ jobs:
           fi
 
   opentofu:
-    name: OpenTofu (fixture + 21 module cases)
+    name: OpenTofu (fixture + 21 module cases + lifecycle)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -210,6 +220,9 @@ jobs:
       - name: Run the OpenTofu aggregate
         run: make test-gcp-terraform-all TF_BIN=tofu STRICT=1
 
+      - name: Run the lifecycle depth gate
+        run: make test-gcp-terraform-lifecycle TF_BIN=tofu STRICT=1
+
       - name: Upload the per-case logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -220,6 +233,11 @@ jobs:
             /tmp/jaiscloud-gcp-terraform-all/summary.tsv
             /tmp/jaiscloud-gcp-terraform-all/*.log
             /tmp/jaiscloud-gcp-terraform-all.log
+            /tmp/jaiscloud-gcp-terraform-lifecycle/summary.md
+            /tmp/jaiscloud-gcp-terraform-lifecycle/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-lifecycle/*.log
+            /tmp/jaiscloud-gcp-terraform-lifecycle/*-import.tsv
+            /tmp/jaiscloud-gcp-terraform-lifecycle.log
           if-no-files-found: ignore
 
       - name: Open or update the failure issue
