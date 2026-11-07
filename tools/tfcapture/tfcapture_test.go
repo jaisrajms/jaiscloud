@@ -314,6 +314,33 @@ func TestSecretManagerAndWorkflowsPathRules(t *testing.T) {
 	}
 }
 
+// TestSchedulerAndTasksPathRules pins the Cloud Scheduler and Cloud Tasks
+// attribution: the collection POST and the PATCH are the resource writes, the
+// queue IAM member is :setIamPolicy, and the custom methods / task creates are
+// not attributed.
+func TestSchedulerAndTasksPathRules(t *testing.T) {
+	cases := []struct {
+		method, path, want string
+	}{
+		{"POST", "/v1/projects/p/locations/us-central1/jobs?alt=json", "google_cloud_scheduler_job"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/jobs/j?alt=json&updateMask=schedule", "google_cloud_scheduler_job"},
+		{"POST", "/v1/projects/p/locations/us-central1/jobs/j:pause?alt=json", ""},
+		{"POST", "/v1/projects/p/locations/us-central1/jobs/j:resume?alt=json", ""},
+		{"POST", "/v1/projects/p/locations/us-central1/jobs/j:run?alt=json", ""},
+		{"POST", "/v2/projects/p/locations/us-central1/queues?alt=json", "google_cloud_tasks_queue"},
+		{"PATCH", "/v2/projects/p/locations/us-central1/queues/q?alt=json&updateMask=rateLimits", "google_cloud_tasks_queue"},
+		{"POST", "/v2/projects/p/locations/us-central1/queues/q:setIamPolicy?alt=json", "google_cloud_tasks_queue_iam_member"},
+		{"POST", "/v2/projects/p/locations/us-central1/queues/q:getIamPolicy?alt=json", ""},
+		{"POST", "/v2/projects/p/locations/us-central1/queues/q:purge?alt=json", ""},
+		{"POST", "/v2/projects/p/locations/us-central1/queues/q/tasks?alt=json", ""},
+	}
+	for _, c := range cases {
+		if got := ResourceForPath(c.method, c.path); got != c.want {
+			t.Errorf("ResourceForPath(%s %s) = %q, want %q", c.method, c.path, got, c.want)
+		}
+	}
+}
+
 // TestCloudRunV2PathRules pins the Cloud Run resource attribution: the create
 // (collection POST) and update (PATCH one service) carry the provider's write
 // bodies, while the service IAM custom methods are POSTs under the same

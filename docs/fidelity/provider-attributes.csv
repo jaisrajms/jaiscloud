@@ -955,3 +955,86 @@ google_workflows_workflow,,,timeouts.delete,,client-side,provider timeout block;
 google_workflows_workflow,,,timeouts.update,,client-side,provider timeout block; never part of a request body
 google_workflows_workflow,,,update_time,,output-only,computed-only attribute; never part of a request body
 google_workflows_workflow,,,user_env_vars,userEnvVars,not-exercised,the pinned submodule does not configure user environment variables
+google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.instance,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.service,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.version,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,app_engine_http_target.body,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,app_engine_http_target.headers,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,app_engine_http_target.http_method,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,app_engine_http_target.relative_uri,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
+google_cloud_scheduler_job,,,attempt_deadline,,not-exercised,the module nulls attempt_deadline for a Pub/Sub target
+google_cloud_scheduler_job,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_cloud_scheduler_job,,,description,description,no-catalog,
+google_cloud_scheduler_job,,,http_target.body,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.headers,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.http_method,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.oauth_token.scope,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.oauth_token.service_account_email,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.oidc_token.audience,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.oidc_token.service_account_email,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.uri,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,id,,client-side,provider identity attribute; never part of a request body
+google_cloud_scheduler_job,,,name,name,no-catalog,
+google_cloud_scheduler_job,,,paused,,client-side,not a Cloud Scheduler Job field (Discovery); the provider deletes it from every request body and maps it onto the :pause/:resume methods
+google_cloud_scheduler_job,,,project,,client-side,the project is in the request path not the body
+google_cloud_scheduler_job,,,pubsub_target.attributes,pubsubTarget.attributes,no-catalog,
+google_cloud_scheduler_job,,,pubsub_target.data,pubsubTarget.data,no-catalog,
+google_cloud_scheduler_job,,,pubsub_target.topic_name,pubsubTarget.topicName,no-catalog,
+google_cloud_scheduler_job,,,region,,client-side,the region is in the request path not the body
+google_cloud_scheduler_job,,,retry_config.max_backoff_duration,retryConfig.maxBackoffDuration,no-catalog,
+google_cloud_scheduler_job,,,retry_config.max_doublings,retryConfig.maxDoublings,no-catalog,
+google_cloud_scheduler_job,,,retry_config.max_retry_duration,retryConfig.maxRetryDuration,no-catalog,
+google_cloud_scheduler_job,,,retry_config.min_backoff_duration,retryConfig.minBackoffDuration,no-catalog,
+google_cloud_scheduler_job,,,retry_config.retry_count,retryConfig.retryCount,no-catalog,
+google_cloud_scheduler_job,,,schedule,schedule,no-catalog,
+google_cloud_scheduler_job,,,state,,output-only,computed-only attribute; never part of a request body
+google_cloud_scheduler_job,,,time_zone,timeZone,no-catalog,
+google_cloud_scheduler_job,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_cloud_scheduler_job,,,timeouts.delete,,client-side,provider timeout block; never part of a request body
+google_cloud_scheduler_job,,,timeouts.update,,client-side,provider timeout block; never part of a request body
+google_cloud_tasks_queue,,,app_engine_routing_override.host,,output-only,computed-only attribute; never part of a request body
+google_cloud_tasks_queue,,,app_engine_routing_override.instance,,not-exercised,the case leaves the App Engine routing override null
+google_cloud_tasks_queue,,,app_engine_routing_override.service,,not-exercised,the case leaves the App Engine routing override null
+google_cloud_tasks_queue,,,app_engine_routing_override.version,,not-exercised,the case leaves the App Engine routing override null
+google_cloud_tasks_queue,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_cloud_tasks_queue,,,desired_state,,client-side,maps to the :pause/:resume custom methods and never appears in a queue body
+google_cloud_tasks_queue,,,http_target.header_overrides.header.key,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.header_overrides.header.value,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.http_method,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.oauth_token.scope,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.oauth_token.service_account_email,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.oidc_token.audience,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.oidc_token.service_account_email,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.uri_override.host,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.uri_override.path_override.path,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.uri_override.port,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.uri_override.query_override.query_params,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.uri_override.scheme,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,http_target.uri_override.uri_override_enforce_mode,,not-exercised,the case leaves the queue http_target null
+google_cloud_tasks_queue,,,id,,client-side,provider identity attribute; never part of a request body
+google_cloud_tasks_queue,,,location,,client-side,the location is in the request path not the body
+google_cloud_tasks_queue,,,name,name,no-catalog,
+google_cloud_tasks_queue,,,project,,client-side,the project is in the request path not the body
+google_cloud_tasks_queue,,,rate_limits.max_burst_size,,output-only,computed-only in the provider schema; the module input stays null and a queue body never carries it
+google_cloud_tasks_queue,,,rate_limits.max_concurrent_dispatches,rateLimits.maxConcurrentDispatches,no-catalog,
+google_cloud_tasks_queue,,,rate_limits.max_dispatches_per_second,rateLimits.maxDispatchesPerSecond,no-catalog,
+google_cloud_tasks_queue,,,retry_config.max_attempts,retryConfig.maxAttempts,no-catalog,
+google_cloud_tasks_queue,,,retry_config.max_backoff,retryConfig.maxBackoff,no-catalog,
+google_cloud_tasks_queue,,,retry_config.max_doublings,retryConfig.maxDoublings,no-catalog,
+google_cloud_tasks_queue,,,retry_config.max_retry_duration,retryConfig.maxRetryDuration,no-catalog,
+google_cloud_tasks_queue,,,retry_config.min_backoff,retryConfig.minBackoff,no-catalog,
+google_cloud_tasks_queue,,,stackdriver_logging_config.sampling_ratio,stackdriverLoggingConfig.samplingRatio,no-catalog,
+google_cloud_tasks_queue,,,state,,output-only,computed-only attribute; never part of a request body
+google_cloud_tasks_queue,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_cloud_tasks_queue,,,timeouts.delete,,client-side,provider timeout block; never part of a request body
+google_cloud_tasks_queue,,,timeouts.update,,client-side,provider timeout block; never part of a request body
+google_cloud_tasks_queue_iam_member,,,condition.description,,not-exercised,the module does not configure IAM conditions
+google_cloud_tasks_queue_iam_member,,,condition.expression,,not-exercised,the module does not configure IAM conditions
+google_cloud_tasks_queue_iam_member,,,condition.title,,not-exercised,the module does not configure IAM conditions
+google_cloud_tasks_queue_iam_member,,,etag,policy.etag,no-catalog,
+google_cloud_tasks_queue_iam_member,,,id,,client-side,provider identity attribute; never part of a request body
+google_cloud_tasks_queue_iam_member,,,location,,client-side,the location is in the request path not the body
+google_cloud_tasks_queue_iam_member,,,member,policy.bindings.members,no-catalog,
+google_cloud_tasks_queue_iam_member,,,name,,client-side,the queue name is in the request path not the body
+google_cloud_tasks_queue_iam_member,,,project,,client-side,the project is in the request path not the body
+google_cloud_tasks_queue_iam_member,,,role,policy.bindings.role,no-catalog,

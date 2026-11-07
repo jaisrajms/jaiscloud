@@ -128,8 +128,10 @@ module, and requires the module's lifecycle to converge.
 | `bigquery` | [`terraform-google-bigquery`](https://github.com/terraform-google-modules/terraform-google-bigquery) | `e11db0dcd597` | the dataset + table create with the module's defaults and the `access` ACL; the dataset reads back its description, location, labels, `defaultTableExpirationMs` and the OWNER/`projectOwners` entry, the table its reference, friendly name, labels and schema; a second `plan` is **No changes**; a new schema column, dataset/table labels, the description and a second ACL entry (READER/`projectReaders`) update in place and re-plan **No changes**; destroy leaves the dataset and table `404` |
 | `secret-manager` | [`terraform-google-secret-manager`](https://github.com/GoogleCloudPlatform/terraform-google-secret-manager) | `77fca80ccd6a` | two module secrets: one automatic-replication secret with a `global` CMEK key, a rotation schedule and its Pub/Sub topic, one user-managed secret with two replicas (one with a regional CMEK key), a version each and an authoritative IAM binding with two members; GET reads back the replication arm/keys, labels, topics, rotation and the version payload, `getIamPolicy` reads the members; a second `plan` is **No changes**; labels, the rotation period, the automatic secret's payload (a version replacement) and the IAM member list update in place and re-plan **No changes**; destroy leaves the secrets and versions `404` |
 | `workflows` | [`terraform-google-cloud-workflows`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows) (`modules/simple_workflow`) | `4c431381b5d8` | the workflow applies with a description, labels, source and a root-module-owned service account + `roles/workflows.invoker` project grant; GET reads back name, `state: ACTIVE`, description, labels, source, service account and revision `000001`; a second `plan` is **No changes**; a new source, description and label update in place, mint revision `000002` and re-plan **No changes**; the workflow is deleted through the API (the submodule exposes no `deletion_protection`) and the service account and grant are destroyed |
+| `scheduler` | [`terraform-google-cloud-scheduler`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-scheduler) | `ece5c3e87412` | a paused job with a far-future schedule and a Pub/Sub target applies; GET reads back the schedule, `timeZone`, `state: PAUSED`, the retry config and `pubsubTarget.topicName`/`data`/`attributes`; a second `plan` is **No changes**; a schedule/description/retry/Pub/Sub-payload change updates in place and re-plans **No changes**; unpausing calls `:resume` (state `ENABLED`, `scheduleTime` present) and re-pausing calls `:pause`, each re-planning clean; destroy leaves the job and its topic `404` |
+| `tasks` | [`terraform-google-cloud-tasks`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks) | `ba7dbc000bfb` | a queue with rate limits, retry config, Stackdriver logging config and one `iam_member` applies; GET reads back `state: RUNNING`, every limit and the IAM binding, and the task list is empty (no dispatch); a second `plan` is **No changes**; a rate limit, a retry limit and the IAM member update in place and re-plan **No changes**; destroy leaves the queue `404` |
 
-The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery and secret-manager cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `workflows` case pins `= 6.49.3` instead: the pinned module declares `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy it. The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
+The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery and secret-manager cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `workflows`, `scheduler` and `tasks` cases pin `= 6.49.3` instead: their pinned modules declare `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy them (the scheduler module also requires `hashicorp/null`, pinned to `3.3.2`). The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -198,6 +200,16 @@ git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflow
   "$HOME/.cache/terraform-modules/terraform-google-cloud-workflows"
 git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-workflows" checkout 4c431381b5d8
 make test-gcp-terraform-workflows
+
+git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-scheduler \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-scheduler"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-scheduler" checkout ece5c3e87412
+make test-gcp-terraform-scheduler
+
+git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-tasks"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-tasks" checkout ba7dbc000bfb
+make test-gcp-terraform-tasks
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
@@ -207,7 +219,8 @@ point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_CLOUDDNS_MODULE_DIR` / `TF_CLOUD_OPERATIONS_MODULE_DIR` /
 `TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` / `TF_CLOUD_RUN_MODULE_DIR` /
 `TF_BIGQUERY_MODULE_DIR` / `TF_SECRET_MANAGER_MODULE_DIR` /
-`TF_WORKFLOWS_MODULE_DIR` respectively.
+`TF_WORKFLOWS_MODULE_DIR` / `TF_SCHEDULER_MODULE_DIR` /
+`TF_TASKS_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -517,8 +530,35 @@ DELETE the provider guards; that is an upstream module limitation, not an
 emulator gap. Workflow CMEK and resource-level IAM are not implemented
 (README-GCP) and the provider has no workflow IAM resource type.
 
+**scheduler** — the CFT `terraform-google-cloud-scheduler` root module is applied with a paused job, a far-future schedule (`0 0 1 1 *`), `UTC`, a `retry_config`, and a Pub/Sub target (the case's root module owns the topic). The gate:
+
+1. `apply`; assert through REST that GET returns the reference, description, schedule, `timeZone`, `state: PAUSED`, the retry config and `pubsubTarget.topicName`/`data`/`attributes`; the apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change the schedule, description, retry config and Pub/Sub payload/attributes; `apply`; assert the new values; `plan` → **no changes**
+4. unpause (`paused = false`): the provider calls `:resume`; assert `state: ENABLED` and that `scheduleTime` is present; `plan` → **no changes**
+5. re-pause: the provider calls `:pause`; assert `state: PAUSED`; `plan` → **no changes**
+6. `destroy`; the job and the topic are `404`
+
+Two boundaries are recorded, not worked around:
+
+- The **HTTP target** is not driven: provider 6.49.3 panics in `flattenCloudSchedulerJobHttpTargetHeaders` when the response omits an empty `httpTarget.headers` map, while real Cloud Scheduler answers `headers: {}` (the provider's own 6.49.3 acceptance test uses a header-less HTTP target; 7.x added a nil guard). That response-shape gap is TF3-4-1 (`fix/gcp-scheduler-http-target-headers`).
+- The module's default `retry_config = { retry_count = 0 }` is not sent (the provider drops an all-empty block) and the emulator does not synthesize the documented RetryConfig defaults, so that input re-plans `+ retry_config { retry_count = 0 }`; the case creates a non-default retry config and the default synthesis is TF3-4-2 (`fix/gcp-scheduler-retry-config-defaults`).
+
+The provider always issues `:resume` after a create that leaves `paused` unset, and the emulator's resume is not yet idempotent on an ENABLED job (TF2-12, `fix/gcp-scheduler-resume-enabled`); the paused create keeps the gate off that path and out of the live cron engine.
+
+**tasks** — the CFT `terraform-google-cloud-tasks` root module is applied with a queue, rate limits, a retry config, a Stackdriver logging config and one queue IAM member (`queue_iam_choice = "iam_member"`). No task is created, so the dispatch engine never runs. The gate:
+
+1. `apply`; assert through REST that GET returns the reference, `state: RUNNING`, every rate/retry/logging value and the IAM binding, and that the queue's task list is empty; the apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change a rate limit, a retry limit and the IAM member; `apply`; assert the new values, that the replaced member is gone, and `plan` → **no changes**
+4. `destroy`; the queue is `404`
+
+`rate_limits.max_burst_size` is computed-only in the provider's 6.x schema (7.x made it Optional+Computed), so the module input stays null; the emulator reports `maxBurstSize` 0 when the create body omits it while real Cloud Tasks defaults it to 100 — a recorded reader gap (TF3-4-3, `fix/gcp-tasks-queue-rate-limit-defaults`). `app_engine_routing_override` and the queue-level `http_target` are left null: they are defaults for App Engine/HTTP tasks, and the case creates no task.
+
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
+
+
 
 ## What it does
 

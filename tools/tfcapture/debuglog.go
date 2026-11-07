@@ -143,6 +143,19 @@ var pathRules = []struct {
 	// the workflow but is not a Terraform resource write, so it is excluded.
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/workflows/?$`), res: "google_workflows_workflow"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/workflows/[^/:?]+/?$`), res: "google_workflows_workflow"},
+	// Cloud Scheduler (google_cloud_scheduler_job): create is the collection
+	// POST (the job id is in the body's name member), update is a PATCH. The
+	// :pause/:resume/:run custom methods are POSTs under the job name and carry
+	// no resource write body, so they are not attributed.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/jobs/?$`), res: "google_cloud_scheduler_job"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/jobs/[^/:?]+/?$`), res: "google_cloud_scheduler_job"},
+	// Cloud Tasks (google_cloud_tasks_queue and its IAM member): create is the
+	// collection POST, update is a PATCH, and the IAM member writes through
+	// :setIamPolicy. Task creates and the :pause/:resume/:purge custom methods
+	// are not queue resource writes.
+	{method: "POST", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/queues/?$`), res: "google_cloud_tasks_queue"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/queues/[^/:?]+/?$`), res: "google_cloud_tasks_queue"},
+	{method: "POST", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/queues/[^/:?]+:setIamPolicy$`), res: "google_cloud_tasks_queue_iam_member"},
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/keyRings/?$`), res: "google_kms_key_ring"},
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/?$`), res: "google_kms_crypto_key"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/[^/?]+`), res: "google_kms_crypto_key"},

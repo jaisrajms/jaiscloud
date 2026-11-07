@@ -160,6 +160,58 @@ Workflow CMEK and resource-level IAM are not implemented (README-GCP), and the
 provider exposes no workflow IAM resource type; regional Secret Manager secrets
 remain the recorded TF1-4 gap.
 
+## TF3-4 — Cloud Scheduler and Cloud Tasks consumer cases (2026-11-07)
+
+Two cases were added on one branch:
+
+| case | module | pinned commit | what it drives |
+|---|---|---|---|
+| `scheduler` | `GoogleCloudPlatform/terraform-google-cloud-scheduler` | `ece5c3e87412` | a paused far-future job with a RetryConfig and a Pub/Sub target; schedule/description/retry/payload change; `:resume` and `:pause` transitions |
+| `tasks` | `GoogleCloudPlatform/terraform-google-cloud-tasks` | `ba7dbc000bfb` | a queue with rate limits, retry config, Stackdriver logging config and one queue `iam_member`; rate/retry/IAM change; no task created |
+
+Both runs below are green on the session commit (each run against a fresh
+ephemeral emulator). The full aggregate — the fixture plus all fifteen module
+cases — is also green under both binaries (`16 passed, 0 failed, 0 skipped`):
+
+| binary | result | case |
+|---|---|---|
+| Terraform 1.16.3 | PASS (28 passed, 0 failed) | `scheduler` |
+| OpenTofu 1.12.6 | PASS (28 passed, 0 failed) | `scheduler` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (21 passed, 0 failed) | `tasks` |
+| OpenTofu 1.12.6 | PASS (21 passed, 0 failed) | `tasks` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (16 passed, 0 failed) | full aggregate (`make test-gcp-terraform-all STRICT=1`) |
+| OpenTofu 1.12.6 | PASS (16 passed, 0 failed) | full aggregate (`TF_BIN=tofu STRICT=1`) |
+
+Three boundaries are recorded, not worked around:
+
+- Both modules declare `hashicorp/google < 7.0`, so the two cases pin 6.49.3
+  (the scheduler module also requires `hashicorp/null`, pinned to 3.3.2). The
+  FC6 capture is scoped to each case's own resources
+  (`google_cloud_scheduler_job`; `google_cloud_tasks_queue` +
+  `google_cloud_tasks_queue_iam_member`) and absent 7.x-only mapping rows are
+  notes.
+- The scheduler case drives the **Pub/Sub target**, not HTTP: provider 6.49.3
+  panics in `flattenCloudSchedulerJobHttpTargetHeaders` when the response omits
+  an empty `httpTarget.headers` map, while real Cloud Scheduler answers
+  `headers: {}` (the provider's own 6.49.3 acceptance test uses a header-less
+  HTTP target and 7.x added a nil guard). That is TF3-4-1
+  (`fix/gcp-scheduler-http-target-headers`), so the HTTP-target path is
+  unmeasured until it is fixed.
+- The module's default `retry_config = { retry_count = 0 }` is dropped from the
+  create body by the provider and the emulator does not synthesize the
+  documented RetryConfig defaults, so that input re-plans
+  `+ retry_config { retry_count = 0 }` forever; the case creates a non-default
+  retry config and default synthesis is TF3-4-2
+  (`fix/gcp-scheduler-retry-config-defaults`). The task queue's omitted
+  `maxBurstSize` reads back 0 where real Cloud Tasks defaults 100 (TF3-4-3,
+  `fix/gcp-tasks-queue-rate-limit-defaults`); it is computed-only in the
+  provider, so it cannot permadiff, but a raw reader sees the wrong value.
+
+The paused create also keeps the case off TF2-12 (the provider always issues
+`:resume` after an enabled create, and the emulator's resume is not idempotent
+on an ENABLED job); the case still exercises both custom methods by unpausing
+and re-pausing an existing job.
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,
