@@ -250,7 +250,7 @@ google_dataproc_autoscaling_policy,dataproc,unsupported,none,unsupported,Datapro
 google_dataproc_autoscaling_policy_iam_binding,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
 google_dataproc_autoscaling_policy_iam_member,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
 google_dataproc_autoscaling_policy_iam_policy,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
-google_dataproc_batch,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_batch,dataproc,unsupported,none,unsupported,Dataproc Serverless (batches) is an explicit 501 stub in the operation registry (Dataproc.Serverless); the emulator models clusters and jobs.,2027-06-30
 google_dataproc_cluster,dataproc,served,"fixture:gce,fixture:gke",served,,2027-06-30
 google_dataproc_cluster_iam_binding,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
 google_dataproc_cluster_iam_member,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
@@ -372,7 +372,7 @@ google_managed_kafka_connect_cluster,managedkafka,unsupported,none,unsupported,M
 google_managed_kafka_connector,managedkafka,unsupported,none,unsupported,Managed Kafka connectors are not in the operation registry.,2027-06-30
 google_managed_kafka_topic,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
 google_memorystore_acl_policy,memorystore,unsupported,none,unsupported,Memorystore ACL policies are not in the operation registry.,2027-06-30
-google_memorystore_instance,memorystore,limited,none,served,memorystore is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_memorystore_instance,memorystore,unsupported,none,unsupported,"The emulator serves the Redis API (redis.googleapis.com/v1, google_redis_instance); the Memorystore v1 instance resource targets memorystore.googleapis.com/v1, which is not in the operation registry.",2027-06-30
 google_memorystore_instance_desired_user_created_endpoints,memorystore,unsupported,none,unsupported,Memorystore desired user-created endpoints are not in the operation registry.,2027-06-30
 google_monitoring_alert_policy,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
 google_monitoring_custom_service,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30

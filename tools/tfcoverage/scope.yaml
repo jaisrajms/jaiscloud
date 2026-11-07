@@ -259,7 +259,8 @@ rules:
     state: served
   - match: google_dataproc_batch
     service: dataproc
-    state: served
+    state: unsupported
+    reason: Dataproc Serverless (batches) is an explicit 501 stub in the operation registry (Dataproc.Serverless); the emulator models clusters and jobs.
   - match: google_dataproc_workflow_template
     service: dataproc
     state: served
@@ -358,7 +359,8 @@ rules:
     state: limited
   - match: google_memorystore_instance
     service: memorystore
-    state: limited
+    state: unsupported
+    reason: The emulator serves the Redis API (redis.googleapis.com/v1, google_redis_instance); the Memorystore v1 instance resource targets memorystore.googleapis.com/v1, which is not in the operation registry.
   - match: google_redis_cluster
     service: memorystore
     state: unsupported
