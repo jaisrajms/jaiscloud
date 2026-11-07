@@ -34,6 +34,7 @@ import (
 	"jaiscloud/internal/gcp/downscope"
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/gcperr"
+	"jaiscloud/internal/gcp/reference"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
@@ -125,6 +126,10 @@ type Provider struct {
 	resources store.ResourceStore // generic store: IAM + ACL (jc_resources)
 	blobs     blobfs.BlobStore    // object bytes
 	encryptor crypto.EnvelopeEncryptor
+	// kms resolves a bucket's encryption.defaultKmsKeyName against the KMS
+	// store at create/update (FC4-1). Nil checks only the CryptoKey name shape
+	// and the bucket's location.
+	kms kmsstore.Store
 
 	mu      sync.Mutex
 	uploads map[string]*uploadSession // resumable upload sessions (in-memory)
@@ -147,6 +152,23 @@ type Provider struct {
 	// registers one to drop its own in-memory sessions).
 	invalidMu        sync.Mutex
 	bucketDeleteHook func(bucket string)
+}
+
+// SetKMSStore attaches the Cloud KMS store so a bucket's
+// encryption.defaultKmsKeyName is resolved on create/update (FC4-1). A nil
+// store checks only the key's name shape and location.
+func (p *Provider) SetKMSStore(k kmsstore.Store) { p.kms = k }
+
+// ValidateBucketEncryption resolves a bucket encryption block against the KMS
+// store for a bucket in location. The REST insert/update and the gRPC
+// CreateBucket/UpdateBucket all call it, so both transports answer alike. An
+// empty/absent defaultKmsKeyName is not a reference and passes.
+func (p *Provider) ValidateBucketEncryption(ctx context.Context, location string, enc map[string]any) error {
+	key, _ := enc["defaultKmsKeyName"].(string)
+	if key == "" {
+		return nil
+	}
+	return reference.ValidateCryptoKey(ctx, p.kms, "encryption.defaultKmsKeyName", key, location)
 }
 
 // SetEventPublisher wires the Pub/Sub publisher used to fan object events out
@@ -953,6 +975,12 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Updated = b.TimeCreated
 	b.Metageneration = "1"
 
+	// A bucket's default CMEK key is a reference into Cloud KMS: real GCS
+	// rejects a create naming a key that does not exist or is not in the
+	// bucket's location (FC4-1).
+	if err := p.ValidateBucketEncryption(ctx, b.Location, b.Encryption); err != nil {
+		return nil, err
+	}
 	if err := p.objects.CreateBucket(ctx, nr.AccountID, name, bucketToMap(b)); err != nil {
 		if errors.Is(err, gcs.ErrAlreadyExists) {
 			return nil, model.NewProviderError("Conflict", "bucket already exists", 409)
@@ -1469,6 +1497,22 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 	pre, err := bucketPrecondition(nr)
 	if err != nil {
 		return nil, err
+	}
+	// Resolve a new default CMEK key before the store write (FC4-1), against the
+	// bucket's own location.
+	if raw, present := body["encryption"]; present {
+		enc, _ := raw.(map[string]any)
+		meta, gerr := p.objects.GetBucket(ctx, name)
+		if gerr != nil {
+			if errors.Is(gerr, gcs.ErrNoSuchBucket) {
+				return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+			}
+			return nil, gerr
+		}
+		loc, _ := meta["location"].(string)
+		if err := p.ValidateBucketEncryption(ctx, loc, enc); err != nil {
+			return nil, err
+		}
 	}
 	// The read-modify-write runs atomically in the store: the metageneration
 	// precondition is validated against the bucket's current meta, then the

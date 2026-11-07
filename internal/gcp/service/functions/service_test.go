@@ -243,7 +243,7 @@ func TestV2FieldFollowups(t *testing.T) {
 	ctx := context.Background()
 	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
 	in := FunctionInputFromMap(map[string]any{
-		"kmsKeyName": "projects/p/locations/global/keyRings/r/cryptoKeys/k",
+		"kmsKeyName": "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k",
 		// environment is output-only: a client value must be ignored and the
 		// server value (GEN_2) served (FC3-4).
 		"environment": "GEN_1",
@@ -279,7 +279,7 @@ func TestV2FieldFollowups(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	out := FunctionJSON(V2, "p", f)
-	if out["kmsKeyName"] != "projects/p/locations/global/keyRings/r/cryptoKeys/k" {
+	if out["kmsKeyName"] != "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k" {
 		t.Fatalf("kmsKeyName = %v", out["kmsKeyName"])
 	}
 	if out["environment"] != "GEN_2" {
@@ -373,7 +373,7 @@ func TestV2FieldFollowups(t *testing.T) {
 
 	// The v1 view carries the same stored kmsKeyName/serviceAccountEmail.
 	v1 := FunctionJSON(V1, "p", upd)
-	if v1["kmsKeyName"] != "projects/p/locations/global/keyRings/r/cryptoKeys/k" ||
+	if v1["kmsKeyName"] != "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k" ||
 		v1["serviceAccountEmail"] != "sa@p.iam.gserviceaccount.com" {
 		t.Fatalf("v1 view = %+v", v1)
 	}

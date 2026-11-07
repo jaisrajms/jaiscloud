@@ -901,6 +901,13 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	}
 	if enc := encryptionToMap(req.GetBucket().GetEncryption()); enc != nil {
 		meta["encryption"] = enc
+		// The default CMEK key is a Cloud KMS reference: resolve it before the
+		// bucket is stored, exactly as the REST insert does (FC4-1).
+		if s.provider != nil {
+			if err := s.provider.ValidateBucketEncryption(ctx, location, enc); err != nil {
+				return nil, mapError(err)
+			}
+		}
 	}
 	if cors := corsToMap(req.GetBucket().GetCors()); cors != nil {
 		meta["cors"] = cors
@@ -1321,6 +1328,21 @@ func (s *Service) UpdateBucket(ctx context.Context, req *storagepb.UpdateBucketR
 	mask := req.GetUpdateMask()
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "update_mask is required", 400))
+	}
+	// A masked encryption change carries a Cloud KMS reference: resolve it
+	// against the bucket's location before the store write (FC4-1).
+	if s.provider != nil && maskIncludes(mask, "encryption") {
+		cur, gerr := s.objects.GetBucket(ctx, bucket)
+		if gerr != nil {
+			if errors.Is(gerr, gcs.ErrNoSuchBucket) {
+				return nil, mapError(model.NewProviderError("NotFound", "bucket not found", 404))
+			}
+			return nil, mapError(gerr)
+		}
+		loc, _ := cur["location"].(string)
+		if err := s.provider.ValidateBucketEncryption(ctx, loc, encryptionToMap(req.GetBucket().GetEncryption())); err != nil {
+			return nil, mapError(err)
+		}
 	}
 	var pre *gcs.Precondition
 	if req.IfMetagenerationMatch != nil || req.IfMetagenerationNotMatch != nil {

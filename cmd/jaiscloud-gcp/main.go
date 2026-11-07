@@ -76,6 +76,7 @@ import (
 	taskscore "jaiscloud/internal/gcp/service/tasks"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	workflowscore "jaiscloud/internal/gcp/service/workflows"
+	"jaiscloud/internal/gcp/serviceaccount"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
@@ -321,6 +322,9 @@ func startCmd() *cobra.Command {
 			}
 
 			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs, crypto.NewEnvelopeEncryptor(stores.keys))
+			// A bucket's encryption.defaultKmsKeyName is resolved against the
+			// running KMS store at create/update (FC4-1).
+			storageP.SetKMSStore(stores.keys)
 			secretP := secretmanagerprovider.New(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys))
 			// Cloud KMS: one transport-neutral core shared by the REST provider
 			// and the gRPC adapter, so the two transports cannot drift.
@@ -454,6 +458,9 @@ func startCmd() *cobra.Command {
 				// v2 storageSource) through the storage provider, which owns
 				// object decryption.
 				functionsCore = functionscore.NewService(stores.functions, stores.resources, serviceOpts...)
+				// A function's kmsKeyName is resolved against the running KMS
+				// store at create/update (FC4-1).
+				functionsCore.SetKMSStore(stores.keys)
 				if dockerExec, ok := funcExec.(*container.DockerExecutor); ok {
 					dockerExec.SetCodeLoader(functionsCore)
 				}
@@ -664,6 +671,9 @@ func startCmd() *cobra.Command {
 				}
 				slog.Info("dataproc executor", "mode", effectiveSparkMode, "requested", sparkMode, "source", sparkModeSrc)
 				dataprocCore = dataproccore.NewService(stores.dataproc, stores.resources, dataprocOpts...)
+				// Cluster and workflow-template encryptionConfig.kmsKey is
+				// resolved against the running KMS store (FC4-1).
+				dataprocCore.SetKMSStore(stores.keys)
 				// Deliver lifecycle events directly to functions whose
 				// eventTrigger names a Dataproc state-change type (independent
 				// of the Pub/Sub topic). Only wire when functions is enabled.
@@ -719,6 +729,9 @@ func startCmd() *cobra.Command {
 				// trigger (its dead-letter surface) is created by the Pub/Sub
 				// provider (FD9).
 				eventarcCore.SetSubscriptionProvisioner(pubsubSeam)
+				// A trigger's serviceAccount is resolved against the IAM
+				// service-account store (FC4-2).
+				eventarcCore.SetServiceAccountExister(serviceaccount.Exister{Resources: stores.resources})
 			}
 			// Eventarc validates destination.cloudFunction against the functions
 			// core, and the functions delivery engine consults Eventarc triggers
@@ -839,6 +852,9 @@ func startCmd() *cobra.Command {
 					"mode", runExecutorMode, "source", runExecutorSource)
 			}
 			runCore := runcore.NewService(stores.run, stores.resources, runOpts...)
+			// A service's template.encryptionKey is resolved against the running
+			// KMS store at create/update (FC4-1).
+			runCore.SetKMSStore(stores.keys)
 			runP := restrun.NewProvider(runCore)
 
 			// Eventarc delivers a destination.cloudRun trigger through the run

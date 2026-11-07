@@ -22,7 +22,7 @@ func TestGCSCMEKRoundTrip(t *testing.T) {
 	p := New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), enc)
 
 	projectID := "my-project"
-	location := "global"
+	location := "us"
 	keyringID := "my-keyring"
 	keyID := "my-key"
 	if err := kmsStore.CreateKeyRing(ctx, projectID, location, keyringID, kms.KeyRing{ID: keyringID}); err != nil {
@@ -89,11 +89,11 @@ func TestGCSCMEKMetadataUpdateKeepsReadable(t *testing.T) {
 	p := New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), enc)
 
 	projectID := "my-project"
-	kmsKeyName := "projects/" + projectID + "/locations/global/keyRings/r/cryptoKeys/k"
-	if err := kmsStore.CreateKeyRing(ctx, projectID, "global", "r", kms.KeyRing{ID: "r"}); err != nil {
+	kmsKeyName := "projects/" + projectID + "/locations/us/keyRings/r/cryptoKeys/k"
+	if err := kmsStore.CreateKeyRing(ctx, projectID, "us", "r", kms.KeyRing{ID: "r"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := kmsStore.CreateCryptoKey(ctx, projectID, "global", "r", "k", kms.CryptoKey{ID: "k", Purpose: "ENCRYPT_DECRYPT"}); err != nil {
+	if err := kmsStore.CreateCryptoKey(ctx, projectID, "us", "r", "k", kms.CryptoKey{ID: "k", Purpose: "ENCRYPT_DECRYPT"}); err != nil {
 		t.Fatal(err)
 	}
 

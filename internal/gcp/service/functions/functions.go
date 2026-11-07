@@ -36,6 +36,12 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 	if err := validateConfigRelations(f); err != nil {
 		return functionsstore.Function{}, Operation{}, err
 	}
+	if err := s.validateFunctionKMS(ctx, location, f.KmsKeyName); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
+	if err := s.validateTriggerReference(ctx, project, location, id, f.EventTrigger); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
 	sha, size, blobKey, serr := s.resolveSource(ctx, project, location, id, in)
 	if serr != nil {
 		return functionsstore.Function{}, Operation{}, serr
@@ -125,6 +131,27 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 	}
 	if verr := validateConfigInput(in, v); verr != nil {
 		return functionsstore.Function{}, Operation{}, verr
+	}
+	// Resolve the references of the function this update will produce before
+	// anything is persisted: a CMEK key or event-trigger topic that does not
+	// exist makes the update an INVALID_ARGUMENT (FC4-1, FC4-3), as real Cloud
+	// Functions rejects it.
+	preview := old
+	// ApplyFunctionUpdate edits a nested eventTrigger in place; give the preview
+	// its own copy so the read-only precondition check cannot mutate the record
+	// the store returned.
+	if old.EventTrigger != nil {
+		et := *old.EventTrigger
+		preview.EventTrigger = &et
+	}
+	if uerr := ApplyFunctionUpdate(&preview, in, mask); uerr != nil {
+		return functionsstore.Function{}, Operation{}, uerr
+	}
+	if err := s.validateFunctionKMS(ctx, location, preview.KmsKeyName); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
+	if err := s.validateTriggerReference(ctx, project, location, id, preview.EventTrigger); err != nil {
+		return functionsstore.Function{}, Operation{}, err
 	}
 	var sha string
 	var size int64

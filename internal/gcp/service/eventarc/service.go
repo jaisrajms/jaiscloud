@@ -52,6 +52,13 @@ type FunctionExister interface {
 	FunctionExists(ctx context.Context, project, location, id string) (bool, error)
 }
 
+// ServiceAccountExister reports whether an IAM service account exists, so a
+// Trigger's serviceAccount is resolved without importing the IAM provider. A
+// nil exister disables the existence check (the address is still shape-checked).
+type ServiceAccountExister interface {
+	ServiceAccountExists(ctx context.Context, project, email string) (bool, error)
+}
+
 // rtTopic is the Pub/Sub topic resource type in the shared ResourceStore
 // (mirrors provider/pubsub's unexported constant). Eventarc validates
 // transport.pubsub.topic references against it.
@@ -66,14 +73,17 @@ const (
 
 // Service is the transport-neutral Eventarc v1 service.
 type Service struct {
-	store         eventarcstore.Store
-	resources     store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
-	workflows     workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
-	functions     FunctionExister      // Cloud Functions existence (destination.cloudFunction)
-	cloudRun      CloudRunInvoker      // Cloud Run delivery seam (destination.cloudRun)
-	subscriptions eventing.SubscriptionProvisioner
-	httpClient    httpDoer       // outbound delivery client; nil disables delivery
-	deliveryWG    sync.WaitGroup // tracks in-flight fire-and-forget deliveries (tests)
+	store     eventarcstore.Store
+	resources store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
+	workflows workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
+	functions FunctionExister      // Cloud Functions existence (destination.cloudFunction)
+	// serviceAccounts resolves a Trigger's serviceAccount against the IAM
+	// service-account store (FC4-2). Nil disables the existence check.
+	serviceAccounts ServiceAccountExister
+	cloudRun        CloudRunInvoker // Cloud Run delivery seam (destination.cloudRun)
+	subscriptions   eventing.SubscriptionProvisioner
+	httpClient      httpDoer       // outbound delivery client; nil disables delivery
+	deliveryWG      sync.WaitGroup // tracks in-flight fire-and-forget deliveries (tests)
 	// deliveryRetryBase is the first backoff step for a retried delivery.
 	// Zero means the 100ms default; tests lower it so a retry sequence is fast.
 	deliveryRetryBase time.Duration
@@ -93,6 +103,11 @@ func NewService(s eventarcstore.Store, resources store.ResourceStore, workflows 
 // SetFunctionExister wires the Cloud Functions existence check used to validate
 // a destination.cloudFunction. A nil exister (the default) skips the check.
 func (s *Service) SetFunctionExister(f FunctionExister) { s.functions = f }
+
+// SetServiceAccountExister wires the IAM service-account existence check used
+// to validate Trigger.serviceAccount. A nil exister (the default) skips the
+// check.
+func (s *Service) SetServiceAccountExister(e ServiceAccountExister) { s.serviceAccounts = e }
 
 // SetCloudRunInvoker wires the Cloud Run delivery seam used by a
 // destination.cloudRun trigger. A nil invoker (the default) logs-and-drops
@@ -566,6 +581,41 @@ func (s *Service) validateReferences(ctx context.Context, project string, body m
 		if _, err := s.store.GetChannel(ctx, project, loc, id); err != nil {
 			return model.NewProviderError("NotFound", "channel not found: "+ch, 404)
 		}
+	}
+	if sa, _ := body["serviceAccount"].(string); sa != "" {
+		if err := s.validateServiceAccountRef(ctx, project, sa); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateServiceAccountRef checks a Trigger's serviceAccount: the address must
+// be a service account email (or its projects/{p}/serviceAccounts/{email}
+// resource name), and — when the IAM store is wired — the account must exist.
+// Real Eventarc resolves the account when the trigger is created; a missing one
+// is NOT_FOUND (the same answer IAM gives for an unknown account).
+func (s *Service) validateServiceAccountRef(ctx context.Context, project, ref string) error {
+	email := ref
+	if strings.HasPrefix(ref, "projects/") {
+		parts := strings.Split(ref, "/")
+		if len(parts) != 4 || parts[0] != "projects" || parts[2] != "serviceAccounts" {
+			return invalidArgument("serviceAccount must be a service account email or projects/{project}/serviceAccounts/{email}")
+		}
+		email = parts[3]
+	}
+	if !strings.Contains(email, "@") || !strings.HasSuffix(email, ".gserviceaccount.com") {
+		return invalidArgument("serviceAccount must be a service account email: " + ref)
+	}
+	if s.serviceAccounts == nil {
+		return nil
+	}
+	ok, err := s.serviceAccounts.ServiceAccountExists(ctx, project, email)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return model.NewProviderError("NotFound", "service account not found: "+ref, 404)
 	}
 	return nil
 }

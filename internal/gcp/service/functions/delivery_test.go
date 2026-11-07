@@ -52,6 +52,10 @@ func (f *fakeProvisioner) EnsureFunctionTrigger(_ context.Context, spec eventing
 	return trigger, sub, nil
 }
 
+func (f *fakeProvisioner) ValidateFunctionTriggerReference(context.Context, eventing.FunctionTriggerSpec) error {
+	return nil
+}
+
 func (f *fakeProvisioner) DeleteFunctionTrigger(_ context.Context, _, _, functionID string) error {
 	f.deleted = append(f.deleted, functionID)
 	return nil
@@ -70,6 +74,7 @@ type fakeSubs struct {
 	retryOK            bool
 }
 
+func (f *fakeSubs) TopicExists(context.Context, string, string) (bool, error) { return true, nil }
 func (f *fakeSubs) EnsureEventarcTopic(context.Context, string, string, string) (string, error) {
 	return "topic", nil
 }

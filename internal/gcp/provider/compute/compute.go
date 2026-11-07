@@ -42,6 +42,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/reference"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -51,7 +52,7 @@ import (
 const (
 	rtInstance   = "gcp_compute_instance"
 	rtDisk       = "gcp_compute_disk"
-	rtNetwork    = "gcp_compute_network"
+	rtNetwork    = reference.ComputeNetworkType
 	rtFirewall   = "gcp_compute_firewall"
 	rtSubnetwork = "gcp_compute_subnetwork"
 	rtOperation  = "gcp_compute_operation"

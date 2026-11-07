@@ -8,6 +8,24 @@ import (
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
 
+// validateTriggerReference resolves an event trigger's external source before
+// the function is persisted. The provisioner checks the Pub/Sub topic (FC4-3),
+// so a function naming a missing topic is rejected at create/update instead of
+// being stored with an unprovisioned backing trigger. A nil provisioner or a
+// non-Eventarc trigger disables the check.
+func (s *Service) validateTriggerReference(ctx context.Context, project, location, id string, et *functionsstore.EventTrigger) error {
+	if s.triggerProvisioner == nil || !isEventarcBackedTrigger(et) {
+		return nil
+	}
+	return s.triggerProvisioner.ValidateFunctionTriggerReference(ctx, eventing.FunctionTriggerSpec{
+		Project:    project,
+		Location:   location,
+		FunctionID: id,
+		EventType:  et.EventType,
+		Resource:   et.Resource,
+	})
+}
+
 // ensureTrigger materializes the backing Eventarc trigger (and its transport
 // Pub/Sub subscription) for a function's Pub/Sub or Cloud Storage event
 // trigger, returning a copy of f with EventTrigger.Trigger/Subscription

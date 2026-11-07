@@ -33,6 +33,26 @@ func AccountNotFound() error {
 	return model.NewProviderError("NotFound", "service account not found", 404)
 }
 
+// Exister adapts LookupAccount to the existence-check interfaces other services
+// hold (for example Eventarc's Trigger.serviceAccount validation), so a core
+// resolves an account without importing the IAM provider.
+type Exister struct{ Resources store.ResourceStore }
+
+// ServiceAccountExists reports whether identifier names a live service account
+// in project. A malformed or unknown account is (false, nil); a store failure
+// is returned.
+func (e Exister) ServiceAccountExists(ctx context.Context, project, identifier string) (bool, error) {
+	_, _, err := LookupAccount(ctx, e.Resources, project, identifier)
+	if err == nil {
+		return true, nil
+	}
+	var pe *model.ProviderError
+	if errors.As(err, &pe) && pe.HTTPStatus == 404 {
+		return false, nil
+	}
+	return false, err
+}
+
 // LookupAccount resolves the service account named by identifier — its email or
 // its numeric unique id — and returns the store account that owns it and its
 // canonical email. account may be the "projects/-" wildcard, which resolves from

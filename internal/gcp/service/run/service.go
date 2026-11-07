@@ -24,6 +24,7 @@ import (
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	runstore "jaiscloud/internal/gcp/store/run"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -57,6 +58,9 @@ type Service struct {
 	lro       lro.Mode
 	runtime   RuntimeManager
 	host      HostConfig
+	// kms resolves template.encryptionKey against the KMS store (FC4-1). Nil
+	// checks only the CryptoKey name shape and its region.
+	kms kmsstore.Store
 	// eventBus publishes cloud-neutral status events for the console's live
 	// stream. Nil disables them (unit tests that only exercise the control
 	// plane).
@@ -126,6 +130,11 @@ func NewService(s runstore.Store, resources store.ResourceStore, opts ...Option)
 	return svc
 }
 
+// SetKMSStore attaches the Cloud KMS store so a service's
+// template.encryptionKey is resolved on create/update (FC4-1). A nil store
+// checks only the key's name shape and location.
+func (s *Service) SetKMSStore(k kmsstore.Store) { s.kms = k }
+
 // Reset clears all services, revisions and operations (/_jaiscloud/reset).
 func (s *Service) Reset(ctx context.Context) {
 	s.runtime.Reset(ctx)
@@ -163,6 +172,9 @@ func (s *Service) createService(ctx context.Context, project, location, serviceI
 		return runstore.Operation{}, err
 	}
 	if err := validateTraffic(serviceID, body); err != nil {
+		return runstore.Operation{}, err
+	}
+	if err := s.validateServiceKMS(ctx, location, body); err != nil {
 		return runstore.Operation{}, err
 	}
 
@@ -266,6 +278,14 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 	}
 
 	templateChanged := templateMasked(updateMask) || (strings.TrimSpace(updateMask) == "" && bodyHasTemplate(body))
+	if templateChanged {
+		// Resolve the effective revision template's CMEK key before the store
+		// write (FC4-1): an update that introduces a missing key must not mint a
+		// revision.
+		if err := s.validateServiceKMS(ctx, location, updated.Data); err != nil {
+			return runstore.Operation{}, err
+		}
+	}
 	updated.Generation++
 	updated.Etag = newUUID()
 	updated.UpdateTime = now

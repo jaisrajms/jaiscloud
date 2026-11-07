@@ -660,7 +660,10 @@ func TestFunctionsHTTPSTrigger(t *testing.T) {
 	resp, _ = doHost(t, "POST", "/nope", triggerHost, []byte("x"), nil)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 
-	// Event-only function → 404.
+	// Event-only function → 404. Its Pub/Sub topic must exist: a function's
+	// eventTrigger.pubsubTopic is a resolved reference (FC4-3).
+	resp, body = do(t, "PUT", "/v1/projects/proj/topics/t", []byte(`{}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "topic create: %s", body)
 	resp, body = do(t, "POST", base+"?functionId=evt",
 		[]byte(`{"runtime":"nodejs20","entryPoint":"handler","eventTrigger":{"eventType":"google.pubsub.topic.publish","resource":"projects/proj/topics/t"}}`),
 		map[string]string{"Content-Type": "application/json"})

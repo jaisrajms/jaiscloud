@@ -283,6 +283,11 @@ type TriggerProvisioner interface {
 	// returns its resource name plus the short id of its transport Pub/Sub
 	// subscription (the dead-letter surface).
 	EnsureFunctionTrigger(ctx context.Context, spec FunctionTriggerSpec) (triggerName, subscription string, err error)
+	// ValidateFunctionTriggerReference resolves the trigger's declared source
+	// reference (a Pub/Sub topic) against the source service, so a function
+	// naming one that does not exist fails before it is persisted. A nil/absent
+	// source store makes it a no-op.
+	ValidateFunctionTriggerReference(ctx context.Context, spec FunctionTriggerSpec) error
 	// DeleteFunctionTrigger removes the backing trigger and its subscription,
 	// tolerating an absent trigger.
 	DeleteFunctionTrigger(ctx context.Context, project, location, functionID string) error
@@ -294,6 +299,9 @@ type TriggerProvisioner interface {
 // Eventarc and Cloud Functions cores hold it as this interface so they never
 // import the Pub/Sub provider.
 type SubscriptionProvisioner interface {
+	// TopicExists reports whether a Pub/Sub topic exists, so a trigger's
+	// declared source can be validated before it is stored.
+	TopicExists(ctx context.Context, account, topic string) (bool, error)
 	// EnsureEventarcTopic idempotently creates the Eventarc-managed transport
 	// topic that backs a non-Pub/Sub trigger (a Cloud Storage trigger),
 	// returning its short id. An existing topic is left untouched.

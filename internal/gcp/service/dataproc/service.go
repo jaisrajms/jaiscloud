@@ -32,6 +32,7 @@ import (
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/sparkgcp"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
@@ -42,6 +43,10 @@ import (
 type Service struct {
 	store     dpstore.Store
 	resources store.ResourceStore // terminal snapshots (rehydrate after k8s Job GC)
+	// kms resolves the CMEK keys a cluster or workflow template names
+	// (encryptionConfig.kmsKey). Nil checks only shape and location, so unit
+	// tests can build the core without a KMS store.
+	kms kmsstore.Store
 
 	k8sClient   kubernetes.Interface // nil = no k8s namespace provisioning
 	platformCfg *platform.PlatformConfig

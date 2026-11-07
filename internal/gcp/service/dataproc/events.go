@@ -12,6 +12,7 @@ import (
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/eventing"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 )
 
@@ -66,6 +67,11 @@ func WithEventBus(bus *events.EventBus) Option {
 // the dispatcher is built before the Dataproc core in main.go. Nil disables
 // direct delivery.
 func (s *Service) SetEventDispatcher(d eventing.Dispatcher) { s.eventDispatcher = d }
+
+// SetKMSStore attaches the Cloud KMS store so cluster and workflow-template
+// creates resolve encryptionConfig.kmsKey against it (FC4-1). A nil store
+// checks only the CryptoKey name shape and its location.
+func (s *Service) SetKMSStore(k kmsstore.Store) { s.kms = k }
 
 // jobStateChangeData is the CloudEvents `data` payload for a Dataproc job
 // state transition. It is an emulator-defined contract: real GCP has no native

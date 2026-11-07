@@ -33,6 +33,9 @@ func (s *Service) CreateWorkflowTemplate(ctx context.Context, project, region st
 	if err := validateWorkflowDefinition(in.Definition); err != nil {
 		return dpstore.WorkflowTemplate{}, err
 	}
+	if err := s.validateWorkflowKMS(ctx, region, in.Definition); err != nil {
+		return dpstore.WorkflowTemplate{}, err
+	}
 	def, err := json.Marshal(in.Definition)
 	if err != nil {
 		return dpstore.WorkflowTemplate{}, invalidArgument("malformed workflow template")
@@ -102,6 +105,9 @@ func (s *Service) UpdateWorkflowTemplate(ctx context.Context, project, region st
 		return dpstore.WorkflowTemplate{}, invalidArgument("missing region or workflow template id")
 	}
 	if err := validateWorkflowDefinition(in.Definition); err != nil {
+		return dpstore.WorkflowTemplate{}, err
+	}
+	if err := s.validateWorkflowKMS(ctx, region, in.Definition); err != nil {
 		return dpstore.WorkflowTemplate{}, err
 	}
 	def, err := json.Marshal(in.Definition)
