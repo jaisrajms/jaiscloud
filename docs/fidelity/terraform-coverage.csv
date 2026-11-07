@@ -258,7 +258,7 @@ google_dataproc_cluster_iam_policy,dataproc,unsupported,none,unsupported,Cluster
 google_dataproc_gdc_application_environment,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
 google_dataproc_gdc_service_instance,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
 google_dataproc_gdc_spark_application,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
-google_dataproc_job,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_job,dataproc,served,module:dataproc,served,,2027-06-30
 google_dataproc_job_iam_binding,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
 google_dataproc_job_iam_member,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
 google_dataproc_job_iam_policy,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
@@ -404,7 +404,7 @@ google_pubsub_subscription,pubsub,served,fixture:compat,served,,2027-06-30
 google_pubsub_subscription_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
 google_pubsub_subscription_iam_member,pubsub,served,fixture:subscriber,served,,2027-06-30
 google_pubsub_subscription_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
-google_pubsub_topic,pubsub,served,"fixture:compat,module:functions,module:pubsub-topic,module:scheduler,module:secret-manager",served,,2027-06-30
+google_pubsub_topic,pubsub,served,"fixture:compat,module:functions,module:iam,module:pubsub-topic,module:scheduler,module:secret-manager",served,,2027-06-30
 google_pubsub_topic_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
 google_pubsub_topic_iam_member,pubsub,served,"fixture:publisher,fixture:viewer",served,,2027-06-30
 google_pubsub_topic_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -424,7 +424,7 @@ google_secret_manager_secret_iam_binding,secretmanager,served,none,served,secret
 google_secret_manager_secret_iam_member,secretmanager,served,fixture:accessor,served,,2027-06-30
 google_secret_manager_secret_iam_policy,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
 google_secret_manager_secret_version,secretmanager,served,fixture:compat,served,,2027-06-30
-google_service_account,iam,served,"fixture:compat,module:secret-manager,module:storage,module:workflows",served,,2027-06-30
+google_service_account,iam,served,"fixture:compat,module:iam,module:secret-manager,module:storage,module:workflows",served,,2027-06-30
 google_service_account_iam_binding,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_service_account_iam_member,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_service_account_iam_policy,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -437,7 +437,7 @@ google_sql_ssl_cert,cloudsql,unsupported,none,unsupported,sslCerts is not in the
 google_sql_user,cloudsql,limited,fixture:compat,served,,2027-06-30
 google_storage_anywhere_cache,storage,unsupported,none,unsupported,Anywhere Cache is a separate storage.googleapis.com surface; the emulator registers no anywhereCaches operation.,2027-06-30
 google_storage_batch_operations_job,storage,unsupported,none,unsupported,Storage Batch Operations is a separate surface; the emulator registers no batchOperations operation.,2027-06-30
-google_storage_bucket,storage,served,"fixture:compat,module:functions,module:storage",served,,2027-06-30
+google_storage_bucket,storage,served,"fixture:compat,module:functions,module:iam,module:storage",served,,2027-06-30
 google_storage_bucket_access_control,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_bucket_acl,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_bucket_iam_binding,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30

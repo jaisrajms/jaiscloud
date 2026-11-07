@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks \
+        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
@@ -1729,6 +1729,96 @@ test-gcp-terraform-tasks: ## Opt-in terraform-google-cloud-tasks module gate (sk
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-tasks.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_MODULE_DIR="$(TF_TASKS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh tasks http://localhost:8080 test-project
+
+# The same driver with the terraform-google-dataproc case (TF3-5). The CFT
+# blueprint renders a GCE-shaped cluster, and the generated root module adds a
+# pyspark job in it; the case asserts the cluster/job read-back, a label +
+# worker-count update, plan No changes and the 404s after destroy. The module's
+# internal default-service-account data source is pruned with -target because
+# Compute projects.get is unserved (TF2-1); the case header records it. Opt-in
+# for the same reasons (one-time module clone, provider from the registry) and
+# SKIPs cleanly when either is missing.
+TF_DATAPROC_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-dataproc
+test-gcp-terraform-dataproc: ## Opt-in terraform-google-dataproc module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_DATAPROC_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_DATAPROC_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/GoogleCloudPlatform/terraform-google-dataproc \"$(TF_DATAPROC_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_DATAPROC_MODULE_DIR)\" checkout 56c7c7ed630f"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-dataproc.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-dataproc.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_DATAPROC_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh dataproc http://localhost:8080 test-project
+
+# The same driver with the terraform-google-service-accounts case (TF3-5). The
+# CFT module creates three service accounts and a project binding per
+# (account, role); the case changes the role set, runs every phase with
+# -parallelism=10 and asserts the project policy keeps every member (the etag
+# OCC path). Opt-in for the same reasons (one-time module clone, provider from
+# the registry) and SKIPs cleanly when either is missing.
+TF_SERVICE_ACCOUNTS_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-service-accounts
+test-gcp-terraform-service-accounts: ## Opt-in terraform-google-service-accounts module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_SERVICE_ACCOUNTS_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_SERVICE_ACCOUNTS_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-service-accounts \"$(TF_SERVICE_ACCOUNTS_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_SERVICE_ACCOUNTS_MODULE_DIR)\" checkout 570caafff32d"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-service-accounts.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-service-accounts.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_SERVICE_ACCOUNTS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh service-accounts http://localhost:8080 test-project
+
+# The same driver with the terraform-google-iam case (TF3-5). The repo is a
+# collection of IAM submodules, so the case pins modules/projects_iam and drives
+# the project, bucket and topic submodules in additive mode with multiple
+# members per role. Every phase runs with -parallelism=10, and the role-set
+# change asserts no lost updates on the project/bucket/topic policies. The
+# submodules reference ../helper, so the case uses git::file module sources
+# over the existing checkout (a plain local path would escape the package). The
+# checkout directory is the repo root; the case sets MODULE_SUBDIR itself.
+# Opt-in for the same reasons (one-time module clone, provider from the
+# registry) and SKIPs cleanly when either is missing.
+TF_IAM_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-iam
+test-gcp-terraform-iam: ## Opt-in terraform-google-iam module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_IAM_MODULE_DIR)/modules/projects_iam" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_IAM_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-iam \"$(TF_IAM_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_IAM_MODULE_DIR)\" checkout 9b9eacfa2b4f"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-iam.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-iam.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_IAM_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh iam http://localhost:8080 test-project
 
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \

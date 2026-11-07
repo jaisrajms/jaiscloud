@@ -8,7 +8,7 @@ name: GCP provider / module drift
 # with the request capture enabled, diffs the provider schema against the
 # committed snapshot (docs/fidelity/terraform-provider-schema.json) and opens an
 # issue with the schema diff when anything moved. It is deliberately NOT a
-# pull_request check: it clones fourteen consumer module repos and runs fifteen
+# pull_request check: it clones seventeen consumer module repos and runs eighteen
 # full apply/destroy cycles (pubsub-topic reuses the pubsub checkout).
 on:
   schedule:
@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/terraform-modules
-          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb
+          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb-56c7c7ed630f-570caafff32d-9b9eacfa2b4f
           restore-keys: |
             tf-modules-${{ runner.os }}-
 
@@ -72,6 +72,9 @@ jobs:
           clone terraform-google-cloud-workflows 4c431381b5d8 https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows
           clone terraform-google-cloud-scheduler ece5c3e87412 https://github.com/GoogleCloudPlatform/terraform-google-cloud-scheduler
           clone terraform-google-cloud-tasks ba7dbc000bfb https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks
+          clone terraform-google-dataproc 56c7c7ed630f https://github.com/GoogleCloudPlatform/terraform-google-dataproc
+          clone terraform-google-service-accounts 570caafff32d
+          clone terraform-google-iam 9b9eacfa2b4f
 
       - name: Build the capture tool
         run: go build -o bin/tfcapture ./tools/tfcapture
@@ -81,7 +84,7 @@ jobs:
           set -uo pipefail
           : > drift-report.md
           rc=0
-          for case in pubsub pubsub-topic storage memorystore functions clouddns cloud-operations kms firestore cloudrun bigquery secret-manager workflows scheduler tasks; do
+          for case in pubsub pubsub-topic storage memorystore functions clouddns cloud-operations kms firestore cloudrun bigquery secret-manager workflows scheduler tasks dataproc service-accounts iam; do
             echo "### module case: $case" | tee -a drift-report.md
             if ! make "test-gcp-terraform-$case" >>"$case.log" 2>&1; then
               echo "FAILED: make test-gcp-terraform-$case" | tee -a drift-report.md

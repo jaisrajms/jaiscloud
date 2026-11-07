@@ -1038,3 +1038,302 @@ google_cloud_tasks_queue_iam_member,,,member,policy.bindings.members,no-catalog,
 google_cloud_tasks_queue_iam_member,,,name,,client-side,the queue name is in the request path not the body
 google_cloud_tasks_queue_iam_member,,,project,,client-side,the project is in the request path not the body
 google_cloud_tasks_queue_iam_member,,,role,policy.bindings.role,no-catalog,
+google_dataproc_cluster,,,cluster_config.autoscaling_config.policy_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.name,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.accelerators.accelerator_count,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.accelerators.accelerator_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.instance_names,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.machine_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.min_cpu_platform,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.node_group_config.num_instances,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group.roles,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.auxiliary_node_groups.node_group_id,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.bucket,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.cluster_tier,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.cluster_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.dataproc_metric_config.metrics.metric_overrides,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.dataproc_metric_config.metrics.metric_source,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.encryption_config.kms_key_name,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.endpoint_config.enable_http_port_access,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.endpoint_config.http_ports,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.engine,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.confidential_instance_config.confidential_instance_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.confidential_instance_config.enable_confidential_compute,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.internal_ip_only,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.metadata,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.network,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.node_group_affinity.node_group_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.reservation_affinity.consume_reservation_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.reservation_affinity.key,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.reservation_affinity.values,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.resource_manager_tags,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.service_account,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.service_account_scopes,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.shielded_instance_config.enable_integrity_monitoring,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.shielded_instance_config.enable_secure_boot,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.shielded_instance_config.enable_vtpm,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.subnetwork,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.tags,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.gce_cluster_config.zone,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.initialization_action.script,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.initialization_action.timeout_sec,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.lifecycle_config.auto_delete_time,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.lifecycle_config.auto_stop_time,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.lifecycle_config.idle_delete_ttl,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.lifecycle_config.idle_start_time,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.lifecycle_config.idle_stop_ttl,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.accelerators.accelerator_count,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.accelerators.accelerator_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.attached_disk_config.disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.attached_disk_config.disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.attached_disk_config.provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.attached_disk_config.provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.image_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.machine_types,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_list.rank,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.instance_flexibility_policy.instance_selection_results,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.master_config.instance_names,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.master_config.machine_type,config.masterConfig.machineTypeUri,no-catalog,
+google_dataproc_cluster,,,cluster_config.master_config.min_cpu_platform,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.master_config.num_instances,config.masterConfig.numInstances,no-catalog,
+google_dataproc_cluster,,,cluster_config.metastore_config.dataproc_metastore_service,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.attached_disk_config.disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.attached_disk_config.disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.attached_disk_config.provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.attached_disk_config.provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.machine_types,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_list.rank,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.instance_selection_results,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.provisioning_model_mix.standard_capacity_base,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_flexibility_policy.provisioning_model_mix.standard_capacity_percent_above_base,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.instance_names,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.num_instances,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.preemptible_worker_config.preemptibility,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.identity_config.user_service_account_mapping,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.cross_realm_trust_admin_server,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.cross_realm_trust_kdc,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.cross_realm_trust_realm,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.cross_realm_trust_shared_password_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.enable_kerberos,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.kdc_db_key_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.key_password_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.keystore_password_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.keystore_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.kms_key_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.realm,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.root_principal_password_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.tgt_lifetime_hours,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.truststore_password_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.security_config.kerberos_config.truststore_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.software_config.image_version,config.softwareConfig.imageVersion,no-catalog,
+google_dataproc_cluster,,,cluster_config.software_config.optional_components,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.software_config.override_properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.software_config.properties,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.staging_bucket,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.temp_bucket,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.accelerators.accelerator_count,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.accelerators.accelerator_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.attached_disk_config.disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.attached_disk_config.disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.attached_disk_config.provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.attached_disk_config.provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.image_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.attached_disk_config.provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_size_gb,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.boot_disk_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.local_ssd_interface,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.disk_config.num_local_ssds,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.machine_types,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_list.rank,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.instance_flexibility_policy.instance_selection_results,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.worker_config.instance_names,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,cluster_config.worker_config.machine_type,config.workerConfig.machineTypeUri,no-catalog,
+google_dataproc_cluster,,,cluster_config.worker_config.min_cpu_platform,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.min_num_instances,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,cluster_config.worker_config.num_instances,config.workerConfig.numInstances,no-catalog,
+google_dataproc_cluster,,,deletion_policy,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,effective_labels,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,graceful_decommission_timeout,,client-side,"sent as the gracefulDecommissionTimeout query parameter, not in the request body"
+google_dataproc_cluster,,,id,,client-side,provider identity attribute; never part of a request body
+google_dataproc_cluster,,,labels,labels,no-catalog,
+google_dataproc_cluster,,,name,clusterName,no-catalog,
+google_dataproc_cluster,,,project,,client-side,the project is in the request path (and the provider also sets projectId in the body)
+google_dataproc_cluster,,,region,,client-side,the region is in the request path not the body
+google_dataproc_cluster,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
+google_dataproc_cluster,,,timeouts.create,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,timeouts.delete,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,timeouts.update,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.auxiliary_services_config.metastore_config.dataproc_metastore_service,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.auxiliary_services_config.spark_history_server_config.dataproc_cluster,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.gke_cluster_target,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.autoscaling.max_node_count,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.autoscaling.min_node_count,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.config.local_ssd_count,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.config.machine_type,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.config.min_cpu_platform,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.config.preemptible,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.config.spot,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.node_pool_config.locations,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.gke_cluster_config.node_pool_target.roles,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.kubernetes_namespace,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.kubernetes_software_config.component_version,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.kubernetes_cluster_config.kubernetes_software_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_cluster,,,virtual_cluster_config.staging_bucket,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_dataproc_job,,,driver_controls_files_uri,,output-only,computed-only attribute; never part of a request body
+google_dataproc_job,,,driver_output_resource_uri,,output-only,computed-only attribute; never part of a request body
+google_dataproc_job,,,effective_labels,,output-only,computed-only attribute; never part of a request body
+google_dataproc_job,,,force_delete,,client-side,provider-local delete behaviour; never part of a request body
+google_dataproc_job,,,hadoop_config.archive_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.args,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.jar_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.logging_config.driver_log_levels,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.main_class,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.main_jar_file_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hadoop_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hive_config.continue_on_failure,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hive_config.jar_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hive_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hive_config.query_file_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hive_config.query_list,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,hive_config.script_variables,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,id,,client-side,provider identity attribute (the server-generated job id); never a request field
+google_dataproc_job,,,labels,job.labels,no-catalog,
+google_dataproc_job,,,pig_config.continue_on_failure,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pig_config.jar_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pig_config.logging_config.driver_log_levels,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pig_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pig_config.query_file_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pig_config.query_list,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pig_config.script_variables,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,placement.cluster_name,job.placement.clusterName,no-catalog,
+google_dataproc_job,,,placement.cluster_uuid,,output-only,computed-only attribute; never part of a request body
+google_dataproc_job,,,presto_config.client_tags,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,presto_config.continue_on_failure,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,presto_config.logging_config.driver_log_levels,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,presto_config.output_format,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,presto_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,presto_config.query_file_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,presto_config.query_list,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,project,,client-side,the project is in the request path; the provider also sets job.reference.projectId
+google_dataproc_job,,,pyspark_config.archive_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pyspark_config.args,job.pysparkJob.args,no-catalog,
+google_dataproc_job,,,pyspark_config.file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pyspark_config.jar_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pyspark_config.logging_config.driver_log_levels,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pyspark_config.main_python_file_uri,job.pysparkJob.mainPythonFileUri,no-catalog,
+google_dataproc_job,,,pyspark_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,pyspark_config.python_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,reference.job_id,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,region,,client-side,the region is in the request path not the body
+google_dataproc_job,,,scheduling.max_failures_per_hour,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,scheduling.max_failures_total,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.archive_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.args,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.jar_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.logging_config.driver_log_levels,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.main_class,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.main_jar_file_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,spark_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,sparksql_config.jar_file_uris,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,sparksql_config.logging_config.driver_log_levels,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,sparksql_config.properties,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,sparksql_config.query_file_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,sparksql_config.query_list,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,sparksql_config.script_variables,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,status,,output-only,computed-only attribute; never part of a request body
+google_dataproc_job,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
+google_dataproc_job,,,timeouts.create,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,timeouts.delete,,not-exercised,the pinned module cases do not configure this attribute
+google_dataproc_job,,,wait_for_completion,,client-side,provider-local wait behaviour; never part of the job submission body
+google_service_account,,,account_id,accountId,no-catalog,
+google_service_account,,,create_ignore_already_exists,,client-side,provider-local create behaviour; never part of a request body
+google_service_account,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_service_account,,,description,serviceAccount.description,no-catalog,
+google_service_account,,,disabled,,not-exercised,the pinned module cases do not configure this attribute
+google_service_account,,,display_name,serviceAccount.displayName,no-catalog,
+google_service_account,,,email,,output-only,computed-only attribute; never part of a request body
+google_service_account,,,id,,client-side,provider identity attribute; never part of a request body
+google_service_account,,,member,,output-only,computed-only attribute; never part of a request body
+google_service_account,,,name,,output-only,computed-only attribute; never part of a request body
+google_service_account,,,project,,client-side,the project is in the request path not the body
+google_service_account,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_service_account,,,unique_id,,output-only,computed-only attribute; never part of a request body
+google_project_iam_member,,,condition.description,,not-exercised,the pinned module cases do not configure this attribute
+google_project_iam_member,,,condition.expression,,not-exercised,the pinned module cases do not configure this attribute
+google_project_iam_member,,,condition.title,,not-exercised,the pinned module cases do not configure this attribute
+google_project_iam_member,,,etag,policy.etag,no-catalog,the provider sends the read etag in every setIamPolicy body
+google_project_iam_member,,,id,,client-side,provider identity attribute; never part of a request body
+google_project_iam_member,,,member,policy.bindings.members,no-catalog,
+google_project_iam_member,,,project,,client-side,the project is in the request path not the body
+google_project_iam_member,,,role,policy.bindings.role,no-catalog,
+google_storage_bucket_iam_member,,,bucket,,client-side,the bucket is in the request path not the body
+google_storage_bucket_iam_member,,,condition.description,,not-exercised,the pinned module cases do not configure this attribute
+google_storage_bucket_iam_member,,,condition.expression,,not-exercised,the pinned module cases do not configure this attribute
+google_storage_bucket_iam_member,,,condition.title,,not-exercised,the pinned module cases do not configure this attribute
+google_storage_bucket_iam_member,,,etag,etag,no-catalog,the provider sends the read etag in every buckets.setIamPolicy body
+google_storage_bucket_iam_member,,,id,,client-side,provider identity attribute; never part of a request body
+google_storage_bucket_iam_member,,,member,bindings.members,no-catalog,
+google_storage_bucket_iam_member,,,role,bindings.role,no-catalog,
+google_storage_bucket_iam_member,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_pubsub_topic_iam_member,,,condition.description,,not-exercised,the pinned module cases do not configure this attribute
+google_pubsub_topic_iam_member,,,condition.expression,,not-exercised,the pinned module cases do not configure this attribute
+google_pubsub_topic_iam_member,,,condition.title,,not-exercised,the pinned module cases do not configure this attribute
+google_pubsub_topic_iam_member,,,etag,policy.etag,no-catalog,the provider sends the read etag in every setIamPolicy body
+google_pubsub_topic_iam_member,,,id,,client-side,provider identity attribute; never part of a request body
+google_pubsub_topic_iam_member,,,member,policy.bindings.members,no-catalog,
+google_pubsub_topic_iam_member,,,project,,client-side,the project is in the request path not the body
+google_pubsub_topic_iam_member,,,role,policy.bindings.role,no-catalog,
+google_pubsub_topic_iam_member,,,topic,,client-side,the topic is in the request path not the body

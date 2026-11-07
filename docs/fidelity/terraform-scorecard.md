@@ -212,6 +212,64 @@ The paused create also keeps the case off TF2-12 (the provider always issues
 on an ENABLED job); the case still exercises both custom methods by unpausing
 and re-pausing an existing job.
 
+## TF3-5 — Dataproc, service-accounts and IAM consumer cases (2026-11-07)
+
+Three cases were added on one branch:
+
+| case | module | pinned commit | what it drives |
+|---|---|---|---|
+| `dataproc` | `GoogleCloudPlatform/terraform-google-dataproc` | `56c7c7ed630f` | a GCE-shaped cluster (master/worker machine types and counts, software image) plus a root-module pyspark job; labels + worker-count update |
+| `service-accounts` | `terraform-google-modules/terraform-google-service-accounts` | `570caafff32d` | three accounts with two project roles each; role-set change under `-parallelism=10` |
+| `iam` | `terraform-google-modules/terraform-google-iam` (`modules/projects_iam`, `modules/storage_buckets_iam`, `modules/pubsub_topics_iam`) | `9b9eacfa2b4f` | project, bucket and Pub/Sub topic IAM in additive mode; role-set change under `-parallelism=10` (no lost updates) |
+
+Both runs below are green on the session commit (each run against a fresh
+ephemeral emulator). The full aggregate — the fixture plus all eighteen module
+cases — is also green under both binaries (`19 passed, 0 failed, 0 skipped`,
+`STRICT=1`, so a SKIP would have failed the run):
+
+| binary | result | case |
+|---|---|---|
+| Terraform 1.16.3 | PASS (18 passed, 0 failed) | `dataproc` |
+| OpenTofu 1.12.6 | PASS (17 passed, 0 failed) | `dataproc` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (21 passed, 0 failed) | `service-accounts` |
+| OpenTofu 1.12.6 | PASS (20 passed, 0 failed) | `service-accounts` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (31 passed, 0 failed) | `iam` |
+| OpenTofu 1.12.6 | PASS (30 passed, 0 failed) | `iam` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (19 passed, 0 failed) | full aggregate (`make test-gcp-terraform-all STRICT=1`) |
+| OpenTofu 1.12.6 | PASS (19 passed, 0 failed) | full aggregate (`TF_BIN=tofu STRICT=1`) |
+
+The pass counts differ by one between the binaries only because the tofu runs
+were made with `JC_TF_CAPTURE=0` for a faster local loop; the aggregate runs
+above include the FC6 capture and pass under both.
+
+Boundaries, recorded rather than worked around:
+
+- The Dataproc module's `main.tf` unconditionally reads
+  `data.google_compute_default_service_account` and grants it
+  `roles/dataproc.worker` through `google_project_iam_member`. The data source
+  calls Compute `projects.get` (`GET /compute/v1/projects/{project}`), which the
+  emulator does not serve yet — TF2-1 (`fix/gcp-compute-projects-get`). The case
+  prunes both resources with `-target` on plan, apply and destroy, so the module
+  still renders and updates its cluster and the root module's job while the IAM
+  prerequisite stays unmeasured. `virtual_cluster_config` is left null: the
+  fixture already covers the GKE-shaped cluster and its NodePool reconciliation.
+- `service-accounts` passes the module's documented `"project=>role"` format;
+  a bare `"roles/viewer"` makes the module parse the role as both the project
+  and the role. `display_name` is set explicitly because the provider's
+  attribute is Optional (not Computed) while the emulator defaults an omitted
+  `serviceAccount.displayName` to the account id — TF2-14
+  (`fix/gcp-iam-serviceaccount-display-name`); the module's own default is a
+  non-empty display name, so a real consumer does not hit it. Billing/org IAM
+  and key generation are disabled (outside the project-scoped surface).
+- The IAM repo's submodules reference `../helper`; a plain local-path module
+  source makes Terraform treat the submodule directory as the package root and
+  rejects the relative helper path. The case uses an offline
+  `git::file://<checkout>//modules/<name>?ref=<HEAD>` source, which presents the
+  whole repo as the package the way the registry does. Folder/organization IAM,
+  the audit-config submodule and the `member_iam`/`service_accounts_iam`
+  submodules are out of scope (the emulator is project-scoped, wire-contract
+  §8); the root module creates the accounts it binds.
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,

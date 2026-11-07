@@ -3,7 +3,7 @@ name: GCP Terraform nightly
 # TF0 — the scheduled aggregate of the Terraform/OpenTofu compatibility suite.
 #
 # Not a pull_request check: it downloads the hashicorp/google provider and runs
-# the fixture plus every pinned module case (fifteen), twice (Terraform and
+# the fixture plus every pinned module case (eighteen), twice (Terraform and
 # OpenTofu). The per-PR signal stays offline (`make gcp-ci-preflight`, the
 # provider-capture self-test, the static coverage gate); this job catches
 # provider-registry drift and module/gate regressions on a schedule.
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   terraform:
-    name: Terraform (fixture + 15 module cases)
+    name: Terraform (fixture + 18 module cases)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -56,7 +56,7 @@ jobs:
           path: |
             ${{ runner.temp }}/tf-plugin-cache
             ~/.cache/terraform-modules
-          key: tf-nightly-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb
+          key: tf-nightly-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb-56c7c7ed630f-570caafff32d-9b9eacfa2b4f
           restore-keys: |
             tf-nightly-${{ runner.os }}-
 
@@ -87,6 +87,9 @@ jobs:
           clone terraform-google-cloud-workflows 4c431381b5d8 https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows
           clone terraform-google-cloud-scheduler ece5c3e87412 https://github.com/GoogleCloudPlatform/terraform-google-cloud-scheduler
           clone terraform-google-cloud-tasks ba7dbc000bfb https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks
+          clone terraform-google-dataproc 56c7c7ed630f https://github.com/GoogleCloudPlatform/terraform-google-dataproc
+          clone terraform-google-service-accounts 570caafff32d
+          clone terraform-google-iam 9b9eacfa2b4f
 
       - name: Run the Terraform aggregate
         run: make test-gcp-terraform-all STRICT=1
@@ -128,7 +131,7 @@ jobs:
           fi
 
   opentofu:
-    name: OpenTofu (fixture + 15 module cases)
+    name: OpenTofu (fixture + 18 module cases)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -163,7 +166,7 @@ jobs:
           path: |
             ${{ runner.temp }}/tf-plugin-cache
             ~/.cache/terraform-modules
-          key: tf-nightly-tofu-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb
+          key: tf-nightly-tofu-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb-56c7c7ed630f-570caafff32d-9b9eacfa2b4f
           restore-keys: |
             tf-nightly-tofu-${{ runner.os }}-
 
@@ -194,6 +197,9 @@ jobs:
           clone terraform-google-cloud-workflows 4c431381b5d8 https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows
           clone terraform-google-cloud-scheduler ece5c3e87412 https://github.com/GoogleCloudPlatform/terraform-google-cloud-scheduler
           clone terraform-google-cloud-tasks ba7dbc000bfb https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks
+          clone terraform-google-dataproc 56c7c7ed630f https://github.com/GoogleCloudPlatform/terraform-google-dataproc
+          clone terraform-google-service-accounts 570caafff32d
+          clone terraform-google-iam 9b9eacfa2b4f
 
       - name: Run the OpenTofu aggregate
         run: make test-gcp-terraform-all TF_BIN=tofu STRICT=1
