@@ -717,3 +717,165 @@ google_cloud_run_v2_service,,,uid,uid,output-only,computed-only attribute; never
 google_cloud_run_v2_service,,,update_time,updateTime,output-only,computed-only attribute; never part of a request body
 google_cloud_run_v2_service,,,uri,uri,output-only,computed-only attribute; never part of a request body
 google_cloud_run_v2_service,,,urls,urls,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,access.condition.description,access.condition.description,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.condition.expression,access.condition.expression,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.condition.location,access.condition.location,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.condition.title,access.condition.title,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.dataset.dataset.dataset_id,access.dataset.dataset.datasetId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.dataset.dataset.project_id,access.dataset.dataset.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.dataset.target_types,access.dataset.targetTypes,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.domain,access.domain,client-side,the provider drops empty access member values; a non-empty domain would be sent
+google_bigquery_dataset,,,access.group_by_email,access.groupByEmail,client-side,the provider drops empty access member values; a non-empty group would be sent
+google_bigquery_dataset,,,access.iam_member,access.iamMember,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.role,access.role,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,access.routine.dataset_id,access.routine.datasetId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.routine.project_id,access.routine.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.routine.routine_id,access.routine.routineId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.special_group,access.specialGroup,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,access.user_by_email,access.userByEmail,client-side,the provider drops empty access member values; a non-empty user would be sent
+google_bigquery_dataset,,,access.view.dataset_id,access.view.datasetId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.view.project_id,access.view.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,access.view.table_id,access.view.tableId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,creation_time,,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,dataset_id,datasetReference.datasetId,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,default_collation,defaultCollation,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,default_encryption_configuration.kms_key_name,defaultEncryptionConfiguration.kmsKeyName,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,default_partition_expiration_ms,defaultPartitionExpirationMs,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,default_table_expiration_ms,defaultTableExpirationMs,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,delete_contents_on_destroy,deleteContents,client-side,"provider-local destroy behaviour; sent as a delete query parameter, never a resource body field"
+google_bigquery_dataset,,,deletion_policy,deletionPolicy,client-side,provider-local destructive-action policy; never part of a request body
+google_bigquery_dataset,,,description,description,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,effective_labels,,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,etag,,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,external_catalog_dataset_options.default_storage_location_uri,externalCatalogDatasetOptions.defaultStorageLocationUri,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,external_catalog_dataset_options.parameters,externalCatalogDatasetOptions.parameters,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,external_dataset_reference.connection,externalDatasetReference.connection,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,external_dataset_reference.external_source,externalDatasetReference.externalSource,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,friendly_name,friendlyName,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,id,id,client-side,provider routing/identity attribute; never part of a request body
+google_bigquery_dataset,,,is_case_insensitive,isCaseInsensitive,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,labels,labels,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,last_modified_time,,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,location,location,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,max_time_travel_hours,maxTimeTravelHours,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_dataset,,,project,project,client-side,"the project is in the request path and datasetReference.projectId, not a top-level body field"
+google_bigquery_dataset,,,resource_tags,resourceTags,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,self_link,,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,storage_billing_model,storageBillingModel,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_dataset,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
+google_bigquery_dataset,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_bigquery_dataset,,,timeouts.delete,,client-side,provider timeout block; never part of a request body
+google_bigquery_dataset,,,timeouts.update,,client-side,provider timeout block; never part of a request body
+google_bigquery_table,,,biglake_configuration.connection_id,biglakeConfiguration.connectionId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,biglake_configuration.file_format,biglakeConfiguration.fileFormat,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,biglake_configuration.storage_uri,biglakeConfiguration.storageUri,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,biglake_configuration.table_format,biglakeConfiguration.tableFormat,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,clustering,clustering,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,creation_time,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,dataset_id,tableReference.datasetId,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_table,,,deletion_policy,deletionPolicy,client-side,provider-local destructive-action policy; never part of a request body
+google_bigquery_table,,,deletion_protection,deletionProtection,client-side,provider-local destroy guard; never part of a request body
+google_bigquery_table,,,description,description,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,effective_labels,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,encryption_configuration.kms_key_name,encryptionConfiguration.kmsKeyName,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,encryption_configuration.kms_key_version,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,etag,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,expiration_time,expirationTime,client-side,a zero expiration is the provider unset value and is omitted
+google_bigquery_table,,,external_catalog_table_options.connection_id,externalCatalogTableOptions.connectionId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.parameters,externalCatalogTableOptions.parameters,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.storage_descriptor.input_format,externalCatalogTableOptions.storageDescriptor.inputFormat,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.storage_descriptor.location_uri,externalCatalogTableOptions.storageDescriptor.locationUri,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.storage_descriptor.output_format,externalCatalogTableOptions.storageDescriptor.outputFormat,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.storage_descriptor.serde_info.name,externalCatalogTableOptions.storageDescriptor.serdeInfo.name,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.storage_descriptor.serde_info.parameters,externalCatalogTableOptions.storageDescriptor.serdeInfo.parameters,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_catalog_table_options.storage_descriptor.serde_info.serialization_library,externalCatalogTableOptions.storageDescriptor.serdeInfo.serializationLibrary,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.autodetect,externalDataConfiguration.autodetect,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.avro_options.use_avro_logical_types,externalDataConfiguration.avroOptions.useAvroLogicalTypes,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.column.encoding,externalDataConfiguration.bigtableOptions.columnFamily.column.encoding,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.column.field_name,externalDataConfiguration.bigtableOptions.columnFamily.column.fieldName,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.column.only_read_latest,externalDataConfiguration.bigtableOptions.columnFamily.column.onlyReadLatest,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.column.qualifier_encoded,externalDataConfiguration.bigtableOptions.columnFamily.column.qualifierEncoded,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.column.qualifier_string,externalDataConfiguration.bigtableOptions.columnFamily.column.qualifierString,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.column.type,externalDataConfiguration.bigtableOptions.columnFamily.column.type,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.encoding,externalDataConfiguration.bigtableOptions.columnFamily.encoding,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.family_id,externalDataConfiguration.bigtableOptions.columnFamily.familyId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.only_read_latest,externalDataConfiguration.bigtableOptions.columnFamily.onlyReadLatest,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.column_family.type,externalDataConfiguration.bigtableOptions.columnFamily.type,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.ignore_unspecified_column_families,externalDataConfiguration.bigtableOptions.ignoreUnspecifiedColumnFamilies,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.output_column_families_as_json,externalDataConfiguration.bigtableOptions.outputColumnFamiliesAsJson,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.bigtable_options.read_rowkey_as_string,externalDataConfiguration.bigtableOptions.readRowkeyAsString,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.compression,externalDataConfiguration.compression,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.connection_id,externalDataConfiguration.connectionId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.allow_jagged_rows,externalDataConfiguration.csvOptions.allowJaggedRows,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.allow_quoted_newlines,externalDataConfiguration.csvOptions.allowQuotedNewlines,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.encoding,externalDataConfiguration.csvOptions.encoding,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.field_delimiter,externalDataConfiguration.csvOptions.fieldDelimiter,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.quote,externalDataConfiguration.csvOptions.quote,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.skip_leading_rows,externalDataConfiguration.csvOptions.skipLeadingRows,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.csv_options.source_column_match,externalDataConfiguration.csvOptions.sourceColumnMatch,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.decimal_target_types,externalDataConfiguration.decimalTargetTypes,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.file_set_spec_type,externalDataConfiguration.fileSetSpecType,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.google_sheets_options.range,externalDataConfiguration.googleSheetsOptions.range,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.google_sheets_options.skip_leading_rows,externalDataConfiguration.googleSheetsOptions.skipLeadingRows,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.hive_partitioning_options.mode,externalDataConfiguration.hivePartitioningOptions.mode,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.hive_partitioning_options.require_partition_filter,externalDataConfiguration.hivePartitioningOptions.requirePartitionFilter,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.hive_partitioning_options.source_uri_prefix,externalDataConfiguration.hivePartitioningOptions.sourceUriPrefix,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.ignore_unknown_values,externalDataConfiguration.ignoreUnknownValues,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.json_extension,externalDataConfiguration.jsonExtension,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.json_options.encoding,externalDataConfiguration.jsonOptions.encoding,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.max_bad_records,externalDataConfiguration.maxBadRecords,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.metadata_cache_mode,externalDataConfiguration.metadataCacheMode,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.object_metadata,externalDataConfiguration.objectMetadata,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.parquet_options.enable_list_inference,externalDataConfiguration.parquetOptions.enableListInference,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.parquet_options.enum_as_string,externalDataConfiguration.parquetOptions.enumAsString,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.reference_file_schema_uri,externalDataConfiguration.referenceFileSchemaUri,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.schema,externalDataConfiguration.schema,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.source_format,externalDataConfiguration.sourceFormat,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,external_data_configuration.source_uris,externalDataConfiguration.sourceUris,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,friendly_name,friendlyName,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_table,,,generated_schema_columns,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,id,id,client-side,provider routing/identity attribute; never part of a request body
+google_bigquery_table,,,ignore_auto_generated_schema,,client-side,provider-local read control; never part of a request body
+google_bigquery_table,,,ignore_schema_changes,,client-side,provider-local read control; never part of a request body
+google_bigquery_table,,,labels,labels,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_table,,,last_modified_time,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,location,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,materialized_view.allow_non_incremental_definition,materializedView.allowNonIncrementalDefinition,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,materialized_view.enable_refresh,materializedView.enableRefresh,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,materialized_view.query,materializedView.query,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,materialized_view.refresh_interval_ms,materializedView.refreshIntervalMs,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,max_staleness,maxStaleness,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,num_bytes,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,num_long_term_bytes,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,num_rows,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,project,project,client-side,"the project is in the request path and tableReference.projectId, not a top-level body field"
+google_bigquery_table,,,range_partitioning.field,rangePartitioning.field,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,range_partitioning.range.end,rangePartitioning.range.end,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,range_partitioning.range.interval,rangePartitioning.range.interval,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,range_partitioning.range.start,rangePartitioning.range.start,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,require_partition_filter,requirePartitionFilter,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,resource_tags,resourceTags,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,schema,schema,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_table,,,schema_foreign_type_info.type_system,schemaForeignTypeInfo.typeSystem,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,self_link,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,table_constraints.foreign_keys.column_references.referenced_column,tableConstraints.foreignKeys.columnReferences.referencedColumn,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_constraints.foreign_keys.column_references.referencing_column,tableConstraints.foreignKeys.columnReferences.referencingColumn,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_constraints.foreign_keys.name,tableConstraints.foreignKeys.name,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_constraints.foreign_keys.referenced_table.dataset_id,tableConstraints.foreignKeys.referencedTable.datasetId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_constraints.foreign_keys.referenced_table.project_id,tableConstraints.foreignKeys.referencedTable.projectId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_constraints.foreign_keys.referenced_table.table_id,tableConstraints.foreignKeys.referencedTable.tableId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_constraints.primary_key.columns,tableConstraints.primaryKey.columns,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_id,tableReference.tableId,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
+google_bigquery_table,,,table_metadata_view,,client-side,provider-local read control; never part of a request body
+google_bigquery_table,,,table_replication_info.replication_interval_ms,tableReplicationInfo.replicationIntervalMs,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_replication_info.source_dataset_id,tableReplicationInfo.sourceDatasetId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_replication_info.source_project_id,tableReplicationInfo.sourceProjectId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,table_replication_info.source_table_id,tableReplicationInfo.sourceTableId,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,time_partitioning.expiration_ms,timePartitioning.expirationMs,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,time_partitioning.field,timePartitioning.field,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,time_partitioning.require_partition_filter,timePartitioning.requirePartitionFilter,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,time_partitioning.type,timePartitioning.type,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,type,,output-only,computed-only attribute; never part of a request body
+google_bigquery_table,,,view.query,view.query,not-exercised,the pinned module cases do not configure this attribute
+google_bigquery_table,,,view.use_legacy_sql,view.useLegacySql,not-exercised,the pinned module cases do not configure this attribute

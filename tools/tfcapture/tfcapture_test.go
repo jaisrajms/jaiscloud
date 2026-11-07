@@ -214,6 +214,31 @@ func TestInitMappingFlushesTheWholeFile(t *testing.T) {
 	}
 }
 
+// TestBigQueryPathRules pins the BigQuery resource attribution: datasets and
+// tables create with a collection POST and update with a full-body PUT, while
+// tables.insert/tabledata and dataset-scoped routines are not attributed to
+// the dataset/table resource.
+func TestBigQueryPathRules(t *testing.T) {
+	cases := []struct {
+		method, path, want string
+	}{
+		{"POST", "/bigquery/v2/projects/p/datasets?alt=json", "google_bigquery_dataset"},
+		{"PUT", "/bigquery/v2/projects/p/datasets/d?alt=json", "google_bigquery_dataset"},
+		{"PATCH", "/bigquery/v2/projects/p/datasets/d?updateMask=labels", "google_bigquery_dataset"},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables?alt=json", "google_bigquery_table"},
+		{"PUT", "/bigquery/v2/projects/p/datasets/d/tables/t?alt=json", "google_bigquery_table"},
+		{"PATCH", "/bigquery/v2/projects/p/datasets/d/tables/t?alt=json", "google_bigquery_table"},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/t/insertAll", ""},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/routines", ""},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/t/rowAccessPolicies", ""},
+	}
+	for _, c := range cases {
+		if got := ResourceForPath(c.method, c.path); got != c.want {
+			t.Errorf("ResourceForPath(%s %s) = %q, want %q", c.method, c.path, got, c.want)
+		}
+	}
+}
+
 // TestCloudRunV2PathRules pins the Cloud Run resource attribution: the create
 // (collection POST) and update (PATCH one service) carry the provider's write
 // bodies, while the service IAM custom methods are POSTs under the same

@@ -327,7 +327,7 @@ capture_phase() {
   # exercise the join; the others record the capture without requirement.
   local require=""
   case "$CASE" in
-    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun) require="-require-resources" ;;
+    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery) require="-require-resources" ;;
   esac
   echo "== capture: provider request bodies vs the field catalog"
   if "$bin" -case "$CASE" $require -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \

@@ -104,6 +104,22 @@ the unserved `compute.projects.get` (TF2-1); `cloud_run_deletion_protection` is
 disabled because it is a provider-side destroy guard. Jobs, WorkerPools, the v1
 surface and traffic targets are outside the served surface.
 
+## TF3-2 — BigQuery consumer case (2026-11-07)
+
+The `bigquery` case pins `terraform-google-modules/terraform-google-bigquery`
+`e11db0dcd597` and drives its root module (dataset + tables + `access` ACL).
+Both runs below are green on the session commit:
+
+| binary | result | case |
+|---|---|---|
+| Terraform 1.16.3 | PASS (20 passed, 0 failed) | `bigquery` (`TF_MODULE_DIR=…/terraform-google-bigquery`) |
+| OpenTofu 1.12.6 | PASS (20 passed, 0 failed) | `bigquery` (`TF_BIN=tofu`) |
+
+Dataset- and table-level IAM is a recorded gap (TF1-1): the
+`getIamPolicy`/`setIamPolicy` operations are not in the registry, so the module
+case drives the served dataset ACL (`access`) instead. Views, materialized and
+external tables, routines, CMEK and resource tags stay at their defaults.
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,

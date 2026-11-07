@@ -160,6 +160,18 @@ var pathRules = []struct {
 	// anchor on the collection and the PATCH rule must exclude ':' and '/'.
 	{method: "POST", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/services/?$`), res: "google_cloud_run_v2_service"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v2/projects/[^/]+/locations/[^/]+/services/[^/:?]+/?$`), res: "google_cloud_run_v2_service"},
+	// BigQuery (google_bigquery_dataset, google_bigquery_table). The provider
+	// creates with a collection POST and updates with a full-body PUT (both
+	// datasets.update and tables.update use PUT; the merge-equivalent PATCH is
+	// accepted by the emulator adapter but the provider does not send it).
+	// tables.insert/tabledata paths are excluded by anchoring on the exact
+	// collection/resource shape.
+	{method: "POST", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/?$`), res: "google_bigquery_dataset"},
+	{method: "PUT", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/?]+/?$`), res: "google_bigquery_dataset"},
+	{method: "PATCH", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/?]+/?$`), res: "google_bigquery_dataset"},
+	{method: "POST", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/?$`), res: "google_bigquery_table"},
+	{method: "PUT", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/:?]+/?$`), res: "google_bigquery_table"},
+	{method: "PATCH", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/:?]+/?$`), res: "google_bigquery_table"},
 }
 
 // ResourceForPath returns the provider resource type a captured request writes,
