@@ -311,6 +311,22 @@ func alertPolicyToProto(p monitoringstore.AlertPolicy, project string) *monitori
 			out.Conditions = append(out.Conditions, cond)
 		}
 	}
+	// creationRecord/mutationRecord are output-only audit messages real
+	// Monitoring always returns for an alert policy. They are derived from the
+	// server clock and the documented mutation identity, never from the stored
+	// request body (a supplied record is ignored).
+	if !p.CreateTime.IsZero() {
+		out.CreationRecord = &monitoringpb.MutationRecord{
+			MutateTime: timestamp.Proto(p.CreateTime),
+			MutatedBy:  core.MutationActorEmail,
+		}
+	}
+	if !p.UpdateTime.IsZero() {
+		out.MutationRecord = &monitoringpb.MutationRecord{
+			MutateTime: timestamp.Proto(p.UpdateTime),
+			MutatedBy:  core.MutationActorEmail,
+		}
+	}
 	return out
 }
 

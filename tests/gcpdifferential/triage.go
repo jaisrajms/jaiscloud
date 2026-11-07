@@ -464,20 +464,6 @@ var triageRules = []TriageRule{
 		Reason:   "output-only default: real GCP auto-fills the global monitored resource's project_id label; the emulator stores the resource type only",
 	},
 
-	// Cloud Monitoring: mutation-record/condition sub-resource metadata.
-	{
-		Service: "monitoring",
-		Op:      "mon_alert_policy_create",
-		Kind:    "missing_field",
-		Reason:  "output-only Monitoring metadata: the server-generated condition name and the creationRecord/mutationRecord audit records real GCP returns are not echoed by the emulator; the policy identity, conditions, channels and enabled state match",
-	},
-	{
-		Service: "monitoring",
-		Op:      "mon_alert_policy_get",
-		Kind:    "missing_field",
-		Reason:  "output-only Monitoring metadata: the server-generated condition name and the creationRecord/mutationRecord audit records real GCP returns are not echoed by the emulator; the policy identity, conditions, channels and enabled state match",
-	},
-
 	// Cloud Scheduler: defaulted/attempt-status fields.
 	{
 		Service: "scheduler",

@@ -6,7 +6,24 @@ import (
 	"io"
 	"sort"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
+
+// stampPolicyTimes fills a policy's server clocks when an older snapshot or an
+// upgraded row from before FC2-18 carries none. The policy's
+// creationRecord/mutationRecord are rendered from these times, so a zero would
+// make them silently disappear; the restore time is the honest stand-in for a
+// record the snapshot never held.
+func stampPolicyTimes(p AlertPolicy, now time.Time) AlertPolicy {
+	if p.CreateTime.IsZero() {
+		p.CreateTime = now
+	}
+	if p.UpdateTime.IsZero() {
+		p.UpdateTime = now
+	}
+	return p
+}
 
 // snapRow pairs a project with a single stored value.
 type descriptorRow struct {
@@ -205,11 +222,12 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 		series[row.Project][seriesKey(ts)] = &ts
 	}
 	policies := make(map[string]map[string]AlertPolicy)
+	now := clock.Now()
 	for _, row := range snap.Policies {
 		if policies[row.Project] == nil {
 			policies[row.Project] = make(map[string]AlertPolicy)
 		}
-		policies[row.Project][row.Policy.ID] = row.Policy
+		policies[row.Project][row.Policy.ID] = stampPolicyTimes(row.Policy, now)
 	}
 	channels := make(map[string]map[string]NotificationChannel)
 	for _, row := range snap.Channels {
@@ -524,14 +542,17 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			return err
 		}
 	}
+	now := clock.Now()
 	for _, row := range snap.Policies {
+		pol := stampPolicyTimes(row.Policy, now)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_monitoring_alert_policies
-				(project_id, id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels, alert_strategy, severity)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		`, row.Project, row.Policy.ID, row.Policy.DisplayName, row.Policy.Combiner, row.Policy.Enabled,
-			jsonb(row.Policy.Documentation), jsonb(row.Policy.Conditions), jsonb(row.Policy.NotificationChannels),
-			jsonb(row.Policy.UserLabels), jsonb(row.Policy.AlertStrategy), row.Policy.Severity); err != nil {
+				(project_id, id, display_name, combiner, enabled, documentation, conditions, notification_channels, user_labels, alert_strategy, severity, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		`, row.Project, pol.ID, pol.DisplayName, pol.Combiner, pol.Enabled,
+			jsonb(pol.Documentation), jsonb(pol.Conditions), jsonb(pol.NotificationChannels),
+			jsonb(pol.UserLabels), jsonb(pol.AlertStrategy), pol.Severity,
+			pol.CreateTime, pol.UpdateTime); err != nil {
 			return err
 		}
 	}

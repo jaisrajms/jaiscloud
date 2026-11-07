@@ -703,6 +703,22 @@ func alertPolicyToJSON(p monitoringstore.AlertPolicy, project string) map[string
 		}
 		out["conditions"] = conds
 	}
+	// creationRecord/mutationRecord are output-only audit messages real
+	// Monitoring always returns for an alert policy. They are derived from the
+	// server clock and the documented mutation identity, never from the stored
+	// request body (a supplied record is ignored).
+	if !p.CreateTime.IsZero() {
+		out["creationRecord"] = map[string]any{
+			"mutateTime": timestamp.Canonical(p.CreateTime),
+			"mutatedBy":  core.MutationActorEmail,
+		}
+	}
+	if !p.UpdateTime.IsZero() {
+		out["mutationRecord"] = map[string]any{
+			"mutateTime": timestamp.Canonical(p.UpdateTime),
+			"mutatedBy":  core.MutationActorEmail,
+		}
+	}
 	return out
 }
 

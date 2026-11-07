@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 )
@@ -621,6 +622,97 @@ func TestAlertPolicyCRUD(t *testing.T) {
 	}
 	if _, err := ac.GetAlertPolicy(ctx, &monitoringpb.GetAlertPolicyRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
 		t.Fatalf("get after delete err = %v, want NotFound", err)
+	}
+}
+
+// TestAlertPolicyAuditAndConditionNames covers FC2-18/FC2-20 over gRPC: the
+// policy carries creation_record/mutation_record (derived from the server
+// clock, never from the request) and every condition carries the
+// server-assigned name, with a create-time name ignored.
+func TestAlertPolicyAuditAndConditionNames(t *testing.T) {
+	at := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	_, ac, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := ac.CreateAlertPolicy(ctx, &monitoringpb.CreateAlertPolicyRequest{
+		Name: "projects/test",
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			DisplayName:    "Audit Policy",
+			Combiner:       monitoringpb.AlertPolicy_OR,
+			CreationRecord: &monitoringpb.MutationRecord{MutatedBy: "caller@example.com"},
+			MutationRecord: &monitoringpb.MutationRecord{MutatedBy: "caller@example.com"},
+			Conditions: []*monitoringpb.AlertPolicy_Condition{{
+				Name:        "projects/other/alertPolicies/x/conditions/999",
+				DisplayName: "cond",
+				Condition: &monitoringpb.AlertPolicy_Condition_ConditionThreshold{ConditionThreshold: &monitoringpb.AlertPolicy_Condition_MetricThreshold{
+					Filter: `metric.type = "custom.googleapis.com/conf/audit"`,
+				}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	wantCondition := created.GetName() + "/conditions/0"
+	if len(created.GetConditions()) != 1 {
+		t.Fatalf("created conditions = %d, want 1", len(created.GetConditions()))
+	}
+	if got := created.GetConditions()[0].GetName(); got != wantCondition {
+		t.Fatalf("create condition name = %q, want %q (a client-supplied name is ignored)", got, wantCondition)
+	}
+	assertGRPCMutationRecord(t, "creationRecord", created.GetCreationRecord(), at)
+	assertGRPCMutationRecord(t, "mutationRecord", created.GetMutationRecord(), at)
+
+	got, err := ac.GetAlertPolicy(ctx, &monitoringpb.GetAlertPolicyRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	if len(got.GetConditions()) != 1 {
+		t.Fatalf("get conditions = %d, want 1", len(got.GetConditions()))
+	}
+	if n := got.GetConditions()[0].GetName(); n != wantCondition {
+		t.Fatalf("get condition name = %q, want %q", n, wantCondition)
+	}
+	assertGRPCMutationRecord(t, "creationRecord", got.GetCreationRecord(), at)
+
+	at = at.Add(time.Hour)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	updated, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			Name:        created.GetName(),
+			DisplayName: "Audit Policy (updated)",
+			Conditions: []*monitoringpb.AlertPolicy_Condition{
+				{Name: wantCondition, DisplayName: "cond"},
+				{DisplayName: "added"},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"conditions", "display_name"}},
+	})
+	if err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+	conds := updated.GetConditions()
+	if len(conds) != 2 {
+		t.Fatalf("updated conditions = %d, want 2", len(conds))
+	}
+	if conds[0].GetName() != wantCondition || conds[1].GetName() != created.GetName()+"/conditions/1" {
+		t.Fatalf("updated condition names = %q, %q", conds[0].GetName(), conds[1].GetName())
+	}
+	assertGRPCMutationRecord(t, "creationRecord", updated.GetCreationRecord(), at.Add(-time.Hour))
+	assertGRPCMutationRecord(t, "mutationRecord", updated.GetMutationRecord(), at)
+}
+
+func assertGRPCMutationRecord(t *testing.T, field string, rec *monitoringpb.MutationRecord, want time.Time) {
+	t.Helper()
+	if rec == nil {
+		t.Fatalf("%s absent", field)
+	}
+	if !rec.GetMutateTime().AsTime().Equal(want) || rec.GetMutatedBy() != core.MutationActorEmail {
+		t.Fatalf("%s = {%v, %q}, want {%v, %q}", field, rec.GetMutateTime().AsTime(), rec.GetMutatedBy(), want, core.MutationActorEmail)
 	}
 }
 

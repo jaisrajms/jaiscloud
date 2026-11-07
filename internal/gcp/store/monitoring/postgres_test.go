@@ -276,6 +276,72 @@ func TestPostgresAlertPolicyStrategyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPostgresAlertPolicyTimestampsRoundTrip verifies the create/update clock
+// the policy's creationRecord/mutationRecord are rendered from survives the
+// Postgres columns (migration 083), an atomic update and Snapshot/Restore —
+// the memory/Postgres parity the store promises.
+func TestPostgresAlertPolicyTimestampsRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres monitoring test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	defer s.Reset(ctx)
+	s.Reset(ctx)
+
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
+	updatedAt := createdAt.Add(time.Hour)
+	if err := s.CreateAlertPolicy(ctx, "p1", AlertPolicy{
+		ID: "ap-times", DisplayName: "timed", CreateTime: createdAt, UpdateTime: createdAt,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetAlertPolicy(ctx, "p1", "ap-times")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.CreateTime.Equal(createdAt) || !got.UpdateTime.Equal(createdAt) {
+		t.Fatalf("get times = %v/%v, want %v/%v", got.CreateTime, got.UpdateTime, createdAt, createdAt)
+	}
+
+	advanced, err := s.UpdateAlertPolicyAtomic(ctx, "p1", "ap-times", func(stored AlertPolicy) (AlertPolicy, error) {
+		stored.UpdateTime = updatedAt
+		return stored, nil
+	})
+	if err != nil {
+		t.Fatalf("atomic update: %v", err)
+	}
+	if !advanced.CreateTime.Equal(createdAt) || !advanced.UpdateTime.Equal(updatedAt) {
+		t.Fatalf("updated times = %v/%v, want %v/%v", advanced.CreateTime, advanced.UpdateTime, createdAt, updatedAt)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	restored, err := s.GetAlertPolicy(ctx, "p1", "ap-times")
+	if err != nil {
+		t.Fatalf("restored policy: %v", err)
+	}
+	if !restored.CreateTime.Equal(createdAt) || !restored.UpdateTime.Equal(updatedAt) {
+		t.Fatalf("restored times = %v/%v, want %v/%v", restored.CreateTime, restored.UpdateTime, createdAt, updatedAt)
+	}
+}
+
 // TestPostgresAtomicRetriesSerializationConflict drives many concurrent
 // read-modify-writes of the same alert policy. Under SERIALIZABLE an unlucky
 // interleaving aborts one transaction with SQLSTATE 40001; before SPK8 the

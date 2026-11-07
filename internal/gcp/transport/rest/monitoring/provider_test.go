@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	"jaiscloud/internal/model"
@@ -432,6 +433,103 @@ func TestRESTAlertPolicyRoundTrip(t *testing.T) {
 	}
 	if _, err := call(t, c, p, http.MethodGet, "/v3/"+name, nil); err == nil {
 		t.Fatal("get after delete should be NotFound")
+	}
+}
+
+// TestRESTAlertPolicyAuditAndConditionNames covers FC2-18/FC2-20 over the JSON
+// API: creationRecord/mutationRecord are always served (derived from the server
+// clock, never from the request), and every condition carries the
+// server-assigned name while a name supplied at create is ignored.
+func TestRESTAlertPolicyAuditAndConditionNames(t *testing.T) {
+	at := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	c, p := newTestProvider(t)
+	created, err := call(t, c, p, http.MethodPost, "/v3/projects/test/alertPolicies", map[string]any{
+		"displayName": "Audit Policy",
+		"conditions": []any{map[string]any{
+			"displayName": "cond",
+			"name":        "projects/other/alertPolicies/x/conditions/999",
+			"conditionThreshold": map[string]any{
+				"filter": `metric.type="custom.googleapis.com/conf/audit"`, "comparison": "COMPARISON_GT", "thresholdValue": 1,
+			},
+		}},
+		"creationRecord": map[string]any{"mutateTime": "2000-01-01T00:00:00Z", "mutatedBy": "caller@example.com"},
+		"mutationRecord": map[string]any{"mutateTime": "2000-01-01T00:00:00Z", "mutatedBy": "caller@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("create alert policy: %v", err)
+	}
+	data := wireData(t, created)
+	name, _ := data["name"].(string)
+	wantCondition := name + "/conditions/0"
+	if got := firstConditionName(t, data); got != wantCondition {
+		t.Fatalf("create condition name = %q, want %q (a client-supplied name is ignored)", got, wantCondition)
+	}
+	assertRestMutationRecord(t, data, "creationRecord", "2031-02-03T04:05:06Z")
+	assertRestMutationRecord(t, data, "mutationRecord", "2031-02-03T04:05:06Z")
+
+	got, err := call(t, c, p, http.MethodGet, "/v3/"+name, nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	gotData := wireData(t, got)
+	if got := firstConditionName(t, gotData); got != wantCondition {
+		t.Fatalf("get condition name = %q, want %q", got, wantCondition)
+	}
+	assertRestMutationRecord(t, gotData, "creationRecord", "2031-02-03T04:05:06Z")
+
+	// A masked update advances mutationRecord but not creationRecord, and names
+	// a condition the caller adds without one.
+	at = at.Add(time.Hour)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	patched, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=conditions", map[string]any{
+		"conditions": []any{
+			map[string]any{"displayName": "cond", "name": wantCondition, "conditionThreshold": map[string]any{"filter": `metric.type="custom.googleapis.com/conf/audit"`}},
+			map[string]any{"displayName": "added"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("patch conditions: %v", err)
+	}
+	pd := wireData(t, patched)
+	conds, _ := pd["conditions"].([]any)
+	if len(conds) != 2 {
+		t.Fatalf("patched conditions = %+v", pd["conditions"])
+	}
+	names := make([]string, 0, len(conds))
+	for _, cond := range conds {
+		m, _ := cond.(map[string]any)
+		n, _ := m["name"].(string)
+		names = append(names, n)
+	}
+	if want := []string{wantCondition, name + "/conditions/1"}; names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("patched condition names = %v, want %v", names, want)
+	}
+	assertRestMutationRecord(t, pd, "creationRecord", "2031-02-03T04:05:06Z")
+	assertRestMutationRecord(t, pd, "mutationRecord", "2031-02-03T05:05:06Z")
+}
+
+func firstConditionName(t *testing.T, data map[string]any) string {
+	t.Helper()
+	conds, _ := data["conditions"].([]any)
+	if len(conds) == 0 {
+		t.Fatalf("response has no conditions: %+v", data)
+	}
+	cond, _ := conds[0].(map[string]any)
+	name, _ := cond["name"].(string)
+	return name
+}
+
+func assertRestMutationRecord(t *testing.T, data map[string]any, field, mutateTime string) {
+	t.Helper()
+	rec, _ := data[field].(map[string]any)
+	if rec == nil {
+		t.Fatalf("%s absent from %+v", field, data)
+	}
+	if rec["mutateTime"] != mutateTime || rec["mutatedBy"] != core.MutationActorEmail {
+		t.Fatalf("%s = %+v, want {mutateTime: %q, mutatedBy: %q}", field, rec, mutateTime, core.MutationActorEmail)
 	}
 }
 

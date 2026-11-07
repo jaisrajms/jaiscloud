@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 func double(v float64) *float64 { return &v }
@@ -303,6 +305,55 @@ func TestMemoryStoreSnapshot(t *testing.T) {
 	}
 	if got, _ := s2.ListAlertPolicies(ctx, "p1"); len(got) != 1 || got[0].DisplayName != "x" {
 		t.Fatalf("restored policies = %+v", got)
+	}
+}
+
+// TestRestoreStampsPolicyClocks covers a snapshot written before FC2-18: the
+// policy carries no create/update clock, and a restore must give it one so the
+// creationRecord/mutationRecord are not permanently unrenderable.
+func TestRestoreStampsPolicyClocks(t *testing.T) {
+	ctx := context.Background()
+	past := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: past})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	s := NewMemoryStore()
+	if err := s.CreateAlertPolicy(ctx, "p1", AlertPolicy{ID: "legacy", DisplayName: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatal(err)
+	}
+
+	restoredAt := past.Add(48 * time.Hour)
+	clock.SetGlobalClock(clock.FixedClock{T: restoredAt})
+	s2 := NewMemoryStore()
+	if err := s2.Restore(ctx, &buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s2.GetAlertPolicy(ctx, "p1", "legacy")
+	if err != nil {
+		t.Fatalf("restored policy: %v", err)
+	}
+	if got.CreateTime.IsZero() || got.UpdateTime.IsZero() {
+		t.Fatalf("restored policy has no clock: %+v", got)
+	}
+	if !got.UpdateTime.Equal(restoredAt) {
+		t.Fatalf("restored updateTime = %v, want the restore time %v", got.UpdateTime, restoredAt)
+	}
+	// A snapshot that does carry the clocks keeps them.
+	var second bytes.Buffer
+	if err := s2.Snapshot(ctx, &second); err != nil {
+		t.Fatal(err)
+	}
+	s3 := NewMemoryStore()
+	if err := s3.Restore(ctx, &second); err != nil {
+		t.Fatal(err)
+	}
+	kept, _ := s3.GetAlertPolicy(ctx, "p1", "legacy")
+	if !kept.CreateTime.Equal(got.CreateTime) || !kept.UpdateTime.Equal(got.UpdateTime) {
+		t.Fatalf("restore changed an existing clock: %v/%v, want %v/%v", kept.CreateTime, kept.UpdateTime, got.CreateTime, got.UpdateTime)
 	}
 }
 

@@ -294,6 +294,13 @@ func TestSDKAlertPolicy(t *testing.T) {
 	require.Equal(t, displayName, got.GetDisplayName())
 	require.Len(t, got.GetConditions(), 1)
 
+	// FC2-18/FC2-20: real Monitoring always returns the policy's audit records
+	// and names each condition itself.
+	require.NotNil(t, got.GetCreationRecord())
+	require.NotNil(t, got.GetMutationRecord())
+	require.NotEmpty(t, got.GetCreationRecord().GetMutatedBy())
+	require.Contains(t, got.GetConditions()[0].GetName(), created.GetName()+"/conditions/")
+
 	var listed []string
 	it := ac.ListAlertPolicies(ctx, &monitoringpb.ListAlertPoliciesRequest{Name: "projects/" + projectID})
 	for {
