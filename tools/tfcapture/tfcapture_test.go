@@ -361,3 +361,28 @@ func TestCloudRunV2PathRules(t *testing.T) {
 		}
 	}
 }
+
+// TestCloudSQLPathRules pins the sqladmin v1beta4 attribution: the instance,
+// database and user create/update bodies are the provider writes, while the
+// instance-level custom methods (a POST under the instance name) and the
+// read-only GETs are not attributed.
+func TestCloudSQLPathRules(t *testing.T) {
+	cases := []struct {
+		method, path, want string
+	}{
+		{"POST", "/sql/v1beta4/projects/p/instances?alt=json", "google_sql_database_instance"},
+		{"PUT", "/sql/v1beta4/projects/p/instances/i?alt=json", "google_sql_database_instance"},
+		{"PATCH", "/sql/v1beta4/projects/p/instances/i?alt=json", "google_sql_database_instance"},
+		{"POST", "/sql/v1beta4/projects/p/instances/i/restoreBackup?alt=json", ""},
+		{"POST", "/sql/v1beta4/projects/p/instances/i/databases?alt=json", "google_sql_database"},
+		{"PUT", "/sql/v1beta4/projects/p/instances/i/databases/d?alt=json", "google_sql_database"},
+		{"POST", "/sql/v1beta4/projects/p/instances/i/users?alt=json", "google_sql_user"},
+		{"PUT", "/sql/v1beta4/projects/p/instances/i/users?alt=json", "google_sql_user"},
+		{"GET", "/sql/v1beta4/projects/p/instances/i?alt=json", ""},
+	}
+	for _, c := range cases {
+		if got := ResourceForPath(c.method, c.path); got != c.want {
+			t.Errorf("ResourceForPath(%s %s) = %q, want %q", c.method, c.path, got, c.want)
+		}
+	}
+}

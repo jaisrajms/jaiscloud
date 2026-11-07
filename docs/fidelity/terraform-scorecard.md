@@ -82,7 +82,10 @@ the full runs below are green.
 - **Module case**: `init` → `plan` → `apply` → read-back assertions → `plan`
   **No changes** → mutate → `plan` No changes → clear → `plan` No changes →
   `destroy`, plus the FC6 capture gate over the provider's outgoing request
-  bodies joined to the field catalog.
+  bodies joined to the field catalog. A **plan-only** case (GKE, Datastore, or
+  any case run with `PLAN_ONLY=1`) stops after `init` → `validate` → `plan`:
+  it asserts the planned resource addresses and the reads the module needs, and
+  never applies, destroys or captures (a plan sends no write bodies).
 - Every module checkout in the table is at the commit the case pins; a moved
   checkout is visible in `summary.tsv` via its `module_head` column.
 
@@ -269,6 +272,66 @@ Boundaries, recorded rather than worked around:
   the audit-config submodule and the `member_iam`/`service_accounts_iam`
   submodules are out of scope (the emulator is project-scoped, wire-contract
   §8); the root module creates the accounts it binds.
+
+## TF3-6 — Cloud SQL module, Datastore and GKE plan-only tier (2026-11-07)
+
+Three cases and a driver mode were added on one branch:
+
+| case | module | pinned commit | tier | what it drives |
+|---|---|---|---|---|
+| `sql-db` | `terraform-google-modules/terraform-google-sql-db` (`modules/postgresql`) | `75b57dc6838e` (v28.3.0) | apply | the module's PostgreSQL instance + default database + user; tier and label update |
+| `gke` | `terraform-google-modules/terraform-google-kubernetes-engine` | `a19597ac18ad` (v47.0.0) | plan-only | the regional cluster, default node pool, node service account, and the `google_container_engine_versions` read |
+| `datastore` | `terraform-google-modules/terraform-google-cloud-datastore` | `1616a282bbf4` (v2.0.1) | plan-only | the rendered `index.yaml` and the gcloud `null_resource` |
+
+The driver (`run-module.sh`) gained the **plan-only tier**: a case sets
+`PLAN_ONLY=1` and calls `plan_only_phase` (and `plan_includes` for resource
+addresses). A run is `init → validate → plan`; there is no apply, destroy or FC6
+capture. A completed plan is the acceptance, not a clean one; a provider panic
+or an unrouted request fails, an API diagnostic is recorded only when the case
+opts in with `PLAN_ONLY_ALLOW_DIAGNOSTICS=1`. A plan-only run that creates state
+is failed and destroyed. `PLAN_ONLY=1` in the environment flips the applying
+`sql-db` case into the same mode (`make test-gcp-terraform-plan-only
+CASE=sql-db`).
+
+`sql-db` is a full apply: it converged on its first run (5 resources, then a
+tier/label update), so the plan-only measurement was promoted to the standard
+contract. `gke` and `datastore` stay plan-only: GKE's control plane is
+metadata-only, and the Datastore module has no provider resource at all (it
+shells out to `gcloud`). `gke`'s plan diagnostics are empty; its two
+`google_container_engine_versions` reads reach Container `GetServerConfig`.
+
+The FC6 capture learned the sqladmin v1beta4 paths (instance/database/user
+create/update), and the mapping gained 207 `google_sql_*` rows with the 31
+attributes the module actually sends classified `no-catalog` (sqladmin is not in
+the FC1 field catalog; the sent fields are stored and echoed by the emulator).
+`tools/tfcapture` has a path-rule test for the new routes.
+
+Runs (each against a fresh ephemeral emulator; `STRICT=1`, so a SKIP fails):
+
+| binary | result | case |
+|---|---|---|
+| Terraform 1.16.3 | PASS (15 passed, 0 failed) | `sql-db` |
+| Terraform 1.16.3 | PASS (7 passed, 0 failed) | `gke` (plan-only) |
+| Terraform 1.16.3 | PASS (6 passed, 0 failed) | `datastore` (plan-only) |
+| Terraform 1.16.3 | PASS (22 passed, 0 failed, 0 skipped) | full aggregate (`make test-gcp-terraform-all STRICT=1`) |
+| OpenTofu 1.12.6 | PASS (15 passed, 0 failed) | `sql-db` (`TF_BIN=tofu`) |
+| OpenTofu 1.12.6 | PASS (7 passed, 0 failed) | `gke` (`TF_BIN=tofu`) |
+| OpenTofu 1.12.6 | PASS (6 passed, 0 failed) | `datastore` (`TF_BIN=tofu`) |
+| OpenTofu 1.12.6 | PASS (22 passed, 0 failed, 0 skipped) | full aggregate (`TF_BIN=tofu STRICT=1`) |
+
+Boundaries, recorded rather than worked around:
+
+- The Datastore Admin surface (`projects.indexes.*`, export/import and the admin
+  operations) is not served; the CFT module manages indexes only through
+  `gcloud datastore indexes`, so no provider path exists to exercise it — TF3-6-1
+  and TF3-6-2 (`no fix` in the wave plan).
+- The GKE module's apply path is not measured (plan-only): the fixture's raw
+  `google_container_cluster` remains the apply gate for the served control
+  plane — TF3-6-3 (`no fix`).
+- `sql-db` sets `deletion_protection = false` (the provider guard, real Cloud
+  SQL refuses the delete too) and leaves read replicas, private service access,
+  CMEK/autokey, password policy, insights and PITR at their defaults; those
+  reach surfaces outside this family's measured scope.
 
 ## What this does not prove
 
