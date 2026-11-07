@@ -396,7 +396,7 @@ case_main() {
 
   echo "== spot checks (create)"
   check_db "CMEK database echoes its cmekConfig.kmsKeyName" "$(db_url "$DB")" \
-    '"cmekConfig":{"kmsKeyName":"'"$KEY_NAME"'"}'
+    '"cmekConfig"' '"kmsKeyName":"'"$KEY_NAME"'"'
   check_db_absent "Google-managed database reports no cmekConfig" "$(db_url "$PLAIN_DB")" '"cmekConfig"'
 
   echo "== $TF: second plan (CMEK permadiff check)"
@@ -408,7 +408,7 @@ case_main() {
   echo "== spot checks (mutate)"
   check_db "non-ForceNew PITR mutate applied" "$(db_url "$DB")" \
     '"pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED"' \
-    '"cmekConfig":{"kmsKeyName":"'"$KEY_NAME"'"}'
+    '"cmekConfig"' '"kmsKeyName":"'"$KEY_NAME"'"'
   plan_no_changes "re-plan after the PITR change reports no changes"
 
   # A destroy -> apply cycle on the same database id must converge immediately

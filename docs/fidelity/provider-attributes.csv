@@ -441,7 +441,7 @@ google_monitoring_alert_policy,,,conditions.condition_threshold.threshold_value,
 google_monitoring_alert_policy,,,conditions.condition_threshold.trigger.count,conditions.conditionThreshold.trigger.count,no-catalog,served by the emulator; the resource is outside the FC1 catalog scope (FC6-2)
 google_monitoring_alert_policy,,,conditions.condition_threshold.trigger.percent,conditions.conditionThreshold.trigger.percent,not-exercised,the pinned module cases do not configure this attribute
 google_monitoring_alert_policy,monitoring,AlertPolicy,conditions.display_name,conditions.displayName,served,
-google_monitoring_alert_policy,,,conditions.name,conditions.name,output-only,computed-only attribute; never part of a request body
+google_monitoring_alert_policy,monitoring,AlertPolicy,conditions.name,conditions.name,served,
 google_monitoring_alert_policy,,,creation_record,creationRecord,output-only,computed-only attribute; never part of a request body
 google_monitoring_alert_policy,,,deletion_policy,deletionPolicy,not-exercised,the pinned module cases do not configure this attribute
 google_monitoring_alert_policy,monitoring,AlertPolicy,display_name,displayName,served,

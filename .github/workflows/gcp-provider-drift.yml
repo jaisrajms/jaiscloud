@@ -8,8 +8,8 @@ name: GCP provider / module drift
 # with the request capture enabled, diffs the provider schema against the
 # committed snapshot (docs/fidelity/terraform-provider-schema.json) and opens an
 # issue with the schema diff when anything moved. It is deliberately NOT a
-# pull_request check: it clones five consumer modules and runs five full
-# apply/destroy cycles.
+# pull_request check: it clones eight consumer module repos and runs nine full
+# apply/destroy cycles (pubsub-topic reuses the pubsub checkout).
 on:
   schedule:
     - cron: '23 5 * * 1' # Mondays 05:23 UTC
@@ -23,7 +23,7 @@ jobs:
   drift:
     name: Provider schema + pinned module drift
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/terraform-modules
-          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647
+          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4
           restore-keys: |
             tf-modules-${{ runner.os }}-
 
@@ -50,10 +50,10 @@ jobs:
         run: |
           set -euo pipefail
           clone() {
-            repo="$1"; commit="$2"
+            repo="$1"; commit="$2"; url="${3:-https://github.com/terraform-google-modules/$repo}"
             dir="$HOME/.cache/terraform-modules/$repo"
             if [ ! -d "$dir/.git" ]; then
-              git clone --quiet "https://github.com/terraform-google-modules/$repo" "$dir"
+              git clone --quiet "$url" "$dir"
             fi
             git -C "$dir" fetch --quiet --depth 1 origin "$commit"
             git -C "$dir" checkout --quiet "$commit"
@@ -61,8 +61,11 @@ jobs:
           clone terraform-google-cloud-storage c7effc0be0f4
           clone terraform-google-pubsub 6cf1860
           clone terraform-google-kms ef6e0eda7032
-          clone terraform-google-firestore 50d170b9ebfc
+          clone terraform-google-firestore 50d170b9ebfc https://github.com/GoogleCloudPlatform/terraform-google-firestore
           clone terraform-google-cloud-dns 35cd6de8e647
+          clone terraform-google-memorystore 5415d5ccca28
+          clone terraform-google-event-function 9f2e26ae3b73
+          clone terraform-google-cloud-operations 8c3e37951bb4
 
       - name: Build the capture tool
         run: go build -o bin/tfcapture ./tools/tfcapture
@@ -72,7 +75,7 @@ jobs:
           set -uo pipefail
           : > drift-report.md
           rc=0
-          for case in storage pubsub kms firestore clouddns; do
+          for case in pubsub pubsub-topic storage memorystore functions clouddns cloud-operations kms firestore; do
             echo "### module case: $case" | tee -a drift-report.md
             if ! make "test-gcp-terraform-$case" >>"$case.log" 2>&1; then
               echo "FAILED: make test-gcp-terraform-$case" | tee -a drift-report.md

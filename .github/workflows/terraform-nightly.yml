@@ -1,0 +1,223 @@
+name: GCP Terraform nightly
+
+# TF0 — the scheduled aggregate of the Terraform/OpenTofu compatibility suite.
+#
+# Not a pull_request check: it downloads the hashicorp/google provider and runs
+# the fixture plus nine apply/destroy module cycles, twice (Terraform and
+# OpenTofu). The per-PR signal stays offline (`make gcp-ci-preflight`, the
+# provider-capture self-test, the static coverage gate); this job catches
+# provider-registry drift and module/gate regressions on a schedule.
+#
+# STRICT=1 is deliberate: a SKIP (missing terraform/tofu or a module checkout)
+# is a broken gate, not a pass.
+on:
+  schedule:
+    - cron: '41 4 * * *' # daily 04:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  terraform:
+    name: Terraform (fixture + 9 module cases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.3'
+          terraform_wrapper: false
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache provider plugin + consumer module checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/tf-plugin-cache
+            ~/.cache/terraform-modules
+          key: tf-nightly-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4
+          restore-keys: |
+            tf-nightly-${{ runner.os }}-
+
+      - name: Clone the pinned consumer modules
+        run: |
+          set -euo pipefail
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          clone() {
+            repo="$1"; commit="$2"; url="${3:-https://github.com/terraform-google-modules/$repo}"
+            dir="$HOME/.cache/terraform-modules/$repo"
+            if [ ! -d "$dir/.git" ]; then
+              git clone --quiet "$url" "$dir"
+            fi
+            git -C "$dir" fetch --quiet --depth 1 origin "$commit"
+            git -C "$dir" checkout --quiet "$commit"
+          }
+          clone terraform-google-cloud-storage c7effc0be0f4
+          clone terraform-google-pubsub 6cf1860
+          clone terraform-google-kms ef6e0eda7032
+          clone terraform-google-firestore 50d170b9ebfc https://github.com/GoogleCloudPlatform/terraform-google-firestore
+          clone terraform-google-cloud-dns 35cd6de8e647
+          clone terraform-google-memorystore 5415d5ccca28
+          clone terraform-google-event-function 9f2e26ae3b73
+          clone terraform-google-cloud-operations 8c3e37951bb4
+
+      - name: Run the Terraform aggregate
+        run: make test-gcp-terraform-all STRICT=1
+
+      - name: Upload the per-case logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-terraform-nightly
+          path: |
+            /tmp/jaiscloud-gcp-terraform-all/summary.md
+            /tmp/jaiscloud-gcp-terraform-all/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-all/*.log
+            /tmp/jaiscloud-gcp-terraform-all.log
+          if-no-files-found: ignore
+
+      - name: Open or update the failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="Terraform nightly failing (Terraform)"
+          {
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo '```'
+            cat /tmp/jaiscloud-gcp-terraform-all/summary.md 2>/dev/null || echo "no summary (the job failed before the cases ran)"
+            echo '```'
+            echo
+            echo 'The artifact `gcp-terraform-nightly` carries the per-case logs.'
+          } > issue-body.md
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$num" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
+          else
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+          fi
+
+  opentofu:
+    name: OpenTofu (fixture + 9 module cases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: '1.12.6'
+          tofu_wrapper: false
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache provider plugin + consumer module checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/tf-plugin-cache
+            ~/.cache/terraform-modules
+          key: tf-nightly-tofu-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4
+          restore-keys: |
+            tf-nightly-tofu-${{ runner.os }}-
+
+      - name: Clone the pinned consumer modules
+        run: |
+          set -euo pipefail
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          clone() {
+            repo="$1"; commit="$2"; url="${3:-https://github.com/terraform-google-modules/$repo}"
+            dir="$HOME/.cache/terraform-modules/$repo"
+            if [ ! -d "$dir/.git" ]; then
+              git clone --quiet "$url" "$dir"
+            fi
+            git -C "$dir" fetch --quiet --depth 1 origin "$commit"
+            git -C "$dir" checkout --quiet "$commit"
+          }
+          clone terraform-google-cloud-storage c7effc0be0f4
+          clone terraform-google-pubsub 6cf1860
+          clone terraform-google-kms ef6e0eda7032
+          clone terraform-google-firestore 50d170b9ebfc https://github.com/GoogleCloudPlatform/terraform-google-firestore
+          clone terraform-google-cloud-dns 35cd6de8e647
+          clone terraform-google-memorystore 5415d5ccca28
+          clone terraform-google-event-function 9f2e26ae3b73
+          clone terraform-google-cloud-operations 8c3e37951bb4
+
+      - name: Run the OpenTofu aggregate
+        run: make test-gcp-terraform-all TF_BIN=tofu STRICT=1
+
+      - name: Upload the per-case logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-opentofu-nightly
+          path: |
+            /tmp/jaiscloud-gcp-terraform-all/summary.md
+            /tmp/jaiscloud-gcp-terraform-all/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-all/*.log
+            /tmp/jaiscloud-gcp-terraform-all.log
+          if-no-files-found: ignore
+
+      - name: Open or update the failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="Terraform nightly failing (OpenTofu)"
+          {
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo '```'
+            cat /tmp/jaiscloud-gcp-terraform-all/summary.md 2>/dev/null || echo "no summary (the job failed before the cases ran)"
+            echo '```'
+            echo
+            echo 'The artifact `gcp-opentofu-nightly` carries the per-case logs.'
+          } > issue-body.md
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$num" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
+          else
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+          fi

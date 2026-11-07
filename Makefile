@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore \
+        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
@@ -1276,6 +1276,29 @@ test-gcp-terraform: ## Opt-in GCP Terraform compat suite (requires terraform; sk
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_BIN=terraform tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+
+# Aggregate entry point for the baseline/nightly: one emulator, then the fixture
+# and every pinned module case (tests/integration/gcp/terraform/run-all.sh).
+# Per-case targets below remain the developer entry point. TF_BIN=tofu runs the
+# same set under OpenTofu; STRICT=1 makes a SKIP (missing tool or module
+# checkout) a failure, which is what CI wants and a local run does not. The
+# per-case logs and summary land in /tmp/jaiscloud-gcp-terraform-all/.
+TF_BIN ?= terraform
+STRICT ?=
+test-gcp-terraform-all: ## Run the Terraform fixture + every pinned module case (TF_BIN=tofu, STRICT=1)
+	@set -e; \
+	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-all.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-all.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-all.sh http://localhost:8080 test-project
 
 # The demo module's own gate (../demo/dpgke-lifecycle/terraform/run.sh): apply,
 # re-plan for permadiffs, the provider's job submit/read, destroy ordering and

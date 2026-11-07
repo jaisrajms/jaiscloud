@@ -10,6 +10,7 @@ and `make test-gcp-provider-capture`.
 | `reference-coverage.csv` | `google.api.resource_reference` annotations + documented references | `check-gcp-field-coverage` |
 | `provider-attributes.csv` | `terraform providers schema -json`, classified per attribute | `make test-gcp-provider-capture` + every module gate |
 | `terraform-provider-schema.json` | a compacted provider-schema snapshot of the mapped resource types | the weekly drift workflow |
+| `terraform-scorecard.md` | `make test-gcp-terraform-all` output, pinned tool/provider versions | the nightly (`terraform-nightly.yml`); reviewed per Terraform session |
 
 ## provider-attributes.csv
 
