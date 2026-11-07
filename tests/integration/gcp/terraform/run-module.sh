@@ -336,7 +336,7 @@ capture_phase() {
   # exercise the join; the others record the capture without requirement.
   local require=""
   case "$CASE" in
-    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery | secret-manager | workflows) require="-require-resources" ;;
+    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery | secret-manager | workflows | scheduler | tasks) require="-require-resources" ;;
   esac
   local scope=()
   if [[ -n "${CAPTURE_RESOURCES:-}" ]]; then

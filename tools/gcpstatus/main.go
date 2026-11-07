@@ -206,8 +206,8 @@ func assignOrders(items []*Item, seriesOrder []string) {
 	}
 }
 
-var idRe = regexp.MustCompile(`^([A-Z]{1,3}[0-9]+(?:-[0-9]+)?)\b`)
-var idTokenRe = regexp.MustCompile(`[A-Z]{1,3}[0-9]+(?:-[0-9]+)?`)
+var idRe = regexp.MustCompile(`^([A-Z]{1,3}[0-9]+(?:-[0-9]+)*)\b`)
+var idTokenRe = regexp.MustCompile(`[A-Z]{1,3}[0-9]+(?:-[0-9]+)*`)
 var rangeIDRe = regexp.MustCompile(`([A-Z]{1,3})([0-9]+)\s*[-\x{2013}]\s*([A-Z]{1,3})?([0-9]+)`)
 var prWordRe = regexp.MustCompile(`(?i)\bPR\s*#?(\d+)`)
 var barePRRe = regexp.MustCompile(`#(\d+)`)

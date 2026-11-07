@@ -171,6 +171,7 @@ func TestExtractID(t *testing.T) {
 		"R11 Datastore REST protobuf bodies": "R11",
 		"**P0 infra**":                       "P0",
 		"B2-10 iamcredentials":               "B2-10",
+		"TF3-4-1 scheduler headers":          "TF3-4-1",
 		"no id here":                         "",
 	}
 	for in, want := range cases {
