@@ -879,3 +879,79 @@ google_bigquery_table,,,time_partitioning.type,timePartitioning.type,not-exercis
 google_bigquery_table,,,type,,output-only,computed-only attribute; never part of a request body
 google_bigquery_table,,,view.query,view.query,not-exercised,the pinned module cases do not configure this attribute
 google_bigquery_table,,,view.use_legacy_sql,view.useLegacySql,not-exercised,the pinned module cases do not configure this attribute
+google_secret_manager_secret,,,annotations,,not-exercised,the module has no annotations input
+google_secret_manager_secret,,,create_time,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_secret_manager_secret,,,deletion_protection,,client-side,provider-local destroy guard; never part of a request body
+google_secret_manager_secret,,,effective_annotations,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret,,,effective_labels,,output-only,computed-only attribute; the body's labels member is mapped by the labels row
+google_secret_manager_secret,,,expire_time,expireTime,not-exercised,the module configures TTL/expiration only through version_destroy_ttl, which stays null
+google_secret_manager_secret,,,id,,client-side,provider identity attribute; never part of a request body
+google_secret_manager_secret,,,labels,labels,no-catalog,
+google_secret_manager_secret,,,name,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret,,,project,,client-side,the project is in the request path, not the body
+google_secret_manager_secret,,,replication.auto.customer_managed_encryption.kms_key_name,replication.automatic.customerManagedEncryption.kmsKeyName,no-catalog,
+google_secret_manager_secret,,,replication.user_managed.replicas.customer_managed_encryption.kms_key_name,replication.userManaged.replicas.customerManagedEncryption.kmsKeyName,no-catalog,
+google_secret_manager_secret,,,replication.user_managed.replicas.location,replication.userManaged.replicas.location,no-catalog,
+google_secret_manager_secret,,,rotation.next_rotation_time,rotation.nextRotationTime,no-catalog,
+google_secret_manager_secret,,,rotation.rotation_period,rotation.rotationPeriod,no-catalog,
+google_secret_manager_secret,,,secret_id,,client-side,the id is the secretId query parameter, not a body field
+google_secret_manager_secret,,,tags,tags,not-exercised,the module does not configure resource tags
+google_secret_manager_secret,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_secret_manager_secret,,,timeouts.delete,,client-side,provider timeout block; never part of a request body
+google_secret_manager_secret,,,timeouts.update,,client-side,provider timeout block; never part of a request body
+google_secret_manager_secret,,,topics.name,topics.name,no-catalog,
+google_secret_manager_secret,,,ttl,ttl,not-exercised,the module does not expose a TTL/expiration input
+google_secret_manager_secret,,,version_aliases,versionAliases,not-exercised,the module does not configure version aliases
+google_secret_manager_secret,,,version_destroy_ttl,versionDestroyTtl,not-exercised,the module defaults it to null and the case leaves it null
+google_secret_manager_secret_version,,,create_time,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret_version,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_secret_manager_secret_version,,,destroy_time,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret_version,,,enabled,,client-side,maps to the enable/disable custom methods, never the addVersion body
+google_secret_manager_secret_version,,,id,,client-side,provider identity attribute; never part of a request body
+google_secret_manager_secret_version,,,is_secret_data_base64,,client-side,provider-local encoding control; the addVersion body always carries base64 payload.data
+google_secret_manager_secret_version,,,name,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret_version,,,project,,client-side,the project is in the request path, not the body
+google_secret_manager_secret_version,,,secret,,client-side,the secret is in the request path, not the body
+google_secret_manager_secret_version,,,secret_data,payload.data,no-catalog,
+google_secret_manager_secret_version,,,secret_data_wo,,not-exercised,the module configures secret_data, not the write-only variant
+google_secret_manager_secret_version,,,secret_data_wo_version,,client-side,provider-local write-only version counter; never part of a request body
+google_secret_manager_secret_version,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_secret_manager_secret_version,,,timeouts.delete,,client-side,provider timeout block; never part of a request body
+google_secret_manager_secret_version,,,timeouts.update,,client-side,provider timeout block; never part of a request body
+google_secret_manager_secret_version,,,version,,output-only,computed-only attribute; never part of a request body
+google_secret_manager_secret_iam_binding,,,condition.description,policy.bindings.condition.description,not-exercised,the module does not configure IAM conditions
+google_secret_manager_secret_iam_binding,,,condition.expression,policy.bindings.condition.expression,not-exercised,the module does not configure IAM conditions
+google_secret_manager_secret_iam_binding,,,condition.title,policy.bindings.condition.title,not-exercised,the module does not configure IAM conditions
+google_secret_manager_secret_iam_binding,,,etag,,output-only,computed-only attribute; the binding writes the merged policy without sending an etag
+google_secret_manager_secret_iam_binding,,,id,,client-side,provider identity attribute; never part of a request body
+google_secret_manager_secret_iam_binding,,,members,policy.bindings.members,no-catalog,
+google_secret_manager_secret_iam_binding,,,project,,client-side,the project is in the request path, not the body
+google_secret_manager_secret_iam_binding,,,role,policy.bindings.role,no-catalog,
+google_secret_manager_secret_iam_binding,,,secret_id,,client-side,the secret is in the request path, not the body
+google_workflows_workflow,,,call_log_level,callLogLevel,not-exercised,the pinned submodule does not expose call logging
+google_workflows_workflow,,,create_time,,output-only,computed-only attribute; never part of a request body
+google_workflows_workflow,,,crypto_key_name,cryptoKeyName,unsupported,Cloud Workflows CMEK is not implemented (README-GCP records workflow CMEK as not implemented); the submodule does not expose it
+google_workflows_workflow,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
+google_workflows_workflow,,,deletion_protection,,client-side,provider-local destroy guard; never part of a request body
+google_workflows_workflow,,,description,description,no-catalog,
+google_workflows_workflow,,,effective_labels,,output-only,computed-only attribute; the body's labels member is mapped by the labels row
+google_workflows_workflow,,,execution_history_level,executionHistoryLevel,unsupported,executionHistoryLevel is not modelled by the workflows service (the wire renderer omits it); the submodule does not expose it
+google_workflows_workflow,,,id,,client-side,provider identity attribute; never part of a request body
+google_workflows_workflow,,,labels,labels,no-catalog,
+google_workflows_workflow,,,name,name,no-catalog,
+google_workflows_workflow,,,name_prefix,,client-side,provider-local name generator; never part of a request body
+google_workflows_workflow,,,project,,client-side,the project is in the request path, not the body
+google_workflows_workflow,,,region,,client-side,the region is in the request path, not the body
+google_workflows_workflow,,,revision_id,,output-only,computed-only attribute; never part of a request body
+google_workflows_workflow,,,service_account,serviceAccount,no-catalog,
+google_workflows_workflow,,,source_contents,sourceContents,no-catalog,
+google_workflows_workflow,,,state,,output-only,computed-only attribute; never part of a request body
+google_workflows_workflow,,,tags,tags,not-exercised,the pinned submodule does not configure resource tags
+google_workflows_workflow,,,terraform_labels,,output-only,computed-only attribute; never part of a request body
+google_workflows_workflow,,,timeouts.create,,client-side,provider timeout block; never part of a request body
+google_workflows_workflow,,,timeouts.delete,,client-side,provider timeout block; never part of a request body
+google_workflows_workflow,,,timeouts.update,,client-side,provider timeout block; never part of a request body
+google_workflows_workflow,,,update_time,,output-only,computed-only attribute; never part of a request body
+google_workflows_workflow,,,user_env_vars,userEnvVars,not-exercised,the pinned submodule does not configure user environment variables

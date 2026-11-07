@@ -8,8 +8,8 @@ name: GCP provider / module drift
 # with the request capture enabled, diffs the provider schema against the
 # committed snapshot (docs/fidelity/terraform-provider-schema.json) and opens an
 # issue with the schema diff when anything moved. It is deliberately NOT a
-# pull_request check: it clones ten consumer module repos and runs eleven full
-# apply/destroy cycles (pubsub-topic reuses the pubsub checkout).
+# pull_request check: it clones twelve consumer module repos and runs thirteen
+# full apply/destroy cycles (pubsub-topic reuses the pubsub checkout).
 on:
   schedule:
     - cron: '23 5 * * 1' # Mondays 05:23 UTC
@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/terraform-modules
-          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597
+          key: tf-modules-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8
           restore-keys: |
             tf-modules-${{ runner.os }}-
 
@@ -68,6 +68,8 @@ jobs:
           clone terraform-google-cloud-operations 8c3e37951bb4
           clone terraform-google-cloud-run 4ce640a2a519 https://github.com/GoogleCloudPlatform/terraform-google-cloud-run
           clone terraform-google-bigquery e11db0dcd597
+          clone terraform-google-secret-manager 77fca80ccd6a https://github.com/GoogleCloudPlatform/terraform-google-secret-manager
+          clone terraform-google-cloud-workflows 4c431381b5d8 https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows
 
       - name: Build the capture tool
         run: go build -o bin/tfcapture ./tools/tfcapture
@@ -77,7 +79,7 @@ jobs:
           set -uo pipefail
           : > drift-report.md
           rc=0
-          for case in pubsub pubsub-topic storage memorystore functions clouddns cloud-operations kms firestore cloudrun bigquery; do
+          for case in pubsub pubsub-topic storage memorystore functions clouddns cloud-operations kms firestore cloudrun bigquery secret-manager workflows; do
             echo "### module case: $case" | tee -a drift-report.md
             if ! make "test-gcp-terraform-$case" >>"$case.log" 2>&1; then
               echo "FAILED: make test-gcp-terraform-$case" | tee -a drift-report.md

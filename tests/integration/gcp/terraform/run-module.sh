@@ -24,6 +24,15 @@
 #                  a collection of modules (e.g.
 #                  terraform-google-cloud-operations/modules/simple-uptime-check);
 #                  case_main then sees $MODULE_DIR as that module directory
+#   CAPTURE_RESOURCES      optional comma-separated provider resource types the
+#                          FC6 capture gate should check; the default checks
+#                          every mapped resource in the case's schema. A case
+#                          whose module pins an older provider must scope it,
+#                          because the global mapping also carries attributes
+#                          added after that provider release.
+#   CAPTURE_ALLOW_MISSING  set 1 when the case's provider predates some mapping
+#                          rows; absent rows become notes instead of failures
+#                          (a declared-but-unclassified attribute still fails)
 #   case_main      the gate body; it runs with $WORK, $MODULE_DIR, $ENDPOINT,
 #                  $PROJECT and the helpers below in scope
 #
@@ -327,10 +336,17 @@ capture_phase() {
   # exercise the join; the others record the capture without requirement.
   local require=""
   case "$CASE" in
-    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery) require="-require-resources" ;;
+    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery | secret-manager | workflows) require="-require-resources" ;;
   esac
+  local scope=()
+  if [[ -n "${CAPTURE_RESOURCES:-}" ]]; then
+    scope=(-only-resources "$CAPTURE_RESOURCES")
+  fi
+  if [[ "${CAPTURE_ALLOW_MISSING:-0}" == "1" ]]; then
+    scope+=(-allow-missing-attributes)
+  fi
   echo "== capture: provider request bodies vs the field catalog"
-  if "$bin" -case "$CASE" $require -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \
+  if "$bin" -case "$CASE" $require "${scope[@]}" -log "$WORK/tf-debug.log" -schema "$WORK/schema.json" \
       -mapping "$root/docs/fidelity/provider-attributes.csv" \
       -catalog "$root/docs/fidelity/field-coverage.csv"; then
     pass "capture (every sent provider attribute is served)"

@@ -127,6 +127,22 @@ var pathRules = []struct {
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/subscriptions/[^/?]+`), res: "google_pubsub_subscription"},
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/databases/?$`), res: "google_firestore_database"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/databases/[^/?]+`), res: "google_firestore_database"},
+	// Secret Manager (google_secret_manager_secret, its version and its IAM
+	// binding). The secret create is the collection POST (the id is the
+	// secretId query parameter, stripped before matching), the metadata update
+	// is a PATCH, a version is added with the :addVersion custom method, and
+	// the authoritative IAM binding writes through :setIamPolicy. Read-only
+	// custom methods (:getIamPolicy, versions access/destroy) carry no body and
+	// are excluded by anchoring on the method set and resource shape.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/secrets/?$`), res: "google_secret_manager_secret"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/secrets/[^/:?]+/?$`), res: "google_secret_manager_secret"},
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/secrets/[^/:?]+:addVersion$`), res: "google_secret_manager_secret_version"},
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/secrets/[^/:?]+:setIamPolicy$`), res: "google_secret_manager_secret_iam_binding"},
+	// Cloud Workflows (google_workflows_workflow): create is the collection POST
+	// (workflowId query), update is a PATCH. The executions surface lives under
+	// the workflow but is not a Terraform resource write, so it is excluded.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/workflows/?$`), res: "google_workflows_workflow"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/workflows/[^/:?]+/?$`), res: "google_workflows_workflow"},
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/keyRings/?$`), res: "google_kms_key_ring"},
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/?$`), res: "google_kms_crypto_key"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/[^/?]+`), res: "google_kms_crypto_key"},
