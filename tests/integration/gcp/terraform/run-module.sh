@@ -140,6 +140,28 @@ DESTROYED=0
 # tf runs Terraform against the generated root module.
 tf() { "$TF" -chdir="$WORK" "$@"; }
 
+# endpoint_for <service> prints the provider custom endpoint for one emulated
+# service from terraform-endpoints.yaml (the single map the fixture and the
+# corpus tool consume too). New cases should use
+#
+#   kms_custom_endpoint = "$(endpoint_for kms)"
+#
+# in their generated provider block; existing cases keep their literals until
+# their own session migrates them.
+TF_CORPUS_BIN="${TF_CORPUS_BIN:-}"
+endpoint_for() {
+  local svc="$1" root
+  if [[ -z "$TF_CORPUS_BIN" ]]; then
+    root="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+    TF_CORPUS_BIN="$root/bin/tfcorpus"
+    if ! (cd "$root" && go build -o "$TF_CORPUS_BIN" ./tools/tfcorpus); then
+      echo "ERROR: could not build tools/tfcorpus" >&2
+      return 1
+    fi
+  fi
+  "$TF_CORPUS_BIN" -print-endpoint "$svc" -endpoint "$ENDPOINT" -endpoints "$SCRIPT_DIR/terraform-endpoints.yaml"
+}
+
 destroy_work() {
   [[ "$DESTROYED" == "1" ]] && return 0
   DESTROYED=1

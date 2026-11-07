@@ -299,6 +299,13 @@ provider "google" {
 }
 ```
 
+The full per-service endpoint block is generated from
+[`tests/integration/gcp/terraform/terraform-endpoints.yaml`](tests/integration/gcp/terraform/terraform-endpoints.yaml);
+`make gcp-terraform-endpoints` prints it. The same map drives the fixture, the
+module driver and the web-corpus plan run (`make test-gcp-terraform-corpus`,
+see the [suite README](tests/integration/gcp/terraform/README.md#web-corpus-tf2)),
+which plans the provider's published examples against the emulator.
+
 `google_dataproc_cluster` with `virtual_cluster_config` plans, applies and re-reads with no diff, and the node pools it reconciles are readable through the GKE API — that is the path `make test-gcp-terraform` gates. The plain `cluster_config` (Compute-Engine) shape applies and re-reads cleanly too: the read carries the service defaults real Dataproc reports (`config.softwareConfig.imageVersion`, the instance groups and a zone — see [Dataproc: Compute-Engine cluster read defaults](#dataproc-compute-engine-cluster-read-defaults)), so the provider no longer panics flattening an absent `software_config`. Point `gke_cluster_target` at an existing GKE cluster: `gcloud container clusters create` works against the emulator with `CLOUDSDK_API_ENDPOINT_OVERRIDES_CONTAINER=http://localhost:8080/container/` (or a direct `POST /container/v1/projects/{p}/locations/{l}/clusters` with a `workloadIdentityConfig`, which Dataproc-on-GKE requires).
 
 `google_container_cluster` works now that the GKE read is complete: it renders the nested messages the provider dereferences unconditionally on its read (`legacyAbac`, `networkConfig`, `shieldedNodes`, `defaultMaxPodsConstraint`), so the fixture creates the Dataproc-on-GKE prerequisite with the resource itself and a second `plan` reports no changes. It needs one thing the other services do not: a `container.`-prefixed host (`container_custom_endpoint = "http://container.localhost:8080/container/"`), because the emulator routes `container.v1` by host — the bare `/v1/projects/{p}/locations/{l}/clusters` path belongs to Managed Kafka — and the provider keeps only the scheme+host of a custom endpoint. `make test-gcp-terraform` derives that host from the endpoint.

@@ -1,10 +1,13 @@
 # JaisCloud GCP Terraform / OpenTofu compatibility fixture.
 #
 # Drives the hashicorp/google provider against jaiscloud-gcp through per-service
-# custom endpoints. Only services jaiscloud-gcp implements are declared here;
-# Cloud Run v2 is served but not declared yet (see README.md and wave-plan
-# W2.2), while Service Usage and Cloud Resource Manager project-level IAM are
-# included (google_project_service, google_project_iam_member).
+# custom endpoints. The endpoint values come from one artifact,
+# terraform-endpoints.yaml: run.sh asks tools/tfcorpus for a generated
+# `endpoints` tfvars file, and the locals below are the offline defaults for a
+# bare `terraform plan` in this directory. Cloud Run v2 is served but its
+# consumer case arrives in wave-plan W2.2; Service Usage and Cloud Resource
+# Manager project-level IAM are included (google_project_service,
+# google_project_iam_member).
 #
 # Credentials: the emulator ignores auth, but the provider needs *some* token,
 # so run.sh exports GOOGLE_OAUTH_ACCESS_TOKEN.
@@ -66,55 +69,95 @@ variable "row_access_policy_predicate" {
   default     = "region = \"EU\""
 }
 
+variable "endpoints" {
+  type        = map(string)
+  description = "Provider custom-endpoint values generated from terraform-endpoints.yaml (run.sh passes them as a tfvars file)."
+  default     = {}
+}
+
+locals {
+  # Offline defaults for a bare `terraform plan`: the same values
+  # terraform-endpoints.yaml generates, derived from var.endpoint.
+  endpoint_defaults = {
+    big_query_custom_endpoint          = "${var.endpoint}/bigquery/v2/"
+    cloud_billing_custom_endpoint      = "${var.endpoint}/v1/"
+    dns_custom_endpoint                = "${var.endpoint}/dns/v1/"
+    sql_custom_endpoint                = "${var.endpoint}/sql/v1beta4/"
+    compute_custom_endpoint            = "${var.endpoint}/compute/v1/"
+    container_custom_endpoint          = var.container_endpoint
+    dataproc_custom_endpoint           = "${var.endpoint}/"
+    eventarc_custom_endpoint           = "${var.endpoint}/v1/"
+    firestore_custom_endpoint          = "${var.endpoint}/v1/"
+    cloud_functions_custom_endpoint    = "${var.endpoint}/v1/"
+    cloudfunctions2_custom_endpoint    = "${var.endpoint}/v2/"
+    iam_custom_endpoint                = "${var.endpoint}/"
+    iam_beta_custom_endpoint           = "${var.endpoint}/v1/"
+    kms_custom_endpoint                = "${var.endpoint}/v1/"
+    logging_custom_endpoint            = "${var.endpoint}/v2/"
+    managed_kafka_custom_endpoint      = "${var.endpoint}/v1/"
+    redis_custom_endpoint              = "${var.endpoint}/v1/"
+    dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
+    monitoring_custom_endpoint         = "${var.endpoint}/"
+    pubsub_custom_endpoint             = "${var.endpoint}/v1/"
+    resource_manager_custom_endpoint   = "${var.endpoint}/v1/"
+    cloud_run_v2_custom_endpoint       = "${var.endpoint}/v2/"
+    cloud_scheduler_custom_endpoint    = "${var.endpoint}/v1/"
+    secret_manager_custom_endpoint     = "${var.endpoint}/v1/"
+    service_usage_custom_endpoint      = "${var.endpoint}/v1/"
+    storage_custom_endpoint            = "${var.endpoint}/storage/v1/"
+    cloud_tasks_custom_endpoint        = "${var.endpoint}/v2/"
+    workflows_custom_endpoint          = "${var.endpoint}/v1/"
+  }
+  endpoints = merge(local.endpoint_defaults, var.endpoints)
+}
+
 provider "google" {
   project = var.project
   region  = var.region
 
   user_project_override = false
 
-  storage_custom_endpoint        = "${var.endpoint}/storage/v1/"
-  iam_custom_endpoint            = "${var.endpoint}/"
-  iam_beta_custom_endpoint       = "${var.endpoint}/v1/"
-  secret_manager_custom_endpoint = "${var.endpoint}/v1/"
-  sql_custom_endpoint            = "${var.endpoint}/sql/v1beta4/"
-  kms_custom_endpoint            = "${var.endpoint}/v1/"
-  pubsub_custom_endpoint         = "${var.endpoint}/v1/"
-
-  # BigQuery (datasets/tables in the fixture, plus the NF31 routine and row
-  # access policy). The provider uses the custom endpoint as the whole base
-  # path, so it must carry the /bigquery/v2/ service path the emulator routes.
-  big_query_custom_endpoint = "${var.endpoint}/bigquery/v2/"
-
+  big_query_custom_endpoint     = local.endpoints["big_query_custom_endpoint"]
+  cloud_billing_custom_endpoint = local.endpoints["cloud_billing_custom_endpoint"]
+  dns_custom_endpoint           = local.endpoints["dns_custom_endpoint"]
+  sql_custom_endpoint           = local.endpoints["sql_custom_endpoint"]
+  compute_custom_endpoint       = local.endpoints["compute_custom_endpoint"]
+  # GKE. The provider keeps only the scheme+host of a custom endpoint, so the
+  # container.* host that run.sh derives is the only way to reach GKE through
+  # it; the emulator serves container.v1 under that host token or the
+  # /container/ path prefix, because the bare /v1/.../clusters path collides
+  # with Managed Kafka.
+  container_custom_endpoint = local.endpoints["container_custom_endpoint"]
+  # Dataproc. RemoveBasePathVersion strips the version, so the origin is right
+  # for the generated client (it appends v1/ itself).
+  dataproc_custom_endpoint  = local.endpoints["dataproc_custom_endpoint"]
+  eventarc_custom_endpoint  = local.endpoints["eventarc_custom_endpoint"]
+  firestore_custom_endpoint = local.endpoints["firestore_custom_endpoint"]
+  # hashicorp/google 7.46.2 names the v1 endpoint cloud_functions_custom_endpoint
+  # (cloudfunctions2_custom_endpoint is the v2 one).
+  cloud_functions_custom_endpoint = local.endpoints["cloud_functions_custom_endpoint"]
+  cloudfunctions2_custom_endpoint = local.endpoints["cloudfunctions2_custom_endpoint"]
+  iam_custom_endpoint             = local.endpoints["iam_custom_endpoint"]
+  iam_beta_custom_endpoint        = local.endpoints["iam_beta_custom_endpoint"]
+  kms_custom_endpoint             = local.endpoints["kms_custom_endpoint"]
+  logging_custom_endpoint         = local.endpoints["logging_custom_endpoint"]
+  managed_kafka_custom_endpoint   = local.endpoints["managed_kafka_custom_endpoint"]
+  redis_custom_endpoint           = local.endpoints["redis_custom_endpoint"]
+  # Dataproc Metastore (service + federation + database/table IAM).
+  dataproc_metastore_custom_endpoint = local.endpoints["dataproc_metastore_custom_endpoint"]
+  # Cloud Monitoring (declarative uptime check configurations). The provider
+  # appends its own /v3/ path root, so the endpoint is the bare origin.
+  monitoring_custom_endpoint = local.endpoints["monitoring_custom_endpoint"]
+  pubsub_custom_endpoint     = local.endpoints["pubsub_custom_endpoint"]
   # Service Usage + the Cloud Resource Manager v1 project lookup that
   # google_project_service performs on every read, and project-level IAM for
   # google_project_iam_member.
-  service_usage_custom_endpoint    = "${var.endpoint}/v1/"
-  resource_manager_custom_endpoint = "${var.endpoint}/v1/"
-
-  # Cloud Billing's project billingInfo singleton: the read that data
-  # "google_project" always performs (it exposes `billing_account`). One trailing
-  # slash is mandatory for the provider's endpoint regexp.
-  cloud_billing_custom_endpoint = "${var.endpoint}/v1/"
-
-  # Dataproc Metastore (service + federation + database/table IAM). The
-  # federation resource (google_dataproc_metastore_federation) and the
-  # database IAM member go through the same v1 custom endpoint.
-  dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
-
-  # Cloud Monitoring (declarative uptime check configurations). The provider
-  # appends its own /v3/ path root, so the endpoint is the bare origin.
-  monitoring_custom_endpoint = "${var.endpoint}/"
-
-  # Dataproc (clusters incl. the Dataproc-on-GKE virtual cluster). The provider
-  # keeps only the scheme+host of a custom endpoint, so the plain v1 root is
-  # right for dataproc: it carries no path-prefix requirement.
-  dataproc_custom_endpoint = "${var.endpoint}/"
-
-  # GKE. The emulator serves container.v1 either under a "/container/" path
-  # prefix or under a host whose first DNS label is "container" (real
-  # container.googleapis.com), because the bare /v1/.../clusters path collides
-  # with Managed Kafka. The provider keeps only scheme+host here too, so the
-  # container.* host that run.sh derives is the only way to reach GKE through
-  # it.
-  container_custom_endpoint = var.container_endpoint
+  resource_manager_custom_endpoint = local.endpoints["resource_manager_custom_endpoint"]
+  cloud_run_v2_custom_endpoint     = local.endpoints["cloud_run_v2_custom_endpoint"]
+  cloud_scheduler_custom_endpoint  = local.endpoints["cloud_scheduler_custom_endpoint"]
+  secret_manager_custom_endpoint   = local.endpoints["secret_manager_custom_endpoint"]
+  service_usage_custom_endpoint    = local.endpoints["service_usage_custom_endpoint"]
+  storage_custom_endpoint          = local.endpoints["storage_custom_endpoint"]
+  cloud_tasks_custom_endpoint      = local.endpoints["cloud_tasks_custom_endpoint"]
+  workflows_custom_endpoint        = local.endpoints["workflows_custom_endpoint"]
 }
