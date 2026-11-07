@@ -1,9 +1,10 @@
 # Resources exercised by the jaiscloud-gcp Terraform / OpenTofu compat suite.
 #
 # Scope: only services jaiscloud-gcp implements. Adding a resource whose service
-# is unimplemented (currently Cloud Run v2) makes `apply` fail and aborts the
-# whole run — keep this file in sync with the emulator's supported surface. See
-# README.md.
+# is unimplemented (Cloud Run Jobs/WorkerPools, Artifact Registry, ...) makes
+# `apply` fail and aborts the whole run — keep this file in sync with the
+# emulator's supported surface. Cloud Run v2 services are served but not declared
+# here yet (wave-plan W2.2). See README.md.
 
 # ── Cloud Storage ─────────────────────────────────────────────────────────────
 resource "google_storage_bucket" "compat" {

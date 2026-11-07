@@ -32,10 +32,14 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
   (`projects.getBillingInfo`) and `google_project`'s `billing_account`
   association round-trip (`projects.updateBillingInfo`)
 
-Deliberately **excluded** because it makes `apply` fail (and abort the run):
+Deliberately **not declared yet** because the fixture cannot apply it cleanly
+(one unimplemented resource aborts the whole run):
 
-- **Cloud Run v2** — not implemented; declared out of scope in
-  `docs/gcp/wire-contract.md` §5.
+- **Cloud Run v2** — the control plane is implemented (README-GCP and
+  `docs/gcp/wire-contract.md` §5), but the suite has no case for it yet; the
+  Terraform wave plan schedules one (W2.2 / TF3-1). Cloud Run **Jobs**,
+  WorkerPools and traffic splitting are not served, so a case must stay on the
+  service/revision/IAM surface.
 
 `google_container_cluster` was excluded until DPG37: the provider's cluster read
 dereferences `legacyAbac.enabled`, `networkConfig.network`,
@@ -79,6 +83,8 @@ Preferred — the Makefile starts and stops the emulator for you:
 ```bash
 make test-gcp-terraform     # requires terraform
 make test-gcp-opentofu      # requires tofu
+make test-gcp-terraform-all # fixture + every pinned module case, one emulator
+make test-gcp-terraform-all TF_BIN=tofu STRICT=1  # same set under OpenTofu; a SKIP fails
 ```
 
 Both targets are opt-in: if the binary is not installed they print `SKIP` and

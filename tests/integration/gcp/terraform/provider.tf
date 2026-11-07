@@ -2,8 +2,9 @@
 #
 # Drives the hashicorp/google provider against jaiscloud-gcp through per-service
 # custom endpoints. Only services jaiscloud-gcp implements are declared here;
-# Cloud Run v2, Service Usage and Cloud Resource Manager project-level IAM are
-# deliberately excluded (see README.md).
+# Cloud Run v2 is served but not declared yet (see README.md and wave-plan
+# W2.2), while Service Usage and Cloud Resource Manager project-level IAM are
+# included (google_project_service, google_project_iam_member).
 #
 # Credentials: the emulator ignores auth, but the provider needs *some* token,
 # so run.sh exports GOOGLE_OAUTH_ACCESS_TOKEN.
