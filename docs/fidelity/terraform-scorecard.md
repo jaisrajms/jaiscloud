@@ -130,7 +130,8 @@ Two cases were added on one branch:
 | `workflows` | `GoogleCloudPlatform/terraform-google-cloud-workflows` (`modules/simple_workflow`) | `4c431381b5d8` | the workflow resource with a root-module-owned service account and project `roles/workflows.invoker` grant |
 
 Both runs below are green on the session commit (each run against a fresh
-ephemeral emulator):
+ephemeral emulator). The full aggregate — the fixture plus all thirteen module
+cases — is also green under both binaries (`14 passed, 0 failed, 0 skipped`):
 
 | binary | result | case |
 |---|---|---|
@@ -138,6 +139,8 @@ ephemeral emulator):
 | OpenTofu 1.12.6 | PASS (25 passed, 0 failed) | `secret-manager` (`TF_BIN=tofu`) |
 | Terraform 1.16.3 | PASS (20 passed, 0 failed) | `workflows` |
 | OpenTofu 1.12.6 | PASS (20 passed, 0 failed) | `workflows` (`TF_BIN=tofu`) |
+| Terraform 1.16.3 | PASS (14 passed, 0 failed) | full aggregate (`make test-gcp-terraform-all STRICT=1`) |
+| OpenTofu 1.12.6 | PASS (14 passed, 0 failed) | full aggregate (`TF_BIN=tofu`) |
 
 Three boundaries are recorded, not worked around:
 
