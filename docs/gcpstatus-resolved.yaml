@@ -363,3 +363,67 @@ entries:
     match: "decapsulate"
     pr: 423
     note: "resolved: KMS Service.Decapsulate + :decapsulate adapter mapping shipped in #423 (B1-6)"
+
+  # Stacked/rolled-up sessions: the plan docs declare one branch per session,
+  # but the work shipped under a single rolled-up PR head, so the ancestor
+  # branches were never PR heads. The ledger joins PRs by branch name, so those
+  # rows stayed "branch" (and audited as "abandoned") after the head merged —
+  # exactly the artifact the defect-coverage wave plan §2 warns about. Each row
+  # is matched on a phrase from its ORIGINAL gap (detail row) or index summary
+  # (wave row) and is evidence-gated on the PR that carried the work.
+  - source: "gcp-pubsub-subscription-parity-wave-plan"
+    match: "stores ack deadline, ordering"
+    pr: 687
+    note: "resolved: PS1 shipped in #687 (PS1, PS2); the per-session branch fix/gcp-pubsub-subscription-create-labels was never a PR head"
+  - source: "gcp-pubsub-subscription-parity-wave-plan"
+    match: "pubsub subscriptions.create (REST labels)"
+    pr: 687
+    note: "resolved: PS1 wave shipped in #687; the per-session branch was never a PR head"
+  - source: "gcp-pubsub-topic-fields-wave-plan"
+    match: "renderer handle only"
+    pr: 690
+    note: "resolved: PTF1 shipped in #690 (PTF1, PTF2); the per-session branch feat/gcp-pubsub-topic-fields was never a PR head"
+  - source: "gcp-pubsub-topic-fields-wave-plan"
+    match: "pubsub topics.create/get (store + serve"
+    pr: 690
+    note: "resolved: PTF1 wave shipped in #690; the per-session branch was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "so Terraform reads"
+    pr: 695
+    note: "resolved: TGM7 shipped in #695 (TGM7/TGM8/TGM9); the per-session branch feat/gcp-storage-project-service-account was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "storage REST projects.serviceAccount.get"
+    pr: 695
+    note: "resolved: TGM7 wave shipped in #695; the per-session branch was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "whose create call carries"
+    pr: 695
+    note: "resolved: TGM8 shipped in #695; the per-session branch feat/gcp-storage-hmac-keys was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "storage REST projects.hmacKeys."
+    pr: 695
+    note: "resolved: TGM8 wave shipped in #695; the per-session branch was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "compare `US-CENTRAL1`"
+    pr: 696
+    note: "resolved: TGM10 shipped in #696 (TGM10, TGM11, TGM12); the per-session branch fix/gcp-storage-location-canonical was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "storage: canonicalise bucket location"
+    pr: 696
+    note: "resolved: TGM10 wave shipped in #696; the per-session branch was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "is OPTIONAL (presence = CMEK enabled)"
+    pr: 696
+    note: "resolved: TGM11 shipped in #696 (TGM11-1 validation followed in #701); the per-session branch fix/gcp-firestore-cmek-config was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "firestore: store/echo Database.cmekConfig"
+    pr: 696
+    note: "resolved: TGM11 wave shipped in #696; the per-session branch was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "id stays occupied forever"
+    pr: 697
+    note: "resolved: TGM13 shipped in #697 (TGM13, TGM14); the per-session branch fix/gcp-firestore-database-recreate was never a PR head"
+  - source: "gcp-terraform-module-parity-wave-plan"
+    match: "firestore: make a deleted database id reusable"
+    pr: 697
+    note: "resolved: TGM13 wave shipped in #697; the per-session branch was never a PR head"
