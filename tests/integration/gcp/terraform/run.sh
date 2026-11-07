@@ -115,6 +115,23 @@ fi
 
 TF_VARS=(-var="endpoint=$ENDPOINT" -var="project=$PROJECT" -var="container_endpoint=$CONTAINER_ENDPOINT")
 
+# The endpoint map is one artifact (terraform-endpoints.yaml): generate the
+# fixture's `endpoints` tfvars with tools/tfcorpus so this directory cannot
+# drift from the module driver and the corpus tool. The locals in provider.tf
+# are only a fallback for an environment without Go.
+ROOT="$(cd "$DIR/../../../.." && pwd)"
+ENDPOINTS_TFVARS="$(mktemp "${TMPDIR:-/tmp}/jc-tf-endpoints.XXXXXX.json")"
+if command -v go >/dev/null 2>&1; then
+  if ! (cd "$ROOT" && go run ./tools/tfcorpus -emit-tfvars "$ENDPOINTS_TFVARS" \
+      -endpoint "$ENDPOINT" -endpoints "$DIR/terraform-endpoints.yaml"); then
+    echo "ERROR: could not generate the endpoint tfvars from terraform-endpoints.yaml"
+    exit 1
+  fi
+  TF_VARS+=(-var-file="$ENDPOINTS_TFVARS")
+else
+  echo "  note: go not found; using provider.tf's endpoint defaults"
+fi
+
 # The Dataproc-on-GKE virtual cluster needs a standard, Workload-Identity-
 # enabled GKE cluster as its target; that is google_container_cluster.gke in
 # main.tf (the DPG37 gate), so it is created and destroyed with the fixture.
@@ -127,7 +144,11 @@ destroy() {
   DESTROYED=1
   tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null 2>&1 || true
 }
-trap 'destroy' EXIT INT TERM
+cleanup() {
+  destroy
+  [[ -n "${ENDPOINTS_TFVARS:-}" ]] && rm -f "$ENDPOINTS_TFVARS"
+}
+trap 'cleanup' EXIT INT TERM
 
 echo "== $TF: init / validate / plan / apply (endpoint=$ENDPOINT project=$PROJECT)"
 tf init -input=false -no-color >/dev/null

@@ -482,3 +482,83 @@ match a fresh computation, an unexercised/unsupported row in a `ga` service has
 no reason or an expired review date, or a service the rules recorded as
 `limited`/`unsupported` gains `ga` cells in the fidelity matrix (reclassify
 instead of keeping a stale reason).
+
+## Web corpus (TF2)
+
+The fixture and the module cases are configurations this repository wrote. The
+web corpus is the configuration surface the provider and Google publish:
+`tools/tfcorpus` extracts every Example Usage block from
+`hashicorp/terraform-provider-google`'s `website/docs/r` and every scenario
+under `terraform-google-modules/terraform-docs-samples`, joins each block
+against `docs/fidelity/terraform-coverage.csv`, and plans the in-scope ones.
+
+Corpora are never vendored and no gate clones them: point the tool at local
+checkouts. `corpus.yaml` pins the commit (and commit date) the committed report
+was produced from.
+
+```bash
+git clone --filter=blob:none --sparse https://github.com/hashicorp/terraform-provider-google /tmp/tf-provider
+git -C /tmp/tf-provider sparse-checkout set website/docs/r
+git -C /tmp/tf-provider checkout v7.46.2
+git clone --depth 1 https://github.com/terraform-google-modules/terraform-docs-samples /tmp/tf-samples
+export TF_PROVIDER_DOCS=/tmp/tf-provider TF_SAMPLES_DIR=/tmp/tf-samples
+
+make gen-gcp-terraform-corpus   # extract/refresh corpus.yaml (hand edits survive)
+make test-gcp-terraform-corpus  # start the emulator, plan 5/service, run the apply allowlist
+```
+
+| artifact | role |
+|---|---|
+| `corpus.yaml` | generated manifest: pinned corpora plus one row per extracted block (`mode: plan|apply`, `status: candidate|excluded`, reason) |
+| `corpus-report.md` / `.json` | committed triage: per-service plan counts, failure groups, apply results |
+| `terraform-endpoints.yaml` | the single service -> provider custom-endpoint map |
+| `tools/tfcorpus/` | discovery, plan classification, apply contract, endpoint emission |
+
+A block that declares any resource type outside the TF1 served set is
+`excluded` with `unsupported-service: …`, so an unserved subsystem never
+becomes a case. `docs-samples` scenarios are recorded as `excluded` with a
+deferred reason: they are multi-service stacks and running them is a follow-up.
+
+Some published examples use the client-side `hashicorp/random` and
+`hashicorp/time` providers for name uniqueness and waits; the generated module
+pins them (`= 3.9.1`, `= 0.14.2`). A block that needs any other non-google
+resource (e.g. `kubernetes_secret`) is `excluded` as `helper-provider: …`.
+
+For a fast offline loop, point `TF_CLI_CONFIG_FILE` at a Terraform CLI config
+whose `provider_installation` is a `filesystem_mirror` over the plugin cache and
+whose `direct` method excludes the registry; otherwise every `init` re-resolves
+the provider over the network (~1 minute per case instead of ~0.1s).
+
+### Case modes
+
+- `plan` (default): `init -backend=false` -> `validate` -> `plan -json`. The
+  diagnostics are classified `plan-ok`, `unrouted` (404), `unimplemented` (501),
+  `validation` (400), `auth` (401/403), `config`, `transport`,
+  `provider-panic` or `other`. Plan-only results are triage data, not a gate:
+  every failure group is owned by a row in the wave plan.
+- `apply` (curated allowlist): `apply` -> REST asserts -> `plan
+  -detailed-exitcode` == 0 -> `destroy` -> post-destroy asserts. `-apply`
+  fails on a case that does not converge. An example that cannot converge — a
+  recorded emulator gap or an upstream example defect — stays `mode: plan`, and
+  the gap is a TF2-x row in the wave plan; the committed allowlist is green.
+  It covers 20 of the 26 served services; the remaining six are plan-only
+  because their published examples cannot complete the destroy half (TF2-15,
+  TF2-18), while the fixture and module gates already apply those services.
+
+The committed report is a 5-examples-per-service smoke (`-max-per-service 5`);
+run the whole in-scope corpus with `TF_CORPUS_MAX_PER_SERVICE=0`.
+
+### Endpoint map
+
+`terraform-endpoints.yaml` is the single source for the provider's per-service
+custom endpoints (field name, path, and the `container.` host token). `run.sh`
+generates the fixture's `endpoints` tfvars from it, `run-module.sh` exposes
+`endpoint_for <service>` to new cases, and `tfcorpus` emits the provider block
+for every generated case. Print the user-facing block with:
+
+```bash
+make gcp-terraform-endpoints
+```
+
+`make test-gcp-terraform-corpus` SKIPs when `TF_PROVIDER_DOCS` is unset; set
+`STRICT=1` to make a SKIP fatal.

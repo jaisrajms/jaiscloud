@@ -1,0 +1,2108 @@
+{
+  "provider": "hashicorp/google",
+  "provider_version": "7.46.2",
+  "terraform": "Terraform v1.16.3",
+  "endpoint": "http://localhost:8080",
+  "project": "test-project",
+  "corpora": [
+    {
+      "name": "docs-samples",
+      "repo": "terraform-google-modules/terraform-docs-samples",
+      "commit": "fbf08aa52ee5a2ff5510b2791ae77230ae1a7a85",
+      "path": ".",
+      "date": "2026-10-26"
+    },
+    {
+      "name": "provider-docs",
+      "repo": "hashicorp/terraform-provider-google",
+      "commit": "5dbfd8a3d1eafa32db6a3afbc1c63924370fdfc6",
+      "path": "website/docs/r",
+      "date": "2026-10-23"
+    }
+  ],
+  "cases": 3581,
+  "candidates": 393,
+  "excluded": 3188,
+  "zero_example_services": null,
+  "services": [
+    {
+      "service": "bigquery",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "clouddns",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "cloudsql",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "compute",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "container",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "dataproc",
+      "planned": 5,
+      "plan_ok": 3,
+      "failures": {
+        "config": 2
+      }
+    },
+    {
+      "service": "eventarc",
+      "planned": 5,
+      "plan_ok": 4,
+      "failures": {
+        "config": 1
+      }
+    },
+    {
+      "service": "firestore",
+      "planned": 1,
+      "plan_ok": 1,
+      "failures": {}
+    },
+    {
+      "service": "firestoreadmin",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "functions",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "iam",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "kms",
+      "planned": 5,
+      "plan_ok": 4,
+      "failures": {
+        "config": 1
+      }
+    },
+    {
+      "service": "logging",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "managedkafka",
+      "planned": 2,
+      "plan_ok": 2,
+      "failures": {}
+    },
+    {
+      "service": "memorystore",
+      "planned": 4,
+      "plan_ok": 1,
+      "failures": {
+        "unrouted": 3
+      }
+    },
+    {
+      "service": "metastore",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "monitoring",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "pubsub",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "resourcemanager",
+      "planned": 4,
+      "plan_ok": 4,
+      "failures": {}
+    },
+    {
+      "service": "run",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "scheduler",
+      "planned": 5,
+      "plan_ok": 3,
+      "failures": {
+        "unimplemented": 2
+      }
+    },
+    {
+      "service": "secretmanager",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "storage",
+      "planned": 5,
+      "plan_ok": 5,
+      "failures": {}
+    },
+    {
+      "service": "tasks",
+      "planned": 5,
+      "plan_ok": 3,
+      "failures": {
+        "config": 2
+      }
+    },
+    {
+      "service": "workflows",
+      "planned": 1,
+      "plan_ok": 1,
+      "failures": {}
+    }
+  ],
+  "failure_groups": [
+    {
+      "service": "dataproc",
+      "resource_type": "google_dataproc_job",
+      "class": "config",
+      "signature": "Insufficient placement blocks: At least 1 \"placement\" blocks are required.",
+      "count": 2,
+      "example": "dataproc_job-example-2",
+      "cases": [
+        "dataproc_job-example-2",
+        "dataproc_job-example-3"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "resource_type": "google_eventarc_enrollment",
+      "class": "config",
+      "signature": "Reference to undeclared resource: A managed resource \"google_eventarc_message_bus\" \"primary\" has not been declared in the root module.",
+      "count": 1,
+      "example": "eventarc_enrollment-example-1",
+      "cases": [
+        "eventarc_enrollment-example-1"
+      ]
+    },
+    {
+      "service": "kms",
+      "resource_type": "google_kms_key_ring",
+      "class": "config",
+      "signature": "terraform init",
+      "count": 1,
+      "example": "kms_key_ring_import_job-example-1",
+      "cases": [
+        "kms_key_ring_import_job-example-1"
+      ]
+    },
+    {
+      "service": "memorystore",
+      "resource_type": "google_redis_instance",
+      "class": "unrouted",
+      "signature": "projects/test-project/global/networks/redis-test-network not found:",
+      "count": 3,
+      "example": "redis_instance-example-2",
+      "cases": [
+        "redis_instance-example-2",
+        "redis_instance-example-5",
+        "redis_instance-example-6"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "resource_type": "google_cloud_scheduler_job",
+      "class": "unimplemented",
+      "signature": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:",
+      "count": 2,
+      "example": "cloud_scheduler_job-example-5",
+      "cases": [
+        "cloud_scheduler_job-example-5",
+        "cloud_scheduler_job-example-6"
+      ]
+    },
+    {
+      "service": "tasks",
+      "resource_type": "google_cloud_tasks_queue_iam_binding",
+      "class": "config",
+      "signature": "Reference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.",
+      "count": 1,
+      "example": "cloud_tasks_queue_iam-example-2",
+      "cases": [
+        "cloud_tasks_queue_iam-example-2"
+      ]
+    },
+    {
+      "service": "tasks",
+      "resource_type": "google_cloud_tasks_queue_iam_policy",
+      "class": "config",
+      "signature": "Reference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.",
+      "count": 1,
+      "example": "cloud_tasks_queue_iam-example-1",
+      "cases": [
+        "cloud_tasks_queue_iam-example-1"
+      ]
+    }
+  ],
+  "excluded_reasons": [
+    {
+      "class": "beta-provider",
+      "count": 323
+    },
+    {
+      "class": "deferred-sample",
+      "count": 212
+    },
+    {
+      "class": "helper-provider",
+      "count": 8
+    },
+    {
+      "class": "unsupported-service",
+      "count": 2645
+    }
+  ],
+  "plan": [
+    {
+      "name": "bigquery_dataset-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/bigquery_dataset.html.markdown",
+      "block": 1,
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_service_account"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery_dataset-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/bigquery_dataset.html.markdown",
+      "block": 2,
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_kms_crypto_key",
+        "google_kms_key_ring"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery_dataset-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/bigquery_dataset.html.markdown",
+      "block": 3,
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_service_account"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery_dataset-example-5",
+      "source": "provider-docs",
+      "file": "website/docs/r/bigquery_dataset.html.markdown",
+      "block": 5,
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery_dataset-example-6",
+      "source": "provider-docs",
+      "file": "website/docs/r/bigquery_dataset.html.markdown",
+      "block": 6,
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns_managed_zone-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/dns_managed_zone.html.markdown",
+      "block": 1,
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns_managed_zone-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/dns_managed_zone.html.markdown",
+      "block": 2,
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns_managed_zone-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/dns_managed_zone.html.markdown",
+      "block": 3,
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns_managed_zone-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/dns_managed_zone.html.markdown",
+      "block": 4,
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns_managed_zone-example-5",
+      "source": "provider-docs",
+      "file": "website/docs/r/dns_managed_zone.html.markdown",
+      "block": 5,
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network",
+        "google_compute_subnetwork",
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "sql_database-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/sql_database.html.markdown",
+      "block": 1,
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "sql_database-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/sql_database.html.markdown",
+      "block": 2,
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "sql_database_instance-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/sql_database_instance.html.markdown",
+      "block": 1,
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "sql_database_instance-example-10",
+      "source": "provider-docs",
+      "file": "website/docs/r/sql_database_instance.html.markdown",
+      "block": 10,
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "sql_database_instance-example-11",
+      "source": "provider-docs",
+      "file": "website/docs/r/sql_database_instance.html.markdown",
+      "block": 11,
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute_disk-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_disk.html.markdown",
+      "block": 1,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_disk"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute_disk-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_disk.html.markdown",
+      "block": 2,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_disk"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute_disk-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_disk.html.markdown",
+      "block": 3,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_disk"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute_firewall-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_firewall.html.markdown",
+      "block": 1,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_firewall",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute_firewall-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_firewall.html.markdown",
+      "block": 2,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_firewall"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "container_cluster-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/container_cluster.html.markdown",
+      "block": 1,
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "container_cluster-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/container_cluster.html.markdown",
+      "block": 3,
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "container_cluster-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/container_cluster.html.markdown",
+      "block": 4,
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "container_node_pool-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/container_node_pool.html.markdown",
+      "block": 1,
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "container_node_pool-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/container_node_pool.html.markdown",
+      "block": 2,
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_container_node_pool",
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_cluster-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_cluster.html.markdown",
+      "block": 2,
+      "service": "dataproc",
+      "resource_types": [
+        "google_service_account",
+        "google_dataproc_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_cluster-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_cluster.html.markdown",
+      "block": 3,
+      "service": "dataproc",
+      "resource_types": [
+        "google_dataproc_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_job-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_job.html.markdown",
+      "block": 1,
+      "service": "dataproc",
+      "resource_types": [
+        "google_dataproc_cluster",
+        "google_dataproc_job"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_job-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_job.html.markdown",
+      "block": 2,
+      "service": "dataproc",
+      "resource_types": [
+        "google_dataproc_job"
+      ],
+      "mode": "plan",
+      "class": "config",
+      "summary": "Insufficient placement blocks: At least 1 \"placement\" blocks are required.",
+      "detail": "Insufficient placement blocks: At least 1 \"placement\" blocks are required."
+    },
+    {
+      "name": "dataproc_job-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_job.html.markdown",
+      "block": 3,
+      "service": "dataproc",
+      "resource_types": [
+        "google_dataproc_job"
+      ],
+      "mode": "plan",
+      "class": "config",
+      "summary": "Insufficient placement blocks: At least 1 \"placement\" blocks are required.",
+      "detail": "Insufficient placement blocks: At least 1 \"placement\" blocks are required."
+    },
+    {
+      "name": "eventarc_enrollment-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/eventarc_enrollment.html.markdown",
+      "block": 1,
+      "service": "eventarc",
+      "resource_types": [
+        "google_eventarc_enrollment",
+        "google_eventarc_pipeline",
+        "google_eventarc_message_bus"
+      ],
+      "mode": "plan",
+      "class": "config",
+      "summary": "Reference to undeclared resource: A managed resource \"google_eventarc_message_bus\" \"primary\" has not been declared in the root module.",
+      "detail": "Reference to undeclared resource: A managed resource \"google_eventarc_message_bus\" \"primary\" has not been declared in the root module."
+    },
+    {
+      "name": "eventarc_pipeline-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/eventarc_pipeline.html.markdown",
+      "block": 1,
+      "service": "eventarc",
+      "resource_types": [
+        "google_pubsub_topic",
+        "google_eventarc_pipeline"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "eventarc_pipeline-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/eventarc_pipeline.html.markdown",
+      "block": 2,
+      "service": "eventarc",
+      "resource_types": [
+        "google_eventarc_pipeline"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "eventarc_pipeline-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/eventarc_pipeline.html.markdown",
+      "block": 3,
+      "service": "eventarc",
+      "resource_types": [
+        "google_workflows_workflow",
+        "google_eventarc_pipeline"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "eventarc_pipeline-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/eventarc_pipeline.html.markdown",
+      "block": 4,
+      "service": "eventarc",
+      "resource_types": [
+        "google_eventarc_pipeline"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "firestore_document-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_document.html.markdown",
+      "block": 2,
+      "service": "firestore",
+      "resource_types": [
+        "google_project",
+        "google_project_service",
+        "google_firestore_database",
+        "google_firestore_document"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "firestore_backup_schedule-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_backup_schedule.html.markdown",
+      "block": 1,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database",
+        "google_firestore_backup_schedule"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "firestore_backup_schedule-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_backup_schedule.html.markdown",
+      "block": 2,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database",
+        "google_firestore_backup_schedule"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "firestore_change_stream-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_change_stream.html.markdown",
+      "block": 1,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database",
+        "google_firestore_change_stream"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "firestore_change_stream-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_change_stream.html.markdown",
+      "block": 2,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database",
+        "google_firestore_change_stream"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "firestore_database-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_database.html.markdown",
+      "block": 2,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloudfunctions2_function-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloudfunctions2_function.html.markdown",
+      "block": 1,
+      "service": "functions",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_object",
+        "google_cloudfunctions2_function"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloudfunctions2_function-example-13",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloudfunctions2_function.html.markdown",
+      "block": 13,
+      "service": "functions",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_object",
+        "google_cloudfunctions2_function"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloudfunctions2_function-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloudfunctions2_function.html.markdown",
+      "block": 2,
+      "service": "functions",
+      "resource_types": [
+        "google_service_account",
+        "google_pubsub_topic",
+        "google_storage_bucket",
+        "google_storage_bucket_object",
+        "google_cloudfunctions2_function"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloudfunctions2_function-example-7",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloudfunctions2_function.html.markdown",
+      "block": 7,
+      "service": "functions",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_object",
+        "google_cloudfunctions2_function",
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloudfunctions2_function-example-8",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloudfunctions2_function.html.markdown",
+      "block": 8,
+      "service": "functions",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_object",
+        "google_cloudfunctions2_function",
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_service_account-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_service_account.html.markdown",
+      "block": 1,
+      "service": "iam",
+      "resource_types": [
+        "google_service_account"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_service_account_key-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_service_account_key.html.markdown",
+      "block": 1,
+      "service": "iam",
+      "resource_types": [
+        "google_service_account",
+        "google_service_account_key"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_service_account_key-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_service_account_key.html.markdown",
+      "block": 2,
+      "service": "iam",
+      "resource_types": [
+        "google_service_account",
+        "google_service_account_key"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project_iam-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_iam.html.markdown",
+      "block": 2,
+      "service": "iam",
+      "resource_types": [
+        "google_project_iam_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project_iam-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_iam.html.markdown",
+      "block": 3,
+      "service": "iam",
+      "resource_types": [
+        "google_project_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "kms_crypto_key-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/kms_crypto_key.html.markdown",
+      "block": 1,
+      "service": "kms",
+      "resource_types": [
+        "google_kms_key_ring",
+        "google_kms_crypto_key"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "kms_crypto_key-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/kms_crypto_key.html.markdown",
+      "block": 2,
+      "service": "kms",
+      "resource_types": [
+        "google_kms_key_ring",
+        "google_kms_crypto_key"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "kms_crypto_key_version-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/kms_crypto_key_version.html.markdown",
+      "block": 1,
+      "service": "kms",
+      "resource_types": [
+        "google_kms_key_ring",
+        "google_kms_crypto_key",
+        "google_kms_crypto_key_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "kms_key_ring_import_job-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/kms_key_ring_import_job.html.markdown",
+      "block": 1,
+      "service": "kms",
+      "resource_types": [
+        "google_kms_key_ring",
+        "google_kms_crypto_key",
+        "google_kms_key_ring_import_job"
+      ],
+      "mode": "plan",
+      "class": "config",
+      "summary": "terraform init",
+      "detail": "…, in resource \"google_kms_crypto_key\" \"example-key\":\n  87:   protection_level = \"SOFTWARE\"\n  88: }\n\nQuoted strings may not be split over multiple lines. To produce a multi-line\nstring, either use the \\n escape to represent a newline character or use the\n\"heredoc\" multi-line template syntax.\n\nError: Invalid multi-line string\n\n  on main.tf line 88, in resource \"google_kms_crypto_key\" \"example-key\":\n  88: }\n\nQuoted strings may not be split over multiple lines. To produce a multi-line\nstring, either use the \\n escape to represent a newline character or use the\n\"heredoc\" multi-line template syntax."
+    },
+    {
+      "name": "kms_secret_ciphertext-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/kms_secret_ciphertext.html.markdown",
+      "block": 1,
+      "service": "kms",
+      "resource_types": [
+        "google_kms_key_ring",
+        "google_kms_crypto_key",
+        "google_kms_secret_ciphertext",
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "logging_linked_dataset-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/logging_linked_dataset.html.markdown",
+      "block": 1,
+      "service": "logging",
+      "resource_types": [
+        "google_logging_project_bucket_config",
+        "google_logging_linked_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "logging_linked_dataset-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/logging_linked_dataset.html.markdown",
+      "block": 2,
+      "service": "logging",
+      "resource_types": [
+        "google_logging_project_bucket_config",
+        "google_logging_linked_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "logging_log_scope-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/logging_log_scope.html.markdown",
+      "block": 1,
+      "service": "logging",
+      "resource_types": [
+        "google_logging_log_scope"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "logging_log_view-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/logging_log_view.html.markdown",
+      "block": 1,
+      "service": "logging",
+      "resource_types": [
+        "google_logging_project_bucket_config",
+        "google_logging_log_view"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "logging_metric-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/logging_metric.html.markdown",
+      "block": 2,
+      "service": "logging",
+      "resource_types": [
+        "google_logging_metric"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "managed_kafka_acl-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/managed_kafka_acl.html.markdown",
+      "block": 1,
+      "service": "managedkafka",
+      "resource_types": [
+        "google_managed_kafka_cluster",
+        "google_managed_kafka_acl"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "managed_kafka_topic-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/managed_kafka_topic.html.markdown",
+      "block": 1,
+      "service": "managedkafka",
+      "resource_types": [
+        "google_managed_kafka_cluster",
+        "google_managed_kafka_topic"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "redis_instance-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/redis_instance.html.markdown",
+      "block": 2,
+      "service": "memorystore",
+      "resource_types": [
+        "google_redis_instance"
+      ],
+      "mode": "plan",
+      "class": "unrouted",
+      "summary": "projects/test-project/global/networks/redis-test-network not found:",
+      "detail": "projects/test-project/global/networks/redis-test-network not found:"
+    },
+    {
+      "name": "redis_instance-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/redis_instance.html.markdown",
+      "block": 3,
+      "service": "memorystore",
+      "resource_types": [
+        "google_redis_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "redis_instance-example-5",
+      "source": "provider-docs",
+      "file": "website/docs/r/redis_instance.html.markdown",
+      "block": 5,
+      "service": "memorystore",
+      "resource_types": [
+        "google_redis_instance"
+      ],
+      "mode": "plan",
+      "class": "unrouted",
+      "summary": "projects/test-project/global/networks/redis-test-network not found:",
+      "detail": "projects/test-project/global/networks/redis-test-network not found:"
+    },
+    {
+      "name": "redis_instance-example-6",
+      "source": "provider-docs",
+      "file": "website/docs/r/redis_instance.html.markdown",
+      "block": 6,
+      "service": "memorystore",
+      "resource_types": [
+        "google_redis_instance",
+        "google_kms_key_ring",
+        "google_kms_crypto_key"
+      ],
+      "mode": "plan",
+      "class": "unrouted",
+      "summary": "projects/test-project/global/networks/redis-test-network not found:",
+      "detail": "projects/test-project/global/networks/redis-test-network not found:"
+    },
+    {
+      "name": "dataproc_metastore_federation-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_federation.html.markdown",
+      "block": 1,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_federation",
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_metastore_federation-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_federation.html.markdown",
+      "block": 2,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_federation",
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_metastore_service-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_service.html.markdown",
+      "block": 1,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_metastore_service-example-10",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_service.html.markdown",
+      "block": 10,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dataproc_metastore_service-example-11",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_service.html.markdown",
+      "block": 11,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "monitoring_alert_policy-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/monitoring_alert_policy.html.markdown",
+      "block": 1,
+      "service": "monitoring",
+      "resource_types": [
+        "google_monitoring_alert_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "monitoring_alert_policy-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/monitoring_alert_policy.html.markdown",
+      "block": 2,
+      "service": "monitoring",
+      "resource_types": [
+        "google_monitoring_alert_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "monitoring_alert_policy-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/monitoring_alert_policy.html.markdown",
+      "block": 3,
+      "service": "monitoring",
+      "resource_types": [
+        "google_monitoring_alert_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "monitoring_alert_policy-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/monitoring_alert_policy.html.markdown",
+      "block": 4,
+      "service": "monitoring",
+      "resource_types": [
+        "google_monitoring_alert_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "monitoring_alert_policy-example-5",
+      "source": "provider-docs",
+      "file": "website/docs/r/monitoring_alert_policy.html.markdown",
+      "block": 5,
+      "service": "monitoring",
+      "resource_types": [
+        "google_monitoring_alert_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "pubsub_schema-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/pubsub_schema.html.markdown",
+      "block": 1,
+      "service": "pubsub",
+      "resource_types": [
+        "google_pubsub_schema"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "pubsub_schema-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/pubsub_schema.html.markdown",
+      "block": 2,
+      "service": "pubsub",
+      "resource_types": [
+        "google_pubsub_schema",
+        "google_pubsub_topic"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "pubsub_subscription-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/pubsub_subscription.html.markdown",
+      "block": 1,
+      "service": "pubsub",
+      "resource_types": [
+        "google_pubsub_topic",
+        "google_pubsub_subscription"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "pubsub_subscription-example-12",
+      "source": "provider-docs",
+      "file": "website/docs/r/pubsub_subscription.html.markdown",
+      "block": 12,
+      "service": "pubsub",
+      "resource_types": [
+        "google_pubsub_topic",
+        "google_pubsub_subscription"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "pubsub_subscription-example-13",
+      "source": "provider-docs",
+      "file": "website/docs/r/pubsub_subscription.html.markdown",
+      "block": 13,
+      "service": "pubsub",
+      "resource_types": [
+        "google_pubsub_topic",
+        "google_pubsub_subscription"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project.html.markdown",
+      "block": 1,
+      "service": "resourcemanager",
+      "resource_types": [
+        "google_project"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project.html.markdown",
+      "block": 3,
+      "service": "resourcemanager",
+      "resource_types": [
+        "google_project"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project_default_service_accounts-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_default_service_accounts.html.markdown",
+      "block": 1,
+      "service": "resourcemanager",
+      "resource_types": [
+        "google_project_default_service_accounts"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project_default_service_accounts-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_default_service_accounts.html.markdown",
+      "block": 2,
+      "service": "resourcemanager",
+      "resource_types": [
+        "google_project_default_service_accounts"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_run_v2_service-example-11",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
+      "block": 11,
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_run_v2_service-example-12",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
+      "block": 12,
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service",
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_run_v2_service-example-16",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
+      "block": 16,
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_run_v2_service-example-18",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
+      "block": 18,
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_run_v2_service-example-19",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
+      "block": 19,
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_scheduler_job-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 1,
+      "service": "scheduler",
+      "resource_types": [
+        "google_pubsub_topic",
+        "google_cloud_scheduler_job"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_scheduler_job-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 2,
+      "service": "scheduler",
+      "resource_types": [
+        "google_cloud_scheduler_job"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_scheduler_job-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 4,
+      "service": "scheduler",
+      "resource_types": [
+        "google_cloud_scheduler_job"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_scheduler_job-example-5",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 5,
+      "service": "scheduler",
+      "resource_types": [
+        "google_cloud_scheduler_job"
+      ],
+      "mode": "plan",
+      "class": "unimplemented",
+      "summary": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:",
+      "detail": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:"
+    },
+    {
+      "name": "cloud_scheduler_job-example-6",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 6,
+      "service": "scheduler",
+      "resource_types": [
+        "google_cloud_scheduler_job"
+      ],
+      "mode": "plan",
+      "class": "unimplemented",
+      "summary": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:",
+      "detail": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:"
+    },
+    {
+      "name": "secret_manager_secret-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_secret.html.markdown",
+      "block": 2,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_secret"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "secret_manager_secret-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_secret.html.markdown",
+      "block": 3,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_secret"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "secret_manager_secret_version-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_secret_version.html.markdown",
+      "block": 1,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "secret_manager_secret_version-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_secret_version.html.markdown",
+      "block": 2,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "secret_manager_secret_version-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_secret_version.html.markdown",
+      "block": 3,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage_bucket-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/storage_bucket.html.markdown",
+      "block": 2,
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage_bucket-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/storage_bucket.html.markdown",
+      "block": 4,
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage_bucket-example-5",
+      "source": "provider-docs",
+      "file": "website/docs/r/storage_bucket.html.markdown",
+      "block": 5,
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage_bucket-example-6",
+      "source": "provider-docs",
+      "file": "website/docs/r/storage_bucket.html.markdown",
+      "block": 6,
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage_bucket-example-7",
+      "source": "provider-docs",
+      "file": "website/docs/r/storage_bucket.html.markdown",
+      "block": 7,
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_tasks_queue-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue.html.markdown",
+      "block": 2,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_tasks_queue-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue.html.markdown",
+      "block": 3,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue",
+        "google_service_account"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_tasks_queue-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue.html.markdown",
+      "block": 4,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue",
+        "google_service_account"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_tasks_queue_iam-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue_iam.html.markdown",
+      "block": 1,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue_iam_policy"
+      ],
+      "mode": "plan",
+      "class": "config",
+      "summary": "Reference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.",
+      "detail": "Reference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.\nReference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.\nReference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module."
+    },
+    {
+      "name": "cloud_tasks_queue_iam-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue_iam.html.markdown",
+      "block": 2,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "config",
+      "summary": "Reference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.",
+      "detail": "Reference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.\nReference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module.\nReference to undeclared resource: A managed resource \"google_cloud_tasks_queue\" \"default\" has not been declared in the root module."
+    },
+    {
+      "name": "workflows_workflow-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/workflows_workflow.html.markdown",
+      "block": 1,
+      "service": "workflows",
+      "resource_types": [
+        "google_service_account",
+        "google_workflows_workflow"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    }
+  ],
+  "apply": [
+    {
+      "name": "bigquery_dataset-example-4",
+      "source": "provider-docs",
+      "file": "website/docs/r/bigquery_dataset.html.markdown",
+      "block": 4,
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_routine"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "cloud_run_v2_service-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
+      "block": 1,
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "cloud_scheduler_job-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 3,
+      "service": "scheduler",
+      "resource_types": [
+        "google_cloud_scheduler_job"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "cloud_tasks_queue-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue.html.markdown",
+      "block": 1,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "dataproc_cluster-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_cluster.html.markdown",
+      "block": 1,
+      "service": "dataproc",
+      "resource_types": [
+        "google_dataproc_cluster"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "dataproc_metastore_service-example-10",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_service.html.markdown",
+      "block": 10,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "dns_record_set-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/dns_record_set.html.markdown",
+      "block": 2,
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_record_set",
+        "google_dns_managed_zone"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "eventarc_channel-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/eventarc_channel.html.markdown",
+      "block": 1,
+      "service": "eventarc",
+      "resource_types": [
+        "google_eventarc_channel"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "firestore_database-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_database.html.markdown",
+      "block": 1,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "firestore_document-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_document.html.markdown",
+      "block": 1,
+      "service": "firestore",
+      "resource_types": [
+        "google_project",
+        "google_project_service",
+        "google_firestore_database",
+        "google_firestore_document"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "google_project_iam-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_iam.html.markdown",
+      "block": 1,
+      "service": "iam",
+      "resource_types": [
+        "google_project_iam_policy"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "google_project_service-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_service.html.markdown",
+      "block": 1,
+      "service": "serviceusage",
+      "resource_types": [
+        "google_project_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "kms_key_ring-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/kms_key_ring.html.markdown",
+      "block": 1,
+      "service": "kms",
+      "resource_types": [
+        "google_kms_key_ring"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "logging_metric-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/logging_metric.html.markdown",
+      "block": 1,
+      "service": "logging",
+      "resource_types": [
+        "google_logging_metric"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "managed_kafka_cluster-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/managed_kafka_cluster.html.markdown",
+      "block": 1,
+      "service": "managedkafka",
+      "resource_types": [
+        "google_managed_kafka_cluster"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "monitoring_custom_service-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/monitoring_custom_service.html.markdown",
+      "block": 1,
+      "service": "monitoring",
+      "resource_types": [
+        "google_monitoring_custom_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "pubsub_topic-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/pubsub_topic.html.markdown",
+      "block": 1,
+      "service": "pubsub",
+      "resource_types": [
+        "google_pubsub_topic"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "redis_instance-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/redis_instance.html.markdown",
+      "block": 1,
+      "service": "memorystore",
+      "resource_types": [
+        "google_redis_instance"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "secret_manager_secret-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_secret.html.markdown",
+      "block": 1,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_secret"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "storage_bucket-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/storage_bucket.html.markdown",
+      "block": 1,
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    }
+  ]
+}

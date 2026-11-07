@@ -65,3 +65,13 @@ that matches nothing, a stale row/field, an unexercised or unsupported row in a
 that moved from `limited`/`unsupported` to `ga` in the fidelity matrix without
 its rules being re-reviewed. The weekly drift workflow regenerates the full
 snapshot and runs the same check against the provider's current schema.
+
+## Web-corpus triage (TF2)
+
+The provider's published examples and Google's sample configs are measured in
+the Terraform suite, not here: `tests/integration/gcp/terraform/corpus.yaml`
+is the generated manifest (pinned corpora + one row per extracted block) and
+`corpus-report.md`/`.json` is the plan-only and apply-allowlist triage. The
+single service -> provider custom-endpoint map those runs share with the
+fixture is `tests/integration/gcp/terraform/terraform-endpoints.yaml`. See the
+[suite README](../../tests/integration/gcp/terraform/README.md#web-corpus-tf2).

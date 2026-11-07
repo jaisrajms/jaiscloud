@@ -1,0 +1,149 @@
+# Terraform provider custom-endpoint map (wave plan TF2).
+#
+# One artifact for the three consumers that drive hashicorp/google against the
+# emulator:
+#
+#   * the fixture          (run.sh  -> generated `endpoints` tfvars)
+#   * the module driver    (run-module.sh -> endpoint_for <service>)
+#   * the corpus tool      (tools/tfcorpus -> generated provider block)
+#
+# `make gcp-terraform-endpoints` prints the user-facing provider snippet.
+#
+# Keys are the service names in docs/fidelity/terraform-coverage.csv. `field` is
+# the provider's `*_custom_endpoint` attribute (taken from provider 7.46.2's
+# product registry, not guessed), and `path` is the path the provider appends
+# to the origin. `host_prefix` marks a service the provider routes by host: it
+# keeps only scheme+host of a custom endpoint, so the emulator's host token is
+# the only way to target it through the provider.
+#
+# A service appears here only if the emulator serves it; listing an unserved
+# endpoint would point provider traffic at the emulator for no reason. Services
+# with no provider resource type in scope (datastore, iamcredentials,
+# workflowexecutions) are absent.
+provider: hashicorp/google
+credential_env: GOOGLE_OAUTH_ACCESS_TOKEN
+default_endpoint: http://localhost:8080
+
+services:
+  bigquery:
+    endpoints:
+      - field: big_query_custom_endpoint
+        path: /bigquery/v2/
+  cloudbilling:
+    endpoints:
+      - field: cloud_billing_custom_endpoint
+        path: /v1/
+  clouddns:
+    endpoints:
+      - field: dns_custom_endpoint
+        path: /dns/v1/
+  cloudsql:
+    endpoints:
+      - field: sql_custom_endpoint
+        path: /sql/v1beta4/
+  compute:
+    endpoints:
+      - field: compute_custom_endpoint
+        path: /compute/v1/
+  container:
+    endpoints:
+      # The provider keeps only scheme+host, so the endpoint carries the
+      # container.* host the emulator routes GKE by (the bare
+      # /v1/projects/{p}/locations/{l}/clusters path belongs to Managed Kafka).
+      - field: container_custom_endpoint
+        path: /container/
+        host_prefix: container
+  dataproc:
+    endpoints:
+      # RemoveBasePathVersion strips a trailing version from the custom
+      # endpoint, so the origin is right here (the generated client appends v1/).
+      - field: dataproc_custom_endpoint
+        path: /
+  eventarc:
+    endpoints:
+      - field: eventarc_custom_endpoint
+        path: /v1/
+  firestore:
+    endpoints:
+      - field: firestore_custom_endpoint
+        path: /v1/
+  firestoreadmin:
+    endpoints:
+      - field: firestore_custom_endpoint
+        path: /v1/
+  functions:
+    endpoints:
+      - field: cloud_functions_custom_endpoint
+        path: /v1/
+      - field: cloudfunctions2_custom_endpoint
+        path: /v2/
+  iam:
+    endpoints:
+      - field: iam_custom_endpoint
+        path: /
+      - field: iam_beta_custom_endpoint
+        path: /v1/
+  kms:
+    endpoints:
+      - field: kms_custom_endpoint
+        path: /v1/
+  logging:
+    endpoints:
+      - field: logging_custom_endpoint
+        path: /v2/
+  managedkafka:
+    endpoints:
+      - field: managed_kafka_custom_endpoint
+        path: /v1/
+  memorystore:
+    endpoints:
+      # The v1 Redis surface (google_redis_instance). The newer Memorystore API
+      # (google_memorystore_instance) is not served and is out of scope.
+      - field: redis_custom_endpoint
+        path: /v1/
+  metastore:
+    endpoints:
+      - field: dataproc_metastore_custom_endpoint
+        path: /v1/
+  monitoring:
+    endpoints:
+      # The provider appends v3/ itself, so the endpoint is the bare origin.
+      - field: monitoring_custom_endpoint
+        path: /
+  pubsub:
+    endpoints:
+      - field: pubsub_custom_endpoint
+        path: /v1/
+  resourcemanager:
+    endpoints:
+      - field: resource_manager_custom_endpoint
+        path: /v1/
+  run:
+    endpoints:
+      # Cloud Run Admin v2 only; v1 (google_cloud_run_service) is not served.
+      - field: cloud_run_v2_custom_endpoint
+        path: /v2/
+  scheduler:
+    endpoints:
+      - field: cloud_scheduler_custom_endpoint
+        path: /v1/
+  secretmanager:
+    endpoints:
+      - field: secret_manager_custom_endpoint
+        path: /v1/
+  serviceusage:
+    endpoints:
+      - field: service_usage_custom_endpoint
+        path: /v1/
+  storage:
+    endpoints:
+      - field: storage_custom_endpoint
+        path: /storage/v1/
+  tasks:
+    endpoints:
+      - field: cloud_tasks_custom_endpoint
+        path: /v2/
+  workflows:
+    endpoints:
+      - field: workflows_custom_endpoint
+        path: /v1/

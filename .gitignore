@@ -10,6 +10,7 @@ jaiscloud-azure
 !jaiscloud-azure/
 jaiscloud-gcp
 !jaiscloud-gcp/
+/tfcorpus
 jaiscloud-linux
 !jaiscloud-linux/
 !jaiscloud/
