@@ -35,6 +35,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -113,7 +114,12 @@ type Service struct {
 	// forwards exhausted deliveries to its dead-letter topic (FD9).
 	// nil = disabled (a terminal dead_letter record only).
 	subscriptions eventing.SubscriptionProvisioner
-	deliveries    *deliveryEngine
+	// kms resolves a function's kmsKeyName against the KMS store (FC4-1). The
+	// field is metadata only (no payload is encrypted), but real Cloud Functions
+	// rejects a create/update naming a missing or cross-region key. Nil checks
+	// only the CryptoKey name shape and location.
+	kms        kmsstore.Store
+	deliveries *deliveryEngine
 	// accountConcurrency caps concurrent invocations across every function in a
 	// project (the GCP analogue of Lambda's account-level concurrency limit),
 	// derived from the shared executor's account cap. 0 = unlimited.
@@ -265,6 +271,11 @@ func (s *Service) SetTriggerProvisioner(p eventing.TriggerProvisioner) { s.trigg
 // resolution and forwarding. It is a setter because the Pub/Sub provider is
 // constructed before the functions core but the wiring reads better here.
 func (s *Service) SetSubscriptions(p eventing.SubscriptionProvisioner) { s.subscriptions = p }
+
+// SetKMSStore attaches the Cloud KMS store so a function's kmsKeyName is
+// resolved on create/update (FC4-1). A nil store checks only the key's name
+// shape and location.
+func (s *Service) SetKMSStore(k kmsstore.Store) { s.kms = k }
 
 // Reset wipes the underlying store and any persisted source archives, and
 // invalidates in-flight deliveries. In-flight concurrency counts are dropped as

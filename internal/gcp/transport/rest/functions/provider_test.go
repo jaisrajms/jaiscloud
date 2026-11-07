@@ -400,7 +400,7 @@ func TestFunctionV2FieldFollowups(t *testing.T) {
 		"location":   "us-central1",
 		"functionId": "fields",
 		"body": map[string]any{
-			"kmsKeyName": "projects/proj/locations/global/keyRings/r/cryptoKeys/k",
+			"kmsKeyName": "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k",
 			"buildConfig": map[string]any{
 				"runtime": "nodejs20",
 				"source": map[string]any{"storageSource": map[string]any{
@@ -433,7 +433,7 @@ func TestFunctionV2FieldFollowups(t *testing.T) {
 		t.Fatalf("create v2: %v", err)
 	}
 	created := operationResponseV2(t, resp)
-	if created["kmsKeyName"] != "projects/proj/locations/global/keyRings/r/cryptoKeys/k" {
+	if created["kmsKeyName"] != "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k" {
 		t.Errorf("kmsKeyName = %v", created["kmsKeyName"])
 	}
 	bc, _ := created["buildConfig"].(map[string]any)

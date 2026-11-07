@@ -20,6 +20,29 @@ import (
 // output-only eventTrigger.trigger to it).
 func FunctionTriggerName(functionID string) string { return eventing.FunctionTriggerID(functionID) }
 
+// ValidateFunctionTriggerReference resolves a function trigger's declared
+// Pub/Sub topic through the Pub/Sub seam, so Cloud Functions can reject a
+// create/update naming a topic that does not exist (FC4-3). A Cloud Storage
+// trigger's bucket reference is not resolved here, and a nil subscription seam
+// leaves the check disabled.
+func (s *Service) ValidateFunctionTriggerReference(ctx context.Context, spec eventing.FunctionTriggerSpec) error {
+	if !eventing.IsPubSubEventType(spec.EventType) || s.subscriptions == nil {
+		return nil
+	}
+	topicID := lastSegment(spec.Resource)
+	if topicID == "" {
+		return invalidArgument("missing trigger topic")
+	}
+	ok, err := s.subscriptions.TopicExists(ctx, spec.Project, topicID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return invalidArgument("event trigger topic not found: " + spec.Resource)
+	}
+	return nil
+}
+
 // EnsureFunctionTrigger materializes (or updates) the backing Eventarc trigger
 // for a function's event trigger and provisions its transport Pub/Sub
 // subscription. It returns the trigger's resource name and the short id of its

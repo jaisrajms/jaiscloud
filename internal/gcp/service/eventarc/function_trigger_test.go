@@ -28,6 +28,13 @@ type fakeSubs struct {
 	resources store.ResourceStore
 }
 
+func (f *fakeSubs) TopicExists(_ context.Context, _, topic string) (bool, error) {
+	if f.failWith != nil {
+		return false, f.failWith
+	}
+	return topic != "missing", nil
+}
+
 func (f *fakeSubs) EnsureEventarcTopic(ctx context.Context, project, location, triggerID string) (string, error) {
 	if f.failWith != nil {
 		return "", f.failWith
@@ -173,6 +180,32 @@ func TestEnsureFunctionTriggerMissingTopic(t *testing.T) {
 	}
 	if _, err := st.GetTrigger(ctx, "proj", "us-central1", "functions-fn"); !errors.Is(err, eventarcstore.ErrNoSuchTrigger) {
 		t.Fatalf("expected no dangling trigger, got %v", err)
+	}
+}
+
+// TestValidateFunctionTriggerReference covers FC4-3's reference check: a
+// Pub/Sub-triggered function's declared topic must exist, while a Cloud Storage
+// trigger's bucket reference is not resolved here.
+func TestValidateFunctionTriggerReference(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(eventarcstore.NewMemoryStore(), store.NewMemoryResourceStore(), workflowsstore.NewMemoryStore())
+	svc.SetSubscriptionProvisioner(&fakeSubs{})
+
+	spec := eventing.FunctionTriggerSpec{
+		Project: "proj", Location: "us-central1", FunctionID: "fn",
+		EventType: eventing.TypePubSubPublish, Resource: "projects/proj/topics/missing",
+	}
+	if err := svc.ValidateFunctionTriggerReference(ctx, spec); err == nil {
+		t.Fatal("missing topic: want INVALID_ARGUMENT")
+	}
+	spec.Resource = "projects/proj/topics/present"
+	if err := svc.ValidateFunctionTriggerReference(ctx, spec); err != nil {
+		t.Fatalf("present topic: %v", err)
+	}
+	spec.EventType = eventing.TypeStorageFinalize
+	spec.Resource = "projects/proj/buckets/missing"
+	if err := svc.ValidateFunctionTriggerReference(ctx, spec); err != nil {
+		t.Fatalf("storage trigger should not be resolved here: %v", err)
 	}
 }
 

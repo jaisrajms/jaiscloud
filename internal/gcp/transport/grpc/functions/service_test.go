@@ -160,7 +160,7 @@ func TestV2FieldFollowups(t *testing.T) {
 		Parent:     "projects/proj/locations/us-central1",
 		FunctionId: "fields",
 		Function: &apiv2functionspb.Function{
-			KmsKeyName: "projects/proj/locations/global/keyRings/r/cryptoKeys/k",
+			KmsKeyName: "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k",
 			BuildConfig: &apiv2functionspb.BuildConfig{
 				Runtime: "nodejs20",
 				Source: &apiv2functionspb.Source{Source: &apiv2functionspb.Source_StorageSource{
@@ -198,7 +198,7 @@ func TestV2FieldFollowups(t *testing.T) {
 	if err := op.GetResponse().UnmarshalTo(&created); err != nil {
 		t.Fatalf("response UnmarshalTo: %v", err)
 	}
-	if created.GetKmsKeyName() != "projects/proj/locations/global/keyRings/r/cryptoKeys/k" {
+	if created.GetKmsKeyName() != "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k" {
 		t.Errorf("kmsKeyName = %q", created.GetKmsKeyName())
 	}
 	ss := created.GetBuildConfig().GetSource().GetStorageSource()

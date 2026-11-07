@@ -1638,6 +1638,19 @@ func (s *Service) CreateSnapshot(ctx context.Context, req *pubsubpb.CreateSnapsh
 	var sub map[string]any
 	json.Unmarshal(e.Data, &sub)
 	topic, _ := sub["topic"].(string)
+	// Snapshot.topic is a reference into the topic store: a snapshot of a
+	// subscription whose topic no longer exists is NOT_FOUND (FC4-5), matching
+	// real Pub/Sub rather than storing a dangling name.
+	topicID := lastSegment(topic)
+	if topicID == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "subscription has no topic", 400))
+	}
+	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtTopic, topicID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "topic not found: "+topic, 404))
+		}
+		return nil, mapError(err)
+	}
 
 	backlog, err := s.messages.List(ctx, subID)
 	if err != nil {

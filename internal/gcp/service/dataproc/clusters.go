@@ -82,6 +82,12 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if err := s.validateClusterMetastore(ctx, project, region, in); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
+	// Resolve encryptionConfig.kmsKey against the KMS store (FC4-1): a key that
+	// does not exist, sits in another region or cannot encrypt is rejected
+	// before anything is persisted.
+	if err := s.validateClusterKMS(ctx, region, in); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
 	// A Kubernetes namespace belongs to one live virtual cluster per GKE
 	// cluster: real Dataproc verifies that "another Dataproc VirtualCluster is
 	// not installed into it", which is why the recreate guide drops
@@ -306,6 +312,11 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	// (the effective merged config under the mask), not the raw request body.
 	if err := s.validateClusterMetastoreUpdate(ctx, project, region, current, in, mask); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	if in.Config != nil && apply("config") {
+		if err := s.validateClusterKMS(ctx, region, in); err != nil {
+			return dpstore.Cluster{}, dpstore.Operation{}, err
+		}
 	}
 	// A virtualClusterConfig update is rejected above (recreate-only), so a PHS
 	// attachment is validated at create time only; there is no update path that

@@ -195,6 +195,11 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 	if err := validateEndpointProtocol(cfg); err != nil {
 		return metastorestore.Service{}, metastorestore.Operation{}, err
 	}
+	// The attached VPC network is a compute reference: resolve it before the
+	// service is stored (FC4-4).
+	if err := s.validateNetwork(ctx, project, cfg); err != nil {
+		return metastorestore.Service{}, metastorestore.Operation{}, err
+	}
 	now := clock.Now().UTC()
 	svc := metastorestore.Service{
 		Location:     location,
@@ -266,6 +271,11 @@ func (s *Service) UpdateService(ctx context.Context, project, location, serviceI
 	// created as THRIFT must not be patched to GRPC (or arbitrary junk).
 	if err := validateEndpointProtocol(cfg); err != nil {
 		return metastorestore.Service{}, metastorestore.Operation{}, err
+	}
+	if mask == "" || containsMaskField(mask, "network") {
+		if err := s.validateNetwork(ctx, project, cfg); err != nil {
+			return metastorestore.Service{}, metastorestore.Operation{}, err
+		}
 	}
 	updated, err := s.store.UpdateServiceAtomic(ctx, project, location, serviceID, func(current metastorestore.Service) (metastorestore.Service, error) {
 		apply := func(field string) bool {

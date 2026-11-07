@@ -13,6 +13,7 @@ import (
 
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -23,12 +24,33 @@ import (
 // field one transport's transcode drops or invents is caught the same way the
 // object surface is.
 //
+// storageBucketCMEKeys creates (idempotently) the two US CMEK keys the bucket
+// scenario names, in the run's project, and returns their resource names. A
+// bucket's default KMS key is a resolved reference (FC4-1), so the keys must
+// exist before the bucket that names them.
+func storageBucketCMEKeys(ctx context.Context, e *Env) (string, string, error) {
+	ring := e.Resource("parity-ref-ring")
+	base := fmt.Sprintf("/v1/projects/%s/locations/us", e.Cfg.Project)
+	if _, err := e.Rest(ctx, http.MethodPost, base+"/keyRings?keyRingId="+ring, `{}`); err != nil && !statusIs(err, codes.AlreadyExists) {
+		return "", "", fmt.Errorf("create CMEK key ring: %w", err)
+	}
+	ringName := fmt.Sprintf("projects/%s/locations/us/keyRings/%s", e.Cfg.Project, ring)
+	names := make([]string, 0, 2)
+	for _, id := range []string{e.Resource("parity-ref-key"), e.Resource("parity-ref-key2")} {
+		if _, err := e.Rest(ctx, http.MethodPost, "/v1/"+ringName+"/cryptoKeys?cryptoKeyId="+id, `{"purpose":"ENCRYPT_DECRYPT"}`); err != nil && !statusIs(err, codes.AlreadyExists) {
+			return "", "", fmt.Errorf("create CMEK key %s: %w", id, err)
+		}
+		names = append(names, ringName+"/cryptoKeys/"+id)
+	}
+	return names[0], names[1], nil
+}
+
 // gRPC is driven with the emulator's own storagepb stub (see cases_storage.go).
 func storageBucketsScenario() Scenario {
 	bkt := func(e *Env) string { return e.Resource("parity-bucket") }
 	project := func(e *Env) string { return e.Cfg.Project }
 
-	bucketBody := func(e *Env) string {
+	bucketBody := func(e *Env, kmsKey string) string {
 		// The bucket is created with uniform bucket-level access on and public
 		// access prevention enforced, so every create/get/list/update step below
 		// compares a non-default iamConfiguration across the two transports
@@ -39,11 +61,15 @@ func storageBucketsScenario() Scenario {
 		return fmt.Sprintf(`{"name":%q,"location":"US","storageClass":"STANDARD",`+
 			`"lifecycle":{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]},`+
 			`"cors":[{"origin":["https://example.com"],"method":["GET"],"responseHeader":["Content-Type"],"maxAgeSeconds":3600}],`+
-			`"encryption":{"defaultKmsKeyName":"projects/test-project/locations/us/keyRings/r/cryptoKeys/k"},`+
-			`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true},"publicAccessPrevention":"enforced"}}`, bkt(e))
+			`"encryption":{"defaultKmsKeyName":%q},`+
+			`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":true},"publicAccessPrevention":"enforced"}}`, bkt(e), kmsKey)
 	}
 	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
-		return e.Rest(ctx, http.MethodPost, "/storage/v1/b?project="+url.QueryEscape(project(e)), bucketBody(e))
+		key, _, err := storageBucketCMEKeys(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		return e.Rest(ctx, http.MethodPost, "/storage/v1/b?project="+url.QueryEscape(project(e)), bucketBody(e, key))
 	}
 	getREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
 		return e.Rest(ctx, http.MethodGet, "/storage/v1/b/"+bkt(e), "")
@@ -56,20 +82,28 @@ func storageBucketsScenario() Scenario {
 		// prevention back to inherited through the PATCH body — the write path
 		// google_storage_bucket uses to change either setting. It also replaces
 		// the lifecycle/CORS/CMEK blocks so their update path is compared.
+		_, key2, err := storageBucketCMEKeys(ctx, e)
+		if err != nil {
+			return nil, err
+		}
 		return e.Rest(ctx, http.MethodPatch, "/storage/v1/b/"+bkt(e),
 			`{"labels":{"marker":"v2"},`+
 				`"lifecycle":{"rule":[{"action":{"type":"SetStorageClass","storageClass":"NEARLINE"},"condition":{"age":7}}]},`+
 				`"cors":[{"origin":["*"],"method":["GET"],"maxAgeSeconds":60}],`+
-				`"encryption":{"defaultKmsKeyName":"projects/test-project/locations/us/keyRings/r/cryptoKeys/k2"},`+
+				`"encryption":{"defaultKmsKeyName":`+strconv.Quote(key2)+`},`+
 				`"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},"publicAccessPrevention":"inherited"}}`)
 	}
 	deleteREST := func(ctx context.Context, e *Env) error {
 		return e.RestDelete(ctx, "/storage/v1/b/"+bkt(e))
 	}
 	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		key, _, err := storageBucketCMEKeys(ctx, e)
+		if err != nil {
+			return nil, err
+		}
 		age := int32(30)
 		var out *storagepb.Bucket
-		err := storageDial(ctx, e, func(c storagepb.StorageClient) error {
+		err = storageDial(ctx, e, func(c storagepb.StorageClient) error {
 			var cerr error
 			out, cerr = c.CreateBucket(ctx, &storagepb.CreateBucketRequest{
 				Parent:   "projects/" + project(e),
@@ -87,9 +121,7 @@ func storageBucketsScenario() Scenario {
 						ResponseHeader: []string{"Content-Type"},
 						MaxAgeSeconds:  3600,
 					}},
-					Encryption: &storagepb.Bucket_Encryption{
-						DefaultKmsKey: "projects/test-project/locations/us/keyRings/r/cryptoKeys/k",
-					},
+					Encryption: &storagepb.Bucket_Encryption{DefaultKmsKey: key},
 					IamConfig: &storagepb.Bucket_IamConfig{
 						UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: true},
 						PublicAccessPrevention:   "enforced",
@@ -128,9 +160,13 @@ func storageBucketsScenario() Scenario {
 		return out, nil
 	}
 	updateBucketGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		_, key2, err := storageBucketCMEKeys(ctx, e)
+		if err != nil {
+			return nil, err
+		}
 		age := int32(7)
 		var out *storagepb.Bucket
-		err := storageDial(ctx, e, func(c storagepb.StorageClient) error {
+		err = storageDial(ctx, e, func(c storagepb.StorageClient) error {
 			var cerr error
 			out, cerr = c.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
 				Bucket: &storagepb.Bucket{
@@ -145,9 +181,7 @@ func storageBucketsScenario() Scenario {
 						Method:        []string{"GET"},
 						MaxAgeSeconds: 60,
 					}},
-					Encryption: &storagepb.Bucket_Encryption{
-						DefaultKmsKey: "projects/test-project/locations/us/keyRings/r/cryptoKeys/k2",
-					},
+					Encryption: &storagepb.Bucket_Encryption{DefaultKmsKey: key2},
 					IamConfig: &storagepb.Bucket_IamConfig{
 						UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: false},
 						PublicAccessPrevention:   "inherited",
