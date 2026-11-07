@@ -1,0 +1,755 @@
+# Terraform provider coverage scope (wave plan TF1).
+#
+# This is the hand-maintained half of docs/fidelity/terraform-coverage.csv.
+# `tools/tfcoverage` joins it with the committed provider-schema snapshot
+# (docs/fidelity/terraform-provider-schema-full.json) and the resource blocks
+# the fixture / pinned module cases declare, then writes or verifies the CSV:
+#
+#   make gen-gcp-terraform-coverage    # rewrite the CSV after a provider bump
+#   make check-gcp-terraform-coverage  # the offline PR gate
+#
+# Matching: `out_of_scope` is evaluated first and removes a subsystem from the
+# inventory entirely; then `rules` are evaluated in file order and the first
+# match wins. A provider resource type that matches neither fails the gate, so
+# a provider bump cannot silently drop a new resource from the measurement.
+#
+# States (seeded from docs/fidelity/fidelity-matrix.json and the operation
+# registry, checked today):
+#   served       the provider's calls reach an operation the emulator serves
+#   limited      served, with a caveat the fidelity matrix grades `limited`
+#   unsupported  the resource targets an API surface the operation registry
+#                does not serve; the reason says which surface
+#   client-side  the provider performs no emulator API call; the reason says why
+#
+# Services with no provider resource type today: datastore, iamcredentials,
+# operations, workflowexecutions. iceberg is served as an Iceberg REST catalog,
+# which the google provider does not drive (google_biglake_iceberg_* talks to
+# the BigLake API, which is not served).
+provider: hashicorp/google
+default_review_after: "2027-06-30"
+
+services:
+  # ga: at least one ga cell and no preview cell (the ledger's rule).
+  bigquery:        { matrix_state: ga }
+  container:       { matrix_state: ga }
+  dataproc:        { matrix_state: ga }
+  eventarc:        { matrix_state: ga }
+  firestore:       { matrix_state: ga }
+  firestoreadmin:  { matrix_state: ga }
+  functions:       { matrix_state: ga }
+  iam:             { matrix_state: ga }
+  kms:             { matrix_state: ga }
+  logging:         { matrix_state: ga }
+  managedkafka:    { matrix_state: ga }
+  metastore:       { matrix_state: ga }
+  monitoring:      { matrix_state: ga }
+  pubsub:          { matrix_state: ga }
+  resourcemanager: { matrix_state: ga }
+  run:             { matrix_state: ga }
+  scheduler:       { matrix_state: ga }
+  secretmanager:   { matrix_state: ga }
+  serviceusage:    { matrix_state: ga }
+  storage:         { matrix_state: ga }
+  tasks:           { matrix_state: ga }
+  workflows:       { matrix_state: ga }
+
+  # served but graded `limited` end to end: the whole service has no ga cell.
+  clouddns:        { matrix_state: limited }
+  cloudsql:        { matrix_state: limited }
+  compute:         { matrix_state: limited }
+  memorystore:     { matrix_state: limited }
+
+rules:
+  # ── Cloud Storage ──────────────────────────────────────────────────────────
+  - match: google_storage_bucket
+    service: storage
+    state: served
+  - match: google_storage_bucket_*
+    service: storage
+    state: served
+  - match: google_storage_default_object_*
+    service: storage
+    state: served
+  - match: google_storage_hmac_key
+    service: storage
+    state: served
+  - match: google_storage_notification
+    service: storage
+    state: served
+  - match: google_storage_object_*
+    service: storage
+    state: served
+  # Storage-adjacent APIs with no registered operation in the emulator.
+  - match: google_storage_anywhere_cache
+    service: storage
+    state: unsupported
+    reason: Anywhere Cache is a separate storage.googleapis.com surface; the emulator registers no anywhereCaches operation.
+  - match: google_storage_batch_operations_job
+    service: storage
+    state: unsupported
+    reason: Storage Batch Operations is a separate surface; the emulator registers no batchOperations operation.
+  - match: google_storage_control_*
+    service: storage
+    state: unsupported
+    reason: Storage Intelligence (storagecontrol) is a separate API; the emulator registers no intelligenceConfig operation.
+  - match: google_storage_folder
+    service: storage
+    state: unsupported
+    reason: Hierarchical-namespace folders (storage/folders) are not in the operation registry; only hierarchicalNamespace on a bucket is served.
+  - match: google_storage_insights_*
+    service: storage
+    state: unsupported
+    reason: Storage Insights (storageinsights) is a separate API; the emulator registers no inventoryReport/datasetConfig operation.
+  - match: google_storage_managed_folder*
+    service: storage
+    state: unsupported
+    reason: Managed folders (storage/managedFolders) are not in the operation registry.
+
+  # ── Pub/Sub ────────────────────────────────────────────────────────────────
+  - match: google_pubsub_schema*
+    service: pubsub
+    state: served
+  - match: google_pubsub_subscription*
+    service: pubsub
+    state: served
+  - match: google_pubsub_topic*
+    service: pubsub
+    state: served
+
+  # ── Cloud KMS ──────────────────────────────────────────────────────────────
+  - match: google_kms_crypto_key
+    service: kms
+    state: served
+  - match: google_kms_crypto_key_*
+    service: kms
+    state: served
+  - match: google_kms_key_ring
+    service: kms
+    state: served
+  - match: google_kms_key_ring_*
+    service: kms
+    state: served
+  - match: google_kms_secret_ciphertext
+    service: kms
+    state: served
+  - match: google_kms_autokey_config
+    service: kms
+    state: unsupported
+    reason: AutokeyAdmin (autokeyConfig) is a separate surface; the emulator registers no autokeyConfig operation.
+  - match: google_kms_ekm_connection*
+    service: kms
+    state: unsupported
+    reason: EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.
+  - match: google_kms_key_handle
+    service: kms
+    state: unsupported
+    reason: Key handles are an AutokeyAdmin surface; the emulator registers no autokey operation.
+  - match: google_kms_project_autokey_config
+    service: kms
+    state: unsupported
+    reason: AutokeyAdmin (autokeyConfig) is a separate surface; the emulator registers no autokeyConfig operation.
+
+  # ── Secret Manager ─────────────────────────────────────────────────────────
+  - match: google_secret_manager_secret
+    service: secretmanager
+    state: served
+  - match: google_secret_manager_secret_*
+    service: secretmanager
+    state: served
+  - match: google_secret_manager_regional_secret*
+    service: secretmanager
+    state: unsupported
+    reason: Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.
+
+  # ── Cloud SQL ──────────────────────────────────────────────────────────────
+  - match: google_sql_database
+    service: cloudsql
+    state: limited
+  - match: google_sql_database_instance
+    service: cloudsql
+    state: limited
+  - match: google_sql_source_representation_instance
+    service: cloudsql
+    state: limited
+  - match: google_sql_user
+    service: cloudsql
+    state: limited
+  - match: google_sql_provision_script
+    service: cloudsql
+    state: unsupported
+    reason: Provisioning scripts (sqladmin provisionScript) are not in the operation registry.
+  - match: google_sql_ssl_cert
+    service: cloudsql
+    state: unsupported
+    reason: sslCerts is not in the operation registry; the emulator serves instances/databases/users/flags/tiers/operations only.
+
+  # ── BigQuery ───────────────────────────────────────────────────────────────
+  - match: google_bigquery_dataset
+    service: bigquery
+    state: served
+  - match: google_bigquery_dataset_access
+    service: bigquery
+    state: served
+  - match: google_bigquery_job
+    service: bigquery
+    state: served
+  - match: google_bigquery_routine
+    service: bigquery
+    state: served
+  - match: google_bigquery_routine_iam_*
+    service: bigquery
+    state: served
+  - match: google_bigquery_row_access_policy
+    service: bigquery
+    state: served
+  - match: google_bigquery_table
+    service: bigquery
+    state: served
+  - match: google_bigquery_dataset_iam_*
+    service: bigquery
+    state: unsupported
+    reason: datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.
+  - match: google_bigquery_table_iam_*
+    service: bigquery
+    state: unsupported
+    reason: tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.
+  - match: google_bigquery_analytics_hub_*
+    service: bigquery
+    state: unsupported
+    reason: Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.
+  - match: google_bigquery_bi_reservation
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Reservation API (bigqueryreservation) is not served.
+  - match: google_bigquery_capacity_commitment
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Reservation API (capacityCommitments) is not served.
+  - match: google_bigquery_connection*
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Connection API is a separate service; the emulator registers no connection operation.
+  - match: google_bigquery_data_transfer_config
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig operation.
+  - match: google_bigquery_datapolicy*
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.
+  - match: google_bigquery_reservation
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Reservation API is not served.
+  - match: google_bigquery_reservation_assignment
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Reservation API (assignments) is not served.
+  - match: google_bigquery_reservation_group
+    service: bigquery
+    state: unsupported
+    reason: BigQuery Reservation API (reservationGroups) is not served.
+
+  # ── Dataproc ───────────────────────────────────────────────────────────────
+  - match: google_dataproc_cluster
+    service: dataproc
+    state: served
+  - match: google_dataproc_job
+    service: dataproc
+    state: served
+  - match: google_dataproc_batch
+    service: dataproc
+    state: served
+  - match: google_dataproc_workflow_template
+    service: dataproc
+    state: served
+  - match: google_dataproc_cluster_iam_*
+    service: dataproc
+    state: unsupported
+    reason: Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.
+  - match: google_dataproc_job_iam_*
+    service: dataproc
+    state: unsupported
+    reason: Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.
+  - match: google_dataproc_autoscaling_policy*
+    service: dataproc
+    state: unsupported
+    reason: Dataproc autoscalingPolicies are not in the operation registry.
+  - match: google_dataproc_session_template
+    service: dataproc
+    state: unsupported
+    reason: Dataproc session templates are not in the operation registry.
+  - match: google_dataproc_gdc_*
+    service: dataproc
+    state: unsupported
+    reason: Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.
+
+  # ── Dataproc Metastore ─────────────────────────────────────────────────────
+  - match: google_dataproc_metastore_*
+    service: metastore
+    state: served
+
+  # ── Firestore and the Firestore Admin API ──────────────────────────────────
+  - match: google_firestore_document
+    service: firestore
+    state: served
+  - match: google_firestore_database
+    service: firestoreadmin
+    state: served
+  - match: google_firestore_backup_schedule
+    service: firestoreadmin
+    state: served
+  - match: google_firestore_change_stream
+    service: firestoreadmin
+    state: served
+  - match: google_firestore_field
+    service: firestoreadmin
+    state: served
+  - match: google_firestore_index
+    service: firestoreadmin
+    state: served
+  - match: google_firestore_user_creds
+    service: firestoreadmin
+    state: served
+
+  # ── Cloud DNS ──────────────────────────────────────────────────────────────
+  - match: google_dns_managed_zone
+    service: clouddns
+    state: limited
+  - match: google_dns_record_set
+    service: clouddns
+    state: limited
+  - match: google_dns_managed_zone_iam_*
+    service: clouddns
+    state: unsupported
+    reason: managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.
+  - match: google_dns_policy
+    service: clouddns
+    state: unsupported
+    reason: DNS policies (policies) are not in the operation registry.
+  - match: google_dns_response_policy*
+    service: clouddns
+    state: unsupported
+    reason: DNS response policies (responsePolicies) are not in the operation registry.
+
+  # ── GKE (Cloud Container) ──────────────────────────────────────────────────
+  - match: google_container_cluster
+    service: container
+    state: served
+  - match: google_container_node_pool
+    service: container
+    state: served
+  - match: google_container_registry
+    service: container
+    state: unsupported
+    reason: Container Registry (gcr.io image metadata) is a separate API; the emulator serves the Container v1 cluster/nodePool surface only.
+
+  # ── Cloud Functions ────────────────────────────────────────────────────────
+  - match: google_cloudfunctions_function*
+    service: functions
+    state: served
+  - match: google_cloudfunctions2_function*
+    service: functions
+    state: served
+
+  # ── Memorystore / Redis ────────────────────────────────────────────────────
+  - match: google_redis_instance
+    service: memorystore
+    state: limited
+  - match: google_memorystore_instance
+    service: memorystore
+    state: limited
+  - match: google_redis_cluster
+    service: memorystore
+    state: unsupported
+    reason: Redis Cluster (redis.googleapis.com/v1 clusters) is a separate surface; the emulator registers Memorystore v1 instance operations only.
+  - match: google_redis_cluster_acl_policy
+    service: memorystore
+    state: unsupported
+    reason: Redis Cluster ACL policies are not in the operation registry.
+  - match: google_redis_cluster_user_created_connections
+    service: memorystore
+    state: unsupported
+    reason: Redis Cluster user-created connections are not in the operation registry.
+  - match: google_memorystore_acl_policy
+    service: memorystore
+    state: unsupported
+    reason: Memorystore ACL policies are not in the operation registry.
+  - match: google_memorystore_instance_desired_user_created_endpoints
+    service: memorystore
+    state: unsupported
+    reason: Memorystore desired user-created endpoints are not in the operation registry.
+
+  # ── Cloud Monitoring ───────────────────────────────────────────────────────
+  - match: google_monitoring_alert_policy
+    service: monitoring
+    state: served
+  - match: google_monitoring_custom_service
+    service: monitoring
+    state: served
+  - match: google_monitoring_dashboard
+    service: monitoring
+    state: served
+  - match: google_monitoring_metric_descriptor
+    service: monitoring
+    state: served
+  - match: google_monitoring_notification_channel
+    service: monitoring
+    state: served
+  - match: google_monitoring_service
+    service: monitoring
+    state: served
+  - match: google_monitoring_slo
+    service: monitoring
+    state: served
+  - match: google_monitoring_uptime_check_config
+    service: monitoring
+    state: served
+  - match: google_monitoring_group
+    service: monitoring
+    state: unsupported
+    reason: Monitoring groups are not in the operation registry.
+  - match: google_monitoring_monitored_project
+    service: monitoring
+    state: unsupported
+    reason: monitoredProjects is a separate Monitoring surface and is not in the operation registry.
+
+  # ── Cloud Logging ──────────────────────────────────────────────────────────
+  - match: google_logging_metric
+    service: logging
+    state: served
+  - match: google_logging_project_bucket_config
+    service: logging
+    state: served
+  - match: google_logging_project_exclusion
+    service: logging
+    state: served
+  - match: google_logging_project_sink
+    service: logging
+    state: served
+  - match: google_logging_log_scope
+    service: logging
+    state: served
+  - match: google_logging_log_view
+    service: logging
+    state: served
+  - match: google_logging_log_view_iam_*
+    service: logging
+    state: served
+  - match: google_logging_linked_dataset
+    service: logging
+    state: served
+  - match: google_logging_saved_query
+    service: logging
+    state: unsupported
+    reason: savedQueries are not in the operation registry.
+  - match: google_logging_billing_account_*
+    service: logging
+    state: unsupported
+    reason: Billing-account-scoped logging parents are outside the emulated project scope (no billingAccounts log routes).
+  - match: google_logging_folder_*
+    service: logging
+    state: unsupported
+    reason: Folder-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).
+  - match: google_logging_organization_*
+    service: logging
+    state: unsupported
+    reason: Organization-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).
+
+  # ── Cloud Scheduler / Tasks / Workflows ────────────────────────────────────
+  - match: google_cloud_scheduler_job
+    service: scheduler
+    state: served
+  - match: google_cloud_tasks_queue*
+    service: tasks
+    state: served
+  - match: google_workflows_workflow
+    service: workflows
+    state: served
+
+  # ── Eventarc ───────────────────────────────────────────────────────────────
+  - match: google_eventarc_*
+    service: eventarc
+    state: served
+
+  # ── Managed Service for Apache Kafka ───────────────────────────────────────
+  - match: google_managed_kafka_acl
+    service: managedkafka
+    state: served
+  - match: google_managed_kafka_cluster
+    service: managedkafka
+    state: served
+  - match: google_managed_kafka_topic
+    service: managedkafka
+    state: served
+  - match: google_managed_kafka_connect_cluster
+    service: managedkafka
+    state: unsupported
+    reason: Managed Kafka Connect is a separate surface; the emulator registers cluster/topic/acl operations only.
+  - match: google_managed_kafka_connector
+    service: managedkafka
+    state: unsupported
+    reason: Managed Kafka connectors are not in the operation registry.
+
+  # ── IAM (service accounts, project IAM, roles) ─────────────────────────────
+  - match: google_service_account
+    service: iam
+    state: served
+  - match: google_service_account_iam_*
+    service: iam
+    state: served
+  - match: google_service_account_key
+    service: iam
+    state: served
+  - match: google_project_iam_audit_config
+    service: iam
+    state: served
+  - match: google_project_iam_binding
+    service: iam
+    state: served
+  - match: google_project_iam_custom_role
+    service: iam
+    state: served
+  - match: google_project_iam_member
+    service: iam
+    state: served
+  - match: google_project_iam_member_remove
+    service: iam
+    state: served
+  - match: google_project_iam_policy
+    service: iam
+    state: served
+  - match: google_iam_access_boundary_policy
+    service: iam
+    state: unsupported
+    reason: IAM access boundary policies (IAM v2) are not in the operation registry.
+  - match: google_iam_deny_policy
+    service: iam
+    state: unsupported
+    reason: IAM deny policies (IAM v2) are not in the operation registry.
+  - match: google_iam_*_access_policy
+    service: iam
+    state: unsupported
+    reason: IAM principal/folder/organization access policies (IAM v2) are not in the operation registry.
+  - match: google_iam_*_policy_binding
+    service: iam
+    state: unsupported
+    reason: IAM policy bindings (IAM v2) are not in the operation registry.
+  - match: google_iam_oauth_client*
+    service: iam
+    state: unsupported
+    reason: IAM OAuth clients are not in the operation registry.
+  - match: google_iam_principal_access_boundary_policy
+    service: iam
+    state: unsupported
+    reason: IAM principal access boundary policies (IAM v2) are not in the operation registry.
+  - match: google_iam_workforce_pool*
+    service: iam
+    state: unsupported
+    reason: IAM workforce pools are not in the operation registry.
+  - match: google_iam_workload_identity_pool*
+    service: iam
+    state: unsupported
+    reason: IAM workload identity pools are not in the operation registry (only service accounts and roles are served).
+
+  # ── Cloud Resource Manager / Service Usage ─────────────────────────────────
+  - match: google_project
+    service: resourcemanager
+    state: served
+  - match: google_project_default_service_accounts
+    service: resourcemanager
+    state: served
+  - match: google_project_access_approval_settings
+    service: resourcemanager
+    state: unsupported
+    reason: Access Approval is a separate API; the emulator registers no accessApprovalSettings operation.
+  - match: google_project_organization_policy
+    service: resourcemanager
+    state: unsupported
+    reason: Organization Policy is a separate API; the emulator models project-level IAM only (wire-contract §8).
+  - match: google_project_usage_export_bucket
+    service: resourcemanager
+    state: unsupported
+    reason: Billing usage export is a Cloud Billing surface and is not in the operation registry.
+  - match: google_project_service
+    service: serviceusage
+    state: served
+  - match: google_resource_manager_*
+    service: resourcemanager
+    state: unsupported
+    reason: Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).
+
+  # ── Compute (metadata-only tier) ───────────────────────────────────────────
+  - match: google_compute_instance
+    service: compute
+    state: limited
+  - match: google_compute_disk
+    service: compute
+    state: limited
+  - match: google_compute_firewall
+    service: compute
+    state: limited
+  - match: google_compute_network
+    service: compute
+    state: limited
+  - match: google_compute_subnetwork
+    service: compute
+    state: limited
+  - match: google_compute_*
+    service: compute
+    state: unsupported
+    reason: Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).
+
+  # ── Cloud Run ──────────────────────────────────────────────────────────────
+  # Cloud Run Admin v2 is served (services + revisions + IAM); Jobs and
+  # WorkerPools are not. The v1 service resource maps to the v1 API, which the
+  # emulator does not serve.
+  - match: google_cloud_run_v2_service
+    service: run
+    state: served
+  - match: google_cloud_run_v2_service_iam_*
+    service: run
+    state: served
+  - match: google_cloud_run_service
+    service: run
+    state: unsupported
+    reason: Cloud Run v1 (run.googleapis.com/v1) is not in the operation registry; the emulator serves the v2 service control plane.
+  - match: google_cloud_run_service_iam_*
+    service: run
+    state: unsupported
+    reason: Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.
+  - match: google_cloud_run_v2_job*
+    service: run
+    state: unsupported
+    reason: Cloud Run Jobs are not served (recorded boundary in the terraform suite README).
+  - match: google_cloud_run_v2_worker_pool*
+    service: run
+    state: unsupported
+    reason: Cloud Run WorkerPools are not served (recorded boundary in the terraform suite README).
+  - match: google_cloud_run_domain_mapping
+    service: run
+    state: unsupported
+    reason: Cloud Run domain mappings are not in the operation registry.
+
+# ── Out of scope ────────────────────────────────────────────────────────────
+# Provider subsystems whose API the emulator does not serve at all. The reason
+# is fixed by wave-plan §6 and docs/gcp/wire-contract.md: an unserved service is
+# classified here, never emulated to make a module plan pass.
+out_of_scope:
+  - { match: google_access_context_manager_*, reason: "Access Context Manager (VPC Service Controls) is not an emulated service." }
+  - { match: google_alloydb_*, reason: "AlloyDB is not an emulated service." }
+  - { match: google_apigee_*, reason: "Apigee is not an emulated service." }
+  - { match: google_app_engine_*, reason: "App Engine is not an emulated service." }
+  - { match: google_apphub_*, reason: "App Hub is not an emulated service." }
+  - { match: google_artifact_registry_*, reason: "Artifact Registry is not an emulated service (wave-plan §6)." }
+  - { match: google_assured_workloads_*, reason: "Assured Workloads is not an emulated service." }
+  - { match: google_beyondcorp_*, reason: "BeyondCorp is not an emulated service." }
+  - { match: google_biglake_*, reason: "The BigLake API is not served; the emulator's Iceberg support is the Iceberg REST catalog, which the google provider does not drive." }
+  - { match: google_bigtable_*, reason: "Cloud Bigtable is not an emulated service." }
+  - { match: google_billing_*, reason: "Cloud Billing catalog/budgets are not emulated; only the project↔account association is modelled." }
+  - { match: google_binary_authorization_*, reason: "Binary Authorization is not an emulated service." }
+  - { match: google_blockchain_node_engine_*, reason: "Blockchain Node Engine is not an emulated service." }
+  - { match: google_certificate_manager_*, reason: "Certificate Manager is not an emulated service." }
+  - { match: google_chronicle_*, reason: "Chronicle is not an emulated service." }
+  - { match: google_cloud_asset_*, reason: "Cloud Asset Inventory is not an emulated service." }
+  - { match: google_cloudbuild*, reason: "Cloud Build is not an emulated service." }
+  - { match: google_clouddeploy_*, reason: "Cloud Deploy is not an emulated service." }
+  - { match: google_clouddomains_*, reason: "Cloud Domains is not an emulated service." }
+  - { match: google_colab_*, reason: "Colab is not an emulated service." }
+  - { match: google_composer_*, reason: "Cloud Composer is not an emulated service (wave-plan §6)." }
+  - { match: google_container_analysis_*, reason: "Container Analysis (Artifact Analysis) is a separate service and is not emulated." }
+  - { match: google_container_attached_*, reason: "Anthos Attached Clusters is not an emulated service." }
+  - { match: google_container_aws_*, reason: "Anthos on AWS is not an emulated service." }
+  - { match: google_container_azure_*, reason: "Anthos on Azure is not an emulated service." }
+  - { match: google_data_catalog_*, reason: "Data Catalog is not an emulated service." }
+  - { match: google_data_fusion_*, reason: "Data Fusion is not an emulated service (wave-plan §6)." }
+  - { match: google_data_loss_prevention_*, reason: "Sensitive Data Protection is not an emulated service." }
+  - { match: google_data_pipeline_*, reason: "Data Pipelines is not an emulated service." }
+  - { match: google_dataform_*, reason: "Dataform is not an emulated service." }
+  - { match: google_dataflow_*, reason: "Dataflow is not an emulated service (wave-plan §6)." }
+  - { match: google_dataplex_*, reason: "Dataplex is not an emulated service." }
+  - { match: google_datastream_*, reason: "Datastream is not an emulated service." }
+  - { match: google_developer_connect_*, reason: "Developer Connect is not an emulated service." }
+  - { match: google_dialogflow_*, reason: "Dialogflow is not an emulated service." }
+  - { match: google_discovery_engine_*, reason: "Discovery Engine is not an emulated service." }
+  - { match: google_document_ai_*, reason: "Document AI is not an emulated service." }
+  - { match: google_edgecontainer_*, reason: "Distributed Cloud Edge Container is not an emulated service." }
+  - { match: google_edgenetwork_*, reason: "Distributed Cloud Edge Network is not an emulated service." }
+  - { match: google_endpoints_service*, reason: "Cloud Endpoints is not an emulated service." }
+  - { match: google_essential_contacts_*, reason: "Essential Contacts is not an emulated service." }
+  - { match: google_filestore_*, reason: "Filestore is not an emulated service." }
+  - { match: google_firebase_*, reason: "Firebase is not an emulated service (wave-plan §6)." }
+  - { match: google_firebaserules_*, reason: "Firebase Rules is not an emulated service." }
+  - { match: google_folder*, reason: "Folder hierarchy is not modelled; project-level only (wire-contract §8)." }
+  - { match: google_gemini_*, reason: "Gemini/Vertex AI is not an emulated service." }
+  - { match: google_gke_backup_*, reason: "Backup for GKE is not an emulated service." }
+  - { match: google_gke_hub_*, reason: "GKE Hub / Fleet is not an emulated service." }
+  - { match: google_gkeonprem_*, reason: "GKE on-prem is not an emulated service." }
+  - { match: google_healthcare_*, reason: "Cloud Healthcare is not an emulated service (wave-plan §6)." }
+  - { match: google_hypercomputecluster_*, reason: "Hypercompute Cluster is not an emulated service." }
+  - { match: google_iap_*, reason: "Identity-Aware Proxy is not an emulated service." }
+  - { match: google_identity_platform_*, reason: "Identity Platform is not an emulated service." }
+  - { match: google_integration_connectors_*, reason: "Integration Connectors is not an emulated service." }
+  - { match: google_integrations_*, reason: "Application Integration is not an emulated service." }
+  - { match: google_looker_*, reason: "Looker is not an emulated service." }
+  - { match: google_lustre_*, reason: "Managed Lustre is not an emulated service." }
+  - { match: google_memcache_*, reason: "Memcached is a separate API and is not served (memorystore covers Redis/Memorystore instances)." }
+  - { match: google_migration_center_*, reason: "Migration Center is not an emulated service." }
+  - { match: google_ml_engine_*, reason: "Vertex AI / ML Engine is not an emulated service." }
+  - { match: google_model_armor_*, reason: "Model Armor is not an emulated service." }
+  - { match: google_netapp_*, reason: "NetApp Volumes is not an emulated service." }
+  - { match: google_network_connectivity_*, reason: "Network Connectivity Center is not an emulated service." }
+  - { match: google_network_management_*, reason: "Network Management is not an emulated service." }
+  - { match: google_network_security_*, reason: "Network Security is not an emulated service." }
+  - { match: google_network_services_*, reason: "Network Services is not an emulated service." }
+  - { match: google_notebooks_*, reason: "Vertex AI Workbench / Notebooks is not an emulated service." }
+  - { match: google_observability_*, reason: "Observability is not an emulated service." }
+  - { match: google_oracle_database_*, reason: "Oracle Database@Google Cloud is not an emulated service." }
+  - { match: google_org_policy_*, reason: "Organization Policy is not modelled; project-level only (wire-contract §8)." }
+  - { match: google_organization*, reason: "Organization hierarchy is not modelled; project-level only (wire-contract §8)." }
+  - { match: google_os_config_*, reason: "VM Manager (OS Config) is not an emulated service." }
+  - { match: google_os_login_*, reason: "OS Login is not an emulated service." }
+  - { match: google_parallelstore_*, reason: "Parallelstore is not an emulated service." }
+  - { match: google_privateca_*, reason: "Certificate Authority Service is not an emulated service." }
+  - { match: google_privileged_access_manager_*, reason: "Privileged Access Manager is not an emulated service." }
+  - { match: google_public_ca_*, reason: "Public Certificate Authority is not an emulated service." }
+  - { match: google_recaptcha_*, reason: "reCAPTCHA Enterprise is not an emulated service." }
+  - { match: google_scc_*, reason: "Security Command Center is not an emulated service." }
+  - { match: google_secure_source_manager_*, reason: "Secure Source Manager is not an emulated service." }
+  - { match: google_securityposture_*, reason: "Security Posture is not an emulated service." }
+  - { match: google_service_directory_*, reason: "Service Directory is not an emulated service." }
+  - { match: google_service_networking_*, reason: "Service Networking / peering is not an emulated service." }
+  - { match: google_site_verification_*, reason: "Site Verification is not an emulated service." }
+  - { match: google_sourcerepo_*, reason: "Cloud Source Repositories is not an emulated service." }
+  - { match: google_spanner_*, reason: "Cloud Spanner is not an emulated service." }
+  - { match: google_storage_transfer_*, reason: "Storage Transfer Service is a separate API and is not served." }
+  - { match: google_tags_*, reason: "Resource Manager tags are not modelled." }
+  - { match: google_transcoder_*, reason: "Transcoder API is not an emulated service." }
+  - { match: google_vector_*, reason: "Vector Search is not an emulated service." }
+  - { match: google_vertex_ai_*, reason: "Vertex AI is not an emulated service." }
+  - { match: google_vmwareengine_*, reason: "VMware Engine is not an emulated service." }
+  - { match: google_vpc_access_connector*, reason: "Serverless VPC Access is not an emulated service." }
+  - { match: google_workbench_*, reason: "Vertex AI Workbench is not an emulated service." }
+  - { match: google_workload_*, reason: "Workload Manager is not an emulated service." }
+  - { match: google_workstations_*, reason: "Cloud Workstations is not an emulated service." }
+  - { match: google_active_directory_*, reason: "Managed Service for Microsoft Active Directory is not an emulated service." }
+  - { match: google_agent_identity_*, reason: "Agent Identity is not an emulated service." }
+  - { match: google_agent_registry_*, reason: "Agent Registry is not an emulated service." }
+  - { match: google_agentic_*, reason: "Agentic Applications is not an emulated service." }
+  - { match: google_apihub_*, reason: "API Hub is not an emulated service." }
+  - { match: google_apikeys_*, reason: "API Keys is not an emulated service." }
+  - { match: google_backup_dr_*, reason: "Backup and DR Service is not an emulated service." }
+  - { match: google_ces_*, reason: "Customer Engagement Suite is not an emulated service." }
+  - { match: google_cloud_identity_*, reason: "Cloud Identity is not an emulated service." }
+  - { match: google_cloud_ids_*, reason: "Cloud IDS is not an emulated service." }
+  - { match: google_cloud_quotas_*, reason: "Cloud Quotas is not an emulated service." }
+  - { match: google_cloud_security_compliance_*, reason: "Cloud Security Compliance is not an emulated service." }
+  - { match: google_cloud_support_*, reason: "Cloud Support is not an emulated service." }
+  - { match: google_config_*, reason: "Infrastructure Manager (config) is not an emulated service." }
+  - { match: google_contact_center_insights_*, reason: "Contact Center AI Insights is not an emulated service." }
+  - { match: google_data_lineage_*, reason: "Data Lineage is not an emulated service." }
+  - { match: google_database_migration_service_*, reason: "Database Migration Service is not an emulated service." }
+  - { match: google_deployment_manager_*, reason: "Deployment Manager is not an emulated service (wave-plan §6)." }
+  - { match: google_license_manager_*, reason: "License Manager is not an emulated service." }
+  - { match: google_parameter_manager_*, reason: "Parameter Manager is not an emulated service." }
+  - { match: google_pubsub_lite_*, reason: "Pub/Sub Lite is a separate API and is not served; only the Pub/Sub v1 topic/subscription/schema surface is." }

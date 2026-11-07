@@ -1,0 +1,463 @@
+provider_resource,service,emulator_state,exercised_by,classification,reason,review_after
+google_bigquery_analytics_hub_data_exchange,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_data_exchange_iam_binding,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_data_exchange_iam_member,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_data_exchange_iam_policy,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_listing,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_listing_iam_binding,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_listing_iam_member,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_listing_iam_policy,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_listing_subscription,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_analytics_hub_query_template,bigquery,unsupported,none,unsupported,Analytics Hub (bigqueryanalyticshub) is a separate API; the emulator registers no analyticsHub operation.,2027-06-30
+google_bigquery_bi_reservation,bigquery,unsupported,none,unsupported,BigQuery Reservation API (bigqueryreservation) is not served.,2027-06-30
+google_bigquery_capacity_commitment,bigquery,unsupported,none,unsupported,BigQuery Reservation API (capacityCommitments) is not served.,2027-06-30
+google_bigquery_connection,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
+google_bigquery_connection_iam_binding,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
+google_bigquery_connection_iam_member,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
+google_bigquery_connection_iam_policy,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
+google_bigquery_data_transfer_config,bigquery,unsupported,none,unsupported,BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig operation.,2027-06-30
+google_bigquery_datapolicy_data_policy,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicy_data_policy_iam_binding,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicy_data_policy_iam_member,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicy_data_policy_iam_policy,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicyv2_data_policy,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicyv2_data_policy_iam_binding,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicyv2_data_policy_iam_member,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_datapolicyv2_data_policy_iam_policy,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
+google_bigquery_dataset,bigquery,served,fixture:compat,served,,2027-06-30
+google_bigquery_dataset_access,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
+google_bigquery_dataset_iam_binding,bigquery,unsupported,none,unsupported,datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_dataset_iam_member,bigquery,unsupported,none,unsupported,datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_dataset_iam_policy,bigquery,unsupported,none,unsupported,datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_job,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
+google_bigquery_reservation,bigquery,unsupported,none,unsupported,BigQuery Reservation API is not served.,2027-06-30
+google_bigquery_reservation_assignment,bigquery,unsupported,none,unsupported,BigQuery Reservation API (assignments) is not served.,2027-06-30
+google_bigquery_reservation_group,bigquery,unsupported,none,unsupported,BigQuery Reservation API (reservationGroups) is not served.,2027-06-30
+google_bigquery_routine,bigquery,served,fixture:compat,served,,2027-06-30
+google_bigquery_routine_iam_binding,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
+google_bigquery_routine_iam_member,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
+google_bigquery_routine_iam_policy,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
+google_bigquery_row_access_policy,bigquery,served,fixture:compat,served,,2027-06-30
+google_bigquery_table,bigquery,served,fixture:compat,served,,2027-06-30
+google_bigquery_table_iam_binding,bigquery,unsupported,none,unsupported,tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_table_iam_member,bigquery,unsupported,none,unsupported,tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_table_iam_policy,bigquery,unsupported,none,unsupported,tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_cloud_run_domain_mapping,run,unsupported,none,unsupported,Cloud Run domain mappings are not in the operation registry.,2027-06-30
+google_cloud_run_service,run,unsupported,none,unsupported,Cloud Run v1 (run.googleapis.com/v1) is not in the operation registry; the emulator serves the v2 service control plane.,2027-06-30
+google_cloud_run_service_iam_binding,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30
+google_cloud_run_service_iam_member,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30
+google_cloud_run_service_iam_policy,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30
+google_cloud_run_v2_job,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_job_iam_binding,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_job_iam_member,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_job_iam_policy,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_service,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_run_v2_service_iam_binding,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_run_v2_service_iam_member,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_run_v2_service_iam_policy,run,served,none,served,run is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_run_v2_worker_pool,run,unsupported,none,unsupported,Cloud Run WorkerPools are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_worker_pool_iam_binding,run,unsupported,none,unsupported,Cloud Run WorkerPools are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_worker_pool_iam_member,run,unsupported,none,unsupported,Cloud Run WorkerPools are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_run_v2_worker_pool_iam_policy,run,unsupported,none,unsupported,Cloud Run WorkerPools are not served (recorded boundary in the terraform suite README).,2027-06-30
+google_cloud_scheduler_job,scheduler,served,none,served,scheduler is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_tasks_queue,tasks,served,none,served,tasks is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_tasks_queue_iam_binding,tasks,served,none,served,tasks is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_tasks_queue_iam_member,tasks,served,none,served,tasks is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloud_tasks_queue_iam_policy,tasks,served,none,served,tasks is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions2_function,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions2_function_iam_binding,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions2_function_iam_member,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions2_function_iam_policy,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions_function,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions_function_iam_binding,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions_function_iam_member,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_cloudfunctions_function_iam_policy,functions,served,none,served,functions is served; no fixture or module case declares this resource type yet,2027-06-30
+google_compute_address,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_attached_disk,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_autoscaler,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_backend_bucket,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_backend_bucket_signed_url_key,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_backend_service,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_backend_service_signed_url_key,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_bulk_per_instance_config,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_cross_site_network,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_disk,compute,limited,none,served,compute is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_compute_disk_async_replication,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_disk_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_disk_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_disk_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_disk_resource_policy_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_external_vpn_gateway,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall,compute,limited,none,served,compute is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_compute_firewall_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall_policy_association,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall_policy_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall_policy_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall_policy_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall_policy_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_firewall_policy_with_rules,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_forwarding_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_global_address,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_global_forwarding_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_global_network_endpoint,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_global_network_endpoint_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_global_vm_extension_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_ha_vpn_gateway,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_health_check,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_http_health_check,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_https_health_check,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_image,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_image_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_image_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_image_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance,compute,limited,none,served,compute is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_compute_instance_from_template,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_group_manager,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_group_membership,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_group_named_port,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_settings,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_template,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_template_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_template_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instance_template_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instant_snapshot,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instant_snapshot_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instant_snapshot_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_instant_snapshot_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_interconnect,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_interconnect_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_interconnect_attachment_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_interconnect_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_managed_ssl_certificate,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network,compute,limited,none,served,compute is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_compute_network_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_endpoint,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_endpoint_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_endpoints,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy_association,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_firewall_policy_with_rules,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_peering,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_peering_routes_config,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_node_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_node_template,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_organization_security_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_organization_security_policy_association,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_organization_security_policy_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_packet_mirroring,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_per_instance_config,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_preview_feature,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_project_cloud_armor_tier,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_project_default_network_tier,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_project_metadata,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_project_metadata_item,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_public_advertised_prefix,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_public_delegated_prefix,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_autoscaler,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_backend_service,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_commitment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_composite_health_check,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_disk,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_disk_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_disk_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_disk_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_disk_resource_policy_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_health_aggregation_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_health_check,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_health_source,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_instance_group_manager,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_instance_template,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_instant_snapshot,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_instant_snapshot_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_instant_snapshot_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_instant_snapshot_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_endpoint,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_endpoint_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy_association,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_network_firewall_policy_with_rules,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_per_instance_config,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_resize_request,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_security_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_security_policy_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_ssl_certificate,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_ssl_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_target_http_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_target_https_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_target_tcp_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_region_url_map,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_reservation,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_resize_request,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_resource_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_resource_policy_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_rollout_plan,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_route,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router_interface,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router_named_set,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router_nat,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router_nat_address,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router_peer,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_router_route_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_security_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_security_policy_rule,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_service_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_shared_vpc_host_project,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_shared_vpc_service_project,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_snapshot,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_snapshot_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_snapshot_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_snapshot_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_snapshot_settings,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_ssl_certificate,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_ssl_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_storage_pool,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_storage_pool_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_storage_pool_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_storage_pool_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_subnetwork,compute,limited,none,served,compute is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_compute_subnetwork_iam_binding,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_subnetwork_iam_member,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_subnetwork_iam_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_grpc_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_http_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_https_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_instance,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_pool,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_ssl_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_target_tcp_proxy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_url_map,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_vpn_gateway,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_vpn_tunnel,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_wire_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_zone_vm_extension_policy,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_container_cluster,container,served,fixture:gke,served,,2027-06-30
+google_container_node_pool,container,served,none,served,container is served; no fixture or module case declares this resource type yet,2027-06-30
+google_container_registry,container,unsupported,none,unsupported,Container Registry (gcr.io image metadata) is a separate API; the emulator serves the Container v1 cluster/nodePool surface only.,2027-06-30
+google_dataproc_autoscaling_policy,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
+google_dataproc_autoscaling_policy_iam_binding,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
+google_dataproc_autoscaling_policy_iam_member,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
+google_dataproc_autoscaling_policy_iam_policy,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
+google_dataproc_batch,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_cluster,dataproc,served,"fixture:gce,fixture:gke",served,,2027-06-30
+google_dataproc_cluster_iam_binding,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_cluster_iam_member,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_cluster_iam_policy,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_gdc_application_environment,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
+google_dataproc_gdc_service_instance,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
+google_dataproc_gdc_spark_application,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
+google_dataproc_job,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_job_iam_binding,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_job_iam_member,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_job_iam_policy,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_metastore_database_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_database_iam_member,metastore,served,fixture:compat,served,,2027-06-30
+google_dataproc_metastore_database_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_federation,metastore,served,fixture:compat,served,,2027-06-30
+google_dataproc_metastore_federation_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_federation_iam_member,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_federation_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_service,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_service_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_service_iam_member,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_service_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_table_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_table_iam_member,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_table_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_session_template,dataproc,unsupported,none,unsupported,Dataproc session templates are not in the operation registry.,2027-06-30
+google_dataproc_workflow_template,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dns_managed_zone,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_dns_managed_zone_iam_binding,clouddns,unsupported,none,unsupported,managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.,2027-06-30
+google_dns_managed_zone_iam_member,clouddns,unsupported,none,unsupported,managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.,2027-06-30
+google_dns_managed_zone_iam_policy,clouddns,unsupported,none,unsupported,managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.,2027-06-30
+google_dns_policy,clouddns,unsupported,none,unsupported,DNS policies (policies) are not in the operation registry.,2027-06-30
+google_dns_record_set,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_dns_response_policy,clouddns,unsupported,none,unsupported,DNS response policies (responsePolicies) are not in the operation registry.,2027-06-30
+google_dns_response_policy_rule,clouddns,unsupported,none,unsupported,DNS response policies (responsePolicies) are not in the operation registry.,2027-06-30
+google_eventarc_channel,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_enrollment,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_google_api_source,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_google_channel_config,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_message_bus,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_pipeline,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_trigger,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_backup_schedule,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_change_stream,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_database,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_document,firestore,served,none,served,firestore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_field,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_index,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_user_creds,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_iam_access_boundary_policy,iam,unsupported,none,unsupported,IAM access boundary policies (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_deny_policy,iam,unsupported,none,unsupported,IAM deny policies (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_folder_access_policy,iam,unsupported,none,unsupported,IAM principal/folder/organization access policies (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_folders_policy_binding,iam,unsupported,none,unsupported,IAM policy bindings (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_oauth_client,iam,unsupported,none,unsupported,IAM OAuth clients are not in the operation registry.,2027-06-30
+google_iam_oauth_client_credential,iam,unsupported,none,unsupported,IAM OAuth clients are not in the operation registry.,2027-06-30
+google_iam_organization_access_policy,iam,unsupported,none,unsupported,IAM principal/folder/organization access policies (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_organizations_policy_binding,iam,unsupported,none,unsupported,IAM policy bindings (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_principal_access_boundary_policy,iam,unsupported,none,unsupported,IAM principal access boundary policies (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_project_access_policy,iam,unsupported,none,unsupported,IAM principal/folder/organization access policies (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_projects_policy_binding,iam,unsupported,none,unsupported,IAM policy bindings (IAM v2) are not in the operation registry.,2027-06-30
+google_iam_workforce_pool,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_iam_binding,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_iam_member,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_iam_policy,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_provider,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_provider_key,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_provider_scim_tenant,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workforce_pool_provider_scim_token,iam,unsupported,none,unsupported,IAM workforce pools are not in the operation registry.,2027-06-30
+google_iam_workload_identity_pool,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_iam_workload_identity_pool_iam_binding,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_iam_workload_identity_pool_iam_member,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_iam_workload_identity_pool_iam_policy,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_iam_workload_identity_pool_managed_identity,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_iam_workload_identity_pool_namespace,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_iam_workload_identity_pool_provider,iam,unsupported,none,unsupported,IAM workload identity pools are not in the operation registry (only service accounts and roles are served).,2027-06-30
+google_kms_autokey_config,kms,unsupported,none,unsupported,AutokeyAdmin (autokeyConfig) is a separate surface; the emulator registers no autokeyConfig operation.,2027-06-30
+google_kms_crypto_key,kms,served,"fixture:compat,fixture:compat_global,module:firestore",served,,2027-06-30
+google_kms_crypto_key_iam_binding,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_crypto_key_iam_member,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_crypto_key_iam_policy,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_crypto_key_version,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_ekm_connection,kms,unsupported,none,unsupported,EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.,2027-06-30
+google_kms_ekm_connection_iam_binding,kms,unsupported,none,unsupported,EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.,2027-06-30
+google_kms_ekm_connection_iam_member,kms,unsupported,none,unsupported,EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.,2027-06-30
+google_kms_ekm_connection_iam_policy,kms,unsupported,none,unsupported,EKM (ekmConnections) is a separate surface; the emulator registers no ekmConnection operation.,2027-06-30
+google_kms_key_handle,kms,unsupported,none,unsupported,Key handles are an AutokeyAdmin surface; the emulator registers no autokey operation.,2027-06-30
+google_kms_key_ring,kms,served,"fixture:compat,fixture:compat_global,module:firestore",served,,2027-06-30
+google_kms_key_ring_iam_binding,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_key_ring_iam_member,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_key_ring_iam_policy,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_key_ring_import_job,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_kms_project_autokey_config,kms,unsupported,none,unsupported,AutokeyAdmin (autokeyConfig) is a separate surface; the emulator registers no autokeyConfig operation.,2027-06-30
+google_kms_secret_ciphertext,kms,served,none,served,kms is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_billing_account_bucket_config,logging,unsupported,none,unsupported,Billing-account-scoped logging parents are outside the emulated project scope (no billingAccounts log routes).,2027-06-30
+google_logging_billing_account_exclusion,logging,unsupported,none,unsupported,Billing-account-scoped logging parents are outside the emulated project scope (no billingAccounts log routes).,2027-06-30
+google_logging_billing_account_sink,logging,unsupported,none,unsupported,Billing-account-scoped logging parents are outside the emulated project scope (no billingAccounts log routes).,2027-06-30
+google_logging_folder_bucket_config,logging,unsupported,none,unsupported,Folder-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_folder_exclusion,logging,unsupported,none,unsupported,Folder-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_folder_settings,logging,unsupported,none,unsupported,Folder-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_folder_sink,logging,unsupported,none,unsupported,Folder-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_linked_dataset,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_log_scope,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_log_view,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_log_view_iam_binding,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_log_view_iam_member,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_log_view_iam_policy,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_metric,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_organization_bucket_config,logging,unsupported,none,unsupported,Organization-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_organization_exclusion,logging,unsupported,none,unsupported,Organization-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_organization_settings,logging,unsupported,none,unsupported,Organization-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_organization_sink,logging,unsupported,none,unsupported,Organization-scoped logging parents are outside the emulated project scope (the emulator models project-level logging only).,2027-06-30
+google_logging_project_bucket_config,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_project_exclusion,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_project_sink,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
+google_logging_saved_query,logging,unsupported,none,unsupported,savedQueries are not in the operation registry.,2027-06-30
+google_managed_kafka_acl,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
+google_managed_kafka_cluster,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
+google_managed_kafka_connect_cluster,managedkafka,unsupported,none,unsupported,Managed Kafka Connect is a separate surface; the emulator registers cluster/topic/acl operations only.,2027-06-30
+google_managed_kafka_connector,managedkafka,unsupported,none,unsupported,Managed Kafka connectors are not in the operation registry.,2027-06-30
+google_managed_kafka_topic,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
+google_memorystore_acl_policy,memorystore,unsupported,none,unsupported,Memorystore ACL policies are not in the operation registry.,2027-06-30
+google_memorystore_instance,memorystore,limited,none,served,memorystore is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_memorystore_instance_desired_user_created_endpoints,memorystore,unsupported,none,unsupported,Memorystore desired user-created endpoints are not in the operation registry.,2027-06-30
+google_monitoring_alert_policy,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_custom_service,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_dashboard,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_group,monitoring,unsupported,none,unsupported,Monitoring groups are not in the operation registry.,2027-06-30
+google_monitoring_metric_descriptor,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_monitored_project,monitoring,unsupported,none,unsupported,monitoredProjects is a separate Monitoring surface and is not in the operation registry.,2027-06-30
+google_monitoring_notification_channel,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_service,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_slo,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_uptime_check_config,monitoring,served,fixture:compat,served,,2027-06-30
+google_project,resourcemanager,served,fixture:billing,served,,2027-06-30
+google_project_access_approval_settings,resourcemanager,unsupported,none,unsupported,Access Approval is a separate API; the emulator registers no accessApprovalSettings operation.,2027-06-30
+google_project_default_service_accounts,resourcemanager,served,none,served,resourcemanager is served; no fixture or module case declares this resource type yet,2027-06-30
+google_project_iam_audit_config,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_project_iam_binding,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_project_iam_custom_role,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_project_iam_member,iam,served,fixture:publisher,served,,2027-06-30
+google_project_iam_member_remove,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_project_iam_policy,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_project_organization_policy,resourcemanager,unsupported,none,unsupported,Organization Policy is a separate API; the emulator models project-level IAM only (wire-contract §8).,2027-06-30
+google_project_service,serviceusage,served,fixture:run_api,served,,2027-06-30
+google_project_usage_export_bucket,resourcemanager,unsupported,none,unsupported,Billing usage export is a Cloud Billing surface and is not in the operation registry.,2027-06-30
+google_pubsub_schema,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_schema_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_schema_iam_member,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_schema_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_subscription,pubsub,served,fixture:compat,served,,2027-06-30
+google_pubsub_subscription_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_subscription_iam_member,pubsub,served,fixture:subscriber,served,,2027-06-30
+google_pubsub_subscription_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_topic,pubsub,served,"fixture:compat,module:functions,module:pubsub-topic",served,,2027-06-30
+google_pubsub_topic_iam_binding,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_pubsub_topic_iam_member,pubsub,served,"fixture:publisher,fixture:viewer",served,,2027-06-30
+google_pubsub_topic_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
+google_redis_cluster,memorystore,unsupported,none,unsupported,Redis Cluster (redis.googleapis.com/v1 clusters) is a separate surface; the emulator registers Memorystore v1 instance operations only.,2027-06-30
+google_redis_cluster_acl_policy,memorystore,unsupported,none,unsupported,Redis Cluster ACL policies are not in the operation registry.,2027-06-30
+google_redis_cluster_user_created_connections,memorystore,unsupported,none,unsupported,Redis Cluster user-created connections are not in the operation registry.,2027-06-30
+google_redis_instance,memorystore,limited,none,served,memorystore is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_resource_manager_capability,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
+google_resource_manager_lien,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
+google_secret_manager_regional_secret,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
+google_secret_manager_regional_secret_iam_binding,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
+google_secret_manager_regional_secret_iam_member,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
+google_secret_manager_regional_secret_iam_policy,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
+google_secret_manager_regional_secret_version,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
+google_secret_manager_secret,secretmanager,served,"fixture:cmek,fixture:compat,fixture:user_managed",served,,2027-06-30
+google_secret_manager_secret_iam_binding,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
+google_secret_manager_secret_iam_member,secretmanager,served,fixture:accessor,served,,2027-06-30
+google_secret_manager_secret_iam_policy,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
+google_secret_manager_secret_version,secretmanager,served,fixture:compat,served,,2027-06-30
+google_service_account,iam,served,"fixture:compat,module:storage",served,,2027-06-30
+google_service_account_iam_binding,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_service_account_iam_member,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_service_account_iam_policy,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_service_account_key,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
+google_sql_database,cloudsql,limited,fixture:compat,served,,2027-06-30
+google_sql_database_instance,cloudsql,limited,fixture:compat,served,,2027-06-30
+google_sql_provision_script,cloudsql,unsupported,none,unsupported,Provisioning scripts (sqladmin provisionScript) are not in the operation registry.,2027-06-30
+google_sql_source_representation_instance,cloudsql,limited,none,served,cloudsql is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_sql_ssl_cert,cloudsql,unsupported,none,unsupported,sslCerts is not in the operation registry; the emulator serves instances/databases/users/flags/tiers/operations only.,2027-06-30
+google_sql_user,cloudsql,limited,fixture:compat,served,,2027-06-30
+google_storage_anywhere_cache,storage,unsupported,none,unsupported,Anywhere Cache is a separate storage.googleapis.com surface; the emulator registers no anywhereCaches operation.,2027-06-30
+google_storage_batch_operations_job,storage,unsupported,none,unsupported,Storage Batch Operations is a separate surface; the emulator registers no batchOperations operation.,2027-06-30
+google_storage_bucket,storage,served,"fixture:compat,module:functions,module:storage",served,,2027-06-30
+google_storage_bucket_access_control,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_bucket_acl,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_bucket_iam_binding,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_bucket_iam_member,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_bucket_iam_policy,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_bucket_object,storage,served,fixture:readme,served,,2027-06-30
+google_storage_control_folder_intelligence_config,storage,unsupported,none,unsupported,Storage Intelligence (storagecontrol) is a separate API; the emulator registers no intelligenceConfig operation.,2027-06-30
+google_storage_control_organization_intelligence_config,storage,unsupported,none,unsupported,Storage Intelligence (storagecontrol) is a separate API; the emulator registers no intelligenceConfig operation.,2027-06-30
+google_storage_control_project_intelligence_config,storage,unsupported,none,unsupported,Storage Intelligence (storagecontrol) is a separate API; the emulator registers no intelligenceConfig operation.,2027-06-30
+google_storage_default_object_access_control,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_default_object_acl,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_folder,storage,unsupported,none,unsupported,Hierarchical-namespace folders (storage/folders) are not in the operation registry; only hierarchicalNamespace on a bucket is served.,2027-06-30
+google_storage_hmac_key,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_insights_dataset_config,storage,unsupported,none,unsupported,Storage Insights (storageinsights) is a separate API; the emulator registers no inventoryReport/datasetConfig operation.,2027-06-30
+google_storage_insights_report_config,storage,unsupported,none,unsupported,Storage Insights (storageinsights) is a separate API; the emulator registers no inventoryReport/datasetConfig operation.,2027-06-30
+google_storage_managed_folder,storage,unsupported,none,unsupported,Managed folders (storage/managedFolders) are not in the operation registry.,2027-06-30
+google_storage_managed_folder_iam_binding,storage,unsupported,none,unsupported,Managed folders (storage/managedFolders) are not in the operation registry.,2027-06-30
+google_storage_managed_folder_iam_member,storage,unsupported,none,unsupported,Managed folders (storage/managedFolders) are not in the operation registry.,2027-06-30
+google_storage_managed_folder_iam_policy,storage,unsupported,none,unsupported,Managed folders (storage/managedFolders) are not in the operation registry.,2027-06-30
+google_storage_notification,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_object_access_control,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_storage_object_acl,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
+google_workflows_workflow,workflows,served,none,served,workflows is served; no fixture or module case declares this resource type yet,2027-06-30
