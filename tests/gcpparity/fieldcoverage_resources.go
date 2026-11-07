@@ -76,13 +76,21 @@ func preparedRefs(ctx context.Context, e *Env, service, resource, transport stri
 }
 
 func ensureRefCryptoKey(ctx context.Context, e *Env) (string, error) {
-	ring := e.Resource("fc-ref-ring")
-	key := e.Resource("fc-ref-key")
-	base := fmt.Sprintf("/v1/projects/%s/locations/us", e.Cfg.Project)
+	return ensureRefCryptoKeyAt(ctx, e, "us")
+}
+
+// ensureRefCryptoKeyAt creates (idempotently) an ENCRYPT_DECRYPT key in
+// location. A bucket in a multi-region needs a key in that multi-region, while
+// a regional resource (a Cloud Functions function) needs a key in its region,
+// so the two cannot share one key.
+func ensureRefCryptoKeyAt(ctx context.Context, e *Env, location string) (string, error) {
+	ring := e.Resource("fc-ref-ring-" + location)
+	key := e.Resource("fc-ref-key-" + location)
+	base := fmt.Sprintf("/v1/projects/%s/locations/%s", e.Cfg.Project, location)
 	if _, err := e.Rest(ctx, http.MethodPost, base+"/keyRings?keyRingId="+ring, `{}`); err != nil && !statusIs(err, codes.AlreadyExists) {
 		return "", fmt.Errorf("create reference key ring: %w", err)
 	}
-	ringName := fmt.Sprintf("projects/%s/locations/us/keyRings/%s", e.Cfg.Project, ring)
+	ringName := fmt.Sprintf("projects/%s/locations/%s/keyRings/%s", e.Cfg.Project, location, ring)
 	if _, err := e.Rest(ctx, http.MethodPost, "/v1/"+ringName+"/cryptoKeys?cryptoKeyId="+key, `{"purpose":"ENCRYPT_DECRYPT"}`); err != nil && !statusIs(err, codes.AlreadyExists) {
 		return "", fmt.Errorf("create reference crypto key: %w", err)
 	}
@@ -669,7 +677,18 @@ func (functionsFunction) transports() []string {
 }
 
 func (functionsFunction) prepare(ctx context.Context, e *Env) (map[string]string, error) {
-	return preparedRefs(ctx, e, "functions", "Function", "rest", nil)
+	refs, err := preparedRefs(ctx, e, "functions", "Function", "rest", nil)
+	if err != nil {
+		return nil, err
+	}
+	// kmsKeyName must be in the function's region; the shared ref key lives in
+	// the US multi-region for the bucket round-trip.
+	key, err := ensureRefCryptoKeyAt(ctx, e, functionsLocation)
+	if err != nil {
+		return nil, err
+	}
+	refs["kms"] = key
+	return refs, nil
 }
 
 func (functionsFunction) baseBody(e *Env, id string) map[string]any { return map[string]any{} }
