@@ -113,6 +113,11 @@ func TestValidateComputeNetwork(t *testing.T) {
 	if err := ValidateComputeNetwork(ctx, nil, "p", byNumber); err != nil {
 		t.Fatalf("nil store accept: %v", err)
 	}
+	// Every project starts with a default network; the compute surface treats
+	// it as implicit, so a project with no seeded network still resolves it.
+	if err := ValidateComputeNetwork(ctx, res, "p", "projects/p/global/networks/default"); err != nil {
+		t.Fatalf("implicit default network: %v", err)
+	}
 	for name, c := range map[string]struct {
 		resources store.ResourceStore
 		name      string

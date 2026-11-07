@@ -133,6 +133,13 @@ func ValidateComputeNetwork(ctx context.Context, resources store.ResourceStore, 
 	}
 	if _, err := resources.Get(ctx, project, store.GlobalRegion, ComputeNetworkType, network); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// Every real GCP project starts with a "default" network, and the
+			// compute surface already treats it as implicit (an instance,
+			// firewall or subnetwork that names no network gets this one). The
+			// emulator does not seed the record, so resolve it without one.
+			if network == "default" {
+				return nil
+			}
 			return invalidArgument("network does not exist: %s", name)
 		}
 		return model.NewProviderError("Internal", err.Error(), 500)
