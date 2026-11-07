@@ -93,6 +93,7 @@ make test-gcp-terraform     # requires terraform
 make test-gcp-opentofu      # requires tofu
 make test-gcp-terraform-all # fixture + every pinned module case, one emulator
 make test-gcp-terraform-all TF_BIN=tofu STRICT=1  # same set under OpenTofu; a SKIP fails
+make test-gcp-terraform-plan-only CASE=gke        # plan-only tier: no apply, no destroy
 ```
 
 Both targets are opt-in: if the binary is not installed they print `SKIP` and
@@ -133,8 +134,11 @@ module, and requires the module's lifecycle to converge.
 | `dataproc` | [`terraform-google-dataproc`](https://github.com/GoogleCloudPlatform/terraform-google-dataproc) | `56c7c7ed630f` | the module renders a GCE-shaped cluster (master/worker counts and machine types, software image version, labels) and a root-module-owned pyspark job is submitted into it; GET reads back the cluster name/labels/config and the job placement/pyspark driver/`DONE` state; a second `plan` is **No changes**; labels and the worker count update in place and re-plan **No changes**; destroy leaves the cluster and job `404`. The module's internal default-service-account data source is pruned with `-target` (Compute `projects.get` is TF2-1) |
 | `service-accounts` | [`terraform-google-service-accounts`](https://github.com/terraform-google-modules/terraform-google-service-accounts) | `570caafff32d` | three service accounts and a project binding per (account, role) apply; the accounts read back their email/display name, and the project policy contains every member under `roles/viewer` and `roles/storage.objectViewer`; a second `plan` is **No changes**; the role set changes and the new role gains every member while `roles/viewer` keeps them and the replaced role is gone; every phase runs with `-parallelism=10`; destroy leaves the accounts `404` |
 | `iam` | [`terraform-google-iam`](https://github.com/terraform-google-modules/terraform-google-iam) (`modules/projects_iam`, `modules/storage_buckets_iam`, `modules/pubsub_topics_iam`) | `9b9eacfa2b4f` | project, bucket and Pub/Sub topic IAM are driven in additive mode with multiple members per role; the three policies read back every member; a second `plan` is **No changes**; a role-set change adds the new members without dropping the survivors (the etag OCC path), and the replaced roles are gone; every phase runs with `-parallelism=10`; destroy leaves the bucket, topic and accounts `404` |
+| `sql-db` | [`terraform-google-sql-db`](https://github.com/terraform-google-modules/terraform-google-sql-db) (`modules/postgresql`) | `75b57dc6838e` | a PostgreSQL instance with the module's default `settings` block (tier, availability, backup configuration, maintenance window, disk settings, labels) applies through `google-beta`; the instance reads back `RUNNABLE` with its tier and labels, the default database and user exist, a second `plan` is **No changes**; a tier + label change PATCHes in place and re-plans **No changes**; destroy leaves the instance `404`. `PLAN_ONLY=1` runs the same module as init → validate → plan only |
+| `gke` | [`terraform-google-kubernetes-engine`](https://github.com/terraform-google-modules/terraform-google-kubernetes-engine) | `a19597ac18ad` | **plan-only**: the regional cluster, the default node pool and the node service account are in the plan, and the module's `data.google_container_engine_versions.{region,zone}` read reaches Container `GetServerConfig`; no apply/destroy (GKE's control plane is metadata-only) |
+| `datastore` | [`terraform-google-cloud-datastore`](https://github.com/terraform-google-modules/terraform-google-cloud-datastore) | `1616a282bbf4` | **plan-only**: the module renders the caller's `index.yaml` (`local_file`) and its gcloud `null_resource`; the plan carries the requested index kind and properties. No apply: the module shells out to `gcloud datastore indexes` and the Datastore Admin index surface is not served (TF3-6-1) |
 
-The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery, secret-manager, dataproc, service-accounts and iam cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `workflows`, `scheduler` and `tasks` cases pin `= 6.49.3` instead: their pinned modules declare `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy them (the scheduler module also requires `hashicorp/null`, pinned to `3.3.2`). The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
+The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery, secret-manager, dataproc, service-accounts and iam cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `sql-db` case pins `google` and `google-beta` `= 7.46.2` plus `random = 3.7.2` and `null = 3.2.4`; `gke` pins `google = 7.46.2`, `kubernetes = 2.38.0` and `random = 3.7.2`; `datastore` has no provider resource, so it pins only the client-side `local = 2.5.2` and `null = 3.2.4`. The `workflows`, `scheduler` and `tasks` cases pin `= 6.49.3` instead: their pinned modules declare `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy them (the scheduler module also requires `hashicorp/null`, pinned to `3.3.2`). The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -228,6 +232,21 @@ git clone https://github.com/terraform-google-modules/terraform-google-iam \
   "$HOME/.cache/terraform-modules/terraform-google-iam"
 git -C "$HOME/.cache/terraform-modules/terraform-google-iam" checkout 9b9eacfa2b4f
 make test-gcp-terraform-iam
+
+git clone https://github.com/terraform-google-modules/terraform-google-sql-db \
+  "$HOME/.cache/terraform-modules/terraform-google-sql-db"
+git -C "$HOME/.cache/terraform-modules/terraform-google-sql-db" checkout 75b57dc6838e
+make test-gcp-terraform-sql-db
+
+git clone https://github.com/terraform-google-modules/terraform-google-kubernetes-engine \
+  "$HOME/.cache/terraform-modules/terraform-google-kubernetes-engine"
+git -C "$HOME/.cache/terraform-modules/terraform-google-kubernetes-engine" checkout a19597ac18ad
+make test-gcp-terraform-gke
+
+git clone https://github.com/terraform-google-modules/terraform-google-cloud-datastore \
+  "$HOME/.cache/terraform-modules/terraform-google-cloud-datastore"
+git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-datastore" checkout 1616a282bbf4
+make test-gcp-terraform-datastore
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
@@ -239,7 +258,41 @@ point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_BIGQUERY_MODULE_DIR` / `TF_SECRET_MANAGER_MODULE_DIR` /
 `TF_WORKFLOWS_MODULE_DIR` / `TF_SCHEDULER_MODULE_DIR` /
 `TF_TASKS_MODULE_DIR` / `TF_DATAPROC_MODULE_DIR` /
-`TF_SERVICE_ACCOUNTS_MODULE_DIR` / `TF_IAM_MODULE_DIR` respectively.
+`TF_SERVICE_ACCOUNTS_MODULE_DIR` / `TF_IAM_MODULE_DIR` /
+`TF_SQLDB_MODULE_DIR` / `TF_GKE_MODULE_DIR` /
+`TF_DATASTORE_MODULE_DIR` respectively.
+
+### The plan-only tier
+
+Not every module can complete the apply/destroy contract, and forcing one to
+would either abort the aggregate or produce a green that proves nothing. A case
+opts into the plan-only tier by setting `PLAN_ONLY=1` and calling
+`plan_only_phase` instead of the apply phases:
+
+```
+init -> validate -> plan (saved) -> plan_includes <address>...
+```
+
+There is no apply, no destroy and no FC6 capture (a plan sends no write request
+bodies). Acceptance is a **completed** plan that carries the addresses the case
+asserts — not necessarily a clean one, because a module may legitimately plan
+against a metadata-only control plane. A provider panic or an unrouted request
+(the endpoint map does not reach the emulator) is a failure; a plan that stops
+on an API diagnostic is recorded only when the case sets
+`PLAN_ONLY_ALLOW_DIAGNOSTICS=1`, and its header says which data plane is
+missing. `PLAN_ONLY=1` in the environment also flips a case that can be applied
+(the `sql-db` case) into plan-only mode, which is what the generic target does.
+A plan-only run that somehow creates state is failed and destroyed, so the mode
+cannot leave resources behind:
+
+```bash
+make test-gcp-terraform-plan-only CASE=sql-db   # measure the diff, no apply
+make test-gcp-terraform-plan-only CASE=gke
+```
+
+Plan-only cases run in the aggregate and the nightly like any other case; they
+are reported as `plan-only:<case>` in `docs/fidelity/terraform-coverage.csv`
+when their root module declares provider resources.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -600,6 +653,61 @@ The module's `main.tf` unconditionally reads `data.google_compute_default_servic
 4. `destroy`; the bucket, topic and accounts are `404`
 
 Folder and organization IAM, the audit-config submodule and the module's `member_iam`/`service_accounts_iam` submodules are out of scope: the emulator is project-scoped (wire-contract §8) and the root module creates the accounts it binds.
+
+**sql-db** — the CFT `terraform-google-sql-db` `modules/postgresql` submodule is applied
+through `google-beta` with its real defaults (tier `db-custom-1-3840`, ZONAL
+availability, the module's backup configuration, maintenance window, disk
+settings and `user_labels`) and the case's `deletion_protection = false`:
+
+1. `apply`; assert through the REST API (`sqladmin` v1beta4) that the instance
+   is `RUNNABLE`, echoes `POSTGRES_18`, its tier and labels, and that the
+   module's default database and user exist; the apply log must contain no
+   `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change the tier (`db-custom-1-3840` → `db-custom-2-7680`) and the labels;
+   `apply` (an in-place settings update); assert the new values; `plan` →
+   **no changes**
+4. `destroy`; the instance GET is `404`
+
+The module reads `data.google_compute_zones.available` from `read_replica.tf`,
+so the case points the compute endpoint at the emulator as well. Read replicas,
+private service access, CMEK/autokey, password policy, insights and PITR stay at
+their defaults: they reach surfaces outside this family's measured scope. The
+case also supports `PLAN_ONLY=1` (init → validate → plan only), which the
+`test-gcp-terraform-plan-only CASE=sql-db` target uses.
+
+**gke** — the CFT `terraform-google-kubernetes-engine` ROOT module is measured
+with the **plan-only tier** (it sets `PLAN_ONLY=1` itself):
+
+1. `init`, `validate`, `plan`; assert the plan changes the cluster
+   (`module.gke.google_container_cluster.primary`), the default node pool
+   (`…pools["default-node-pool"]`) and the node service account
+   (`…cluster_service_account[0]`)
+2. assert the plan reached Container `GetServerConfig` for
+   `data.google_container_engine_versions.{region,zone}` — the read the module
+   cannot avoid — so a routing regression is visible as a failed read, not only
+   as a generic plan failure
+3. print the plan's own `Warning:`/`Error:` diagnostics as the recorded gap list
+
+No apply or destroy runs: GKE's control plane is metadata-only in the emulator,
+and the module's default surface reaches firewall/service-account resources
+whose apply behavior is not what this family measures. `zones` is supplied so
+the module does not read `data.google_compute_zones`; the provider's
+`container_custom_endpoint` carries the `container.` host (the provider keeps
+only scheme+host), and the compute/IAM/Resource Manager endpoints cover the
+plan-time data sources and rendered IAM resources.
+
+**datastore** — the CFT `terraform-google-cloud-datastore` module is measured
+with the **plan-only tier** (it sets `PLAN_ONLY=1` itself), because it has no
+provider resource at all: per its own README it "supports index creation by
+shelling out to gcloud". `plan` must render the caller's `index.yaml`
+(`module.datastore.local_file.cloud-datastore-index-file`) and the gcloud
+`null_resource`, and the plan must carry the requested index kind and
+properties. No apply runs: it would execute `gcloud datastore indexes` against a
+real endpoint, and the Datastore Admin `projects.indexes.*` surface is not
+served by the emulator (recorded as TF3-6-1). The client-side `local` and
+`null` providers are pinned by the case because the module has no
+`versions.tf`.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.

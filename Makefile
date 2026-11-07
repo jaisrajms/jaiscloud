@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam \
+        test-gcp-terraform test-gcp-terraform-all test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam test-gcp-terraform-sql-db test-gcp-terraform-gke test-gcp-terraform-datastore test-gcp-terraform-plan-only \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
@@ -1819,6 +1819,110 @@ test-gcp-terraform-iam: ## Opt-in terraform-google-iam module gate (skips withou
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-iam.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_MODULE_DIR="$(TF_IAM_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh iam http://localhost:8080 test-project
+
+# The plan-only tier (TF3-6). Cloud SQL's module applies (so its default target
+# runs the full lifecycle), but the same case can be measured without applying
+# when a change is being triaged. GKE and Datastore are plan-only by
+# construction: GKE's control plane is metadata-only, and the Datastore module
+# shells out to `gcloud` instead of using a provider resource. A plan-only run
+# is init -> validate -> plan: no apply, no destroy, no capture.
+TF_SQLDB_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-sql-db
+test-gcp-terraform-sql-db: ## Opt-in terraform-google-sql-db (postgresql) module gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_SQLDB_MODULE_DIR)/modules/postgresql" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_SQLDB_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-sql-db \"$(TF_SQLDB_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_SQLDB_MODULE_DIR)\" checkout 75b57dc6838e"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-sql-db.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-sql-db.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_SQLDB_MODULE_DIR)" TF_BIN=terraform PLAN_ONLY="$(PLAN_ONLY)" tests/integration/gcp/terraform/run-module.sh sql-db http://localhost:8080 test-project
+
+TF_GKE_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-kubernetes-engine
+test-gcp-terraform-gke: ## Opt-in terraform-google-kubernetes-engine plan-only gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_GKE_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_GKE_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-kubernetes-engine \"$(TF_GKE_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_GKE_MODULE_DIR)\" checkout a19597ac18ad"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-gke.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-gke.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_GKE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh gke http://localhost:8080 test-project
+
+TF_DATASTORE_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-cloud-datastore
+test-gcp-terraform-datastore: ## Opt-in terraform-google-cloud-datastore plan-only gate (skips without terraform/module)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  if [ ! -d "$(TF_DATASTORE_MODULE_DIR)" ]; then \
+	    echo "SKIP: module checkout not found at $(TF_DATASTORE_MODULE_DIR)"; \
+	    echo "      git clone https://github.com/terraform-google-modules/terraform-google-cloud-datastore \"$(TF_DATASTORE_MODULE_DIR)\""; \
+	    echo "      git -C \"$(TF_DATASTORE_MODULE_DIR)\" checkout 1616a282bbf4"; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-datastore.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-datastore.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$(TF_DATASTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh datastore http://localhost:8080 test-project
+
+# Generic plan-only entry point: measure any pinned module case without applying.
+# CASE names a module-cases/*.sh file; its MODULE_REPO decides the default
+# checkout, and TF_MODULE_DIR overrides it. GKE and Datastore are already
+# plan-only; sql-db is the case the tier was added for (its default target
+# applies). A missing checkout/tool SKIPs; in CI a SKIP is a failure.
+CASE ?=
+test-gcp-terraform-plan-only: ## Plan-only tier: make test-gcp-terraform-plan-only CASE=<case> (no apply/destroy)
+	@set -e; \
+	  case_name="$(CASE)"; \
+	  [ -n "$$case_name" ] || { echo "usage: make test-gcp-terraform-plan-only CASE=<module case>"; echo "cases: $$(ls tests/integration/gcp/terraform/module-cases/*.sh | xargs -n1 basename | sed 's/\.sh$$//' | paste -sd' ' -)"; exit 2; }; \
+	  case_file="tests/integration/gcp/terraform/module-cases/$$case_name.sh"; \
+	  [ -f "$$case_file" ] || { echo "ERROR: unknown case '$$case_name'"; exit 2; }; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  repo="$$(sed -n 's/^MODULE_REPO="\([^"]*\)".*/\1/p' "$$case_file" | head -1)"; \
+	  dir="$${TF_MODULE_DIR:-$$HOME/.cache/terraform-modules/$$repo}"; \
+	  if [ ! -d "$$dir" ]; then \
+	    echo "SKIP: module checkout not found at $$dir"; \
+	    echo "      git clone https://github.com/terraform-google-modules/$$repo \"$$dir\""; \
+	    exit 0; \
+	  fi; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-plan-only.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-plan-only.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_MODULE_DIR="$$dir" TF_BIN=terraform PLAN_ONLY=1 tests/integration/gcp/terraform/run-module.sh "$$case_name" http://localhost:8080 test-project
 
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \

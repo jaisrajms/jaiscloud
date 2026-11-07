@@ -1337,3 +1337,210 @@ google_pubsub_topic_iam_member,,,member,policy.bindings.members,no-catalog,
 google_pubsub_topic_iam_member,,,project,,client-side,the project is in the request path not the body
 google_pubsub_topic_iam_member,,,role,policy.bindings.role,no-catalog,
 google_pubsub_topic_iam_member,,,topic,,client-side,the topic is in the request path not the body
+google_sql_database_instance,,,available_maintenance_versions,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,backupdr_backup,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.allocated_ip_range,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.database_names,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.point_in_time,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.preferred_zone,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.source_instance_deletion_time,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.source_instance_name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,clone.source_project,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,connection_name,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,database_version,databaseVersion,no-catalog,
+google_sql_database_instance,,,deletion_policy,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,deletion_protection,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,dns_name,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,dns_names,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,encryption_key_name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,enforce_new_sql_network_architecture,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,final_backup_description,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,first_ip_address,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,include_replicas_for_major_version_upgrade,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,instance_type,instanceType,no-catalog,
+google_sql_database_instance,,,ip_address,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,maintenance_version,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,master_instance_name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,name,name,no-catalog,
+google_sql_database_instance,,,node_count,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,point_in_time_restore_context.allocated_ip_range,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,point_in_time_restore_context.datasource,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,point_in_time_restore_context.point_in_time,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,point_in_time_restore_context.preferred_zone,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,point_in_time_restore_context.region,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,point_in_time_restore_context.target_instance,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,private_ip_address,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,project,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,psc_service_attachment_link,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,public_ip_address,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,region,region,no-catalog,
+google_sql_database_instance,,,replica_configuration.ca_certificate,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.cascadable_replica,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.client_certificate,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.client_key,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.connect_retry_interval,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.dump_file_path,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.failover_target,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.master_heartbeat_period,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.password,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.ssl_cipher,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.username,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_configuration.verify_server_certificate,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replica_names,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replication_cluster.dr_replica,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,replication_cluster.failover_dr_replica_name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,replication_cluster.psa_write_endpoint,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,restore_backup_context.backup_run_id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,restore_backup_context.instance_id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,restore_backup_context.project,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,root_password,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,root_password_wo,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,root_password_wo_version,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,self_link,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,server_ca_cert,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,service_account_email_address,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.activation_policy,settings.activationPolicy,no-catalog,
+google_sql_database_instance,,,settings.active_directory_config.admin_credential_secret_name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.active_directory_config.dns_servers,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.active_directory_config.domain,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.active_directory_config.mode,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.active_directory_config.organizational_unit,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.advanced_machine_features.threads_per_core,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.auto_upgrade_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.availability_type,settings.availabilityType,no-catalog,
+google_sql_database_instance,,,settings.backup_configuration.backup_retention_settings.retained_backups,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.backup_configuration.backup_retention_settings.retention_unit,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.backup_configuration.backup_tier,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.backup_configuration.binary_log_enabled,settings.backupConfiguration.binaryLogEnabled,no-catalog,
+google_sql_database_instance,,,settings.backup_configuration.enabled,settings.backupConfiguration.enabled,no-catalog,
+google_sql_database_instance,,,settings.backup_configuration.location,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.backup_configuration.point_in_time_recovery_enabled,settings.backupConfiguration.pointInTimeRecoveryEnabled,no-catalog,
+google_sql_database_instance,,,settings.backup_configuration.start_time,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.backup_configuration.transaction_log_retention_days,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.collation,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.connection_pool_config.connection_pooling_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.connection_pool_config.flags.name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.connection_pool_config.flags.value,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.connector_enforcement,settings.connectorEnforcement,no-catalog,
+google_sql_database_instance,,,settings.data_api_access,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.data_cache_config.data_cache_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.data_disk_provisioned_iops,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.data_disk_provisioned_throughput,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.database_flags.name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.database_flags.value,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.deletion_protection_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.deny_maintenance_period.end_date,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.deny_maintenance_period.start_date,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.deny_maintenance_period.time,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.disk_autoresize,settings.storageAutoResize,no-catalog,
+google_sql_database_instance,,,settings.disk_autoresize_limit,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.disk_size,settings.dataDiskSizeGb,no-catalog,
+google_sql_database_instance,,,settings.disk_type,settings.dataDiskType,no-catalog,
+google_sql_database_instance,,,settings.edition,settings.edition,no-catalog,
+google_sql_database_instance,,,settings.effective_availability_type,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.enable_dataplex_integration,settings.enableDataplexIntegration,no-catalog,
+google_sql_database_instance,,,settings.enable_google_ml_integration,settings.enableGoogleMlIntegration,no-catalog,
+google_sql_database_instance,,,settings.entraid_config.application_id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.entraid_config.tenant_id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.final_backup_config.enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.final_backup_config.retention_days,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.insights_config.enhanced_query_insights_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.insights_config.query_insights_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.insights_config.query_plans_per_minute,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.insights_config.query_string_length,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.insights_config.record_application_tags,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.insights_config.record_client_address,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.allocated_ip_range,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.authorized_networks.expiration_time,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.authorized_networks.name,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.authorized_networks.value,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.custom_subject_alternative_names,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.enable_private_path_for_google_cloud_services,settings.ipConfiguration.enablePrivatePathForGoogleCloudServices,no-catalog,
+google_sql_database_instance,,,settings.ip_configuration.ipv4_enabled,settings.ipConfiguration.ipv4Enabled,no-catalog,
+google_sql_database_instance,,,settings.ip_configuration.private_network,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.allowed_consumer_projects,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.network_attachment_uri,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connection_policy_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.consumer_network,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.consumer_network_status,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.consumer_service_project_id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.instance_auto_dns_status,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.ip_address,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.service_connection_policy,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.service_connection_policy_creation_result,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.status,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_connections.write_endpoint_auto_dns_status,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_auto_dns_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.psc_config.psc_write_endpoint_dns_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.server_ca_mode,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.server_ca_pool,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.server_certificate_rotation_mode,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.ip_configuration.ssl_mode,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.location_preference.follow_gae_application,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.location_preference.secondary_zone,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.location_preference.zone,settings.locationPreference.zone,no-catalog,
+google_sql_database_instance,,,settings.maintenance_window.day,settings.maintenanceWindow.day,no-catalog,
+google_sql_database_instance,,,settings.maintenance_window.hour,settings.maintenanceWindow.hour,no-catalog,
+google_sql_database_instance,,,settings.maintenance_window.update_track,settings.maintenanceWindow.updateTrack,no-catalog,
+google_sql_database_instance,,,settings.password_validation_policy.complexity,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.password_validation_policy.disallow_username_substring,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.password_validation_policy.enable_password_policy,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.password_validation_policy.min_length,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.password_validation_policy.password_change_interval,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.password_validation_policy.reuse_interval,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.pricing_plan,settings.pricingPlan,no-catalog,
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.disable_scale_in,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.max_node_count,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.min_node_count,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.scale_in_cooldown_seconds,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.scale_out_cooldown_seconds,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.target_metrics.metric,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.read_pool_auto_scale_config.target_metrics.target_value,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.replication_lag_max_seconds,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.retain_backups_on_delete,settings.retainBackupsOnDelete,no-catalog,
+google_sql_database_instance,,,settings.sql_server_audit_config.bucket,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.sql_server_audit_config.retention_interval,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.sql_server_audit_config.upload_interval,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.tier,settings.tier,no-catalog,
+google_sql_database_instance,,,settings.time_zone,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,settings.user_labels,settings.userLabels,no-catalog,
+google_sql_database_instance,,,settings.version,,output-only,computed-only attribute; never part of a request body
+google_sql_database_instance,,,switch_transaction_logs_to_cloud_storage_enabled,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,timeouts.create,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,timeouts.delete,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database_instance,,,timeouts.update,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,charset,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,collation,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,deletion_policy,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,instance,instance,no-catalog,
+google_sql_database,,,name,name,no-catalog,
+google_sql_database,,,project,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,self_link,,output-only,computed-only attribute; never part of a request body
+google_sql_database,,,timeouts.create,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,timeouts.delete,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_database,,,timeouts.update,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,database_roles,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,deletion_policy,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,host,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,iam_email,,output-only,computed-only attribute; never part of a request body
+google_sql_user,,,id,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,instance,instance,no-catalog,
+google_sql_user,,,name,name,no-catalog,
+google_sql_user,,,password,password,no-catalog,
+google_sql_user,,,password_policy.allowed_failed_attempts,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,password_policy.enable_failed_attempts_check,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,password_policy.enable_password_verification,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,password_policy.password_expiration_duration,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,password_policy.status,,output-only,computed-only attribute; never part of a request body
+google_sql_user,,,password_wo,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,password_wo_version,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,project,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,sql_server_user_details,,output-only,computed-only attribute; never part of a request body
+google_sql_user,,,timeouts.create,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,timeouts.delete,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,timeouts.update,,not-exercised,the pinned module cases do not configure this attribute
+google_sql_user,,,type,,not-exercised,the pinned module cases do not configure this attribute

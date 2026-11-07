@@ -41,6 +41,25 @@
 # exist the script prints SKIP and exits 0, so it is safe to invoke
 # unconditionally. It also SKIPs when the Terraform binary is absent.
 #
+# Plan-only tier (wave-plan TF3-6)
+#
+# Some modules cannot be applied against a metadata-only control plane (GKE) or
+# have no provider resource at all (the Datastore module shells out to gcloud),
+# so forcing them through apply would either fail the whole run or fake a green.
+# A case opts into the tier by setting PLAN_ONLY=1 (at source time, or through
+# the environment for a case that can also be applied, e.g. sql-db) and calling
+# plan_only_phase instead of the apply phases:
+#
+#   init -> validate -> plan (saved to $WORK/plan.out) -> plan_includes <addr>
+#
+# No apply and no destroy run; the FC6 capture is skipped because a plan sends
+# no write request bodies. Acceptance is a completed plan (exit 0) that carries
+# the resource addresses the case asserts. A provider panic (crash) or an
+# unrouted request (the endpoint map does not reach the emulator) is a failure.
+# A plan that stops on an API diagnostic is recorded, not silently passed: a
+# case that expects one sets PLAN_ONLY_ALLOW_DIAGNOSTICS=1 and its header says
+# which data plane is missing.
+#
 # Usage:
 #   tests/integration/gcp/terraform/run-module.sh <case> [ENDPOINT] [PROJECT]
 #
@@ -54,10 +73,14 @@
 #   TF_MODULE_DIR  the module checkout for the named case (default:
 #                  $HOME/.cache/terraform-modules/<MODULE_REPO>)
 #   TF_BIN         terraform binary to use (default: terraform; TF_BIN=tofu works)
+#   PLAN_ONLY=1    run the case in plan-only mode even if it can be applied
+#   PLAN_ONLY_RC   set by plan_only_phase: 0 when the plan completed (or its
+#                  diagnostic was accepted), non-zero on a classified failure
 #
 # Prefer the Makefile target, which starts/stops the emulator for you:
 #   make test-gcp-terraform-pubsub
 #   make test-gcp-terraform-storage
+#   make test-gcp-terraform-plan-only CASE=gke
 
 set -euo pipefail
 
@@ -103,6 +126,9 @@ MODULE_REPO=""
 MODULE_COMMIT=""
 MODULE_GIT=""
 MODULE_SUBDIR=""
+# PLAN_ONLY may come from the environment (a case that can also be applied) or
+# be set by the case at source time (a case that can only be planned).
+PLAN_ONLY="${PLAN_ONLY:-0}"
 case_main() { :; }
 # shellcheck source=/dev/null
 source "$CASE_FILE"
@@ -177,7 +203,10 @@ destroy_work() {
   tf destroy -input=false -auto-approve -no-color >/dev/null 2>&1 || true
 }
 cleanup() {
-  destroy_work
+  # The plan-only tier never applies, so there is nothing to destroy. Doing it
+  # anyway would be a no-op on an empty state but would hide a case that
+  # mistakenly applied in plan-only mode.
+  [[ "$PLAN_ONLY" == "1" ]] || destroy_work
   # JC_TF_KEEP=1 keeps the work dir (debug logs, captured request bodies) for
   # local investigation; the default removes it.
   if [[ "${JC_TF_KEEP:-0}" != "1" ]]; then
@@ -280,6 +309,82 @@ plan_no_changes() {
   esac
 }
 
+# plan_only_phase is the plan-only tier (wave-plan TF3-6): validate, then plan
+# into $WORK/plan.out, with no apply and no destroy. It reports the planned
+# change count and leaves $WORK/plan-show.log for plan_includes.
+#
+# Acceptance is a completed plan, not a clean one: a module may legitimately
+# plan against a metadata-only control plane. A provider crash or an unrouted
+# request is a hard failure; any other non-zero exit is a diagnostic, and the
+# case must opt in (PLAN_ONLY_ALLOW_DIAGNOSTICS=1) to record it rather than
+# fail. PLAN_ONLY_RC carries the outcome for a case that wants to branch.
+plan_only_phase() {
+  local label="${1:-plan (plan-only)}" rc planned
+  PLAN_ONLY_RC=0
+  if ! tf validate -no-color >"$WORK/validate.log" 2>&1; then
+    cat "$WORK/validate.log"
+    fail "validate (plan-only; see the log above)"
+    PLAN_ONLY_RC=1
+    return 0
+  fi
+  pass "validate (plan-only)"
+
+  set +e
+  tf plan -input=false -no-color -out="$WORK/plan.out" >"$WORK/plan.log" 2>&1
+  rc=$?
+  set -e
+  PLAN_ONLY_RC=$rc
+  if [[ "$rc" -eq 0 ]]; then
+    tf show -no-color "$WORK/plan.out" >"$WORK/plan-show.log" 2>/dev/null || cp "$WORK/plan.log" "$WORK/plan-show.log"
+    planned="$(grep -c '^  # ' "$WORK/plan-show.log" 2>/dev/null || true)"
+    pass "$label"
+    echo "  plan-only: ${planned:-0} resource change(s) planned (no apply, no destroy)"
+    return 0
+  fi
+
+  # A provider crash is never acceptable: the response shape is wrong.
+  if grep -qE 'panic:|SIGSEGV|Plugin did not respond|goroutine [0-9]+ \[running\]' "$WORK/plan.log"; then
+    cat "$WORK/plan.log"
+    fail "$label (provider panic; see the log above)"
+    PLAN_ONLY_RC=1
+    return 0
+  fi
+  # An unrouted request means the case's endpoint map does not reach the
+  # emulator at all: the gate would measure nothing.
+  if grep -qE 'UnknownService|cannot detect target GCP service|connection refused|dial tcp .*connect: ' "$WORK/plan.log"; then
+    cat "$WORK/plan.log"
+    fail "$label (unrouted request — the endpoint map does not reach the emulator; see the log above)"
+    PLAN_ONLY_RC=1
+    return 0
+  fi
+  # An API diagnostic (an operation or data plane the emulator does not model)
+  # is recorded when the case expects it; otherwise it fails, so a broken case
+  # cannot pass as "diagnostic".
+  if [[ "${PLAN_ONLY_ALLOW_DIAGNOSTICS:-0}" == "1" ]] &&
+    grep -qE 'Error (400|404|409|412|501)|not found|not implemented|unsupported' "$WORK/plan.log"; then
+    cp "$WORK/plan.log" "$WORK/plan-show.log"
+    pass "$label (API diagnostic recorded, no apply)"
+    echo "  plan-only: plan did not complete; the diagnostic above is the measured gap"
+    return 0
+  fi
+  cat "$WORK/plan.log"
+  fail "$label (plan failed: exit $rc; see the log above)"
+  PLAN_ONLY_RC=1
+}
+
+# plan_includes asserts that the saved plan changes the given address. It is
+# the plan-only counterpart of the apply-phase REST asserts: it proves the
+# module actually renders the resource, not merely that the plan ran.
+plan_includes() {
+  local addr="$1" label="${2:-plan changes $1}"
+  if grep -qF "# $addr will be" "$WORK/plan-show.log" 2>/dev/null ||
+    grep -qF "# $addr will be" "$WORK/plan.log" 2>/dev/null; then
+    pass "$label"
+  else
+    fail "$label (address not in the plan; see $WORK/plan.log)"
+  fi
+}
+
 # check asserts that a bucket/API body carries each expected substring.
 check() {
   local name="$1" url="$2"
@@ -314,6 +419,10 @@ destroy_phase() {
 # the field catalog (FC6). JC_TF_CAPTURE=0 disables it for local debugging.
 capture_phase() {
   [[ "${JC_TF_CAPTURE:-1}" == "1" ]] || return 0
+  if [[ "$PLAN_ONLY" == "1" ]]; then
+    echo "== capture: skipped (the plan-only tier sends no write request bodies)"
+    return 0
+  fi
   if [[ ! -s "$WORK/schema.json" ]]; then
     fail "capture (no provider schema at $WORK/schema.json; terraform providers schema -json failed)"
     return 0
@@ -336,7 +445,7 @@ capture_phase() {
   # exercise the join; the others record the capture without requirement.
   local require=""
   case "$CASE" in
-    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery | secret-manager | workflows | scheduler | tasks | dataproc | service-accounts | iam) require="-require-resources" ;;
+    storage | pubsub | pubsub-topic | kms | firestore | clouddns | functions | memorystore | cloud-operations | cloudrun | bigquery | secret-manager | workflows | scheduler | tasks | dataproc | service-accounts | iam | sql-db) require="-require-resources" ;;
   esac
   local scope=()
   if [[ -n "${CAPTURE_RESOURCES:-}" ]]; then
@@ -355,9 +464,21 @@ capture_phase() {
   fi
 }
 
-echo "== $TF: consumer module $MODULE_DIR (case=$CASE endpoint=$ENDPOINT project=$PROJECT)"
+echo "== $TF: consumer module $MODULE_DIR (case=$CASE endpoint=$ENDPOINT project=$PROJECT plan_only=$PLAN_ONLY)"
 
 case_main
+
+# A plan-only run must not create state. A case that applied anyway would leak
+# resources because cleanup skips destroy in this mode, so fail loudly and tear
+# the state down rather than leaving the emulator dirty.
+if [[ "$PLAN_ONLY" == "1" ]]; then
+  leaked="$(tf state list 2>/dev/null || true)"
+  if [[ -n "$leaked" ]]; then
+    fail "plan-only run created $(printf '%s\n' "$leaked" | wc -l | tr -d ' ') state object(s); destroying"
+    destroy_work
+  fi
+fi
+
 capture_phase
 
 summary

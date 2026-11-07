@@ -209,6 +209,21 @@ var pathRules = []struct {
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/regions/[^/]+/clusters/?$`), res: "google_dataproc_cluster"},
 	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/regions/[^/]+/clusters/[^/:?]+/?$`), res: "google_dataproc_cluster"},
 	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/regions/[^/]+/jobs:submit$`), res: "google_dataproc_job"},
+	// Cloud SQL (google_sql_database_instance, google_sql_database,
+	// google_sql_user) is sqladmin v1beta4. The instance create is the
+	// project-level collection POST and its update is a PUT/PATCH on the
+	// instance; databases and users are collections under the instance. The
+	// read-only custom methods (:restoreBackup, :failover, …) are POSTs under
+	// the instance name and are excluded by anchoring on the resource shape.
+	{method: "POST", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/?$`), res: "google_sql_database_instance"},
+	{method: "PUT", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/:?]+/?$`), res: "google_sql_database_instance"},
+	{method: "PATCH", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/:?]+/?$`), res: "google_sql_database_instance"},
+	{method: "POST", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/]+/databases/?$`), res: "google_sql_database"},
+	{method: "PUT", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/]+/databases/[^/:?]+/?$`), res: "google_sql_database"},
+	{method: "PATCH", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/]+/databases/[^/:?]+/?$`), res: "google_sql_database"},
+	{method: "POST", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/]+/users/?$`), res: "google_sql_user"},
+	{method: "PUT", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/]+/users/?$`), res: "google_sql_user"},
+	{method: "PATCH", re: regexp.MustCompile(`^/sql/v1beta4/projects/[^/]+/instances/[^/]+/users/[^/:?]+/?$`), res: "google_sql_user"},
 	// IAM Admin (google_service_account): create is the project collection POST,
 	// update is a PUT/PATCH on the account. The keys surface is a separate
 	// resource and is not in scope.
