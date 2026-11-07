@@ -201,6 +201,30 @@ var pathRules = []struct {
 	{method: "POST", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/?$`), res: "google_bigquery_table"},
 	{method: "PUT", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/:?]+/?$`), res: "google_bigquery_table"},
 	{method: "PATCH", re: regexp.MustCompile(`^/bigquery/v2/projects/[^/]+/datasets/[^/]+/tables/[^/:?]+/?$`), res: "google_bigquery_table"},
+	// Dataproc (google_dataproc_cluster and google_dataproc_job): the cluster
+	// create is the regional collection POST, its in-place update is a PATCH,
+	// and a job is submitted with a regional collection POST. The custom
+	// methods (:start/:stop/...) and the job's GET/DELETE carry no body and do
+	// not join.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/regions/[^/]+/clusters/?$`), res: "google_dataproc_cluster"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/regions/[^/]+/clusters/[^/:?]+/?$`), res: "google_dataproc_cluster"},
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/regions/[^/]+/jobs:submit$`), res: "google_dataproc_job"},
+	// IAM Admin (google_service_account): create is the project collection POST,
+	// update is a PUT/PATCH on the account. The keys surface is a separate
+	// resource and is not in scope.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/serviceAccounts/?$`), res: "google_service_account"},
+	{method: "PUT", re: regexp.MustCompile(`^/v1/projects/[^/]+/serviceAccounts/[^/:?]+/?$`), res: "google_service_account"},
+	{method: "PATCH", re: regexp.MustCompile(`^/v1/projects/[^/]+/serviceAccounts/[^/:?]+/?$`), res: "google_service_account"},
+	// Project IAM (google_project_iam_member) writes through Resource Manager
+	// v1 projects.setIamPolicy. The getIamPolicy read carries no body.
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+:setIamPolicy$`), res: "google_project_iam_member"},
+	// Storage bucket IAM (google_storage_bucket_iam_member) writes the bucket
+	// policy with a body-less-resource PUT /storage/v1/b/{bucket}/iam.
+	{method: "PUT", re: regexp.MustCompile(`^/storage/v1/b/[^/]+/iam/?$`), res: "google_storage_bucket_iam_member"},
+	// Pub/Sub topic IAM (google_pubsub_topic_iam_member) writes through the IAM
+	// v1 topics.setIamPolicy custom method (a POST; the topic create/update
+	// rules above are PUT/PATCH, so they do not shadow this).
+	{method: "POST", re: regexp.MustCompile(`^/v1/projects/[^/]+/topics/[^/:?]+:setIamPolicy$`), res: "google_pubsub_topic_iam_member"},
 }
 
 // ResourceForPath returns the provider resource type a captured request writes,

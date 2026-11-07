@@ -130,8 +130,11 @@ module, and requires the module's lifecycle to converge.
 | `workflows` | [`terraform-google-cloud-workflows`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-workflows) (`modules/simple_workflow`) | `4c431381b5d8` | the workflow applies with a description, labels, source and a root-module-owned service account + `roles/workflows.invoker` project grant; GET reads back name, `state: ACTIVE`, description, labels, source, service account and revision `000001`; a second `plan` is **No changes**; a new source, description and label update in place, mint revision `000002` and re-plan **No changes**; the workflow is deleted through the API (the submodule exposes no `deletion_protection`) and the service account and grant are destroyed |
 | `scheduler` | [`terraform-google-cloud-scheduler`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-scheduler) | `ece5c3e87412` | a paused job with a far-future schedule and a Pub/Sub target applies; GET reads back the schedule, `timeZone`, `state: PAUSED`, the retry config and `pubsubTarget.topicName`/`data`/`attributes`; a second `plan` is **No changes**; a schedule/description/retry/Pub/Sub-payload change updates in place and re-plans **No changes**; unpausing calls `:resume` (state `ENABLED`, `scheduleTime` present) and re-pausing calls `:pause`, each re-planning clean; destroy leaves the job and its topic `404` |
 | `tasks` | [`terraform-google-cloud-tasks`](https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks) | `ba7dbc000bfb` | a queue with rate limits, retry config, Stackdriver logging config and one `iam_member` applies; GET reads back `state: RUNNING`, every limit and the IAM binding, and the task list is empty (no dispatch); a second `plan` is **No changes**; a rate limit, a retry limit and the IAM member update in place and re-plan **No changes**; destroy leaves the queue `404` |
+| `dataproc` | [`terraform-google-dataproc`](https://github.com/GoogleCloudPlatform/terraform-google-dataproc) | `56c7c7ed630f` | the module renders a GCE-shaped cluster (master/worker counts and machine types, software image version, labels) and a root-module-owned pyspark job is submitted into it; GET reads back the cluster name/labels/config and the job placement/pyspark driver/`DONE` state; a second `plan` is **No changes**; labels and the worker count update in place and re-plan **No changes**; destroy leaves the cluster and job `404`. The module's internal default-service-account data source is pruned with `-target` (Compute `projects.get` is TF2-1) |
+| `service-accounts` | [`terraform-google-service-accounts`](https://github.com/terraform-google-modules/terraform-google-service-accounts) | `570caafff32d` | three service accounts and a project binding per (account, role) apply; the accounts read back their email/display name, and the project policy contains every member under `roles/viewer` and `roles/storage.objectViewer`; a second `plan` is **No changes**; the role set changes and the new role gains every member while `roles/viewer` keeps them and the replaced role is gone; every phase runs with `-parallelism=10`; destroy leaves the accounts `404` |
+| `iam` | [`terraform-google-iam`](https://github.com/terraform-google-modules/terraform-google-iam) (`modules/projects_iam`, `modules/storage_buckets_iam`, `modules/pubsub_topics_iam`) | `9b9eacfa2b4f` | project, bucket and Pub/Sub topic IAM are driven in additive mode with multiple members per role; the three policies read back every member; a second `plan` is **No changes**; a role-set change adds the new members without dropping the survivors (the etag OCC path), and the replaced roles are gone; every phase runs with `-parallelism=10`; destroy leaves the bucket, topic and accounts `404` |
 
-The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery and secret-manager cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `workflows`, `scheduler` and `tasks` cases pin `= 6.49.3` instead: their pinned modules declare `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy them (the scheduler module also requires `hashicorp/null`, pinned to `3.3.2`). The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
+The storage, memorystore, functions, clouddns, cloud-operations, kms, firestore, cloudrun, bigquery, secret-manager, dataproc, service-accounts and iam cases pin provider `hashicorp/google = 7.46.2` (the clouddns module also declares `hashicorp/google-beta`, pinned to the same version; the cloudrun module creates the service through `google-beta` and creates its service account through the IAM API, so it pins and points both providers at the emulator; the secret-manager module requires google-beta as well). The `workflows`, `scheduler` and `tasks` cases pin `= 6.49.3` instead: their pinned modules declare `hashicorp/google < 7.0`, so 7.46.2 cannot satisfy them (the scheduler module also requires `hashicorp/null`, pinned to `3.3.2`). The FC6 capture is scoped to that case's own resource (`CAPTURE_RESOURCES`) and tolerates mapping rows the 6.x schema does not declare (`CAPTURE_ALLOW_MISSING`) — the shared mapping carries the union of both provider versions, and re-checking unrelated 7.x-only attributes under 6.x would fail for reasons the case cannot measure. The cloud-operations case exercises `alertStrategy`; the `severity` enum the same change added is covered by the unit/transport tests, since the module exposes no variable for it. The kms case passes `key_rotation_period = null` because CryptoKey rotation is ENCRYPT_DECRYPT-only (the module's `7776000s` default would be rejected for a MAC key by real GCP too); the rotation mask path is covered by the unit/transport tests. The firestore case creates the CMEK key with `google_kms_key_ring` + `google_kms_crypto_key` and passes its id as the module's `kms_key_name`, mirroring a real config; it sets `delete_protection_state = "DELETE_PROTECTION_DISABLED"` because the module's `DELETE_PROTECTION_ENABLED` default would block destroy (real GCP refuses too). Its `(default)` phase runs first and in its own working directory/state because a read of the default materialises it, and a materialised default is a live record — a later create would be `ALREADY_EXISTS`. Its recreate phase destroys a plain database and re-applies the same id in its own state; the emulator allows immediate reuse (TGM13), whereas real GCP refuses to reuse a deleted database id for about five minutes.
 
 Per-case targets are **opt-in** for two reasons: each needs a one-time module
 clone (this repo never clones from the network in a gate), and they resolve the
@@ -210,6 +213,21 @@ git clone https://github.com/GoogleCloudPlatform/terraform-google-cloud-tasks \
   "$HOME/.cache/terraform-modules/terraform-google-cloud-tasks"
 git -C "$HOME/.cache/terraform-modules/terraform-google-cloud-tasks" checkout ba7dbc000bfb
 make test-gcp-terraform-tasks
+
+git clone https://github.com/GoogleCloudPlatform/terraform-google-dataproc \
+  "$HOME/.cache/terraform-modules/terraform-google-dataproc"
+git -C "$HOME/.cache/terraform-modules/terraform-google-dataproc" checkout 56c7c7ed630f
+make test-gcp-terraform-dataproc
+
+git clone https://github.com/terraform-google-modules/terraform-google-service-accounts \
+  "$HOME/.cache/terraform-modules/terraform-google-service-accounts"
+git -C "$HOME/.cache/terraform-modules/terraform-google-service-accounts" checkout 570caafff32d
+make test-gcp-terraform-service-accounts
+
+git clone https://github.com/terraform-google-modules/terraform-google-iam \
+  "$HOME/.cache/terraform-modules/terraform-google-iam"
+git -C "$HOME/.cache/terraform-modules/terraform-google-iam" checkout 9b9eacfa2b4f
+make test-gcp-terraform-iam
 ```
 
 `TF_MODULE_DIR` overrides the checkout location for whichever case you run
@@ -220,7 +238,8 @@ point it at `TF_MODULE_DIR` / `TF_STORAGE_MODULE_DIR` /
 `TF_KMS_MODULE_DIR` / `TF_FIRESTORE_MODULE_DIR` / `TF_CLOUD_RUN_MODULE_DIR` /
 `TF_BIGQUERY_MODULE_DIR` / `TF_SECRET_MANAGER_MODULE_DIR` /
 `TF_WORKFLOWS_MODULE_DIR` / `TF_SCHEDULER_MODULE_DIR` /
-`TF_TASKS_MODULE_DIR` respectively.
+`TF_TASKS_MODULE_DIR` / `TF_DATAPROC_MODULE_DIR` /
+`TF_SERVICE_ACCOUNTS_MODULE_DIR` / `TF_IAM_MODULE_DIR` respectively.
 
 Against an already-running emulator, with a checkout you control:
 
@@ -554,6 +573,33 @@ The provider always issues `:resume` after a create that leaves `paused` unset, 
 4. `destroy`; the queue is `404`
 
 `rate_limits.max_burst_size` is computed-only in the provider's 6.x schema (7.x made it Optional+Computed), so the module input stays null; the emulator reports `maxBurstSize` 0 when the create body omits it while real Cloud Tasks defaults it to 100 — a recorded reader gap (TF3-4-3, `fix/gcp-tasks-queue-rate-limit-defaults`). `app_engine_routing_override` and the queue-level `http_target` are left null: they are defaults for App Engine/HTTP tasks, and the case creates no task.
+
+**dataproc** — the CFT `terraform-google-dataproc` root module is applied with a GCE-shaped `cluster_config` (one master, two workers, `n1-standard-4`, image `2.2-debian12`, labels), and the generated root module submits a pyspark job into the module's cluster. The gate:
+
+1. `apply`; assert through REST that the cluster GET returns `clusterName`, the labels, `config.masterConfig`/`workerConfig.numInstances` and `config.softwareConfig.imageVersion`, and that the job GET (the root module's `job_id` output) returns its `placement.clusterName`, labels, `pysparkJob.mainPythonFileUri`/args and `status.state: DONE`; the apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes**
+3. change the cluster labels and grow the workers 2 → 3; `apply`; assert the read-back and `plan` → **no changes**
+4. `destroy`; the cluster and job are `404`
+
+The module's `main.tf` unconditionally reads `data.google_compute_default_service_account` and grants that account `roles/dataproc.worker` through `google_project_iam_member`. The data source calls Compute `projects.get` (`GET /compute/v1/projects/{project}`), which the emulator does not serve yet — TF2-1 (`fix/gcp-compute-projects-get`) — so both resources are pruned with `-target` on plan, apply and destroy. The case still measures the module's cluster rendering and the job path; the pruned IAM prerequisite is recorded rather than worked around. The module's `virtual_cluster_config` is left null: the fixture already covers the GKE-shaped cluster and its NodePool reconciliation.
+
+**service-accounts** — the CFT `terraform-google-service-accounts` root module creates three accounts with two project roles, then the case changes the role set. The module's `project_roles` format is `"project=>role"`; a bare role string would make the module parse the role as both the project and the role, so the case always passes `"${var.project}=>role"`. Every phase runs with `-parallelism=10`. The gate:
+
+1. `apply`; assert each account GET (email, display name, `disabled: false`) and that the project policy has every account under `roles/viewer` and `roles/storage.objectViewer`; no `400`/`501`
+2. `plan -detailed-exitcode` → **no changes**
+3. replace `roles/storage.objectViewer` with `roles/pubsub.viewer`; `apply`; assert the new role holds all three accounts, `roles/viewer` still does, and the replaced role is gone; `plan` → **no changes**
+4. `destroy`; the accounts are `404`
+
+`display_name` is set explicitly: the provider's attribute is Optional (not Computed) while the emulator defaults an omitted `serviceAccount.displayName` to the account id, so an omitted value permadiffs — TF2-14 (`fix/gcp-iam-serviceaccount-display-name`). The module's own default is non-empty, so a real consumer does not hit it. Billing/org IAM (`grant_billing_role`, `grant_xpn_roles`) and key generation are disabled: they are outside the project-scoped surface this case measures.
+
+**iam** — the `terraform-google-iam` repo is a collection of scope submodules, so the case pins `modules/projects_iam` and drives three of them on one project: project IAM, bucket IAM (one bucket) and Pub/Sub topic IAM (one topic), all in additive mode with multiple members per role. The submodules reference `../helper`; a plain local-path module source makes Terraform treat the submodule directory as the package root and rejects the relative helper path, so the case uses `git::file://<checkout>//modules/<name>?ref=<HEAD>` (offline; the checkout already exists) and presents the whole repo as the package, exactly as the registry does. Every phase runs with `-parallelism=10`. The gate:
+
+1. `apply`; assert each account and that the project, bucket and topic policies carry every configured member; no `400`/`501`
+2. `plan -detailed-exitcode` → **no changes**
+3. change the role sets: `roles/viewer` gains a third member, a new `roles/iam.securityReviewer` appears, bucket `roles/storage.objectViewer` and topic `roles/pubsub.publisher` gain the third member, and the replaced roles disappear; `apply`; assert every survivor and new member is present (no lost updates) and the replaced roles are gone; `plan` → **no changes**
+4. `destroy`; the bucket, topic and accounts are `404`
+
+Folder and organization IAM, the audit-config submodule and the module's `member_iam`/`service_accounts_iam` submodules are out of scope: the emulator is project-scoped (wire-contract §8) and the root module creates the accounts it binds.
 
 Each case prints one `PASS`/`FAIL` line per step and exits non-zero on any
 failure.
