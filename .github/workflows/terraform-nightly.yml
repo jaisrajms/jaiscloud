@@ -3,9 +3,10 @@ name: GCP Terraform nightly
 # TF0 — the scheduled aggregate of the Terraform/OpenTofu compatibility suite.
 #
 # Not a pull_request check: it downloads the hashicorp/google provider and runs
-# the fixture plus every pinned module case (twenty-one), then the lifecycle
-# depth gate (TF5: import/refresh/replace/drift/negative/parallel), twice
-# (Terraform and OpenTofu). The per-PR signal stays offline
+# the fixture plus every pinned module case (twenty-one), the lifecycle depth
+# gate (TF5: import/refresh/replace/drift/negative/parallel) and the composition
+# patterns (TF4: project bootstrap + CMEK everywhere), twice (Terraform and
+# OpenTofu). The per-PR signal stays offline
 # (`make gcp-ci-preflight`, the provider-capture self-test, the static coverage
 # gate); this job catches provider-registry drift and module/gate regressions on
 # a schedule.
@@ -102,6 +103,9 @@ jobs:
       - name: Run the lifecycle depth gate
         run: make test-gcp-terraform-lifecycle STRICT=1
 
+      - name: Run the composition patterns
+        run: make test-gcp-terraform-patterns STRICT=1
+
       - name: Upload the per-case logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -117,6 +121,10 @@ jobs:
             /tmp/jaiscloud-gcp-terraform-lifecycle/*.log
             /tmp/jaiscloud-gcp-terraform-lifecycle/*-import.tsv
             /tmp/jaiscloud-gcp-terraform-lifecycle.log
+            /tmp/jaiscloud-gcp-terraform-patterns/summary.md
+            /tmp/jaiscloud-gcp-terraform-patterns/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-patterns/*.log
+            /tmp/jaiscloud-gcp-terraform-patterns.log
           if-no-files-found: ignore
 
       - name: Open or update the failure issue
@@ -223,6 +231,9 @@ jobs:
       - name: Run the lifecycle depth gate
         run: make test-gcp-terraform-lifecycle TF_BIN=tofu STRICT=1
 
+      - name: Run the composition patterns
+        run: make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1
+
       - name: Upload the per-case logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -238,6 +249,10 @@ jobs:
             /tmp/jaiscloud-gcp-terraform-lifecycle/*.log
             /tmp/jaiscloud-gcp-terraform-lifecycle/*-import.tsv
             /tmp/jaiscloud-gcp-terraform-lifecycle.log
+            /tmp/jaiscloud-gcp-terraform-patterns/summary.md
+            /tmp/jaiscloud-gcp-terraform-patterns/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-patterns/*.log
+            /tmp/jaiscloud-gcp-terraform-patterns.log
           if-no-files-found: ignore
 
       - name: Open or update the failure issue

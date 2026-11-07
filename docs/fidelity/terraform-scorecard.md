@@ -400,6 +400,45 @@ Expansion after the representative set: `secretmanager`, `bigquery`,
 `cloudrun`, `dataproc`, `cloudsql`, `firestore`, `clouddns` — each has an import
 id and a ForceNew identity change; the table is in the suite README.
 
+## TF4-1 — Composition patterns: project bootstrap + CMEK (2026-11-07)
+
+One branch, one driver (`run-patterns.sh`), two patterns under `patterns/`.
+Each pattern is a root module (`main.tf` + `outputs.tf`) assembled by
+`patterns/lib.sh` with the shared `patterns/provider.tf` and the endpoints
+emitted from `terraform-endpoints.yaml`; the contract is
+`apply -> REST asserts -> plan No changes -> (rotate) -> destroy -> absence`.
+
+```bash
+make test-gcp-terraform-patterns STRICT=1                 # Terraform
+make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1     # OpenTofu
+```
+
+Runs (each against a fresh ephemeral emulator; `STRICT=1`, so a SKIP fails):
+
+| binary | result | patterns |
+|---|---|---|
+| Terraform 1.16.3 | PASS (2 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27 |
+| OpenTofu 1.12.6 | PASS (2 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27 |
+
+What each pattern proves:
+
+| pattern | proof |
+|---|---|
+| `00-bootstrap` | Terraform creates the project (unique per run), links the billing account, enables four Service Usage APIs, creates a service account + project IAM grant, a GCS bucket with a computed `self_link`, a Pub/Sub topic/subscription, a Secret Manager secret/version (payload readable) and a KMS key ring/key, all referencing the created project; the provider's post-create reads of the new project succeed; re-plan is clean; destroy disables the APIs, removes every resource, and leaves the project `DELETE_REQUESTED` |
+| `01-cmek` | the regional and global KMS keys are `ENCRYPT_DECRYPT`; the bucket echoes `encryption.defaultKmsKeyName`, the BigQuery dataset echoes `defaultEncryptionConfiguration.kmsKeyName` and the Secret Manager secret echoes `replication.automatic.customerManagedEncryption.kmsKeyName`; re-plan is clean; switching the bucket and dataset to the second regional key is in place (bucket `timeCreated` kept and metageneration 1 -> 2, dataset `creationTime` kept) and re-plans clean; destroy removes the data resources and leaves only the key rings |
+
+Recorded gap and boundaries:
+
+| ID | classification | evidence |
+|---|---|---|
+| TF4-1-1 | `fix` — `fix/gcp-serviceusage-unknown-project` | Service Usage answers `200` (`DISABLED`) for `projects/00000000000/services/serviceusage.googleapis.com`; real GCP answers `403` ("Project '00000000000' not found or permission denied"). Provider 7.46.2's `resourceGoogleProjectCheckPreRequisites` probes that dummy project when `auto_create_network = false` and calls `err.Error()` without a nil check, so the `200` panics the provider. The pattern keeps the provider default (`true`) and records the gap. |
+| TF4-1-2 | `out of scope` | The bootstrap project keeps `auto_create_network = true`; the default Compute network it implies, and the `compute.projects.get`/networks deletion path `false` would take, are outside this stack's measured surface (TF2-1, wave-plan §6). |
+| TF4-1-3 | `no fix` (provider schema) | `google_secret_manager_secret.replication` is ForceNew, so the CMEK pattern rotates the bucket/dataset key in place but creates the secret's key once. The emulator's replication PATCH path is covered by the service/REST tests. |
+
+The KMS objects that survive each destroy are the TF5-3/TF5-4 boundary (the
+provider never calls the documented delete methods and `keyRings.delete` is a
+`501`), not a separate gap.
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,
