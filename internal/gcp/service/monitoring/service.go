@@ -496,10 +496,10 @@ func cloneConditions(conds []json.RawMessage) []json.RawMessage {
 
 // alertPolicyMaskFields is the full update_mask field set of a Cloud Monitoring
 // AlertPolicy (Discovery schema google.monitoring.v3.AlertPolicy), normalized
-// to snake_case roots. validity, creationRecord and mutationRecord are
-// read-only fields the emulator does not store, so a mask naming one stays a
-// 501 UnsupportedOperation rather than a client error (a path that names no
-// field at all is still a 400).
+// to snake_case roots. validity and the creationRecord/mutationRecord audit
+// messages are server-owned, so a mask naming one stays a 501
+// UnsupportedOperation rather than a client error (a path that names no field at
+// all is still a 400).
 var alertPolicyMaskFields = maskFieldSet(
 	"displayName", "documentation", "conditions", "combiner", "enabled",
 	"notificationChannels", "userLabels", "alertStrategy", "severity",
