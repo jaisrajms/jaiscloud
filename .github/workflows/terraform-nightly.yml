@@ -32,7 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+      # The `runner` context is not available in a job-level `env:` (only in
+      # step-level env/with/if/run), so this must not use `${{ runner.temp }}`:
+      # it makes the whole workflow file invalid before any job can start.
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.tf-plugin-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -61,7 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/tf-plugin-cache
+            ${{ github.workspace }}/.tf-plugin-cache
             ~/.cache/terraform-modules
           key: tf-nightly-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb-56c7c7ed630f-570caafff32d-9b9eacfa2b4f-75b57dc6838e-1616a282bbf4-a19597ac18ad
           restore-keys: |
@@ -163,7 +166,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/tf-plugin-cache
+      # The `runner` context is not available in a job-level `env:` (only in
+      # step-level env/with/if/run), so this must not use `${{ runner.temp }}`:
+      # it makes the whole workflow file invalid before any job can start.
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.tf-plugin-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -192,7 +198,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ runner.temp }}/tf-plugin-cache
+            ${{ github.workspace }}/.tf-plugin-cache
             ~/.cache/terraform-modules
           key: tf-nightly-tofu-${{ runner.os }}-c7effc0be0f4-6cf1860-ef6e0eda7032-50d170b9ebfc-35cd6de8e647-5415d5ccca28-9f2e26ae3b73-8c3e37951bb4-4ce640a2a519-e11db0dcd597-77fca80ccd6a-4c431381b5d8-ece5c3e87412-ba7dbc000bfb-56c7c7ed630f-570caafff32d-9b9eacfa2b4f-75b57dc6838e-1616a282bbf4-a19597ac18ad
           restore-keys: |
