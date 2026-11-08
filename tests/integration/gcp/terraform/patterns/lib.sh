@@ -16,7 +16,9 @@
 #
 # A pattern may add a targeted-destroy phase between the re-plan and the full
 # destroy (see targeted_destroy below) when the stack's partial-teardown
-# behaviour is part of what it proves.
+# behaviour is part of what it proves. A multi-environment pattern may run the
+# whole contract once per workspace (see workspace_select/destroy_workspace
+# below) when isolation between states is part of what it proves.
 #
 # The acceptance is the clean re-plan and the post-destroy state, not the apply
 # exit code: a stack whose cross-resource references do not round-trip is a
@@ -190,8 +192,72 @@ sink_reset() {
   return 0
 }
 
+# ── Workspaces (patterns that prove multi-environment isolation) ────────────
+# A workspace is a separate state over one configuration. WORKSPACES records the
+# ones a pattern selected so cleanup destroys each of them: an environment left
+# behind is a state full of resources left behind.
+WORKSPACES=()
+DESTROYED_WORKSPACES=()
+
+# workspace_select NAME selects NAME, creating it when absent.
+workspace_select() {
+  local name="$1" w seen=0 list
+  # `workspace list` marks the selected one with "* " and indents the others.
+  # Capture it first: a failing list must not look like "workspace absent" and
+  # silently turn into a `workspace new` that then aborts on an existing name.
+  if ! list="$(tf workspace list -no-color 2>&1)"; then
+    echo "ERROR: terraform workspace list failed:" >&2
+    printf '%s\n' "$list" >&2
+    return 1
+  fi
+  if printf '%s\n' "$list" | sed -E 's/^(\* )? *//' | grep -qxF -- "$name"; then
+    tf workspace select -no-color "$name" >/dev/null
+  else
+    tf workspace new -no-color "$name" >/dev/null
+  fi
+  for w in "${WORKSPACES[@]:-}"; do
+    [[ -n "$w" && "$w" == "$name" ]] && seen=1
+  done
+  [[ "$seen" == "1" ]] || WORKSPACES+=("$name")
+}
+
+# destroy_workspace NAME destroys the stack in NAME, leaving it selected. Each
+# workspace has its own state, so this only tears down that environment.
+destroy_workspace() {
+  local name="$1" log
+  if ! workspace_select "$name"; then
+    fail "destroy ($name): could not select the workspace"
+    return 0
+  fi
+  log="$WORK/destroy-$name.log"
+  if tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >"$log" 2>&1; then
+    DESTROYED_WORKSPACES+=("$name")
+    pass "destroy ($name)"
+  else
+    cat "$log" 2>/dev/null || true
+    fail "destroy ($name) (see the log above)"
+  fi
+}
+
 DESTROYED=0
 destroy_work() {
+  local w d skip
+  if [[ "${#WORKSPACES[@]}" -gt 0 ]]; then
+    for w in "${WORKSPACES[@]}"; do
+      skip=0
+      for d in "${DESTROYED_WORKSPACES[@]:-}"; do
+        [[ -n "$d" && "$d" == "$w" ]] && skip=1
+      done
+      [[ "$skip" == "1" ]] && continue
+      workspace_select "$w" >/dev/null 2>&1 || true
+      if tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null 2>&1; then
+        DESTROYED_WORKSPACES+=("$w")
+      fi
+    done
+    tf workspace select default >/dev/null 2>&1 || true
+    DESTROYED=1
+    return 0
+  fi
   [[ "$DESTROYED" == "1" ]] && return 0
   DESTROYED=1
   tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null 2>&1 || true

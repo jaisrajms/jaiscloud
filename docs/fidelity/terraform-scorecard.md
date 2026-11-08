@@ -546,6 +546,53 @@ Recorded boundaries:
 | TF4-3-3 | `out of scope` | The Spark data plane and an ELT run into BigQuery stay out of a local emulator and out of this pattern: nothing is scheduled onto the reconciled pools, the output bucket stays empty, and there is no BigQuery load-job surface. `demo/dpgke-lifecycle` and its k3d gate own the real-driver leg (`spark/wordcount.py`), and the pattern README points there instead of duplicating it. |
 | TF4-3-4 | `no fix` (documented divergence) | Database- and table-level Metastore IAM is metadata-only: databases/tables live in the separate Hive Metastore Thrift plane, so `requireIAMTarget` does not check their existence. After the service is destroyed, `databases/default:getIamPolicy` still answers `200` with an empty policy; the pattern asserts the grant is gone rather than a `404`. |
 
+## TF4-4 — Composition pattern: multi-environment (2026-11-07)
+
+One new pattern under `patterns/`, same driver and contract as TF4-1–TF4-3. It
+applies one root module once per Terraform workspace — `staging`, then `prod` —
+and gates the isolation a per-environment deployment relies on: both stacks
+co-exist from one configuration, `for_each`/`count` build each environment's
+resources, an aliased provider routes the audit topic to a second project, and
+destroying one workspace leaves the other readable and clean-planning.
+
+```bash
+make test-gcp-terraform-patterns STRICT=1                  # Terraform, 5 patterns
+make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1      # OpenTofu
+make test-gcp-terraform-pattern PATTERN=04-multienv        # one, own emulator
+```
+
+Runs (fresh ephemeral emulator; `STRICT=1`, so a SKIP fails):
+
+| binary | result | patterns |
+|---|---|---|
+| Terraform 1.16.3 | PASS (5 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 45, `04-multienv` 60 |
+| OpenTofu 1.12.6 | PASS (5 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 45, `04-multienv` 60 |
+
+What `04-multienv` proves:
+
+- one configuration applied in two workspaces produces two coexisting stacks
+  whose names and `env` labels differ; `for_each` (the input/output bucket pair)
+  and `count` (two secret versions) are asserted through the API, including both
+  version payloads read via `versions.access`;
+- the aliased provider's routing is observable: the audit topic's resource name
+  is `projects/<project>-shared/topics/...` and the same name under the default
+  project is `404`, so an alias cannot silently fall back to the default project;
+- destroying `staging` is confined to that state: every `staging` resource the
+  pattern creates has a `404` read-back, every `prod` resource is still readable,
+  and `prod`'s `plan -detailed-exitcode` is still `0`; the full destroy then
+  leaves no orphan bucket, topic, secret or audit topic in either project (the
+  version sub-resources go with their secret).
+
+Recorded boundaries:
+
+| ID | classification | evidence |
+|---|---|---|
+| TF4-4-1 | `no fix` (emulator scope) | The shared project is served without a `google_project` row. The emulator is project-scoped (wire-contract §5) and every other pattern already relies on the same assumption with `var.project`; `00-bootstrap` is the gate that proves project creation, billing and Service Usage. `<project>-shared` still has to be a valid project id for real GCP (6–30 characters, starts with a letter); the default `test-project` satisfies that, a long `TF_PROJECT` would not — an environment constraint, not an emulator gap. |
+| TF4-4-2 | `no fix` (Discovery shape) | `SecretVersion.get` does not carry `payload`: real Secret Manager populates it only in the `versions.access` response, and the emulator matches that. The pattern reads payloads through `versions.access` and asserts that a plain `versions.get` omits `payload`. |
+| TF4-4-3 | `no fix` (nondeterministic by design) | The two `google_secret_manager_secret_version` resources are independent, so Terraform may create them in either order and the API numbers them by arrival. The pattern asserts both revisions exist across the version pair instead of pinning `revision=N` to `versions/N`, which would be a flake rather than a fidelity signal. |
+| TF4-4-4 | `no fix` (client-side) | Workspaces are a Terraform/OpenTofu concept with no GCP wire surface; the isolation assertion is therefore the emulator's per-resource read-back after one state's destroy, not an API call about the workspace itself. |
+
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,
