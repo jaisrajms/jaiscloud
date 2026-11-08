@@ -14,6 +14,10 @@
 #        -> (optional in-place mutation -> apply -> plan) -> destroy
 #        -> (post-destroy absence asserts)
 #
+# A pattern may add a targeted-destroy phase between the re-plan and the full
+# destroy (see targeted_destroy below) when the stack's partial-teardown
+# behaviour is part of what it proves.
+#
 # The acceptance is the clean re-plan and the post-destroy state, not the apply
 # exit code: a stack whose cross-resource references do not round-trip is a
 # stack no consumer can use.
@@ -288,6 +292,24 @@ destroy_phase() {
   fi
 }
 
+# targeted_destroy LABEL ADDRESS... — destroy only the named addresses, for a
+# phase that proves what a partial teardown leaves behind (a pattern can then
+# still run its full destroy). Terraform's destroy graph keeps each target's
+# dependencies, so targeting a virtual cluster does not take its GKE cluster
+# with it. ADDRESS is the `-target=...` flag, passed through verbatim.
+targeted_destroy() {
+  local label="$1" slug log
+  shift
+  slug="$(printf '%s' "$label" | tr ' ' '-')"
+  log="$WORK/targeted-destroy-$slug.log"
+  if tf destroy -input=false -auto-approve -no-color "$@" "${TF_VARS[@]}" >"$log" 2>&1; then
+    pass "targeted destroy: $label"
+  else
+    cat "$log"
+    fail "targeted destroy: $label (see the log above)"
+  fi
+}
+
 # tf_output reads one root-module output (empty when it is absent).
 tf_output() {
   tf output -raw "$1" 2>/dev/null || true
@@ -343,6 +365,24 @@ check_status() {
     pass "$name"
   else
     fail "$name (HTTP $got, want $want)"
+  fi
+}
+
+# check_post_absent NAME URL NEEDLE — POST (the :getIamPolicy verbs) and require
+# NEEDLE is NOT in the body. For a metadata-only resource whose policy outlives
+# its parent: the grant must be gone even when the endpoint still answers.
+check_post_absent() {
+  local name="$1" url="$2" needle="$3" body
+  body="$(curl -sf -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' "$url" 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    fail "$name (no response from $url)"
+    return 0
+  fi
+  if [[ "$body" == *"$needle"* ]]; then
+    fail "$name (found: $needle)"
+  else
+    pass "$name"
   fi
 }
 

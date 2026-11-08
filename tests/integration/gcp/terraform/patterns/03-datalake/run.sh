@@ -42,7 +42,8 @@ TF_VARS+=(-var "name_suffix=$SUFFIX")
 # emulator through its default endpoint's host. lib.sh emits the host-prefixed
 # endpoint from terraform-endpoints.yaml; this check turns a missing host alias
 # into a clear setup failure instead of a provider 404.
-CONTAINER_HOST="$(printf '%s' "$ENDPOINT" | sed -E 's#^https?://#container.#; s#[:/].*##')"
+CONTAINER_HOST="$(printf '%s' "$ENDPOINT" | sed -E 's#^https?://##; s#[:/].*##')"
+[[ "$CONTAINER_HOST" == container.* ]] || CONTAINER_HOST="container.$CONTAINER_HOST"
 if ! getent hosts "$CONTAINER_HOST" >/dev/null 2>&1; then
   echo "ERROR: $CONTAINER_HOST does not resolve — the GKE part of this pattern needs a container.* host alias" >&2
   echo "       (add e.g. '127.0.0.1 container.localhost' to the hosts file, or pass a resolvable ENDPOINT)" >&2
@@ -81,18 +82,22 @@ JOB_SA="$(tf_output job_service_account)"
 
 # ── Cloud Storage: the lake ─────────────────────────────────────────────────
 check "the input bucket carries its role label" \
-  "$ENDPOINT/storage/v1/b/$IN_BUCKET" "\"name\":\"$IN_BUCKET\"" '"role":"input"'
+  "$ENDPOINT/storage/v1/b/$IN_BUCKET" "\"name\":\"$IN_BUCKET\"" '"role":"input"' \
+  '"uniformBucketLevelAccess":{"enabled":true}'
 check "the output bucket carries its role label" \
-  "$ENDPOINT/storage/v1/b/$OUT_BUCKET" "\"name\":\"$OUT_BUCKET\"" '"role":"output"'
+  "$ENDPOINT/storage/v1/b/$OUT_BUCKET" "\"name\":\"$OUT_BUCKET\"" '"role":"output"' \
+  '"uniformBucketLevelAccess":{"enabled":true}'
 check "the staging bucket carries its role label" \
-  "$ENDPOINT/storage/v1/b/$STAGING_BUCKET" "\"name\":\"$STAGING_BUCKET\"" '"role":"staging"'
-check "the buckets are uniform-bucket-level-access" \
-  "$ENDPOINT/storage/v1/b/$IN_BUCKET" '"uniformBucketLevelAccess":{"enabled":true}'
+  "$ENDPOINT/storage/v1/b/$STAGING_BUCKET" "\"name\":\"$STAGING_BUCKET\"" '"role":"staging"' \
+  '"uniformBucketLevelAccess":{"enabled":true}'
+# Object names carry a slash; the GCS object GET path encodes it.
+JOB_CODE_PATH="${JOB_CODE//\//%2F}"
+JOB_INPUT_PATH="${JOB_INPUT//\//%2F}"
 check "the job code object exists in the input bucket" \
-  "$ENDPOINT/storage/v1/b/$IN_BUCKET/o/code%2Fwordcount.py" \
+  "$ENDPOINT/storage/v1/b/$IN_BUCKET/o/$JOB_CODE_PATH" \
   "\"name\":\"$JOB_CODE\"" "\"bucket\":\"$IN_BUCKET\""
 check "the seed data object exists in the input bucket" \
-  "$ENDPOINT/storage/v1/b/$IN_BUCKET/o/data%2Fevents.csv" \
+  "$ENDPOINT/storage/v1/b/$IN_BUCKET/o/$JOB_INPUT_PATH" \
   "\"name\":\"$JOB_INPUT\"" "\"bucket\":\"$IN_BUCKET\""
 
 # ── BigQuery: the catalog ───────────────────────────────────────────────────
@@ -132,13 +137,16 @@ check "the virtual cluster is RUNNING and names both pool targets" \
   "$CONTROLLER_POOL" "$SPARK_POOL" \
   "\"kubernetesNamespace\":\"$DP_NAMESPACE\"" \
   "\"stagingBucket\":\"$STAGING_BUCKET\""
+check "the virtual cluster is attached to the Metastore service" \
+  "$DP_CLUSTER_URL" '"auxiliaryServicesConfig":{' '"metastoreConfig":{' \
+  "\"dataprocMetastoreService\":\"projects/$PROJECT/locations/$REGION/services/$MS_SERVICE\""
 check_absent "the virtual cluster read omits input-only nodePoolConfig" \
   "$DP_CLUSTER_URL" "nodePoolConfig"
 check "the controller pool is readable through container.v1" \
   "$GKE_POOLS/$CONTROLLER_POOL" "\"name\":\"$CONTROLLER_POOL\"" \
-  '"machineType":"n1-standard-4"' '"maxNodeCount":3' \
+  '"machineType":"n1-standard-4"' '"minNodeCount":1' '"maxNodeCount":3' \
   "\"goog-dataproc-cluster-name\":\"$DP_CLUSTER\""
-check "the spark pool carries the API's 1/10 autoscaler defaults" \
+check "the spark pool carries the service-created pool defaults" \
   "$GKE_POOLS/$SPARK_POOL" "\"name\":\"$SPARK_POOL\"" \
   '"minNodeCount":1' '"maxNodeCount":10'
 
@@ -182,14 +190,10 @@ plan_no_changes "re-plan of the data-lake stack reports no changes"
 # GKE cluster delete reclaims them. Destroy the job first so the job record
 # does not outlive the cluster it runs on.
 echo "== targeted destroy (job, then virtual cluster)"
-tf destroy -input=false -auto-approve -no-color \
-  -target=google_dataproc_job.wordcount "${TF_VARS[@]}" >"$WORK/destroy-job.log" 2>&1 ||
-  { cat "$WORK/destroy-job.log"; fail "targeted destroy of the job"; }
+targeted_destroy "the job" -target=google_dataproc_job.wordcount
 check_status "the job record is gone after its destroy" "$JOB_URL" 404
 
-tf destroy -input=false -auto-approve -no-color \
-  -target=google_dataproc_cluster.datalake "${TF_VARS[@]}" >"$WORK/destroy-vc.log" 2>&1 ||
-  { cat "$WORK/destroy-vc.log"; fail "targeted destroy of the virtual cluster"; }
+targeted_destroy "the virtual cluster" -target=google_dataproc_cluster.datalake
 check_status "the virtual cluster is gone after its destroy" "$DP_CLUSTER_URL" 404
 check "the controller pool survives the virtual-cluster delete" \
   "$GKE_POOLS/$CONTROLLER_POOL" '"machineType":"n1-standard-4"'
@@ -200,12 +204,16 @@ destroy_phase
 
 echo "== post-destroy (the stack is gone, nothing orphaned)"
 check_status "the GKE cluster is gone" "$GKE_CLUSTER_URL" 404
+check_status "the controller pool is gone with its GKE cluster" \
+  "$GKE_POOLS/$CONTROLLER_POOL" 404
 check_status "the input bucket is gone" "$ENDPOINT/storage/v1/b/$IN_BUCKET" 404
 check_status "the output bucket is gone" "$ENDPOINT/storage/v1/b/$OUT_BUCKET" 404
 check_status "the staging bucket is gone" "$ENDPOINT/storage/v1/b/$STAGING_BUCKET" 404
 check_status "the BigQuery dataset is gone" "$BQ_DATASET_URL" 404
 check_status "the Metastore service is gone" "$MS_URL" 404
 check_status "the Metastore federation is gone" "$FED_URL" 404
+check_post_absent "the database IAM grant is gone with its service" \
+  "$MS_URL/databases/default:getIamPolicy" "$JOB_SA"
 
 # List-level orphan checks: a deleted name must not linger in the collection.
 check_absent "no Dataproc cluster orphan remains" "$DP_PARENT" "$DP_CLUSTER"

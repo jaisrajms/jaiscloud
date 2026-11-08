@@ -131,13 +131,14 @@ resource "google_storage_bucket" "staging" {
 
 # The job's PySpark file and a small CSV it counts. The mock executor never
 # opens them; they exist so the URIs the job names resolve to real objects (the
-# Terraform graph is what this pattern measures, not a Spark runtime).
+# Terraform graph is what this pattern measures, not a Spark runtime). This is
+# a URI target, not the demo's word-count program: the real driver
+# (`demo/dpgke-lifecycle/spark/wordcount.py`) runs only in that demo's k8s gate.
 resource "google_storage_bucket_object" "job_code" {
   bucket  = google_storage_bucket.input.name
   name    = local.job_code_object
   content = <<-PY
-    # Minimal word count the demo's k8s executor runs; this pattern only proves
-    # the provider submits a job whose main file resolves.
+    # Placeholder main file: the provider only needs a resolvable gs:// URI.
     import sys
     PY
 }
@@ -292,6 +293,16 @@ resource "google_dataproc_cluster" "datalake" {
         component_version = {
           SPARK = "3.5-dataproc-28"
         }
+      }
+    }
+
+    # The catalog the job reads through. Dataproc validates the reference at
+    # cluster creation (real Dataproc does too) and injects the service's
+    # thrift endpoint at job submission, so the metastore half of the graph is
+    # wired to the data path rather than being a disconnected component.
+    auxiliary_services_config {
+      metastore_config {
+        dataproc_metastore_service = google_dataproc_metastore_service.datalake.id
       }
     }
   }
