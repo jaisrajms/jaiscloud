@@ -5,8 +5,9 @@ name: GCP Terraform nightly
 # Not a pull_request check: it downloads the hashicorp/google provider and runs
 # the fixture plus every pinned module case (twenty-one), the lifecycle depth
 # gate (TF5: import/refresh/replace/drift/negative/parallel) and the composition
-# patterns (TF4: project bootstrap, CMEK everywhere, and the event-driven chain
-# — Scheduler/Pub/Sub/functions plus an Eventarc GCS trigger), twice (Terraform
+# patterns (TF4: project bootstrap, CMEK everywhere, the event-driven chain
+# — Scheduler/Pub/Sub/functions plus an Eventarc GCS trigger — and the data-lake
+# stack of buckets/BigQuery/Dataproc-on-GKE/Metastore), twice (Terraform
 # and OpenTofu). The per-PR signal stays offline
 # (`make gcp-ci-preflight`, the provider-capture self-test, the static coverage
 # gate); this job catches provider-registry drift and module/gate regressions on

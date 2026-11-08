@@ -834,6 +834,7 @@ map the fixture, the module driver and the corpus tool consume. A bare
 | `00-bootstrap` | `google_project` (with `billing_account`) + four `google_project_service` APIs + service account + project IAM member + GCS bucket + Pub/Sub topic/subscription + Secret Manager secret/version + KMS key ring/key | every resource resolves against the project Terraform just created; the provider's post-create reads of the new project succeed; the whole graph re-plans clean; destroy removes every resource before the project, and the project ends `DELETE_REQUESTED` (real GCP reserves the id too) |
 | `01-cmek` | regional KMS ring/key pair + a global ring/key + GCS bucket `encryption.default_kms_key_name` + BigQuery dataset `default_encryption_configuration` + Secret Manager automatic replication CMEK | each response echoes the key it was configured with; switching the bucket and dataset to the second regional key updates them **in place** (bucket `timeCreated` kept, metageneration increments; dataset `creationTime` kept) and re-plans clean |
 | `02-events` | a Pub/Sub topic + push subscription + a paused Cloud Scheduler job with a `pubsub_target` + a Pub/Sub-triggered function + a storage-triggered function + a standalone Eventarc GCS trigger with an `http_endpoint` destination | `jobs.run` publishes through the topic to the push subscription, and the delivery **arrives at a local echo sink** (`patterns/helpers/echo-sink`) with the configured payload and attributes; the same message invokes the Pub/Sub function (the emulator's delivery record is `delivered`); an object write reaches the Eventarc trigger's HTTP destination with `ce-type: google.cloud.storage.object.v1.finalized`, the bucket source and the object metadata, and invokes the storage-triggered function; both functions materialize their backing Eventarc triggers, and destroy leaves no orphan topic, subscription, job, trigger or function |
+| `03-datalake` | input/output/staging buckets + a BigQuery dataset/table/routine/row-access-policy + a GKE cluster + a Dataproc-on-GKE virtual cluster with two node-pool targets + a Dataproc pyspark job + a Dataproc Metastore service/federation with a database IAM grant | the whole data graph re-plans clean; both node pools are readable through `container.v1` (the virtual-cluster read omits the input-only `nodePoolConfig`); the job reaches `DONE` with the input/output URIs it was given; the federation names the Metastore service at rank `0` and the database policy carries the job account's grant; destroying the job and the virtual cluster leaves the pools readable, and the full destroy leaves no orphan resource. Its boundaries (the Spark data plane and the BigQuery load path stay in the k3d/Helm/Java demo and out of a local emulator) are in [`patterns/03-datalake/README.md`](patterns/03-datalake/README.md) |
 
 Recorded boundaries, not worked around:
 
@@ -878,6 +879,14 @@ Recorded boundaries, not worked around:
   each delivery's `status`. The delivery log is an emulator observability
   extension with no real-GCP wire equivalent, so there is nothing to fix there
   (TF4-2-2).
+- **`google_bigquery_table` guards its destroy by default.** Provider 7.x sets
+  `deletion_protection = true`, a client-side guard real GCP does not require for
+  a composition that tears its own stack down; `03-datalake` sets it `false`.
+- **A Metastore federation's `backend_metastores` is a map keyed by rank.** The
+  Discovery document defines `backendMetastores` as an object with
+  `additionalProperties: BackendMetastore`, and `BackendMetastore` has no rank
+  member, so the provider's `rank` becomes the map key (`"backendMetastores":
+  {"0": …}`). `03-datalake` asserts that shape rather than a repeated list.
 
 ## What it does
 
