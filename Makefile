@@ -1326,12 +1326,14 @@ test-gcp-terraform-lifecycle: ## Lifecycle gate: import/refresh/replace/drift/ne
 # bootstrap (project + billing + APIs + IAM + storage + pubsub + secret + KMS),
 # CMEK everywhere (KMS + GCS + BigQuery + Secret Manager), an event-driven
 # chain (Scheduler jobs.run -> Pub/Sub -> push sink + function, plus an Eventarc
-# GCS trigger) and a data lake (buckets -> BigQuery -> Dataproc-on-GKE job +
-# Metastore). A full apply/deliver/destroy run, so this is nightly-only (not in
-# gcp-ci-preflight). Pass STRICT=1 in CI: a SKIP is a broken gate, not a pass.
+# GCS trigger), a data lake (buckets -> BigQuery -> Dataproc-on-GKE job +
+# Metastore) and a multi-environment stack (one module, two workspaces, an
+# aliased provider for the shared project). A full apply/deliver/destroy run, so
+# this is nightly-only (not in gcp-ci-preflight). Pass STRICT=1 in CI: a SKIP is
+# a broken gate, not a pass.
 # TF_BIN=tofu runs the same patterns under OpenTofu; per-pattern logs land in
 # /tmp/jaiscloud-gcp-terraform-patterns/.
-test-gcp-terraform-patterns: ## Composition patterns: bootstrap + CMEK + event chain + data lake (TF_BIN=tofu, STRICT=1)
+test-gcp-terraform-patterns: ## Composition patterns: bootstrap + CMEK + event chain + data lake + multi-env (TF_BIN=tofu, STRICT=1)
 	@set -e; \
 	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
 	  echo "Building jaiscloud-gcp..."; \
@@ -1349,7 +1351,7 @@ test-gcp-terraform-patterns: ## Composition patterns: bootstrap + CMEK + event c
 # One composition pattern (a developer entry point like the per-case module
 # targets). PATTERN is the directory name under patterns/, e.g. 00-bootstrap.
 PATTERN ?=
-test-gcp-terraform-pattern: ## Run one composition pattern (PATTERN=00-bootstrap|01-cmek|02-events|03-datalake)
+test-gcp-terraform-pattern: ## Run one composition pattern (PATTERN=00-bootstrap|01-cmek|02-events|03-datalake|04-multienv)
 	@set -e; \
 	  [ -n "$(PATTERN)" ] || { echo "ERROR: set PATTERN=<dir> (e.g. PATTERN=00-bootstrap)"; exit 2; }; \
 	  [ -x "tests/integration/gcp/terraform/patterns/$(PATTERN)/run.sh" ] || { echo "ERROR: no pattern '$(PATTERN)'"; exit 2; }; \
