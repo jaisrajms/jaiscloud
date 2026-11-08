@@ -140,9 +140,6 @@ func TestPauseResumeRun(t *testing.T) {
 	if err != nil || paused.State != schedstore.StatePaused {
 		t.Fatalf("PauseJob state = %q err %v", paused.State, err)
 	}
-	if _, err := core.PauseJob(ctx, "proj", "us-central1", created.Name); err == nil {
-		t.Fatalf("double pause should fail")
-	}
 	// A paused job is never fired, even when due.
 	clock.SetGlobalClock(clock.FixedClock{T: at.Add(2 * time.Minute)})
 	engine.TickNow(ctx)
@@ -163,6 +160,93 @@ func TestPauseResumeRun(t *testing.T) {
 		t.Fatalf("RunJob did not record lastAttemptTime")
 	}
 	_ = mem
+}
+
+// TestPauseResumeIdempotent pins the measured Cloud Scheduler behaviour the
+// Terraform provider depends on: a repeated :pause or :resume is answered with
+// 200 and the unchanged job, not a FAILED_PRECONDITION. The provider issues
+// :resume after every create that leaves `paused` false and :pause on every
+// update that sets it, so the emulator must accept both on a job that already
+// sits in the target state (TF2-12).
+func TestPauseResumeIdempotent(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedClock(t, at)
+	core, _, mem := newCore(t)
+	ctx := context.Background()
+
+	created, err := core.CreateJob(ctx, "proj", "us-central1", schedstore.Job{
+		Schedule: "* * * * *",
+		TimeZone: "UTC",
+		Target:   schedstore.TargetHTTP,
+		HTTP:     &schedstore.HttpTarget{URI: "http://example.com/hook"},
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	// Advancing the clock makes a no-op distinguishable from a write: a real
+	// transition would stamp userUpdateTime with the new now.
+	clock.SetGlobalClock(clock.FixedClock{T: at.Add(time.Minute)})
+
+	same, err := core.ResumeJob(ctx, "proj", "us-central1", created.Name)
+	if err != nil {
+		t.Fatalf("resume of an ENABLED job: %v", err)
+	}
+	if same.State != schedstore.StateEnabled {
+		t.Fatalf("state = %q, want ENABLED", same.State)
+	}
+	if !same.UserUpdateTime.Equal(created.UserUpdateTime) || !same.ScheduleTime.Equal(created.ScheduleTime) {
+		t.Fatalf("resume of an ENABLED job changed it: userUpdateTime %v -> %v, scheduleTime %v -> %v",
+			created.UserUpdateTime, same.UserUpdateTime, created.ScheduleTime, same.ScheduleTime)
+	}
+
+	paused, err := core.PauseJob(ctx, "proj", "us-central1", created.Name)
+	if err != nil || paused.State != schedstore.StatePaused {
+		t.Fatalf("PauseJob state = %q err %v", paused.State, err)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: at.Add(2 * time.Minute)})
+	same, err = core.PauseJob(ctx, "proj", "us-central1", created.Name)
+	if err != nil {
+		t.Fatalf("pause of a PAUSED job: %v", err)
+	}
+	if same.State != schedstore.StatePaused || !same.UserUpdateTime.Equal(paused.UserUpdateTime) {
+		t.Fatalf("pause of a PAUSED job changed it: state = %q, userUpdateTime %v -> %v",
+			same.State, paused.UserUpdateTime, same.UserUpdateTime)
+	}
+
+	// The real transitions still work and a resume brings the next run back.
+	resumed, err := core.ResumeJob(ctx, "proj", "us-central1", created.Name)
+	if err != nil || resumed.State != schedstore.StateEnabled {
+		t.Fatalf("ResumeJob state = %q err %v", resumed.State, err)
+	}
+	if !resumed.ScheduleTime.After(at.Add(2 * time.Minute)) {
+		t.Fatalf("resume did not recompute scheduleTime: %v", resumed.ScheduleTime)
+	}
+
+	// A state the emulator never hands out (DISABLED/UPDATE_FAILED) keeps the
+	// documented precondition: there is no measured real-GCP answer for whether
+	// pause/resume tolerates those, so they stay FAILED_PRECONDITION.
+	if err := mem.CreateJob(ctx, "proj", "us-central1", schedstore.Job{
+		Name:     "disabled-job",
+		State:    schedstore.StateDisabled,
+		Schedule: "* * * * *",
+		TimeZone: "UTC",
+		Target:   schedstore.TargetHTTP,
+		HTTP:     &schedstore.HttpTarget{URI: "http://example.com/hook"},
+	}); err != nil {
+		t.Fatalf("seed disabled job: %v", err)
+	}
+	for name, call := range map[string]func() (schedstore.Job, error){
+		"pause":  func() (schedstore.Job, error) { return core.PauseJob(ctx, "proj", "us-central1", "disabled-job") },
+		"resume": func() (schedstore.Job, error) { return core.ResumeJob(ctx, "proj", "us-central1", "disabled-job") },
+	} {
+		_, err := call()
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "FailedPrecondition" {
+			t.Fatalf("%s of a DISABLED job: err = %v, want FailedPrecondition", name, err)
+		}
+	}
 }
 
 func TestEngineFiresHTTPAndAdvances(t *testing.T) {

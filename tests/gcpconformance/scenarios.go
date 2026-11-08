@@ -1725,15 +1725,19 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "workflows", Method: "DELETE", Path: "/v1/${exOp}"},
 	)
 
-	// ─── Cloud Scheduler: pause → resume ──────────────────────────────────────
+	// ─── Cloud Scheduler: pause → resume → repeat resume ──────────────────────
 	// The resume transition requires the paused state, so the chain pauses the
-	// job first (the create honours the caller-specified body name).
+	// job first (the create honours the caller-specified body name). The second
+	// :resume lands on an ENABLED job: real Cloud Scheduler answers the repeat
+	// with 200 and the job unchanged, which is what the Terraform provider needs
+	// after a create that leaves `paused` false (TF2-12).
 	schedBase := "/v1/projects/" + p + "/locations/us-central1/jobs"
 	schedName := "projects/" + p + "/locations/us-central1/jobs/conf-sched-" + suffix
 	sc = append(sc,
 		Scenario{Service: "scheduler", Method: "POST", Path: schedBase,
 			Body: fmt.Sprintf(`{"name":%q,"schedule":"*/5 * * * *","timeZone":"UTC","httpTarget":{"uri":"http://example.com"}}`, schedName)},
 		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":pause"},
+		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":resume"},
 		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":resume"},
 		Scenario{Service: "scheduler", Method: "DELETE", Path: "/v1/" + schedName},
 	)
