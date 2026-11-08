@@ -795,6 +795,66 @@ where the API supports it, a ForceNew identity change:
 | `firestore` | `google_firestore_database` | `projects/p/databases/d` | database id ForceNew |
 | `clouddns` | `google_dns_managed_zone` | `projects/p/managedZones/z` | name ForceNew |
 
+## Composition patterns (TF4)
+
+The fixture is a bag of resources and each module case is one module. Neither
+proves a *stack*: several services wired together by cross-resource references,
+applied and destroyed as one graph. The patterns under `patterns/<NN-name>/` are
+small root modules written here, one per canonical provisioning stack, each
+with a `run.sh` that follows the standard contract:
+
+```text
+init -> apply -> REST read-back asserts -> plan -detailed-exitcode == 0
+     -> (optional in-place mutation -> apply -> asserts -> plan == 0)
+     -> destroy -> post-destroy asserts (404 / DELETE_REQUESTED)
+```
+
+```bash
+make test-gcp-terraform-patterns STRICT=1                 # both, one emulator
+make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1     # OpenTofu
+make test-gcp-terraform-pattern PATTERN=00-bootstrap      # one, own emulator
+tests/integration/gcp/terraform/run-patterns.sh http://localhost:8080 test-project
+```
+
+It is a full apply/destroy run, so it is **nightly-only**, not part of
+`gcp-ci-preflight`. `STRICT=1` (what the nightly uses) makes a SKIP a failure.
+Per-pattern logs and a summary land in
+`/tmp/jaiscloud-gcp-terraform-patterns/`.
+
+Each pattern directory holds `main.tf` + `outputs.tf`; `patterns/provider.tf`
+carries the shared provider block and the offline endpoint defaults, and
+`patterns/lib.sh` assembles the root module in a throwaway work dir with the
+per-service custom endpoints emitted from `terraform-endpoints.yaml` — the same
+map the fixture, the module driver and the corpus tool consume. A bare
+`terraform plan` inside a pattern directory therefore still works without Go
+(the `provider.tf` locals are the offline defaults).
+
+| pattern | stack | proves |
+|---|---|---|
+| `00-bootstrap` | `google_project` (with `billing_account`) + four `google_project_service` APIs + service account + project IAM member + GCS bucket + Pub/Sub topic/subscription + Secret Manager secret/version + KMS key ring/key | every resource resolves against the project Terraform just created; the provider's post-create reads of the new project succeed; the whole graph re-plans clean; destroy removes every resource before the project, and the project ends `DELETE_REQUESTED` (real GCP reserves the id too) |
+| `01-cmek` | regional KMS ring/key pair + a global ring/key + GCS bucket `encryption.default_kms_key_name` + BigQuery dataset `default_encryption_configuration` + Secret Manager automatic replication CMEK | each response echoes the key it was configured with; switching the bucket and dataset to the second regional key updates them **in place** (bucket `timeCreated` kept, metageneration increments; dataset `creationTime` kept) and re-plans clean |
+
+Recorded boundaries, not worked around:
+
+- **`auto_create_network`.** The bootstrap project keeps the provider default
+  (`true`). Setting it `false` makes provider 7.46.2 probe Service Usage for the
+  dummy project `00000000000`; real GCP answers `403` and the provider's
+  pre-requisite switch assumes an error, but the emulator answers `200` with
+  `DISABLED`, so the provider dereferences a nil error and panics. That is
+  TF4-1-1 (`fix/gcp-serviceusage-unknown-project`); Compute networking is
+  outside this stack's scope either way.
+- **KMS objects survive destroy.** The provider never calls the documented
+  `keyRings.delete`/`cryptoKeys.delete` (TF5-3), and
+  `projects.locations.keyRings.delete` is a `501` in the emulator (TF5-4), so
+  the patterns assert the rings are still readable after destroy while every
+  resource the provider does delete is `404`. Neither pattern uses a fixed key
+  ring name for that reason: names carry a per-run suffix (the bootstrap
+  project id is unique per run too).
+- **Secret Manager replication key rotation** is not driven: the provider models
+  the `replication` block as ForceNew, so a Terraform change would replace the
+  secret. The emulator's PATCH path for that field is covered by the
+  service/REST tests, and the pattern asserts the key it was created with.
+
 ## What it does
 
 `run.sh` runs `init -> validate -> plan -> apply`, performs the spot checks

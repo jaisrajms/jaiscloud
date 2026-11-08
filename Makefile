@@ -200,7 +200,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
-        test-gcp-terraform test-gcp-terraform-all test-gcp-terraform-lifecycle test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam test-gcp-terraform-sql-db test-gcp-terraform-gke test-gcp-terraform-datastore test-gcp-terraform-plan-only \
+        test-gcp-terraform test-gcp-terraform-all test-gcp-terraform-lifecycle test-gcp-terraform-patterns test-gcp-terraform-pattern test-gcp-opentofu test-gcp-terraform-pubsub test-gcp-terraform-pubsub-topic test-gcp-terraform-storage test-gcp-terraform-memorystore test-gcp-terraform-functions test-gcp-terraform-clouddns test-gcp-terraform-cloud-operations test-gcp-terraform-kms test-gcp-terraform-firestore test-gcp-terraform-cloudrun test-gcp-terraform-bigquery test-gcp-terraform-secret-manager test-gcp-terraform-workflows test-gcp-terraform-scheduler test-gcp-terraform-tasks test-gcp-terraform-dataproc test-gcp-terraform-service-accounts test-gcp-terraform-iam test-gcp-terraform-sql-db test-gcp-terraform-gke test-gcp-terraform-datastore test-gcp-terraform-plan-only \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
@@ -1321,6 +1321,48 @@ test-gcp-terraform-lifecycle: ## Lifecycle gate: import/refresh/replace/drift/ne
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-lifecycle.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-lifecycle.sh http://localhost:8080 test-project
+
+# Composition patterns (TF4): the canonical provisioning stacks — a project
+# bootstrap (project + billing + APIs + IAM + storage + pubsub + secret + KMS)
+# and CMEK everywhere (KMS + GCS + BigQuery + Secret Manager). A full
+# apply/rotate/destroy run, so this is nightly-only (not in gcp-ci-preflight).
+# Pass STRICT=1 in CI: a SKIP is a broken gate, not a pass. TF_BIN=tofu runs
+# the same patterns under OpenTofu; per-pattern logs land in
+# /tmp/jaiscloud-gcp-terraform-patterns/.
+test-gcp-terraform-patterns: ## Composition patterns: project bootstrap + CMEK (TF_BIN=tofu, STRICT=1)
+	@set -e; \
+	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-patterns.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-patterns.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-patterns.sh http://localhost:8080 test-project
+
+# One composition pattern (a developer entry point like the per-case module
+# targets). PATTERN is the directory name under patterns/, e.g. 00-bootstrap.
+PATTERN ?=
+test-gcp-terraform-pattern: ## Run one composition pattern (PATTERN=00-bootstrap|01-cmek)
+	@set -e; \
+	  [ -n "$(PATTERN)" ] || { echo "ERROR: set PATTERN=<dir> (e.g. PATTERN=00-bootstrap)"; exit 2; }; \
+	  [ -x "tests/integration/gcp/terraform/patterns/$(PATTERN)/run.sh" ] || { echo "ERROR: no pattern '$(PATTERN)'"; exit 2; }; \
+	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-pattern.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pattern.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/patterns/$(PATTERN)/run.sh http://localhost:8080 test-project
 
 # The demo module's own gate (../demo/dpgke-lifecycle/terraform/run.sh): apply,
 # re-plan for permadiffs, the provider's job submit/read, destroy ordering and
