@@ -204,6 +204,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
+        check-gcp-terraform-differential record-gcp-terraform-differential test-gcp-terraform-differential \
         test-gcp-terraform-corpus gen-gcp-terraform-corpus gcp-terraform-endpoints \
         security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
@@ -472,8 +473,8 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 	go test -race -count=1 -timeout 120s -run '(?i)(Scheduling|LongRunning|RestartPolicy|Restartable|NonRestartable|JarFileUri)' \
 	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
 
-test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow)
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/...
+test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow, terraform)
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfdifferential/...
 
 test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
 	go test -count=1 -tags release ./tests/release/...
@@ -1368,6 +1369,43 @@ test-gcp-terraform-pattern: ## Run one composition pattern (PATTERN=00-bootstrap
 	  done; echo "  ready (REST :8080)"; \
 	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/patterns/$(PATTERN)/run.sh http://localhost:8080 test-project
 
+# ── Terraform differential (TF6) ───────────────────────────────────────────
+# tools/tfdifferential records a curated corpus against REAL GCP and replays it
+# against the emulator. The recording is credentialed and manual; the replay is
+# offline and runs in the nightly. `check` is the no-Terraform hygiene gate that
+# also runs in gcp-ci-preflight.
+check-gcp-terraform-differential: ## Offline check: TF6 corpus, goldens, manifest and classifications (no Terraform)
+	go test -count=1 ./tools/tfdifferential/
+	go run ./tools/tfdifferential -mode check
+
+record-gcp-terraform-differential: ## Record the TF6 corpus from REAL GCP (needs ADC + gcloud; PROJECT=..., CASES=...)
+	@command -v terraform >/dev/null 2>&1 || { echo "ERROR: terraform is required to record"; exit 1; }; \
+	command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud is required to resolve the project number"; exit 1; }; \
+	echo "Recording the Terraform differential from real GCP (project: $${PROJECT:-$${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud}})"; \
+	go run ./tools/tfdifferential -mode record \
+	  -project "$${PROJECT:-$${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud}}" \
+	  $(if $(CASES),-cases "$(CASES)")
+
+test-gcp-terraform-differential: ## Replay the TF6 real-GCP goldens against an ephemeral emulator (TF_BIN=tofu, STRICT=1, CASES=...)
+	@set -e; \
+	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-differential.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-differential.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  go run ./tools/tfcorpus -emit-tfvars /tmp/jaiscloud-gcp-terraform-differential-endpoints.auto.tfvars.json \
+	    -endpoint http://localhost:8080 >/dev/null; \
+	  TF_BIN="$(TF_BIN)" go run ./tools/tfdifferential -mode compare \
+	    -endpoint http://localhost:8080 -project test-project -tf-bin "$(TF_BIN)" \
+	    -endpoints-tfvars /tmp/jaiscloud-gcp-terraform-differential-endpoints.auto.tfvars.json \
+	    $(if $(CASES),-cases "$(CASES)")
+
 # The demo module's own gate (../demo/dpgke-lifecycle/terraform/run.sh): apply,
 # re-plan for permadiffs, the provider's job submit/read, destroy ordering and
 # "nothing left". Kept separate from the k3d lifecycle so a developer can iterate
@@ -2243,7 +2281,7 @@ gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, li
 	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfcoverage/... ./tools/tfcorpus/...
+	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfcoverage/... ./tools/tfcorpus/... ./tools/tfdifferential/...
 	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 	$(MAKE) --no-print-directory check-gcp-field-coverage
 	$(MAKE) --no-print-directory check-gcp-terraform-coverage

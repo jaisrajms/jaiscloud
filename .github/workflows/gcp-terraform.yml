@@ -1,10 +1,26 @@
 name: GCP Terraform Compatibility
 
-# Opt-in: run manually from the Actions tab, or `gh workflow run gcp-terraform.yml`.
-# Not wired into pull_request — it downloads the hashicorp/google provider on
-# first init and drives a full apply/destroy cycle.
+# The fixture gate runs on a pull request that can change what Terraform sees —
+# the suite itself, the emulator's provider-facing surface, the Terraform tools,
+# or the provider-attribute/fidelity snapshots — and can always be dispatched
+# manually. The heavier jobs (OpenTofu, the Dataproc-on-GKE lifecycle) stay
+# dispatch-only, and the apply matrix stays in terraform-nightly.yml; see
+# docs/gcp/terraform-compatibility.md for the gating policy.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tests/integration/gcp/terraform/**'
+      - 'internal/gcp/**'
+      - 'cmd/jaiscloud-gcp/**'
+      - 'tools/tfcoverage/**'
+      - 'tools/tfcorpus/**'
+      - 'tools/tfdifferential/**'
+      - 'tools/tfcapture/**'
+      - 'tools/providerschema/**'
+      - 'docs/fidelity/terraform-*'
+      - 'docs/gcp/terraform-compatibility.md'
+      - '.github/workflows/gcp-terraform.yml'
 
 jobs:
   terraform:
@@ -50,6 +66,7 @@ jobs:
 
   opentofu:
     name: OpenTofu vs jaiscloud-gcp
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +123,7 @@ jobs:
   # tool is missing; a present tool that fails is a failure.
   dpgke-demo-k3d:
     name: Dataproc-on-GKE demo lifecycle (k3d)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

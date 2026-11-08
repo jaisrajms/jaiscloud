@@ -1,0 +1,92 @@
+# Terraform differential corpus (TF6).
+#
+# `tools/tfdifferential -mode record` runs a `real_gcp: safe` case against a
+# real project (ADC, no custom endpoints) and writes a normalized golden under
+# golden/. `-mode compare` runs the same case against the emulator and diffs the
+# two, classifying every difference with classifications.yaml. See README.md.
+#
+# `dir` is relative to this file. Every case is a root module that accepts the
+# shared provider variables (endpoint, project, region, endpoints); the tool
+# copies provider.tf from patterns/ into the throwaway work dir, so the
+# emulator run and the real-GCP run use the same provider block.
+version: 1
+
+cases:
+  # ── recorded against real GCP ─────────────────────────────────────────────
+  - name: foundation
+    dir: cases/foundation
+    description: >-
+      The resource shapes a first stack uses: a versioned CORS/lifecycle GCS
+      bucket with an object, a Pub/Sub topic + subscription with retry and
+      retention, a Secret Manager secret + version, a service account with a
+      project IAM grant, and a KMS key ring + key. Cheap, self-cleaning.
+    real_gcp: safe
+    variables:
+      name_suffix: "{suffix}"
+
+  - name: cmek
+    dir: ../patterns/01-cmek
+    description: >-
+      The CMEK composition (TF4-1): regional and global KMS rings/keys, a bucket
+      with default encryption, a BigQuery dataset with default encryption and a
+      Secret Manager secret with an automatic-replication key. Key rings survive
+      a destroy (no API delete), so names are run-suffixed.
+    real_gcp: safe
+    variables:
+      cmek_suffix: "{suffix}"
+      active_key: primary
+
+  # ── not recorded: classified so the boundary is explicit ─────────────────
+  - name: bootstrap
+    dir: ../patterns/00-bootstrap
+    description: >-
+      The project-bootstrap composition (TF4-1): creates a Cloud Resource
+      Manager project, attaches a billing account, enables APIs and grants IAM.
+    real_gcp: excluded
+    reason: >-
+      Creates a real project and needs an organization/billing entitlement; a
+      recorded run would leave a project in DELETE_REQUESTED and is not a cheap
+      or reversible operator action. Environment-scoped, not an emulator claim.
+    variables:
+      bootstrap_project: "jc-tf-diff-{suffix}"
+
+  - name: events
+    dir: ../patterns/02-events
+    description: >-
+      The event-driven composition (TF4-2): Cloud Scheduler -> Pub/Sub ->
+      push/function plus GCS -> Eventarc triggers and a local echo sink.
+    real_gcp: excluded
+    reason: >-
+      Cloud Functions v2 deploys real build/run infrastructure and needs a
+      source archive and Artifact Registry; the echo sink is a local process a
+      real GCP trigger cannot reach. The composition is proven against the
+      emulator by the patterns gate.
+    variables:
+      name_suffix: "{suffix}"
+
+  - name: datalake
+    dir: ../patterns/03-datalake
+    description: >-
+      The data-lake composition (TF4-3): GCS, BigQuery, a real GKE cluster, a
+      Dataproc-on-GKE virtual cluster, a submitted Spark job and a Metastore
+      service + federation.
+    real_gcp: excluded
+    reason: >-
+      Needs a billable GKE cluster, a running Dataproc job and a real Spark
+      driver; hours of compute for a control-plane differential. The Spark data
+      plane is explicitly outside the trust boundary (terraform-compatibility).
+    variables:
+      name_suffix: "{suffix}"
+
+  - name: multienv
+    dir: ../patterns/04-multienv
+    description: >-
+      The multi-environment composition (TF4-4): one configuration applied per
+      workspace plus an aliased provider targeting a second project.
+    real_gcp: excluded
+    reason: >-
+      The aliased provider targets <project>-shared, which does not exist on
+      real GCP; workspaces are a Terraform feature already exercised by the
+      emulator pattern, and a recorded run would need a second real project.
+    variables:
+      name_suffix: "{suffix}"

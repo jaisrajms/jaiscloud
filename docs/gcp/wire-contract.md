@@ -761,6 +761,14 @@ ratchets a floor up, refusing to lower one without `ALLOW_LOWER=1`). It is a loc
 per-PR gate (a full package run is minutes)
 (§13 of [`docs/gcp/testability.md`](testability.md#13-mutation-testing--assertion-strength-the-local-spike)).
 
+The Terraform suite has its own boundary statement:
+[`terraform-compatibility.md`](terraform-compatibility.md) records what a green
+Terraform/OpenTofu gate proves and what it does not (authz, quotas, org
+hierarchy, data planes). The static coverage inventory is a PR check; the apply
+matrix, the lifecycle/pattern gates and the TF6 differential replay run in
+`terraform-nightly.yml`, and the differential is recorded from real GCP by a
+credentialed operator step (`make record-gcp-terraform-differential`).
+
 ---
 
 ## 7. How to verify

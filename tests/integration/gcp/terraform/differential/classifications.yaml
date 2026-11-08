@@ -1,0 +1,61 @@
+# Classification table for the Terraform differential (TF6).
+#
+# Every real-GCP vs emulator difference must match exactly one row here or the
+# compare run fails. `*` matches any run of characters in `case` and `path`.
+#
+# verdicts:
+#   emulator-gap   the emulator is wrong; needs `id` (a ledger row) + `branch`
+#   provider-quirk the provider or real GCP behaves this way; no fix
+#   environment    project id/region/org difference; not behavior
+#   accepted-risk  known and deliberate; documented in terraform-compatibility.md
+#
+# The row ids are recorded in plan_docs/gcp-terraform-confidence-wave-plan.md so
+# a scheduled fix can close its classification when it lands.
+rules:
+  - case: "*"
+    path: resources.google_kms_crypto_key.*.destroy_scheduled_duration
+    verdict: emulator-gap
+    id: TF6-1
+    branch: fix/gcp-kms-destroy-scheduled-duration
+    reason: >-
+      CryptoKey.get omits destroyScheduledDuration. Real GCP always returns the
+      default 2592000s; the provider stores it as a computed attribute, so an
+      import/refresh against the emulator sees an empty value.
+
+  - case: "*"
+    path: resources.google_bigquery_dataset.*.self_link
+    verdict: emulator-gap
+    id: TF6-2
+    branch: fix/gcp-bigquery-dataset-selflink
+    reason: >-
+      datasets.get omits selfLink. Real GCP returns
+      https://bigquery.googleapis.com/bigquery/v2/projects/{p}/datasets/{d};
+      the provider exposes it as a computed self_link.
+
+  - case: "*"
+    path: resources.google_storage_bucket_object.*.media_link
+    verdict: emulator-gap
+    id: TF6-3
+    branch: fix/gcp-storage-object-media-link-generation
+    reason: >-
+      The object mediaLink omits the generation query parameter. Real GCP
+      returns ?generation=<n>&alt=media; the emulator returns ?alt=media.
+
+  - case: "*"
+    path: resources.google_storage_bucket.*.versioning.length
+    verdict: accepted-risk
+    id: TF6-4
+    reason: >-
+      A bucket that never configured versioning is returned as
+      versioning:{enabled:false} by the emulator; real GCP omits the block. Both
+      are valid API shapes and Terraform reports no diff either way, so the
+      omission is not chased. Recorded in docs/gcp/terraform-compatibility.md.
+
+  - case: "*"
+    path: resources.google_bigquery_dataset.*.access[0].user_by_email
+    verdict: accepted-risk
+    id: TF6-5
+    reason: >-
+      Real GCP adds the authenticated user to a dataset's default ACL; the
+      emulator is unauthenticated and names jaiscloud@example.iam.gserviceaccount.com.
+      Identity/authz is outside the local trust boundary.

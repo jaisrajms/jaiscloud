@@ -9,7 +9,8 @@ name: GCP Terraform nightly
 # — Scheduler/Pub/Sub/functions plus an Eventarc GCS trigger — the data-lake
 # stack of buckets/BigQuery/Dataproc-on-GKE/Metastore, and the multi-environment
 # stack of one module over two workspaces plus a shared-project provider alias),
-# twice (Terraform and OpenTofu). The per-PR signal stays offline
+# twice (Terraform and OpenTofu), and replays the TF6 differential goldens that
+# were recorded against real GCP. The per-PR signal stays offline
 # (`make gcp-ci-preflight`, the provider-capture self-test, the static coverage
 # gate); this job catches provider-registry drift and module/gate regressions on
 # a schedule.
@@ -108,6 +109,9 @@ jobs:
 
       - name: Run the composition patterns
         run: make test-gcp-terraform-patterns STRICT=1
+
+      - name: Replay the real-GCP differential goldens
+        run: make test-gcp-terraform-differential STRICT=1
 
       - name: Upload the per-case logs
         if: always()
