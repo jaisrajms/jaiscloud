@@ -49,8 +49,9 @@ locals {
   # container is routed by host, not by path: the provider keeps only
   # scheme+host of a custom endpoint, so the first DNS label must be
   # "container" (the emulator routes GKE that way, and the bare /v1/... path
-  # belongs to Managed Kafka). The emitted tfvars carry the same rewrite.
-  container_endpoint = "${replace(var.endpoint, "://", "://container.")}/container/"
+  # belongs to Managed Kafka). The emitted tfvars carry the same rewrite
+  # (tools/tfcorpus guards against double-prefixing); mirror it here.
+  container_endpoint = "${replace(replace(trimsuffix(var.endpoint, "/"), "://container.", "://"), "://", "://container.")}/container/"
 
   endpoint_defaults = {
     big_query_custom_endpoint          = "${var.endpoint}/bigquery/v2/"

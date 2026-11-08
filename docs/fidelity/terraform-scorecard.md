@@ -508,22 +508,26 @@ Runs (fresh ephemeral emulator; `STRICT=1`, so a SKIP fails):
 
 | binary | result | patterns |
 |---|---|---|
-| Terraform 1.16.3 | PASS (4 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 41 |
-| OpenTofu 1.12.6 | PASS (4 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 41 |
+| Terraform 1.16.3 | PASS (4 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 45 |
+| OpenTofu 1.12.6 | PASS (4 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 45 |
 
 What `03-datalake` proves:
 
 - one apply creates input/output/staging buckets with the job's code and seed
   objects, a BigQuery dataset/table/routine/row-access-policy, a regional GKE
   cluster with Workload Identity, a Dataproc-on-GKE virtual cluster with two
-  node-pool targets, a pyspark `google_dataproc_job`, a Dataproc Metastore
-  service + federation and the job account's database-level IAM grant — each
-  cross-resource reference (`bucket.name`, `container_cluster.name`,
-  `metastore_service.id`) resolving, and the whole graph re-planning clean;
+  node-pool targets attached to a Dataproc Metastore service, a pyspark
+  `google_dataproc_job`, a Metastore federation and the job account's
+  database-level IAM grant — each cross-resource reference (`bucket.name`,
+  `container_cluster.name`, `metastore_service.id`) resolving, and the whole
+  graph re-planning clean;
 - the controller pool reads back through `container.v1` with its explicit
-  1..3 autoscaler and `machineType`, the named-only driver/executor pool with
-  the API's 1/10 defaults, and the virtual-cluster read omits the input-only
-  `nodePoolConfig`;
+  1..3 autoscaler (`minNodeCount`/`maxNodeCount`) and `machineType`, the
+  named-only driver/executor pool with the service-created pool defaults of
+  1/10, and the virtual-cluster read omits the input-only `nodePoolConfig`;
+- the virtual cluster's `auxiliaryServicesConfig.metastoreConfig` names the
+  Metastore service (the reference Dataproc validates at cluster creation and
+  injects at job submission);
 - the submitted job reaches `DONE` with the input/output `gs://` URIs it was
   given;
 - the Metastore service is `ACTIVE` with its Hive version, the federation names
@@ -540,6 +544,7 @@ Recorded boundaries:
 | TF4-3-1 | `no fix` (provider schema) | `google_bigquery_table.deletion_protection` defaults to `true` in provider 7.x — a client-side destroy guard, not an API behaviour. The pattern sets it `false`, as a composition that tears its own stack down must. |
 | TF4-3-2 | `no fix` (Discovery shape) | A federation's `backendMetastores` is a map keyed by rank (`additionalProperties: BackendMetastore`), and `BackendMetastore` has no rank member: the provider's `rank` HCL attribute becomes the map key. The pattern asserts `"backendMetastores": {"0": …}` and no `"rank"`. |
 | TF4-3-3 | `out of scope` | The Spark data plane and an ELT run into BigQuery stay out of a local emulator and out of this pattern: nothing is scheduled onto the reconciled pools, the output bucket stays empty, and there is no BigQuery load-job surface. `demo/dpgke-lifecycle` and its k3d gate own the real-driver leg (`spark/wordcount.py`), and the pattern README points there instead of duplicating it. |
+| TF4-3-4 | `no fix` (documented divergence) | Database- and table-level Metastore IAM is metadata-only: databases/tables live in the separate Hive Metastore Thrift plane, so `requireIAMTarget` does not check their existence. After the service is destroyed, `databases/default:getIamPolicy` still answers `200` with an empty policy; the pattern asserts the grant is gone rather than a `404`. |
 
 ## What this does not prove
 

@@ -1,6 +1,7 @@
-# Outputs the composition driver asserts against. Everything is a real
-# attribute of the created resource, so a name the provider cannot compute is a
-# plan-time failure rather than a silent empty assertion.
+# Outputs the composition driver asserts against. Resource-derived outputs are
+# real attributes of the created resource, so a name the provider cannot compute
+# is a plan-time failure; the pool/namespace outputs are the locals the driver
+# uses to build the container.v1 and Dataproc GET paths.
 
 output "input_bucket" {
   value = google_storage_bucket.input.name
