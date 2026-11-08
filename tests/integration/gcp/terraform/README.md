@@ -810,7 +810,7 @@ init -> apply -> REST read-back asserts -> plan -detailed-exitcode == 0
 ```
 
 ```bash
-make test-gcp-terraform-patterns STRICT=1                 # both, one emulator
+make test-gcp-terraform-patterns STRICT=1                 # all patterns, one emulator
 make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1     # OpenTofu
 make test-gcp-terraform-pattern PATTERN=00-bootstrap      # one, own emulator
 tests/integration/gcp/terraform/run-patterns.sh http://localhost:8080 test-project
@@ -833,6 +833,7 @@ map the fixture, the module driver and the corpus tool consume. A bare
 |---|---|---|
 | `00-bootstrap` | `google_project` (with `billing_account`) + four `google_project_service` APIs + service account + project IAM member + GCS bucket + Pub/Sub topic/subscription + Secret Manager secret/version + KMS key ring/key | every resource resolves against the project Terraform just created; the provider's post-create reads of the new project succeed; the whole graph re-plans clean; destroy removes every resource before the project, and the project ends `DELETE_REQUESTED` (real GCP reserves the id too) |
 | `01-cmek` | regional KMS ring/key pair + a global ring/key + GCS bucket `encryption.default_kms_key_name` + BigQuery dataset `default_encryption_configuration` + Secret Manager automatic replication CMEK | each response echoes the key it was configured with; switching the bucket and dataset to the second regional key updates them **in place** (bucket `timeCreated` kept, metageneration increments; dataset `creationTime` kept) and re-plans clean |
+| `02-events` | a Pub/Sub topic + push subscription + a paused Cloud Scheduler job with a `pubsub_target` + a Pub/Sub-triggered function + a storage-triggered function + a standalone Eventarc GCS trigger with an `http_endpoint` destination | `jobs.run` publishes through the topic to the push subscription, and the delivery **arrives at a local echo sink** (`patterns/helpers/echo-sink`) with the configured payload and attributes; the same message invokes the Pub/Sub function (the emulator's delivery record is `delivered`); an object write reaches the Eventarc trigger's HTTP destination with `ce-type: google.cloud.storage.object.v1.finalized`, the bucket source and the object metadata, and invokes the storage-triggered function; both functions materialize their backing Eventarc triggers, and destroy leaves no orphan topic, subscription, job, trigger or function |
 
 Recorded boundaries, not worked around:
 
@@ -854,6 +855,29 @@ Recorded boundaries, not worked around:
   the `replication` block as ForceNew, so a Terraform change would replace the
   secret. The emulator's PATCH path for that field is covered by the
   service/REST tests, and the pattern asserts the key it was created with.
+- **The scheduler job in `02-events` is paused.** Provider 7.46.2 calls
+  `jobs:resume` after every create when `paused` is false, and the emulator
+  rejects resuming an ENABLED job, so an enabled `google_cloud_scheduler_job`
+  cannot be created yet (TF2-12, `fix/gcp-scheduler-resume-enabled`). The
+  pattern creates the job paused with a far-future cron and fires it with
+  `projects.locations.jobs.run`, Cloud Scheduler's documented "force it now"
+  call, which goes through the same target dispatcher the cron engine uses.
+  `retry_config` is omitted for the same reason: the provider only sends a
+  non-zero expanded block and the emulator does not synthesize the API's retry
+  defaults on a read yet (TF3-4-2, `fix/gcp-scheduler-retry-config-defaults`),
+  so an explicit zero block would permadiff.
+- **Event deliveries are asserted at a local HTTP sink.** `patterns/helpers/echo-sink`
+  is a small Go program (`patterns/lib.sh` builds it, so Go is already a
+  prerequisite of the driver) that records every request it receives. The push
+  subscription and the Eventarc `http_endpoint` both point at it, so the pattern
+  checks the real payload and CloudEvents headers rather than that a resource
+  exists. A binary built without the console does not serve the Cloud Functions
+  delivery log (`/api/ui/.../deliveries`); the pattern therefore proves the
+  function invocation through the state export
+  (`GET /_jaiscloud/export` → `envelope.json`), whose functions store records
+  each delivery's `status`. The delivery log is an emulator observability
+  extension with no real-GCP wire equivalent, so there is nothing to fix there
+  (TF4-2-2).
 
 ## What it does
 

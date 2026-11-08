@@ -439,6 +439,58 @@ The KMS objects that survive each destroy are the TF5-3/TF5-4 boundary (the
 provider never calls the documented delete methods and `keyRings.delete` is a
 `501`), not a separate gap.
 
+## TF4-2 — Composition pattern: event-driven chain (2026-11-07)
+
+One new pattern under `patterns/`, same driver and contract as TF4-1, plus a
+shared local HTTP sink (`patterns/helpers/echo-sink`, built by `patterns/lib.sh`)
+so a delivery is asserted at its far end rather than inferred from a stored
+resource.
+
+```bash
+make test-gcp-terraform-patterns STRICT=1                 # Terraform
+make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1     # OpenTofu
+make test-gcp-terraform-pattern PATTERN=02-events         # one, own emulator
+```
+
+Runs (fresh ephemeral emulator; `STRICT=1`, so a SKIP fails; `02-events` also
+ran twice in a row on one emulator to prove the per-run name suffix):
+
+| binary | result | patterns |
+|---|---|---|
+| Terraform 1.16.3 | PASS (3 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43 |
+| OpenTofu 1.12.6 | PASS (3 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43 |
+
+What `02-events` proves:
+
+- one apply creates a Pub/Sub topic, a push subscription, a paused Cloud
+  Scheduler job with a `pubsub_target`, a Pub/Sub-triggered v1 function, a
+  storage-triggered v1 function, a GCS bucket + deployment archive, an Eventarc
+  GCS trigger with an `http_endpoint` destination, and the trigger's service
+  account — each resource resolving its reference (`topic.id`, `bucket.name`,
+  `service_account.email`) and the whole graph re-planning clean;
+- `projects.locations.jobs.run` (the documented "force it now" call) publishes
+  the configured payload, and the push subscription delivers it to the local
+  sink with `message.data` = the configured base64 and
+  `message.attributes.source = "cloud-scheduler"`; the same message invokes the
+  Pub/Sub function (the emulator's persisted delivery record is `delivered`);
+- an object write reaches the Eventarc `http_endpoint` as a binary-mode
+  CloudEvent: `ce-type: google.cloud.storage.object.v1.finalized`,
+  `ce-source: //storage.googleapis.com/projects/_/buckets/<bucket>`, and the
+  object metadata body; the same write invokes the storage function
+  (`delivered`);
+- both functions materialize their backing Eventarc trigger
+  (`functions-<id>`) with a `cloudFunction` destination, and destroy leaves no
+  orphan topic, subscription, job, trigger or function.
+
+Recorded gaps and boundaries:
+
+| ID | classification | evidence |
+|---|---|---|
+| TF4-2-1 | `fix` (fixed here) | The bootstrap assertion compared the provider's `google_project.number` (decimal, no leading zero) with the API's zero-padded `projectNumber`; the synthesized number starts with zero for about one id in ten, so the aggregate flaked. The assertion now pads before comparing. |
+| TF4-2-2 | `no fix` | Function delivery records are served only by the console API (`/api/ui/v1/gcp/functions/.../deliveries`), which a non-UI build does not mount; real Cloud Functions exposes no delivery log either. The pattern asserts invocation through `GET /_jaiscloud/export` (`envelope.json` → `stores.functions.deliveries`). |
+| TF2-12 | known, separate session | Provider 7.46.2 calls `jobs:resume` after every create when `paused` is false and the emulator rejects resuming an ENABLED job, so the job is created paused and fired with `jobs.run`; `fix/gcp-scheduler-resume-enabled` owns the enabled path. |
+| TF3-4-2 | known, separate session | An all-zero `retry_config` is dropped by the provider and not synthesized by the emulator's read, so the pattern omits the block; `fix/gcp-scheduler-retry-config-defaults` owns the defaults. |
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,
