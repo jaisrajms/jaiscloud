@@ -80,8 +80,15 @@ jobs:
             if [ ! -d "$dir/.git" ]; then
               git clone --quiet "$url" "$dir"
             fi
-            git -C "$dir" fetch --quiet --depth 1 origin "$commit"
-            git -C "$dir" checkout --quiet "$commit"
+            # `commit` is a short SHA (the same pin the local driver documents):
+            # `git fetch origin <sha>` treats the argument as a ref name and
+            # fails with "couldn't find remote ref". The clone carries the
+            # history, so resolve the abbreviation locally; a cached checkout
+            # from another pin may need one fetch first.
+            if ! git -C "$dir" checkout --quiet "$commit" 2>/dev/null; then
+              git -C "$dir" fetch --quiet --tags origin
+              git -C "$dir" checkout --quiet "$commit"
+            fi
           }
           clone terraform-google-cloud-storage c7effc0be0f4
           clone terraform-google-pubsub 6cf1860
@@ -214,8 +221,15 @@ jobs:
             if [ ! -d "$dir/.git" ]; then
               git clone --quiet "$url" "$dir"
             fi
-            git -C "$dir" fetch --quiet --depth 1 origin "$commit"
-            git -C "$dir" checkout --quiet "$commit"
+            # `commit` is a short SHA (the same pin the local driver documents):
+            # `git fetch origin <sha>` treats the argument as a ref name and
+            # fails with "couldn't find remote ref". The clone carries the
+            # history, so resolve the abbreviation locally; a cached checkout
+            # from another pin may need one fetch first.
+            if ! git -C "$dir" checkout --quiet "$commit" 2>/dev/null; then
+              git -C "$dir" fetch --quiet --tags origin
+              git -C "$dir" checkout --quiet "$commit"
+            fi
           }
           clone terraform-google-cloud-storage c7effc0be0f4
           clone terraform-google-pubsub 6cf1860
