@@ -71,7 +71,13 @@ locals {
     service_usage_custom_endpoint      = "${var.endpoint}/v1/"
     storage_custom_endpoint            = "${var.endpoint}/storage/v1/"
   }
-  endpoints = merge(local.endpoint_defaults, var.endpoints)
+  endpoints = local.emulated ? merge(local.endpoint_defaults, var.endpoints) : {}
+
+  # An empty endpoint means "real GCP": the same provider block is used by the
+  # Terraform differential recorder (differential/) so the two runs cannot drift
+  # in project/region/provider arguments. A null custom endpoint is unset, which
+  # is what the provider expects against the real APIs.
+  emulated = var.endpoint != ""
 }
 
 provider "google" {
@@ -80,20 +86,20 @@ provider "google" {
 
   user_project_override = false
 
-  big_query_custom_endpoint          = local.endpoints["big_query_custom_endpoint"]
-  cloud_billing_custom_endpoint      = local.endpoints["cloud_billing_custom_endpoint"]
-  cloud_functions_custom_endpoint    = local.endpoints["cloud_functions_custom_endpoint"]
-  cloud_scheduler_custom_endpoint    = local.endpoints["cloud_scheduler_custom_endpoint"]
-  container_custom_endpoint          = local.endpoints["container_custom_endpoint"]
-  dataproc_custom_endpoint           = local.endpoints["dataproc_custom_endpoint"]
-  dataproc_metastore_custom_endpoint = local.endpoints["dataproc_metastore_custom_endpoint"]
-  eventarc_custom_endpoint           = local.endpoints["eventarc_custom_endpoint"]
-  iam_custom_endpoint                = local.endpoints["iam_custom_endpoint"]
-  iam_beta_custom_endpoint           = local.endpoints["iam_beta_custom_endpoint"]
-  kms_custom_endpoint                = local.endpoints["kms_custom_endpoint"]
-  pubsub_custom_endpoint             = local.endpoints["pubsub_custom_endpoint"]
-  resource_manager_custom_endpoint   = local.endpoints["resource_manager_custom_endpoint"]
-  secret_manager_custom_endpoint     = local.endpoints["secret_manager_custom_endpoint"]
-  service_usage_custom_endpoint      = local.endpoints["service_usage_custom_endpoint"]
-  storage_custom_endpoint            = local.endpoints["storage_custom_endpoint"]
+  big_query_custom_endpoint          = local.emulated ? local.endpoints["big_query_custom_endpoint"] : null
+  cloud_billing_custom_endpoint      = local.emulated ? local.endpoints["cloud_billing_custom_endpoint"] : null
+  cloud_functions_custom_endpoint    = local.emulated ? local.endpoints["cloud_functions_custom_endpoint"] : null
+  cloud_scheduler_custom_endpoint    = local.emulated ? local.endpoints["cloud_scheduler_custom_endpoint"] : null
+  container_custom_endpoint          = local.emulated ? local.endpoints["container_custom_endpoint"] : null
+  dataproc_custom_endpoint           = local.emulated ? local.endpoints["dataproc_custom_endpoint"] : null
+  dataproc_metastore_custom_endpoint = local.emulated ? local.endpoints["dataproc_metastore_custom_endpoint"] : null
+  eventarc_custom_endpoint           = local.emulated ? local.endpoints["eventarc_custom_endpoint"] : null
+  iam_custom_endpoint                = local.emulated ? local.endpoints["iam_custom_endpoint"] : null
+  iam_beta_custom_endpoint           = local.emulated ? local.endpoints["iam_beta_custom_endpoint"] : null
+  kms_custom_endpoint                = local.emulated ? local.endpoints["kms_custom_endpoint"] : null
+  pubsub_custom_endpoint             = local.emulated ? local.endpoints["pubsub_custom_endpoint"] : null
+  resource_manager_custom_endpoint   = local.emulated ? local.endpoints["resource_manager_custom_endpoint"] : null
+  secret_manager_custom_endpoint     = local.emulated ? local.endpoints["secret_manager_custom_endpoint"] : null
+  service_usage_custom_endpoint      = local.emulated ? local.endpoints["service_usage_custom_endpoint"] : null
+  storage_custom_endpoint            = local.emulated ? local.endpoints["storage_custom_endpoint"] : null
 }

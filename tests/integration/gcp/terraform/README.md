@@ -109,6 +109,28 @@ tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 ```
 
+## Real-GCP differential (TF6)
+
+Every gate above is emulator-only. `differential/` closes that gap: a small
+curated corpus is recorded against a real project (ADC, no custom endpoints) and
+replayed against the emulator, diffing the normalized post-apply state, the
+first plan's diff set and the re-plan. Every difference must be classified
+(`emulator-gap` with a ledger row, `provider-quirk`, `environment` or
+`accepted-risk`); an unclassified one fails the replay.
+
+```bash
+make test-gcp-terraform-differential          # offline replay vs an ephemeral emulator
+make test-gcp-terraform-differential STRICT=1 # nightly: a missing Terraform fails
+make record-gcp-terraform-differential        # credentialed: re-record the goldens
+make check-gcp-terraform-differential         # no Terraform: corpus/golden/manifest hygiene
+```
+
+See [differential/README.md](differential/README.md) for the corpus, golden
+format and normalization rules, and
+[`docs/gcp/terraform-compatibility.md`](../../../../docs/gcp/terraform-compatibility.md)
+for the trust boundary: what local Terraform evidence proves and what it does
+not.
+
 ## Pinned consumer-module gates
 
 `run.sh` drives a fixture *we* wrote, so it only proves the surface we already

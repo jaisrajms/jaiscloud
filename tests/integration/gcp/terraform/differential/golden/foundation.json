@@ -1,0 +1,505 @@
+{
+  "case": "foundation",
+  "provenance": {
+    "project": "parity-diff-jaiscloud",
+    "region": "us-central1",
+    "recorded_at": "2026-11-08T03:11:26Z",
+    "terraform_version": "1.16.3",
+    "provider_version": "hashicorp/google 7.46.2",
+    "platform": "linux_amd64",
+    "case_dir": "cases/foundation"
+  },
+  "resources": {
+    "google_kms_crypto_key.diff": {
+      "crypto_key_backend": "",
+      "deletion_policy": "DELETE",
+      "destroy_scheduled_duration": "2592000s",
+      "effective_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "id": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-diff-ring-\u003csuffix\u003e/cryptoKeys/jc-tf-diff-key-\u003csuffix\u003e",
+      "import_only": false,
+      "key_ring": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-diff-ring-\u003csuffix\u003e",
+      "labels": null,
+      "name": "jc-tf-diff-key-\u003csuffix\u003e",
+      "primary": [
+        {
+          "name": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-diff-ring-\u003csuffix\u003e/cryptoKeys/jc-tf-diff-key-\u003csuffix\u003e/cryptoKeyVersions/1",
+          "state": "ENABLED"
+        }
+      ],
+      "purpose": "ENCRYPT_DECRYPT",
+      "rotation_period": "",
+      "skip_initial_version_creation": false,
+      "terraform_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "version_template": [
+        {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protection_level": "SOFTWARE"
+        }
+      ]
+    },
+    "google_kms_key_ring.diff": {
+      "id": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-diff-ring-\u003csuffix\u003e",
+      "location": "us-central1",
+      "name": "jc-tf-diff-ring-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e"
+    },
+    "google_project_iam_member.diff": {
+      "condition": [],
+      "etag": "\u003cetag\u003e",
+      "id": "\u003cproject\u003e/roles/viewer/serviceAccount:jc-tf-diff-\u003csuffix\u003e@\u003cproject\u003e.iam.gserviceaccount.com",
+      "member": "serviceAccount:jc-tf-diff-\u003csuffix\u003e@\u003cproject\u003e.iam.gserviceaccount.com",
+      "project": "\u003cproject\u003e",
+      "role": "roles/viewer"
+    },
+    "google_pubsub_subscription.diff": {
+      "ack_deadline_seconds": 20,
+      "bigquery_config": [],
+      "cloud_storage_config": [],
+      "dead_letter_policy": [],
+      "deletion_policy": "DELETE",
+      "effective_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "enable_exactly_once_delivery": false,
+      "enable_message_ordering": false,
+      "expiration_policy": [
+        {
+          "ttl": ""
+        }
+      ],
+      "filter": "",
+      "id": "projects/\u003cproject\u003e/subscriptions/jc-tf-diff-sub-\u003csuffix\u003e",
+      "labels": null,
+      "message_retention_duration": "600s",
+      "message_transforms": [],
+      "name": "jc-tf-diff-sub-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e",
+      "push_config": [],
+      "retain_acked_messages": false,
+      "retry_policy": [
+        {
+          "maximum_backoff": "120s",
+          "minimum_backoff": "10s"
+        }
+      ],
+      "tags": null,
+      "terraform_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "topic": "projects/\u003cproject\u003e/topics/jc-tf-diff-\u003csuffix\u003e"
+    },
+    "google_pubsub_topic.diff": {
+      "deletion_policy": "DELETE",
+      "effective_labels": {
+        "env": "differential",
+        "goog-terraform-provisioned": "true"
+      },
+      "id": "projects/\u003cproject\u003e/topics/jc-tf-diff-\u003csuffix\u003e",
+      "ingestion_data_source_settings": [],
+      "kms_key_name": "",
+      "labels": {
+        "env": "differential"
+      },
+      "message_retention_duration": "",
+      "message_storage_policy": [],
+      "message_transforms": [],
+      "name": "jc-tf-diff-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e",
+      "schema_settings": [],
+      "tags": null,
+      "terraform_labels": {
+        "env": "differential",
+        "goog-terraform-provisioned": "true"
+      }
+    },
+    "google_secret_manager_secret.diff": {
+      "annotations": null,
+      "create_time": "\u003ctimestamp\u003e",
+      "deletion_policy": "DELETE",
+      "deletion_protection": false,
+      "effective_annotations": {},
+      "effective_labels": {
+        "env": "differential",
+        "goog-terraform-provisioned": "true"
+      },
+      "expire_time": "\u003ctimestamp\u003e",
+      "id": "projects/\u003cproject\u003e/secrets/jc-tf-diff-\u003csuffix\u003e",
+      "labels": {
+        "env": "differential"
+      },
+      "name": "projects/\u003cproject\u003e/secrets/jc-tf-diff-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e",
+      "replication": [
+        {
+          "auto": [
+            {
+              "customer_managed_encryption": []
+            }
+          ],
+          "user_managed": []
+        }
+      ],
+      "rotation": [],
+      "secret_id": "jc-tf-diff-\u003csuffix\u003e",
+      "tags": null,
+      "terraform_labels": {
+        "env": "differential",
+        "goog-terraform-provisioned": "true"
+      },
+      "topics": [],
+      "ttl": null,
+      "version_aliases": null,
+      "version_destroy_ttl": ""
+    },
+    "google_secret_manager_secret_version.diff": {
+      "create_time": "\u003ctimestamp\u003e",
+      "deletion_policy": "DELETE",
+      "destroy_time": "",
+      "enabled": true,
+      "id": "projects/\u003cproject\u003e/secrets/jc-tf-diff-\u003csuffix\u003e/versions/1",
+      "is_secret_data_base64": false,
+      "name": "projects/\u003cproject\u003e/secrets/jc-tf-diff-\u003csuffix\u003e/versions/1",
+      "project": null,
+      "secret": "projects/\u003cproject\u003e/secrets/jc-tf-diff-\u003csuffix\u003e",
+      "secret_data_wo": null,
+      "secret_data_wo_version": 0,
+      "version": "1"
+    },
+    "google_service_account.diff": {
+      "account_id": "jc-tf-diff-\u003csuffix\u003e",
+      "create_ignore_already_exists": null,
+      "deletion_policy": "DELETE",
+      "description": "",
+      "disabled": false,
+      "display_name": "jaiscloud terraform differential",
+      "email": "jc-tf-diff-\u003csuffix\u003e@\u003cproject\u003e.iam.gserviceaccount.com",
+      "id": "projects/\u003cproject\u003e/serviceAccounts/jc-tf-diff-\u003csuffix\u003e@\u003cproject\u003e.iam.gserviceaccount.com",
+      "member": "serviceAccount:jc-tf-diff-\u003csuffix\u003e@\u003cproject\u003e.iam.gserviceaccount.com",
+      "name": "projects/\u003cproject\u003e/serviceAccounts/jc-tf-diff-\u003csuffix\u003e@\u003cproject\u003e.iam.gserviceaccount.com",
+      "project": "\u003cproject\u003e",
+      "unique_id": "\u003cunique-id\u003e"
+    },
+    "google_storage_bucket.diff": {
+      "autoclass": [],
+      "cors": [
+        {
+          "max_age_seconds": 3600,
+          "method": [
+            "GET",
+            "HEAD"
+          ],
+          "origin": [
+            "https://example.com"
+          ],
+          "response_header": [
+            "Content-Type"
+          ]
+        }
+      ],
+      "custom_placement_config": [],
+      "default_event_based_hold": false,
+      "deletion_policy": "DELETE",
+      "effective_labels": {
+        "env": "differential",
+        "goog-terraform-provisioned": "true",
+        "managed_by": "terraform"
+      },
+      "enable_object_retention": false,
+      "encryption": [],
+      "force_destroy": true,
+      "hierarchical_namespace": [
+        {
+          "enabled": false
+        }
+      ],
+      "id": "jc-tf-diff-\u003csuffix\u003e",
+      "ip_filter": [],
+      "labels": {
+        "env": "differential",
+        "managed_by": "terraform"
+      },
+      "lifecycle_rule": [
+        {
+          "action": [
+            {
+              "storage_class": "",
+              "type": "Delete"
+            }
+          ],
+          "condition": [
+            {
+              "age": 7,
+              "created_before": "",
+              "custom_time_before": "",
+              "days_since_custom_time": 0,
+              "days_since_noncurrent_time": 0,
+              "matches_prefix": [],
+              "matches_storage_class": [],
+              "matches_suffix": [],
+              "noncurrent_time_before": "",
+              "num_newer_versions": 0,
+              "send_age_if_zero": false,
+              "send_days_since_custom_time_if_zero": false,
+              "send_days_since_noncurrent_time_if_zero": false,
+              "send_num_newer_versions_if_zero": false,
+              "size_above_bytes": 0,
+              "size_below_bytes": 0,
+              "with_state": "ANY"
+            }
+          ]
+        }
+      ],
+      "location": "US-CENTRAL1",
+      "logging": [],
+      "name": "jc-tf-diff-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e",
+      "project_number": "\u003cproject\u003e",
+      "public_access_prevention": "inherited",
+      "requester_pays": false,
+      "retention_policy": [],
+      "rpo": null,
+      "self_link": "\u003corigin\u003e/storage/v1/b/jc-tf-diff-\u003csuffix\u003e",
+      "soft_delete_policy": [
+        {
+          "effective_time": "\u003ctimestamp\u003e",
+          "retention_duration_seconds": 604800
+        }
+      ],
+      "storage_class": "STANDARD",
+      "terraform_labels": {
+        "env": "differential",
+        "goog-terraform-provisioned": "true",
+        "managed_by": "terraform"
+      },
+      "time_created": "\u003ctimestamp\u003e",
+      "uniform_bucket_level_access": true,
+      "updated": "\u003ctimestamp\u003e",
+      "url": "gs://jc-tf-diff-\u003csuffix\u003e",
+      "versioning": [
+        {
+          "enabled": true
+        }
+      ],
+      "website": []
+    },
+    "google_storage_bucket_object.diff": {
+      "bucket": "jc-tf-diff-\u003csuffix\u003e",
+      "cache_control": "",
+      "content_disposition": "",
+      "content_encoding": "",
+      "content_language": "",
+      "content_type": "text/plain",
+      "contexts": [],
+      "crc32c": "AMeVkg==",
+      "customer_encryption": [],
+      "deletion_policy": "DELETE",
+      "detect_md5hash": "jpw8qqWMZv8FsZzXPzt22w==",
+      "event_based_hold": false,
+      "force_empty_content_type": null,
+      "generation": "\u003cgeneration\u003e",
+      "id": "jc-tf-diff-\u003csuffix\u003e-hello.txt",
+      "kms_key_name": "",
+      "md5hash": "jpw8qqWMZv8FsZzXPzt22w==",
+      "md5hexhash": "8e9c3caaa58c66ff05b19cd73f3b76db",
+      "media_link": "\u003corigin\u003e/download/storage/v1/b/jc-tf-diff-\u003csuffix\u003e/o/hello.txt?generation=\u003cgeneration\u003e\u0026alt=media",
+      "metadata": null,
+      "name": "hello.txt",
+      "output_name": "hello.txt",
+      "retention": [],
+      "self_link": "\u003corigin\u003e/storage/v1/b/jc-tf-diff-\u003csuffix\u003e/o/hello.txt",
+      "source": null,
+      "source_md5hash": "",
+      "storage_class": "STANDARD",
+      "temporary_hold": false
+    }
+  },
+  "plan": {
+    "google_kms_crypto_key.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "crypto_key_backend",
+        "destroy_scheduled_duration",
+        "id",
+        "import_only",
+        "key_ring",
+        "primary",
+        "version_template"
+      ]
+    },
+    "google_kms_key_ring.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id"
+      ]
+    },
+    "google_project_iam_member.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "etag",
+        "id"
+      ]
+    },
+    "google_pubsub_subscription.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id",
+        "topic"
+      ]
+    },
+    "google_pubsub_topic.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id",
+        "message_storage_policy"
+      ]
+    },
+    "google_secret_manager_secret.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "create_time",
+        "effective_annotations",
+        "expire_time",
+        "id",
+        "name"
+      ]
+    },
+    "google_secret_manager_secret_version.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "create_time",
+        "deletion_policy",
+        "destroy_time",
+        "id",
+        "name",
+        "project",
+        "secret",
+        "version"
+      ]
+    },
+    "google_service_account.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id",
+        "name",
+        "unique_id"
+      ]
+    },
+    "google_storage_bucket.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id",
+        "lifecycle_rule[0].condition[0].with_state",
+        "project_number",
+        "public_access_prevention",
+        "rpo",
+        "self_link",
+        "soft_delete_policy",
+        "time_created",
+        "updated",
+        "url",
+        "website"
+      ]
+    },
+    "google_storage_bucket_object.diff": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "crc32c",
+        "generation",
+        "id",
+        "kms_key_name",
+        "md5hash",
+        "md5hexhash",
+        "media_link",
+        "output_name",
+        "self_link",
+        "storage_class"
+      ]
+    }
+  },
+  "replan": {
+    "google_kms_crypto_key.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_key_ring.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_project_iam_member.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_pubsub_subscription.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_pubsub_topic.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_secret_manager_secret.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_secret_manager_secret_version.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_service_account.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_storage_bucket.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_storage_bucket_object.diff": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    }
+  }
+}

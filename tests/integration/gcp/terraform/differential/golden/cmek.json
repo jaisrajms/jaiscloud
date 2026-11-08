@@ -1,0 +1,526 @@
+{
+  "case": "cmek",
+  "provenance": {
+    "project": "parity-diff-jaiscloud",
+    "region": "us-central1",
+    "recorded_at": "2026-11-08T03:14:04Z",
+    "terraform_version": "1.16.3",
+    "provider_version": "hashicorp/google 7.46.2",
+    "platform": "linux_amd64",
+    "case_dir": "../patterns/01-cmek"
+  },
+  "resources": {
+    "google_bigquery_dataset.cmek": {
+      "access": [
+        {
+          "condition": [],
+          "dataset": [],
+          "domain": "",
+          "group_by_email": "",
+          "iam_member": "",
+          "role": "OWNER",
+          "routine": [],
+          "special_group": "",
+          "user_by_email": "\u003cuser\u003e",
+          "view": []
+        },
+        {
+          "condition": [],
+          "dataset": [],
+          "domain": "",
+          "group_by_email": "",
+          "iam_member": "",
+          "role": "OWNER",
+          "routine": [],
+          "special_group": "projectOwners",
+          "user_by_email": "",
+          "view": []
+        },
+        {
+          "condition": [],
+          "dataset": [],
+          "domain": "",
+          "group_by_email": "",
+          "iam_member": "",
+          "role": "READER",
+          "routine": [],
+          "special_group": "projectReaders",
+          "user_by_email": "",
+          "view": []
+        },
+        {
+          "condition": [],
+          "dataset": [],
+          "domain": "",
+          "group_by_email": "",
+          "iam_member": "",
+          "role": "WRITER",
+          "routine": [],
+          "special_group": "projectWriters",
+          "user_by_email": "",
+          "view": []
+        }
+      ],
+      "creation_time": "\u003ctimestamp\u003e",
+      "dataset_id": "jc_tf_cmek_ds_\u003csuffix\u003e",
+      "default_collation": "",
+      "default_encryption_configuration": [
+        {
+          "kms_key_name": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-key-\u003csuffix\u003e"
+        }
+      ],
+      "default_partition_expiration_ms": 0,
+      "default_table_expiration_ms": 0,
+      "delete_contents_on_destroy": false,
+      "deletion_policy": "DELETE",
+      "description": "",
+      "effective_labels": {
+        "env": "compat-test",
+        "goog-terraform-provisioned": "true"
+      },
+      "etag": "\u003cetag\u003e",
+      "external_catalog_dataset_options": [],
+      "external_dataset_reference": [],
+      "friendly_name": "",
+      "id": "projects/\u003cproject\u003e/datasets/jc_tf_cmek_ds_\u003csuffix\u003e",
+      "is_case_insensitive": false,
+      "labels": {
+        "env": "compat-test"
+      },
+      "last_modified_time": "\u003ctimestamp\u003e",
+      "location": "us-central1",
+      "max_time_travel_hours": "168",
+      "project": "\u003cproject\u003e",
+      "resource_tags": null,
+      "self_link": "\u003corigin\u003e/bigquery/v2/projects/\u003cproject\u003e/datasets/jc_tf_cmek_ds_\u003csuffix\u003e",
+      "storage_billing_model": "",
+      "terraform_labels": {
+        "env": "compat-test",
+        "goog-terraform-provisioned": "true"
+      }
+    },
+    "google_kms_crypto_key.global": {
+      "crypto_key_backend": "",
+      "deletion_policy": "DELETE",
+      "destroy_scheduled_duration": "2592000s",
+      "effective_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "id": "projects/\u003cproject\u003e/locations/global/keyRings/jc-tf-cmek-gring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-gkey-\u003csuffix\u003e",
+      "import_only": false,
+      "key_ring": "projects/\u003cproject\u003e/locations/global/keyRings/jc-tf-cmek-gring-\u003csuffix\u003e",
+      "labels": null,
+      "name": "jc-tf-cmek-gkey-\u003csuffix\u003e",
+      "primary": [
+        {
+          "name": "projects/\u003cproject\u003e/locations/global/keyRings/jc-tf-cmek-gring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-gkey-\u003csuffix\u003e/cryptoKeyVersions/1",
+          "state": "ENABLED"
+        }
+      ],
+      "purpose": "ENCRYPT_DECRYPT",
+      "rotation_period": "",
+      "skip_initial_version_creation": false,
+      "terraform_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "version_template": [
+        {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protection_level": "SOFTWARE"
+        }
+      ]
+    },
+    "google_kms_crypto_key.primary": {
+      "crypto_key_backend": "",
+      "deletion_policy": "DELETE",
+      "destroy_scheduled_duration": "2592000s",
+      "effective_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "id": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-key-\u003csuffix\u003e",
+      "import_only": false,
+      "key_ring": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring-\u003csuffix\u003e",
+      "labels": null,
+      "name": "jc-tf-cmek-key-\u003csuffix\u003e",
+      "primary": [
+        {
+          "name": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-key-\u003csuffix\u003e/cryptoKeyVersions/1",
+          "state": "ENABLED"
+        }
+      ],
+      "purpose": "ENCRYPT_DECRYPT",
+      "rotation_period": "",
+      "skip_initial_version_creation": false,
+      "terraform_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "version_template": [
+        {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protection_level": "SOFTWARE"
+        }
+      ]
+    },
+    "google_kms_crypto_key.rotated": {
+      "crypto_key_backend": "",
+      "deletion_policy": "DELETE",
+      "destroy_scheduled_duration": "2592000s",
+      "effective_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "id": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring2-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-key2-\u003csuffix\u003e",
+      "import_only": false,
+      "key_ring": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring2-\u003csuffix\u003e",
+      "labels": null,
+      "name": "jc-tf-cmek-key2-\u003csuffix\u003e",
+      "primary": [
+        {
+          "name": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring2-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-key2-\u003csuffix\u003e/cryptoKeyVersions/1",
+          "state": "ENABLED"
+        }
+      ],
+      "purpose": "ENCRYPT_DECRYPT",
+      "rotation_period": "",
+      "skip_initial_version_creation": false,
+      "terraform_labels": {
+        "goog-terraform-provisioned": "true"
+      },
+      "version_template": [
+        {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protection_level": "SOFTWARE"
+        }
+      ]
+    },
+    "google_kms_key_ring.global": {
+      "id": "projects/\u003cproject\u003e/locations/global/keyRings/jc-tf-cmek-gring-\u003csuffix\u003e",
+      "location": "global",
+      "name": "jc-tf-cmek-gring-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e"
+    },
+    "google_kms_key_ring.primary": {
+      "id": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring-\u003csuffix\u003e",
+      "location": "us-central1",
+      "name": "jc-tf-cmek-ring-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e"
+    },
+    "google_kms_key_ring.rotated": {
+      "id": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring2-\u003csuffix\u003e",
+      "location": "us-central1",
+      "name": "jc-tf-cmek-ring2-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e"
+    },
+    "google_secret_manager_secret.cmek": {
+      "annotations": null,
+      "create_time": "\u003ctimestamp\u003e",
+      "deletion_policy": "DELETE",
+      "deletion_protection": false,
+      "effective_annotations": {},
+      "effective_labels": {
+        "env": "compat-test",
+        "goog-terraform-provisioned": "true"
+      },
+      "expire_time": "\u003ctimestamp\u003e",
+      "id": "projects/\u003cproject\u003e/secrets/jc-tf-cmek-secret-\u003csuffix\u003e",
+      "labels": {
+        "env": "compat-test"
+      },
+      "name": "projects/\u003cproject\u003e/secrets/jc-tf-cmek-secret-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e",
+      "replication": [
+        {
+          "auto": [
+            {
+              "customer_managed_encryption": [
+                {
+                  "kms_key_name": "projects/\u003cproject\u003e/locations/global/keyRings/jc-tf-cmek-gring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-gkey-\u003csuffix\u003e"
+                }
+              ]
+            }
+          ],
+          "user_managed": []
+        }
+      ],
+      "rotation": [],
+      "secret_id": "jc-tf-cmek-secret-\u003csuffix\u003e",
+      "tags": null,
+      "terraform_labels": {
+        "env": "compat-test",
+        "goog-terraform-provisioned": "true"
+      },
+      "topics": [],
+      "ttl": null,
+      "version_aliases": null,
+      "version_destroy_ttl": ""
+    },
+    "google_secret_manager_secret_version.cmek": {
+      "create_time": "\u003ctimestamp\u003e",
+      "deletion_policy": "DELETE",
+      "destroy_time": "",
+      "enabled": true,
+      "id": "projects/\u003cproject\u003e/secrets/jc-tf-cmek-secret-\u003csuffix\u003e/versions/1",
+      "is_secret_data_base64": false,
+      "name": "projects/\u003cproject\u003e/secrets/jc-tf-cmek-secret-\u003csuffix\u003e/versions/1",
+      "project": null,
+      "secret": "projects/\u003cproject\u003e/secrets/jc-tf-cmek-secret-\u003csuffix\u003e",
+      "secret_data_wo": null,
+      "secret_data_wo_version": 0,
+      "version": "1"
+    },
+    "google_storage_bucket.cmek": {
+      "autoclass": [],
+      "cors": [],
+      "custom_placement_config": [],
+      "default_event_based_hold": false,
+      "deletion_policy": "DELETE",
+      "effective_labels": {
+        "env": "compat-test",
+        "goog-terraform-provisioned": "true"
+      },
+      "enable_object_retention": false,
+      "encryption": [
+        {
+          "customer_managed_encryption_enforcement_config": [],
+          "customer_supplied_encryption_enforcement_config": [],
+          "default_kms_key_name": "projects/\u003cproject\u003e/locations/us-central1/keyRings/jc-tf-cmek-ring-\u003csuffix\u003e/cryptoKeys/jc-tf-cmek-key-\u003csuffix\u003e",
+          "google_managed_encryption_enforcement_config": []
+        }
+      ],
+      "force_destroy": true,
+      "hierarchical_namespace": [
+        {
+          "enabled": false
+        }
+      ],
+      "id": "jc-tf-cmek-bucket-\u003csuffix\u003e",
+      "ip_filter": [],
+      "labels": {
+        "env": "compat-test"
+      },
+      "lifecycle_rule": [],
+      "location": "US-CENTRAL1",
+      "logging": [],
+      "name": "jc-tf-cmek-bucket-\u003csuffix\u003e",
+      "project": "\u003cproject\u003e",
+      "project_number": "\u003cproject\u003e",
+      "public_access_prevention": "inherited",
+      "requester_pays": false,
+      "retention_policy": [],
+      "rpo": null,
+      "self_link": "\u003corigin\u003e/storage/v1/b/jc-tf-cmek-bucket-\u003csuffix\u003e",
+      "soft_delete_policy": [
+        {
+          "effective_time": "\u003ctimestamp\u003e",
+          "retention_duration_seconds": 604800
+        }
+      ],
+      "storage_class": "STANDARD",
+      "terraform_labels": {
+        "env": "compat-test",
+        "goog-terraform-provisioned": "true"
+      },
+      "time_created": "\u003ctimestamp\u003e",
+      "uniform_bucket_level_access": false,
+      "updated": "\u003ctimestamp\u003e",
+      "url": "gs://jc-tf-cmek-bucket-\u003csuffix\u003e",
+      "versioning": [],
+      "website": []
+    }
+  },
+  "plan": {
+    "google_bigquery_dataset.cmek": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "access",
+        "creation_time",
+        "default_collation",
+        "default_encryption_configuration[0].kms_key_name",
+        "etag",
+        "id",
+        "is_case_insensitive",
+        "last_modified_time",
+        "max_time_travel_hours",
+        "self_link",
+        "storage_billing_model"
+      ]
+    },
+    "google_kms_crypto_key.global": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "crypto_key_backend",
+        "destroy_scheduled_duration",
+        "id",
+        "import_only",
+        "key_ring",
+        "primary",
+        "version_template"
+      ]
+    },
+    "google_kms_crypto_key.primary": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "crypto_key_backend",
+        "destroy_scheduled_duration",
+        "id",
+        "import_only",
+        "key_ring",
+        "primary",
+        "version_template"
+      ]
+    },
+    "google_kms_crypto_key.rotated": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "crypto_key_backend",
+        "destroy_scheduled_duration",
+        "id",
+        "import_only",
+        "key_ring",
+        "primary",
+        "version_template"
+      ]
+    },
+    "google_kms_key_ring.global": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id"
+      ]
+    },
+    "google_kms_key_ring.primary": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id"
+      ]
+    },
+    "google_kms_key_ring.rotated": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "id"
+      ]
+    },
+    "google_secret_manager_secret.cmek": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "create_time",
+        "effective_annotations",
+        "expire_time",
+        "id",
+        "name",
+        "replication[0].auto[0].customer_managed_encryption[0].kms_key_name"
+      ]
+    },
+    "google_secret_manager_secret_version.cmek": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "create_time",
+        "deletion_policy",
+        "destroy_time",
+        "id",
+        "name",
+        "project",
+        "secret",
+        "version"
+      ]
+    },
+    "google_storage_bucket.cmek": {
+      "actions": [
+        "create"
+      ],
+      "unknown": [
+        "encryption[0].default_kms_key_name",
+        "id",
+        "project_number",
+        "public_access_prevention",
+        "rpo",
+        "self_link",
+        "soft_delete_policy",
+        "time_created",
+        "uniform_bucket_level_access",
+        "updated",
+        "url",
+        "versioning",
+        "website"
+      ]
+    }
+  },
+  "replan": {
+    "google_bigquery_dataset.cmek": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_crypto_key.global": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_crypto_key.primary": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_crypto_key.rotated": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_key_ring.global": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_key_ring.primary": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_kms_key_ring.rotated": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_secret_manager_secret.cmek": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_secret_manager_secret_version.cmek": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    },
+    "google_storage_bucket.cmek": {
+      "actions": [
+        "no-op"
+      ],
+      "unknown": []
+    }
+  }
+}
