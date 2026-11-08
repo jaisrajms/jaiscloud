@@ -63,8 +63,14 @@ check "the created project is ACTIVE with its display name and labels" \
   "$ENDPOINT/v1/projects/$PROJECT_ID" \
   "\"projectId\":\"$PROJECT_ID\"" '"lifecycleState":"ACTIVE"' \
   '"name":"jaiscloud tf bootstrap"' '"env":"compat-test"'
+# The provider normalises google_project.number to a decimal integer, while the
+# API's projectNumber is the emulator's synthesized 12-digit zero-padded string;
+# compare the padded form so a number with a leading zero (about 1 run in 10,
+# since the id is hashed) does not flake the assertion.
+PROJECT_NUMBER_API="$PROJECT_NUMBER"
+while [[ ${#PROJECT_NUMBER_API} -lt 12 ]]; do PROJECT_NUMBER_API="0$PROJECT_NUMBER_API"; done
 check "the project lookup carries the Terraform-computed number" \
-  "$ENDPOINT/v1/projects/$PROJECT_ID" "\"projectNumber\":\"$PROJECT_NUMBER\""
+  "$ENDPOINT/v1/projects/$PROJECT_ID" "\"projectNumber\":\"$PROJECT_NUMBER_API\""
 check "the billing association is stored for the created project" \
   "$ENDPOINT/v1/projects/$PROJECT_ID/billingInfo" \
   "\"name\":\"projects/$PROJECT_ID/billingInfo\"" \

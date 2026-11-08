@@ -105,6 +105,87 @@ emit_endpoints() {
     -endpoint "$ENDPOINT" -endpoints "$PATTERNS_DIR/../terraform-endpoints.yaml"
 }
 
+# ── Local echo sink (compositions that prove a delivery) ────────────────────
+# A pattern that asserts a Pub/Sub push or an Eventarc httpEndpoint delivery
+# needs a far end to observe. start_echo_sink builds and starts the shared
+# helpers/echo-sink: every request is appended to ECHO_SINK_LOG as one JSON
+# line (method, path, headers, body) and ECHO_SINK_URL is the base URL the
+# pattern passes to Terraform. Requires Go (this driver already builds
+# tools/tfcorpus with it); a missing Go is a setup failure, not a SKIP.
+ECHO_SINK_PID=""
+ECHO_SINK_URL=""
+ECHO_SINK_LOG=""
+ECHO_SINK_BODY=""
+
+start_echo_sink() {
+  local bin="$WORK/echo-sink" addr_file="$WORK/echo-sink.addr" i
+  ECHO_SINK_LOG="${1:-$WORK/echo-sink.jsonl}"
+  ECHO_SINK_BODY="$WORK/echo-sink.last-body"
+  : >"$ECHO_SINK_LOG"
+  : >"$ECHO_SINK_BODY"
+  if ! command -v go >/dev/null 2>&1; then
+    echo "ERROR: go is required to build the composition echo sink" >&2
+    return 1
+  fi
+  if ! (cd "$REPO_ROOT" && go build -o "$bin" ./tests/integration/gcp/terraform/patterns/helpers/echo-sink); then
+    echo "ERROR: could not build the composition echo sink" >&2
+    return 1
+  fi
+  rm -f "$addr_file"
+  "$bin" -addr 127.0.0.1:0 -out "$ECHO_SINK_LOG" -addr-file "$addr_file" \
+    -raw-latest "$ECHO_SINK_BODY" >"$WORK/echo-sink.out" 2>&1 &
+  ECHO_SINK_PID=$!
+  for ((i = 0; i < 100; i++)); do
+    if [[ -s "$addr_file" ]]; then
+      ECHO_SINK_URL="$(tr -d '\n' <"$addr_file")"
+      return 0
+    fi
+    if ! kill -0 "$ECHO_SINK_PID" 2>/dev/null; then
+      echo "ERROR: the composition echo sink exited:" >&2
+      cat "$WORK/echo-sink.out" >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "ERROR: the composition echo sink did not report an address" >&2
+  return 1
+}
+
+stop_echo_sink() {
+  [[ -n "$ECHO_SINK_PID" ]] || return 0
+  kill "$ECHO_SINK_PID" 2>/dev/null || true
+  wait "$ECHO_SINK_PID" 2>/dev/null || true
+  ECHO_SINK_PID=""
+}
+
+# sink_count FILE — number of deliveries recorded so far.
+sink_count() {
+  [[ -f "$1" ]] || {
+    echo 0
+    return 0
+  }
+  grep -c . "$1" 2>/dev/null || true
+}
+
+# wait_for_sink FILE WANT [TIMEOUT_SECONDS] — poll until FILE holds WANT lines.
+wait_for_sink() {
+  local file="$1" want="$2" timeout="${3:-20}" i limit
+  limit=$((timeout * 10))
+  for ((i = 0; i < limit; i++)); do
+    [[ "$(sink_count "$file")" -ge "$want" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# sink_reset FILE — forget the deliveries recorded so far (the sink keeps its
+# append handle, so the next delivery lands at offset 0).
+sink_reset() {
+  : >"$1"
+  [[ -n "$ECHO_SINK_BODY" ]] && : >"$ECHO_SINK_BODY"
+  return 0
+}
+
 DESTROYED=0
 destroy_work() {
   [[ "$DESTROYED" == "1" ]] && return 0
@@ -112,6 +193,7 @@ destroy_work() {
   tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null 2>&1 || true
 }
 cleanup() {
+  stop_echo_sink
   destroy_work
   if [[ "${JC_TF_KEEP:-0}" != "1" ]]; then
     rm -rf "$WORK"
@@ -261,6 +343,22 @@ check_status() {
     pass "$name"
   else
     fail "$name (HTTP $got, want $want)"
+  fi
+}
+
+# check_absent NAME URL NEEDLE — GET the URL and require NEEDLE is NOT in the
+# body (orphan assertions over a list endpoint).
+check_absent() {
+  local name="$1" url="$2" needle="$3" body
+  body="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$url" 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    fail "$name (no response from $url)"
+    return 0
+  fi
+  if [[ "$body" == *"$needle"* ]]; then
+    fail "$name (found orphan: $needle)"
+  else
+    pass "$name"
   fi
 }
 

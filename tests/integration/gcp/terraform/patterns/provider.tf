@@ -49,6 +49,9 @@ locals {
   endpoint_defaults = {
     big_query_custom_endpoint        = "${var.endpoint}/bigquery/v2/"
     cloud_billing_custom_endpoint    = "${var.endpoint}/v1/"
+    cloud_functions_custom_endpoint  = "${var.endpoint}/v1/"
+    cloud_scheduler_custom_endpoint  = "${var.endpoint}/v1/"
+    eventarc_custom_endpoint         = "${var.endpoint}/v1/"
     iam_custom_endpoint              = "${var.endpoint}/"
     iam_beta_custom_endpoint         = "${var.endpoint}/v1/"
     kms_custom_endpoint              = "${var.endpoint}/v1/"
@@ -69,6 +72,9 @@ provider "google" {
 
   big_query_custom_endpoint        = local.endpoints["big_query_custom_endpoint"]
   cloud_billing_custom_endpoint    = local.endpoints["cloud_billing_custom_endpoint"]
+  cloud_functions_custom_endpoint  = local.endpoints["cloud_functions_custom_endpoint"]
+  cloud_scheduler_custom_endpoint  = local.endpoints["cloud_scheduler_custom_endpoint"]
+  eventarc_custom_endpoint         = local.endpoints["eventarc_custom_endpoint"]
   iam_custom_endpoint              = local.endpoints["iam_custom_endpoint"]
   iam_beta_custom_endpoint         = local.endpoints["iam_beta_custom_endpoint"]
   kms_custom_endpoint              = local.endpoints["kms_custom_endpoint"]
