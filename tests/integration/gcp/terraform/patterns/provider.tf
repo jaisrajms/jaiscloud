@@ -46,20 +46,29 @@ variable "endpoints" {
 }
 
 locals {
+  # container is routed by host, not by path: the provider keeps only
+  # scheme+host of a custom endpoint, so the first DNS label must be
+  # "container" (the emulator routes GKE that way, and the bare /v1/... path
+  # belongs to Managed Kafka). The emitted tfvars carry the same rewrite.
+  container_endpoint = "${replace(var.endpoint, "://", "://container.")}/container/"
+
   endpoint_defaults = {
-    big_query_custom_endpoint        = "${var.endpoint}/bigquery/v2/"
-    cloud_billing_custom_endpoint    = "${var.endpoint}/v1/"
-    cloud_functions_custom_endpoint  = "${var.endpoint}/v1/"
-    cloud_scheduler_custom_endpoint  = "${var.endpoint}/v1/"
-    eventarc_custom_endpoint         = "${var.endpoint}/v1/"
-    iam_custom_endpoint              = "${var.endpoint}/"
-    iam_beta_custom_endpoint         = "${var.endpoint}/v1/"
-    kms_custom_endpoint              = "${var.endpoint}/v1/"
-    pubsub_custom_endpoint           = "${var.endpoint}/v1/"
-    resource_manager_custom_endpoint = "${var.endpoint}/v1/"
-    secret_manager_custom_endpoint   = "${var.endpoint}/v1/"
-    service_usage_custom_endpoint    = "${var.endpoint}/v1/"
-    storage_custom_endpoint          = "${var.endpoint}/storage/v1/"
+    big_query_custom_endpoint          = "${var.endpoint}/bigquery/v2/"
+    cloud_billing_custom_endpoint      = "${var.endpoint}/v1/"
+    cloud_functions_custom_endpoint    = "${var.endpoint}/v1/"
+    cloud_scheduler_custom_endpoint    = "${var.endpoint}/v1/"
+    container_custom_endpoint          = local.container_endpoint
+    dataproc_custom_endpoint           = "${var.endpoint}/"
+    dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
+    eventarc_custom_endpoint           = "${var.endpoint}/v1/"
+    iam_custom_endpoint                = "${var.endpoint}/"
+    iam_beta_custom_endpoint           = "${var.endpoint}/v1/"
+    kms_custom_endpoint                = "${var.endpoint}/v1/"
+    pubsub_custom_endpoint             = "${var.endpoint}/v1/"
+    resource_manager_custom_endpoint   = "${var.endpoint}/v1/"
+    secret_manager_custom_endpoint     = "${var.endpoint}/v1/"
+    service_usage_custom_endpoint      = "${var.endpoint}/v1/"
+    storage_custom_endpoint            = "${var.endpoint}/storage/v1/"
   }
   endpoints = merge(local.endpoint_defaults, var.endpoints)
 }
@@ -70,17 +79,20 @@ provider "google" {
 
   user_project_override = false
 
-  big_query_custom_endpoint        = local.endpoints["big_query_custom_endpoint"]
-  cloud_billing_custom_endpoint    = local.endpoints["cloud_billing_custom_endpoint"]
-  cloud_functions_custom_endpoint  = local.endpoints["cloud_functions_custom_endpoint"]
-  cloud_scheduler_custom_endpoint  = local.endpoints["cloud_scheduler_custom_endpoint"]
-  eventarc_custom_endpoint         = local.endpoints["eventarc_custom_endpoint"]
-  iam_custom_endpoint              = local.endpoints["iam_custom_endpoint"]
-  iam_beta_custom_endpoint         = local.endpoints["iam_beta_custom_endpoint"]
-  kms_custom_endpoint              = local.endpoints["kms_custom_endpoint"]
-  pubsub_custom_endpoint           = local.endpoints["pubsub_custom_endpoint"]
-  resource_manager_custom_endpoint = local.endpoints["resource_manager_custom_endpoint"]
-  secret_manager_custom_endpoint   = local.endpoints["secret_manager_custom_endpoint"]
-  service_usage_custom_endpoint    = local.endpoints["service_usage_custom_endpoint"]
-  storage_custom_endpoint          = local.endpoints["storage_custom_endpoint"]
+  big_query_custom_endpoint          = local.endpoints["big_query_custom_endpoint"]
+  cloud_billing_custom_endpoint      = local.endpoints["cloud_billing_custom_endpoint"]
+  cloud_functions_custom_endpoint    = local.endpoints["cloud_functions_custom_endpoint"]
+  cloud_scheduler_custom_endpoint    = local.endpoints["cloud_scheduler_custom_endpoint"]
+  container_custom_endpoint          = local.endpoints["container_custom_endpoint"]
+  dataproc_custom_endpoint           = local.endpoints["dataproc_custom_endpoint"]
+  dataproc_metastore_custom_endpoint = local.endpoints["dataproc_metastore_custom_endpoint"]
+  eventarc_custom_endpoint           = local.endpoints["eventarc_custom_endpoint"]
+  iam_custom_endpoint                = local.endpoints["iam_custom_endpoint"]
+  iam_beta_custom_endpoint           = local.endpoints["iam_beta_custom_endpoint"]
+  kms_custom_endpoint                = local.endpoints["kms_custom_endpoint"]
+  pubsub_custom_endpoint             = local.endpoints["pubsub_custom_endpoint"]
+  resource_manager_custom_endpoint   = local.endpoints["resource_manager_custom_endpoint"]
+  secret_manager_custom_endpoint     = local.endpoints["secret_manager_custom_endpoint"]
+  service_usage_custom_endpoint      = local.endpoints["service_usage_custom_endpoint"]
+  storage_custom_endpoint            = local.endpoints["storage_custom_endpoint"]
 }

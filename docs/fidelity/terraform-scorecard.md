@@ -491,6 +491,56 @@ Recorded gaps and boundaries:
 | TF2-12 | known, separate session | Provider 7.46.2 calls `jobs:resume` after every create when `paused` is false and the emulator rejects resuming an ENABLED job, so the job is created paused and fired with `jobs.run`; `fix/gcp-scheduler-resume-enabled` owns the enabled path. |
 | TF3-4-2 | known, separate session | An all-zero `retry_config` is dropped by the provider and not synthesized by the emulator's read, so the pattern omits the block; `fix/gcp-scheduler-retry-config-defaults` owns the defaults. |
 
+## TF4-3 — Composition pattern: data lake + GKE/Dataproc (2026-11-07)
+
+One new pattern under `patterns/`, same driver and contract as TF4-1/TF4-2. It
+composes the analytics stack — buckets, BigQuery, GKE, Dataproc-on-GKE, a
+Dataproc job and Dataproc Metastore — and asserts the data-path read-backs, the
+clean re-plan, and the pool-survives-the-virtual-cluster-delete ordering.
+
+```bash
+make test-gcp-terraform-patterns STRICT=1                 # Terraform
+make test-gcp-terraform-patterns TF_BIN=tofu STRICT=1     # OpenTofu
+make test-gcp-terraform-pattern PATTERN=03-datalake       # one, own emulator
+```
+
+Runs (fresh ephemeral emulator; `STRICT=1`, so a SKIP fails):
+
+| binary | result | patterns |
+|---|---|---|
+| Terraform 1.16.3 | PASS (4 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 41 |
+| OpenTofu 1.12.6 | PASS (4 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27, `02-events` 43, `03-datalake` 41 |
+
+What `03-datalake` proves:
+
+- one apply creates input/output/staging buckets with the job's code and seed
+  objects, a BigQuery dataset/table/routine/row-access-policy, a regional GKE
+  cluster with Workload Identity, a Dataproc-on-GKE virtual cluster with two
+  node-pool targets, a pyspark `google_dataproc_job`, a Dataproc Metastore
+  service + federation and the job account's database-level IAM grant — each
+  cross-resource reference (`bucket.name`, `container_cluster.name`,
+  `metastore_service.id`) resolving, and the whole graph re-planning clean;
+- the controller pool reads back through `container.v1` with its explicit
+  1..3 autoscaler and `machineType`, the named-only driver/executor pool with
+  the API's 1/10 defaults, and the virtual-cluster read omits the input-only
+  `nodePoolConfig`;
+- the submitted job reaches `DONE` with the input/output `gs://` URIs it was
+  given;
+- the Metastore service is `ACTIVE` with its Hive version, the federation names
+  it at backend rank `0`, and the database `:getIamPolicy` carries the job
+  account's `roles/metastore.admin` grant;
+- destroying the job and then the virtual cluster leaves both reconciled node
+  pools readable (real Dataproc does not own them); the full destroy leaves no
+  orphan cluster, bucket, dataset, Metastore service, federation or IAM grant.
+
+Recorded boundaries:
+
+| ID | classification | evidence |
+|---|---|---|
+| TF4-3-1 | `no fix` (provider schema) | `google_bigquery_table.deletion_protection` defaults to `true` in provider 7.x — a client-side destroy guard, not an API behaviour. The pattern sets it `false`, as a composition that tears its own stack down must. |
+| TF4-3-2 | `no fix` (Discovery shape) | A federation's `backendMetastores` is a map keyed by rank (`additionalProperties: BackendMetastore`), and `BackendMetastore` has no rank member: the provider's `rank` HCL attribute becomes the map key. The pattern asserts `"backendMetastores": {"0": …}` and no `"rank"`. |
+| TF4-3-3 | `out of scope` | The Spark data plane and an ELT run into BigQuery stay out of a local emulator and out of this pattern: nothing is scheduled onto the reconciled pools, the output bucket stays empty, and there is no BigQuery load-job surface. `demo/dpgke-lifecycle` and its k3d gate own the real-driver leg (`spark/wordcount.py`), and the pattern README points there instead of duplicating it. |
+
 ## What this does not prove
 
 This is emulator-only evidence. It says nothing about authz/IAM conditions,
