@@ -131,6 +131,11 @@ services:
     endpoints:
       - field: secret_manager_custom_endpoint
         path: /v1/
+      # Regional secrets use a per-location host in real GCP
+      # (secretmanager.{location}.rep.googleapis.com); the provider's regional
+      # product reads its own custom-endpoint field.
+      - field: secret_manager_regional_custom_endpoint
+        path: /v1/
   serviceusage:
     endpoints:
       - field: service_usage_custom_endpoint

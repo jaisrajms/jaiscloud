@@ -300,8 +300,67 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/v1/projects/" + p + "/secrets/" + secret + ":rotateSecret", Body: `{}`},
 		Scenario{Service: "secretmanager", Method: "GET",
 			Path: "/v1/projects/" + p + "/secrets/" + secret + "/versions"},
+		// The version lifecycle, metadata patch and the IAM mixin, so every
+		// project-level Secret action has a curated response (the regional
+		// surface below mirrors them).
+		Scenario{Service: "secretmanager", Method: "GET",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + "/versions/1"},
+		Scenario{Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + "/versions/1:disable"},
+		Scenario{Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + "/versions/1:enable"},
+		Scenario{Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + "/versions/1:destroy"},
+		Scenario{Service: "secretmanager", Method: "PATCH",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + "?updateMask=labels",
+			Body: `{"labels":{"env":"prod"}}`},
+		Scenario{Service: "secretmanager", Method: "GET",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + ":getIamPolicy"},
+		Scenario{Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + p + "/secrets/" + secret + ":testIamPermissions",
+			Body: `{"permissions":["secretmanager.versions.access"]}`},
 		Scenario{Service: "secretmanager", Method: "GET", Path: "/v1/projects/" + p + "/secrets/missing-" + suffix},
 		Scenario{Service: "secretmanager", Method: "DELETE", Path: "/v1/projects/" + p + "/secrets/" + secret},
+	)
+
+	// ─── Secret Manager: regional secrets (projects.locations.secrets) ────────
+	// The same verbs over a location-qualified namespace: create/read/list,
+	// a masked patch, a version (add/access/list/get/disable/enable/destroy),
+	// the IAM mixin, managed rotation, and the scoping proof that the
+	// project-level list never includes a regional secret.
+	regSecret := "conf-regional-" + suffix
+	regBase := "/v1/projects/" + p + "/locations/us-central1/secrets"
+	regPath := regBase + "/" + regSecret
+	sc = append(sc,
+		Scenario{Service: "secretmanager", Method: "POST", Path: regBase + "?secretId=" + regSecret,
+			Body: `{"labels":{"env":"conf"}}`},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regPath},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regBase},
+		Scenario{Service: "secretmanager", Method: "GET", Path: "/v1/projects/" + p + "/secrets"},
+		Scenario{Service: "secretmanager", Method: "PATCH", Path: regPath + "?updateMask=labels",
+			Body: `{"labels":{"env":"prod"}}`},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + ":addVersion",
+			Body: `{"payload":{"data":"cmVnaW9uYWw="}}`},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regPath + "/versions/1:access"},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regPath + "/versions"},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regPath + "/versions/1"},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + "/versions/1:disable"},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + "/versions/1:enable"},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + "/versions/1:destroy"},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regPath + ":getIamPolicy"},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + ":testIamPermissions",
+			Body: `{"permissions":["secretmanager.versions.access"]}`},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + ":enableManagedRotation",
+			Body: `{"cloudSqlSingleUserCredentials":{"instanceId":"conf-instance","username":"conf-user"}}`},
+		Scenario{Service: "secretmanager", Method: "POST", Path: regPath + ":rotateSecret", Body: `{}`},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regPath + "/versions"},
+		Scenario{Service: "secretmanager", Method: "GET", Path: regBase + "/missing-" + suffix},
+		Scenario{Service: "secretmanager", Method: "DELETE", Path: regPath},
 	)
 
 	// ─── Cloud KMS ────────────────────────────────────────────────────────────

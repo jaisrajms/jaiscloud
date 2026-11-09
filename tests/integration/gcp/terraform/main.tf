@@ -124,6 +124,44 @@ resource "google_secret_manager_secret_iam_member" "accessor" {
   member    = "serviceAccount:${google_service_account.compat.email}"
 }
 
+# A regional secret (projects.locations.secrets): the location is the storage
+# location, so there is no replication policy; CMEK is the top-level
+# customerManagedEncryption block, and its key must reside in the secret's own
+# location (the region-local key below).
+resource "google_secret_manager_regional_secret" "regional" {
+  secret_id = "jaiscloud-tf-regional-secret"
+  location  = var.region
+  project   = var.project
+
+  labels = {
+    env = "compat-test"
+  }
+
+  annotations = {
+    owner = "terraform"
+  }
+
+  deletion_protection = false
+
+  customer_managed_encryption {
+    kms_key_name = google_kms_crypto_key.compat.id
+  }
+}
+
+resource "google_secret_manager_regional_secret_version" "regional" {
+  secret          = google_secret_manager_regional_secret.regional.id
+  secret_data     = "jaiscloud-tf-regional-secret-value"
+  deletion_policy = "DELETE"
+}
+
+resource "google_secret_manager_regional_secret_iam_member" "regional" {
+  project   = var.project
+  location  = google_secret_manager_regional_secret.regional.location
+  secret_id = google_secret_manager_regional_secret.regional.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.compat.email}"
+}
+
 # ── Cloud KMS ─────────────────────────────────────────────────────────────────
 resource "google_kms_key_ring" "compat" {
   name     = "jaiscloud-tf-keyring"

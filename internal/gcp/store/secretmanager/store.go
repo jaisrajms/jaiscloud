@@ -134,6 +134,8 @@ func GeneratePassword() (string, error) {
 
 // Secret is Secret Manager secret metadata.
 type Secret struct {
+	// ID is the store key: the secret ID for a project-level secret, or the
+	// location-qualified "locations/{l}/secrets/{id}" name for a regional one.
 	ID          string
 	Labels      map[string]string
 	Annotations map[string]string
@@ -150,9 +152,10 @@ type Secret struct {
 	// ReplicationPolicy() to read it.
 	Replication *Replication `json:"replication,omitempty"`
 	// KmsKeyName is the effective wrapping key of new versions (the automatic
-	// arm's key or the first user-managed replica's). Kept alongside the policy
-	// because the version-wrap path and records written by older builds read
-	// it; it is never the source of truth for the wire shape.
+	// arm's key, the first user-managed replica's, or a regional secret's
+	// customerManagedEncryption key). Kept alongside the policy because the
+	// version-wrap path and records written by older builds read it; it is never
+	// the source of truth for the wire shape.
 	KmsKeyName string
 	// VersionDestroyTTL is the destruction delay applied when a version is
 	// destroyed (the API's `versionDestroyTtl`, stored in its canonical

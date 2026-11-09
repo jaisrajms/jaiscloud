@@ -218,6 +218,28 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Secret.GetIamPolicy":          p.GetIamPolicy,
 		"Secret.SetIamPolicy":          p.SetIamPolicy,
 		"Secret.TestIamPermissions":    p.TestIamPermissions,
+
+		// Regional secrets (projects.locations.secrets) share the handlers: the
+		// store key carries the location, so each handler infers its scope from
+		// the request name. Distinct dispatch keys keep the two surfaces
+		// separately graded in the conformance matrix.
+		"Secret.RegionalCreate":                p.Create,
+		"Secret.RegionalList":                  p.List,
+		"Secret.RegionalGet":                   p.Get,
+		"Secret.RegionalUpdate":                p.Update,
+		"Secret.RegionalDelete":                p.Delete,
+		"Secret.RegionalAddVersion":            p.AddVersion,
+		"Secret.RegionalAccess":                p.Access,
+		"Secret.RegionalListVersions":          p.ListVersions,
+		"Secret.RegionalGetVersion":            p.GetVersion,
+		"Secret.RegionalDestroyVersion":        p.DestroyVersion,
+		"Secret.RegionalDisableVersion":        p.DisableVersion,
+		"Secret.RegionalEnableVersion":         p.EnableVersion,
+		"Secret.RegionalEnableManagedRotation": p.EnableManagedRotation,
+		"Secret.RegionalRotateSecret":          p.RotateSecret,
+		"Secret.RegionalGetIamPolicy":          p.GetIamPolicy,
+		"Secret.RegionalSetIamPolicy":          p.SetIamPolicy,
+		"Secret.RegionalTestIamPermissions":    p.TestIamPermissions,
 	}
 }
 
@@ -236,7 +258,8 @@ type secretMeta struct {
 	// legacy record.
 	Replication *secretmanagerstore.Replication
 	// legacyKmsKeyName is the stored effective key of a record that predates the
-	// modelled policy; it is preserved verbatim so such a record keeps its CMEK.
+	// modelled policy, or a regional secret's customerManagedEncryption key; it
+	// is preserved verbatim so such a record keeps its CMEK.
 	legacyKmsKeyName string
 	// VersionDestroyTTL is the canonical google-duration delayed-destruction
 	// delay ("" when disabled); ExpireTime is when the secret auto-deletes
@@ -254,8 +277,9 @@ type versionMeta struct {
 	Data                 string `json:"data"` // base64 payload (encrypted at rest)
 	// KmsKeyVersionName is the full CryptoKeyVersion name (see
 	// secretmanagersvc.KmsKeyVersionName) reported back through
-	// replicationStatus.automatic.customerManagedEncryption; empty when the
-	// version has no customer-managed encryption.
+	// replicationStatus.automatic.customerManagedEncryption (or, for a regional
+	// secret, the top-level customerManagedEncryption); empty when the version
+	// has no customer-managed encryption.
 	KmsKeyVersionName string `json:"kmsKeyVersionName,omitempty"`
 	// KmsKeyName is the Cloud KMS key this version's DEK was wrapped with; it
 	// decides which user-managed replica reports a CMEK status.
@@ -276,36 +300,14 @@ func resourceName(nr *model.NormalizedRequest) (string, error) {
 	return n, nil
 }
 
-// parseSecretName splits a relative resource name or full GCP name into the secret ID and version.
-func parseSecretName(name string) (secret, version string) {
-	if i := strings.Index(name, "/secrets/"); i >= 0 {
-		name = name[i+len("/secrets/"):]
-	} else {
-		name = strings.TrimPrefix(name, "secrets/")
-	}
-	if i := strings.Index(name, "/versions/"); i >= 0 {
-		return name[:i], name[i+len("/versions/"):]
-	}
-	// A trailing "/versions" is the versions collection (secrets list), not a
-	// version resource; treat the secret as having no version component.
-	if strings.HasSuffix(name, "/versions") {
-		return strings.TrimSuffix(name, "/versions"), ""
-	}
-	return name, ""
-}
-
-// secretID extracts the secret ID from a relative name or a full GCP name.
-func secretID(name string) string {
-	if i := strings.Index(name, "/secrets/"); i >= 0 {
-		return name[i+len("/secrets/"):]
-	}
-	return strings.TrimPrefix(name, "secrets/")
-}
+// secretKey returns the store key a request name refers to: the secret ID for a
+// project-level secret, or "locations/{loc}/secrets/{id}" for a regional one.
+func secretKey(name string) string { return secretmanagersvc.SecretKey(name) }
 
 func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 	tc, _ := time.Parse(time.RFC3339Nano, m.CreateTime)
 	s := secretmanagerstore.Secret{
-		ID: secretID(m.Name), Labels: m.Labels, Annotations: m.Annotations, Topics: m.Topics,
+		ID: secretmanagersvc.SecretKey(m.Name), Labels: m.Labels, Annotations: m.Annotations, Topics: m.Topics,
 		CreateTime: tc, NextVer: m.NextVer,
 		Rotation: m.Rotation, VersionAliases: m.VersionAliases,
 		Replication: m.Replication, KmsKeyName: m.legacyKmsKeyName,
@@ -545,6 +547,23 @@ func customerManagedEncryptionFromBody(m map[string]any) *secretmanagerstore.Cus
 	return &secretmanagerstore.CustomerManagedEncryption{KmsKeyName: key}
 }
 
+// regionalCMEKFromBody reads the top-level customerManagedEncryption of a
+// regional Secret. present reports whether the request carried the object, so a
+// masked patch that omits it clears the stored key; the returned configuration
+// is nil for a present-but-null/empty object (Google-managed).
+func regionalCMEKFromBody(body map[string]any) (cme *secretmanagerstore.CustomerManagedEncryption, present bool) {
+	raw, ok := body["customerManagedEncryption"]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return &secretmanagerstore.CustomerManagedEncryption{}, true
+	}
+	key, _ := obj["kmsKeyName"].(string)
+	return &secretmanagerstore.CustomerManagedEncryption{KmsKeyName: key}, true
+}
+
 func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version) versionMeta {
 	m := versionMeta{
 		Name:  nr.ResourceID("secret", v.SecretID) + "/versions/" + v.VersionID,
@@ -572,21 +591,24 @@ func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version)
 
 func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	p.TrackProject(nr.AccountID)
+	parent, _ := nr.Params["name"].(string)
+	location := secretmanagersvc.ParentLocation(parent)
 	id, _ := nr.Params["secretId"].(string)
 	if id == "" {
 		if body, ok := nr.Params["body"].(map[string]any); ok {
 			if n, _ := body["name"].(string); n != "" {
-				id = secretID(n)
+				id = secretmanagersvc.SecretID(n)
 			}
 		}
 	}
 	if id == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing secretId", 400)
 	}
+	key := secretmanagersvc.ParentKey(parent, id)
 	body, _ := nr.Params["body"].(map[string]any)
 	now := clock.Now()
 	m := secretMeta{
-		Name:       nr.ResourceID("secret", id),
+		Name:       nr.ResourceID("secret", key),
 		CreateTime: timestamp.Canonical(now),
 		NextVer:    1,
 	}
@@ -636,12 +658,33 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	if err := secretmanagersvc.ValidateReplicationKeys(ctx, p.encryptor, nr.AccountID, replication); err != nil {
-		return nil, err
+	if location != "" {
+		// Regional secrets have no replication policy; the location is their
+		// storage location. Their CMEK configuration is the top-level
+		// customerManagedEncryption field.
+		if replication != nil || body["replication"] != nil {
+			return nil, secretmanagersvc.RegionalReplicationUnsupported()
+		}
+		cme, present := regionalCMEKFromBody(body)
+		if present {
+			if err := secretmanagersvc.ValidateRegionalCMEKKey(ctx, p.encryptor, nr.AccountID, location, cme); err != nil {
+				return nil, err
+			}
+			if cme != nil {
+				m.legacyKmsKeyName = cme.KmsKeyName
+			}
+		}
+	} else {
+		if _, present := regionalCMEKFromBody(body); present {
+			return nil, secretmanagersvc.ProjectCMEKUnsupported()
+		}
+		if err := secretmanagersvc.ValidateReplicationKeys(ctx, p.encryptor, nr.AccountID, replication); err != nil {
+			return nil, err
+		}
+		m.Replication = replication
 	}
-	m.Replication = replication
 	sec := toStoreSecret(m)
-	if err := p.secrets.CreateSecret(ctx, nr.AccountID, id, sec); err != nil {
+	if err := p.secrets.CreateSecret(ctx, nr.AccountID, key, sec); err != nil {
 		if errors.Is(err, secretmanagerstore.ErrAlreadyExists) {
 			return nil, model.NewProviderError("AlreadyExists", "secret already exists", 409)
 		}
@@ -682,6 +725,24 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 		live = append(live, s)
 	}
 	secrets = live
+	// A list is scoped to one secret namespace: the project-level list returns
+	// the global secrets, and a location-level list returns that location's
+	// regional secrets. The two namespaces share one store but never bleed into
+	// each other's response.
+	parent, _ := nr.Params["name"].(string)
+	location := secretmanagersvc.ParentLocation(parent)
+	scoped := secrets[:0]
+	for _, s := range secrets {
+		if location == "" {
+			if secretmanagersvc.IsRegionalKey(s.ID) {
+				continue
+			}
+		} else if !strings.HasPrefix(s.ID, "locations/"+location+"/secrets/") {
+			continue
+		}
+		scoped = append(scoped, s)
+	}
+	secrets = scoped
 	filter, _ := nr.Params["filter"].(string)
 	matched, applied, err := secretmanagersvc.FilterSecrets(nr.AccountID, filter, secrets)
 	if err != nil {
@@ -716,7 +777,7 @@ func (p *Provider) Get(ctx context.Context, nr *model.NormalizedRequest) (*model
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	s, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
 	if err != nil {
 		return nil, mapSecretErr(err)
@@ -738,7 +799,7 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	body, _ := nr.Params["body"].(map[string]any)
 
 	// An expired secret is already gone in real GCP; sweep it before applying
@@ -753,18 +814,41 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	// mask does not name would be destructive now that replication is modelled
 	// (a labels-only patch carrying a stale `replication` must not clear CMEK).
 	mask := restUpdateMask(nr)
+	regional := secretmanagersvc.IsRegionalKey(id)
+	location := secretmanagersvc.ParentLocation(name)
 
 	// Parse the incoming replication policy once: it is request data, not store
 	// state, so it must not be re-derived inside the (retried) atomic mutate.
 	// A request whose mask does not select replication is ignored entirely.
 	var incomingReplication *secretmanagerstore.Replication
 	if mask.has("replication") {
+		if regional {
+			return nil, secretmanagersvc.RegionalReplicationUnsupported()
+		}
 		incomingReplication, err = replicationFromBody(body)
 		if err != nil {
 			return nil, err
 		}
 		if err := secretmanagersvc.ValidateReplicationKeys(ctx, p.encryptor, nr.AccountID, incomingReplication); err != nil {
 			return nil, err
+		}
+	}
+	// A regional secret's CMEK is the top-level customerManagedEncryption field;
+	// a project-level secret must not carry it. A masked field the body omits
+	// clears the stored key (the documented removal form).
+	var incomingCMEK *secretmanagerstore.CustomerManagedEncryption
+	cmekSelected := mask.hasAny("customerManagedEncryption", "customer_managed_encryption")
+	cmekPresent := false
+	if cmekSelected {
+		incomingCMEK, cmekPresent = regionalCMEKFromBody(body)
+		if regional {
+			if cmekPresent {
+				if err := secretmanagersvc.ValidateRegionalCMEKKey(ctx, p.encryptor, nr.AccountID, location, incomingCMEK); err != nil {
+					return nil, err
+				}
+			}
+		} else if cmekPresent {
+			return nil, secretmanagersvc.ProjectCMEKUnsupported()
 		}
 	}
 
@@ -850,11 +934,27 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			if va := versionAliasesFromBody(body); va != nil && mask.hasAny("versionAliases", "version_aliases") {
 				m.VersionAliases = va
 			}
-			merged, err := secretmanagersvc.MergeReplication(current.Replication, incomingReplication)
-			if err != nil {
-				return secretmanagerstore.Secret{}, err
+			if regional {
+				// A regional secret has no replication policy; its CMEK is
+				// applied below, outside the body-presence block, so a masked
+				// bodyless patch can clear it.
+			} else {
+				merged, err := secretmanagersvc.MergeReplication(current.Replication, incomingReplication)
+				if err != nil {
+					return secretmanagerstore.Secret{}, err
+				}
+				m.Replication = merged
 			}
-			m.Replication = merged
+		}
+		if regional && cmekSelected {
+			switch {
+			case cmekPresent && incomingCMEK != nil:
+				m.legacyKmsKeyName = incomingCMEK.KmsKeyName
+			case cmekPresent, mask != nil:
+				// A present-but-empty object, or a mask that names the field
+				// without carrying it, removes the stored configuration.
+				m.legacyKmsKeyName = ""
+			}
 		}
 		// The lifecycle fields are applied outside the body-presence block: a
 		// masked, bodyless patch (`?updateMask=expire_time` with no body) is the
@@ -1017,7 +1117,7 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	// An expired secret is already gone (and its deletion event published), so
 	// a user delete answers the documented 404 rather than deleting it again.
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
@@ -1124,7 +1224,7 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	body, _ := nr.Params["body"].(map[string]any)
 	payload := ""
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
@@ -1205,7 +1305,7 @@ func (p *Provider) EnableManagedRotation(ctx context.Context, nr *model.Normaliz
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -1255,7 +1355,7 @@ func (p *Provider) RotateSecret(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -1340,7 +1440,7 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	secret, version := parseSecretName(name)
+	secret, version := secretmanagersvc.ParseSecretName(name)
 	if err := p.rejectExpired(ctx, nr, secret); err != nil {
 		return nil, err
 	}
@@ -1383,7 +1483,7 @@ func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	secret, _ := parseSecretName(name)
+	secret, _ := secretmanagersvc.ParseSecretName(name)
 	if err := p.rejectExpired(ctx, nr, secret); err != nil {
 		return nil, err
 	}
@@ -1432,7 +1532,7 @@ func (p *Provider) GetVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	secret, version := parseSecretName(name)
+	secret, version := secretmanagersvc.ParseSecretName(name)
 	if err := p.rejectExpired(ctx, nr, secret); err != nil {
 		return nil, err
 	}
@@ -1496,7 +1596,7 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	secret, version := parseSecretName(name)
+	secret, version := secretmanagersvc.ParseSecretName(name)
 	if err := p.rejectExpired(ctx, nr, secret); err != nil {
 		return nil, err
 	}
@@ -1588,7 +1688,7 @@ func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -1603,7 +1703,7 @@ func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -1623,7 +1723,7 @@ func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedR
 	if err != nil {
 		return nil, err
 	}
-	id := secretID(name)
+	id := secretKey(name)
 	if err := p.rejectExpired(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -1660,6 +1760,7 @@ func crc32c(b64 string) string {
 
 func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[string]any {
 	m := fromStoreSecret(nr, s)
+	regional := secretmanagersvc.IsRegionalKey(s.ID)
 	out := map[string]any{
 		"name":       m.Name,
 		"createTime": m.CreateTime,
@@ -1667,8 +1768,17 @@ func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[s
 		// a hash of the secret's mutable metadata, so it is stable across reads
 		// of an unchanged secret and different after any update — the same
 		// contract GCP's opaque token provides for the delete precondition.
-		"etag":        secretmanagersvc.SecretEtag(m.Name, s),
-		"replication": replicationToMap(s.ReplicationPolicy()),
+		"etag": secretmanagersvc.SecretEtag(m.Name, s),
+	}
+	if regional {
+		// A regional Secret has no replication policy; its CMEK configuration
+		// is the top-level customerManagedEncryption field. The effective key is
+		// stored in the shared KmsKeyName field (see toStoreSecret).
+		if m.legacyKmsKeyName != "" {
+			out["customerManagedEncryption"] = map[string]any{"kmsKeyName": m.legacyKmsKeyName}
+		}
+	} else {
+		out["replication"] = replicationToMap(s.ReplicationPolicy())
 	}
 	if m.Labels != nil {
 		out["labels"] = m.Labels
@@ -1741,6 +1851,7 @@ func replicationToMap(repl *secretmanagerstore.Replication) map[string]any {
 }
 
 func versionToMap(v versionMeta, repl *secretmanagerstore.Replication) map[string]any {
+	regional := strings.Contains(v.Name, "/locations/")
 	out := map[string]any{
 		"name":       v.Name,
 		"state":      v.State,
@@ -1749,16 +1860,25 @@ func versionToMap(v versionMeta, repl *secretmanagerstore.Replication) map[strin
 		// lifecycle transition (the version's only mutable field), so a stale
 		// disable/enable/destroy precondition is detectable.
 		"etag": secretmanagersvc.VersionEtag(v.Name, v.CreateTime, v.State, v.ScheduledDestroyTime),
-		// replicationStatus mirrors the parent secret's replication policy: the
-		// automatic arm (with the CryptoKeyVersion that wrapped this payload,
-		// DC44) or one status per user-managed replica (DC45).
-		"replicationStatus": versionReplicationStatusToMap(v, repl),
 		// clientSpecifiedPayloadChecksum is the only integrity field the real
 		// SecretVersion carries: the Discovery schema and the v1 proto both
 		// define it and nothing else (no `checksum` property). gcloud's
 		// `secrets versions add` checks it and aborts with a false
 		// data-corruption warning when it is absent.
 		"clientSpecifiedPayloadChecksum": true,
+	}
+	if regional {
+		// A regional SecretVersion has no replicationStatus; its CMEK status is
+		// the top-level customerManagedEncryption field, populated only when the
+		// payload was wrapped with a customer-managed key.
+		if v.KmsKeyVersionName != "" {
+			out["customerManagedEncryption"] = map[string]any{"kmsKeyVersionName": v.KmsKeyVersionName}
+		}
+	} else {
+		// replicationStatus mirrors the parent secret's replication policy: the
+		// automatic arm (with the CryptoKeyVersion that wrapped this payload,
+		// DC44) or one status per user-managed replica (DC45).
+		out["replicationStatus"] = versionReplicationStatusToMap(v, repl)
 	}
 	if v.DestroyTime != "" {
 		out["destroyTime"] = v.DestroyTime

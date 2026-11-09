@@ -27,6 +27,8 @@ func secretManagerChecks() []Check {
 		{Service: "secretmanager", RPC: "AddSecretVersion", KeyField: "name", Run: checkSecretAddVersion},
 		{Service: "secretmanager", RPC: "AccessSecretVersion", KeyField: "payload.data", Run: checkSecretAccessVersion},
 		{Service: "secretmanager", RPC: "DeleteSecret", KeyField: "success", Run: checkSecretDelete},
+		// Regional secrets use the same RPCs over a location-scoped parent.
+		{Service: "secretmanager", RPC: "CreateSecret", KeyField: "name", Run: checkSecretRegional},
 	}
 }
 
@@ -430,6 +432,90 @@ func checkSecretDelete(ctx context.Context, cfg Config) error {
 	defer client.Close()
 	if err := client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: secretName(cfg)}); err != nil {
 		return err
+	}
+	return nil
+}
+
+// checkSecretRegional drives a regional secret over the same RPCs with a
+// location-scoped parent and resource names. The official clients reach the
+// regional endpoint by host, but the messages carry the location.
+func checkSecretRegional(ctx context.Context, cfg Config) error {
+	client, err := newSecretClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+	parent := secretProject(cfg) + "/locations/us-central1"
+	name := parent + "/secrets/" + cfg.ResourceName("gcpc-grpc-regional")
+
+	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: parent, SecretId: cfg.ResourceName("gcpc-grpc-regional"),
+		Secret: &secretmanagerpb.Secret{Labels: map[string]string{"env": "conf"}},
+	})
+	if err != nil {
+		return fmt.Errorf("create: %w", err)
+	}
+	if created.GetName() != name {
+		return fmt.Errorf("CreateSecret name = %q, want %q", created.GetName(), name)
+	}
+	if created.GetReplication() != nil {
+		return fmt.Errorf("regional Secret carries a replication policy: %v", created.GetReplication())
+	}
+	if _, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name}); err != nil {
+		return fmt.Errorf("get: %w", err)
+	}
+	version, err := client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+		Parent: name, Payload: &secretmanagerpb.SecretPayload{Data: []byte(secretPayload)},
+	})
+	if err != nil {
+		return fmt.Errorf("addVersion: %w", err)
+	}
+	if version.GetName() != name+"/versions/1" {
+		return fmt.Errorf("AddSecretVersion name = %q, want %q", version.GetName(), name+"/versions/1")
+	}
+	if version.GetReplicationStatus() != nil {
+		return fmt.Errorf("regional SecretVersion carries replicationStatus: %v", version.GetReplicationStatus())
+	}
+	accessed, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: name + "/versions/1"})
+	if err != nil {
+		return fmt.Errorf("access: %w", err)
+	}
+	if got := string(accessed.GetPayload().GetData()); got != secretPayload {
+		return fmt.Errorf("AccessSecretVersion payload = %q, want %q", got, secretPayload)
+	}
+	found := false
+	it := client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{Parent: parent})
+	for {
+		s, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("regional list: %w", err)
+		}
+		if s.GetName() == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("regional list does not contain %q", name)
+	}
+	global := client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{Parent: secretProject(cfg)})
+	for {
+		s, err := global.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("global list: %w", err)
+		}
+		if s.GetName() == name {
+			return fmt.Errorf("project-level list includes regional secret %q", name)
+		}
+	}
+	if err := client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: name}); err != nil {
+		return fmt.Errorf("delete: %w", err)
 	}
 	return nil
 }

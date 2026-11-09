@@ -153,7 +153,16 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 
 	isCollection := len(rest) > 0 && rest[len(rest)-1] == resourceType
 
-	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom, apiVersion)
+	action := deriveAction(resourceType, isCollection, name, r.Method, custom, apiVersion)
+	// A location-scoped secret is a distinct surface: the same verbs operate on
+	// a separate namespace, so they get their own dispatch keys
+	// (Secret.RegionalCreate, …). Both transports serve the same records, and
+	// the conformance matrix grades the regional Discovery methods against
+	// these keys instead of conflating them with the project-level ones.
+	if action != "" && resourceType == "secrets" && len(rest) >= 3 && rest[0] == "locations" {
+		action = "Regional" + action
+	}
+	nr.Action = action
 	if nr.Action == "" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 501)
 	}
@@ -1243,14 +1252,18 @@ func segmentAfter(segs []string, marker string) string {
 	return ""
 }
 
-// isSecretVersionsCollection reports whether name is a secret's versions
-// collection path ("secrets/{id}/versions"). It is distinct from a secret
+// isSecretVersionsCollection reports whether name ends with a secret's versions
+// collection ("secrets/{id}/versions", also for a regional
+// "locations/{l}/secrets/{id}/versions"). It is distinct from a secret
 // literally named "versions" ("secrets/versions", two segments) and from a
-// single version ("secrets/{id}/versions/{v}", four segments), neither of which
-// is a versions list.
+// single version ("secrets/{id}/versions/{v}"), neither of which is a versions
+// list.
 func isSecretVersionsCollection(name string) bool {
 	parts := strings.Split(name, "/")
-	return len(parts) == 3 && parts[0] == "secrets" && parts[2] == "versions"
+	if len(parts) < 3 {
+		return false
+	}
+	return parts[len(parts)-3] == "secrets" && parts[len(parts)-1] == "versions"
 }
 
 // isDocumentsMethodMarker reports whether the last segment is the Firestore

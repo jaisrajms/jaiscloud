@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1234,
+    "total": 1251,
     "by_state": {
-      "ga": 1025,
+      "ga": 1042,
       "limited": 156,
       "preview": 14,
       "unsupported": 39
@@ -15,7 +15,7 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 575,
+        "ga": 592,
         "limited": 133,
         "preview": 14,
         "unsupported": 11
@@ -113,7 +113,7 @@
         "ga": 16
       },
       "secretmanager": {
-        "ga": 34
+        "ga": 51
       },
       "serviceusage": {
         "ga": 12
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 687
+        "rest": 704
       },
       "unverified": {
         "grpc": 46,
@@ -1268,13 +1268,11 @@
       "source_ref": "secretmanager.v1",
       "published": 36,
       "served": 34,
-      "graded": 17,
+      "graded": 34,
       "unserved": [
         "secretmanager.projects.locations.get",
         "secretmanager.projects.locations.list"
-      ],
-      "ungraded": 17,
-      "note": "17 served method(s) have no graded cell (their routes are aggregated under one cell)"
+      ]
     },
     {
       "service": "secretmanager",
@@ -15896,7 +15894,7 @@
         "grpc-checks=CreateSecret",
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)",
+        "transport=grpc (conformance=2/2 pass)",
         "verified=true (grpc)"
       ]
     },
@@ -16065,13 +16063,13 @@
       "operation": "Secret.AddVersion",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.addVersion",
+      "discovery": "secretmanager.projects.secrets.addVersion",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.addVersion",
+        "discovery=secretmanager.projects.secrets.addVersion",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 6 transcript entries)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -16079,13 +16077,13 @@
       "operation": "Secret.Create",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.create",
+      "discovery": "secretmanager.projects.secrets.create",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.create",
+        "discovery=secretmanager.projects.secrets.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 16 transcript entries)"
+        "verified=true (rest, 17 transcript entries)"
       ]
     },
     {
@@ -16093,13 +16091,13 @@
       "operation": "Secret.Delete",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.delete",
+      "discovery": "secretmanager.projects.secrets.delete",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.delete",
+        "discovery=secretmanager.projects.secrets.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16112,7 +16110,7 @@
       "evidence": [
         "discovery=secretmanager.projects.secrets.versions.destroy",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16126,7 +16124,7 @@
         "discovery=secretmanager.projects.secrets.versions.disable",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16154,7 +16152,7 @@
         "discovery=secretmanager.projects.secrets.versions.enable",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16175,12 +16173,12 @@
       "operation": "Secret.GetIamPolicy",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.getIamPolicy",
+      "discovery": "secretmanager.projects.secrets.getIamPolicy",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.getIamPolicy",
+        "discovery=secretmanager.projects.secrets.getIamPolicy",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16193,7 +16191,7 @@
       "evidence": [
         "discovery=secretmanager.projects.secrets.versions.get",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16206,7 +16204,7 @@
       "evidence": [
         "discovery=secretmanager.projects.secrets.list",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -16220,6 +16218,235 @@
         "discovery=secretmanager.projects.secrets.versions.list",
         "postgres=yes",
         "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalAccess",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.versions.access",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.versions.access",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalAddVersion",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.addVersion",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.addVersion",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 7 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalCreate",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.create",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 17 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalDelete",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalDestroyVersion",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.versions.destroy",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.versions.destroy",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalDisableVersion",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.versions.disable",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.versions.disable",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalEnableManagedRotation",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.enableManagedRotation",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.enableManagedRotation",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalEnableVersion",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.versions.enable",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.versions.enable",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalGet",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.get",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.get",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalGetVersion",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.versions.get",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.versions.get",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalList",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.list",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.list",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalListVersions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.versions.list",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.versions.list",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalRotateSecret",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.rotateSecret",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.rotateSecret",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RegionalUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "secretmanager.projects.locations.secrets.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16240,13 +16467,13 @@
       "operation": "Secret.SetIamPolicy",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.setIamPolicy",
+      "discovery": "secretmanager.projects.secrets.setIamPolicy",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.setIamPolicy",
+        "discovery=secretmanager.projects.secrets.setIamPolicy",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16254,12 +16481,12 @@
       "operation": "Secret.TestIamPermissions",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.testIamPermissions",
+      "discovery": "secretmanager.projects.secrets.testIamPermissions",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.testIamPermissions",
+        "discovery=secretmanager.projects.secrets.testIamPermissions",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -16267,13 +16494,13 @@
       "operation": "Secret.Update",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.secrets.patch",
+      "discovery": "secretmanager.projects.secrets.patch",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.secrets.patch",
+        "discovery=secretmanager.projects.secrets.patch",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

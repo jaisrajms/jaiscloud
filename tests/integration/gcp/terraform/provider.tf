@@ -85,34 +85,35 @@ locals {
   # Offline defaults for a bare `terraform plan`: the same values
   # terraform-endpoints.yaml generates, derived from var.endpoint.
   endpoint_defaults = {
-    big_query_custom_endpoint          = "${var.endpoint}/bigquery/v2/"
-    cloud_billing_custom_endpoint      = "${var.endpoint}/v1/"
-    dns_custom_endpoint                = "${var.endpoint}/dns/v1/"
-    sql_custom_endpoint                = "${var.endpoint}/sql/v1beta4/"
-    compute_custom_endpoint            = "${var.endpoint}/compute/v1/"
-    container_custom_endpoint          = var.container_endpoint
-    dataproc_custom_endpoint           = "${var.endpoint}/"
-    eventarc_custom_endpoint           = "${var.endpoint}/v1/"
-    firestore_custom_endpoint          = "${var.endpoint}/v1/"
-    cloud_functions_custom_endpoint    = "${var.endpoint}/v1/"
-    cloudfunctions2_custom_endpoint    = "${var.endpoint}/v2/"
-    iam_custom_endpoint                = "${var.endpoint}/"
-    iam_beta_custom_endpoint           = "${var.endpoint}/v1/"
-    kms_custom_endpoint                = "${var.endpoint}/v1/"
-    logging_custom_endpoint            = "${var.endpoint}/v2/"
-    managed_kafka_custom_endpoint      = "${var.endpoint}/v1/"
-    redis_custom_endpoint              = "${var.endpoint}/v1/"
-    dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
-    monitoring_custom_endpoint         = "${var.endpoint}/"
-    pubsub_custom_endpoint             = "${var.endpoint}/v1/"
-    resource_manager_custom_endpoint   = "${var.endpoint}/v1/"
-    cloud_run_v2_custom_endpoint       = "${var.endpoint}/v2/"
-    cloud_scheduler_custom_endpoint    = "${var.endpoint}/v1/"
-    secret_manager_custom_endpoint     = "${var.endpoint}/v1/"
-    service_usage_custom_endpoint      = "${var.endpoint}/v1/"
-    storage_custom_endpoint            = "${var.endpoint}/storage/v1/"
-    cloud_tasks_custom_endpoint        = "${var.endpoint}/v2/"
-    workflows_custom_endpoint          = "${var.endpoint}/v1/"
+    big_query_custom_endpoint               = "${var.endpoint}/bigquery/v2/"
+    cloud_billing_custom_endpoint           = "${var.endpoint}/v1/"
+    dns_custom_endpoint                     = "${var.endpoint}/dns/v1/"
+    sql_custom_endpoint                     = "${var.endpoint}/sql/v1beta4/"
+    compute_custom_endpoint                 = "${var.endpoint}/compute/v1/"
+    container_custom_endpoint               = var.container_endpoint
+    dataproc_custom_endpoint                = "${var.endpoint}/"
+    eventarc_custom_endpoint                = "${var.endpoint}/v1/"
+    firestore_custom_endpoint               = "${var.endpoint}/v1/"
+    cloud_functions_custom_endpoint         = "${var.endpoint}/v1/"
+    cloudfunctions2_custom_endpoint         = "${var.endpoint}/v2/"
+    iam_custom_endpoint                     = "${var.endpoint}/"
+    iam_beta_custom_endpoint                = "${var.endpoint}/v1/"
+    kms_custom_endpoint                     = "${var.endpoint}/v1/"
+    logging_custom_endpoint                 = "${var.endpoint}/v2/"
+    managed_kafka_custom_endpoint           = "${var.endpoint}/v1/"
+    redis_custom_endpoint                   = "${var.endpoint}/v1/"
+    dataproc_metastore_custom_endpoint      = "${var.endpoint}/v1/"
+    monitoring_custom_endpoint              = "${var.endpoint}/"
+    pubsub_custom_endpoint                  = "${var.endpoint}/v1/"
+    resource_manager_custom_endpoint        = "${var.endpoint}/v1/"
+    cloud_run_v2_custom_endpoint            = "${var.endpoint}/v2/"
+    cloud_scheduler_custom_endpoint         = "${var.endpoint}/v1/"
+    secret_manager_custom_endpoint          = "${var.endpoint}/v1/"
+    secret_manager_regional_custom_endpoint = "${var.endpoint}/v1/"
+    service_usage_custom_endpoint           = "${var.endpoint}/v1/"
+    storage_custom_endpoint                 = "${var.endpoint}/storage/v1/"
+    cloud_tasks_custom_endpoint             = "${var.endpoint}/v2/"
+    workflows_custom_endpoint               = "${var.endpoint}/v1/"
   }
   endpoints = merge(local.endpoint_defaults, var.endpoints)
 }
@@ -158,12 +159,13 @@ provider "google" {
   # Service Usage + the Cloud Resource Manager v1 project lookup that
   # google_project_service performs on every read, and project-level IAM for
   # google_project_iam_member.
-  resource_manager_custom_endpoint = local.endpoints["resource_manager_custom_endpoint"]
-  cloud_run_v2_custom_endpoint     = local.endpoints["cloud_run_v2_custom_endpoint"]
-  cloud_scheduler_custom_endpoint  = local.endpoints["cloud_scheduler_custom_endpoint"]
-  secret_manager_custom_endpoint   = local.endpoints["secret_manager_custom_endpoint"]
-  service_usage_custom_endpoint    = local.endpoints["service_usage_custom_endpoint"]
-  storage_custom_endpoint          = local.endpoints["storage_custom_endpoint"]
-  cloud_tasks_custom_endpoint      = local.endpoints["cloud_tasks_custom_endpoint"]
-  workflows_custom_endpoint        = local.endpoints["workflows_custom_endpoint"]
+  resource_manager_custom_endpoint        = local.endpoints["resource_manager_custom_endpoint"]
+  cloud_run_v2_custom_endpoint            = local.endpoints["cloud_run_v2_custom_endpoint"]
+  cloud_scheduler_custom_endpoint         = local.endpoints["cloud_scheduler_custom_endpoint"]
+  secret_manager_custom_endpoint          = local.endpoints["secret_manager_custom_endpoint"]
+  secret_manager_regional_custom_endpoint = local.endpoints["secret_manager_regional_custom_endpoint"]
+  service_usage_custom_endpoint           = local.endpoints["service_usage_custom_endpoint"]
+  storage_custom_endpoint                 = local.endpoints["storage_custom_endpoint"]
+  cloud_tasks_custom_endpoint             = local.endpoints["cloud_tasks_custom_endpoint"]
+  workflows_custom_endpoint               = local.endpoints["workflows_custom_endpoint"]
 }
