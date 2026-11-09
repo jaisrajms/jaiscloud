@@ -105,6 +105,14 @@ const computeBasePath = "https://www.googleapis.com/compute/v1/"
 // defaultDiskSizeGb is used when a disk create request omits sizeGb.
 const defaultDiskSizeGb = "10"
 
+// defaultDiskPhysicalBlockSizeBytes is the physical block size a disk reports
+// when the create request omits it: Discovery (Disk.physicalBlockSizeBytes)
+// documents a server-side default, and 4096 is the value real Compute reports
+// for the pd-* types. It is Optional+Computed in the hashicorp/google provider,
+// so a disk created without it must read the default back rather than nothing
+// (an absent value reads as 0 and permadiffs the ForceNew field).
+const defaultDiskPhysicalBlockSizeBytes = "4096"
+
 // defaultMachineType is used when an instance create request omits machineType.
 const defaultMachineType = "e2-micro"
 
@@ -584,17 +592,22 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	if sizeGb == "" {
 		sizeGb = defaultDiskSizeGb
 	}
+	blockSizeBytes := stringifyInt(body["physicalBlockSizeBytes"])
+	if blockSizeBytes == "" {
+		blockSizeBytes = defaultDiskPhysicalBlockSizeBytes
+	}
 	disk := map[string]any{
-		"kind":              kindDisk,
-		"id":                numericID(project + "/zones/" + zone + "/disks/" + name),
-		"name":              name,
-		"sizeGb":            sizeGb,
-		"type":              absLink(nr, "compute-disk-type", zone+"/"+diskType),
-		"zone":              absLink(nr, "compute-zone", zone),
-		"status":            "READY",
-		"creationTimestamp": formatTimestamp(clock.Now()),
-		"selfLink":          absLink(nr, "compute-disk", zone+"/"+name),
-		"targetLink":        absLink(nr, "compute-disk", zone+"/"+name),
+		"kind":                   kindDisk,
+		"id":                     numericID(project + "/zones/" + zone + "/disks/" + name),
+		"name":                   name,
+		"sizeGb":                 sizeGb,
+		"physicalBlockSizeBytes": blockSizeBytes,
+		"type":                   absLink(nr, "compute-disk-type", zone+"/"+diskType),
+		"zone":                   absLink(nr, "compute-zone", zone),
+		"status":                 "READY",
+		"creationTimestamp":      formatTimestamp(clock.Now()),
+		"selfLink":               absLink(nr, "compute-disk", zone+"/"+name),
+		"targetLink":             absLink(nr, "compute-disk", zone+"/"+name),
 	}
 	if v, ok := body["description"]; ok && v != nil {
 		disk["description"] = v

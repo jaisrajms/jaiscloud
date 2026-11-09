@@ -298,6 +298,12 @@ func TestDiskCRUD(t *testing.T) {
 	if got.Data["sizeGb"] != "20" {
 		t.Errorf("sizeGb = %v (%T), want \"20\"", got.Data["sizeGb"], got.Data["sizeGb"])
 	}
+	// physicalBlockSizeBytes is Optional+Computed in the provider: a disk that
+	// omitted it must read the documented server default back, or the ForceNew
+	// field permadiffs (0 in state vs the configured value).
+	if got.Data["physicalBlockSizeBytes"] != defaultDiskPhysicalBlockSizeBytes {
+		t.Errorf("physicalBlockSizeBytes = %v, want the %s default", got.Data["physicalBlockSizeBytes"], defaultDiskPhysicalBlockSizeBytes)
+	}
 	if !strings.Contains(str(got.Data["type"]), "diskTypes/pd-ssd") {
 		t.Errorf("type = %v", got.Data["type"])
 	}
@@ -380,6 +386,19 @@ func TestDiskSourceImageResolution(t *testing.T) {
 		if got.Data["sourceImageId"] != tc.wantID {
 			t.Errorf("%s: sourceImageId = %v, want %v", tc.name, got.Data["sourceImageId"], tc.wantID)
 		}
+	}
+
+	if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+		"name": "disk-requested-block", "physicalBlockSizeBytes": 16384,
+	}}))); err != nil {
+		t.Fatalf("create disk with a requested block size: %v", err)
+	}
+	block, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": "disk-requested-block"})))
+	if err != nil {
+		t.Fatalf("get disk with a requested block size: %v", err)
+	}
+	if block.Data["physicalBlockSizeBytes"] != "16384" {
+		t.Errorf("physicalBlockSizeBytes = %v, want the requested 16384", block.Data["physicalBlockSizeBytes"])
 	}
 
 	// A reference that resolves to no image fails the create rather than storing

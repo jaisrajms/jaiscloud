@@ -183,6 +183,8 @@ func TestSDKCompute(t *testing.T) {
 	require.Equal(t, "compute#disk", gotDisk.Kind)
 	require.Equal(t, "READY", gotDisk.Status)
 	require.Equal(t, int64(20), gotDisk.SizeGb)
+	// The documented server default for a disk that did not request one.
+	require.Equal(t, int64(4096), gotDisk.PhysicalBlockSizeBytes)
 	disks, err := svc.Disks.List(project, zone).Do()
 	require.NoError(t, err)
 	require.Equal(t, "compute#diskList", disks.Kind)
