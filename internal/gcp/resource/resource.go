@@ -299,7 +299,7 @@ var formatters = map[string]func(project, name string) string{
 	},
 	// Cloud SQL Admin — relative resource names used to build selfLink and
 	// targetLink. Callers pass "instance", "instance/database",
-	// "instance/user", and "operation".
+	// "instance/user", "instance/fingerprint", and "operation".
 	"cloudsql-instance": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/instances/%s", p, n)
 	},
@@ -310,6 +310,10 @@ var formatters = map[string]func(project, name string) string{
 	"cloudsql-user": func(p, n string) string {
 		inst, usr := wfLoc(n)
 		return fmt.Sprintf("projects/%s/instances/%s/users/%s", p, inst, usr)
+	},
+	"cloudsql-sslcert": func(p, n string) string {
+		inst, fp := wfLoc(n)
+		return fmt.Sprintf("projects/%s/instances/%s/sslCerts/%s", p, inst, fp)
 	},
 	"cloudsql-operation": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/operations/%s", p, n)

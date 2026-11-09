@@ -248,7 +248,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   stubs. Simplifications
   (synchronous DDL/DML jobs, serialized DML spans, atomic CTAS, immutable
   `getQueryResults` snapshots, documented divergences) are the cell reasons.
-- **Metadata-only services** — `limited` REST cells: **Cloud SQL** (23 + 1 `unsupported` stub),
+- **Metadata-only services** — `limited` REST cells: **Cloud SQL** (27 + 1 `unsupported` stub),
   **Compute Engine** (32 + 1), **Cloud DNS** (15 + 1), **Memorystore** (8). No control plane,
   VM/disk/network data plane, authoritative DNS server, or Redis data plane.
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).

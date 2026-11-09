@@ -193,6 +193,7 @@ SA_EMAIL="$(out service_account_email)"
 SQL_INSTANCE="$(out sql_instance_name)"
 SQL_DB="$(out sql_database_name)"
 SQL_USER="$(out sql_user_name)"
+SQL_CERT_FP="$(out sql_ssl_cert_fingerprint)"
 ENABLED_SERVICE="$(out enabled_service)"
 FED_NAME="$(out metastore_federation_name)"
 GKE_CLUSTER_DP="$(out dataproc_gke_cluster_name)"
@@ -317,6 +318,15 @@ check "Cloud SQL database created" \
 check "Cloud SQL user created" \
   "$ENDPOINT/sql/v1beta4/projects/$PROJECT/instances/$SQL_INSTANCE/users/$SQL_USER" \
   '"kind":"sql#user"'
+# google_sql_ssl_cert: the fingerprint Terraform state holds addresses the
+# certificate the emulator minted, and the instance carries its server CA (the
+# server-ca.pem a real client downloads).
+check "Cloud SQL client certificate created" \
+  "$ENDPOINT/sql/v1beta4/projects/$PROJECT/instances/$SQL_INSTANCE/sslCerts/$SQL_CERT_FP" \
+  '"kind":"sql#sslCert"' '"commonName":"jaiscloud-tf-client"' "$SQL_CERT_FP"
+check "Cloud SQL instance exposes its server CA" \
+  "$ENDPOINT/sql/v1beta4/projects/$PROJECT/instances/$SQL_INSTANCE" \
+  '"serverCaCert"' 'BEGIN CERTIFICATE'
 check "Dataproc Metastore federation created" \
   "$ENDPOINT/v1/$FED_NAME" 'jaiscloud-tf-federation' '"state":"ACTIVE"'
 check "Dataproc Metastore database IAM grant" \

@@ -16,12 +16,12 @@ import (
 // "sql/v1beta4/" service prefix, so the API is identified by the "/sql/" path
 // prefix and decoded here. Resources live under
 // /sql/v1beta4/projects/{project}/{instances[/{instance}[/restart|/databases[/{db}]|
-// /users[/{name}]|/connectSettings]]|operations[/{op}]|tiers} plus the
-// project-less /sql/v1beta4/flags discovery path.
+// /users[/{name}]|/sslCerts[/{fingerprint}]|/connectSettings]]|operations[/{op}]|
+// tiers} plus the project-less /sql/v1beta4/flags discovery path.
 //
-// Deferred surfaces (sslCerts, backupRuns, clone, failover, promoteReplica,
-// import/export, demote, resetSslConfig, operation cancel, and every instance
-// custom method such as instances:generateEphemeralCert) resolve to an
+// Deferred surfaces (backupRuns, clone, failover, promoteReplica, import/export,
+// demote, resetSslConfig, sslCerts.createEphemeral, operation cancel, and every
+// instance custom method such as instances:generateEphemeralCert) resolve to an
 // Unimplemented action so the provider fails loud with 501 rather than the
 // codec 404-ing them.
 type CloudSQLCodec struct {
@@ -148,14 +148,41 @@ func instanceAction(rest []string, method string, nr *model.NormalizedRequest) s
 		return databaseAction(rest[2:], method, nr)
 	case "users":
 		return userAction(rest[2:], method, nr)
+	case "sslCerts":
+		return sslCertAction(rest[2:], method, nr)
 	case "connectSettings":
 		if len(rest) == 2 && method == http.MethodGet {
 			return "ConnectGet"
 		}
 	default:
-		// sslCerts, backupRuns, clone, failover, promoteReplica, import,
-		// export, demote, resetSslConfig, restoreBackup, ... — deferred.
+		// backupRuns, clone, failover, promoteReplica, import, export, demote,
+		// resetSslConfig, createEphemeral, restoreBackup, ... — deferred.
 		return "Unimplemented"
+	}
+	return ""
+}
+
+// sslCertAction maps projects/{project}/instances/{instance}/sslCerts[/{sha1Fingerprint}].
+// The collection is list/insert; a fingerprint addresses one certificate for
+// get/delete. Real Cloud SQL has no update method on a certificate.
+func sslCertAction(rest []string, method string, nr *model.NormalizedRequest) string {
+	if len(rest) == 0 {
+		switch method {
+		case http.MethodGet:
+			return "SslCertsList"
+		case http.MethodPost:
+			return "SslCertsInsert"
+		}
+		return ""
+	}
+	nr.Params["sha1Fingerprint"] = rest[0]
+	if len(rest) == 1 {
+		switch method {
+		case http.MethodGet:
+			return "SslCertsGet"
+		case http.MethodDelete:
+			return "SslCertsDelete"
+		}
 	}
 	return ""
 }

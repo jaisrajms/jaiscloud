@@ -433,7 +433,7 @@ google_sql_database,cloudsql,limited,fixture:compat,served,,2027-06-30
 google_sql_database_instance,cloudsql,limited,fixture:compat,served,,2027-06-30
 google_sql_provision_script,cloudsql,unsupported,none,unsupported,Provisioning scripts (sqladmin provisionScript) are not in the operation registry.,2027-06-30
 google_sql_source_representation_instance,cloudsql,limited,none,served,cloudsql is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
-google_sql_ssl_cert,cloudsql,unsupported,none,unsupported,sslCerts is not in the operation registry; the emulator serves instances/databases/users/flags/tiers/operations only.,2027-06-30
+google_sql_ssl_cert,cloudsql,limited,fixture:compat,served,,2027-06-30
 google_sql_user,cloudsql,limited,fixture:compat,served,,2027-06-30
 google_storage_anywhere_cache,storage,unsupported,none,unsupported,Anywhere Cache is a separate storage.googleapis.com surface; the emulator registers no anywhereCaches operation.,2027-06-30
 google_storage_batch_operations_job,storage,unsupported,none,unsupported,Storage Batch Operations is a separate surface; the emulator registers no batchOperations operation.,2027-06-30
