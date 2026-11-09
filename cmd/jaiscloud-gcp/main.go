@@ -912,6 +912,12 @@ func startCmd() *cobra.Command {
 					resourcemanagercore.WithEventBus(eventBus))
 			}
 			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
+			// A Google-managed default service account addressed through the
+			// projects/- wildcard carries only its project number, so IAM needs
+			// the project registry to map it back to a project id (TF2-1-1).
+			if resourceManagerCore != nil {
+				iamP.SetProjectNumberResolver(resourceManagerCore)
+			}
 
 			// The REST locations/{location}/operations/{id} path is decoded as
 			// a Workflows operation, so in the opt-in async LRO mode wire the

@@ -94,6 +94,21 @@ func (s *Service) ObserveAccount(ctx context.Context, account, service string) {
 	s.evictObserved(ctx)
 }
 
+// observedProjectIDs returns the ids in the observed-project registry, sorted
+// for a deterministic caller. It is the id set a wildcard project-number
+// resolution can use for a project the emulator served but never registered.
+func (s *Service) observedProjectIDs(ctx context.Context) []string {
+	s.observed.mu.Lock()
+	s.loadObservedLocked(ctx)
+	ids := make([]string, 0, len(s.observed.byID))
+	for id := range s.observed.byID {
+		ids = append(ids, id)
+	}
+	s.observed.mu.Unlock()
+	sort.Strings(ids)
+	return ids
+}
+
 // ListObservedProjects returns the observed-project registry, newest activity
 // first. Registered and configured projects are not returned: they have their
 // own groups in the console (created / configured) and would otherwise appear

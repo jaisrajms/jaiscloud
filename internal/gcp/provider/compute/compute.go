@@ -127,10 +127,6 @@ var machineTypeRE = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z][a-z0-9]*-[a-z0-9]+
 // suffix.
 var customMachineTypeRE = regexp.MustCompile(`^(?:[a-z0-9]+-)?custom-[0-9]+-[0-9]+(?:-ext)?$`)
 
-// numericProjectRE matches the numeric half of Discovery's project pattern
-// ([0-9]{1,19}), i.e. a project addressed by number rather than by id.
-var numericProjectRE = regexp.MustCompile(`^[0-9]{1,19}$`)
-
 // zeroRequestID is the all-zero UUID the Compute Engine API documents as
 // unsupported for the requestId parameter.
 const zeroRequestID = "00000000-0000-0000-0000-000000000000"
@@ -247,10 +243,7 @@ func (p *Provider) ProjectsGet(ctx context.Context, nr *model.NormalizedRequest)
 // both). The synthesized number is not invertible, so a number is taken at face
 // value — which is what real Compute reports back as the Project's id.
 func projectNumber(project string) string {
-	if numericProjectRE.MatchString(project) {
-		return project
-	}
-	return resource.ProjectNumber(project)
+	return resource.ProjectNumberFor(project)
 }
 
 // projectObject builds the compute#project payload.

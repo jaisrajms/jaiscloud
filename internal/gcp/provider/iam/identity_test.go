@@ -76,16 +76,23 @@ func TestServiceAccountCreateNumericIDs(t *testing.T) {
 		t.Fatalf("keys.list by unique id: %v", err)
 	}
 
-	// list reports the same stored values.
+	// list reports the same stored values. It also includes the project's two
+	// Google-managed defaults (App Engine + Compute Engine), so locate the
+	// created account by email.
 	listed, err := p.List(ctx, newNR(nil))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	accounts, _ := listed.Data["accounts"].([]any)
-	if len(accounts) != 1 {
-		t.Fatalf("list returned %d accounts, want 1", len(accounts))
+	var item map[string]any
+	for _, a := range accounts {
+		if am, ok := a.(map[string]any); ok && am["email"] == email {
+			item = am
+		}
 	}
-	item, _ := accounts[0].(map[string]any)
+	if item == nil {
+		t.Fatalf("list did not include the created account %q (got %v)", email, accounts)
+	}
 	if item["uniqueId"] != uniqueID || item["oauth2ClientId"] != clientID {
 		t.Errorf("list identifiers = %v, want the stored %q / %q", item, uniqueID, clientID)
 	}

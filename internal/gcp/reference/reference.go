@@ -125,7 +125,7 @@ func ValidateComputeNetwork(ctx context.Context, resources store.ResourceStore, 
 	if !ok || network == "" {
 		return invalidArgument("network must be a compute network resource name (projects/{project}/global/networks/{network})")
 	}
-	if refProject != "" && refProject != project && refProject != resource.ProjectNumber(project) {
+	if refProject != "" && refProject != project && refProject != resource.ProjectNumberFor(project) {
 		return invalidArgument("network must belong to the same project: %s", name)
 	}
 	if resources == nil {

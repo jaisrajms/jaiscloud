@@ -77,3 +77,24 @@ func TestLocRingKeyOf(t *testing.T) {
 		t.Errorf("keyOf(noslash) = %q, want empty", got)
 	}
 }
+
+// TestProjectNumberFor pins the project-number rule shared by Compute and IAM:
+// a numeric project reference is the number itself, while a project id gets the
+// synthesized stable value.
+func TestProjectNumberFor(t *testing.T) {
+	if got, want := ProjectNumberFor("123456789012"), "123456789012"; got != want {
+		t.Errorf("ProjectNumberFor(numeric) = %q, want %q", got, want)
+	}
+	if got, want := ProjectNumberFor("my-project"), ProjectNumber("my-project"); got != want {
+		t.Errorf("ProjectNumberFor(id) = %q, want the synthesized %q", got, want)
+	}
+	if got := ProjectNumberFor(""); got != ProjectNumber("") {
+		t.Errorf("ProjectNumberFor(\"\") = %q, want the synthesized value", got)
+	}
+	if got, want := ProjectNumberFor("12345678901234567890"), ProjectNumber("12345678901234567890"); got != want {
+		t.Errorf("ProjectNumberFor(20 digits) = %q, want the synthesized %q", got, want)
+	}
+	if got, want := ProjectNumberFor("12a4"), ProjectNumber("12a4"); got != want {
+		t.Errorf("ProjectNumberFor(non-numeric) = %q, want the synthesized %q", got, want)
+	}
+}

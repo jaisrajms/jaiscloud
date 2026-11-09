@@ -21,10 +21,11 @@ func OperationName(project, location, operationID string) string {
 // DefaultServiceAccount returns the project's Compute Engine default service
 // account, the identity real GCP assigns to a workflow whose service_account is
 // unset. The account name is the project number (the emulator synthesizes one
-// via resource.ProjectNumber), matching real GCP's
-// "{project-number}-compute@developer.gserviceaccount.com".
+// via resource.ProjectNumberFor), matching real GCP's
+// "{project-number}-compute@developer.gserviceaccount.com" — and matching the
+// account IAM and Compute render for the same project reference.
 func DefaultServiceAccount(project string) string {
-	account := resource.ProjectNumber(project) + "-compute@developer.gserviceaccount.com"
+	account := resource.ProjectNumberFor(project) + "-compute@developer.gserviceaccount.com"
 	return resource.ResourceID(project)("service-account", account)
 }
 

@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/serviceaccount"
 
 	"github.com/stretchr/testify/require"
 )
@@ -455,7 +456,7 @@ func isoCases() []isoCase {
 				require.Equal(t, http.StatusOK, st, "create service account in %s: %s", p, string(b))
 			},
 			list: func(t *testing.T, p, leaf string) []string {
-				return isoAccountLeaves(t, isoGET(t, fmt.Sprintf("/v1/projects/%s/serviceAccounts", p)))
+				return isoAccountLeaves(t, p, isoGET(t, fmt.Sprintf("/v1/projects/%s/serviceAccounts", p)))
 			},
 			get:   func(t *testing.T, p, leaf string) int { return isoStatus(t, "GET", isoSAEmail(p, leaf), "") },
 			del:   func(t *testing.T, p, leaf string) int { return isoStatus(t, "DELETE", isoSAEmail(p, leaf), "") },
@@ -1084,14 +1085,20 @@ func isoClusterLeaves(t *testing.T, b []byte, arrayKey string) []string {
 	return out
 }
 
-// isoAccountLeaves reads the accountId prefix of each IAM service-account email.
-func isoAccountLeaves(t *testing.T, b []byte) []string {
+// isoAccountLeaves reads the accountId prefix of each created IAM
+// service-account email. The project's Google-managed defaults are skipped:
+// every project has them without a create, so they are not part of the
+// per-tenant create/list scoping this suite proves.
+func isoAccountLeaves(t *testing.T, project string, b []byte) []string {
 	t.Helper()
 	objs := isoObjects(t, b, "accounts")
 	out := make([]string, 0, len(objs))
 	for _, o := range objs {
 		e, ok := o["email"].(string)
 		if !ok {
+			continue
+		}
+		if serviceaccount.ImplicitDefault(project, e) {
 			continue
 		}
 		if i := strings.IndexByte(e, '@'); i > 0 {

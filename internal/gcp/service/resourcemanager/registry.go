@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -222,6 +223,46 @@ func (s *Service) collectProjects(ctx context.Context) (map[string]Project, erro
 		}
 	}
 	return byID, nil
+}
+
+// ProjectByNumber resolves a project id from its synthesized project number
+// (resource.ProjectNumber). The number is a hash of the id, so it cannot be
+// inverted: the resolver enumerates every project id the emulator knows — the
+// configured projects, the registry, and the observed-project registry — and
+// compares each synthesized number. It is the resolution the IAM wildcard needs
+// for a Google-managed default account email, which carries only the number.
+//
+// ok is false when no known project has that number; a failure reading the
+// project registry is returned rather than reported as a miss. (The
+// observed-project half is best-effort by design — observation must never fail
+// a request — so it contributes ids without reporting store errors.)
+func (s *Service) ProjectByNumber(ctx context.Context, number string) (string, bool, error) {
+	if number == "" {
+		return "", false, nil
+	}
+	byID, err := s.collectProjects(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	// Observed projects are not part of collectProjects (the console shows them
+	// in their own group), but a request that reached the wire named one, so it
+	// resolves a wildcard number too.
+	for _, id := range s.observedProjectIDs(ctx) {
+		if _, ok := byID[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if resource.ProjectNumberFor(id) == number {
+			return id, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // DeleteProject marks a project DELETE_REQUESTED (real GCP keeps it restorable
