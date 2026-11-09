@@ -120,6 +120,11 @@ var actionOverrides = map[string]string{
 	"Dataproc.JobGetIamPolicy":              "dataproc.projects.regions.jobs.getIamPolicy",
 	"Dataproc.JobSetIamPolicy":              "dataproc.projects.regions.jobs.setIamPolicy",
 	"Dataproc.JobTestIamPermissions":        "dataproc.projects.regions.jobs.testIamPermissions",
+	// Cloud DNS publishes the IAM mixin on managedZones with the {+resource}
+	// binding; the flat action names cannot derive it.
+	"CloudDNS.ManagedZoneGetIamPolicy":       "dns.managedZones.getIamPolicy",
+	"CloudDNS.ManagedZoneSetIamPolicy":       "dns.managedZones.setIamPolicy",
+	"CloudDNS.ManagedZoneTestIamPermissions": "dns.managedZones.testIamPermissions",
 	"Metastore.AlterMetadataResourceLocation":     "metastore.projects.locations.services.alterLocation",
 	"Workflow.ListWorkflowRevisions":              "workflows.projects.locations.workflows.listRevisions",
 

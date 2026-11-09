@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1231,
+    "total": 1234,
     "by_state": {
       "ga": 1025,
-      "limited": 153,
+      "limited": 156,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 575,
-        "limited": 130,
+        "limited": 133,
         "preview": 14,
         "unsupported": 11
       }
@@ -28,7 +28,7 @@
         "unsupported": 3
       },
       "clouddns": {
-        "limited": 17,
+        "limited": 20,
         "unsupported": 1
       },
       "cloudsql": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 684
+        "rest": 687
       },
       "unverified": {
         "grpc": 46,
@@ -179,10 +179,10 @@
       "source_ref": "dns.v1",
       "published": 40,
       "served": 40,
-      "graded": 17,
-      "ungraded": 23,
-      "unimplemented": 23,
-      "note": "23 served method(s) have no graded cell; 23 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
+      "graded": 20,
+      "ungraded": 20,
+      "unimplemented": 20,
+      "note": "20 served method(s) have no graded cell; 20 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
     },
     {
       "service": "clouddns",
@@ -2074,7 +2074,7 @@
         "discovery=dns.managedZones.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 16 transcript entries)"
+        "verified=true (rest, 19 transcript entries)"
       ]
     },
     {
@@ -2104,6 +2104,20 @@
         "discovery=dns.managedZones.get",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "clouddns",
+      "operation": "CloudDNS.ManagedZoneGetIamPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no private DNS resolution)",
+      "discovery": "dns.managedZones.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dns.managedZones.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -2159,6 +2173,35 @@
       "evidence": [
         "discovery=dns.managedZones.patch",
         "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "clouddns",
+      "operation": "CloudDNS.ManagedZoneSetIamPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no private DNS resolution)",
+      "discovery": "dns.managedZones.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dns.managedZones.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "clouddns",
+      "operation": "CloudDNS.ManagedZoneTestIamPermissions",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no private DNS resolution)",
+      "discovery": "dns.managedZones.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=dns.managedZones.testIamPermissions",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
       ]

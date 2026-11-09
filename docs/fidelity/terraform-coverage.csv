@@ -278,10 +278,10 @@ google_dataproc_metastore_table_iam_member,metastore,served,none,served,metastor
 google_dataproc_metastore_table_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_session_template,dataproc,unsupported,none,unsupported,Dataproc session templates are not in the operation registry.,2027-06-30
 google_dataproc_workflow_template,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
-google_dns_managed_zone,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
-google_dns_managed_zone_iam_binding,clouddns,unsupported,none,unsupported,managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.,2027-06-30
-google_dns_managed_zone_iam_member,clouddns,unsupported,none,unsupported,managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.,2027-06-30
-google_dns_managed_zone_iam_policy,clouddns,unsupported,none,unsupported,managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.,2027-06-30
+google_dns_managed_zone,clouddns,limited,fixture:compat,served,,2027-06-30
+google_dns_managed_zone_iam_binding,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_dns_managed_zone_iam_member,clouddns,limited,fixture:compat,served,,2027-06-30
+google_dns_managed_zone_iam_policy,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
 google_dns_policy,clouddns,unsupported,none,unsupported,DNS policies (policies) are not in the operation registry.,2027-06-30
 google_dns_record_set,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
 google_dns_response_policy,clouddns,unsupported,none,unsupported,DNS response policies (responsePolicies) are not in the operation registry.,2027-06-30

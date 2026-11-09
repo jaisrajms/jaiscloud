@@ -12,14 +12,14 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1231**
+Cells: **1234**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
 | ga | 1025 |
-| limited | 153 |
+| limited | 156 |
 | preview | 14 |
 | unsupported | 39 |
 
@@ -27,7 +27,7 @@ Cells: **1231**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 575 | 130 | 14 | 11 |
+| rest | 575 | 133 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 684 | 46 |
+| rest | 687 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -49,7 +49,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | bigquery | rest | 47 | 45 | 34 | 2 | 11 | bigquery.v2 |
 | bigquery | grpc | — | — | — | — | — | unavailable |
-| clouddns | rest | 40 | 40 | 17 | 0 | 23 | dns.v1 |
+| clouddns | rest | 40 | 40 | 20 | 0 | 20 | dns.v1 |
 | clouddns | grpc | — | — | — | — | — | unavailable |
 | cloudsql | rest | 80 | 69 | 27 | 11 | 42 | sqladmin.v1 |
 | cloudsql | grpc | — | — | — | — | — | unavailable |
@@ -114,7 +114,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 - `bigquery` REST: 11 served method(s) have no graded cell; 9 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `bigquery` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
-- `clouddns` REST: 23 served method(s) have no graded cell; 23 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `clouddns` REST: 20 served method(s) have no graded cell; 20 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `clouddns` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `cloudsql` REST: 42 served method(s) have no graded cell; 42 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `cloudsql` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
@@ -218,11 +218,11 @@ _40 cell(s): ga=1 limited=36 preview=0 unsupported=3_
 
 ## clouddns
 
-_Coverage: REST **40 of 40** published methods served · 17 graded · 23 served-but-ungraded (`dns.v1` Discovery)_
+_Coverage: REST **40 of 40** published methods served · 20 graded · 20 served-but-ungraded (`dns.v1` Discovery)_
 
 _Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
-_18 cell(s): ga=0 limited=17 preview=0 unsupported=1_
+_21 cell(s): ga=0 limited=20 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -232,10 +232,13 @@ _18 cell(s): ga=0 limited=17 preview=0 unsupported=1_
 | CloudDNS.ManagedZoneCreate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneDelete | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZoneGetIamPolicy | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneOperationGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneOperationList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZonePatch | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZoneSetIamPolicy | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZoneTestIamPermissions | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneUpdate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ProjectGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ResourceRecordSetCreate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |

@@ -16,9 +16,11 @@ import (
 // API is identified by the "/dns/v1/" path prefix and decoded here. Resources
 // live under /dns/v1/projects/{project}[/managedZones[/{zone}[/rrsets[/{name}/{type}]|
 // /changes[/{id}]|/operations[/{operation}]]]]. The {project} resource itself
-// (projects.get) carries no further segments. DNSSEC keys, policies, response
-// policies, and the IAM custom methods resolve to an Unimplemented action so the
-// provider fails loud with 501 rather than the codec 404-ing them.
+// (projects.get) carries no further segments. The managed-zone IAM custom
+// methods (:getIamPolicy/:setIamPolicy/:testIamPermissions) are served over the
+// shared policy plane; DNSSEC keys, policies, and response policies still
+// resolve to an Unimplemented action so the provider fails loud with 501 rather
+// than the codec 404-ing them.
 type CloudDNSCodec struct {
 	Service string
 }
@@ -52,7 +54,9 @@ func (c *CloudDNSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 	rest := seg[pi+2:]
 
 	// Strip a trailing custom-method suffix (":getIamPolicy", ...) from the
-	// last segment. Cloud DNS's custom methods are all IAM, which is deferred.
+	// last segment. The only custom methods Cloud DNS v1 publishes are the
+	// managed-zone IAM trio; any other custom path keeps the fail-loud
+	// Unimplemented stub rather than a codec 404.
 	custom := ""
 	if len(rest) > 0 {
 		last := rest[len(rest)-1]
@@ -62,7 +66,11 @@ func (c *CloudDNSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		}
 	}
 	if custom != "" {
-		nr.Action = "Unimplemented"
+		if action := cloudDNSCustomAction(rest, custom, nr); action != "" {
+			nr.Action = action
+		} else {
+			nr.Action = "Unimplemented"
+		}
 		return nr, nil
 	}
 
@@ -71,6 +79,32 @@ func (c *CloudDNSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 501)
 	}
 	return nr, nil
+}
+
+// cloudDNSCustomAction maps a custom method on a managed zone to its provider
+// action. The Discovery document binds the google.iam.v1.IAMPolicy mixin with
+// the {+resource} form (dns/v1/{+resource}:getIamPolicy), so the stripped path
+// is projects/{project}/managedZones/{zone}; the zone is recorded for the
+// handler. These are the only custom methods dns/v1 publishes: any other
+// colon-suffixed path returns "" and the caller keeps the fail-loud
+// Unimplemented stub.
+func cloudDNSCustomAction(rest []string, custom string, nr *model.NormalizedRequest) string {
+	if len(rest) != 2 || rest[0] != "managedZones" || rest[1] == "" {
+		return ""
+	}
+	var action string
+	switch custom {
+	case "getIamPolicy":
+		action = "ManagedZoneGetIamPolicy"
+	case "setIamPolicy":
+		action = "ManagedZoneSetIamPolicy"
+	case "testIamPermissions":
+		action = "ManagedZoneTestIamPermissions"
+	default:
+		return ""
+	}
+	nr.Params["managedZone"] = rest[1]
+	return action
 }
 
 // cloudDNSAction maps the path segments after projects/{project} (plus the HTTP

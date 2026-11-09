@@ -205,6 +205,7 @@ BQ_POLICY="$(out bigquery_row_access_policy_id)"
 BILLING_ACCOUNT="$(out billing_account)"
 PROJECT_BILLING="$(out project_billing_account)"
 RUN_SERVICE="$(out run_service_name)"
+DNS_ZONE="$(out dns_zone_name)"
 RUN_BASE="$ENDPOINT/v2/projects/$PROJECT/locations/$REGION/services/$RUN_SERVICE"
 
 echo "== spot checks"
@@ -485,6 +486,22 @@ check_post_body "BigQuery table testIamPermissions grants the request" \
   "$BQ_BASE/tables/$BQ_TABLE:testIamPermissions" \
   '{"permissions":["bigquery.tables.get","bigquery.tables.getData"]}' \
   '"permissions":["bigquery.tables.get","bigquery.tables.getData"]'
+
+# ── Cloud DNS zone IAM (TF1-3) ───────────────────────────────────────────────
+# google_dns_managed_zone_iam_member drives the managedZones IAM mixin
+# (dns/v1/{+resource}:getIamPolicy). The provider read-modify-writes the policy
+# with the etag it read back, so the stored binding plus a stable etag are what
+# let the next plan converge; run.sh asserts the binding and the permission echo.
+DNS_BASE="$ENDPOINT/dns/v1/projects/$PROJECT/managedZones"
+check "Cloud DNS managed zone created" "$DNS_BASE/$DNS_ZONE" \
+  "\"name\":\"$DNS_ZONE\"" '"dnsName":"jaiscloud-tf.example.com."' '"visibility":"public"'
+check_post "Cloud DNS zone IAM policy carries the granted binding" \
+  "$DNS_BASE/$DNS_ZONE:getIamPolicy" \
+  '"role":"roles/dns.admin"' '"user:tf-dns@example.com"' '"etag"'
+check_post_body "Cloud DNS zone testIamPermissions grants the request" \
+  "$DNS_BASE/$DNS_ZONE:testIamPermissions" \
+  '{"permissions":["dns.managedZones.get","dns.managedZones.update"]}' \
+  '"permissions":["dns.managedZones.get","dns.managedZones.update"]'
 # creationTime is stable across an update: capture it before the update.
 BQ_ROUTINE_CT="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
   "$BQ_BASE/routines/$BQ_ROUTINE" 2>/dev/null | sed -n 's/.*"creationTime":"\([0-9]*\)".*/\1/p')"
@@ -601,6 +618,21 @@ if [[ "$DP_IAM_STATUS" == "404" ]]; then
   PASS=$((PASS + 1))
 else
   printf '  [FAIL] Dataproc cluster getIamPolicy after destroy = HTTP %s, want 404\n' "$DP_IAM_STATUS"
+  FAIL=$((FAIL + 1))
+fi
+
+# The Cloud DNS zone IAM policy row is dropped with the zone: a get after
+# destroy is NotFound (404), so re-creating the zone starts from the empty
+# default rather than inheriting grants.
+DNS_IAM_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' \
+  "$DNS_BASE/$DNS_ZONE:getIamPolicy" 2>/dev/null || true)"
+if [[ "$DNS_IAM_STATUS" == "404" ]]; then
+  printf '  [PASS] Cloud DNS zone IAM policy dropped on destroy\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] Cloud DNS zone getIamPolicy after destroy = HTTP %s, want 404\n' "$DNS_IAM_STATUS"
   FAIL=$((FAIL + 1))
 fi
 

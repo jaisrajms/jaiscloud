@@ -8,8 +8,9 @@
 // authoritative DNS server, so nothing is ever served over port 53: name
 // servers are synthesized placeholders, record sets are stored verbatim, and a
 // "change" completes synchronously with status "done". Create/patch/delete of
-// zones, rrsets, and changes are the supported surface; every DNSSEC, policy,
-// and IAM method is deferred and fails loud with Unimplemented.
+// zones, rrsets, and changes are the supported surface; managed-zone IAM is
+// served over the shared policy plane; every DNSSEC and policy method is
+// deferred and fails loud with Unimplemented.
 package clouddns
 
 import (
@@ -28,6 +29,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -35,10 +37,11 @@ import (
 
 // Resource types in the shared ResourceStore.
 const (
-	rtManagedZone = "gcp_dns_managed_zone"
-	rtRRSet       = "gcp_dns_rrset"
-	rtChange      = "gcp_dns_change"
-	rtOperation   = "gcp_dns_operation"
+	rtManagedZone       = "gcp_dns_managed_zone"
+	rtManagedZonePolicy = "gcp_dns_managed_zone_policy"
+	rtRRSet             = "gcp_dns_rrset"
+	rtChange            = "gcp_dns_change"
+	rtOperation         = "gcp_dns_operation"
 )
 
 // Kind constants for the GCP wire envelope.
@@ -85,6 +88,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 
 		"CloudDNS.ManagedZoneOperationGet":  p.GetManagedZoneOperation,
 		"CloudDNS.ManagedZoneOperationList": p.ListManagedZoneOperations,
+
+		// The google.iam.v1.IAMPolicy mixin on managedZones.
+		"CloudDNS.ManagedZoneGetIamPolicy":       p.GetManagedZoneIamPolicy,
+		"CloudDNS.ManagedZoneSetIamPolicy":       p.SetManagedZoneIamPolicy,
+		"CloudDNS.ManagedZoneTestIamPermissions": p.TestManagedZoneIamPermissions,
 
 		"CloudDNS.ProjectGet":    p.GetProject,
 		"CloudDNS.Unimplemented": p.Unimplemented,
@@ -644,6 +652,65 @@ func (p *Provider) purgeZoneChildren(ctx context.Context, account, zone string) 
 			}
 		}
 	}
+	// The zone's IAM policy is bound to the resource's lifetime (real Cloud DNS
+	// drops it with the zone), so a zone re-created under the same name starts
+	// with the empty default policy instead of inheriting the old grants.
+	_ = p.resources.Delete(ctx, account, store.GlobalRegion, rtManagedZonePolicy, zone)
+}
+
+// ─── Managed-zone IAM ────────────────────────────────────────────────────────
+
+// Cloud DNS publishes the google.iam.v1.IAMPolicy mixin on managedZones
+// (dns/v1/{+resource}:getIamPolicy, :setIamPolicy, :testIamPermissions with
+// resource projects/{project}/managedZones/{zone}). It is the same stored
+// policy plane as the other resource-IAM surfaces: etag OCC, AIP-149 versions,
+// and no enforcement. The zone must exist before the policy is read or written,
+// so a miss is NotFound on every verb and never creates a policy row.
+
+// iamZone resolves the managed zone named by an IAM request and verifies it
+// exists. It reads the store directly (not through the mutation paths) so an
+// IAM read has no side effect on the zone.
+func (p *Provider) iamZone(ctx context.Context, nr *model.NormalizedRequest) (string, error) {
+	zone := strParam(nr, "managedZone")
+	if zone == "" {
+		return "", model.NewProviderError("InvalidArgument", "missing managedZone", 400)
+	}
+	if _, err := p.loadManagedZone(ctx, nr, zone); err != nil {
+		return "", err
+	}
+	return zone, nil
+}
+
+// GetManagedZoneIamPolicy returns the zone's stored policy, or the empty
+// default policy when none was set.
+func (p *Provider) GetManagedZoneIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	zone, err := p.iamZone(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(policy.Load(ctx, p.resources, nr.AccountID, rtManagedZonePolicy, zone))), nil
+}
+
+// SetManagedZoneIamPolicy stores the zone's policy (etag OCC).
+func (p *Provider) SetManagedZoneIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	zone, err := p.iamZone(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	pol, err := policy.Set(ctx, p.resources, nr.AccountID, rtManagedZonePolicy, zone, bodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+// TestManagedZoneIamPermissions reports the requested permissions the caller
+// holds. The emulator does not enforce IAM, so every permission is granted.
+func (p *Provider) TestManagedZoneIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := p.iamZone(ctx, nr); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(bodyOf(nr)))}), nil
 }
 
 // ─── ResourceRecordSet operations ─────────────────────────────────────────────
@@ -942,7 +1009,7 @@ func (p *Provider) GetProject(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 // Unimplemented is the fail-loud handler for deferred Cloud DNS surfaces
-// (DNSSEC keys, policies, response policies, and IAM).
+// (DNSSEC keys, policies, and response policies).
 func (p *Provider) Unimplemented(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return nil, model.NewProviderError("Unimplemented", "operation is not supported by the Cloud DNS emulator", 501)
 }
@@ -952,6 +1019,11 @@ func (p *Provider) Unimplemented(_ context.Context, nr *model.NormalizedRequest)
 func strParam(nr *model.NormalizedRequest, key string) string {
 	s, _ := nr.Params[key].(string)
 	return s
+}
+
+func bodyOf(nr *model.NormalizedRequest) map[string]any {
+	m, _ := nr.Params["body"].(map[string]any)
+	return m
 }
 
 // rrsetParams returns (zone, name, type) for an rrset request. The type is

@@ -28,10 +28,18 @@ func TestCloudDNSCodecDecode(t *testing.T) {
 		{"GET", "/dns/v1/projects/p/managedZones/z/operations", "ManagedZoneOperationList"},
 		{"GET", "/dns/v1/projects/p/managedZones/z/operations/op1", "ManagedZoneOperationGet"},
 		// Deferred surfaces fail loud rather than 404-ing.
-		{"POST", "/dns/v1/projects/p/managedZones/z:getIamPolicy", "Unimplemented"},
 		{"GET", "/dns/v1/projects/p/managedZones/z/dnsKeys", "Unimplemented"},
 		{"GET", "/dns/v1/projects/p/policies", "Unimplemented"},
 		{"GET", "/dns/v1/projects/p/responsePolicies/rp", "Unimplemented"},
+		// Managed-zone IAM is served over the shared policy plane; the
+		// {+resource} binding makes the stripped path the zone itself.
+		{"POST", "/dns/v1/projects/p/managedZones/z:getIamPolicy", "ManagedZoneGetIamPolicy"},
+		{"POST", "/dns/v1/projects/p/managedZones/z:setIamPolicy", "ManagedZoneSetIamPolicy"},
+		{"POST", "/dns/v1/projects/p/managedZones/z:testIamPermissions", "ManagedZoneTestIamPermissions"},
+		// An unknown custom-method path (dns/v1 publishes no others) keeps the
+		// fail-loud Unimplemented stub, not a codec 404.
+		{"POST", "/dns/v1/projects/p/policies/z:getIamPolicy", "Unimplemented"},
+		{"POST", "/dns/v1/projects/p/responsePolicies/rp:setIamPolicy", "Unimplemented"},
 	}
 	for _, tc := range cases {
 		codec := &CloudDNSCodec{Service: "dns"}
@@ -99,6 +107,37 @@ func TestCloudDNSCodecParams(t *testing.T) {
 	}
 	if nr.Params["managedZone"] != "z" {
 		t.Errorf("managedZone = %v", nr.Params["managedZone"])
+	}
+}
+
+func TestCloudDNSCodecIAMParams(t *testing.T) {
+	codec := &CloudDNSCodec{Service: "dns"}
+
+	// The zone the IAM custom method targets is recorded so the handler can
+	// resolve the resource from the stripped {+resource} path.
+	for _, custom := range []string{"getIamPolicy", "setIamPolicy", "testIamPermissions"} {
+		nr, err := codec.Decode(httptest.NewRequest("POST", "/dns/v1/projects/p/managedZones/z:"+custom, nil), nil)
+		if err != nil {
+			t.Fatalf("%s: decode: %v", custom, err)
+		}
+		if nr.Params["managedZone"] != "z" {
+			t.Errorf("%s: managedZone = %v, want z", custom, nr.Params["managedZone"])
+		}
+		if nr.Params["project"] != "p" {
+			t.Errorf("%s: project = %v, want p", custom, nr.Params["project"])
+		}
+	}
+
+	// A deferred surface keeps the Unimplemented action and records no zone.
+	nr, err := codec.Decode(httptest.NewRequest("POST", "/dns/v1/projects/p/policies/z:getIamPolicy", nil), nil)
+	if err != nil {
+		t.Fatalf("decode deferred custom method: %v", err)
+	}
+	if nr.Action != "Unimplemented" {
+		t.Errorf("deferred custom method action = %q, want Unimplemented", nr.Action)
+	}
+	if _, ok := nr.Params["managedZone"]; ok {
+		t.Errorf("deferred custom method recorded managedZone = %v", nr.Params["managedZone"])
 	}
 }
 

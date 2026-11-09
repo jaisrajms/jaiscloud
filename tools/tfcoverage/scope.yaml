@@ -319,8 +319,7 @@ rules:
     state: limited
   - match: google_dns_managed_zone_iam_*
     service: clouddns
-    state: unsupported
-    reason: managedZones.getIamPolicy is not in the operation registry; the emulator serves managedZones and resourceRecordSets only.
+    state: limited
   - match: google_dns_policy
     service: clouddns
     state: unsupported
