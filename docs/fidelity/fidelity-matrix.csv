@@ -96,6 +96,8 @@ compute,Compute.FirewallsDelete,rest,limited,true,metadata-only over ResourceSto
 compute,Compute.FirewallsGet,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.FirewallsInsert,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.FirewallsList,rest,limited,true,metadata-only over ResourceStore (no control plane)
+compute,Compute.ImagesGet,rest,limited,true,"derived public-image catalog (no image registry, no image bytes): a concrete public build in a public image project answers a synthesized READY compute#image; a family name or any other project is a 404"
+compute,Compute.ImagesGetFromFamily,rest,limited,true,"derived public-image catalog (no image registry, no image bytes): any family in a public image project answers one stable synthesized build (the real latest image changes on every Google publish and cannot be known offline)"
 compute,Compute.InstancesAggregatedList,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.InstancesDelete,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.InstancesGet,rest,limited,true,metadata-only over ResourceStore (no control plane)

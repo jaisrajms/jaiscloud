@@ -1,6 +1,7 @@
 package gcp
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -136,6 +137,61 @@ func TestComputeCodecParams(t *testing.T) {
 	// an empty segment must not fall back to the caller's default project.
 	if _, err := codec.Decode(httptest.NewRequest("GET", "/compute/v1/projects/", nil), nil); err == nil {
 		t.Fatal("expected an error for an empty project segment")
+	}
+}
+
+func TestComputeCodecImages(t *testing.T) {
+	codec := &ComputeCodec{Service: "compute"}
+
+	nr, err := codec.Decode(httptest.NewRequest("GET", "/compute/v1/projects/p/global/images/debian-12-bookworm-v20241009", nil), nil)
+	if err != nil {
+		t.Fatalf("decode image: %v", err)
+	}
+	if nr.Action != "ImagesGet" {
+		t.Errorf("image action = %q, want ImagesGet", nr.Action)
+	}
+	if nr.Params["image"] != "debian-12-bookworm-v20241009" || nr.Params["scope"] != "global" {
+		t.Errorf("image params = %v", nr.Params)
+	}
+	if _, ok := nr.Params["family"]; ok {
+		t.Errorf("images.get must not record a family: %v", nr.Params)
+	}
+
+	nr, err = codec.Decode(httptest.NewRequest("GET", "/compute/v1/projects/p/global/images/family/debian-12", nil), nil)
+	if err != nil {
+		t.Fatalf("decode image family: %v", err)
+	}
+	if nr.Action != "ImagesGetFromFamily" || nr.Params["family"] != "debian-12" {
+		t.Errorf("image family decode = %q / %v", nr.Action, nr.Params)
+	}
+	if _, ok := nr.Params["image"]; ok {
+		t.Errorf("images.getFromFamily must not record an image name: %v", nr.Params)
+	}
+
+	// The rest of the images resource is not served: list, insert, delete and
+	// patch resolve to the fail-loud Unimplemented action rather than a 404.
+	for _, req := range []*http.Request{
+		httptest.NewRequest("GET", "/compute/v1/projects/p/global/images", nil),
+		httptest.NewRequest("POST", "/compute/v1/projects/p/global/images", nil),
+		httptest.NewRequest("DELETE", "/compute/v1/projects/p/global/images/i", nil),
+		httptest.NewRequest("PATCH", "/compute/v1/projects/p/global/images/i", nil),
+	} {
+		nr, err := codec.Decode(req, nil)
+		if err != nil {
+			t.Fatalf("decode %s %s: %v", req.Method, req.URL.Path, err)
+		}
+		if nr.Action != "Unimplemented" {
+			t.Errorf("%s %s action = %q, want Unimplemented", req.Method, req.URL.Path, nr.Action)
+		}
+	}
+
+	// Images are global: the zonal/regional spellings are not served.
+	nr, err = codec.Decode(httptest.NewRequest("GET", "/compute/v1/projects/p/zones/us-central1-a/images/i", nil), nil)
+	if err != nil {
+		t.Fatalf("decode zonal image: %v", err)
+	}
+	if nr.Action != "Unimplemented" {
+		t.Errorf("zonal image action = %q, want Unimplemented", nr.Action)
 	}
 }
 

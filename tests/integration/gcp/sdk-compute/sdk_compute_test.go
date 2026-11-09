@@ -3,9 +3,10 @@
 // Google compute/v1 client. This validates wire-level parity with the real SDK:
 // zonal instances (insert/get/list/stop/start/delete), disks, global
 // networks/firewalls, regional subnetworks, the synthesized zones/regions/
-// machineTypes discovery surface, the persisted compute#operation envelope with
-// status DONE, list envelopes, scope isolation, and the AlreadyExists/NotFound
-// error codes.
+// machineTypes discovery surface, the derived public-image catalog
+// (images.get / images.getFromFamily), the persisted compute#operation envelope
+// with status DONE, list envelopes, scope isolation, and the
+// AlreadyExists/NotFound error codes.
 //
 // The compute client's BasePath includes the service path, so the endpoint is
 // the emulator base plus "/compute/v1/". The GCP_EMULATOR_ENDPOINT env var is
@@ -297,6 +298,53 @@ func TestSDKCompute(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "compute#region", gotRegion.Kind)
 	require.NotEmpty(t, gotRegion.Zones)
+
+	// --- images: derived public catalog (images.get / images.getFromFamily) ---
+	img, err := svc.Images.Get("debian-cloud", "debian-12-bookworm-v20241009").Do()
+	require.NoError(t, err)
+	require.Equal(t, "compute#image", img.Kind)
+	require.Equal(t, "READY", img.Status)
+	require.Equal(t, "debian-12-bookworm", img.Family)
+	require.Equal(t, int64(10), img.DiskSizeGb)
+	require.Contains(t, img.SelfLink, "projects/debian-cloud/global/images/debian-12-bookworm-v20241009")
+	require.NotEmpty(t, img.GuestOsFeatures)
+	require.NotEmpty(t, img.Licenses)
+
+	familyImage, err := svc.Images.GetFromFamily("debian-cloud", "debian-12").Do()
+	require.NoError(t, err)
+	require.Equal(t, "debian-12", familyImage.Family)
+	require.NotEmpty(t, familyImage.Name)
+	// The family's reported build is a concrete image the same catalog serves.
+	_, err = svc.Images.Get("debian-cloud", familyImage.Name).Do()
+	require.NoError(t, err)
+
+	// A family name is not an image, and a project publishes no images of its
+	// own (images.insert is not served): both are 404s. This is the probe the
+	// hashicorp/google provider relies on to fall back to a family lookup.
+	_, err = svc.Images.Get("debian-cloud", "debian-12").Do()
+	require.Error(t, err)
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, 404, apiErr.Code)
+	_, err = svc.Images.Get(project, "debian-12-bookworm-v20241009").Do()
+	require.Error(t, err)
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, 404, apiErr.Code)
+
+	// A disk created from an image records the resolved image's absolute
+	// selfLink, which is what the provider's image diff suppression compares.
+	imageDisk := unique("imgdisk")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{
+		Name:        imageDisk,
+		SizeGb:      10,
+		SourceImage: "projects/debian-cloud/global/images/family/debian-12",
+	}).Do()
+	require.NoError(t, err)
+	gotImageDisk, err := svc.Disks.Get(project, zone, imageDisk).Do()
+	require.NoError(t, err)
+	require.Equal(t, "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/"+familyImage.Name, gotImageDisk.SourceImage)
+	require.NotEmpty(t, gotImageDisk.SourceImageId)
+	_, err = svc.Disks.Delete(project, zone, imageDisk).Do()
+	require.NoError(t, err)
 
 	// --- deferred surfaces fail loud with 501, not 404 ---
 	_, err = svc.GlobalAddresses.List(project).Do()

@@ -18,10 +18,15 @@
 // a google.longrunning.Operation — and the same operation is persisted at its
 // scope so operations.get/list can read it back.
 //
-// Deferred surfaces (addresses, images, snapshots, instance groups/templates,
-// routers, backend services, and every custom method such as setMetadata,
-// attachDisk, or reset) resolve to the Unimplemented action and fail loud with
-// 501 rather than 404-ing.
+// The synthesized discovery catalogs are zones, regions, machine types, the
+// project resource, and public images (images.get / images.getFromFamily, which
+// answer a derived READY image for the projects Google publishes public images
+// from — there is no image registry and no image bytes).
+//
+// Deferred surfaces (addresses, snapshots, instance groups/templates, routers,
+// backend services, images.insert/list/delete and the image write methods, and
+// every custom method such as setMetadata, attachDisk, or reset) resolve to the
+// Unimplemented action and fail loud with 501 rather than 404-ing.
 package compute
 
 import (
@@ -75,6 +80,7 @@ const (
 	kindFirewallList           = "compute#firewallList"
 	kindSubnetwork             = "compute#subnetwork"
 	kindSubnetworkList         = "compute#subnetworkList"
+	kindImage                  = "compute#image"
 	kindMachineType            = "compute#machineType"
 	kindMachineTypeList        = "compute#machineTypeList"
 	kindZone                   = "compute#zone"
@@ -193,6 +199,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Compute.SubnetworksGet":    p.SubnetworksGet,
 		"Compute.SubnetworksList":   p.SubnetworksList,
 		"Compute.SubnetworksDelete": p.SubnetworksDelete,
+
+		"Compute.ImagesGet":           p.ImagesGet,
+		"Compute.ImagesGetFromFamily": p.ImagesGetFromFamily,
 
 		"Compute.MachineTypesGet":  p.MachineTypesGet,
 		"Compute.MachineTypesList": p.MachineTypesList,
@@ -592,6 +601,29 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	}
 	if v, ok := body["labels"]; ok && v != nil {
 		disk["labels"] = v
+	}
+	// A disk created from an image records the image it resolved to, exactly as
+	// real Compute does: a family reference resolves to the family's concrete
+	// build and every spelling is stored as the image's absolute selfLink, so a
+	// read reports the canonical link. The provider compares that link back
+	// against the configured `image` (DiskImageDiffSuppress understands every
+	// documented spelling but only when the read is the absolute selfLink), so a
+	// disk created from a family would otherwise permadiff and be replaced on
+	// every plan.
+	if v, ok := body["sourceImage"]; ok && v != nil {
+		ref, isString := v.(string)
+		if !isString {
+			return nil, model.NewProviderError("InvalidArgument",
+				"Invalid value for field 'resource.sourceImage': must be a string", 400)
+		}
+		if ref != "" {
+			link, id, err := resolveImageReference(project, ref)
+			if err != nil {
+				return nil, err
+			}
+			disk["sourceImage"] = link
+			disk["sourceImageId"] = id
+		}
 	}
 	data, err := json.Marshal(disk)
 	if err != nil {
@@ -1032,6 +1064,273 @@ func (p *Provider) SubnetworksDelete(ctx context.Context, nr *model.NormalizedRe
 		return nil, storeError(err, "subnetwork")
 	}
 	return provider.OK(p.recordOperation(nr, project, scope, "regions", "delete", name, stringField(sub, "targetLink"), requestID)), nil
+}
+
+// ─── Image catalog ────────────────────────────────────────────────────────────
+
+// Compute images are a *derived* catalog here, like zone/region/machine-type
+// discovery: the emulator keeps no image registry (images.insert/list/delete are
+// not served and no image bytes exist), so a read answers a synthesized READY
+// public image instead of a stored record.
+//
+// Only the projects real GCP publishes public images from resolve. That
+// restriction is load-bearing for the hashicorp/google provider, which resolves
+// an `image` reference by *probing*: it asks for a concrete image first and only
+// falls back to reading the same name as a *family* when that probe answers 404
+// ("debian-cloud/debian-12" is a family, not an image, so a permissive 200 for
+// every name would skip the family lookup and change the sourceImage it
+// records). An image read in any other project is therefore a 404, exactly as
+// it is in a project that has no images.
+//
+// A name is served as a concrete image when it carries a real public-build
+// label:
+//   - "-vYYYYMMDD" (debian-12-bookworm-v20241009, windows-server-2019-dc-v20241008,
+//     sles-15-sp5-v20240109-x86-64), or
+//   - Cloud COS's milestone/build/patch/revision form
+//     (cos-stable-109-17800-147-54).
+//
+// images.getFromFamily accepts any RFC1035 family name in a public image
+// project: the real families cannot be enumerated offline, and a family read has
+// nothing stored behind it either.
+
+// publicImageProjects are the image projects real GCP serves public images
+// from: the hashicorp/google provider's own ImageMap (centos, coreos, debian,
+// fedora-coreos, opensuse, rhel, rocky-linux, sles, ubuntu, windows,
+// windows-sql) plus the COS, Pro/Ubuntu-OS, CentOS Stream, SAP, deep-learning
+// and ML image projects Terraform configurations reference directly.
+var publicImageProjects = map[string]bool{
+	"centos-cloud":                  true,
+	"centos-stream-cloud":           true,
+	"coreos-cloud":                  true,
+	"cos-cloud":                     true,
+	"debian-cloud":                  true,
+	"deeplearning-platform-release": true,
+	"fedora-coreos-cloud":           true,
+	"ml-images":                     true,
+	"opensuse-cloud":                true,
+	"rhel-cloud":                    true,
+	"rhel-sap-cloud":                true,
+	"rocky-linux-cloud":             true,
+	"suse-cloud":                    true,
+	"suse-sap-cloud":                true,
+	"ubuntu-os-cloud":               true,
+	"ubuntu-os-pro-cloud":           true,
+	"windows-cloud":                 true,
+	"windows-sql-cloud":             true,
+}
+
+// familyImageBuild is the build label a synthesized family image carries. A
+// family read has no real "latest image" to report (that changes on every
+// Google publish), so every family answers one stable build. Images created
+// with it parse back to the family name (imageFamilyFor), so a get of the name
+// getFromFamily returned is self-consistent.
+const familyImageBuild = "v20240101"
+
+// imageDiskSizeGB is the disk size a synthesized public image restores to (the
+// documented default boot-disk size the public Linux images use).
+const imageDiskSizeGB = "10"
+
+// publicImageBuildRE matches the "-vYYYYMMDD" build label inside a concrete
+// public image name (an sles image carries an "-x86-64" suffix after it, which
+// is why the label is matched underived rather than anchored).
+var publicImageBuildRE = regexp.MustCompile(`-v[0-9]{8}`)
+
+// cosImageBuildRE matches Cloud COS's milestone/build/patch/revision suffix
+// (cos-stable-109-17800-147-54).
+var cosImageBuildRE = regexp.MustCompile(`-[0-9]+-[0-9]+-[0-9]+-[0-9]+$`)
+
+// imageBuildDateRE captures the date inside a "-vYYYYMMDD" build label.
+var imageBuildDateRE = regexp.MustCompile(`-v([0-9]{4})([0-9]{2})([0-9]{2})`)
+
+// ImagesGet answers compute.images.get
+// (GET /compute/v1/projects/{project}/global/images/{image}).
+func (p *Provider) ImagesGet(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, name := accountID(nr), strParam(nr, "image")
+	if name == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing image", 400)
+	}
+	if err := validateImageName(name, "image"); err != nil {
+		return nil, err
+	}
+	if !publicImageProjects[project] || !isConcreteImageName(name) {
+		return nil, imageNotFound("images", project, name)
+	}
+	return provider.OK(publicImageObject(nr, project, name, imageFamilyFor(name))), nil
+}
+
+// ImagesGetFromFamily answers compute.images.getFromFamily
+// (GET /compute/v1/projects/{project}/global/images/family/{family}) with the
+// family's synthesized build.
+func (p *Provider) ImagesGetFromFamily(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, family := accountID(nr), strParam(nr, "family")
+	if family == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing family", 400)
+	}
+	if err := validateImageName(family, "family"); err != nil {
+		return nil, err
+	}
+	if !publicImageProjects[project] {
+		return nil, imageNotFound("family", project, family)
+	}
+	return provider.OK(publicImageObject(nr, project, family+"-"+familyImageBuild, family)), nil
+}
+
+// validateImageName enforces Compute Engine's documented resource-name grammar
+// (Discovery, Image.name: 1-63 characters, [a-z]([-a-z0-9]*[a-z0-9])?). Real
+// GCP rejects a malformed name with 400 before looking anything up.
+func validateImageName(name, field string) error {
+	if resourceNameRE.MatchString(name) {
+		return nil
+	}
+	return model.NewProviderError("InvalidArgument",
+		fmt.Sprintf("Invalid value for field 'resource.%s': '%s'. Must be 1-63 characters long and match the regular expression '[a-z]([-a-z0-9]*[a-z0-9])?'", field, name), 400)
+}
+
+// imageNotFound renders Compute Engine's not-found error for an images.get or
+// images.getFromFamily lookup: the exact shape real GCP answers, with the
+// "family" collection segment when a family was requested.
+func imageNotFound(collection, project, name string) error {
+	if collection == "family" {
+		return model.NewProviderError("NotFound",
+			fmt.Sprintf("The resource 'projects/%s/global/images/family/%s' was not found", project, name), 404)
+	}
+	return model.NewProviderError("NotFound",
+		fmt.Sprintf("The resource 'projects/%s/global/images/%s' was not found", project, name), 404)
+}
+
+// isConcreteImageName reports whether name is a concrete public image build
+// rather than a family name.
+func isConcreteImageName(name string) bool {
+	return publicImageBuildRE.MatchString(name) || cosImageBuildRE.MatchString(name)
+}
+
+// imageFamilyFor derives the family a synthesized concrete image reports: the
+// part of the name before its build label, so
+// "debian-12-bookworm-v20241009" reports "debian-12-bookworm" and
+// "sles-15-sp5-v20240109-x86-64" reports "sles-15-sp5". A name with no
+// recognizable build label has no family.
+func imageFamilyFor(name string) string {
+	if loc := publicImageBuildRE.FindStringIndex(name); loc != nil && loc[0] > 0 {
+		return name[:loc[0]]
+	}
+	if loc := cosImageBuildRE.FindStringIndex(name); loc != nil && loc[0] > 0 {
+		return name[:loc[0]]
+	}
+	return ""
+}
+
+// imageCreationTimestamp dates a synthesized image from its build label, so a
+// concrete build reports the day it was built and a family build reports the
+// stable catalog origin.
+func imageCreationTimestamp(name string) string {
+	m := imageBuildDateRE.FindStringSubmatch(name)
+	if m == nil {
+		return catalogCreationTimestamp
+	}
+	return fmt.Sprintf("%s-%s-%sT00:00:00.000-07:00", m[1], m[2], m[3])
+}
+
+// imageArchiveSize is a stable cosmetic archive size for a synthesized image
+// (real public images are roughly 1.0-1.5 GB compressed).
+func imageArchiveSize(name string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return strconv.FormatInt(int64(1_000_000_000)+int64(h.Sum32()%500_000_000), 10)
+}
+
+// resolveImageReference normalizes the image reference a create request
+// carries (`sourceImage` on a disk insert) the way real Compute does when it
+// records the resource: a family reference resolves to the family's concrete
+// build, and a project-relative or full-URL spelling becomes the image's
+// absolute selfLink plus its numeric id. The documented forms are
+// projects/{p}/global/images/{image}, projects/{p}/global/images/family/{family},
+// global/images/{image}, global/images/family/{family}, and the absolute
+// self-link of any of those under /compute/{version}/.
+func resolveImageReference(project, ref string) (link, id string, err error) {
+	imageProject, name, family, ok := parseImageReference(project, ref)
+	if !ok || !resourceNameRE.MatchString(name) {
+		return "", "", model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.sourceImage': '%s'. Must be a global image or image-family reference", ref), 400)
+	}
+	if !publicImageProjects[imageProject] {
+		return "", "", imageNotFound("images", imageProject, name)
+	}
+	if family {
+		name += "-" + familyImageBuild
+	} else if !isConcreteImageName(name) {
+		return "", "", imageNotFound("images", imageProject, name)
+	}
+	return computeBasePath + resource.ResourceID(imageProject)("compute-image", name),
+		numericID("image/" + imageProject + "/" + name), nil
+}
+
+// parseImageReference splits an image reference into its project, name and
+// family flag. defaultProject is the project the reference inherits when it
+// names none (global/images/...). An unrecognized spelling reports ok=false.
+func parseImageReference(defaultProject, ref string) (project, name string, family, ok bool) {
+	segs := imageReferenceSegments(ref)
+	switch {
+	case len(segs) == 5 && segs[0] == "projects" && segs[2] == "global" && segs[3] == "images":
+		return segs[1], segs[4], false, true
+	case len(segs) == 6 && segs[0] == "projects" && segs[2] == "global" && segs[3] == "images" && segs[4] == "family":
+		return segs[1], segs[5], true, true
+	case len(segs) == 3 && segs[0] == "global" && segs[1] == "images":
+		return defaultProject, segs[2], false, true
+	case len(segs) == 4 && segs[0] == "global" && segs[1] == "images" && segs[2] == "family":
+		return defaultProject, segs[3], true, true
+	}
+	return "", "", false, false
+}
+
+// imageReferenceSegments turns an image reference into path segments, dropping
+// the REST root and the API version of an absolute self-link so the standard
+// and universe-domain spellings (https://www.googleapis.com/compute/v1/...,
+// https://compute.example/compute/beta/...) parse alike.
+func imageReferenceSegments(ref string) []string {
+	ref = strings.TrimSpace(ref)
+	if i := strings.Index(ref, "/compute/"); i >= 0 && strings.HasPrefix(ref, "http") {
+		ref = ref[i+len("/compute/"):]
+		if j := strings.IndexByte(ref, '/'); j >= 0 {
+			ref = ref[j+1:]
+		}
+	}
+	return strings.Split(strings.Trim(ref, "/"), "/")
+}
+
+// publicImageObject renders the compute#image a read of a synthesized public
+// image answers. Every value is derived from the request path, so two reads of
+// the same image are byte-identical and a read after a restart reports the same
+// resource (nothing is stored).
+func publicImageObject(nr *model.NormalizedRequest, project, name, family string) map[string]any {
+	obj := map[string]any{
+		"kind":              kindImage,
+		"id":                numericID("image/" + project + "/" + name),
+		"name":              name,
+		"status":            "READY",
+		"sourceType":        "RAW",
+		"architecture":      "X86_64",
+		"diskSizeGb":        imageDiskSizeGB,
+		"archiveSizeBytes":  imageArchiveSize(name),
+		"creationTimestamp": imageCreationTimestamp(name),
+		"selfLink":          absLink(nr, "compute-image", name),
+		"labelFingerprint":  contentEtag("image/" + project + "/" + name),
+		"storageLocations":  []string{"us"},
+		"guestOsFeatures": []any{
+			map[string]any{"type": "UEFI_COMPATIBLE"},
+			map[string]any{"type": "VIRTIO_SCSI_MULTIQUEUE"},
+			map[string]any{"type": "GVNIC"},
+		},
+	}
+	label := family
+	if label == "" {
+		label = name
+	}
+	obj["description"] = label + " public image, x86_64"
+	if family != "" {
+		obj["family"] = family
+		obj["licenses"] = []string{absLink(nr, "compute-license", family)}
+	}
+	return obj
 }
 
 // ─── Machine type, zone, and region discovery ─────────────────────────────────

@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1252,
+    "total": 1254,
     "by_state": {
       "ga": 1042,
-      "limited": 157,
+      "limited": 159,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 592,
-        "limited": 134,
+        "limited": 136,
         "preview": 14,
         "unsupported": 11
       }
@@ -36,7 +36,7 @@
         "unsupported": 1
       },
       "compute": {
-        "limited": 33,
+        "limited": 35,
         "unsupported": 1
       },
       "container": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 705
+        "rest": 707
       },
       "unverified": {
         "grpc": 46,
@@ -234,7 +234,7 @@
       "source_ref": "compute.v1",
       "published": 1011,
       "served": 974,
-      "graded": 33,
+      "graded": 35,
       "unserved": [
         "compute.firewallPolicies.addAssociation",
         "compute.firewallPolicies.addRule",
@@ -274,9 +274,9 @@
         "compute.organizationSecurityPolicies.removeAssociation",
         "compute.organizationSecurityPolicies.removeRule"
       ],
-      "ungraded": 941,
-      "unimplemented": 933,
-      "note": "941 served method(s) have no graded cell; 933 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
+      "ungraded": 939,
+      "unimplemented": 931,
+      "note": "939 served method(s) have no graded cell; 931 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
     },
     {
       "service": "compute",
@@ -2835,6 +2835,34 @@
       "verified": true,
       "evidence": [
         "discovery=compute.firewalls.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "compute",
+      "operation": "Compute.ImagesGet",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "derived public-image catalog (no image registry, no image bytes): a concrete public build in a public image project answers a synthesized READY compute#image; a family name or any other project is a 404",
+      "discovery": "compute.images.get",
+      "verified": true,
+      "evidence": [
+        "discovery=compute.images.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "compute",
+      "operation": "Compute.ImagesGetFromFamily",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "derived public-image catalog (no image registry, no image bytes): any family in a public image project answers one stable synthesized build (the real latest image changes on every Google publish and cannot be known offline)",
+      "discovery": "compute.images.getFromFamily",
+      "verified": true,
+      "evidence": [
+        "discovery=compute.images.getFromFamily",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
