@@ -615,6 +615,47 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	if v, ok := body["labels"]; ok && v != nil {
 		disk["labels"] = v
 	}
+	// Persisted caller inputs are echoed on read. Each is part of the published
+	// Disk schema and the hashicorp/google provider reads it back; most are
+	// ForceNew, so a value the create carried but the record dropped re-plans as
+	// a replacement on every plan (TF2-11-3). The decision per field is caller
+	// value vs documented server default: only physicalBlockSizeBytes documents
+	// a server default (above), so every field below is echoed only when the
+	// request carried it. A synthesized value would permadiff a config that
+	// omits it (architecture and storage_pool are not Computed in the provider)
+	// and invent state the caller never sent.
+	//
+	// Deliberately not echoed: params (Discovery: "input only … not persisted as
+	// part of resource payload"), and the three CustomerEncryptionKey blocks
+	// (real Compute returns only the key's sha256/kmsKeyName, never the raw or
+	// RSA-wrapped key material).
+	for _, field := range []string{
+		"accessMode",
+		"architecture",
+		"asyncPrimaryDisk",
+		"enableConfidentialCompute",
+		"guestOsFeatures",
+		"licenses",
+		"replicaZones",
+		"resourcePolicies",
+		"sourceDisk",
+		"sourceInstantSnapshot",
+		"sourceSnapshot",
+		"sourceStorageObject",
+		"storagePool",
+	} {
+		if v, ok := body[field]; ok && v != nil {
+			disk[field] = v
+		}
+	}
+	// These are int64 on the wire (the Go client encodes them as JSON strings
+	// via `,string`), so normalize a numeric body to the decimal string the rest
+	// of the disk record uses.
+	for _, field := range []string{"provisionedIops", "provisionedThroughput"} {
+		if v := stringifyInt(body[field]); v != "" {
+			disk[field] = v
+		}
+	}
 	// A disk created from an image records the image it resolved to, exactly as
 	// real Compute does: a family reference resolves to the family's concrete
 	// build and every spelling is stored as the image's absolute selfLink, so a

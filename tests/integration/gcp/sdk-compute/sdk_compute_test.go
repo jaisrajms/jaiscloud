@@ -196,6 +196,34 @@ func TestSDKCompute(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	require.Equal(t, 404, apiErr.Code)
 
+	// --- disk input echo (TF2-11-3) ---
+	// The provider reads every one of these back from the disk it created, and
+	// most are ForceNew: a value the create carried but the read dropped
+	// replaces the disk on the next plan. The wire types are mixed (int64 as a
+	// JSON string, arrays, enum strings), so this is the real-client check.
+	features := unique("disk-features")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{
+		Name:                  features,
+		Type:                  "hyperdisk-balanced",
+		GuestOsFeatures:       []*compute.GuestOsFeature{{Type: "UEFI_COMPATIBLE"}, {Type: "WINDOWS"}},
+		Licenses:              []string{"https://www.googleapis.com/compute/v1/projects/windows-cloud/global/licenses/windows-server-core"},
+		AccessMode:            "READ_WRITE_SINGLE",
+		Architecture:          "X86_64",
+		ProvisionedIops:       30000,
+		ProvisionedThroughput: 1200,
+	}).Do()
+	require.NoError(t, err)
+	gotFeatures, err := svc.Disks.Get(project, zone, features).Do()
+	require.NoError(t, err)
+	require.Equal(t, []*compute.GuestOsFeature{{Type: "UEFI_COMPATIBLE"}, {Type: "WINDOWS"}}, gotFeatures.GuestOsFeatures)
+	require.Equal(t, []string{"https://www.googleapis.com/compute/v1/projects/windows-cloud/global/licenses/windows-server-core"}, gotFeatures.Licenses)
+	require.Equal(t, "READ_WRITE_SINGLE", gotFeatures.AccessMode)
+	require.Equal(t, "X86_64", gotFeatures.Architecture)
+	require.Equal(t, int64(30000), gotFeatures.ProvisionedIops)
+	require.Equal(t, int64(1200), gotFeatures.ProvisionedThroughput)
+	_, err = svc.Disks.Delete(project, zone, features).Do()
+	require.NoError(t, err)
+
 	// --- networks (global) ---
 	network := unique("net")
 	netOp, err := svc.Networks.Insert(project, &compute.Network{

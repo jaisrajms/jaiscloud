@@ -332,6 +332,106 @@ func TestDiskCRUD(t *testing.T) {
 	}
 }
 
+// TestDiskInsertEchoesPersistedInputs pins the disk-insert field echo
+// (TF2-11-3): every persisted caller input the provider reads back must survive
+// the round trip, because a dropped value permadiffs and — for the ForceNew
+// attributes — replaces the disk on every plan. Fields with no documented
+// server default must stay absent when the request omits them: synthesizing one
+// would invent state the caller never sent (architecture, storagePool) and
+// permadiff a config that omits it.
+func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	zone := "us-central1-a"
+
+	guestFeatures := []any{
+		map[string]any{"type": "SECURE_BOOT"},
+		map[string]any{"type": "WINDOWS"},
+	}
+	licenses := []any{"https://www.googleapis.com/compute/v1/projects/windows-cloud/global/licenses/windows-server-core"}
+	resourcePolicies := []any{"projects/proj/regions/us-central1/resourcePolicies/rp"}
+	replicaZones := []any{"https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-a"}
+	asyncPrimary := map[string]any{"disk": "projects/proj/zones/us-central1-b/disks/primary"}
+
+	if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+		"name":                      "disk-features",
+		"guestOsFeatures":           guestFeatures,
+		"licenses":                  licenses,
+		"provisionedIops":           30000,  // a raw JSON number
+		"provisionedThroughput":     "1200", // already the wire's decimal string
+		"accessMode":                "READ_WRITE_SINGLE",
+		"resourcePolicies":          resourcePolicies,
+		"storagePool":               "projects/proj/zones/us-central1-a/storagePools/pool",
+		"architecture":              "X86_64",
+		"replicaZones":              replicaZones,
+		"enableConfidentialCompute": true,
+		"asyncPrimaryDisk":          asyncPrimary,
+		"sourceDisk":                "projects/proj/zones/us-central1-a/disks/source",
+		"sourceSnapshot":            "projects/proj/global/snapshots/snap",
+		"sourceInstantSnapshot":     "projects/proj/zones/us-central1-a/instantSnapshots/instant",
+		"sourceStorageObject":       "gs://bucket/disk.tar.gz",
+		// Input-only and secret material: real Compute never returns either, so
+		// the record must not, however persistently the caller sent it.
+		"params":            map[string]any{"resourceManagerTags": map[string]any{"tagKeys/1": "tagValues/2"}},
+		"diskEncryptionKey": map[string]any{"rawKey": "c2VjcmV0"},
+	}}))); err != nil {
+		t.Fatalf("create disk: %v", err)
+	}
+	got, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": "disk-features"})))
+	if err != nil {
+		t.Fatalf("get disk: %v", err)
+	}
+	for field, want := range map[string]any{
+		"guestOsFeatures":           guestFeatures,
+		"licenses":                  licenses,
+		"provisionedIops":           "30000",
+		"provisionedThroughput":     "1200",
+		"accessMode":                "READ_WRITE_SINGLE",
+		"resourcePolicies":          resourcePolicies,
+		"storagePool":               "projects/proj/zones/us-central1-a/storagePools/pool",
+		"architecture":              "X86_64",
+		"replicaZones":              replicaZones,
+		"enableConfidentialCompute": true,
+		"asyncPrimaryDisk":          asyncPrimary,
+		"sourceDisk":                "projects/proj/zones/us-central1-a/disks/source",
+		"sourceSnapshot":            "projects/proj/global/snapshots/snap",
+		"sourceInstantSnapshot":     "projects/proj/zones/us-central1-a/instantSnapshots/instant",
+		"sourceStorageObject":       "gs://bucket/disk.tar.gz",
+	} {
+		if !reflect.DeepEqual(got.Data[field], want) {
+			t.Errorf("%s = %v (%T), want %v", field, got.Data[field], got.Data[field], want)
+		}
+	}
+	for _, field := range []string{"params", "diskEncryptionKey"} {
+		if v, ok := got.Data[field]; ok {
+			t.Errorf("%s must not be recorded, got %v", field, v)
+		}
+	}
+
+	// A create that omits the optional inputs keeps them absent, except the one
+	// field with a documented server default.
+	if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{"name": "disk-bare"}}))); err != nil {
+		t.Fatalf("create bare disk: %v", err)
+	}
+	bare, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": "disk-bare"})))
+	if err != nil {
+		t.Fatalf("get bare disk: %v", err)
+	}
+	for _, field := range []string{
+		"accessMode", "architecture", "asyncPrimaryDisk", "enableConfidentialCompute",
+		"guestOsFeatures", "licenses", "provisionedIops", "provisionedThroughput",
+		"replicaZones", "resourcePolicies", "sourceDisk", "sourceInstantSnapshot",
+		"sourceSnapshot", "sourceStorageObject", "storagePool",
+	} {
+		if v, ok := bare.Data[field]; ok {
+			t.Errorf("bare disk must omit %s, got %v", field, v)
+		}
+	}
+	if bare.Data["physicalBlockSizeBytes"] != defaultDiskPhysicalBlockSizeBytes {
+		t.Errorf("physicalBlockSizeBytes = %v, want the %s default", bare.Data["physicalBlockSizeBytes"], defaultDiskPhysicalBlockSizeBytes)
+	}
+}
+
 // TestDiskSourceImageResolution pins the disk-insert image normalization: a
 // caller's image reference is recorded the way real Compute records it (the
 // resolved image's absolute selfLink plus its id), so a read is canonical and
