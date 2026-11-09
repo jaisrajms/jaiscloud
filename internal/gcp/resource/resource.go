@@ -584,6 +584,33 @@ func ProjectNumber(project string) string {
 	return fmt.Sprintf("%012d", h.Sum64()%1_000_000_000_000)
 }
 
+// ProjectNumberFor returns the number a project reference is addressed by. A
+// caller may address a project by id or (since Discovery's project parameter
+// accepts both) by its number; an all-numeric reference is taken as the number
+// itself, and anything else is the synthesized ProjectNumber(id). Compute and
+// IAM both derive the Compute default service account from this value, so the
+// rule lives here rather than in either service.
+func ProjectNumberFor(project string) string {
+	if numericProjectRef(project) {
+		return project
+	}
+	return ProjectNumber(project)
+}
+
+// numericProjectRef reports whether project is an all-digit project number
+// reference (real project numbers are at most 19 digits).
+func numericProjectRef(project string) bool {
+	if project == "" || len(project) > 19 {
+		return false
+	}
+	for i := 0; i < len(project); i++ {
+		if project[i] < '0' || project[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // ResourceID returns a function that formats GCP resource names for a project.
 // Inject the result into NormalizedRequest.ResourceID at the gateway layer.
 func ResourceID(project string) func(resourceType, name string) string {

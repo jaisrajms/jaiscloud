@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 
@@ -39,22 +41,128 @@ func AccountNotFound() error {
 // resolves an account without importing the IAM provider.
 type Exister struct{ Resources store.ResourceStore }
 
-// ImplicitDefault reports whether email names a Google-managed service account
-// every project has without an explicit create: the App Engine default
-// ({project}@appspot.gserviceaccount.com), the Compute Engine default
-// ({number}-compute@developer.gserviceaccount.com), and the Google APIs service
-// agent ({number}@cloudservices.gserviceaccount.com). Real GCP resolves them,
-// so a reference check must not report one missing just because the emulator
-// never materialized the record.
-func ImplicitDefault(project, email string) bool {
-	number := resource.ProjectNumber(project)
-	switch email {
-	case project + "@appspot.gserviceaccount.com",
-		number + "-compute@developer.gserviceaccount.com",
-		number + "@cloudservices.gserviceaccount.com":
-		return true
+// DefaultAccount is one Google-managed service account a project has without an
+// explicit projects.serviceAccounts.create. Real IAM renders it through the
+// same serviceAccounts.get/list surface as a created account; the emulator
+// materializes no store record, so the IAM provider synthesizes this shape.
+//
+// The captured shape (2026-11-09, live project with Compute enabled):
+//
+//	email       {project}@appspot.gserviceaccount.com or
+//	            {number}-compute@developer.gserviceaccount.com
+//	displayName "App Engine default service account" /
+//	            "Compute Engine default service account"
+//	uniqueId    21-digit numeric; oauth2ClientId is the same value
+//	etag        the fixed DefaultAccountEtag
+type DefaultAccount struct {
+	Email       string
+	DisplayName string
+	// UniqueID is the account's numeric unique id; real IAM reports the same
+	// value as oauth2ClientId for a Google-managed default.
+	UniqueID string
+}
+
+// DefaultAccountEtag is the etag real IAM reports for a Google-managed default
+// account. It is a fixed value rather than a hash of the account (the App
+// Engine and Compute Engine defaults answer the same etag), captured from a
+// live project on 2026-11-09.
+const DefaultAccountEtag = "MDEwMjE5MjA="
+
+// Defaults returns the Google-managed service accounts project has without an
+// explicit create: the App Engine default ({project}@appspot...) and the
+// Compute Engine default ({number}-compute@developer...). Real GCP materializes
+// each when its owning API is enabled; the emulator serves appspot and compute
+// for every project because its served APIs are not enablement-gated.
+//
+// The Google APIs service agent ({number}@cloudservices.gserviceaccount.com) is
+// deliberately not included: it is not a default every project has (a captured
+// project with dozens of enabled APIs answers 404 for it), so treating it as
+// live would make the emulator serve an account real GCP does not.
+func Defaults(project string) []DefaultAccount {
+	if project == "" || project == "-" {
+		return nil
 	}
-	return false
+	number := resource.ProjectNumberFor(project)
+	appspot := project + "@appspot.gserviceaccount.com"
+	compute := number + "-compute@developer.gserviceaccount.com"
+	return []DefaultAccount{
+		{Email: appspot, DisplayName: "App Engine default service account", UniqueID: defaultUniqueID(appspot)},
+		{Email: compute, DisplayName: "Compute Engine default service account", UniqueID: defaultUniqueID(compute)},
+	}
+}
+
+// DefaultByEmail returns the default account of project named by email.
+func DefaultByEmail(project, email string) (DefaultAccount, bool) {
+	for _, d := range Defaults(project) {
+		if d.Email == email {
+			return d, true
+		}
+	}
+	return DefaultAccount{}, false
+}
+
+// DefaultByUniqueID returns the default account of project carrying uniqueID.
+func DefaultByUniqueID(project, uniqueID string) (DefaultAccount, bool) {
+	if uniqueID == "" {
+		return DefaultAccount{}, false
+	}
+	for _, d := range Defaults(project) {
+		if d.UniqueID == uniqueID {
+			return d, true
+		}
+	}
+	return DefaultAccount{}, false
+}
+
+// DefaultEmailProject returns the project id named by an App Engine default
+// account email ({project}@appspot.gserviceaccount.com), or "" for any other
+// email. Such an email names its project directly, so it resolves even through
+// the "projects/-" wildcard.
+func DefaultEmailProject(email string) string {
+	const suffix = "@appspot.gserviceaccount.com"
+	project, ok := strings.CutSuffix(email, suffix)
+	if !ok || project == "" || strings.Contains(project, "@") {
+		return ""
+	}
+	return project
+}
+
+// DefaultEmailNumber returns the project number named by a number-based
+// default-account email ({number}-compute@developer.gserviceaccount.com), or ""
+// for any other email. A number is not invertible to a project id, so a caller
+// must resolve it through the project registry.
+func DefaultEmailNumber(email string) string {
+	const suffix = "-compute@developer.gserviceaccount.com"
+	number, ok := strings.CutSuffix(email, suffix)
+	if !ok || number == "" {
+		return ""
+	}
+	for _, c := range number {
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return number
+}
+
+// defaultUniqueID derives the 21-digit numeric uniqueId of a managed default
+// account from its email. It is deterministic (a read must not churn) and in
+// the system-assigned range: real IAM's managed accounts carry 21-digit ids
+// beginning with "1" (captured: 111361368305025563191), so the hash supplies
+// the trailing digits.
+func defaultUniqueID(email string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(email))
+	return fmt.Sprintf("1%020d", h.Sum64())
+}
+
+// ImplicitDefault reports whether email names a Google-managed default account
+// every project has without an explicit create (DefaultByEmail). Real GCP
+// resolves them, so a reference check must not report one missing just because
+// the emulator never materialized the record.
+func ImplicitDefault(project, email string) bool {
+	_, ok := DefaultByEmail(project, email)
+	return ok
 }
 
 // ServiceAccountExists reports whether identifier names a live service account

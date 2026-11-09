@@ -1838,10 +1838,11 @@ test-gcp-terraform-tasks: ## Opt-in terraform-google-cloud-tasks module gate (sk
 # blueprint renders a GCE-shaped cluster, and the generated root module adds a
 # pyspark job in it; the case asserts the cluster/job read-back, a label +
 # worker-count update, plan No changes and the 404s after destroy. The module's
-# internal default-service-account data source is pruned with -target because
-# Compute projects.get is unserved (TF2-1); the case header records it. Opt-in
-# for the same reasons (one-time module clone, provider from the registry) and
-# SKIPs cleanly when either is missing.
+# internal default-service-account data source and its project IAM grant are
+# served (Compute projects.get by TF2-1, the Google-managed default account by
+# TF2-1-1), so they run as part of the measured surface. Opt-in for the same
+# reasons (one-time module clone, provider from the registry) and SKIPs cleanly
+# when either is missing.
 TF_DATAPROC_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-dataproc
 test-gcp-terraform-dataproc: ## Opt-in terraform-google-dataproc module gate (skips without terraform/module)
 	@set -e; \

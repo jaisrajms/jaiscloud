@@ -42,10 +42,30 @@ type deletedServiceAccount struct {
 // Provider handles IAM service accounts and their IAM policies.
 type Provider struct {
 	resources store.ResourceStore
+	// projectNumbers resolves a project id from its synthesized project
+	// number. A Google-managed default account addressed through the
+	// "projects/-" wildcard carries only the number
+	// ({number}-compute@developer...), and a number is not invertible, so the
+	// project registry is consulted. It is injected by the GCP binary (Cloud
+	// Resource Manager owns that registry); a nil resolver leaves such a
+	// wildcard address unresolved.
+	projectNumbers ProjectNumberResolver
+}
+
+// ProjectNumberResolver resolves a project id from its synthesized project
+// number. Implemented by the Cloud Resource Manager core (ProjectByNumber).
+type ProjectNumberResolver interface {
+	ProjectByNumber(ctx context.Context, number string) (string, bool, error)
 }
 
 func New(resources store.ResourceStore) *Provider {
 	return &Provider{resources: resources}
+}
+
+// SetProjectNumberResolver wires the project registry the wildcard resolution
+// of a Google-managed default account number needs.
+func (p *Provider) SetProjectNumberResolver(r ProjectNumberResolver) {
+	p.projectNumbers = r
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -182,9 +202,18 @@ func (p *Provider) resolveSA(ctx context.Context, nr *model.NormalizedRequest, i
 	if strings.Contains(identifier, "@") {
 		account := serviceaccount.AccountForSA(nr.AccountID, identifier)
 		if account == "" || account == "-" {
-			// The path project is the wildcard and the identifier embeds no
-			// project of its own, so the account cannot be scoped.
-			return saRef{}, notFound()
+			// Neither the path project nor the email names a project (the email
+			// is a Google-managed default account). The App Engine default
+			// embeds its project id; the Compute Engine default embeds the
+			// project number, which is resolved through the project registry.
+			resolved, rerr := p.defaultAccountProject(ctx, identifier)
+			if rerr != nil {
+				return saRef{}, rerr
+			}
+			if resolved == "" {
+				return saRef{}, notFound()
+			}
+			account = resolved
 		}
 		return saRef{Account: account, Email: identifier}, nil
 	}
@@ -193,6 +222,7 @@ func (p *Provider) resolveSA(ctx context.Context, nr *model.NormalizedRequest, i
 		// emulator's ResourceStore is per-account, so it cannot be resolved.
 		return saRef{}, notFound()
 	}
+	live := len(types) == 0
 	if len(types) == 0 {
 		types = []string{rtServiceAccount}
 	}
@@ -218,7 +248,40 @@ func (p *Provider) resolveSA(ctx context.Context, nr *model.NormalizedRequest, i
 			}
 		}
 	}
+	// A Google-managed default account has no store record, so its unique id is
+	// matched against the synthesized defaults (a concrete project can scope it;
+	// the wildcard case returned above).
+	if live {
+		if d, ok := serviceaccount.DefaultByUniqueID(nr.AccountID, identifier); ok {
+			return saRef{Account: nr.AccountID, Email: d.Email}, nil
+		}
+	}
 	return saRef{}, notFound()
+}
+
+// defaultAccountProject resolves the project a Google-managed default-account
+// email belongs to. An App Engine default email (project@appspot...) names its
+// project directly; a Compute Engine default email ({number}-compute@developer...)
+// carries the project number, which the injected project registry maps back to
+// an id. It returns "" when the email is neither form or the number names no
+// known project.
+func (p *Provider) defaultAccountProject(ctx context.Context, email string) (string, error) {
+	if project := serviceaccount.DefaultEmailProject(email); project != "" {
+		// The App Engine default email names its project directly. No registry
+		// lookup is needed (or possible): the emulator synthesizes any project
+		// id as an ACTIVE project, so the address is authoritative here in the
+		// same way it is on the concrete path.
+		return project, nil
+	}
+	number := serviceaccount.DefaultEmailNumber(email)
+	if number == "" || p.projectNumbers == nil {
+		return "", nil
+	}
+	project, ok, err := p.projectNumbers.ProjectByNumber(ctx, number)
+	if err != nil || !ok {
+		return "", err
+	}
+	return project, nil
 }
 
 // saNameFormat returns the resource-name formatter for a resolved account: the
@@ -320,6 +383,23 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, "")
 	if err != nil {
 		return nil, err
+	}
+	// A Google-managed default account is listed alongside the created accounts
+	// (real IAM lists them from the same collection). It is appended only when
+	// no store record already holds that email, so a materialized account is
+	// never listed twice. The project "-" wildcard has no default set.
+	if nr.AccountID != "" && nr.AccountID != "-" {
+		stored := make(map[string]bool, len(entries))
+		for _, e := range entries {
+			stored[e.ID] = true
+		}
+		for _, d := range serviceaccount.Defaults(nr.AccountID) {
+			if stored[d.Email] {
+				continue
+			}
+			m := defaultServiceAccountMeta(nr, nr.AccountID, d)
+			entries = append(entries, store.ResourceEntry{Type: rtServiceAccount, ID: d.Email, Data: mustJSON(m)})
+		}
 	}
 	page, nextToken, err := paging.Apply(entries, nr.Params)
 	if err != nil {
@@ -510,8 +590,11 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
 
-// loadServiceAccountMeta loads a service account's stored metadata.
-func (p *Provider) loadServiceAccountMeta(ctx context.Context, nr *model.NormalizedRequest, ref saRef) (serviceAccountMeta, error) {
+// storedServiceAccountMeta loads a created account's stored metadata only. A
+// synthesized Google-managed default has no record, so it keeps the lookup miss
+// it had before the defaults were rendered — a mutating method must never act on
+// a record that does not exist.
+func (p *Provider) storedServiceAccountMeta(ctx context.Context, nr *model.NormalizedRequest, ref saRef) (serviceAccountMeta, error) {
 	e, err := p.resources.Get(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -524,6 +607,39 @@ func (p *Provider) loadServiceAccountMeta(ctx context.Context, nr *model.Normali
 		return serviceAccountMeta{}, err
 	}
 	return m, nil
+}
+
+// loadServiceAccountMeta loads a created account's stored metadata, falling
+// back to the synthesized Google-managed default for a read. A storage failure
+// (as opposed to a lookup miss) is never masked as a synthesized account.
+func (p *Provider) loadServiceAccountMeta(ctx context.Context, nr *model.NormalizedRequest, ref saRef) (serviceAccountMeta, error) {
+	m, err := p.storedServiceAccountMeta(ctx, nr, ref)
+	if err != nil {
+		var pe *model.ProviderError
+		lookupMiss := errors.As(err, &pe) && (pe.HTTPStatus == 404 || pe.HTTPStatus == 403)
+		if lookupMiss {
+			if d, ok := serviceaccount.DefaultByEmail(ref.Account, ref.Email); ok {
+				return defaultServiceAccountMeta(nr, ref.Account, d), nil
+			}
+		}
+		return serviceAccountMeta{}, err
+	}
+	return m, nil
+}
+
+// defaultServiceAccountMeta renders a Google-managed default account in the
+// shape a stored account carries. The response name is always the concrete
+// project (never "projects/-"), matching real IAM.
+func defaultServiceAccountMeta(nr *model.NormalizedRequest, account string, d serviceaccount.DefaultAccount) serviceAccountMeta {
+	return serviceAccountMeta{
+		Name:           saNameFormat(nr, account)("service-account", d.Email),
+		Email:          d.Email,
+		DisplayName:    d.DisplayName,
+		ProjectID:      account,
+		Oauth2ClientID: d.UniqueID,
+		Etag:           serviceaccount.DefaultAccountEtag,
+		UniqueID:       d.UniqueID,
+	}
 }
 
 // saveServiceAccountMeta persists an updated service account.
@@ -547,12 +663,18 @@ func (p *Provider) setDisabled(ctx context.Context, nr *model.NormalizedRequest,
 	if err != nil {
 		return nil, err
 	}
-	m, err := p.loadServiceAccountMeta(ctx, nr, ref)
+	m, err := p.storedServiceAccountMeta(ctx, nr, ref)
 	if err != nil {
 		return nil, err
 	}
 	m.Disabled = disabled
 	if err := p.saveServiceAccountMeta(ctx, ref.Account, m); err != nil {
+		// A Google-managed default has no store record to update; the emulator
+		// serves it read-only, so a mutation stays the same lookup miss it was
+		// before the defaults were rendered.
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, saLookupError(nr, "serviceAccounts/"+ref.Email, "service account not found")
+		}
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -587,7 +709,7 @@ func (p *Provider) Undelete(ctx context.Context, nr *model.NormalizedRequest) (*
 		if rerr != nil {
 			return nil, rerr
 		}
-	} else if m, lerr := p.loadServiceAccountMeta(ctx, nr, ref); lerr == nil {
+	} else if m, lerr := p.storedServiceAccountMeta(ctx, nr, ref); lerr == nil {
 		return provider.OK(undeleteMap(m)), nil
 	} else if _, ok := lerr.(*model.ProviderError); !ok {
 		return nil, lerr
@@ -636,7 +758,7 @@ func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+	if err := p.requireAccount(ctx, nr, ref); err != nil {
 		return nil, err
 	}
 	pol := policy.Load(ctx, p.resources, ref.Account, rtServiceAccountPolicy, ref.Email)
@@ -660,7 +782,7 @@ func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+	if err := p.requireAccount(ctx, nr, ref); err != nil {
 		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
@@ -680,13 +802,25 @@ func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedR
 	if err != nil {
 		return nil, err
 	}
-	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+	if err := p.requireAccount(ctx, nr, ref); err != nil {
 		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
 }
 
+// requireAccount reports whether the addressed account exists. A synthesized
+// Google-managed default counts: real IAM serves the account's IAM policy, and
+// the policy store is keyed by email without needing an account record.
+func (p *Provider) requireAccount(ctx context.Context, nr *model.NormalizedRequest, ref saRef) error {
+	_, err := p.loadServiceAccountMeta(ctx, nr, ref)
+	return err
+}
+
+// requireServiceAccount requires a materialized account record. The key surface
+// keeps this stricter check: the emulator does not model the managed default's
+// Google-provided key, so a key operation on a default stays a lookup miss
+// rather than creating key material for an account with no record.
 func (p *Provider) requireServiceAccount(ctx context.Context, nr *model.NormalizedRequest, ref saRef) error {
 	if _, err := p.resources.Get(ctx, ref.Account, store.GlobalRegion, rtServiceAccount, ref.Email); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

@@ -254,8 +254,9 @@ func TestServiceAccountLifecycleOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListServiceAccounts: %v", err)
 	}
-	if len(list.GetAccounts()) != 1 {
-		t.Fatalf("ListServiceAccounts returned %d accounts, want 1", len(list.GetAccounts()))
+	// The created account plus the project's two Google-managed defaults.
+	if len(list.GetAccounts()) != 3 {
+		t.Fatalf("ListServiceAccounts returned %d accounts, want 3", len(list.GetAccounts()))
 	}
 
 	if _, err := svc.DisableServiceAccount(ctx, &adminpb.DisableServiceAccountRequest{Name: sa.GetName()}); err != nil {

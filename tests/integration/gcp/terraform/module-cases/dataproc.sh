@@ -19,21 +19,17 @@
 #
 # Pruned surface, recorded rather than worked around:
 #
-#  * The module's `main.tf` unconditionally reads
-#    `data.google_compute_default_service_account` and grants that account
-#    `roles/dataproc.worker` through `google_project_iam_member`. Both are
-#    excluded with `-target`: the data source's Compute half
-#    (`projects.get`, `GET /compute/v1/projects/{project}`) is served (TF2-1),
-#    but its follow-up IAM read of the returned default account
-#    (`projects/-/serviceAccounts/{number}-compute@developer.gserviceaccount.com`)
-#    is not — TF2-1-1 (`fix/gcp-iam-default-service-accounts`). Everything the
-#    case targets is the module's cluster, the root module's job and its job IAM
-#    member; the module's IAM prerequisite is not part of the measured surface.
-#    This is the same "prune the input that reaches an unserved surface and
-#    record it" rule the other cases follow.
-#  * `virtual_cluster_config` is not driven here: the fixture already covers the
-#    GKE-shaped cluster and its NodePool reconciliation, and this case is the
-#    GCE-shaped consumer path. The module's GKE inputs are left null.
+#  * `virtual_cluster_config` is not driven here: the fixture already covers
+#    the GKE-shaped cluster and its NodePool reconciliation, and this case is
+#    the GCE-shaped consumer path. The module's GKE inputs are left null.
+#
+# The module's `main.tf` also unconditionally reads
+# `data.google_compute_default_service_account` and grants that account
+# `roles/dataproc.worker` through `google_project_iam_member`. Both are served
+# and therefore part of the measured surface (TF2-1 served the Compute half;
+# TF2-1-1 renders the Google-managed default account through IAM, including the
+# `projects/-` wildcard read the data source sends), so no `-target` prune is
+# needed: the plan and apply exercise the module's IAM prerequisite too.
 #
 # Provider note: `dataproc_custom_endpoint` is the bare origin (the Dataproc
 # client appends v1/). The case pins google = 7.46.2, the same version as the
@@ -56,20 +52,15 @@ MODULE_REPO="terraform-google-dataproc"
 MODULE_COMMIT="56c7c7ed630f"
 MODULE_GIT="https://github.com/GoogleCloudPlatform/terraform-google-dataproc"
 
-CAPTURE_RESOURCES="google_dataproc_cluster,google_dataproc_job"
+CAPTURE_RESOURCES="google_dataproc_cluster,google_dataproc_job,google_project_iam_member"
 
 CLUSTER="jc-tf-dataproc"
 JOB_LABEL="terraform-case"
 STAGING="gs://jc-tf-dataproc-staging"
 
-# The module reads the default service account through Compute projects.get
-# (served, TF2-1) and then IAM, which does not render the Google-managed
-# default account yet (TF2-1-1), and grants it a project role. Target the two
-# resources the case measures, for plan, apply and destroy alike.
-TARGETS="-target=module.dataproc.google_dataproc_cluster.cluster -target=google_dataproc_job.job -target=google_dataproc_job_iam_member.job"
-export TF_CLI_ARGS_plan="$TARGETS"
-export TF_CLI_ARGS_apply="$TARGETS"
-export TF_CLI_ARGS_destroy="$TARGETS"
+# No -target prune: the module's cluster, the root module's job and job IAM
+# member, and the module's default-service-account IAM prerequisite are all
+# served (TF2-1, TF2-1-1), so every resource the module declares is measured.
 
 # write_module generates the root module for one gate phase.
 #   $1 revision label (kept in the job labels, so a mutate re-creates the job)
@@ -106,6 +97,15 @@ provider "google" {
   user_project_override = false
 
   dataproc_custom_endpoint = "\${var.endpoint}/"
+  # The module's default-service-account data source and project IAM grant
+  # (TF2-1, TF2-1-1) reach Compute projects.get and the IAM service-account
+  # read, so those endpoints must resolve to the emulator too.
+  compute_custom_endpoint  = "\${var.endpoint}/compute/v1/"
+  iam_custom_endpoint      = "\${var.endpoint}/"
+  iam_beta_custom_endpoint = "\${var.endpoint}/v1/"
+  # google_project_iam_member (the module's roles/dataproc.worker grant) reads
+  # and writes the project IAM policy through Resource Manager v1.
+  resource_manager_custom_endpoint = "\${var.endpoint}/v1/"
 }
 
 module "dataproc" {

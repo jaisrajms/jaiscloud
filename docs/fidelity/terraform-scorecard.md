@@ -249,15 +249,17 @@ Boundaries, recorded rather than worked around:
 
 - The Dataproc module's `main.tf` unconditionally reads
   `data.google_compute_default_service_account` and grants it
-  `roles/dataproc.worker` through `google_project_iam_member`. The data source's
-  Compute half (`projects.get`, `GET /compute/v1/projects/{project}`) is
-  served (TF2-1), but its follow-up IAM read of the returned default account
+  `roles/dataproc.worker` through `google_project_iam_member`. Both are served:
+  the data source's Compute half is `projects.get`
+  (`GET /compute/v1/projects/{project}`, TF2-1), and its follow-up IAM read of
+  the returned default account
   (`projects/-/serviceAccounts/{number}-compute@developer.gserviceaccount.com`)
-  is not — TF2-1-1 (`fix/gcp-iam-default-service-accounts`). The case
-  prunes both resources with `-target` on plan, apply and destroy, so the module
-  still renders and updates its cluster and the root module's job while the IAM
-  prerequisite stays unmeasured. `virtual_cluster_config` is left null: the
-  fixture already covers the GKE-shaped cluster and its NodePool reconciliation.
+  renders the Google-managed default (TF2-1-1). The case therefore runs the
+  module's IAM prerequisite as part of the measured surface (no `-target`
+  prune); its provider block routes the compute, IAM and resource-manager
+  endpoints to the emulator so the data source and the project grant reach it.
+  `virtual_cluster_config` is left null: the fixture already covers the
+  GKE-shaped cluster and its NodePool reconciliation.
 - `service-accounts` passes the module's documented `"project=>role"` format;
   a bare `"roles/viewer"` makes the module parse the role as both the project
   and the role. `display_name` is set explicitly because the provider's

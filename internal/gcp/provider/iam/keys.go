@@ -245,7 +245,7 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 	if err != nil {
 		return nil, err
 	}
-	sa, err := p.loadServiceAccountMeta(ctx, nr, ref)
+	sa, err := p.storedServiceAccountMeta(ctx, nr, ref)
 	if err != nil {
 		return nil, err
 	}

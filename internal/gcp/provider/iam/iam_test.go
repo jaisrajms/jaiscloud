@@ -44,7 +44,9 @@ func TestServiceAccountRoundTrip(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	accounts, _ := resp.Data["accounts"].([]any)
-	if len(accounts) != 1 {
-		t.Errorf("expected 1 service account, got %d", len(accounts))
+	// The created account plus the two Google-managed defaults the project
+	// always has (App Engine + Compute Engine).
+	if len(accounts) != 3 {
+		t.Errorf("expected 3 service accounts, got %d", len(accounts))
 	}
 }
