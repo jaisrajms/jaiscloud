@@ -50,7 +50,7 @@ func (c *ComputeCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRe
 			break
 		}
 	}
-	if pi < 0 || pi+1 >= len(seg) {
+	if pi < 0 || pi+1 >= len(seg) || seg[pi+1] == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing project in resource path", 404)
 	}
 	nr.Params["project"] = seg[pi+1]
@@ -66,6 +66,14 @@ func (c *ComputeCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRe
 // map to Unimplemented so the provider can fail loud with 501.
 func computeAction(rest []string, method string, nr *model.NormalizedRequest) string {
 	if len(rest) == 0 {
+		// GET /compute/v1/projects/{project} is the project resource itself
+		// (compute.projects.get). The other methods on the project resource
+		// (setCommonInstanceMetadata, setDefaultNetworkTier, moveDisk, …) carry
+		// another segment and fall through to the catch-all, as does any
+		// non-GET request on this bare path (Discovery publishes none).
+		if method == http.MethodGet {
+			return "ProjectsGet"
+		}
 		return "Unimplemented"
 	}
 	switch rest[0] {

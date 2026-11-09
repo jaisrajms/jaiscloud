@@ -35,6 +35,14 @@ func TestComputeCodecDecode(t *testing.T) {
 		{"DELETE", "/compute/v1/projects/p/regions/us-central1/subnetworks/s", "SubnetworksDelete"},
 		{"GET", "/compute/v1/projects/p/zones/us-central1-a/machineTypes", "MachineTypesList"},
 		{"GET", "/compute/v1/projects/p/zones/us-central1-a/machineTypes/e2-micro", "MachineTypesGet"},
+		// The project resource itself: projects.get is the one served method on
+		// the bare projects/{project} path; a non-GET request there is not a
+		// Discovery method and must fail loud, and the POST siblings
+		// (setCommonInstanceMetadata, setDefaultNetworkTier, moveDisk, ...) stay
+		// deferred.
+		{"GET", "/compute/v1/projects/p", "ProjectsGet"},
+		{"POST", "/compute/v1/projects/p/setCommonInstanceMetadata", "Unimplemented"},
+		{"POST", "/compute/v1/projects/p", "Unimplemented"},
 		{"GET", "/compute/v1/projects/p/zones", "ZonesList"},
 		{"GET", "/compute/v1/projects/p/zones/us-central1-a", "ZonesGet"},
 		{"GET", "/compute/v1/projects/p/regions", "RegionsList"},
@@ -109,6 +117,25 @@ func TestComputeCodecParams(t *testing.T) {
 	}
 	if nr.Params["scope"] != "us-central1-a" || nr.Params["operation"] != "op" {
 		t.Errorf("operation params = %v", nr.Params)
+	}
+
+	// The project resource is addressed by the bare path: the codec records the
+	// project segment and leaves the scope unset.
+	nr, err = codec.Decode(httptest.NewRequest("GET", "/compute/v1/projects/p", nil), nil)
+	if err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	if nr.Action != "ProjectsGet" || nr.Params["project"] != "p" {
+		t.Errorf("project decode = %v / %v", nr.Action, nr.Params["project"])
+	}
+	if _, ok := nr.Params["scope"]; ok {
+		t.Errorf("project decode must not record a scope: %v", nr.Params)
+	}
+
+	// A path with no project is a 404, like every other compute resource path:
+	// an empty segment must not fall back to the caller's default project.
+	if _, err := codec.Decode(httptest.NewRequest("GET", "/compute/v1/projects/", nil), nil); err == nil {
+		t.Fatal("expected an error for an empty project segment")
 	}
 }
 

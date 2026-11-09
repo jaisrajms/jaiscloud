@@ -24,9 +24,10 @@
 # silent):
 #
 #   * `create_service_account = true` (the module default) — the alternative
-#     path reads `data.google_compute_default_service_account`, which needs the
-#     unserved `compute.projects.get` (TF2-1). The module then creates its own
-#     SA, which the emulator serves.
+#     path reads `data.google_compute_default_service_account`, whose IAM read
+#     on the returned default account is not served (TF2-1-1; the Compute
+#     `projects.get` half is served). The module then creates its own SA, which
+#     the emulator serves.
 #   * `cloud_run_deletion_protection = false` — the module default (true) is a
 #     provider-side destroy guard, so it would block `destroy`; real GCP would
 #     refuse too. It is provider-local (never sent as a resource field).
@@ -125,8 +126,8 @@ module "cloudrun" {
   # Provider-side destroy guard only; it never reaches the API.
   cloud_run_deletion_protection = false
 
-  # Create the module's own service account: the default-account data source
-  # needs the unserved compute.projects.get (TF2-1).
+  # Create the module's own service account: the default-account data source's
+  # IAM read on that account is unserved (TF2-1-1).
   create_service_account = true
 
   ingress        = $ingress

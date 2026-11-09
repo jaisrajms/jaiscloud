@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/serviceaccount"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -571,6 +572,153 @@ func TestSynthesizedDiscovery(t *testing.T) {
 func TestUnimplemented(t *testing.T) {
 	if _, err := newProvider().Unimplemented(context.Background(), newNR(nil)); !isCode(err, "Unimplemented") {
 		t.Fatalf("expected Unimplemented, got %v", err)
+	}
+}
+
+// TestProjectsGet pins compute.projects.get: the synthesized compute#project
+// answers for the project id in the request path (arbitrary ids resolve, like
+// Resource Manager), carries the schema's required shape, and reports the
+// project's default service account — the field the hashicorp/google
+// `google_compute_default_service_account` data source reads (TF2-1).
+func TestProjectsGet(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	resp, err := p.ProjectsGet(ctx, newNR(map[string]any{"project": "proj"}))
+	if err != nil {
+		t.Fatalf("projects get: %v", err)
+	}
+	if resp.Data["kind"] != kindProject {
+		t.Errorf("kind = %v, want %s", resp.Data["kind"], kindProject)
+	}
+	if resp.Data["name"] != "proj" {
+		t.Errorf("name = %v, want proj", resp.Data["name"])
+	}
+	number := resource.ProjectNumber("proj")
+	if resp.Data["id"] != number {
+		t.Errorf("id = %v, want the project number %s", resp.Data["id"], number)
+	}
+	wantSA := number + "-compute@developer.gserviceaccount.com"
+	if resp.Data["defaultServiceAccount"] != wantSA {
+		t.Errorf("defaultServiceAccount = %v, want %s", resp.Data["defaultServiceAccount"], wantSA)
+	}
+	if got, want := resp.Data["selfLink"], computeBasePath+"projects/proj"; got != want {
+		t.Errorf("selfLink = %v, want %s", got, want)
+	}
+	if got, want := resp.Data["defaultNetworkTier"], "PREMIUM"; got != want {
+		t.Errorf("defaultNetworkTier = %v, want %s", got, want)
+	}
+	if got, want := resp.Data["vmDnsSetting"], "ZONAL_ONLY"; got != want {
+		t.Errorf("vmDnsSetting = %v, want %s", got, want)
+	}
+
+	// Quotas are the Discovery Quota shape (metric/limit/usage) over the same
+	// four metrics the region surface advertises, with JSON-number limits.
+	wantMetrics := []string{"CPUS", "DISKS_TOTAL_GB", "STATIC_ADDRESSES", "IN_USE_ADDRESSES"}
+	quotas, ok := resp.Data["quotas"].([]any)
+	if !ok || len(quotas) != len(wantMetrics) {
+		t.Fatalf("quotas = %v, want %d entries", resp.Data["quotas"], len(wantMetrics))
+	}
+	for i, q := range quotas {
+		qm, ok := q.(map[string]any)
+		if !ok {
+			t.Fatalf("quota[%d] = %v, want an object", i, q)
+		}
+		if qm["metric"] != wantMetrics[i] {
+			t.Errorf("quota[%d].metric = %v, want %s", i, qm["metric"], wantMetrics[i])
+		}
+		if _, ok := qm["limit"].(float64); !ok {
+			t.Errorf("quota[%d].limit = %T, want a JSON number", i, qm["limit"])
+		}
+		if _, ok := qm["usage"].(float64); !ok {
+			t.Errorf("quota[%d].usage = %T, want a JSON number", i, qm["usage"])
+		}
+	}
+
+	// A project that is not a Shared VPC host reports the unspecified member of
+	// the output-only xpnProjectStatus enum.
+	if got, want := resp.Data["xpnProjectStatus"], "UNSPECIFIED_XPN_PROJECT_STATUS"; got != want {
+		t.Errorf("xpnProjectStatus = %v, want %s", got, want)
+	}
+
+	// commonInstanceMetadata is the empty default envelope with a stable
+	// fingerprint: a second read must not churn (Terraform would see drift).
+	md, _ := resp.Data["commonInstanceMetadata"].(map[string]any)
+	if md["kind"] != "compute#metadata" || md["fingerprint"] == "" {
+		t.Errorf("commonInstanceMetadata = %v, want kind+fingerprint", md)
+	}
+	again, err := p.ProjectsGet(ctx, newNR(map[string]any{"project": "proj"}))
+	if err != nil {
+		t.Fatalf("projects get (again): %v", err)
+	}
+	md2, _ := again.Data["commonInstanceMetadata"].(map[string]any)
+	if md2["fingerprint"] != md["fingerprint"] {
+		t.Errorf("fingerprint churned between reads: %v then %v", md["fingerprint"], md2["fingerprint"])
+	}
+
+	// The reported account is the platform-wide implicit default that
+	// serviceaccount.ImplicitDefault classifies as live (the classifier
+	// Eventarc's trigger validation uses), and it is the operation envelope's
+	// user: one identity, one derivation. Note the read path is a separate
+	// gap — serviceAccounts.get does not render the managed default (TF2-1-1).
+	if !serviceaccount.ImplicitDefault("proj", wantSA) {
+		t.Errorf("serviceaccount.ImplicitDefault does not recognize %q", wantSA)
+	}
+	if got := serviceAccountEmail("proj"); got != wantSA {
+		t.Errorf("operation user = %s, want the project default account %s", got, wantSA)
+	}
+
+	// The response describes the requested project, not a fixed default: the
+	// path project wins over the request's bound ResourceID, for every field
+	// that names the project (name, selfLink, id, defaultServiceAccount).
+	nr := newNR(map[string]any{"project": "other"})
+	other, err := p.ProjectsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("projects get (other): %v", err)
+	}
+	if other.Data["name"] != "other" {
+		t.Errorf("name = %v, want the path project other", other.Data["name"])
+	}
+	if got, want := other.Data["selfLink"], computeBasePath+"projects/other"; got != want {
+		t.Errorf("selfLink = %v, want %s", got, want)
+	}
+	otherNumber := resource.ProjectNumber("other")
+	if other.Data["id"] != otherNumber {
+		t.Errorf("id = %v, want the project number %s", other.Data["id"], otherNumber)
+	}
+	if got, want := other.Data["defaultServiceAccount"], otherNumber+"-compute@developer.gserviceaccount.com"; got != want {
+		t.Errorf("defaultServiceAccount = %v, want %s", got, want)
+	}
+	if otherNumber == number {
+		t.Error("project number must differ between project ids")
+	}
+
+	// Discovery's project parameter also accepts a project number. The
+	// synthesized number is not invertible, so a numeric reference is taken at
+	// face value: it is the number, and the id equals the request.
+	byNumber, err := p.ProjectsGet(ctx, newNR(map[string]any{"project": otherNumber}))
+	if err != nil {
+		t.Fatalf("projects get (by number): %v", err)
+	}
+	if byNumber.Data["id"] != otherNumber {
+		t.Errorf("id = %v, want the requested number %s", byNumber.Data["id"], otherNumber)
+	}
+	if got, want := byNumber.Data["defaultServiceAccount"], otherNumber+"-compute@developer.gserviceaccount.com"; got != want {
+		t.Errorf("defaultServiceAccount = %v, want %s", got, want)
+	}
+	if got, want := byNumber.Data["selfLink"], computeBasePath+"projects/"+otherNumber; got != want {
+		t.Errorf("selfLink = %v, want %s", got, want)
+	}
+	// The same identity rule must hold for the operation envelope on that
+	// reference, or a mutation through a numeric path would report a different
+	// account than projects.get.
+	if got, want := serviceAccountEmail(otherNumber), byNumber.Data["defaultServiceAccount"]; got != want {
+		t.Errorf("operation user = %s, want the projects.get account %v", got, want)
+	}
+
+	// A missing project is INVALID_ARGUMENT, like Resource Manager's get.
+	if _, err := p.ProjectsGet(ctx, newNR(nil)); !isCode(err, "InvalidArgument") {
+		t.Fatalf("expected InvalidArgument for an empty project, got %v", err)
 	}
 }
 

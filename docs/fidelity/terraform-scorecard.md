@@ -102,8 +102,8 @@ service, which is not served). Both runs below are green on the session commit:
 | Terraform 1.16.3 | PASS (68 passed, 0 failed) | `fixture` (includes the raw `google_cloud_run_v2_service` with a `readiness_probe`) |
 
 The module's service account is created by the module itself
-(`create_service_account = true`) because the default-account data source needs
-the unserved `compute.projects.get` (TF2-1); `cloud_run_deletion_protection` is
+(`create_service_account = true`) because the default-account data source's IAM
+read on that account is unserved (TF2-1-1); `cloud_run_deletion_protection` is
 disabled because it is a provider-side destroy guard. Jobs, WorkerPools, the v1
 surface and traffic targets are outside the served surface.
 
@@ -249,9 +249,11 @@ Boundaries, recorded rather than worked around:
 
 - The Dataproc module's `main.tf` unconditionally reads
   `data.google_compute_default_service_account` and grants it
-  `roles/dataproc.worker` through `google_project_iam_member`. The data source
-  calls Compute `projects.get` (`GET /compute/v1/projects/{project}`), which the
-  emulator does not serve yet — TF2-1 (`fix/gcp-compute-projects-get`). The case
+  `roles/dataproc.worker` through `google_project_iam_member`. The data source's
+  Compute half (`projects.get`, `GET /compute/v1/projects/{project}`) is
+  served (TF2-1), but its follow-up IAM read of the returned default account
+  (`projects/-/serviceAccounts/{number}-compute@developer.gserviceaccount.com`)
+  is not — TF2-1-1 (`fix/gcp-iam-default-service-accounts`). The case
   prunes both resources with `-target` on plan, apply and destroy, so the module
   still renders and updates its cluster and the root module's job while the IAM
   prerequisite stays unmeasured. `virtual_cluster_config` is left null: the
@@ -432,7 +434,7 @@ Recorded gap and boundaries:
 | ID | classification | evidence |
 |---|---|---|
 | TF4-1-1 | `fix` — `fix/gcp-serviceusage-unknown-project` | Service Usage answers `200` (`DISABLED`) for `projects/00000000000/services/serviceusage.googleapis.com`; real GCP answers `403` ("Project '00000000000' not found or permission denied"). Provider 7.46.2's `resourceGoogleProjectCheckPreRequisites` probes that dummy project when `auto_create_network = false` and calls `err.Error()` without a nil check, so the `200` panics the provider. The pattern keeps the provider default (`true`) and records the gap. |
-| TF4-1-2 | `out of scope` | The bootstrap project keeps `auto_create_network = true`; the default Compute network it implies, and the `compute.projects.get`/networks deletion path `false` would take, are outside this stack's measured surface (TF2-1, wave-plan §6). |
+| TF4-1-2 | `out of scope` | The bootstrap project keeps `auto_create_network = true`; the default Compute network it implies, and the network-deletion path `false` would take, are outside this stack's measured surface (wave-plan §6). `compute.projects.get` itself is served (TF2-1). |
 | TF4-1-3 | `no fix` (provider schema) | `google_secret_manager_secret.replication` is ForceNew, so the CMEK pattern rotates the bucket/dataset key in place but creates the secret's key once. The emulator's replication PATCH path is covered by the service/REST tests. |
 
 The KMS objects that survive each destroy are the TF5-3/TF5-4 boundary (the
