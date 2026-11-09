@@ -414,11 +414,11 @@ google_redis_cluster_user_created_connections,memorystore,unsupported,none,unsup
 google_redis_instance,memorystore,limited,none,served,memorystore is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
 google_resource_manager_capability,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
 google_resource_manager_lien,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
-google_secret_manager_regional_secret,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
-google_secret_manager_regional_secret_iam_binding,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
-google_secret_manager_regional_secret_iam_member,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
-google_secret_manager_regional_secret_iam_policy,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
-google_secret_manager_regional_secret_version,secretmanager,unsupported,none,unsupported,Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.,2027-06-30
+google_secret_manager_regional_secret,secretmanager,served,fixture:regional,served,,2027-06-30
+google_secret_manager_regional_secret_iam_binding,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
+google_secret_manager_regional_secret_iam_member,secretmanager,served,fixture:regional,served,,2027-06-30
+google_secret_manager_regional_secret_iam_policy,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
+google_secret_manager_regional_secret_version,secretmanager,served,fixture:regional,served,,2027-06-30
 google_secret_manager_secret,secretmanager,served,"fixture:cmek,fixture:compat,fixture:user_managed",served,,2027-06-30
 google_secret_manager_secret_iam_binding,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
 google_secret_manager_secret_iam_member,secretmanager,served,fixture:accessor,served,,2027-06-30

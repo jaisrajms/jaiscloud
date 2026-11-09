@@ -89,6 +89,36 @@ var actionOverrides = map[string]string{
 	// alphabetically by locations.* before secrets.*).
 	"Secret.Get":  "secretmanager.projects.secrets.get",
 	"Secret.List": "secretmanager.projects.secrets.list",
+	// The project-level methods would otherwise tie with their location-level
+	// namesakes: the heuristic sorts projects.locations.* before projects.*,
+	// so pin every project-level Secret action to the projects.secrets.* cell.
+	// (Get/List, the version verbs and the rotation verbs are pinned above.)
+	"Secret.Create":             "secretmanager.projects.secrets.create",
+	"Secret.Update":             "secretmanager.projects.secrets.patch",
+	"Secret.Delete":             "secretmanager.projects.secrets.delete",
+	"Secret.AddVersion":         "secretmanager.projects.secrets.addVersion",
+	"Secret.GetIamPolicy":       "secretmanager.projects.secrets.getIamPolicy",
+	"Secret.SetIamPolicy":       "secretmanager.projects.secrets.setIamPolicy",
+	"Secret.TestIamPermissions": "secretmanager.projects.secrets.testIamPermissions",
+	// The regional secrets surface (projects.locations.secrets) has its own
+	// dispatch keys and cells.
+	"Secret.RegionalCreate":                "secretmanager.projects.locations.secrets.create",
+	"Secret.RegionalList":                  "secretmanager.projects.locations.secrets.list",
+	"Secret.RegionalGet":                   "secretmanager.projects.locations.secrets.get",
+	"Secret.RegionalUpdate":                "secretmanager.projects.locations.secrets.patch",
+	"Secret.RegionalDelete":                "secretmanager.projects.locations.secrets.delete",
+	"Secret.RegionalAddVersion":            "secretmanager.projects.locations.secrets.addVersion",
+	"Secret.RegionalEnableManagedRotation": "secretmanager.projects.locations.secrets.enableManagedRotation",
+	"Secret.RegionalRotateSecret":          "secretmanager.projects.locations.secrets.rotateSecret",
+	"Secret.RegionalGetIamPolicy":          "secretmanager.projects.locations.secrets.getIamPolicy",
+	"Secret.RegionalSetIamPolicy":          "secretmanager.projects.locations.secrets.setIamPolicy",
+	"Secret.RegionalTestIamPermissions":    "secretmanager.projects.locations.secrets.testIamPermissions",
+	"Secret.RegionalGetVersion":            "secretmanager.projects.locations.secrets.versions.get",
+	"Secret.RegionalListVersions":          "secretmanager.projects.locations.secrets.versions.list",
+	"Secret.RegionalAccess":                "secretmanager.projects.locations.secrets.versions.access",
+	"Secret.RegionalDestroyVersion":        "secretmanager.projects.locations.secrets.versions.destroy",
+	"Secret.RegionalDisableVersion":        "secretmanager.projects.locations.secrets.versions.disable",
+	"Secret.RegionalEnableVersion":         "secretmanager.projects.locations.secrets.versions.enable",
 
 	// Dataproc serves its operations under regions/{region} (the emulator's
 	// REST surface); the Discovery document also declares a locations/{location}
@@ -114,19 +144,19 @@ var actionOverrides = map[string]string{
 	"Dataproc.WorkflowTemplateSetIamPolicy":       "dataproc.projects.regions.workflowTemplates.setIamPolicy",
 	"Dataproc.WorkflowTemplateTestIamPermissions": "dataproc.projects.regions.workflowTemplates.testIamPermissions",
 	// Clusters and jobs publish the same mixin on their regional collections.
-	"Dataproc.ClusterGetIamPolicy":          "dataproc.projects.regions.clusters.getIamPolicy",
-	"Dataproc.ClusterSetIamPolicy":          "dataproc.projects.regions.clusters.setIamPolicy",
-	"Dataproc.ClusterTestIamPermissions":    "dataproc.projects.regions.clusters.testIamPermissions",
-	"Dataproc.JobGetIamPolicy":              "dataproc.projects.regions.jobs.getIamPolicy",
-	"Dataproc.JobSetIamPolicy":              "dataproc.projects.regions.jobs.setIamPolicy",
-	"Dataproc.JobTestIamPermissions":        "dataproc.projects.regions.jobs.testIamPermissions",
+	"Dataproc.ClusterGetIamPolicy":       "dataproc.projects.regions.clusters.getIamPolicy",
+	"Dataproc.ClusterSetIamPolicy":       "dataproc.projects.regions.clusters.setIamPolicy",
+	"Dataproc.ClusterTestIamPermissions": "dataproc.projects.regions.clusters.testIamPermissions",
+	"Dataproc.JobGetIamPolicy":           "dataproc.projects.regions.jobs.getIamPolicy",
+	"Dataproc.JobSetIamPolicy":           "dataproc.projects.regions.jobs.setIamPolicy",
+	"Dataproc.JobTestIamPermissions":     "dataproc.projects.regions.jobs.testIamPermissions",
 	// Cloud DNS publishes the IAM mixin on managedZones with the {+resource}
 	// binding; the flat action names cannot derive it.
-	"CloudDNS.ManagedZoneGetIamPolicy":       "dns.managedZones.getIamPolicy",
-	"CloudDNS.ManagedZoneSetIamPolicy":       "dns.managedZones.setIamPolicy",
-	"CloudDNS.ManagedZoneTestIamPermissions": "dns.managedZones.testIamPermissions",
-	"Metastore.AlterMetadataResourceLocation":     "metastore.projects.locations.services.alterLocation",
-	"Workflow.ListWorkflowRevisions":              "workflows.projects.locations.workflows.listRevisions",
+	"CloudDNS.ManagedZoneGetIamPolicy":        "dns.managedZones.getIamPolicy",
+	"CloudDNS.ManagedZoneSetIamPolicy":        "dns.managedZones.setIamPolicy",
+	"CloudDNS.ManagedZoneTestIamPermissions":  "dns.managedZones.testIamPermissions",
+	"Metastore.AlterMetadataResourceLocation": "metastore.projects.locations.services.alterLocation",
+	"Workflow.ListWorkflowRevisions":          "workflows.projects.locations.workflows.listRevisions",
 
 	// Firestore Admin user-creds resetPassword is a Discovery custom method
 	// ("userCreds.resetPassword") the flat registry action name cannot derive.

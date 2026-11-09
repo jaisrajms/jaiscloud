@@ -158,8 +158,7 @@ rules:
     state: served
   - match: google_secret_manager_regional_secret*
     service: secretmanager
-    state: unsupported
-    reason: Regional secrets (projects.locations.secrets) are not in the operation registry; only the global projects.secrets surface is served.
+    state: served
 
   # ── Cloud SQL ──────────────────────────────────────────────────────────────
   - match: google_sql_database

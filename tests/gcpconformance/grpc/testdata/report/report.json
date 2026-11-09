@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 516,
-  "passed": 516,
+  "total": 517,
+  "passed": 517,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 516,
-    "passed": 516,
+    "checks": 517,
+    "passed": 517,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -149,8 +149,8 @@
     },
     {
       "service": "secretmanager",
-      "total": 21,
-      "passed": 21,
+      "total": 22,
+      "passed": 22,
       "failed": 0,
       "unimplemented": 0
     },
@@ -666,6 +666,13 @@
       "method": "DeleteSecret",
       "status": "pass",
       "key_field": "success"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "CreateSecret",
+      "method": "CreateSecret",
+      "status": "pass",
+      "key_field": "name"
     },
     {
       "service": "secretmanager",

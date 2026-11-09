@@ -260,6 +260,27 @@ check "Pub/Sub subscription IAM grant" \
 check "Secret Manager IAM accessor grant" \
   "$ENDPOINT/v1/projects/$PROJECT/secrets/jaiscloud-tf-secret:getIamPolicy" \
   'roles/secretmanager.secretAccessor'
+# A regional secret lives at projects/{p}/locations/{l}/secrets/{s}: no
+# replication policy, top-level customerManagedEncryption, and a version CMEK
+# status instead of replicationStatus.
+REGIONAL_SECRET="$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/secrets/jaiscloud-tf-regional-secret"
+check "Secret Manager regional secret created" "$REGIONAL_SECRET" \
+  "projects/$PROJECT/locations/$REGION/secrets/jaiscloud-tf-regional-secret" \
+  '"env":"compat-test"' '"owner":"terraform"'
+check "Secret Manager regional CMEK echoed" "$REGIONAL_SECRET" \
+  '"customerManagedEncryption"' \
+  "\"kmsKeyName\":\"projects/$PROJECT/locations/$REGION/keyRings/jaiscloud-tf-keyring/cryptoKeys/jaiscloud-tf-key\""
+check_absent "Secret Manager regional secret has no replication policy" "$REGIONAL_SECRET" '"replication"'
+check "Secret Manager regional version ENABLED" "$REGIONAL_SECRET/versions/1" \
+  '"state":"ENABLED"' '"customerManagedEncryption"' '"kmsKeyVersionName"'
+check_absent "Secret Manager regional version has no replicationStatus" \
+  "$REGIONAL_SECRET/versions/1" '"replicationStatus"'
+check "Secret Manager regional list contains the secret" \
+  "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/secrets" 'jaiscloud-tf-regional-secret'
+check_absent "Secret Manager project list excludes regional secrets" \
+  "$ENDPOINT/v1/projects/$PROJECT/secrets" 'jaiscloud-tf-regional-secret'
+check "Secret Manager regional IAM grant" \
+  "$REGIONAL_SECRET:getIamPolicy" 'roles/secretmanager.secretAccessor'
 check "CRM project lookup reports ACTIVE" \
   "$ENDPOINT/v1/projects/$PROJECT" '"lifecycleState":"ACTIVE"'
 # Cloud Billing: data "google_project" reads projects.getBillingInfo to populate
@@ -633,6 +654,19 @@ if [[ "$DNS_IAM_STATUS" == "404" ]]; then
   PASS=$((PASS + 1))
 else
   printf '  [FAIL] Cloud DNS zone getIamPolicy after destroy = HTTP %s, want 404\n' "$DNS_IAM_STATUS"
+  FAIL=$((FAIL + 1))
+fi
+
+# Destroy removed the regional secret; a get is 404 and the project list no
+# longer reports it.
+REGIONAL_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+  "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/secrets/jaiscloud-tf-regional-secret" 2>/dev/null || true)"
+if [[ "$REGIONAL_STATUS" == "404" ]]; then
+  printf '  [PASS] Secret Manager regional secret deleted on destroy\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] Secret Manager regional secret get after destroy = HTTP %s, want 404\n' "$REGIONAL_STATUS"
   FAIL=$((FAIL + 1))
 fi
 

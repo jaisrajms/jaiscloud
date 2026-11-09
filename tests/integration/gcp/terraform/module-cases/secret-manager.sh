@@ -35,9 +35,12 @@
 #   * `version_destroy_ttl` stays null (the delayed-destroy surface is covered by
 #     the service/transport tests); `topics` is configured only on the rotating
 #     secret, because the API requires a topic for a rotation schedule.
-#   * Regional secrets (`google_secret_manager_regional_secret*`) are not served
-#     (TF1-4, `fix/gcp-secretmanager-regional`); the module only creates global
-#     `projects.secrets` resources.
+#   * Regional secrets (`google_secret_manager_regional_secret*`) are served
+#     (projects.locations.secrets), but this blueprint only creates global
+#     `projects.secrets` resources; the regional surface is driven by the
+#     fixture (`google_secret_manager_regional_secret` + version + IAM member).
+#     Provider note: the regional product reads the separate
+#     `secret_manager_regional_custom_endpoint`.
 #
 # Provider note: `secret_manager_custom_endpoint`, `kms_custom_endpoint` and
 # `pubsub_custom_endpoint` are the versioned API base URLs, so each carries one

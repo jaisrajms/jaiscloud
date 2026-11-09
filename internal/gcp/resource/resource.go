@@ -63,8 +63,15 @@ var formatters = map[string]func(project, name string) string{
 	// Cloud Pub/Sub
 	"pubsub-topic":        func(p, n string) string { return fmt.Sprintf("projects/%s/topics/%s", p, n) },
 	"pubsub-subscription": func(p, n string) string { return fmt.Sprintf("projects/%s/subscriptions/%s", p, n) },
-	// Secret Manager
-	"secret": func(p, n string) string { return fmt.Sprintf("projects/%s/secrets/%s", p, n) },
+	// Secret Manager. Callers pass the secret's store key: the secret ID for a
+	// project-level secret, or "locations/{loc}/secrets/{id}" for a regional
+	// one (see service/secretmanager.SecretKey).
+	"secret": func(p, n string) string {
+		if strings.HasPrefix(n, "locations/") {
+			return fmt.Sprintf("projects/%s/%s", p, n)
+		}
+		return fmt.Sprintf("projects/%s/secrets/%s", p, n)
+	},
 	// Cloud KMS — names embed the location; callers pass "location/keyRing/cryptoKey".
 	"kms-keyring": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s", p, locOf(n), ringOf(n))

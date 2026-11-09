@@ -12,13 +12,13 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1234**
+Cells: **1251**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1025 |
+| ga | 1042 |
 | limited | 156 |
 | preview | 14 |
 | unsupported | 39 |
@@ -27,7 +27,7 @@ Cells: **1234**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 575 | 133 | 14 | 11 |
+| rest | 592 | 133 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 687 | 46 |
+| rest | 704 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -97,7 +97,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | run | grpc | 11 | 11 | 11 | 0 | 0 | google.cloud.run.v2.Revisions, google.cloud.run.v2.Services |
 | scheduler | rest | 16 | 8 | 8 | 8 | 0 | cloudscheduler.v1 |
 | scheduler | grpc | 8 | 8 | 8 | 0 | 0 | google.cloud.scheduler.v1.CloudScheduler |
-| secretmanager | rest | 36 | 34 | 17 | 2 | 17 | secretmanager.v1 |
+| secretmanager | rest | 36 | 34 | 34 | 2 | 0 | secretmanager.v1 |
 | secretmanager | grpc | 17 | 17 | 17 | 0 | 0 | google.cloud.secretmanager.v1.SecretManagerService |
 | serviceusage | rest | 10 | 6 | 6 | 4 | 0 | serviceusage.v1 |
 | serviceusage | grpc | 6 | 6 | 6 | 0 | 0 | google.api.serviceusage.v1.ServiceUsage |
@@ -133,7 +133,6 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 - `monitoring` REST: 15 served method(s) have no graded cell; 14 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `operations` REST: no vendored Discovery document describes this service, so its published REST surface cannot be derived; the cells below are not a coverage claim
 - `pubsub` REST: 2 served method(s) have no graded cell (their routes are aggregated under one cell)
-- `secretmanager` REST: 17 served method(s) have no graded cell (their routes are aggregated under one cell)
 - `storage` REST: 8 served method(s) have no graded cell (their routes are aggregated under one cell)
 
 ### Published methods with no registered route
@@ -1503,11 +1502,11 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 ## secretmanager
 
-_Coverage: REST **34 of 36** published methods served · 2 not served · 17 graded · 17 served-but-ungraded (`secretmanager.v1` Discovery)_
+_Coverage: REST **34 of 36** published methods served · 2 not served · 34 graded (`secretmanager.v1` Discovery)_
 
 _Coverage: GRPC **17 of 17** published methods served · 17 graded (`google.cloud.secretmanager.v1.SecretManagerService` proto)_
 
-_34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
+_51 cell(s): ga=51 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -1538,6 +1537,23 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 | Secret.GetVersion | rest | ga | yes | — |
 | Secret.List | rest | ga | yes | — |
 | Secret.ListVersions | rest | ga | yes | — |
+| Secret.RegionalAccess | rest | ga | yes | — |
+| Secret.RegionalAddVersion | rest | ga | yes | — |
+| Secret.RegionalCreate | rest | ga | yes | — |
+| Secret.RegionalDelete | rest | ga | yes | — |
+| Secret.RegionalDestroyVersion | rest | ga | yes | — |
+| Secret.RegionalDisableVersion | rest | ga | yes | — |
+| Secret.RegionalEnableManagedRotation | rest | ga | yes | — |
+| Secret.RegionalEnableVersion | rest | ga | yes | — |
+| Secret.RegionalGet | rest | ga | yes | — |
+| Secret.RegionalGetIamPolicy | rest | ga | yes | — |
+| Secret.RegionalGetVersion | rest | ga | yes | — |
+| Secret.RegionalList | rest | ga | yes | — |
+| Secret.RegionalListVersions | rest | ga | yes | — |
+| Secret.RegionalRotateSecret | rest | ga | yes | — |
+| Secret.RegionalSetIamPolicy | rest | ga | yes | — |
+| Secret.RegionalTestIamPermissions | rest | ga | yes | — |
+| Secret.RegionalUpdate | rest | ga | yes | — |
 | Secret.RotateSecret | rest | ga | yes | — |
 | Secret.SetIamPolicy | rest | ga | yes | — |
 | Secret.TestIamPermissions | rest | ga | yes | — |

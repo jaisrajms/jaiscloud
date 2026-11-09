@@ -22,7 +22,6 @@ import (
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
-	"jaiscloud/internal/gcp/resource"
 	secretmanagersvc "jaiscloud/internal/gcp/service/secretmanager"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/gcp/timestamp"
@@ -214,37 +213,68 @@ func mapVersionErr(err error) error {
 
 // ─── resource-name parsing ────────────────────────────────────────────────────
 
-func secretName(project, id string) string {
-	return resource.ResourceID(project)("secret", id)
+func secretName(project, key string) string {
+	return secretmanagersvc.SecretName(project, key)
 }
 
-func versionName(project, id, ver string) string {
-	return secretName(project, id) + "/versions/" + ver
+func versionName(project, key, ver string) string {
+	return secretName(project, key) + "/versions/" + ver
 }
 
-// splitSecretResource parses a full resource name into project, secret id, and
-// version. It accepts "projects/{p}/secrets/{s}" (4 parts) and
-// "projects/{p}/secrets/{s}/versions/{v}" (6 parts).
-func splitSecretResource(name string) (project, id, version string, ok bool) {
+// splitSecretResource parses a full resource name into project, secret store
+// key, and version. It accepts the project-level and regional forms:
+//
+//	projects/{p}/secrets/{s}
+//	projects/{p}/secrets/{s}/versions/{v}
+//	projects/{p}/locations/{l}/secrets/{s}
+//	projects/{p}/locations/{l}/secrets/{s}/versions/{v}
+func splitSecretResource(name string) (project, key, version string, ok bool) {
 	parts := strings.Split(name, "/")
-	switch len(parts) {
-	case 4:
-		if parts[0] == "projects" && parts[2] == "secrets" {
-			return parts[1], parts[3], "", true
-		}
-	case 6:
-		if parts[0] == "projects" && parts[2] == "secrets" && parts[4] == "versions" {
-			return parts[1], parts[3], parts[5], true
-		}
+	if len(parts) < 4 || parts[0] != "projects" || parts[1] == "" {
+		return "", "", "", false
 	}
-	return "", "", "", false
+	project = parts[1]
+	secretsAt := -1
+	switch {
+	case parts[2] == "secrets":
+		secretsAt = 2
+	case len(parts) >= 6 && parts[2] == "locations" && parts[3] != "" && parts[4] == "secrets":
+		secretsAt = 4
+	default:
+		return "", "", "", false
+	}
+	if len(parts) < secretsAt+2 || parts[secretsAt+1] == "" {
+		return "", "", "", false
+	}
+	id := parts[secretsAt+1]
+	switch rest := parts[secretsAt+2:]; len(rest) {
+	case 0:
+	case 2:
+		if rest[0] != "versions" || rest[1] == "" {
+			return "", "", "", false
+		}
+		version = rest[1]
+	default:
+		return "", "", "", false
+	}
+	if secretsAt == 4 {
+		key = "locations/" + parts[3] + "/secrets/" + id
+	} else {
+		key = id
+	}
+	return project, key, version, true
 }
 
-// projectFromParent resolves the project from a "projects/{p}" parent (or a
-// bare project id), falling back to metadata-derived project.
+// projectFromParent resolves the project from a "projects/{p}[…]" parent (or a
+// bare project id), falling back to metadata-derived project. The parent may be
+// a location-scoped "projects/{p}/locations/{l}" for a regional create/list.
 func (s *Service) projectFromParent(ctx context.Context, p string) string {
 	if p != "" {
-		return strings.TrimPrefix(p, "projects/")
+		rest := strings.TrimPrefix(p, "projects/")
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			return rest[:i]
+		}
+		return rest
 	}
 	return grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
 }
@@ -277,6 +307,27 @@ func (s *Service) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecr
 		live = append(live, sec)
 	}
 	secrets = live
+	// A list is scoped to one secret namespace: a project-level parent lists the
+	// global secrets and a location-scoped parent lists that location's regional
+	// secrets. Both live in the same store.
+	if location := secretmanagersvc.ParentLocation(req.GetParent()); location == "" {
+		scoped := secrets[:0]
+		for _, sec := range secrets {
+			if !secretmanagersvc.IsRegionalKey(sec.ID) {
+				scoped = append(scoped, sec)
+			}
+		}
+		secrets = scoped
+	} else {
+		prefix := "locations/" + location + "/secrets/"
+		scoped := secrets[:0]
+		for _, sec := range secrets {
+			if strings.HasPrefix(sec.ID, prefix) {
+				scoped = append(scoped, sec)
+			}
+		}
+		secrets = scoped
+	}
 	matched, applied, err := secretmanagersvc.FilterSecrets(project, req.GetFilter(), secrets)
 	if err != nil {
 		return nil, mapError(err)
@@ -305,18 +356,20 @@ func (s *Service) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecr
 func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateSecretRequest) (*secretmanagerpb.Secret, error) {
 	project := s.projectFromParent(ctx, req.GetParent())
 	s.TrackProject(project)
+	location := secretmanagersvc.ParentLocation(req.GetParent())
 	id := req.GetSecretId()
 	proto := req.GetSecret()
 	if id == "" && proto != nil {
-		_, id, _, _ = splitSecretResource(proto.GetName())
+		id = secretmanagersvc.SecretID(proto.GetName())
 	}
 	if id == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing secretId", 400))
 	}
+	key := secretmanagersvc.ParentKey(req.GetParent(), id)
 
 	now := clock.Now()
 	sec := secretmanagerstore.Secret{
-		ID:         id,
+		ID:         key,
 		CreateTime: now,
 		NextVer:    1,
 	}
@@ -354,14 +407,32 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 			}
 			sec.ExpireTime = expire
 		}
-		replication, err := replicationFromSecret(proto)
-		if err != nil {
-			return nil, mapError(err)
+		if location != "" {
+			// Regional secrets have no replication policy; the CMEK
+			// configuration is the top-level customerManagedEncryption field.
+			if proto.GetReplication() != nil {
+				return nil, mapError(secretmanagersvc.RegionalReplicationUnsupported())
+			}
+			cme := customerManagedEncryptionFromProto(proto.GetCustomerManagedEncryption())
+			if err := secretmanagersvc.ValidateRegionalCMEKKey(ctx, s.encryptor, project, location, cme); err != nil {
+				return nil, mapError(err)
+			}
+			if cme != nil {
+				sec.KmsKeyName = cme.KmsKeyName
+			}
+		} else {
+			if proto.GetCustomerManagedEncryption() != nil {
+				return nil, mapError(secretmanagersvc.ProjectCMEKUnsupported())
+			}
+			replication, err := replicationFromSecret(proto)
+			if err != nil {
+				return nil, mapError(err)
+			}
+			if err := secretmanagersvc.ValidateReplicationKeys(ctx, s.encryptor, project, replication); err != nil {
+				return nil, mapError(err)
+			}
+			sec.SetReplication(replication)
 		}
-		if err := secretmanagersvc.ValidateReplicationKeys(ctx, s.encryptor, project, replication); err != nil {
-			return nil, mapError(err)
-		}
-		sec.SetReplication(replication)
 	}
 	if err := secretmanagersvc.ValidateTopics(sec.Topics); err != nil {
 		return nil, mapError(err)
@@ -370,7 +441,7 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 		return nil, mapError(err)
 	}
 
-	if err := s.secrets.CreateSecret(ctx, project, id, sec); err != nil {
+	if err := s.secrets.CreateSecret(ctx, project, key, sec); err != nil {
 		if errors.Is(err, secretmanagerstore.ErrAlreadyExists) {
 			return nil, mapError(model.NewProviderError("AlreadyExists", "secret already exists", 409))
 		}
@@ -379,7 +450,7 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 	if len(sec.Topics) > 0 {
 		secretmanagersvc.NotifyTopicConfigured(ctx, s.publisher, project, sec.Topics)
 	}
-	s.notifySecret(ctx, project, id, secretmanagersvc.EventSecretCreate, sec)
+	s.notifySecret(ctx, project, key, secretmanagersvc.EventSecretCreate, sec)
 	return secretToProto(project, sec), nil
 }
 
@@ -430,6 +501,8 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 		fields[p] = true
 	}
 	selected := func(name string) bool { return applyAll || fields[name] }
+	regional := secretmanagersvc.IsRegionalKey(id)
+	location := secretmanagersvc.ParentLocation(proto.GetName())
 
 	// Parse the incoming replication policy once: it is request data, not store
 	// state, so it must not be re-derived inside the (retried) atomic mutate.
@@ -438,8 +511,27 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 		return nil, mapError(err)
 	}
 	if incomingReplication != nil && selected("replication") {
+		if regional {
+			return nil, mapError(secretmanagersvc.RegionalReplicationUnsupported())
+		}
 		if err := secretmanagersvc.ValidateReplicationKeys(ctx, s.encryptor, project, incomingReplication); err != nil {
 			return nil, mapError(err)
+		}
+	}
+	// A regional secret's CMEK is the top-level customerManagedEncryption field;
+	// a project-level secret must not carry it. A masked field the request omits
+	// clears the stored configuration.
+	incomingCMEK := customerManagedEncryptionFromProto(proto.GetCustomerManagedEncryption())
+	cmekSelected := selected("customer_managed_encryption") || selected("customerManagedEncryption")
+	if cmekSelected {
+		if regional {
+			if incomingCMEK != nil {
+				if err := secretmanagersvc.ValidateRegionalCMEKKey(ctx, s.encryptor, project, location, incomingCMEK); err != nil {
+					return nil, mapError(err)
+				}
+			}
+		} else if incomingCMEK != nil {
+			return nil, mapError(secretmanagersvc.ProjectCMEKUnsupported())
 		}
 	}
 
@@ -543,7 +635,7 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 		} else if expireSet {
 			cur.ExpireTime = resolvedExpire
 		}
-		if selected("replication") {
+		if selected("replication") && !regional {
 			// The stored value is the raw policy (nil for a record written
 			// before it was modelled), so a replication update adopts the arm
 			// the client sends instead of conflicting with a reconstructed one.
@@ -555,6 +647,15 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 			// record (including a legacy record's key) untouched.
 			if merged != nil {
 				cur.SetReplication(merged)
+			}
+		}
+		if regional && cmekSelected {
+			// The effective key lives in KmsKeyName, the same field the
+			// replication policy uses for its wrap key.
+			if incomingCMEK != nil {
+				cur.KmsKeyName = incomingCMEK.KmsKeyName
+			} else if !applyAll {
+				cur.KmsKeyName = ""
 			}
 		}
 		// Validate the merged result: a patch that sets a period on a schedule
@@ -1199,8 +1300,17 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 		Name: secretName(project, s.ID),
 		// etag is the shared Secret Manager etag (see service/secretmanager):
 		// stable across reads, different after any metadata mutation.
-		Etag:        secretmanagersvc.SecretEtag(secretName(project, s.ID), s),
-		Replication: replicationToProto(s.ReplicationPolicy()),
+		Etag: secretmanagersvc.SecretEtag(secretName(project, s.ID), s),
+	}
+	if secretmanagersvc.IsRegionalKey(s.ID) {
+		// A regional Secret has no replication policy; its CMEK configuration
+		// is the top-level customerManagedEncryption field, stored in the shared
+		// effective-key field.
+		if s.KmsKeyName != "" {
+			out.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: s.KmsKeyName}
+		}
+	} else {
+		out.Replication = replicationToProto(s.ReplicationPolicy())
 	}
 	if !s.CreateTime.IsZero() {
 		out.CreateTime = timestamp.Proto(s.CreateTime)
@@ -1255,9 +1365,17 @@ func versionToProto(project string, v secretmanagerstore.Version, repl *secretma
 		// Mirror the REST provider's versionToMap: real Secret Manager marks
 		// version responses as carrying a client-specified payload checksum.
 		ClientSpecifiedPayloadChecksum: true,
+	}
+	if secretmanagersvc.IsRegionalKey(v.SecretID) {
+		// A regional SecretVersion has no replicationStatus; its CMEK status is
+		// the top-level customerManagedEncryption field.
+		if keyVersion := secretmanagersvc.KmsKeyVersionName(v.KmsKeyName, v.WrappedDEK); keyVersion != "" {
+			out.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryptionStatus{KmsKeyVersionName: keyVersion}
+		}
+	} else {
 		// The version reports the CMEK status of its own payload under the
 		// parent secret's replication arm (DC44/DC45).
-		ReplicationStatus: versionReplicationStatusToProto(v, repl),
+		out.ReplicationStatus = versionReplicationStatusToProto(v, repl)
 	}
 	if !v.CreateTime.IsZero() {
 		out.CreateTime = timestamp.Proto(v.CreateTime)
