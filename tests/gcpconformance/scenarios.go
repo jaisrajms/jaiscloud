@@ -1730,12 +1730,14 @@ func Scenarios(suffix string) []Scenario {
 	// job first (the create honours the caller-specified body name). The second
 	// :resume lands on an ENABLED job: real Cloud Scheduler answers the repeat
 	// with 200 and the job unchanged, which is what the Terraform provider needs
-	// after a create that leaves `paused` false (TF2-12).
+	// after a create that leaves `paused` false (TF2-12). The header-less HTTP
+	// target with a body records the server-filled headers map
+	// (User-Agent + Content-Type defaults, TF3-4-1).
 	schedBase := "/v1/projects/" + p + "/locations/us-central1/jobs"
 	schedName := "projects/" + p + "/locations/us-central1/jobs/conf-sched-" + suffix
 	sc = append(sc,
 		Scenario{Service: "scheduler", Method: "POST", Path: schedBase,
-			Body: fmt.Sprintf(`{"name":%q,"schedule":"*/5 * * * *","timeZone":"UTC","httpTarget":{"uri":"http://example.com"}}`, schedName)},
+			Body: fmt.Sprintf(`{"name":%q,"schedule":"*/5 * * * *","timeZone":"UTC","httpTarget":{"uri":"http://example.com","httpMethod":"POST","body":"aGk="}}`, schedName)},
 		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":pause"},
 		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":resume"},
 		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":resume"},

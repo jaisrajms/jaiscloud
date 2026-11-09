@@ -195,13 +195,23 @@ func TestSDKSchedulerLifecycle(t *testing.T) {
 		Description: "sdk behavioral job",
 		Schedule:    "* * * * *",
 		TimeZone:    "UTC",
-		HttpTarget:  &scheduler.HttpTarget{Uri: "http://example.com/hook", HttpMethod: "POST"},
+		HttpTarget: &scheduler.HttpTarget{
+			Uri:        "http://example.com/hook",
+			HttpMethod: "POST",
+			Body:       base64.StdEncoding.EncodeToString([]byte(`{"kind":"sdk"}`)),
+		},
 	})
 	require.Equal(t, jobName, created.Name)
 	require.Equal(t, "* * * * *", created.Schedule)
 	require.Equal(t, "UTC", created.TimeZone)
 	require.Equal(t, "ENABLED", created.State)
 	require.Equal(t, "sdk behavioral job", created.Description)
+	// Cloud Scheduler always answers an httpTarget.headers map and fills the
+	// documented delivery defaults, even when the create omitted them: provider
+	// 6.49.3 panics on a missing map and strips these exact values before
+	// diffing (TF3-4-1).
+	require.Equal(t, "Google-Cloud-Scheduler", created.HttpTarget.Headers["User-Agent"])
+	require.Equal(t, "application/octet-stream", created.HttpTarget.Headers["Content-Type"])
 	require.NotEmpty(t, created.ScheduleTime)
 	require.NotEmpty(t, created.UserUpdateTime)
 	st, err := time.Parse(time.RFC3339Nano, created.ScheduleTime)
@@ -211,6 +221,7 @@ func TestSDKSchedulerLifecycle(t *testing.T) {
 	got, err := svc.Projects.Locations.Jobs.Get(jobName).Do()
 	require.NoError(t, err)
 	require.Equal(t, created.ScheduleTime, got.ScheduleTime, "scheduleTime must be stable across reads")
+	require.Equal(t, created.HttpTarget.Headers, got.HttpTarget.Headers, "server headers must be stable across reads")
 
 	// Duplicate create is rejected with AlreadyExists/409.
 	_, err = svc.Projects.Locations.Jobs.Create(parent, &scheduler.Job{

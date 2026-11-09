@@ -88,6 +88,109 @@ func TestCreateGetListDelete(t *testing.T) {
 	}
 }
 
+func TestHTTPTargetServerHeaders(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedClock(t, at)
+	core, _, _ := newCore(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		t    *schedstore.HttpTarget
+		want map[string]string
+	}{
+		{
+			name: "header-less target gets the delivery User-Agent",
+			t:    &schedstore.HttpTarget{URI: "http://example.test/hook", HTTPMethod: "GET"},
+			want: map[string]string{"User-Agent": "Google-Cloud-Scheduler"},
+		},
+		{
+			name: "a body adds the default Content-Type",
+			t:    &schedstore.HttpTarget{URI: "http://example.test/hook", HTTPMethod: "POST", Body: []byte(`{"a":1}`)},
+			want: map[string]string{"User-Agent": "Google-Cloud-Scheduler", "Content-Type": "application/octet-stream"},
+		},
+		{
+			name: "caller headers are preserved and suppress the defaults",
+			t: &schedstore.HttpTarget{
+				URI:        "http://example.test/hook",
+				HTTPMethod: "POST",
+				Body:       []byte(`{"a":1}`),
+				Headers:    map[string]string{"User-Agent": "custom-agent", "Content-Type": "application/json"},
+			},
+			want: map[string]string{"User-Agent": "custom-agent", "Content-Type": "application/json"},
+		},
+		{
+			name: "a lowercase caller header still suppresses the default",
+			t: &schedstore.HttpTarget{
+				URI:        "http://example.test/hook",
+				HTTPMethod: "POST",
+				Body:       []byte(`{"a":1}`),
+				Headers:    map[string]string{"content-type": "text/plain"},
+			},
+			want: map[string]string{"User-Agent": "Google-Cloud-Scheduler", "content-type": "text/plain"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := core.CreateJob(ctx, "proj", "us-central1", schedstore.Job{
+				Schedule: "*/5 * * * *",
+				TimeZone: "UTC",
+				Target:   schedstore.TargetHTTP,
+				HTTP:     tc.t,
+			})
+			if err != nil {
+				t.Fatalf("CreateJob: %v", err)
+			}
+			if got := created.HTTP.Headers; len(got) != len(tc.want) {
+				t.Fatalf("headers = %v, want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if created.HTTP.Headers[k] != v {
+					t.Fatalf("headers[%q] = %q, want %q (all: %v)", k, created.HTTP.Headers[k], v, created.HTTP.Headers)
+				}
+			}
+			// The defaults are stored, so a read answers them too.
+			got, err := core.GetJob(ctx, "proj", "us-central1", created.Name)
+			if err != nil {
+				t.Fatalf("GetJob: %v", err)
+			}
+			if len(got.HTTP.Headers) != len(tc.want) {
+				t.Fatalf("stored headers = %v, want %v", got.HTTP.Headers, tc.want)
+			}
+		})
+	}
+}
+
+func TestHTTPTargetHeadersAfterTargetReplacement(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedClock(t, at)
+	core, _, _ := newCore(t)
+	ctx := context.Background()
+
+	created, err := core.CreateJob(ctx, "proj", "us-central1", schedstore.Job{
+		Schedule: "*/5 * * * *",
+		TimeZone: "UTC",
+		Target:   schedstore.TargetHTTP,
+		HTTP:     &schedstore.HttpTarget{URI: "http://example.test/hook", HTTPMethod: "GET"},
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	// Replacing the target through a masked update must synthesize the defaults
+	// again; an update that does not touch httpTarget keeps the existing map.
+	updated, err := core.UpdateJob(ctx, "proj", "us-central1", created.Name, schedstore.Job{
+		Target: schedstore.TargetHTTP,
+		HTTP:   &schedstore.HttpTarget{URI: "http://example.test/other", HTTPMethod: "POST", Body: []byte("hi")},
+	}, []string{"httpTarget"})
+	if err != nil {
+		t.Fatalf("UpdateJob: %v", err)
+	}
+	if updated.HTTP.Headers["User-Agent"] != "Google-Cloud-Scheduler" ||
+		updated.HTTP.Headers["Content-Type"] != "application/octet-stream" {
+		t.Fatalf("headers after replacement = %v", updated.HTTP.Headers)
+	}
+}
+
 func TestCreateValidation(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fixedClock(t, at)

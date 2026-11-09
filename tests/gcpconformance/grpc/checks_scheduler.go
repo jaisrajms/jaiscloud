@@ -100,6 +100,12 @@ func checkSchedulerCreateJob(ctx context.Context, cfg Config) error {
 	if job.GetHttpTarget().GetUri() != cfg.RESTEndpoint+"/_jaiscloud/health" {
 		return fmt.Errorf("CreateJob httpTarget.uri = %q", job.GetHttpTarget().GetUri())
 	}
+	// Real Cloud Scheduler always answers a headers map and fills the delivery
+	// default User-Agent, even when the create omitted one. Provider 6.49.3
+	// panics on a missing map (TF3-4-1).
+	if got := job.GetHttpTarget().GetHeaders()["User-Agent"]; got != "Google-Cloud-Scheduler" {
+		return fmt.Errorf("CreateJob httpTarget.headers[User-Agent] = %q, want Google-Cloud-Scheduler", got)
+	}
 	if job.GetScheduleTime() == nil {
 		return fmt.Errorf("CreateJob scheduleTime is unset")
 	}

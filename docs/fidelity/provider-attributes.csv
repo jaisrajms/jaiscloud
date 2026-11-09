@@ -955,24 +955,24 @@ google_workflows_workflow,,,timeouts.delete,,client-side,provider timeout block;
 google_workflows_workflow,,,timeouts.update,,client-side,provider timeout block; never part of a request body
 google_workflows_workflow,,,update_time,,output-only,computed-only attribute; never part of a request body
 google_workflows_workflow,,,user_env_vars,userEnvVars,not-exercised,the pinned submodule does not configure user environment variables
-google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.instance,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.service,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.version,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,app_engine_http_target.body,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,app_engine_http_target.headers,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,app_engine_http_target.http_method,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,app_engine_http_target.relative_uri,,not-exercised,the case drives the Pub/Sub target and leaves the App Engine target null
-google_cloud_scheduler_job,,,attempt_deadline,,not-exercised,the module nulls attempt_deadline for a Pub/Sub target
+google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.instance,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.service,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,app_engine_http_target.app_engine_routing.version,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,app_engine_http_target.body,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,app_engine_http_target.headers,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,app_engine_http_target.http_method,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,app_engine_http_target.relative_uri,,not-exercised,the case leaves the App Engine target null (App Engine is not a served service)
+google_cloud_scheduler_job,,,attempt_deadline,attemptDeadline,no-catalog,
 google_cloud_scheduler_job,,,deletion_policy,,client-side,provider-local destructive-action policy; never part of a request body
 google_cloud_scheduler_job,,,description,description,no-catalog,
-google_cloud_scheduler_job,,,http_target.body,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.headers,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.http_method,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.oauth_token.scope,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.oauth_token.service_account_email,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.oidc_token.audience,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.oidc_token.service_account_email,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
-google_cloud_scheduler_job,,,http_target.uri,,not-exercised,the case drives the Pub/Sub target; the HTTP target is blocked by TF3-4-1
+google_cloud_scheduler_job,,,http_target.body,httpTarget.body,no-catalog,
+google_cloud_scheduler_job,,,http_target.headers,,not-exercised,the module HTTP-target input has no headers field; the case asserts the server-filled map on read (TF3-4-1)
+google_cloud_scheduler_job,,,http_target.http_method,httpTarget.httpMethod,no-catalog,
+google_cloud_scheduler_job,,,http_target.oauth_token.scope,,not-exercised,the case configures no OAuth token on its HTTP target
+google_cloud_scheduler_job,,,http_target.oauth_token.service_account_email,,not-exercised,the case configures no OAuth token on its HTTP target
+google_cloud_scheduler_job,,,http_target.oidc_token.audience,,not-exercised,the case configures no OIDC token on its HTTP target
+google_cloud_scheduler_job,,,http_target.oidc_token.service_account_email,,not-exercised,the case configures no OIDC token on its HTTP target
+google_cloud_scheduler_job,,,http_target.uri,httpTarget.uri,no-catalog,
 google_cloud_scheduler_job,,,id,,client-side,provider identity attribute; never part of a request body
 google_cloud_scheduler_job,,,name,name,no-catalog,
 google_cloud_scheduler_job,,,paused,,client-side,not a Cloud Scheduler Job field (Discovery); the provider deletes it from every request body and maps it onto the :pause/:resume methods

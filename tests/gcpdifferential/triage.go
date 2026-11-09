@@ -469,13 +469,13 @@ var triageRules = []TriageRule{
 		Service: "scheduler",
 		Op:      "scheduler_job_create",
 		Kind:    "missing_field",
-		Reason:  "output-only Cloud Scheduler fields the emulator does not echo (defaulted attemptDeadline, the synthesized httpTarget headers, retryConfig.maxRetryDuration, and the job's last-attempt status); the schedule, target, OIDC token and retry config match",
+		Reason:  "output-only Cloud Scheduler fields the emulator does not echo (defaulted attemptDeadline, retryConfig.maxRetryDuration, and the job's last-attempt status); the schedule, target, OIDC token, headers and retry config match",
 	},
 	{
 		Service: "scheduler",
 		Op:      "scheduler_job_get",
 		Kind:    "missing_field",
-		Reason:  "output-only Cloud Scheduler fields the emulator does not echo (defaulted attemptDeadline, the synthesized httpTarget headers, retryConfig.maxRetryDuration, and the job's last-attempt status); the schedule, target, OIDC token and retry config match",
+		Reason:  "output-only Cloud Scheduler fields the emulator does not echo (defaulted attemptDeadline, retryConfig.maxRetryDuration, and the job's last-attempt status); the schedule, target, OIDC token, headers and retry config match",
 	},
 
 	// Service Usage: the returned service's catalog config sub-fields are output-only.
