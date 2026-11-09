@@ -643,6 +643,16 @@ func Scenarios(suffix string) []Scenario {
 			Body: `{"rows":[{"insertId":"1","json":{"id":"1"}}]}`},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/data"},
 
+		// Table IAM mixin: one policy plane per table (get/set/test). The set
+		// carries a policy version 1 binding; testIamPermissions grants every
+		// requested permission (no authz enforcement).
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + ":getIamPolicy",
+			Body: `{}`},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + ":setIamPolicy",
+			Body: `{"policy":{"version":1,"bindings":[{"role":"roles/bigquery.dataViewer","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + ":testIamPermissions",
+			Body: `{"permissions":["bigquery.tables.get","bigquery.tables.getData"]}`},
+
 		// Dataset-scoped routines (NF31): resource CRUD. Routine has no `kind`
 		// member, and creationTime/lastModifiedTime are int64 epoch millis.
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/routines",

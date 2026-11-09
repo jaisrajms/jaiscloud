@@ -202,8 +202,11 @@ func (c *BigQueryCodec) decodeUpload(r *http.Request, body []byte, nr *model.Nor
 // are declared as resource CRUD in the Discovery document (list/get/insert/
 // update/delete, plus rowAccessPolicies:batchDelete); their IAM custom methods
 // resolve to an explicit Unimplemented action so the provider fails loud rather
-// than the codec 404-ing them. models keeps its coarse action: every models
-// method is an explicit 501.
+// than the codec 404-ing them. Tables carry a real IAM plane (getIamPolicy /
+// setIamPolicy / testIamPermissions), so each verb has its own action; an
+// unrecognised custom verb stays a 404 instead of falling through to the
+// create/get switch. models keeps its coarse action: every models method is an
+// explicit 501.
 func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jobID, routineID, policyID string) {
 	if len(seg) == 0 {
 		return "", "", "", "", "", ""
@@ -251,6 +254,24 @@ func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jo
 		case 4:
 			switch seg[2] {
 			case "tables":
+				if i := strings.IndexByte(seg[3], ':'); i >= 0 {
+					// tables.getIamPolicy / setIamPolicy / testIamPermissions.
+					// The table id is the segment without its custom suffix, and
+					// an unknown verb must not fall through to the create/get
+					// switch below (it would resolve to a bogus table id).
+					if method != http.MethodPost {
+						return "", "", "", "", "", ""
+					}
+					switch seg[3][i+1:] {
+					case "getIamPolicy":
+						return "GetTableIamPolicy", seg[1], seg[3][:i], "", "", ""
+					case "setIamPolicy":
+						return "SetTableIamPolicy", seg[1], seg[3][:i], "", "", ""
+					case "testIamPermissions":
+						return "TestTableIamPermissions", seg[1], seg[3][:i], "", "", ""
+					}
+					return "", "", "", "", "", ""
+				}
 				switch method {
 				case http.MethodGet:
 					return "GetTable", seg[1], seg[3], "", "", ""
@@ -476,6 +497,12 @@ func bigQueryReason(code string) string {
 		return "invalid"
 	case "PreconditionFailed":
 		return "conditionNotMet"
+	case "Aborted":
+		// A stale-etag setIamPolicy is the AIP-149 ABORTED conflict. BigQuery's
+		// legacy reason vocabulary has no etag entry, so surface the canonical
+		// code lowered (the fallback "internalError" would report a client-side
+		// optimistic-concurrency conflict as a server fault).
+		return "aborted"
 	case "InvalidQuery":
 		return "invalidQuery"
 	case "PermissionDenied":

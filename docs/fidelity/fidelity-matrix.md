@@ -12,14 +12,14 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1218**
+Cells: **1221**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
 | ga | 1019 |
-| limited | 146 |
+| limited | 149 |
 | preview | 14 |
 | unsupported | 39 |
 
@@ -27,7 +27,7 @@ Cells: **1218**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 569 | 123 | 14 | 11 |
+| rest | 569 | 126 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 671 | 46 |
+| rest | 674 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -47,7 +47,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | service | transport | published | served | graded | not served | served-but-ungraded | source |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| bigquery | rest | 47 | 42 | 31 | 5 | 11 | bigquery.v2 |
+| bigquery | rest | 47 | 45 | 34 | 2 | 11 | bigquery.v2 |
 | bigquery | grpc | — | — | — | — | — | unavailable |
 | clouddns | rest | 40 | 40 | 17 | 0 | 23 | dns.v1 |
 | clouddns | grpc | — | — | — | — | — | unavailable |
@@ -138,7 +138,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 ### Published methods with no registered route
 
-- **bigquery** REST (5): bigquery.datasets.undelete, bigquery.projects.list, bigquery.tables.getIamPolicy, bigquery.tables.setIamPolicy, bigquery.tables.testIamPermissions
+- **bigquery** REST (2): bigquery.datasets.undelete, bigquery.projects.list
 - **cloudsql** REST (11): sql.Backups.CreateBackup, sql.Backups.DeleteBackup, sql.Backups.GetBackup, sql.Backups.ListBackups, sql.Backups.UpdateBackup, sql.blueGreenDeployments.create, sql.blueGreenDeployments.delete, sql.blueGreenDeployments.get, sql.blueGreenDeployments.list, sql.connect.resolve, sql.instances.pointInTimeRestore
 - **compute** REST (37): compute.firewallPolicies.addAssociation, compute.firewallPolicies.addRule, compute.firewallPolicies.cloneRules, compute.firewallPolicies.delete, compute.firewallPolicies.get, compute.firewallPolicies.getAssociation, compute.firewallPolicies.getIamPolicy, compute.firewallPolicies.getRule, compute.firewallPolicies.insert, compute.firewallPolicies.list, compute.firewallPolicies.listAssociations, compute.firewallPolicies.move, compute.firewallPolicies.patch, compute.firewallPolicies.patchRule, compute.firewallPolicies.removeAssociation, compute.firewallPolicies.removeRule, compute.firewallPolicies.setIamPolicy, compute.firewallPolicies.testIamPermissions, compute.globalOrganizationOperations.delete, compute.globalOrganizationOperations.get, compute.globalOrganizationOperations.list, compute.organizationSecurityPolicies.addAssociation, compute.organizationSecurityPolicies.addRule, compute.organizationSecurityPolicies.copyRules, compute.organizationSecurityPolicies.delete, compute.organizationSecurityPolicies.get, compute.organizationSecurityPolicies.getAssociation, compute.organizationSecurityPolicies.getRule, compute.organizationSecurityPolicies.insert, compute.organizationSecurityPolicies.list, compute.organizationSecurityPolicies.listAssociations, compute.organizationSecurityPolicies.listPreconfiguredExpressionSets, compute.organizationSecurityPolicies.move, compute.organizationSecurityPolicies.patch, compute.organizationSecurityPolicies.patchRule, compute.organizationSecurityPolicies.removeAssociation, compute.organizationSecurityPolicies.removeRule
 - **container** REST (40): container.projects.aggregated.usableSubnetworks.list, container.projects.locations.clusters.checkAutopilotCompatibility, container.projects.locations.clusters.completeControlPlaneUpgrade, container.projects.locations.clusters.fetchClusterUpgradeInfo, container.projects.locations.clusters.getJwks, container.projects.locations.clusters.nodePools.completeUpgrade, container.projects.locations.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.locations.clusters.well-known.getOpenid-configuration, container.projects.zones.clusters.addons, container.projects.zones.clusters.completeControlPlaneUpgrade, container.projects.zones.clusters.completeIpRotation, container.projects.zones.clusters.create, container.projects.zones.clusters.delete, container.projects.zones.clusters.fetchClusterUpgradeInfo, container.projects.zones.clusters.get, container.projects.zones.clusters.legacyAbac, container.projects.zones.clusters.list, container.projects.zones.clusters.locations, container.projects.zones.clusters.logging, container.projects.zones.clusters.master, container.projects.zones.clusters.monitoring, container.projects.zones.clusters.nodePools.autoscaling, container.projects.zones.clusters.nodePools.create, container.projects.zones.clusters.nodePools.delete, container.projects.zones.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.zones.clusters.nodePools.get, container.projects.zones.clusters.nodePools.list, container.projects.zones.clusters.nodePools.rollback, container.projects.zones.clusters.nodePools.setManagement, container.projects.zones.clusters.nodePools.setSize, container.projects.zones.clusters.nodePools.update, container.projects.zones.clusters.resourceLabels, container.projects.zones.clusters.setMaintenancePolicy, container.projects.zones.clusters.setMasterAuth, container.projects.zones.clusters.setNetworkPolicy, container.projects.zones.clusters.startIpRotation, container.projects.zones.clusters.update, container.projects.zones.operations.cancel, container.projects.zones.operations.get, container.projects.zones.operations.list
@@ -167,11 +167,11 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 ## bigquery
 
-_Coverage: REST **42 of 47** published methods served · 5 not served · 31 graded · 11 served-but-ungraded (`bigquery.v2` Discovery)_
+_Coverage: REST **45 of 47** published methods served · 2 not served · 34 graded · 11 served-but-ungraded (`bigquery.v2` Discovery)_
 
 _Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
-_37 cell(s): ga=1 limited=33 preview=0 unsupported=3_
+_40 cell(s): ga=1 limited=36 preview=0 unsupported=3_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -192,6 +192,7 @@ _37 cell(s): ga=1 limited=33 preview=0 unsupported=3_
 | BigQuery.GetRowAccessPolicy | rest | limited | yes | store-and-echo CRUD over the table store (memory and --dsn); the predicate is stored, not enforced |
 | BigQuery.GetServiceAccount | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.GetTable | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
+| BigQuery.GetTableIamPolicy | rest | limited | yes | stored IAM policy over the shared ResourceStore (memory and --dsn): an existing table with no policy answers the empty default (version 1, etag ACAB), and an absent table is 404 notFound; options.requestedPolicyVersion is accepted and ignored (the stored policy is returned as set) |
 | BigQuery.InsertAll | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.InsertJob | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.InsertJobResumable | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
@@ -206,8 +207,10 @@ _37 cell(s): ga=1 limited=33 preview=0 unsupported=3_
 | BigQuery.ListTables | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.Models | rest | unsupported | no | models are ML training artifacts (trainingRuns/featureColumns/model data); the emulator executes no training, so a stored model would be hollow — explicit Unimplemented (501) stub |
 | BigQuery.Query | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
-| BigQuery.RoutinesIam | rest | unsupported | no | routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); BigQuery IAM is not stored or enforced by the emulator — explicit Unimplemented (501) stub, while routines CRUD is served |
-| BigQuery.RowAccessPoliciesIam | rest | unsupported | no | row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); row-level access is IAM-enforced and the emulator has no IAM plane — explicit Unimplemented (501) stub, while the policy resource CRUD is served |
+| BigQuery.RoutinesIam | rest | unsupported | no | routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); no hashicorp/google resource type targets it and the emulator enforces no authz — explicit Unimplemented (501) stub, while routines CRUD and table IAM are served |
+| BigQuery.RowAccessPoliciesIam | rest | unsupported | no | row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); no hashicorp/google resource type targets it and row-level access is IAM-enforced, which the emulator does not model — explicit Unimplemented (501) stub, while the policy resource CRUD is served |
+| BigQuery.SetTableIamPolicy | rest | limited | yes | stored IAM policy over the shared ResourceStore with etag OCC (a stale etag is 409 ABORTED) and the AIP-149 version rules (a conditional binding requires version 3); bindings, role and members round-trip, auditConfigs and the updateMask are not modelled, and the policy is never enforced |
+| BigQuery.TestTableIamPermissions | rest | limited | yes | every requested permission is granted (no authz enforcement); an absent table answers the documented empty permission set rather than NOT_FOUND |
 | BigQuery.UpdateDataset | rest | limited | no | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
 | BigQuery.UpdateRoutine | rest | limited | yes | PUT replace or updateMask merge over the stored Routine, with the etag precondition (412 conditionNotMet); the body is stored, not executed |
 | BigQuery.UpdateRowAccessPolicy | rest | limited | yes | PUT replace or updateMask merge over the stored policy, with the etag precondition (412 conditionNotMet); the predicate is stored, not enforced |

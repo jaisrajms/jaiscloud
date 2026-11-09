@@ -16,7 +16,7 @@ classes:
   p3:
     state: present
     suites: [sdk-bigquery]
-    note: "duplicate dataset/table/routine/row-access-policy 409, unknown dataset/table/job/routine/policy 404 (and the models.* 501), subset rejection (legacy SQL/UNNEST/wildcard table/SAFE.) 400, jobs.insert without jobId 400, negative maxResults 400 on every list/read method"
+    note: "duplicate dataset/table/routine/row-access-policy 409, unknown dataset/table/job/routine/policy 404 (and the models.* 501), table IAM get/set on an absent table 404 while testIamPermissions answers the documented empty set, subset rejection (legacy SQL/UNNEST/wildcard table/SAFE.) 400, jobs.insert without jobId 400, negative maxResults 400 on every list/read method"
   p4:
     state: present
     suites: [sdk-bigquery]

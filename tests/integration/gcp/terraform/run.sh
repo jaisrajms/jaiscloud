@@ -82,6 +82,25 @@ check_post() {
 
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
+# check_post_body NAME URL BODY SUBSTRING... — POST the given JSON body and
+# require every substring (the IAM custom methods take a request body).
+check_post_body() {
+  local name="$1" url="$2" payload="$3"
+  shift 3
+  local body want
+  body="$(curl -sf -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d "$payload" "$url" 2>/dev/null || true)"
+  for want in "$@"; do
+    if [[ "$body" != *"$want"* ]]; then
+      printf '  [FAIL] %s (missing: %s)\n' "$name" "$want"
+      FAIL=$((FAIL + 1))
+      return 0
+    fi
+  done
+  printf '  [PASS] %s\n' "$name"
+  PASS=$((PASS + 1))
+}
+
 # check_absent NAME URL SUBSTRING... — GET the URL and require every substring to
 # be absent. Used for input-only fields real GCP never echoes (grantees).
 check_absent() {
@@ -433,6 +452,21 @@ check "BigQuery row access policy listed" \
 # grantees is input-only in the Discovery schema; real GCP never echoes it.
 check_absent "BigQuery row access policy does not echo grantees" \
   "$BQ_BASE/tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLICY" 'grantees' 'compat@example.com'
+
+# ── BigQuery resource IAM (TF1-1) ────────────────────────────────────────────
+# google_bigquery_dataset_iam_member drives the legacy `access` ACL (the
+# provider reads it with ?accessPolicyVersion=3 and PATCHes the whole list);
+# google_bigquery_table_iam_member drives the tables.* IAM mixin.
+check "BigQuery dataset IAM member is in the access ACL" \
+  "$BQ_BASE?accessPolicyVersion=3" \
+  '"role":"roles/bigquery.dataViewer"' '"userByEmail":"tf-dataset@example.com"'
+check_post "BigQuery table IAM policy binding" \
+  "$BQ_BASE/tables/$BQ_TABLE:getIamPolicy" \
+  '"role":"roles/bigquery.dataViewer"' '"user:tf-table@example.com"' '"version":1'
+check_post_body "BigQuery table testIamPermissions grants the request" \
+  "$BQ_BASE/tables/$BQ_TABLE:testIamPermissions" \
+  '{"permissions":["bigquery.tables.get","bigquery.tables.getData"]}' \
+  '"permissions":["bigquery.tables.get","bigquery.tables.getData"]'
 # creationTime is stable across an update: capture it before the update.
 BQ_ROUTINE_CT="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
   "$BQ_BASE/routines/$BQ_ROUTINE" 2>/dev/null | sed -n 's/.*"creationTime":"\([0-9]*\)".*/\1/p')"
@@ -523,6 +557,20 @@ for pair in "routines/$BQ_ROUTINE" "tables/$BQ_TABLE/rowAccessPolicies/$BQ_POLIC
     FAIL=$((FAIL + 1))
   fi
 done
+
+# The table IAM policy row is dropped with the table: a get after destroy is
+# NotFound (404), not a resurrected policy for a table that no longer exists.
+BQ_IAM_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' \
+  "$BQ_BASE/tables/$BQ_TABLE:getIamPolicy" 2>/dev/null || true)"
+if [[ "$BQ_IAM_STATUS" == "404" ]]; then
+  printf '  [PASS] BigQuery table IAM policy dropped on destroy\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] BigQuery table getIamPolicy after destroy = HTTP %s, want 404\n' "$BQ_IAM_STATUS"
+  FAIL=$((FAIL + 1))
+fi
 
 # Destroy removed the Cloud Run service; the service and its revisions are 404.
 for path in "$RUN_BASE" "$RUN_BASE/revisions"; do
