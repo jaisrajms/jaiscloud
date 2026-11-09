@@ -73,6 +73,7 @@ func (s *Service) CreateJob(ctx context.Context, project, location string, j sch
 	if err := validateJob(j); err != nil {
 		return schedstore.Job{}, err
 	}
+	applyServerDefaults(&j)
 	j.ScheduleTime = nextFireFor(j, now)
 	if err := s.store.CreateJob(ctx, project, location, j); err != nil {
 		return schedstore.Job{}, mapStoreErr(err)
@@ -122,6 +123,7 @@ func (s *Service) UpdateJob(ctx context.Context, project, location, name string,
 		if err := validateJob(next); err != nil {
 			return cur, err
 		}
+		applyServerDefaults(&next)
 		next.UserUpdateTime = clock.Now()
 		if next.State == schedstore.StateEnabled {
 			next.ScheduleTime = nextFireFor(next, clock.Now())
@@ -283,6 +285,45 @@ func validateHTTP(t *schedstore.HttpTarget) error {
 		return invalidArgument("httpTarget.body is only allowed for POST, PUT, or PATCH")
 	}
 	return nil
+}
+
+// applyServerDefaults records the output-only httpTarget headers real Cloud
+// Scheduler attaches to every job. The API always answers a `headers` object,
+// even when the create body omitted it, and fills in two documented defaults:
+//
+//   - User-Agent: Google-Cloud-Scheduler, which the service adds unless the
+//     caller set one (the response echoes the effective map, not just the
+//     caller's entries).
+//   - Content-Type: application/octet-stream, only for a job with a body and
+//     only when the caller did not set Content-Type (the Discovery doc lets a
+//     caller override it).
+//
+// The provider's flatten (google 6.49.3) asserts the map's type without a nil
+// guard, so an omitted map panics it; it strips both default values before
+// comparing to the config, so synthesizing them here cannot permadiff (TF3-4-1).
+func applyServerDefaults(j *schedstore.Job) {
+	if j.HTTP == nil {
+		return
+	}
+	if j.HTTP.Headers == nil {
+		j.HTTP.Headers = make(map[string]string, 2)
+	}
+	setHeaderDefault(j.HTTP.Headers, "User-Agent", "Google-Cloud-Scheduler")
+	if len(j.HTTP.Body) > 0 {
+		setHeaderDefault(j.HTTP.Headers, "Content-Type", "application/octet-stream")
+	}
+}
+
+// setHeaderDefault sets name=value unless the caller already supplied the
+// header. Header names are case-insensitive, so an existing key in any casing
+// suppresses the default.
+func setHeaderDefault(headers map[string]string, name, value string) {
+	for k := range headers {
+		if strings.EqualFold(k, name) {
+			return
+		}
+	}
+	headers[name] = value
 }
 
 // --- update merge ---

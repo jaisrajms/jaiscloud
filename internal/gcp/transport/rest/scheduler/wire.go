@@ -284,9 +284,14 @@ func httpTargetToJSON(t *schedstore.HttpTarget) map[string]any {
 	if t.HTTPMethod != "" {
 		out["httpMethod"] = t.HTTPMethod
 	}
-	if len(t.Headers) > 0 {
-		out["headers"] = t.Headers
+	// The job's headers member is always an object in real Cloud Scheduler's
+	// response, even when the create body omitted it; a nil map would marshal
+	// as `null` (or be dropped) and provider 6.49.3 panics on that (TF3-4-1).
+	headers := t.Headers
+	if headers == nil {
+		headers = map[string]string{}
 	}
+	out["headers"] = headers
 	if len(t.Body) > 0 {
 		out["body"] = base64.StdEncoding.EncodeToString(t.Body)
 	}

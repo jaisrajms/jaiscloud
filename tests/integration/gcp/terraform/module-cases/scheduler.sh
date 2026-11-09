@@ -3,7 +3,8 @@
 # Case: GoogleCloudPlatform/terraform-google-cloud-scheduler (TF3-4)
 #
 # The pinned consumer is the CFT Cloud Scheduler blueprint (v0.1.1, commit
-# ece5c3e87412). Its root module creates exactly one served resource:
+# ece5c3e87412). Its root module creates exactly one served resource per
+# instance:
 #
 #   google_cloud_scheduler_job   -> jobs.create / .get / .patch / .delete,
 #                                   plus the :pause and :resume custom methods
@@ -12,49 +13,53 @@
 # `retry_config` and the three mutually-exclusive targets (http, pub/sub,
 # App Engine; the module rejects a config that sets zero or two of them).
 #
-# The case drives the **pub/sub target**. The HTTP target is the other common
-# shape, but provider 6.49.3 panics in `flattenCloudSchedulerJobHttpTargetHeaders`
-# when the response omits an empty `httpTarget.headers` map (the flatten does an
-# unguarded `v.(map[string]interface{})`; 7.x added a nil guard). Real Cloud
-# Scheduler answers `headers: {}` for a header-less HTTP target — the provider's
-# own acceptance test at 6.49.3 uses exactly that shape — so the emulator's
-# omission is a response-shape gap, recorded as TF3-4-1
-# (`fix/gcp-scheduler-http-target-headers`). This case avoids the crash until
-# that fix lands; the pub/sub target is the module's primary published example.
+# The case drives **both served target shapes** through two module instances:
+#
+#   * the HTTP target (header-less, so the server fills the defaults) — the
+#     shape provider 6.49.3 crashed on when the response omitted
+#     `httpTarget.headers`; real Cloud Scheduler always answers a headers map
+#     (User-Agent: Google-Cloud-Scheduler, plus Content-Type:
+#     application/octet-stream when the job carries a body), which TF3-4-1
+#     (`fix/gcp-scheduler-http-target-headers`) makes the emulator do too.
+#   * the Pub/Sub target, the module's primary published example.
 #
 # The gate proves the lifecycle converges without the cron engine firing:
 #
-#   apply (enabled job, far-future schedule, Pub/Sub target, retry config)
+#   apply (two enabled jobs, far-future schedules, retry config)
 #     -> the provider's create issues POST then :resume on the already-ENABLED
 #        job, which real Cloud Scheduler answers 200 and the emulator now does
 #        too (TF2-12)
 #     -> REST asserts (name, description, schedule, timeZone, state ENABLED,
-#        scheduleTime, retryConfig, pubsubTarget topic/data/attributes)
+#        scheduleTime, retryConfig, the HTTP target with the synthesized
+#        headers, the Pub/Sub target topic/data/attributes)
 #   plan -detailed-exitcode -> No changes
-#   mutate (schedule, description, retryConfig, Pub/Sub payload) -> apply
-#     -> REST asserts -> No changes
-#   pause (paused = true) -> the provider calls :pause -> REST assert
-#     PAUSED -> No changes
-#   resume (paused = false) -> the provider calls :resume -> REST assert
-#     ENABLED + a fresh scheduleTime -> No changes
-#   destroy -> job GET is 404
+#   mutate (schedule, description, retryConfig, HTTP body, Pub/Sub payload)
+#     -> apply -> REST asserts -> No changes
+#   pause (paused = true) -> the provider calls :pause -> both jobs PAUSED
+#     -> No changes
+#   resume (paused = false) -> the provider calls :resume -> both ENABLED and a
+#     fresh scheduleTime -> No changes
+#   destroy -> both job GETs and the topic GET are 404
 #
-# Why the job is created enabled: that is the default `google_cloud_scheduler_job`
+# Why the jobs are created enabled: that is the default `google_cloud_scheduler_job`
 # shape (the module default is `paused = false`), and the provider resolves it by
 # POSTing the job and then calling `:resume` on the now-ENABLED job. A 400 there
 # made an enabled job uncreatable, so the case created paused until TF2-12
 # (`fix/gcp-scheduler-resume-enabled`) made `:pause`/`:resume` idempotent the way
-# real Cloud Scheduler is. The schedule ("0 0 1 1 *", then "0 0 1 7 *") is far in
-# the future, so an ENABLED job still cannot fire during the gate.
+# real Cloud Scheduler is. The schedules ("0 0 1 1 *", then "0 0 1 7 *") are far
+# in the future, so an ENABLED job still cannot fire during the gate.
 #
 # Boundaries, recorded rather than worked around:
 #
 #  * `app_engine_http_target` is not configured. The emulator stores and
 #    validates the App Engine target (relative URI + method) but App Engine is
 #    not a served service; the module's App Engine input is left null.
+#  * The module's HTTP target input has no `headers` field, which is exactly the
+#    header-less shape TF3-4-1 fixes; the case asserts the server-filled map.
 #  * `attempt_deadline` is nulled by the module for a pub/sub target (the
 #    module's own conditional); the provider's `EmptyOrDefaultStringSuppress`
-#    keeps the 180s server default out of the plan.
+#    keeps the 180s server default out of the plan. The HTTP instance uses the
+#    module default (15s), inside the documented 15s..30m HTTP window.
 #  * The module's default `retry_config = { retry_count = 0 }` is not sent: the
 #    provider drops an all-empty block and the emulator does not synthesize the
 #    documented RetryConfig defaults, so that input re-plans
@@ -81,8 +86,12 @@ MODULE_GIT="https://github.com/GoogleCloudPlatform/terraform-google-cloud-schedu
 CAPTURE_RESOURCES="google_cloud_scheduler_job"
 CAPTURE_ALLOW_MISSING=1
 
-JOB="jc-tf-scheduler"
+JOB_HTTP="jc-tf-scheduler"
+JOB_PUBSUB="jc-tf-scheduler-pubsub"
 TOPIC="jc-tf-scheduler-topic"
+HTTP_URI="http://example.com/jaiscloud-tf-scheduler"
+HTTP_BODY_V1="c2NoZWR1bGVyLWh0dHAtYm9keS12MQ==" # base64("scheduler-http-body-v1")
+HTTP_BODY_V2="c2NoZWR1bGVyLWh0dHAtYm9keS12Mg==" # base64("scheduler-http-body-v2")
 
 # write_module generates the root module for one gate phase.
 #   $1 description (HCL string literal)
@@ -91,8 +100,9 @@ TOPIC="jc-tf-scheduler-topic"
 #   $4 retry_config (HCL object literal)
 #   $5 Pub/Sub payload (HCL string literal, base64)
 #   $6 Pub/Sub attributes (HCL map literal)
+#   $7 HTTP body (HCL string literal, base64)
 write_module() {
-  local description="$1" schedule="$2" paused="$3" retry="$4" payload="$5" attributes="$6"
+  local description="$1" schedule="$2" paused="$3" retry="$4" payload="$5" attributes="$6" http_body="$7"
 
   cat >"$WORK/main.tf" <<EOF
 terraform {
@@ -129,19 +139,44 @@ provider "google" {
   pubsub_custom_endpoint          = "\${var.endpoint}/v1/"
 }
 
-# The target the job publishes to. The emulator stores the topic name without
-# validating it, but a real consumer creates the topic first, so the case does.
+# The target the Pub/Sub job publishes to. The emulator stores the topic name
+# without validating it, but a real consumer creates the topic first, so the
+# case does.
 resource "google_pubsub_topic" "target" {
   name    = "$TOPIC"
   project = var.project
 }
 
-module "scheduler" {
+# The HTTP target is header-less on purpose: the module's input has no headers
+# field, so the server must answer the synthesized defaults (TF3-4-1).
+module "scheduler_http" {
   source = "$MODULE_DIR"
 
   project_id = var.project
   location   = "us-central1"
-  name       = "$JOB"
+  name       = "$JOB_HTTP"
+
+  description  = $description
+  schedule     = $schedule
+  time_zone    = "UTC"
+  paused       = $paused
+  retry_config = $retry
+
+  app_engine_http_target = null
+  pubsub_target          = null
+  http_target = {
+    uri         = "$HTTP_URI"
+    http_method = "POST"
+    body        = $http_body
+  }
+}
+
+module "scheduler_pubsub" {
+  source = "$MODULE_DIR"
+
+  project_id = var.project
+  location   = "us-central1"
+  name       = "$JOB_PUBSUB"
 
   description  = $description
   schedule     = $schedule
@@ -161,7 +196,7 @@ EOF
 }
 
 job_url() {
-  echo "$ENDPOINT/v1/projects/$PROJECT/locations/us-central1/jobs/$JOB"
+  echo "$ENDPOINT/v1/projects/$PROJECT/locations/us-central1/jobs/$1"
 }
 
 topic_url() {
@@ -201,23 +236,34 @@ case_main() {
   write_module '"jaiscloud terraform scheduler case"' '"0 0 1 1 *"' false \
     '{ retry_count = 1 }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjE="' \
-    '{ source = "jaiscloud" }' # base64("scheduler-payload-v1")
+    '{ source = "jaiscloud" }' \
+    "\"$HTTP_BODY_V1\"" # base64("scheduler-payload-v1")
   init_phase
-  plan_phase "plan (module scheduler job)"
-  apply_phase "apply (module scheduler job)"
+  plan_phase "plan (module scheduler jobs)"
+  apply_phase "apply (module scheduler jobs)"
   assert_no_api_errors
 
   echo "== spot checks (create)"
-  check_body "job echoes its reference, schedule and enabled state" "$(job_url)" \
-    "\"name\":\"projects/$PROJECT/locations/us-central1/jobs/$JOB\"" \
+  check_body "the HTTP job echoes its reference, schedule and enabled state" "$(job_url "$JOB_HTTP")" \
+    "\"name\":\"projects/$PROJECT/locations/us-central1/jobs/$JOB_HTTP\"" \
     '"description":"jaiscloud terraform scheduler case"' \
     '"schedule":"0 0 1 1 *"' \
     '"timeZone":"UTC"' \
     '"state":"ENABLED"'
-  check_body "an enabled job reports its next scheduleTime" "$(job_url)" '"scheduleTime"'
-  check_body "job echoes the retry config" "$(job_url)" \
-    '"retryConfig":{"retryCount":1}'
-  check_body "job echoes the Pub/Sub target" "$(job_url)" \
+  check_body "an enabled job reports its next scheduleTime" "$(job_url "$JOB_HTTP")" '"scheduleTime"'
+  check_body "the HTTP job echoes its target and body" "$(job_url "$JOB_HTTP")" \
+    '"httpTarget"' \
+    "\"uri\":\"$HTTP_URI\"" \
+    '"httpMethod":"POST"' \
+    "\"body\":\"$HTTP_BODY_V1\""
+  # Real Cloud Scheduler answers a headers map for a header-less HTTP target and
+  # fills the delivery defaults; provider 6.49.3 panics if the map is absent and
+  # strips these exact values before diffing (TF3-4-1).
+  check_body "the HTTP job carries the server-filled target headers" "$(job_url "$JOB_HTTP")" \
+    '"headers"' \
+    '"User-Agent":"Google-Cloud-Scheduler"' \
+    '"Content-Type":"application/octet-stream"'
+  check_body "the pub/sub job echoes its target" "$(job_url "$JOB_PUBSUB")" \
     '"pubsubTarget"' \
     "/topics/$TOPIC" \
     '"data":"c2NoZWR1bGVyLXBheWxvYWQtdjE="' \
@@ -227,51 +273,58 @@ case_main() {
   echo "== $TF: second plan (permadiff check)"
   plan_no_changes "re-plan reports no changes"
 
-  # In-place mutate: a new schedule, description, retry config and Pub/Sub
-  # payload/attributes. The job stays enabled, and the schedule is far in the
-  # future, so nothing can fire.
+  # In-place mutate: a new schedule, description, retry config, HTTP body and
+  # Pub/Sub payload/attributes. The jobs stay enabled, and the schedules are far
+  # in the future, so nothing can fire.
   write_module '"jaiscloud terraform scheduler case v2"' '"0 0 1 7 *"' false \
     '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
-    '{ source = "jaiscloud", tier = "gold" }' # base64("scheduler-payload-v2")
-  apply_phase "apply (schedule + description + retryConfig + Pub/Sub payload)"
+    '{ source = "jaiscloud", tier = "gold" }' \
+    "\"$HTTP_BODY_V2\"" # base64("scheduler-payload-v2")
+  apply_phase "apply (schedule + description + retryConfig + targets)"
   assert_no_api_errors
 
   echo "== spot checks (mutate)"
-  check_body "job echoes the mutated schedule and description" "$(job_url)" \
+  check_body "the HTTP job echoes the mutated schedule and description" "$(job_url "$JOB_HTTP")" \
     '"description":"jaiscloud terraform scheduler case v2"' \
     '"schedule":"0 0 1 7 *"'
-  check_body "job echoes the mutated retry config" "$(job_url)" \
+  check_body "the HTTP job echoes the mutated body" "$(job_url "$JOB_HTTP")" \
+    "\"body\":\"$HTTP_BODY_V2\""
+  check_body "the jobs echo the mutated retry config" "$(job_url "$JOB_HTTP")" \
     '"retryCount":3' '"maxDoublings":3' \
     '"minBackoffDuration":"2s"' '"maxBackoffDuration":"20s"'
-  check_body "job echoes the mutated Pub/Sub payload and attributes" "$(job_url)" \
+  check_body "the pub/sub job echoes the mutated payload and attributes" "$(job_url "$JOB_PUBSUB")" \
     '"data":"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
     '"tier":"gold"'
 
   echo "== $TF: second plan after the mutate (permadiff check)"
   plan_no_changes "re-plan after the mutate reports no changes"
 
-  # Pause: the provider calls :pause on the ENABLED job. The schedule is far in
-  # the future, so a paused job and an enabled one alike cannot fire during the
-  # gate.
+  # Pause: the provider calls :pause on the ENABLED jobs. The schedules are far
+  # in the future, so a paused job and an enabled one alike cannot fire during
+  # the gate.
   write_module '"jaiscloud terraform scheduler case v3"' '"0 0 1 7 *"' true \
     '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
-    '{ source = "jaiscloud", tier = "gold" }'
+    '{ source = "jaiscloud", tier = "gold" }' \
+    "\"$HTTP_BODY_V2\""
   apply_phase "apply (pause -> :pause)"
   assert_no_api_errors
-  check_body "pause leaves the job PAUSED" "$(job_url)" '"state":"PAUSED"'
+  check_body "pause leaves the HTTP job PAUSED" "$(job_url "$JOB_HTTP")" '"state":"PAUSED"'
+  check_body "pause leaves the pub/sub job PAUSED" "$(job_url "$JOB_PUBSUB")" '"state":"PAUSED"'
   plan_no_changes "re-plan after :pause reports no changes"
 
-  # Resume: the provider calls :resume on the PAUSED job.
+  # Resume: the provider calls :resume on the PAUSED jobs.
   write_module '"jaiscloud terraform scheduler case v4"' '"0 0 1 7 *"' false \
     '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
-    '{ source = "jaiscloud", tier = "gold" }'
+    '{ source = "jaiscloud", tier = "gold" }' \
+    "\"$HTTP_BODY_V2\""
   apply_phase "apply (resume -> :resume)"
   assert_no_api_errors
-  check_body "resume leaves the job ENABLED" "$(job_url)" '"state":"ENABLED"'
-  body="$(body_of "$(job_url)")"
+  check_body "resume leaves the HTTP job ENABLED" "$(job_url "$JOB_HTTP")" '"state":"ENABLED"'
+  check_body "resume leaves the pub/sub job ENABLED" "$(job_url "$JOB_PUBSUB")" '"state":"ENABLED"'
+  body="$(body_of "$(job_url "$JOB_HTTP")")"
   if [[ "$body" == *'"scheduleTime"'* ]]; then
     pass "a resumed job reports its next scheduleTime"
   else
@@ -281,13 +334,15 @@ case_main() {
 
   destroy_phase
 
-  local status
-  status="$(status_of "$(job_url)")"
-  if [[ "$status" == "404" ]]; then
-    pass "job GET after destroy is 404"
-  else
-    fail "job GET after destroy = HTTP $status, want 404"
-  fi
+  local status job
+  for job in "$JOB_HTTP" "$JOB_PUBSUB"; do
+    status="$(status_of "$(job_url "$job")")"
+    if [[ "$status" == "404" ]]; then
+      pass "job $job GET after destroy is 404"
+    else
+      fail "job $job GET after destroy = HTTP $status, want 404"
+    fi
+  done
   status="$(status_of "$(topic_url)")"
   if [[ "$status" == "404" ]]; then
     pass "target topic GET after destroy is 404"

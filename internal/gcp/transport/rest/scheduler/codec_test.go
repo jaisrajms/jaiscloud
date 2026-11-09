@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	schedstore "jaiscloud/internal/gcp/store/scheduler"
 )
 
 func TestCodecRoutesJobs(t *testing.T) {
@@ -50,6 +52,28 @@ func TestCodecRejectsUnknown(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/v1/projects/p/locations/l/nope", nil)
 	if _, err := codec.Decode(r, nil); err == nil {
 		t.Fatalf("expected error for unknown path")
+	}
+}
+
+func TestJobToJSONAlwaysEmitsHTTPHeaders(t *testing.T) {
+	out := jobToJSON(schedstore.Job{
+		Name:      "j1",
+		ProjectID: "p",
+		Location:  "l",
+		Schedule:  "* * * * *",
+		Target:    schedstore.TargetHTTP,
+		HTTP:      &schedstore.HttpTarget{URI: "http://example.test/hook"},
+	})
+	ht, ok := out["httpTarget"].(map[string]any)
+	if !ok {
+		t.Fatalf("httpTarget = %T", out["httpTarget"])
+	}
+	headers, ok := ht["headers"].(map[string]string)
+	if !ok || headers == nil {
+		t.Fatalf("httpTarget.headers = %#v, want an empty object", ht["headers"])
+	}
+	if len(headers) != 0 {
+		t.Fatalf("httpTarget.headers = %v, want empty", headers)
 	}
 }
 
