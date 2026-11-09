@@ -231,18 +231,27 @@ func TestSDKSchedulerLifecycle(t *testing.T) {
 	require.NotNil(t, patched.HttpTarget, "httpTarget must survive a description/schedule patch")
 	require.Equal(t, "ENABLED", patched.State)
 
-	// Pause / resume, including the already-in-that-state failures.
+	// Pause / resume. Repeating either is a 200 no-op that answers the job
+	// unchanged: real Cloud Scheduler tolerates a repeat (measured) even though
+	// its reference says the job "must be" in the other state, and the provider
+	// issues :resume after every create that leaves `paused` false (TF2-12).
 	paused, err := svc.Projects.Locations.Jobs.Pause(jobName, &scheduler.PauseJobRequest{}).Do()
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", paused.State)
-	_, err = svc.Projects.Locations.Jobs.Pause(jobName, &scheduler.PauseJobRequest{}).Do()
-	require.Equal(t, 400, apiErr(t, err).Code, "pausing a PAUSED job must fail")
+	samePause, err := svc.Projects.Locations.Jobs.Pause(jobName, &scheduler.PauseJobRequest{}).Do()
+	require.NoError(t, err, "pausing a PAUSED job must be a no-op")
+	require.Equal(t, "PAUSED", samePause.State)
+	require.Equal(t, paused.ScheduleTime, samePause.ScheduleTime)
+	require.Equal(t, paused.UserUpdateTime, samePause.UserUpdateTime)
 
 	resumed, err := svc.Projects.Locations.Jobs.Resume(jobName, &scheduler.ResumeJobRequest{}).Do()
 	require.NoError(t, err)
 	require.Equal(t, "ENABLED", resumed.State)
-	_, err = svc.Projects.Locations.Jobs.Resume(jobName, &scheduler.ResumeJobRequest{}).Do()
-	require.Equal(t, 400, apiErr(t, err).Code, "resuming an ENABLED job must fail")
+	sameResume, err := svc.Projects.Locations.Jobs.Resume(jobName, &scheduler.ResumeJobRequest{}).Do()
+	require.NoError(t, err, "resuming an ENABLED job must be a no-op")
+	require.Equal(t, "ENABLED", sameResume.State)
+	require.Equal(t, resumed.ScheduleTime, sameResume.ScheduleTime)
+	require.Equal(t, resumed.UserUpdateTime, sameResume.UserUpdateTime)
 
 	// Pagination: the emulator pageToken is the integer offset into the sorted list.
 	fillerA := unique("job")

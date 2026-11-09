@@ -142,26 +142,43 @@ func (s *Service) DeleteJob(ctx context.Context, project, location, name string)
 	return nil
 }
 
-// PauseJob pauses an ENABLED job.
+// PauseJob pauses an ENABLED job. Pausing an already-PAUSED job is a no-op that
+// answers the unchanged job: real Cloud Scheduler answers a repeated :pause with
+// 200 and no change, even though the Discovery description says a job "must be
+// in Job.State.ENABLED to be paused". Clients retry :pause like a read (the
+// Terraform provider issues it on every update that sets paused), so a 400 here
+// would be a wire divergence.
 func (s *Service) PauseJob(ctx context.Context, project, location, name string) (schedstore.Job, error) {
-	return s.mutateState(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, error) {
-		if cur.State != schedstore.StateEnabled {
-			return cur, failedPrecondition("job must be ENABLED to pause")
+	return s.mutateState(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, bool, error) {
+		switch cur.State {
+		case schedstore.StatePaused:
+			return cur, false, nil
+		case schedstore.StateEnabled:
+			cur.State = schedstore.StatePaused
+			return cur, true, nil
+		default:
+			return cur, false, failedPrecondition("job must be ENABLED to pause")
 		}
-		cur.State = schedstore.StatePaused
-		return cur, nil
 	})
 }
 
-// ResumeJob resumes a PAUSED job and recomputes its next fire time.
+// ResumeJob resumes a PAUSED job and recomputes its next fire time. Resuming an
+// already-ENABLED job is a no-op that answers the unchanged job, for the same
+// measured reason as PauseJob -- and because the Terraform provider issues
+// :resume after every create that leaves `paused` false, so a 400 would make an
+// enabled google_cloud_scheduler_job impossible to create (TF2-12).
 func (s *Service) ResumeJob(ctx context.Context, project, location, name string) (schedstore.Job, error) {
-	return s.mutateState(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, error) {
-		if cur.State != schedstore.StatePaused {
-			return cur, failedPrecondition("job must be PAUSED to resume")
+	return s.mutateState(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, bool, error) {
+		switch cur.State {
+		case schedstore.StateEnabled:
+			return cur, false, nil
+		case schedstore.StatePaused:
+			cur.State = schedstore.StateEnabled
+			cur.ScheduleTime = nextFireFor(cur, clock.Now())
+			return cur, true, nil
+		default:
+			return cur, false, failedPrecondition("job must be PAUSED to resume")
 		}
-		cur.State = schedstore.StateEnabled
-		cur.ScheduleTime = nextFireFor(cur, clock.Now())
-		return cur, nil
 	})
 }
 
@@ -188,13 +205,18 @@ func (s *Service) RunJob(ctx context.Context, project, location, name string) (s
 	})
 }
 
-func (s *Service) mutateState(ctx context.Context, project, location, name string, mutate func(schedstore.Job) (schedstore.Job, error)) (schedstore.Job, error) {
+// mutateState applies mutate atomically. mutate reports whether it changed the
+// job; a no-op leaves userUpdateTime untouched, so a repeated pause/resume
+// answers the job exactly as it stood.
+func (s *Service) mutateState(ctx context.Context, project, location, name string, mutate func(schedstore.Job) (schedstore.Job, bool, error)) (schedstore.Job, error) {
 	j, err := s.store.UpdateJobAtomic(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, error) {
-		next, err := mutate(cur)
+		next, changed, err := mutate(cur)
 		if err != nil {
 			return cur, err
 		}
-		next.UserUpdateTime = clock.Now()
+		if changed {
+			next.UserUpdateTime = clock.Now()
+		}
 		return next, nil
 	})
 	if err != nil {

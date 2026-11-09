@@ -24,27 +24,28 @@
 #
 # The gate proves the lifecycle converges without the cron engine firing:
 #
-#   apply (paused job, far-future schedule, Pub/Sub target, retry config)
-#     -> REST asserts (name, description, schedule, timeZone, state PAUSED,
-#        retryConfig, pubsubTarget topic/data/attributes)
+#   apply (enabled job, far-future schedule, Pub/Sub target, retry config)
+#     -> the provider's create issues POST then :resume on the already-ENABLED
+#        job, which real Cloud Scheduler answers 200 and the emulator now does
+#        too (TF2-12)
+#     -> REST asserts (name, description, schedule, timeZone, state ENABLED,
+#        scheduleTime, retryConfig, pubsubTarget topic/data/attributes)
 #   plan -detailed-exitcode -> No changes
 #   mutate (schedule, description, retryConfig, Pub/Sub payload) -> apply
 #     -> REST asserts -> No changes
-#   unpause (paused = false) -> the provider calls :resume -> REST assert
-#     ENABLED -> No changes
-#   re-pause (paused = true) -> the provider calls :pause -> REST assert
+#   pause (paused = true) -> the provider calls :pause -> REST assert
 #     PAUSED -> No changes
+#   resume (paused = false) -> the provider calls :resume -> REST assert
+#     ENABLED + a fresh scheduleTime -> No changes
 #   destroy -> job GET is 404
 #
-# Why the case creates paused: the provider always issues `:resume` after a
-# create that leaves `paused` unset (the module default), and the emulator's
-# resume is not yet idempotent on an ENABLED job (TF2-12,
-# `fix/gcp-scheduler-resume-enabled`). The paused path also keeps a live cron
-# engine out of the gate. Both `:pause` and `:resume` are still exercised: the
-# unpause/re-pause transitions call them on a job that is in the state each
-# method requires. The enabled-create path is TF2-12's own session, and the
-# committed corpus apply case (`cloud_scheduler_job-example-3`) is the paused
-# example for the same reason.
+# Why the job is created enabled: that is the default `google_cloud_scheduler_job`
+# shape (the module default is `paused = false`), and the provider resolves it by
+# POSTing the job and then calling `:resume` on the now-ENABLED job. A 400 there
+# made an enabled job uncreatable, so the case created paused until TF2-12
+# (`fix/gcp-scheduler-resume-enabled`) made `:pause`/`:resume` idempotent the way
+# real Cloud Scheduler is. The schedule ("0 0 1 1 *", then "0 0 1 7 *") is far in
+# the future, so an ENABLED job still cannot fire during the gate.
 #
 # Boundaries, recorded rather than worked around:
 #
@@ -197,7 +198,7 @@ status_of() {
 case_main() {
   local body
 
-  write_module '"jaiscloud terraform scheduler case"' '"0 0 1 1 *"' true \
+  write_module '"jaiscloud terraform scheduler case"' '"0 0 1 1 *"' false \
     '{ retry_count = 1 }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjE="' \
     '{ source = "jaiscloud" }' # base64("scheduler-payload-v1")
@@ -207,12 +208,13 @@ case_main() {
   assert_no_api_errors
 
   echo "== spot checks (create)"
-  check_body "job echoes its reference, schedule and paused state" "$(job_url)" \
+  check_body "job echoes its reference, schedule and enabled state" "$(job_url)" \
     "\"name\":\"projects/$PROJECT/locations/us-central1/jobs/$JOB\"" \
     '"description":"jaiscloud terraform scheduler case"' \
     '"schedule":"0 0 1 1 *"' \
     '"timeZone":"UTC"' \
-    '"state":"PAUSED"'
+    '"state":"ENABLED"'
+  check_body "an enabled job reports its next scheduleTime" "$(job_url)" '"scheduleTime"'
   check_body "job echoes the retry config" "$(job_url)" \
     '"retryConfig":{"retryCount":1}'
   check_body "job echoes the Pub/Sub target" "$(job_url)" \
@@ -226,8 +228,9 @@ case_main() {
   plan_no_changes "re-plan reports no changes"
 
   # In-place mutate: a new schedule, description, retry config and Pub/Sub
-  # payload/attributes. The job stays paused, so nothing can fire.
-  write_module '"jaiscloud terraform scheduler case v2"' '"0 0 1 7 *"' true \
+  # payload/attributes. The job stays enabled, and the schedule is far in the
+  # future, so nothing can fire.
+  write_module '"jaiscloud terraform scheduler case v2"' '"0 0 1 7 *"' false \
     '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
     '{ source = "jaiscloud", tier = "gold" }' # base64("scheduler-payload-v2")
@@ -248,32 +251,33 @@ case_main() {
   echo "== $TF: second plan after the mutate (permadiff check)"
   plan_no_changes "re-plan after the mutate reports no changes"
 
-  # Unpause: the provider calls :resume. The schedule is far in the future, so
-  # the re-enabled engine still cannot fire during the gate.
-  write_module '"jaiscloud terraform scheduler case v3"' '"0 0 1 7 *"' false \
+  # Pause: the provider calls :pause on the ENABLED job. The schedule is far in
+  # the future, so a paused job and an enabled one alike cannot fire during the
+  # gate.
+  write_module '"jaiscloud terraform scheduler case v3"' '"0 0 1 7 *"' true \
     '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
     '{ source = "jaiscloud", tier = "gold" }'
-  apply_phase "apply (unpause -> :resume)"
+  apply_phase "apply (pause -> :pause)"
   assert_no_api_errors
-  check_body "unpause leaves the job ENABLED" "$(job_url)" '"state":"ENABLED"'
+  check_body "pause leaves the job PAUSED" "$(job_url)" '"state":"PAUSED"'
+  plan_no_changes "re-plan after :pause reports no changes"
+
+  # Resume: the provider calls :resume on the PAUSED job.
+  write_module '"jaiscloud terraform scheduler case v4"' '"0 0 1 7 *"' false \
+    '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
+    '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
+    '{ source = "jaiscloud", tier = "gold" }'
+  apply_phase "apply (resume -> :resume)"
+  assert_no_api_errors
+  check_body "resume leaves the job ENABLED" "$(job_url)" '"state":"ENABLED"'
   body="$(body_of "$(job_url)")"
   if [[ "$body" == *'"scheduleTime"'* ]]; then
-    pass "an enabled job reports its next scheduleTime"
+    pass "a resumed job reports its next scheduleTime"
   else
-    fail "an enabled job is missing scheduleTime"
+    fail "a resumed job is missing scheduleTime"
   fi
   plan_no_changes "re-plan after :resume reports no changes"
-
-  # Re-pause: the provider calls :pause on the ENABLED job.
-  write_module '"jaiscloud terraform scheduler case v4"' '"0 0 1 7 *"' true \
-    '{ retry_count = 3, max_doublings = 3, min_backoff_duration = "2s", max_backoff_duration = "20s" }' \
-    '"c2NoZWR1bGVyLXBheWxvYWQtdjI="' \
-    '{ source = "jaiscloud", tier = "gold" }'
-  apply_phase "apply (re-pause -> :pause)"
-  assert_no_api_errors
-  check_body "re-pause leaves the job PAUSED" "$(job_url)" '"state":"PAUSED"'
-  plan_no_changes "re-plan after :pause reports no changes"
 
   destroy_phase
 

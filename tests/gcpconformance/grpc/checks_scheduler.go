@@ -211,7 +211,7 @@ func checkSchedulerPauseJob(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 6: ResumeJob transitions PAUSED -> ENABLED.
+// Check 6: ResumeJob transitions PAUSED -> ENABLED and tolerates a repeat.
 func checkSchedulerResumeJob(ctx context.Context, cfg Config) error {
 	client, err := newSchedulerClient(ctx, cfg)
 	if err != nil {
@@ -232,6 +232,19 @@ func checkSchedulerResumeJob(ctx context.Context, cfg Config) error {
 	}
 	if resumed.GetState() != schedulerpb.Job_ENABLED {
 		return fmt.Errorf("ResumeJob state = %v, want ENABLED", resumed.GetState())
+	}
+	// A repeated ResumeJob on the now-ENABLED job is a no-op that answers the
+	// unchanged job — the call the Terraform provider makes after an enabled
+	// create (TF2-12).
+	again, err := client.ResumeJob(ctx, &schedulerpb.ResumeJobRequest{Name: created.GetName()})
+	if err != nil {
+		return fmt.Errorf("repeated ResumeJob: %w", err)
+	}
+	if again.GetState() != schedulerpb.Job_ENABLED {
+		return fmt.Errorf("repeated ResumeJob state = %v, want ENABLED", again.GetState())
+	}
+	if !again.GetUserUpdateTime().AsTime().Equal(resumed.GetUserUpdateTime().AsTime()) {
+		return fmt.Errorf("repeated ResumeJob bumped userUpdateTime: %v -> %v", resumed.GetUserUpdateTime(), again.GetUserUpdateTime())
 	}
 	return nil
 }
