@@ -26,9 +26,9 @@ google_bigquery_datapolicyv2_data_policy_iam_member,bigquery,unsupported,none,un
 google_bigquery_datapolicyv2_data_policy_iam_policy,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
 google_bigquery_dataset,bigquery,served,fixture:compat,served,,2027-06-30
 google_bigquery_dataset_access,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
-google_bigquery_dataset_iam_binding,bigquery,unsupported,none,unsupported,datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
-google_bigquery_dataset_iam_member,bigquery,unsupported,none,unsupported,datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
-google_bigquery_dataset_iam_policy,bigquery,unsupported,none,unsupported,datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_dataset_iam_binding,bigquery,served,none,served,"dataset-level IAM is BigQuery's legacy `access` ACL, not an IAM method (real BigQuery has no datasets.getIamPolicy): the provider reads the dataset with ?accessPolicyVersion=3 and PATCHes the whole access list, both served",2027-06-30
+google_bigquery_dataset_iam_member,bigquery,served,fixture:compat_viewer,served,"dataset-level IAM is BigQuery's legacy `access` ACL, not an IAM method (real BigQuery has no datasets.getIamPolicy): the provider reads the dataset with ?accessPolicyVersion=3 and PATCHes the whole access list, both served",2027-06-30
+google_bigquery_dataset_iam_policy,bigquery,served,none,served,"dataset-level IAM is BigQuery's legacy `access` ACL, not an IAM method (real BigQuery has no datasets.getIamPolicy): the provider reads the dataset with ?accessPolicyVersion=3 and PATCHes the whole access list, both served",2027-06-30
 google_bigquery_job,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
 google_bigquery_reservation,bigquery,unsupported,none,unsupported,BigQuery Reservation API is not served.,2027-06-30
 google_bigquery_reservation_assignment,bigquery,unsupported,none,unsupported,BigQuery Reservation API (assignments) is not served.,2027-06-30
@@ -39,9 +39,9 @@ google_bigquery_routine_iam_member,bigquery,served,none,served,bigquery is serve
 google_bigquery_routine_iam_policy,bigquery,served,none,served,bigquery is served; no fixture or module case declares this resource type yet,2027-06-30
 google_bigquery_row_access_policy,bigquery,served,fixture:compat,served,,2027-06-30
 google_bigquery_table,bigquery,served,fixture:compat,served,,2027-06-30
-google_bigquery_table_iam_binding,bigquery,unsupported,none,unsupported,tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
-google_bigquery_table_iam_member,bigquery,unsupported,none,unsupported,tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
-google_bigquery_table_iam_policy,bigquery,unsupported,none,unsupported,tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.,2027-06-30
+google_bigquery_table_iam_binding,bigquery,served,none,served,"tables.getIamPolicy/setIamPolicy/testIamPermissions over the shared policy store (etag OCC, AIP-149 versions); the policy is never enforced, matching the emulator's no-authz posture",2027-06-30
+google_bigquery_table_iam_member,bigquery,served,fixture:compat_viewer,served,"tables.getIamPolicy/setIamPolicy/testIamPermissions over the shared policy store (etag OCC, AIP-149 versions); the policy is never enforced, matching the emulator's no-authz posture",2027-06-30
+google_bigquery_table_iam_policy,bigquery,served,none,served,"tables.getIamPolicy/setIamPolicy/testIamPermissions over the shared policy store (etag OCC, AIP-149 versions); the policy is never enforced, matching the emulator's no-authz posture",2027-06-30
 google_cloud_run_domain_mapping,run,unsupported,none,unsupported,Cloud Run domain mappings are not in the operation registry.,2027-06-30
 google_cloud_run_service,run,unsupported,none,unsupported,Cloud Run v1 (run.googleapis.com/v1) is not in the operation registry; the emulator serves the v2 service control plane.,2027-06-30
 google_cloud_run_service_iam_binding,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30

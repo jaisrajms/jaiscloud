@@ -229,7 +229,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 
 ## 5. Explicitly non-`ga` surfaces
 
-- **BigQuery** — 37 cells: 1 `ga` (the Discovery document), 33 `limited` + 3 `unsupported`.
+- **BigQuery** — 40 cells: 1 `ga` (the Discovery document), 36 `limited` + 3 `unsupported`.
   `jobs.query`/`jobs.insert` (query
   configuration) evaluate a documented Standard SQL subset — `SELECT` plus DDL/DML — on an
   in-process pure-Go SQLite engine in both memory and `--dsn` modes
@@ -239,7 +239,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   schema supplied, embedded in the file, or autodetected; `tabledata.*` reads and writes the
   stored rows;
   `routines.*` and `rowAccessPolicies.*` are stored CRUD resources (memory and `--dsn`; a
-  routine body is never executed and a row access policy predicate is never enforced), the
+  routine body is never executed and a row access policy predicate is never enforced);
+  table-level IAM (`tables.getIamPolicy`/`setIamPolicy`/`testIamPermissions`) is a stored
+  policy over the shared `ResourceStore` with etag OCC and the AIP-149 version rules, while
+  dataset-level IAM is the legacy dataset `access` ACL (real BigQuery publishes no
+  `datasets.getIamPolicy`); the
   `models.*` resource and the routines/rowAccessPolicies IAM methods are explicit `501`
   stubs. Simplifications
   (synchronous DDL/DML jobs, serialized DML spans, atomic CTAS, immutable

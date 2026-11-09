@@ -85,6 +85,7 @@ import (
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/store"
 )
 
 const kindPrefix = "bigquery#"
@@ -92,6 +93,11 @@ const kindPrefix = "bigquery#"
 // Provider handles BigQuery datasets, tables, jobs, and tabledata.
 type Provider struct {
 	store bqstore.Store
+	// resources is the shared policy plane the table IAM methods
+	// (tables.getIamPolicy/setIamPolicy/testIamPermissions) store their policy
+	// in. It is injected by main.go; nil means those methods fail loud
+	// (Unimplemented) rather than fabricating a policy.
+	resources store.ResourceStore
 	// sourceReader resolves gs:// load-job sources against the emulated GCS.
 	// It is injected by main.go; nil means load jobs fail loud (Unimplemented).
 	sourceReader SourceReader
@@ -122,9 +128,14 @@ func New(s bqstore.Store, opts ...Option) *Provider {
 
 // Reset wipes the store and any in-progress resumable load-job upload sessions.
 // A session holds a spool that may be file-backed, so its temp file is removed
-// here too.
+// here too. Table IAM policies live in the shared policy plane, which is wiped
+// by its own resetter; purging the type here keeps a provider-level reset
+// self-contained (as Cloud Tasks does for its queue policies).
 func (p *Provider) Reset(ctx context.Context) {
 	p.store.Reset(ctx)
+	if p.resources != nil {
+		_ = p.resources.Purge(ctx, "", store.GlobalRegion, TablePolicyType)
+	}
 	p.mu.Lock()
 	sessions := p.uploads
 	p.uploads = map[string]*loadUploadSession{}
@@ -147,6 +158,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"BigQuery.ListTables":                   p.ListTables,
 		"BigQuery.UpdateTable":                  p.UpdateTable,
 		"BigQuery.DeleteTable":                  p.DeleteTable,
+		"BigQuery.GetTableIamPolicy":            p.GetTableIamPolicy,
+		"BigQuery.SetTableIamPolicy":            p.SetTableIamPolicy,
+		"BigQuery.TestTableIamPermissions":      p.TestTableIamPermissions,
 		"BigQuery.InsertAll":                    p.InsertAll,
 		"BigQuery.ListRows":                     p.ListRows,
 		"BigQuery.InsertJob":                    p.InsertJob,
@@ -594,13 +608,26 @@ func (p *Provider) UpdateDataset(ctx context.Context, nr *model.NormalizedReques
 	return provider.OK(withMaxTimeTravel(p.datasetMap(projectOf(nr), d))), nil
 }
 
+// DeleteDataset removes a dataset and everything under it. The store cascades
+// to tables/routines/row access policies, so the table IAM policies (which live
+// in the shared policy plane) are enumerated before the cascade and dropped
+// after it — otherwise a re-created table of the same name would inherit a
+// stale policy.
 func (p *Provider) DeleteDataset(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	datasetID := strParam(nr, "datasetId")
 	if datasetID == "" {
 		return nil, invalidArgument("datasetId is required")
 	}
-	if err := p.store.DeleteDataset(ctx, projectOf(nr), datasetID); err != nil {
+	project := projectOf(nr)
+	tables, err := p.store.ListTables(ctx, project, datasetID)
+	if err != nil {
 		return nil, mapErr(err)
+	}
+	if err := p.store.DeleteDataset(ctx, project, datasetID); err != nil {
+		return nil, mapErr(err)
+	}
+	for _, t := range tables {
+		p.deleteTablePolicy(ctx, project, datasetID, t.TableID)
 	}
 	return &model.ProviderResponse{HTTPStatus: http.StatusNoContent, Data: map[string]any{}}, nil
 }
@@ -733,6 +760,7 @@ func (p *Provider) DeleteTable(ctx context.Context, nr *model.NormalizedRequest)
 	if err := p.store.DeleteTable(ctx, projectOf(nr), datasetID, tableID); err != nil {
 		return nil, mapErr(err)
 	}
+	p.deleteTablePolicy(ctx, projectOf(nr), datasetID, tableID)
 	return &model.ProviderResponse{HTTPStatus: http.StatusNoContent, Data: map[string]any{}}, nil
 }
 

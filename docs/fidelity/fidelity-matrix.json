@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1218,
+    "total": 1221,
     "by_state": {
       "ga": 1019,
-      "limited": 146,
+      "limited": 149,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 569,
-        "limited": 123,
+        "limited": 126,
         "preview": 14,
         "unsupported": 11
       }
@@ -24,7 +24,7 @@
     "by_service": {
       "bigquery": {
         "ga": 1,
-        "limited": 33,
+        "limited": 36,
         "unsupported": 3
       },
       "clouddns": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 671
+        "rest": 674
       },
       "unverified": {
         "grpc": 46,
@@ -153,14 +153,11 @@
       "source": "discovery",
       "source_ref": "bigquery.v2",
       "published": 47,
-      "served": 42,
-      "graded": 31,
+      "served": 45,
+      "graded": 34,
       "unserved": [
         "bigquery.datasets.undelete",
-        "bigquery.projects.list",
-        "bigquery.tables.getIamPolicy",
-        "bigquery.tables.setIamPolicy",
-        "bigquery.tables.testIamPermissions"
+        "bigquery.projects.list"
       ],
       "ungraded": 11,
       "unimplemented": 9,
@@ -1703,6 +1700,20 @@
     },
     {
       "service": "bigquery",
+      "operation": "BigQuery.GetTableIamPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "stored IAM policy over the shared ResourceStore (memory and --dsn): an existing table with no policy answers the empty default (version 1, etag ACAB), and an absent table is 404 notFound; options.requestedPolicyVersion is accepted and ignored (the stored policy is returned as set)",
+      "discovery": "bigquery.tables.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.tables.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
       "operation": "BigQuery.InsertAll",
       "transport": "rest",
       "state": "limited",
@@ -1906,7 +1917,7 @@
       "operation": "BigQuery.RoutinesIam",
       "transport": "rest",
       "state": "unsupported",
-      "reason": "routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); BigQuery IAM is not stored or enforced by the emulator — explicit Unimplemented (501) stub, while routines CRUD is served",
+      "reason": "routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); no hashicorp/google resource type targets it and the emulator enforces no authz — explicit Unimplemented (501) stub, while routines CRUD and table IAM are served",
       "verified": false,
       "evidence": [
         "postgres=yes",
@@ -1918,11 +1929,40 @@
       "operation": "BigQuery.RowAccessPoliciesIam",
       "transport": "rest",
       "state": "unsupported",
-      "reason": "row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); row-level access is IAM-enforced and the emulator has no IAM plane — explicit Unimplemented (501) stub, while the policy resource CRUD is served",
+      "reason": "row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); no hashicorp/google resource type targets it and row-level access is IAM-enforced, which the emulator does not model — explicit Unimplemented (501) stub, while the policy resource CRUD is served",
       "verified": false,
       "evidence": [
         "postgres=yes",
         "verified=false (rest, no Discovery method)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.SetTableIamPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "stored IAM policy over the shared ResourceStore with etag OCC (a stale etag is 409 ABORTED) and the AIP-149 version rules (a conditional binding requires version 3); bindings, role and members round-trip, auditConfigs and the updateMask are not modelled, and the policy is never enforced",
+      "discovery": "bigquery.tables.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.tables.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "bigquery",
+      "operation": "BigQuery.TestTableIamPermissions",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "every requested permission is granted (no authz enforcement); an absent table answers the documented empty permission set rather than NOT_FOUND",
+      "discovery": "bigquery.tables.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=bigquery.tables.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

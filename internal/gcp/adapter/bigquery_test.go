@@ -23,6 +23,11 @@ func TestBigQueryCodecDecode_RoutinesAndRowAccessPolicies(t *testing.T) {
 		{"PUT", "/bigquery/v2/projects/p/datasets/d/routines/r", "UpdateRoutine"},
 		{"DELETE", "/bigquery/v2/projects/p/datasets/d/routines/r", "DeleteRoutine"},
 		{"POST", "/bigquery/v2/projects/p/datasets/d/routines/r:getIamPolicy", "RoutinesIam"},
+		// tables: the IAM mixin has one action per verb (the emulator serves a
+		// real table policy plane), with the table id stripped of its suffix.
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/tbl:getIamPolicy", "GetTableIamPolicy"},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/tbl:setIamPolicy", "SetTableIamPolicy"},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/tbl:testIamPermissions", "TestTableIamPermissions"},
 		// models: still an explicit 501, so every method routes to one action.
 		{"GET", "/bigquery/v2/projects/p/datasets/d/models", "Models"},
 		{"POST", "/bigquery/v2/projects/p/datasets/d/models", "Models"},
@@ -71,6 +76,35 @@ func TestBigQueryCodecDecode_RoutinesAndRowAccessPolicies(t *testing.T) {
 	}
 	if nr.Params["datasetId"] != "d" || nr.Params["routineId"] != "r" {
 		t.Fatalf("routine path params = %v", nr.Params)
+	}
+
+	// A table IAM path carries the table id without its custom-method suffix.
+	nr, err = codec.Decode(httptest.NewRequest("POST",
+		"/bigquery/v2/projects/p/datasets/d/tables/tbl:setIamPolicy", nil), nil)
+	if err != nil {
+		t.Fatalf("decode table setIamPolicy: %v", err)
+	}
+	if nr.Params["datasetId"] != "d" || nr.Params["tableId"] != "tbl" {
+		t.Fatalf("table IAM path params = %v", nr.Params)
+	}
+}
+
+// TestBigQueryCodecDecode_TableIamRejections pins the shapes that must not
+// resolve: a non-POST IAM verb, an unknown custom verb on a table (it must not
+// fall through to the create/get switch and become a bogus table id), and a
+// collection-level custom verb.
+func TestBigQueryCodecDecode_TableIamRejections(t *testing.T) {
+	cases := []struct{ method, path string }{
+		{"GET", "/bigquery/v2/projects/p/datasets/d/tables/tbl:getIamPolicy"},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables/tbl:undelete"},
+		{"POST", "/bigquery/v2/projects/p/datasets/d/tables:getIamPolicy"},
+	}
+	for _, tc := range cases {
+		codec := &BigQueryCodec{Service: "bigquery"}
+		_, err := codec.Decode(httptest.NewRequest(tc.method, tc.path, nil), nil)
+		if err == nil {
+			t.Errorf("%s %s decoded, want 404", tc.method, tc.path)
+		}
 	}
 }
 

@@ -304,8 +304,10 @@ operations:
   # BigQuery: routines and row access policies are stored CRUD resources over
   # the same metadata store as datasets/tables (memory and --dsn); models stay
   # an explicit 501 because a Model is the output of a training run the emulator
-  # does not execute. The rest of the service is graded `limited` by the
-  # bigquery default override above.
+  # does not execute. Table-level IAM is a real policy plane (shared
+  # ResourceStore); routine and row-access-policy IAM stay explicit 501s because
+  # the hashicorp/google provider exposes no resource type for either. The rest
+  # of the service is graded `limited` by the bigquery default override above.
   - service: bigquery
     operation: BigQuery.Models
     state: unsupported
@@ -313,11 +315,23 @@ operations:
   - service: bigquery
     operation: BigQuery.RoutinesIam
     state: unsupported
-    reason: "routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); BigQuery IAM is not stored or enforced by the emulator — explicit Unimplemented (501) stub, while routines CRUD is served"
+    reason: "routine IAM (getIamPolicy/setIamPolicy/testIamPermissions); no hashicorp/google resource type targets it and the emulator enforces no authz — explicit Unimplemented (501) stub, while routines CRUD and table IAM are served"
   - service: bigquery
     operation: BigQuery.RowAccessPoliciesIam
     state: unsupported
-    reason: "row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); row-level access is IAM-enforced and the emulator has no IAM plane — explicit Unimplemented (501) stub, while the policy resource CRUD is served"
+    reason: "row access policy IAM (getIamPolicy/setIamPolicy/testIamPermissions); no hashicorp/google resource type targets it and row-level access is IAM-enforced, which the emulator does not model — explicit Unimplemented (501) stub, while the policy resource CRUD is served"
+  - service: bigquery
+    operation: BigQuery.GetTableIamPolicy
+    state: limited
+    reason: "stored IAM policy over the shared ResourceStore (memory and --dsn): an existing table with no policy answers the empty default (version 1, etag ACAB), and an absent table is 404 notFound; options.requestedPolicyVersion is accepted and ignored (the stored policy is returned as set)"
+  - service: bigquery
+    operation: BigQuery.SetTableIamPolicy
+    state: limited
+    reason: "stored IAM policy over the shared ResourceStore with etag OCC (a stale etag is 409 ABORTED) and the AIP-149 version rules (a conditional binding requires version 3); bindings, role and members round-trip, auditConfigs and the updateMask are not modelled, and the policy is never enforced"
+  - service: bigquery
+    operation: BigQuery.TestTableIamPermissions
+    state: limited
+    reason: "every requested permission is granted (no authz enforcement); an absent table answers the documented empty permission set rather than NOT_FOUND"
   - service: bigquery
     operation: BigQuery.InsertRoutine
     state: limited

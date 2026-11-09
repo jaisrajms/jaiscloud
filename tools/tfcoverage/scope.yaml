@@ -207,12 +207,12 @@ rules:
     state: served
   - match: google_bigquery_dataset_iam_*
     service: bigquery
-    state: unsupported
-    reason: datasets.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.
+    state: served
+    reason: "dataset-level IAM is BigQuery's legacy `access` ACL, not an IAM method (real BigQuery has no datasets.getIamPolicy): the provider reads the dataset with ?accessPolicyVersion=3 and PATCHes the whole access list, both served"
   - match: google_bigquery_table_iam_*
     service: bigquery
-    state: unsupported
-    reason: tables.getIamPolicy/setIamPolicy is not in the operation registry; BigQuery IAM is served for routines and row access policies only.
+    state: served
+    reason: "tables.getIamPolicy/setIamPolicy/testIamPermissions over the shared policy store (etag OCC, AIP-149 versions); the policy is never enforced, matching the emulator's no-authz posture"
   - match: google_bigquery_analytics_hub_*
     service: bigquery
     state: unsupported

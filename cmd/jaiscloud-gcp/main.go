@@ -716,7 +716,7 @@ func startCmd() *cobra.Command {
 			// Load jobs read their gs:// source from the emulated GCS through the
 			// SourceReader interface, so the BigQuery provider never imports the
 			// storage provider.
-			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageSeam))
+			bigqueryP := bigqueryprovider.New(stores.bigquery, bigqueryprovider.WithSourceReader(storageSeam), bigqueryprovider.WithResourceStore(stores.resources))
 
 			// Eventarc's transport-neutral core is shared by the REST provider
 			// and the gRPC adapter below, so both transports run against one

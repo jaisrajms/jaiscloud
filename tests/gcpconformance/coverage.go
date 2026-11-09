@@ -127,6 +127,11 @@ var actionOverrides = map[string]string{
 	"BigQuery.Query":             "bigquery.jobs.query",
 	"BigQuery.GetQueryResults":   "bigquery.jobs.getQueryResults",
 	"BigQuery.GetServiceAccount": "bigquery.projects.getServiceAccount",
+	// The table IAM mixin nests under the plural `tables` collection, which the
+	// CamelCase heuristic cannot derive from the flat action names.
+	"BigQuery.GetTableIamPolicy":       "bigquery.tables.getIamPolicy",
+	"BigQuery.SetTableIamPolicy":       "bigquery.tables.setIamPolicy",
+	"BigQuery.TestTableIamPermissions": "bigquery.tables.testIamPermissions",
 
 	// Service Usage v1 services.* verbs.
 	"ServiceUsage.ServicesList":        "serviceusage.services.list",

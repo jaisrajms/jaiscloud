@@ -559,6 +559,11 @@ resource "google_bigquery_table" "compat" {
   dataset_id = google_bigquery_dataset.compat.dataset_id
   table_id   = "jaiscloud_tf_table"
 
+  # The provider's default (true) refuses destroy client-side, which the
+  # run.sh destroy (best-effort, like every fixture cleanup) silently left the
+  # table and dataset behind. The fixture is ephemeral, so opt out.
+  deletion_protection = false
+
   schema = jsonencode([
     {
       name = "region"
@@ -597,4 +602,23 @@ resource "google_bigquery_row_access_policy" "compat" {
   policy_id        = "jaiscloud_tf_policy"
   filter_predicate = var.row_access_policy_predicate
   grantees         = ["user:compat@example.com"]
+}
+
+# ── BigQuery resource IAM (TF1-1) ────────────────────────────────────────────
+# The dataset plane is BigQuery's legacy `access` ACL: real BigQuery has no
+# datasets.getIamPolicy, so the provider reads GET ...?accessPolicyVersion=3 and
+# writes a PATCH carrying the whole access list. The table plane is the
+# tables.getIamPolicy / setIamPolicy / testIamPermissions mixin served on the
+# shared policy store. run.sh asserts both wire shapes and the destroy cleanup.
+resource "google_bigquery_dataset_iam_member" "compat_viewer" {
+  dataset_id = google_bigquery_dataset.compat.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "user:tf-dataset@example.com"
+}
+
+resource "google_bigquery_table_iam_member" "compat_viewer" {
+  dataset_id = google_bigquery_dataset.compat.dataset_id
+  table_id   = google_bigquery_table.compat.table_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "user:tf-table@example.com"
 }
