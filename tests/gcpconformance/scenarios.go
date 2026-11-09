@@ -595,6 +595,25 @@ func Scenarios(suffix string) []Scenario {
 			Body: fmt.Sprintf(`{"name":%q,"dnsName":%q,"description":"conformance replace"}`, zone, dnsName)},
 		Scenario{Service: "clouddns", Method: "GET", Path: dnsBase + "/" + zone + "/operations"},
 		Scenario{Service: "clouddns", Method: "GET", Path: dnsBase + "/missing-" + suffix},
+		// Managed-zone IAM (the google.iam.v1.IAMPolicy mixin): the empty
+		// default, the stored policy echoed back, the permission echo, the
+		// stale-etag 409 ABORTED, and the absent-zone 404 that proves the
+		// existence check runs before the policy plane.
+		Scenario{Service: "clouddns", Method: "POST",
+			Path: dnsBase + "/" + zone + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "clouddns", Method: "POST",
+			Path: dnsBase + "/" + zone + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/dns.admin","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "clouddns", Method: "POST",
+			Path: dnsBase + "/" + zone + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "clouddns", Method: "POST",
+			Path: dnsBase + "/" + zone + ":testIamPermissions",
+			Body: `{"permissions":["dns.managedZones.get","dns.managedZones.update"]}`},
+		Scenario{Service: "clouddns", Method: "POST",
+			Path: dnsBase + "/" + zone + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:stale@example.com"]}],"etag":"stale"}}`},
+		Scenario{Service: "clouddns", Method: "POST",
+			Path: dnsBase + "/missing-" + suffix + ":getIamPolicy", Body: `{}`},
 		Scenario{Service: "clouddns", Method: "DELETE", Path: dnsBase + "/" + zone},
 	)
 

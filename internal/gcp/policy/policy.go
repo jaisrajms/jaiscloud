@@ -1,6 +1,7 @@
-// Package policy provides shared GCP IAM policy helpers used by the Pub/Sub,
-// Secret Manager, and IAM providers: getIamPolicy / setIamPolicy (with etag
-// optimistic concurrency control) and testIamPermissions.
+// Package policy provides shared GCP IAM policy helpers used by the emulator's
+// resource-IAM planes (Pub/Sub, Secret Manager, IAM, KMS, Metastore, Dataproc,
+// BigQuery, Cloud DNS): getIamPolicy / setIamPolicy (with etag optimistic
+// concurrency control) and testIamPermissions.
 package policy
 
 import (

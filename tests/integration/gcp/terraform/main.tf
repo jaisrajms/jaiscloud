@@ -651,3 +651,28 @@ resource "google_bigquery_table_iam_member" "compat_viewer" {
   role       = "roles/bigquery.dataViewer"
   member     = "user:tf-table@example.com"
 }
+
+# ── Cloud DNS zone IAM (TF1-3) ───────────────────────────────────────────────
+# Cloud DNS publishes the google.iam.v1.IAMPolicy mixin on managedZones
+# (dns/v1/{+resource}:getIamPolicy, :setIamPolicy, :testIamPermissions), and
+# google_dns_managed_zone_iam_member drives it: the provider reads the policy,
+# adds the member, writes it back with the etag, and re-reads it into state, so
+# the second plan only converges if the get returns the stored policy verbatim.
+# The zone itself is a plain served managedZones.create; hashicorp/google 7.x
+# drops the old deletion_protection attribute for DNS zones (deletion_policy
+# defaults to DELETE), so no destroy opt-out is needed.
+resource "google_dns_managed_zone" "compat" {
+  name     = "jaiscloud-tf-zone"
+  dns_name = "jaiscloud-tf.example.com."
+}
+
+resource "google_dns_managed_zone_iam_member" "compat" {
+  project      = var.project
+  managed_zone = google_dns_managed_zone.compat.name
+  role         = "roles/dns.admin"
+  member       = "user:tf-dns@example.com"
+}
+
+output "dns_zone_name" {
+  value = google_dns_managed_zone.compat.name
+}
