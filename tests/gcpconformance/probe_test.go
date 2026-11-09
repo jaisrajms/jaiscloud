@@ -107,10 +107,42 @@ func TestPlaceholderOverrides(t *testing.T) {
 		"providers":    "pubsub.googleapis.com",
 		"versions":     "1",
 		"acls":         "allTopics",
+		"images":       "debian-12-bookworm-v20241009",
+		"family":       "debian-12",
 	}
 	for coll, want := range cases {
-		if got := placeholderValue(strings.TrimSuffix(coll, "s")+"Id", coll, cfg, "s", nil); got != want {
+		if got := placeholderValue(strings.TrimSuffix(coll, "s")+"Id", coll, cfg, defaultProject, "s", nil); got != want {
 			t.Errorf("placeholderValue(%s) = %q, want %q", coll, got, want)
+		}
+	}
+}
+
+// TestMethodProjectOverrides checks the catalog-project pin: an overridden
+// method's probe path names the Google-owned project, and an unrelated method
+// keeps the harness project.
+func TestMethodProjectOverrides(t *testing.T) {
+	docs := loadDocs(t)
+	doc := docs["compute"]
+	if doc == nil {
+		t.Skip("compute Discovery snapshot unavailable")
+	}
+	var got map[string]string
+	doc.WalkMethods(func(m *Method) {
+		if m.ID != "compute.images.get" && m.ID != "compute.images.getFromFamily" {
+			return
+		}
+		sc := synthScenario("compute", synthConfigFor("compute"), doc, m, "0", nil)
+		if !strings.Contains(sc.Path, "/projects/debian-cloud/global/images/") {
+			t.Errorf("%s probe path = %q, want the debian-cloud catalog project", m.ID, sc.Path)
+		}
+		if got == nil {
+			got = map[string]string{}
+		}
+		got[m.ID] = sc.Path
+	})
+	for id := range methodProjectOverrides {
+		if _, ok := got[id]; !ok {
+			t.Errorf("%s: no probe synthesized (the override would be dead)", id)
 		}
 	}
 }

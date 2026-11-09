@@ -14,7 +14,7 @@ classes:
   p3:
     state: present
     suites: [sdk-compute]
-    note: "invalid name/machine-type rejected 400, get-after-delete 404, duplicate insert 409, requestId idempotency (a token retry replays the original operation and echoes clientOperationId; a malformed/zero token is 400)"
+    note: "invalid name/machine-type rejected 400, get-after-delete 404, duplicate insert 409, requestId idempotency (a token retry replays the original operation and echoes clientOperationId; a malformed/zero token is 400); the public-image catalog 404s a family name from images.get and any image read in a project that publishes no public images, and a disk insert referencing no image 404s"
   p4:
     state: present
     suites: [sdk-compute]

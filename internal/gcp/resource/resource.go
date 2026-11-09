@@ -370,6 +370,12 @@ var formatters = map[string]func(project, name string) string{
 		r, name := wfLoc(n)
 		return fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", p, r, name)
 	},
+	"compute-image": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/global/images/%s", p, n)
+	},
+	"compute-license": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/global/licenses/%s", p, n)
+	},
 	"compute-project": func(_, n string) string {
 		// The project resource is addressed by its own id/number, not by the
 		// scope the formatter is bound to: the logical name IS the project.

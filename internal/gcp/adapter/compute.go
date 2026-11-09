@@ -139,6 +139,13 @@ func scopedAction(rest []string, scope, scopeType, method string, nr *model.Norm
 		return computeFirewallAction(rest[1:], method, nr)
 	case "subnetworks":
 		return computeSubnetworkAction(rest[1:], method, nr)
+	case "images":
+		// Images are a global resource: the zonal/regional spellings the shared
+		// scope dispatcher also accepts are not part of the published surface.
+		if scopeType != "global" {
+			return "Unimplemented"
+		}
+		return computeImageAction(rest[1:], method, nr)
 	case "machineTypes":
 		return computeMachineTypeAction(rest[1:], method, nr)
 	case "operations":
@@ -264,6 +271,26 @@ func computeSubnetworkAction(rest []string, method string, nr *model.NormalizedR
 		case http.MethodDelete:
 			return "SubnetworksDelete"
 		}
+	}
+	return "Unimplemented"
+}
+
+// computeImageAction dispatches the global images resource. images.get and
+// images.getFromFamily are the two read methods a Terraform provider resolves an
+// image reference through; the rest of the resource (insert/list/delete/patch/
+// deprecate/setLabels/IAM) is not served and falls through to Unimplemented.
+func computeImageAction(rest []string, method string, nr *model.NormalizedRequest) string {
+	if len(rest) == 0 {
+		// GET .../global/images is images.list, which the emulator does not serve.
+		return "Unimplemented"
+	}
+	if len(rest) == 2 && rest[0] == "family" && method == http.MethodGet {
+		nr.Params["family"] = rest[1]
+		return "ImagesGetFromFamily"
+	}
+	nr.Params["image"] = rest[0]
+	if len(rest) == 1 && method == http.MethodGet {
+		return "ImagesGet"
 	}
 	return "Unimplemented"
 }

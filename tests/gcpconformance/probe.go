@@ -360,11 +360,26 @@ var placeholderOverrides = map[string]string{
 	"providers":    "pubsub.googleapis.com",
 	"versions":     "1",
 	"acls":         "allTopics",
+	// Compute images are a public catalog: a synthesized id would exercise
+	// only the not-found path, so these two reads name real catalog entries
+	// (a concrete build and a family).
+	"images": "debian-12-bookworm-v20241009",
+	"family": "debian-12",
 	// Firestore Admin backup schedules have no id on create (the server
 	// assigns the lowest free one, "1" on a fresh database), so a
 	// get/patch/delete probe must target "1" rather than a synthesized
 	// per-operation id.
 	"backupSchedules": "1",
+}
+
+// methodProjectOverrides pins the project a probe addresses when the resource
+// only exists in a Google-owned catalog project. Compute images are the case:
+// the emulator serves the public-image catalog (debian-cloud, …) and has no
+// project image registry, so a probe in the harness's own project would
+// exercise only the not-found path.
+var methodProjectOverrides = map[string]string{
+	"compute.images.get":           "debian-cloud",
+	"compute.images.getFromFamily": "debian-cloud",
 }
 
 // collectionCreateAlias maps a path collection segment to create-like method
@@ -669,7 +684,11 @@ func isInfraPlaceholder(name string) bool {
 // singleton that reads it match.
 func synthScenario(svc string, cfg synthService, doc *DiscoveryDoc, m *Method, suffix string, tokens map[string]string) Scenario {
 	tpl := probeTemplate(m)
-	path := cfg.base + fillTemplate(tpl, cfg, suffix, tokens)
+	project := defaultProject
+	if p, ok := methodProjectOverrides[m.ID]; ok {
+		project = p
+	}
+	path := cfg.base + fillTemplate(tpl, cfg, project, suffix, tokens)
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
@@ -763,7 +782,7 @@ func mergeJSONObjects(base string, extra map[string]any) string {
 // fillTemplate substitutes {placeholders} in a flatPath with probe values. A
 // resource placeholder takes its value from the preceding literal segment (the
 // owning collection).
-func fillTemplate(tpl string, cfg synthService, suffix string, tokens map[string]string) string {
+func fillTemplate(tpl string, cfg synthService, project, suffix string, tokens map[string]string) string {
 	segs := strings.Split(tpl, "/")
 	lastLiteral := ""
 	for i, seg := range segs {
@@ -772,7 +791,7 @@ func fillTemplate(tpl string, cfg synthService, suffix string, tokens map[string
 			lastLiteral = seg
 			continue
 		}
-		val := placeholderValue(name, lastLiteral, cfg, suffix, tokens)
+		val := placeholderValue(name, lastLiteral, cfg, project, suffix, tokens)
 		segs[i] = val + suffixVerb
 	}
 	return strings.Join(segs, "/")
@@ -793,10 +812,10 @@ func parsePlaceholder(seg string) (name, suffix string, ok bool) {
 
 // placeholderValue returns the deterministic probe value for a path
 // placeholder. literal is the preceding path segment (the owning collection).
-func placeholderValue(name, literal string, cfg synthService, suffix string, tokens map[string]string) string {
+func placeholderValue(name, literal string, cfg synthService, project, suffix string, tokens map[string]string) string {
 	switch name {
 	case "project", "projectsId", "projectId":
-		return defaultProject
+		return project
 	case "location", "locationsId", "locationsId1":
 		return cfg.location
 	case "region", "regionsId":

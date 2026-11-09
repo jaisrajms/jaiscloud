@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -297,6 +298,12 @@ func TestDiskCRUD(t *testing.T) {
 	if got.Data["sizeGb"] != "20" {
 		t.Errorf("sizeGb = %v (%T), want \"20\"", got.Data["sizeGb"], got.Data["sizeGb"])
 	}
+	// physicalBlockSizeBytes is Optional+Computed in the provider: a disk that
+	// omitted it must read the documented server default back, or the ForceNew
+	// field permadiffs (0 in state vs the configured value).
+	if got.Data["physicalBlockSizeBytes"] != defaultDiskPhysicalBlockSizeBytes {
+		t.Errorf("physicalBlockSizeBytes = %v, want the %s default", got.Data["physicalBlockSizeBytes"], defaultDiskPhysicalBlockSizeBytes)
+	}
 	if !strings.Contains(str(got.Data["type"]), "diskTypes/pd-ssd") {
 		t.Errorf("type = %v", got.Data["type"])
 	}
@@ -322,6 +329,102 @@ func TestDiskCRUD(t *testing.T) {
 	}
 	if _, err := p.DisksGet(ctx, newNR(zonal("us-central1-a", map[string]any{"disk": "disk-a"}))); !isCode(err, "NotFound") {
 		t.Fatalf("expected NotFound after delete, got %v", err)
+	}
+}
+
+// TestDiskSourceImageResolution pins the disk-insert image normalization: a
+// caller's image reference is recorded the way real Compute records it (the
+// resolved image's absolute selfLink plus its id), so a read is canonical and
+// the provider's `image` diff suppression sees a link it understands. A family
+// reference resolves to the catalog's concrete build (TF2-11).
+func TestDiskSourceImageResolution(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	zone := "us-central1-a"
+
+	cases := []struct {
+		name, ref, wantLink, wantID string
+	}{
+		{
+			name:     "family",
+			ref:      "projects/debian-cloud/global/images/family/debian-12",
+			wantLink: "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-12-" + familyImageBuild,
+			wantID:   numericID("image/debian-cloud/debian-12-" + familyImageBuild),
+		},
+		{
+			name:     "project-relative",
+			ref:      "projects/debian-cloud/global/images/debian-11-bullseye-v20251111",
+			wantLink: "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-11-bullseye-v20251111",
+			wantID:   numericID("image/debian-cloud/debian-11-bullseye-v20251111"),
+		},
+		{
+			name:     "absolute",
+			ref:      "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-12-bookworm-v20241009",
+			wantLink: "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-12-bookworm-v20241009",
+			wantID:   numericID("image/debian-cloud/debian-12-bookworm-v20241009"),
+		},
+		{
+			name:     "universe-url",
+			ref:      "https://compute.example.com/compute/v1/projects/debian-cloud/global/images/debian-12-bookworm-v20241009",
+			wantLink: "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-12-bookworm-v20241009",
+			wantID:   numericID("image/debian-cloud/debian-12-bookworm-v20241009"),
+		},
+	}
+	for _, tc := range cases {
+		if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+			"name": "disk-" + tc.name, "sourceImage": tc.ref,
+		}}))); err != nil {
+			t.Fatalf("%s: create disk: %v", tc.name, err)
+		}
+		got, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": "disk-" + tc.name})))
+		if err != nil {
+			t.Fatalf("%s: get disk: %v", tc.name, err)
+		}
+		if got.Data["sourceImage"] != tc.wantLink {
+			t.Errorf("%s: sourceImage = %v, want %v", tc.name, got.Data["sourceImage"], tc.wantLink)
+		}
+		if got.Data["sourceImageId"] != tc.wantID {
+			t.Errorf("%s: sourceImageId = %v, want %v", tc.name, got.Data["sourceImageId"], tc.wantID)
+		}
+	}
+
+	if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+		"name": "disk-requested-block", "physicalBlockSizeBytes": 16384,
+	}}))); err != nil {
+		t.Fatalf("create disk with a requested block size: %v", err)
+	}
+	block, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": "disk-requested-block"})))
+	if err != nil {
+		t.Fatalf("get disk with a requested block size: %v", err)
+	}
+	if block.Data["physicalBlockSizeBytes"] != "16384" {
+		t.Errorf("physicalBlockSizeBytes = %v, want the requested 16384", block.Data["physicalBlockSizeBytes"])
+	}
+
+	// A reference that resolves to no image fails the create rather than storing
+	// a dangling one: a family name asked for as an image, and a project that
+	// publishes no public images.
+	for _, ref := range []string{
+		"projects/debian-cloud/global/images/debian-12",
+		"projects/proj/global/images/debian-12-bookworm-v20241009",
+	} {
+		if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+			"name": "disk-bad", "sourceImage": ref,
+		}}))); !isCode(err, "NotFound") {
+			t.Fatalf("%s: expected NotFound, got %v", ref, err)
+		}
+	}
+	// An unrecognized spelling is INVALID_ARGUMENT (the API accepts only the
+	// documented project/global image and image-family forms).
+	if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+		"name": "disk-bad", "sourceImage": "debian-cloud/debian-12",
+	}}))); !isCode(err, "InvalidArgument") {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+	if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": map[string]any{
+		"name": "disk-bad", "sourceImage": 42,
+	}}))); !isCode(err, "InvalidArgument") {
+		t.Fatalf("non-string sourceImage = %v, want InvalidArgument", err)
 	}
 }
 
@@ -566,6 +669,147 @@ func TestSynthesizedDiscovery(t *testing.T) {
 	}
 	if _, err := p.MachineTypesGet(ctx, newNR(zonal("us-central1-a", map[string]any{"machineType": "nope"}))); !isCode(err, "NotFound") {
 		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+// projectNR is newNR for a request addressed at another project (the compute
+// image catalog is only served from the public image projects).
+func projectNR(project string, params map[string]any) *model.NormalizedRequest {
+	nr := newNR(params)
+	nr.AccountID = project
+	nr.ResourceID = resource.ResourceID(project)
+	nr.Params["project"] = project
+	return nr
+}
+
+// TestImagesGet pins compute.images.get: the emulator serves a synthesized READY
+// public image for a concrete build name in a public image project, 404s a
+// family name (so the hashicorp/google provider falls back to the family
+// lookup) and 404s any project that does not publish public images (TF2-11).
+func TestImagesGet(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	resp, err := p.ImagesGet(ctx, projectNR("debian-cloud", map[string]any{"image": "debian-12-bookworm-v20241009"}))
+	if err != nil {
+		t.Fatalf("images get: %v", err)
+	}
+	img := resp.Data
+	if img["kind"] != kindImage {
+		t.Errorf("kind = %v, want %s", img["kind"], kindImage)
+	}
+	if img["name"] != "debian-12-bookworm-v20241009" {
+		t.Errorf("name = %v", img["name"])
+	}
+	if img["family"] != "debian-12-bookworm" {
+		t.Errorf("family = %v, want debian-12-bookworm", img["family"])
+	}
+	if img["status"] != "READY" || img["sourceType"] != "RAW" || img["architecture"] != "X86_64" {
+		t.Errorf("image status/sourceType/architecture = %v/%v/%v", img["status"], img["sourceType"], img["architecture"])
+	}
+	if img["diskSizeGb"] != imageDiskSizeGB {
+		t.Errorf("diskSizeGb = %v, want %v", img["diskSizeGb"], imageDiskSizeGB)
+	}
+	wantSelf := "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/images/debian-12-bookworm-v20241009"
+	if img["selfLink"] != wantSelf {
+		t.Errorf("selfLink = %v, want %v", img["selfLink"], wantSelf)
+	}
+	if img["creationTimestamp"] != "2024-10-09T00:00:00.000-07:00" {
+		t.Errorf("creationTimestamp = %v, want the build date", img["creationTimestamp"])
+	}
+	licenses, _ := img["licenses"].([]string)
+	if len(licenses) != 1 || licenses[0] != "https://www.googleapis.com/compute/v1/projects/debian-cloud/global/licenses/debian-12-bookworm" {
+		t.Errorf("licenses = %v", img["licenses"])
+	}
+	if feats, _ := img["guestOsFeatures"].([]any); len(feats) == 0 {
+		t.Error("expected guestOsFeatures")
+	}
+
+	// Two reads of the same name are identical: nothing is stored, so a read
+	// after a restart (or from another gateway) reports the same resource.
+	again, err := p.ImagesGet(ctx, projectNR("debian-cloud", map[string]any{"image": "debian-12-bookworm-v20241009"}))
+	if err != nil {
+		t.Fatalf("images get again: %v", err)
+	}
+	if !reflect.DeepEqual(resp.Data, again.Data) {
+		t.Errorf("repeated read differs:\n%v\n%v", resp.Data, again.Data)
+	}
+
+	// Cloud COS images carry a milestone/build/patch/revision label instead of a
+	// -vYYYYMMDD date; the family is still derived.
+	cos, err := p.ImagesGet(ctx, projectNR("cos-cloud", map[string]any{"image": "cos-stable-109-17800-147-54"}))
+	if err != nil {
+		t.Fatalf("cos image get: %v", err)
+	}
+	if cos.Data["family"] != "cos-stable" {
+		t.Errorf("cos family = %v, want cos-stable", cos.Data["family"])
+	}
+
+	// A family name is not an image: the provider's resolver probes images.get
+	// first and relies on this 404 to read the name as a family instead.
+	if _, err := p.ImagesGet(ctx, projectNR("debian-cloud", map[string]any{"image": "debian-12"})); !isCode(err, "NotFound") {
+		t.Fatalf("family name through images.get = %v, want NotFound", err)
+	}
+
+	// No image registry outside the public image projects: a project's own
+	// images cannot exist (images.insert is not served), so a read is a 404.
+	if _, err := p.ImagesGet(ctx, projectNR("proj", map[string]any{"image": "debian-12-bookworm-v20241009"})); !isCode(err, "NotFound") {
+		t.Fatalf("image in a non-public project = %v, want NotFound", err)
+	}
+
+	// Malformed names are rejected before any lookup, like every other compute
+	// resource name.
+	if _, err := p.ImagesGet(ctx, projectNR("debian-cloud", map[string]any{"image": "Debian_12"})); !isCode(err, "InvalidArgument") {
+		t.Fatalf("malformed image name = %v, want InvalidArgument", err)
+	}
+	if _, err := p.ImagesGet(ctx, projectNR("debian-cloud", nil)); !isCode(err, "InvalidArgument") {
+		t.Fatalf("missing image = %v, want InvalidArgument", err)
+	}
+}
+
+// TestImagesGetFromFamily pins compute.images.getFromFamily: any family name in
+// a public image project answers one stable synthesized build, and that build
+// reads back through images.get as the same family.
+func TestImagesGetFromFamily(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	resp, err := p.ImagesGetFromFamily(ctx, projectNR("debian-cloud", map[string]any{"family": "debian-12"}))
+	if err != nil {
+		t.Fatalf("images get from family: %v", err)
+	}
+	img := resp.Data
+	if img["kind"] != kindImage || img["status"] != "READY" {
+		t.Errorf("image = %v", img)
+	}
+	if img["name"] != "debian-12-"+familyImageBuild {
+		t.Errorf("name = %v, want debian-12-%s", img["name"], familyImageBuild)
+	}
+	if img["family"] != "debian-12" {
+		t.Errorf("family = %v, want debian-12", img["family"])
+	}
+	if img["creationTimestamp"] != "2024-01-01T00:00:00.000-07:00" {
+		t.Errorf("creationTimestamp = %v, want the synthesized build date", img["creationTimestamp"])
+	}
+
+	// The name a family read reports is a concrete build the same catalog
+	// serves, and it derives the same family.
+	back, err := p.ImagesGet(ctx, projectNR("debian-cloud", map[string]any{"image": img["name"]}))
+	if err != nil {
+		t.Fatalf("read the family build: %v", err)
+	}
+	if back.Data["family"] != "debian-12" || back.Data["selfLink"] != img["selfLink"] {
+		t.Errorf("family build reads back as %v / %v", back.Data["family"], back.Data["selfLink"])
+	}
+
+	if _, err := p.ImagesGetFromFamily(ctx, projectNR("proj", map[string]any{"family": "debian-12"})); !isCode(err, "NotFound") {
+		t.Fatalf("family in a non-public project = %v, want NotFound", err)
+	}
+	if _, err := p.ImagesGetFromFamily(ctx, projectNR("debian-cloud", map[string]any{"family": "Debian_12"})); !isCode(err, "InvalidArgument") {
+		t.Fatalf("malformed family = %v, want InvalidArgument", err)
+	}
+	if _, err := p.ImagesGetFromFamily(ctx, projectNR("debian-cloud", nil)); !isCode(err, "InvalidArgument") {
+		t.Fatalf("missing family = %v, want InvalidArgument", err)
 	}
 }
 
