@@ -233,6 +233,16 @@ resource "google_sql_user" "compat" {
   password = "jaiscloud-tf-password"
 }
 
+# The emulator mints a real self-signed client certificate (PEM), its one-time
+# private key, and the instance's server CA. The provider's read (sslCerts.get)
+# must converge without a permadiff: instance/common_name/cert_serial_number/
+# create_time/expiration_time/sha1_fingerprint all round-trip.
+resource "google_sql_ssl_cert" "compat" {
+  common_name = "jaiscloud-tf-client"
+  project     = var.project
+  instance    = google_sql_database_instance.compat.name
+}
+
 # ── Dataproc Metastore — federation + database IAM ────────────────────────────
 # google_dataproc_metastore_federation exercises the separate
 # DataprocMetastoreFederation surface (create/get/update/delete + LRO), and
@@ -494,6 +504,10 @@ output "sql_database_name" {
 
 output "sql_user_name" {
   value = google_sql_user.compat.name
+}
+
+output "sql_ssl_cert_fingerprint" {
+  value = google_sql_ssl_cert.compat.sha1_fingerprint
 }
 
 output "enabled_service" {

@@ -1,7 +1,7 @@
 // Package cloudsql implements the Cloud SQL Admin v1beta4 control-plane
 // provider (sqladmin.googleapis.com/sql/v1beta4): instances, databases, users,
-// and the operations that mutate them, plus the synthesized flags/tiers
-// discovery and connectSettings surfaces.
+// client SSL certificates, and the operations that mutate them, plus the
+// synthesized flags/tiers discovery and connectSettings surfaces.
 //
 // This is metadata-only, mirroring the Cloud DNS and Memorystore providers and
 // the AWS RDS provider: instances, databases, users, and operations are stored
@@ -16,10 +16,10 @@
 // status "DONE" — NOT a google.longrunning.Operation — and the same operation
 // is persisted so operations.get/list can read it back.
 //
-// Deferred surfaces (sslCerts, backupRuns, clone, failover, promoteReplica,
-// import/export, demote, resetSslConfig, operation cancel, and the instance
-// read-only certificate custom methods) resolve to the Unimplemented action and
-// fail loud with 501 rather than silently succeeding.
+// Deferred surfaces (backupRuns, clone, failover, promoteReplica, import/export,
+// demote, resetSslConfig, sslCerts.createEphemeral, operation cancel, and the
+// instance read-only certificate custom methods) resolve to the Unimplemented
+// action and fail loud with 501 rather than silently succeeding.
 package cloudsql
 
 import (
@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -49,6 +50,7 @@ const (
 	rtInstance  = "gcp_cloudsql_instance"
 	rtDatabase  = "gcp_cloudsql_database"
 	rtUser      = "gcp_cloudsql_user"
+	rtSslCert   = "gcp_cloudsql_sslcert"
 	rtOperation = "gcp_cloudsql_operation"
 )
 
@@ -60,6 +62,9 @@ const (
 	kindDatabasesList   = "sql#databasesList"
 	kindUser            = "sql#user"
 	kindUsersList       = "sql#usersList"
+	kindSslCert         = "sql#sslCert"
+	kindSslCertsList    = "sql#sslCertsList"
+	kindSslCertsInsert  = "sql#sslCertsInsert"
 	kindOperation       = "sql#operation"
 	kindOperationsList  = "sql#operationsList"
 	kindFlagsList       = "sql#flagsList"
@@ -80,6 +85,11 @@ const defaultDatabaseVersion = "MYSQL_8_0"
 // Provider handles Cloud SQL instances, databases, users, and operations.
 type Provider struct {
 	resources store.ResourceStore
+
+	// sslMu serializes the certificate name/count check with the create: the
+	// store key is the fingerprint, so uniqueness of a common name and the
+	// per-instance cap cannot be enforced by the store's atomic upsert alone.
+	sslMu sync.Mutex
 }
 
 // New returns a Provider backed by the shared ResourceStore.
@@ -110,6 +120,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudSQL.UsersList":   p.UsersList,
 		"CloudSQL.UsersUpdate": p.UsersUpdate,
 		"CloudSQL.UsersDelete": p.UsersDelete,
+
+		"CloudSQL.SslCertsInsert": p.SslCertsInsert,
+		"CloudSQL.SslCertsGet":    p.SslCertsGet,
+		"CloudSQL.SslCertsList":   p.SslCertsList,
+		"CloudSQL.SslCertsDelete": p.SslCertsDelete,
 
 		"CloudSQL.OperationsGet":  p.OperationsGet,
 		"CloudSQL.OperationsList": p.OperationsList,
@@ -157,6 +172,11 @@ func (p *Provider) InstancesInsert(ctx context.Context, nr *model.NormalizedRequ
 		"type":      "PRIMARY",
 		"ipAddress": synthIP(project + "/" + name),
 	}}
+	serverCA, err := newServerCaCert(nr, name)
+	if err != nil {
+		return nil, err
+	}
+	inst["serverCaCert"] = serverCA
 	inst["settings"] = normalizeSettings(inst["settings"], region+"-a")
 
 	data, err := json.Marshal(inst)
@@ -297,9 +317,10 @@ func (p *Provider) loadInstance(ctx context.Context, account, name string) (map[
 	return m, nil
 }
 
-// purgeInstanceChildren removes the databases and users owned by an instance.
+// purgeInstanceChildren removes the databases, users, and client certificates
+// owned by an instance.
 func (p *Provider) purgeInstanceChildren(ctx context.Context, account, instance string) {
-	for _, rt := range []string{rtDatabase, rtUser} {
+	for _, rt := range []string{rtDatabase, rtUser, rtSslCert} {
 		if entries, err := p.resources.List(ctx, account, store.GlobalRegion, rt, instance); err == nil {
 			for _, e := range entries {
 				_ = p.resources.Delete(ctx, account, store.GlobalRegion, rt, e.ID)
@@ -996,8 +1017,8 @@ func (p *Provider) GetConnectSettings(ctx context.Context, nr *model.NormalizedR
 }
 
 // Unimplemented is the fail-loud handler for deferred Cloud SQL surfaces
-// (sslCerts, backupRuns, clone, failover, promoteReplica, import/export,
-// demote, resetSslConfig, and operation cancel).
+// (backupRuns, clone, failover, promoteReplica, import/export, demote,
+// resetSslConfig, sslCerts.createEphemeral, and operation cancel).
 func (p *Provider) Unimplemented(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return nil, model.NewProviderError("Unimplemented", "operation is not supported by the Cloud SQL emulator", 501)
 }
@@ -1064,7 +1085,7 @@ func mergeInstance(inst, patch map[string]any) {
 		case "name", "project", "region", "kind", "state", "selfLink",
 			"connectionName", "createTime", "serviceAccountEmailAddress",
 			"ipAddresses", "backendType", "instanceType", "currentDiskSize",
-			"databaseInstalledVersion", "etag":
+			"databaseInstalledVersion", "etag", "serverCaCert":
 			continue
 		case "settings":
 			inst["settings"] = mergeSettings(inst["settings"], v)

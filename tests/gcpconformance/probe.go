@@ -168,6 +168,10 @@ var bodyOverrides = map[string]map[string]any{
 	"monitoring.projects.dashboards.patch":  {"displayName": "probe"},
 
 	"dns.managedZones.create": {"dnsName": "probe-" + defaultProject + ".example.com."},
+	// Cloud SQL sslCerts.insert requires the caller-supplied common name (the
+	// Discovery schema does not mark it required); the generic synthesized
+	// create body only carries the probe's target id.
+	"sql.sslCerts.insert": {"commonName": "probe"},
 	"cloudtasks.projects.locations.queues.tasks.create": {
 		"httpRequest": map[string]any{"httpMethod": "GET", "url": "http://example.com/probe"},
 	},

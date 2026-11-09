@@ -17,7 +17,7 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Secret Manager (secret + version + IAM member)
 - Cloud KMS (key ring + crypto key)
 - Pub/Sub (topic + subscription + topic/subscription IAM members)
-- Cloud SQL for PostgreSQL (instance + database + user)
+- Cloud SQL for PostgreSQL (instance + database + user + client SSL certificate)
 - Dataproc Metastore (federation + database IAM member)
 - Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets, plus a
   Compute-Engine `cluster_config` cluster)
@@ -938,7 +938,9 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
 - Pub/Sub topic IAM keeps **both** member grants across the provider's
   `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC)
 - Pub/Sub subscription and Secret Manager IAM grants are present
-- Cloud SQL instance is `RUNNABLE`, database and user exist
+- Cloud SQL instance is `RUNNABLE`, database and user exist, and the
+  `google_sql_ssl_cert` fingerprint resolves under the instance (`sslCerts.get`),
+  with the instance exposing its synthesized `serverCaCert`
 - The CRM project lookup resolves (`lifecycleState: ACTIVE`)
 - The project IAM policy keeps the `google_project_iam_member` grant across
   the provider's `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC),

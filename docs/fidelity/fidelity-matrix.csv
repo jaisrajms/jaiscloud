@@ -74,6 +74,10 @@ cloudsql,CloudSQL.InstancesRestart,rest,limited,true,metadata-only over Resource
 cloudsql,CloudSQL.InstancesUpdate,rest,limited,true,metadata-only over ResourceStore (no control plane)
 cloudsql,CloudSQL.OperationsGet,rest,limited,false,metadata-only over ResourceStore (no control plane)
 cloudsql,CloudSQL.OperationsList,rest,limited,true,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.SslCertsDelete,rest,limited,true,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.SslCertsGet,rest,limited,true,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.SslCertsInsert,rest,limited,true,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.SslCertsList,rest,limited,true,metadata-only over ResourceStore (no control plane)
 cloudsql,CloudSQL.TiersList,rest,limited,true,metadata-only over ResourceStore (no control plane)
 cloudsql,CloudSQL.Unimplemented,rest,unsupported,false,explicit Unimplemented stub
 cloudsql,CloudSQL.UsersDelete,rest,limited,false,metadata-only over ResourceStore (no control plane)

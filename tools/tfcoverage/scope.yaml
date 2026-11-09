@@ -180,8 +180,7 @@ rules:
     reason: Provisioning scripts (sqladmin provisionScript) are not in the operation registry.
   - match: google_sql_ssl_cert
     service: cloudsql
-    state: unsupported
-    reason: sslCerts is not in the operation registry; the emulator serves instances/databases/users/flags/tiers/operations only.
+    state: limited
 
   # ── BigQuery ───────────────────────────────────────────────────────────────
   - match: google_bigquery_dataset

@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1221,
+    "total": 1225,
     "by_state": {
       "ga": 1019,
-      "limited": 149,
+      "limited": 153,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 569,
-        "limited": 126,
+        "limited": 130,
         "preview": 14,
         "unsupported": 11
       }
@@ -32,7 +32,7 @@
         "unsupported": 1
       },
       "cloudsql": {
-        "limited": 23,
+        "limited": 27,
         "unsupported": 1
       },
       "compute": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 674
+        "rest": 678
       },
       "unverified": {
         "grpc": 46,
@@ -200,7 +200,7 @@
       "source_ref": "sqladmin.v1",
       "published": 80,
       "served": 69,
-      "graded": 23,
+      "graded": 27,
       "unserved": [
         "sql.Backups.CreateBackup",
         "sql.Backups.DeleteBackup",
@@ -214,9 +214,9 @@
         "sql.connect.resolve",
         "sql.instances.pointInTimeRestore"
       ],
-      "ungraded": 46,
-      "unimplemented": 46,
-      "note": "46 served method(s) have no graded cell; 46 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
+      "ungraded": 42,
+      "unimplemented": 42,
+      "note": "42 served method(s) have no graded cell; 42 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
     },
     {
       "service": "cloudsql",
@@ -2413,7 +2413,7 @@
         "discovery=sql.instances.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2442,7 +2442,7 @@
         "discovery=sql.instances.insert",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 18 transcript entries)"
+        "verified=true (rest, 23 transcript entries)"
       ]
     },
     {
@@ -2529,6 +2529,64 @@
         "discovery=sql.operations.list",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudsql",
+      "operation": "CloudSQL.SslCertsDelete",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "sql.sslCerts.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=sql.sslCerts.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudsql",
+      "operation": "CloudSQL.SslCertsGet",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "sql.sslCerts.get",
+      "verified": true,
+      "evidence": [
+        "discovery=sql.sslCerts.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudsql",
+      "operation": "CloudSQL.SslCertsInsert",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "sql.sslCerts.insert",
+      "verified": true,
+      "evidence": [
+        "discovery=sql.sslCerts.insert",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 4 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudsql",
+      "operation": "CloudSQL.SslCertsList",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "sql.sslCerts.list",
+      "verified": true,
+      "evidence": [
+        "discovery=sql.sslCerts.list",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

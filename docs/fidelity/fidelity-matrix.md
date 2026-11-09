@@ -12,14 +12,14 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1221**
+Cells: **1225**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
 | ga | 1019 |
-| limited | 149 |
+| limited | 153 |
 | preview | 14 |
 | unsupported | 39 |
 
@@ -27,7 +27,7 @@ Cells: **1221**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 569 | 126 | 14 | 11 |
+| rest | 569 | 130 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 674 | 46 |
+| rest | 678 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -51,7 +51,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | bigquery | grpc | — | — | — | — | — | unavailable |
 | clouddns | rest | 40 | 40 | 17 | 0 | 23 | dns.v1 |
 | clouddns | grpc | — | — | — | — | — | unavailable |
-| cloudsql | rest | 80 | 69 | 23 | 11 | 46 | sqladmin.v1 |
+| cloudsql | rest | 80 | 69 | 27 | 11 | 42 | sqladmin.v1 |
 | cloudsql | grpc | — | — | — | — | — | unavailable |
 | compute | rest | 1011 | 974 | 32 | 37 | 942 | compute.v1 |
 | compute | grpc | — | — | — | — | — | unavailable |
@@ -116,7 +116,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 - `bigquery` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `clouddns` REST: 23 served method(s) have no graded cell; 23 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `clouddns` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
-- `cloudsql` REST: 46 served method(s) have no graded cell; 46 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `cloudsql` REST: 42 served method(s) have no graded cell; 42 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `cloudsql` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `compute` REST: 942 served method(s) have no graded cell; 934 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `compute` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
@@ -247,11 +247,11 @@ _18 cell(s): ga=0 limited=17 preview=0 unsupported=1_
 
 ## cloudsql
 
-_Coverage: REST **69 of 80** published methods served · 11 not served · 23 graded · 46 served-but-ungraded (`sqladmin.v1` Discovery)_
+_Coverage: REST **69 of 80** published methods served · 11 not served · 27 graded · 42 served-but-ungraded (`sqladmin.v1` Discovery)_
 
 _Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
-_24 cell(s): ga=0 limited=23 preview=0 unsupported=1_
+_28 cell(s): ga=0 limited=27 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -272,6 +272,10 @@ _24 cell(s): ga=0 limited=23 preview=0 unsupported=1_
 | CloudSQL.InstancesUpdate | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.OperationsGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.OperationsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.SslCertsDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.SslCertsGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.SslCertsInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.SslCertsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.TiersList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.Unimplemented | rest | unsupported | no | explicit Unimplemented stub |
 | CloudSQL.UsersDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |

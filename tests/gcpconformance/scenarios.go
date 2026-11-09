@@ -1776,6 +1776,32 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "tasks", Method: "DELETE", Path: "/v2/" + tasksName},
 	)
 
+	// ─── Cloud SQL: instance + client SSL certificate lifecycle ──────────────
+	// sslCerts.insert returns real certificate material (a self-signed client
+	// cert, its private key, and the instance's server CA), and the fingerprint
+	// it mints addresses the certificate for get/delete. Delete drops it, so the
+	// follow-up read records the NotFound envelope.
+	//
+	// The requests use the `sql/v1` spelling because the vendored Discovery
+	// snapshot is sqladmin v1: the harness validates responses against it, and a
+	// `sql/v1beta4` path would not match the method templates (the codec serves
+	// both spellings identically; the official-client v1beta4 path is exercised
+	// by tests/integration/gcp/sdk-cloudsql and the Terraform suite).
+	sqlInst := "conf-sql-" + suffix
+	sqlBase := "/sql/v1/projects/" + p + "/instances/" + sqlInst
+	sc = append(sc,
+		Scenario{Service: "cloudsql", Method: "POST", Path: "/sql/v1/projects/" + p + "/instances",
+			Body: fmt.Sprintf(`{"name":%q,"region":"us-central1","databaseVersion":"MYSQL_8_0"}`, sqlInst)},
+		Scenario{Service: "cloudsql", Method: "POST", Path: sqlBase + "/sslCerts",
+			Body: `{"commonName":"conf-client"}`,
+			Save: map[string]string{"sqlFingerprint": "clientCert.certInfo.sha1Fingerprint"}},
+		Scenario{Service: "cloudsql", Method: "GET", Path: sqlBase + "/sslCerts"},
+		Scenario{Service: "cloudsql", Method: "GET", Path: sqlBase + "/sslCerts/${sqlFingerprint}"},
+		Scenario{Service: "cloudsql", Method: "DELETE", Path: sqlBase + "/sslCerts/${sqlFingerprint}"},
+		Scenario{Service: "cloudsql", Method: "GET", Path: sqlBase + "/sslCerts/${sqlFingerprint}"},
+		Scenario{Service: "cloudsql", Method: "DELETE", Path: sqlBase},
+	)
+
 	return sc
 }
 

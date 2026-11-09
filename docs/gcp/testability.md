@@ -226,7 +226,7 @@ behind a wire-conformant API.
 | EventBridge | **Eventarc** | 🟢 `ga` (30/57) | Trigger CRUD; Pub/Sub-sourced `cloudFunction` triggers deliver to their function with a backing subscription dead-letter surface. |
 | Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 12/12, Executions 8/8) | LROs complete synchronously by default; opt-in async timing via `JAISCLOUD_LRO_MODE=async`. |
 | Athena / Redshift | **BigQuery** | 🟡 `limited` (0/23) | Shape only — a documented Standard SQL subset (`SELECT` + DDL/DML) executes locally; full GoogleSQL and real GCP semantics must be tested on real GCP. |
-| RDS | **Cloud SQL** | 🟡 `limited` (0/24) | Metadata only. |
+| RDS | **Cloud SQL** | 🟡 `limited` (0/28) | Metadata only. |
 | EC2 | **Compute Engine** | 🟡 `limited` (0/33) | Metadata only. |
 | ElastiCache | **Memorystore** | 🟡 `limited` (0/8) | Metadata only. |
 | Route 53 | **Cloud DNS** | 🟡 `limited` (0/16) | Metadata only. |
