@@ -113,6 +113,13 @@ var actionOverrides = map[string]string{
 	"Dataproc.WorkflowTemplateGetIamPolicy":       "dataproc.projects.regions.workflowTemplates.getIamPolicy",
 	"Dataproc.WorkflowTemplateSetIamPolicy":       "dataproc.projects.regions.workflowTemplates.setIamPolicy",
 	"Dataproc.WorkflowTemplateTestIamPermissions": "dataproc.projects.regions.workflowTemplates.testIamPermissions",
+	// Clusters and jobs publish the same mixin on their regional collections.
+	"Dataproc.ClusterGetIamPolicy":          "dataproc.projects.regions.clusters.getIamPolicy",
+	"Dataproc.ClusterSetIamPolicy":          "dataproc.projects.regions.clusters.setIamPolicy",
+	"Dataproc.ClusterTestIamPermissions":    "dataproc.projects.regions.clusters.testIamPermissions",
+	"Dataproc.JobGetIamPolicy":              "dataproc.projects.regions.jobs.getIamPolicy",
+	"Dataproc.JobSetIamPolicy":              "dataproc.projects.regions.jobs.setIamPolicy",
+	"Dataproc.JobTestIamPermissions":        "dataproc.projects.regions.jobs.testIamPermissions",
 	"Metastore.AlterMetadataResourceLocation":     "metastore.projects.locations.services.alterLocation",
 	"Workflow.ListWorkflowRevisions":              "workflows.projects.locations.workflows.listRevisions",
 

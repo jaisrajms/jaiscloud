@@ -11,16 +11,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestIAMOwns covers the router dispatch: only workflow-template names are
-// claimed.
+// TestIAMOwns covers the router dispatch: the three regional collections that
+// publish the mixin are claimed; locations-scoped and other Dataproc names are
+// not.
 func TestIAMOwns(t *testing.T) {
 	s := newTestService()
-	if !s.Owns("projects/proj/regions/us-central1/workflowTemplates/t1") {
-		t.Fatal("workflow template name not owned")
-	}
 	for _, name := range []string{
+		"projects/proj/regions/us-central1/workflowTemplates/t1",
 		"projects/proj/regions/us-central1/clusters/c1",
 		"projects/proj/regions/us-central1/jobs/j1",
+	} {
+		if !s.Owns(name) {
+			t.Errorf("Owns(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{
+		"projects/proj/regions/us-central1/autoscalingPolicies/p1",
 		"projects/proj/locations/us-central1/services/s1",
 	} {
 		if s.Owns(name) {
@@ -126,14 +132,63 @@ func TestIAMMissingTemplate(t *testing.T) {
 	}
 }
 
-// TestIAMWrongShape: a non-template name is InvalidArgument without an
-// existence lookup.
+// TestIAMWrongShape: a name outside the three supported collections is
+// InvalidArgument without an existence lookup.
 func TestIAMWrongShape(t *testing.T) {
 	s := newTestService()
 	_, err := s.GetIamPolicy(context.Background(), &iampb.GetIamPolicyRequest{
-		Resource: "projects/proj/regions/us-central1/clusters/c1",
+		Resource: "projects/proj/regions/us-central1/autoscalingPolicies/p1",
 	})
 	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("GetIamPolicy(cluster) = %v, want InvalidArgument", err)
+		t.Fatalf("GetIamPolicy(autoscaling policy) = %v, want InvalidArgument", err)
+	}
+}
+
+// TestIAMClusterAndJob: the mixin serves a cluster and a job through the same
+// google.iam.v1.IAMPolicy service, keyed by the collection the name carries.
+func TestIAMClusterAndJob(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, createClusterReq("c1")); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	for _, resource := range []string{
+		"projects/proj/regions/us-central1/clusters/c1",
+	} {
+		set, err := s.SetIamPolicy(ctx, &iampb.SetIamPolicyRequest{
+			Resource: resource,
+			Policy: &iampb.Policy{
+				Bindings: []*iampb.Binding{{Role: "roles/dataproc.viewer", Members: []string{"user:a@example.com"}}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("SetIamPolicy(%s): %v", resource, err)
+		}
+		if len(set.GetEtag()) == 0 {
+			t.Fatalf("SetIamPolicy(%s) returned no etag", resource)
+		}
+		got, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: resource})
+		if err != nil {
+			t.Fatalf("GetIamPolicy(%s): %v", resource, err)
+		}
+		if len(got.GetBindings()) != 1 || got.GetBindings()[0].GetRole() != "roles/dataproc.viewer" {
+			t.Fatalf("GetIamPolicy(%s) = %+v", resource, got.GetBindings())
+		}
+		perms, err := s.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{
+			Resource: resource, Permissions: []string{"dataproc.clusters.get"},
+		})
+		if err != nil {
+			t.Fatalf("TestIamPermissions(%s): %v", resource, err)
+		}
+		if len(perms.GetPermissions()) != 1 {
+			t.Fatalf("permissions = %v", perms.GetPermissions())
+		}
+	}
+
+	// An absent cluster is NotFound for every verb.
+	absent := "projects/proj/regions/us-central1/clusters/absent"
+	if _, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: absent}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetIamPolicy(absent) = %v, want NotFound", err)
 	}
 }

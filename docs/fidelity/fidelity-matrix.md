@@ -12,13 +12,13 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1225**
+Cells: **1231**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1019 |
+| ga | 1025 |
 | limited | 153 |
 | preview | 14 |
 | unsupported | 39 |
@@ -27,7 +27,7 @@ Cells: **1225**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 569 | 130 | 14 | 11 |
+| rest | 575 | 130 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 678 | 46 |
+| rest | 684 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -57,7 +57,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | compute | grpc | — | — | — | — | — | unavailable |
 | container | rest | 71 | 31 | 30 | 40 | 1 | container.v1 |
 | container | grpc | 37 | 37 | 37 | 0 | 0 | google.container.v1.ClusterManager |
-| dataproc | rest | 136 | 90 | 26 | 46 | 64 | dataproc.v1 |
+| dataproc | rest | 136 | 96 | 32 | 40 | 64 | dataproc.v1 |
 | dataproc | grpc | 36 | 36 | 22 | 0 | 14 | google.cloud.dataproc.v1.BatchController, google.cloud.dataproc.v1.ClusterController, google.cloud.dataproc.v1.JobController, google.cloud.dataproc.v1.SessionController, google.cloud.dataproc.v1.SessionTemplateController, google.cloud.dataproc.v1.WorkflowTemplateService |
 | datastore | rest | 18 | 8 | 8 | 10 | 0 | datastore.v1 |
 | datastore | grpc | 8 | 8 | 8 | 0 | 0 | google.datastore.v1.Datastore |
@@ -142,7 +142,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 - **cloudsql** REST (11): sql.Backups.CreateBackup, sql.Backups.DeleteBackup, sql.Backups.GetBackup, sql.Backups.ListBackups, sql.Backups.UpdateBackup, sql.blueGreenDeployments.create, sql.blueGreenDeployments.delete, sql.blueGreenDeployments.get, sql.blueGreenDeployments.list, sql.connect.resolve, sql.instances.pointInTimeRestore
 - **compute** REST (37): compute.firewallPolicies.addAssociation, compute.firewallPolicies.addRule, compute.firewallPolicies.cloneRules, compute.firewallPolicies.delete, compute.firewallPolicies.get, compute.firewallPolicies.getAssociation, compute.firewallPolicies.getIamPolicy, compute.firewallPolicies.getRule, compute.firewallPolicies.insert, compute.firewallPolicies.list, compute.firewallPolicies.listAssociations, compute.firewallPolicies.move, compute.firewallPolicies.patch, compute.firewallPolicies.patchRule, compute.firewallPolicies.removeAssociation, compute.firewallPolicies.removeRule, compute.firewallPolicies.setIamPolicy, compute.firewallPolicies.testIamPermissions, compute.globalOrganizationOperations.delete, compute.globalOrganizationOperations.get, compute.globalOrganizationOperations.list, compute.organizationSecurityPolicies.addAssociation, compute.organizationSecurityPolicies.addRule, compute.organizationSecurityPolicies.copyRules, compute.organizationSecurityPolicies.delete, compute.organizationSecurityPolicies.get, compute.organizationSecurityPolicies.getAssociation, compute.organizationSecurityPolicies.getRule, compute.organizationSecurityPolicies.insert, compute.organizationSecurityPolicies.list, compute.organizationSecurityPolicies.listAssociations, compute.organizationSecurityPolicies.listPreconfiguredExpressionSets, compute.organizationSecurityPolicies.move, compute.organizationSecurityPolicies.patch, compute.organizationSecurityPolicies.patchRule, compute.organizationSecurityPolicies.removeAssociation, compute.organizationSecurityPolicies.removeRule
 - **container** REST (40): container.projects.aggregated.usableSubnetworks.list, container.projects.locations.clusters.checkAutopilotCompatibility, container.projects.locations.clusters.completeControlPlaneUpgrade, container.projects.locations.clusters.fetchClusterUpgradeInfo, container.projects.locations.clusters.getJwks, container.projects.locations.clusters.nodePools.completeUpgrade, container.projects.locations.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.locations.clusters.well-known.getOpenid-configuration, container.projects.zones.clusters.addons, container.projects.zones.clusters.completeControlPlaneUpgrade, container.projects.zones.clusters.completeIpRotation, container.projects.zones.clusters.create, container.projects.zones.clusters.delete, container.projects.zones.clusters.fetchClusterUpgradeInfo, container.projects.zones.clusters.get, container.projects.zones.clusters.legacyAbac, container.projects.zones.clusters.list, container.projects.zones.clusters.locations, container.projects.zones.clusters.logging, container.projects.zones.clusters.master, container.projects.zones.clusters.monitoring, container.projects.zones.clusters.nodePools.autoscaling, container.projects.zones.clusters.nodePools.create, container.projects.zones.clusters.nodePools.delete, container.projects.zones.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.zones.clusters.nodePools.get, container.projects.zones.clusters.nodePools.list, container.projects.zones.clusters.nodePools.rollback, container.projects.zones.clusters.nodePools.setManagement, container.projects.zones.clusters.nodePools.setSize, container.projects.zones.clusters.nodePools.update, container.projects.zones.clusters.resourceLabels, container.projects.zones.clusters.setMaintenancePolicy, container.projects.zones.clusters.setMasterAuth, container.projects.zones.clusters.setNetworkPolicy, container.projects.zones.clusters.startIpRotation, container.projects.zones.clusters.update, container.projects.zones.operations.cancel, container.projects.zones.operations.get, container.projects.zones.operations.list
-- **dataproc** REST (46): dataproc.projects.locations.autoscalingPolicies.create, dataproc.projects.locations.autoscalingPolicies.delete, dataproc.projects.locations.autoscalingPolicies.get, dataproc.projects.locations.autoscalingPolicies.getIamPolicy, dataproc.projects.locations.autoscalingPolicies.list, dataproc.projects.locations.autoscalingPolicies.setIamPolicy, dataproc.projects.locations.autoscalingPolicies.testIamPermissions, dataproc.projects.locations.autoscalingPolicies.update, dataproc.projects.locations.operations.cancel, dataproc.projects.locations.operations.delete, dataproc.projects.locations.operations.get, dataproc.projects.locations.operations.list, dataproc.projects.locations.workflowTemplates.create, dataproc.projects.locations.workflowTemplates.delete, dataproc.projects.locations.workflowTemplates.get, dataproc.projects.locations.workflowTemplates.getIamPolicy, dataproc.projects.locations.workflowTemplates.instantiate, dataproc.projects.locations.workflowTemplates.instantiateInline, dataproc.projects.locations.workflowTemplates.list, dataproc.projects.locations.workflowTemplates.setIamPolicy, dataproc.projects.locations.workflowTemplates.testIamPermissions, dataproc.projects.locations.workflowTemplates.update, dataproc.projects.regions.autoscalingPolicies.create, dataproc.projects.regions.autoscalingPolicies.delete, dataproc.projects.regions.autoscalingPolicies.get, dataproc.projects.regions.autoscalingPolicies.getIamPolicy, dataproc.projects.regions.autoscalingPolicies.list, dataproc.projects.regions.autoscalingPolicies.setIamPolicy, dataproc.projects.regions.autoscalingPolicies.testIamPermissions, dataproc.projects.regions.autoscalingPolicies.update, dataproc.projects.regions.clusters.getIamPolicy, dataproc.projects.regions.clusters.injectCredentials, dataproc.projects.regions.clusters.nodeGroups.create, dataproc.projects.regions.clusters.nodeGroups.repair, dataproc.projects.regions.clusters.nodeGroups.resize, dataproc.projects.regions.clusters.repair, dataproc.projects.regions.clusters.setIamPolicy, dataproc.projects.regions.clusters.testIamPermissions, dataproc.projects.regions.jobs.getIamPolicy, dataproc.projects.regions.jobs.setIamPolicy, dataproc.projects.regions.jobs.testIamPermissions, dataproc.projects.regions.operations.cancel, dataproc.projects.regions.operations.delete, dataproc.projects.regions.operations.getIamPolicy, dataproc.projects.regions.operations.setIamPolicy, dataproc.projects.regions.operations.testIamPermissions
+- **dataproc** REST (40): dataproc.projects.locations.autoscalingPolicies.create, dataproc.projects.locations.autoscalingPolicies.delete, dataproc.projects.locations.autoscalingPolicies.get, dataproc.projects.locations.autoscalingPolicies.getIamPolicy, dataproc.projects.locations.autoscalingPolicies.list, dataproc.projects.locations.autoscalingPolicies.setIamPolicy, dataproc.projects.locations.autoscalingPolicies.testIamPermissions, dataproc.projects.locations.autoscalingPolicies.update, dataproc.projects.locations.operations.cancel, dataproc.projects.locations.operations.delete, dataproc.projects.locations.operations.get, dataproc.projects.locations.operations.list, dataproc.projects.locations.workflowTemplates.create, dataproc.projects.locations.workflowTemplates.delete, dataproc.projects.locations.workflowTemplates.get, dataproc.projects.locations.workflowTemplates.getIamPolicy, dataproc.projects.locations.workflowTemplates.instantiate, dataproc.projects.locations.workflowTemplates.instantiateInline, dataproc.projects.locations.workflowTemplates.list, dataproc.projects.locations.workflowTemplates.setIamPolicy, dataproc.projects.locations.workflowTemplates.testIamPermissions, dataproc.projects.locations.workflowTemplates.update, dataproc.projects.regions.autoscalingPolicies.create, dataproc.projects.regions.autoscalingPolicies.delete, dataproc.projects.regions.autoscalingPolicies.get, dataproc.projects.regions.autoscalingPolicies.getIamPolicy, dataproc.projects.regions.autoscalingPolicies.list, dataproc.projects.regions.autoscalingPolicies.setIamPolicy, dataproc.projects.regions.autoscalingPolicies.testIamPermissions, dataproc.projects.regions.autoscalingPolicies.update, dataproc.projects.regions.clusters.injectCredentials, dataproc.projects.regions.clusters.nodeGroups.create, dataproc.projects.regions.clusters.nodeGroups.repair, dataproc.projects.regions.clusters.nodeGroups.resize, dataproc.projects.regions.clusters.repair, dataproc.projects.regions.operations.cancel, dataproc.projects.regions.operations.delete, dataproc.projects.regions.operations.getIamPolicy, dataproc.projects.regions.operations.setIamPolicy, dataproc.projects.regions.operations.testIamPermissions
 - **datastore** REST (10): datastore.projects.export, datastore.projects.import, datastore.projects.indexes.create, datastore.projects.indexes.delete, datastore.projects.indexes.get, datastore.projects.indexes.list, datastore.projects.operations.cancel, datastore.projects.operations.delete, datastore.projects.operations.get, datastore.projects.operations.list
 - **eventarc** REST (2): eventarc.projects.locations.get, eventarc.projects.locations.list
 - **firestore** REST (10): firestore.projects.databases.bulkDeleteDocuments, firestore.projects.databases.clone, firestore.projects.databases.documents.listen, firestore.projects.databases.documents.runAggregationQuery, firestore.projects.databases.documents.write, firestore.projects.databases.exportDocuments, firestore.projects.databases.importDocuments, firestore.projects.databases.restore, firestore.projects.locations.get, firestore.projects.locations.list
@@ -408,11 +408,11 @@ _67 cell(s): ga=60 limited=0 preview=0 unsupported=7_
 
 ## dataproc
 
-_Coverage: REST **90 of 136** published methods served · 46 not served · 26 graded · 64 served-but-ungraded (`dataproc.v1` Discovery)_
+_Coverage: REST **96 of 136** published methods served · 40 not served · 32 graded · 64 served-but-ungraded (`dataproc.v1` Discovery)_
 
 _Coverage: GRPC **36 of 36** published methods served · 22 graded · 14 served-but-ungraded (`google.cloud.dataproc.v1.BatchController, google.cloud.dataproc.v1.ClusterController, google.cloud.dataproc.v1.JobController, google.cloud.dataproc.v1.SessionController, google.cloud.dataproc.v1.SessionTemplateController, google.cloud.dataproc.v1.WorkflowTemplateService` proto)_
 
-_49 cell(s): ga=46 limited=0 preview=0 unsupported=3_
+_55 cell(s): ga=52 limited=0 preview=0 unsupported=3_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -420,6 +420,9 @@ _49 cell(s): ga=46 limited=0 preview=0 unsupported=3_
 | CreateCluster | grpc | ga | yes | — |
 | CreateWorkflowTemplate | grpc | ga | yes | — |
 | Dataproc.CancelJob | rest | ga | yes | — |
+| Dataproc.ClusterGetIamPolicy | rest | ga | yes | — |
+| Dataproc.ClusterSetIamPolicy | rest | ga | yes | — |
+| Dataproc.ClusterTestIamPermissions | rest | ga | yes | — |
 | Dataproc.CreateCluster | rest | ga | yes | — |
 | Dataproc.CreateWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.DeleteCluster | rest | ga | yes | — |
@@ -432,6 +435,9 @@ _49 cell(s): ga=46 limited=0 preview=0 unsupported=3_
 | Dataproc.GetWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.InstantiateInlineWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.InstantiateWorkflowTemplate | rest | ga | yes | — |
+| Dataproc.JobGetIamPolicy | rest | ga | yes | — |
+| Dataproc.JobSetIamPolicy | rest | ga | yes | — |
+| Dataproc.JobTestIamPermissions | rest | ga | yes | — |
 | Dataproc.ListClusters | rest | ga | yes | — |
 | Dataproc.ListJobs | rest | ga | yes | — |
 | Dataproc.ListWorkflowTemplates | rest | ga | yes | — |

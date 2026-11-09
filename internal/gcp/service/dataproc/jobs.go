@@ -292,6 +292,7 @@ func (s *Service) DeleteJob(ctx context.Context, project, region, jobID string) 
 	if err := s.store.DeleteJob(ctx, project, region, jobID); err != nil {
 		return mapErr(err)
 	}
+	s.purgeIAMPolicy(ctx, IAMResource{Project: project, Region: region, Kind: IAMJob, ID: jobID})
 	return nil
 }
 

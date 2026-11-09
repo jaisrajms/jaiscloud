@@ -110,11 +110,11 @@ func TestCoverageDataproc(t *testing.T) {
 	if rest.Published != 136 {
 		t.Errorf("dataproc REST published = %d, want 136", rest.Published)
 	}
-	if rest.Served != 90 {
-		t.Errorf("dataproc REST served = %d, want 90", rest.Served)
+	if rest.Served != 96 {
+		t.Errorf("dataproc REST served = %d, want 96", rest.Served)
 	}
-	if len(rest.Unserved) != 46 {
-		t.Errorf("dataproc REST unserved = %d, want 46", len(rest.Unserved))
+	if len(rest.Unserved) != 40 {
+		t.Errorf("dataproc REST unserved = %d, want 40", len(rest.Unserved))
 	}
 	if rest.Unimplemented != 62 {
 		t.Errorf("dataproc REST served-by-UNIMPLEMENTED = %d, want 62 (the Serverless surface)", rest.Unimplemented)
@@ -123,9 +123,24 @@ func TestCoverageDataproc(t *testing.T) {
 		"dataproc.projects.regions.clusters.repair",
 		"dataproc.projects.regions.clusters.nodeGroups.create",
 		"dataproc.projects.locations.autoscalingPolicies.list",
+		"dataproc.projects.regions.operations.getIamPolicy",
 	} {
 		if !containsString(rest.Unserved, want) {
 			t.Errorf("%s: missing from the not-served list", want)
+		}
+	}
+	// The clusters and jobs IAM mixin (TF1-2) is registered on the regional
+	// collections the provider uses, so those six methods must be served.
+	for _, want := range []string{
+		"dataproc.projects.regions.clusters.getIamPolicy",
+		"dataproc.projects.regions.clusters.setIamPolicy",
+		"dataproc.projects.regions.clusters.testIamPermissions",
+		"dataproc.projects.regions.jobs.getIamPolicy",
+		"dataproc.projects.regions.jobs.setIamPolicy",
+		"dataproc.projects.regions.jobs.testIamPermissions",
+	} {
+		if containsString(rest.Unserved, want) {
+			t.Errorf("%s: served IAM method listed as not served", want)
 		}
 	}
 	for _, notWant := range []string{

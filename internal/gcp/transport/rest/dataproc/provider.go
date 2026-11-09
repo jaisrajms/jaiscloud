@@ -54,9 +54,18 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Dataproc.InstantiateWorkflowTemplate":       p.InstantiateWorkflowTemplate,
 		"Dataproc.InstantiateInlineWorkflowTemplate": p.InstantiateInlineWorkflowTemplate,
 
-		"Dataproc.WorkflowTemplateGetIamPolicy":       p.WorkflowTemplateGetIamPolicy,
-		"Dataproc.WorkflowTemplateSetIamPolicy":       p.WorkflowTemplateSetIamPolicy,
-		"Dataproc.WorkflowTemplateTestIamPermissions": p.WorkflowTemplateTestIamPermissions,
+		// The IAM mixin is published on clusters, jobs and workflow templates;
+		// the three verbs share one handler because the core parses the
+		// collection out of the canonical resource name.
+		"Dataproc.ClusterGetIamPolicy":                p.GetIamPolicy,
+		"Dataproc.ClusterSetIamPolicy":                p.SetIamPolicy,
+		"Dataproc.ClusterTestIamPermissions":          p.TestIamPermissions,
+		"Dataproc.JobGetIamPolicy":                    p.GetIamPolicy,
+		"Dataproc.JobSetIamPolicy":                    p.SetIamPolicy,
+		"Dataproc.JobTestIamPermissions":              p.TestIamPermissions,
+		"Dataproc.WorkflowTemplateGetIamPolicy":       p.GetIamPolicy,
+		"Dataproc.WorkflowTemplateSetIamPolicy":       p.SetIamPolicy,
+		"Dataproc.WorkflowTemplateTestIamPermissions": p.TestIamPermissions,
 	}
 }
 
@@ -361,13 +370,14 @@ func (p *Provider) InstantiateInlineWorkflowTemplate(ctx context.Context, nr *mo
 	return provider.OK(core.OperationJSON(op)), nil
 }
 
-// --- Workflow template IAM ---
+// --- Resource IAM (clusters, jobs, workflow templates) ---
 
-// The three IAM verbs are keyed by the full google.iam.v1.IAMPolicy resource
-// name (projects/{p}/regions/{r}/workflowTemplates/{id}), which the codec builds
-// after stripping the custom suffix; the core resolves the project/region/id
-// from it and checks the template exists before touching the policy plane.
-func (p *Provider) WorkflowTemplateGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+// Dataproc publishes the google.iam.v1.IAMPolicy mixin on each regional
+// collection: clusters, jobs and workflow templates. The three actions share
+// one handler per verb because the codec hands over the full canonical resource
+// name (projects/{p}/regions/{r}/{collection}/{id}) and the core resolves the
+// collection, checks the resource exists, and then touches the policy plane.
+func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	pol, err := p.core.GetIamPolicy(ctx, strParam(nr, "iamName"))
 	if err != nil {
 		return nil, err
@@ -375,7 +385,7 @@ func (p *Provider) WorkflowTemplateGetIamPolicy(ctx context.Context, nr *model.N
 	return provider.OK(policy.ToMap(pol)), nil
 }
 
-func (p *Provider) WorkflowTemplateSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	pol, err := p.core.SetIamPolicy(ctx, strParam(nr, "iamName"), bodyOf(nr))
 	if err != nil {
 		return nil, err
@@ -383,7 +393,7 @@ func (p *Provider) WorkflowTemplateSetIamPolicy(ctx context.Context, nr *model.N
 	return provider.OK(policy.ToMap(pol)), nil
 }
 
-func (p *Provider) WorkflowTemplateTestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	perms, err := p.core.TestIamPermissions(ctx, strParam(nr, "iamName"), policy.Permissions(bodyOf(nr)))
 	if err != nil {
 		return nil, err

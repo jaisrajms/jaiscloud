@@ -12,19 +12,23 @@ import (
 	core "jaiscloud/internal/gcp/service/dataproc"
 )
 
-// This file implements the google.iam.v1.IAMPolicy mixin for Dataproc workflow
-// templates. The pinned dataproc proto defines no IAM RPCs, so real GCP serves
-// the mixin through the standalone google.iam.v1.IAMPolicy interface; the
-// emulator registers this Service with the shared IAMPolicy router
+// This file implements the google.iam.v1.IAMPolicy mixin for Dataproc. The
+// pinned dataproc proto defines no IAM RPCs, so real GCP serves the mixin
+// through the standalone google.iam.v1.IAMPolicy interface; the emulator
+// registers this Service with the shared IAMPolicy router
 // (internal/gcp/grpc/iam.go) alongside Pub/Sub, KMS, Eventarc and Metastore.
+//
+// The mixin is published on the regional clusters, jobs and workflowTemplates
+// collections, so Owns() claims all three.
 //
 // Unlike the older per-service converters, the policy is transcoded with
 // protojson in both directions so an iampb.Binding.condition survives a
 // set/get round-trip (the hand-written converters drop it).
 
-// Owns reports whether this service handles IAM for the resource name. Only
-// dataproc workflow-template names are claimed; clusters and jobs have no IAM
-// surface in the emulator.
+// Owns reports whether this service handles IAM for the resource name. The
+// regional clusters, jobs and workflow-template names are claimed; the
+// autoscaling-policy and operations collections, and locations-scoped names,
+// are not.
 func (s *Service) Owns(resource string) bool {
 	_, ok := core.ParseIAMResource(resource)
 	return ok

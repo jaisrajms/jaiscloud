@@ -372,6 +372,21 @@ resource "google_dataproc_cluster" "gce" {
   }
 }
 
+# Resource-level IAM on a Dataproc cluster. The Discovery document publishes
+# getIamPolicy/setIamPolicy/testIamPermissions on projects/{p}/regions/{r}/
+# clusters/{id}, and google_dataproc_cluster_iam_member drives them (with the
+# computed etag read back into state, so a re-plan only converges if the get
+# returns the stored policy verbatim). The member is the fixture's own service
+# account; `member` is what the provider sends after the non-authoritative
+# read-modify-write.
+resource "google_dataproc_cluster_iam_member" "compat" {
+  project = var.project
+  region  = var.region
+  cluster = google_dataproc_cluster.gce.name
+  role    = "roles/dataproc.viewer"
+  member  = "serviceAccount:${google_service_account.compat.email}"
+}
+
 # ── Cloud Billing: the aggregate data "google_project" read ──────────────────
 # The data source always reads projects.getBillingInfo (to populate
 # `billing_account`) alongside the Resource Manager project lookup. Before CB1

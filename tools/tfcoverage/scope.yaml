@@ -265,12 +265,10 @@ rules:
     state: served
   - match: google_dataproc_cluster_iam_*
     service: dataproc
-    state: unsupported
-    reason: Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.
+    state: served
   - match: google_dataproc_job_iam_*
     service: dataproc
-    state: unsupported
-    reason: Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.
+    state: served
   - match: google_dataproc_autoscaling_policy*
     service: dataproc
     state: unsupported

@@ -404,6 +404,14 @@ check "Compute-Engine cluster reads back the default instance groups" \
   "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
   '"numInstances":1' '"numInstances":2'
 
+# Resource-level IAM on the cluster (TF1-2): google_dataproc_cluster_iam_member
+# drives clusters.getIamPolicy/setIamPolicy, so the stored policy must carry the
+# granted role and member. The provider reads the etag back into state, so this
+# check also proves the get returns the stored policy verbatim.
+check_post "Dataproc cluster IAM policy carries the granted binding" \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP:getIamPolicy" \
+  '"role":"roles/dataproc.viewer"' "\"members\":[\"serviceAccount:$SA_EMAIL\"]" '"etag"'
+
 # ── Cloud Run: the v2 service the module gate also drives ────────────────────
 # The raw resource exists for container readiness_probe (the v2 submodule has
 # only startup/liveness probes). labels/env/ingress are plain served fields;
@@ -579,6 +587,20 @@ if [[ "$BQ_IAM_STATUS" == "404" ]]; then
   PASS=$((PASS + 1))
 else
   printf '  [FAIL] BigQuery table getIamPolicy after destroy = HTTP %s, want 404\n' "$BQ_IAM_STATUS"
+  FAIL=$((FAIL + 1))
+fi
+
+# The Dataproc cluster IAM policy row is dropped with the cluster: a get after
+# destroy is NotFound (404), not a resurrected policy for a deleted cluster.
+DP_IAM_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP:getIamPolicy" 2>/dev/null || true)"
+if [[ "$DP_IAM_STATUS" == "404" ]]; then
+  printf '  [PASS] Dataproc cluster IAM policy dropped on destroy\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] Dataproc cluster getIamPolicy after destroy = HTTP %s, want 404\n' "$DP_IAM_STATUS"
   FAIL=$((FAIL + 1))
 fi
 
