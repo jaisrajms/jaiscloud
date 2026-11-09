@@ -22,14 +22,15 @@
 #  * The module's `main.tf` unconditionally reads
 #    `data.google_compute_default_service_account` and grants that account
 #    `roles/dataproc.worker` through `google_project_iam_member`. Both are
-#    excluded with `-target`: the data source calls Compute
-#    `projects.get` (`GET /compute/v1/projects/{project}`), which the emulator
-#    does not serve yet — a 501 recorded as TF2-1
-#    (`fix/gcp-compute-projects-get`). Everything the case targets is the
-#    module's cluster, the root module's job and its job IAM member; the
-#    module's IAM prerequisite is not part of the measured surface. This is the
-#    same "prune the input that reaches an unserved surface and record it" rule
-#    the other cases follow.
+#    excluded with `-target`: the data source's Compute half
+#    (`projects.get`, `GET /compute/v1/projects/{project}`) is served (TF2-1),
+#    but its follow-up IAM read of the returned default account
+#    (`projects/-/serviceAccounts/{number}-compute@developer.gserviceaccount.com`)
+#    is not — TF2-1-1 (`fix/gcp-iam-default-service-accounts`). Everything the
+#    case targets is the module's cluster, the root module's job and its job IAM
+#    member; the module's IAM prerequisite is not part of the measured surface.
+#    This is the same "prune the input that reaches an unserved surface and
+#    record it" rule the other cases follow.
 #  * `virtual_cluster_config` is not driven here: the fixture already covers the
 #    GKE-shaped cluster and its NodePool reconciliation, and this case is the
 #    GCE-shaped consumer path. The module's GKE inputs are left null.
@@ -61,8 +62,9 @@ CLUSTER="jc-tf-dataproc"
 JOB_LABEL="terraform-case"
 STAGING="gs://jc-tf-dataproc-staging"
 
-# The module reads default service account through Compute projects.get, which
-# is not served yet (TF2-1), and grants it a project role. Target the two
+# The module reads the default service account through Compute projects.get
+# (served, TF2-1) and then IAM, which does not render the Google-managed
+# default account yet (TF2-1-1), and grants it a project role. Target the two
 # resources the case measures, for plan, apply and destroy alike.
 TARGETS="-target=module.dataproc.google_dataproc_cluster.cluster -target=google_dataproc_job.job -target=google_dataproc_job_iam_member.job"
 export TF_CLI_ARGS_plan="$TARGETS"

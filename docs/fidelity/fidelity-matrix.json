@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1251,
+    "total": 1252,
     "by_state": {
       "ga": 1042,
-      "limited": 156,
+      "limited": 157,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 592,
-        "limited": 133,
+        "limited": 134,
         "preview": 14,
         "unsupported": 11
       }
@@ -36,7 +36,7 @@
         "unsupported": 1
       },
       "compute": {
-        "limited": 32,
+        "limited": 33,
         "unsupported": 1
       },
       "container": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 704
+        "rest": 705
       },
       "unverified": {
         "grpc": 46,
@@ -234,7 +234,7 @@
       "source_ref": "compute.v1",
       "published": 1011,
       "served": 974,
-      "graded": 32,
+      "graded": 33,
       "unserved": [
         "compute.firewallPolicies.addAssociation",
         "compute.firewallPolicies.addRule",
@@ -274,9 +274,9 @@
         "compute.organizationSecurityPolicies.removeAssociation",
         "compute.organizationSecurityPolicies.removeRule"
       ],
-      "ungraded": 942,
-      "unimplemented": 934,
-      "note": "942 served method(s) have no graded cell; 934 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
+      "ungraded": 941,
+      "unimplemented": 933,
+      "note": "941 served method(s) have no graded cell; 933 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
     },
     {
       "service": "compute",
@@ -3065,6 +3065,20 @@
       "verified": true,
       "evidence": [
         "discovery=compute.globalOperations.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "compute",
+      "operation": "Compute.ProjectsGet",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "compute.projects.get",
+      "verified": true,
+      "evidence": [
+        "discovery=compute.projects.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]

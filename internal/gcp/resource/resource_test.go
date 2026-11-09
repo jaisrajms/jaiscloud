@@ -30,6 +30,10 @@ func TestResourceIDFormatters(t *testing.T) {
 		{"compute-network", "default", "projects/proj/global/networks/default"},
 		{"compute-firewall", "allow-ssh", "projects/proj/global/firewalls/allow-ssh"},
 		{"compute-subnetwork", "us-central1/sub", "projects/proj/regions/us-central1/subnetworks/sub"},
+		{"compute-project", "proj", "projects/proj"},
+		// The project formatter names the project it is given, not the scope
+		// the resolver is bound to.
+		{"compute-project", "other", "projects/other"},
 		{"compute-zone", "us-central1-a", "projects/proj/zones/us-central1-a"},
 		{"compute-region", "us-central1", "projects/proj/regions/us-central1"}, {"compute-zone-operation", "us-central1-a/op1", "projects/proj/zones/us-central1-a/operations/op1"},
 		{"compute-region-operation", "us-central1/op1", "projects/proj/regions/us-central1/operations/op1"},

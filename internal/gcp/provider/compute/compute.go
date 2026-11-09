@@ -43,6 +43,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/reference"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -82,7 +83,14 @@ const (
 	kindRegionList             = "compute#regionList"
 	kindOperation              = "compute#operation"
 	kindOperationList          = "compute#operationList"
+	kindProject                = "compute#project"
 )
+
+// catalogCreationTimestamp is the synthesized creation time the emulator stamps
+// on the discovery-catalog objects it derives rather than stores (zones,
+// regions, machine types, and the project itself): they have no creation event,
+// so the wire carries one stable origin.
+const catalogCreationTimestamp = "2014-01-01T00:00:00.000-07:00"
 
 // computeBasePath is the public Compute Engine REST root. selfLink/targetLink
 // are absolute URLs rooted here.
@@ -118,6 +126,10 @@ var machineTypeRE = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z][a-z0-9]*-[a-z0-9]+
 // for N1, bare custom-<vCPUs>-<memMB>, optionally with an -ext extended-memory
 // suffix.
 var customMachineTypeRE = regexp.MustCompile(`^(?:[a-z0-9]+-)?custom-[0-9]+-[0-9]+(?:-ext)?$`)
+
+// numericProjectRE matches the numeric half of Discovery's project pattern
+// ([0-9]{1,19}), i.e. a project addressed by number rather than by id.
+var numericProjectRE = regexp.MustCompile(`^[0-9]{1,19}$`)
 
 // zeroRequestID is the all-zero UUID the Compute Engine API documents as
 // unsupported for the requestId parameter.
@@ -155,6 +167,8 @@ func New(resources store.ResourceStore) *Provider {
 // Routes maps "Compute.<Action>" keys to their handlers.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
+		"Compute.ProjectsGet": p.ProjectsGet,
+
 		"Compute.InstancesInsert":         p.InstancesInsert,
 		"Compute.InstancesGet":            p.InstancesGet,
 		"Compute.InstancesList":           p.InstancesList,
@@ -197,6 +211,77 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Compute.OperationsList": p.OperationsList,
 
 		"Compute.Unimplemented": p.Unimplemented,
+	}
+}
+
+// ─── Project operations ───────────────────────────────────────────────────────
+
+// ProjectsGet renders the synthesized compute#project (compute.projects.get,
+// GET /compute/v1/projects/{project}). Compute is a metadata-only surface with
+// no project registry: like Resource Manager's projects.get the emulator answers
+// an ACTIVE project for any id it is asked about, and the domain-wide identity
+// is the synthesized resource.ProjectNumber every other surface shares. Two
+// fields are load-bearing for real consumers:
+//
+//   - defaultServiceAccount is the project's Compute Engine default service
+//     account. The hashicorp/google `google_compute_default_service_account`
+//     data source reads exactly this field, and the Dataproc module and the
+//     scheduler examples resolve their IAM grant from it (TF2-1).
+//   - commonInstanceMetadata carries the project-wide metadata envelope. There
+//     is no stored project metadata yet (projects.setCommonInstanceMetadata is
+//     TF1-5), so it reports the empty default with a stable fingerprint.
+func (p *Provider) ProjectsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// The response describes the project named in the request path. Path and
+	// account agree for a wire request (the gateway derives AccountID from the
+	// same segment), but the resource *is* the path project, so it wins.
+	project := strParam(nr, "project")
+	if project == "" {
+		return nil, model.NewProviderError("InvalidArgument", "project is required", 400)
+	}
+	return provider.OK(projectObject(nr, project)), nil
+}
+
+// projectNumber returns the number a project is addressed by: the synthesized
+// resource.ProjectNumber for a project id, and the reference itself when the
+// caller addressed the project by number (Discovery's project parameter accepts
+// both). The synthesized number is not invertible, so a number is taken at face
+// value — which is what real Compute reports back as the Project's id.
+func projectNumber(project string) string {
+	if numericProjectRE.MatchString(project) {
+		return project
+	}
+	return resource.ProjectNumber(project)
+}
+
+// projectObject builds the compute#project payload.
+func projectObject(nr *model.NormalizedRequest, name string) map[string]any {
+	number := projectNumber(name)
+	return map[string]any{
+		"kind":              kindProject,
+		"id":                number,
+		"name":              name,
+		"selfLink":          absLink(nr, "compute-project", name),
+		"creationTimestamp": catalogCreationTimestamp,
+		"commonInstanceMetadata": map[string]any{
+			"kind":        "compute#metadata",
+			"fingerprint": contentEtag("project/" + name + "/commonInstanceMetadata"),
+			"items":       []any{},
+		},
+		"defaultServiceAccount": defaultServiceAccountForNumber(number),
+		// Real Compute reports PREMIUM as the default network tier and
+		// ZONAL_ONLY as the default internal-DNS setting for a project created
+		// with the current defaults (the project schema marks both output-only).
+		"defaultNetworkTier": "PREMIUM",
+		"vmDnsSetting":       "ZONAL_ONLY",
+		// A project that is not the host of a shared VPC reports the
+		// unspecified member of the output-only xpnProjectStatus enum.
+		"xpnProjectStatus": "UNSPECIFIED_XPN_PROJECT_STATUS",
+		"quotas": []any{
+			map[string]any{"metric": "CPUS", "limit": float64(24), "usage": float64(0)},
+			map[string]any{"metric": "DISKS_TOTAL_GB", "limit": float64(4096), "usage": float64(0)},
+			map[string]any{"metric": "STATIC_ADDRESSES", "limit": float64(8), "usage": float64(0)},
+			map[string]any{"metric": "IN_USE_ADDRESSES", "limit": float64(8), "usage": float64(0)},
+		},
 	}
 }
 
@@ -1578,7 +1663,7 @@ func zoneObject(nr *model.NormalizedRequest, name string) map[string]any {
 		"status":            "UP",
 		"region":            absLink(nr, "compute-region", regionFromZone(name)),
 		"selfLink":          absLink(nr, "compute-zone", name),
-		"creationTimestamp": "2014-01-01T00:00:00.000-07:00",
+		"creationTimestamp": catalogCreationTimestamp,
 		"availableCpuPlatforms": []string{
 			"Intel Skylake", "Intel Broadwell", "Intel Haswell", "AMD Rome",
 		},
@@ -1596,7 +1681,7 @@ func regionObject(nr *model.NormalizedRequest, name string) map[string]any {
 		"name":              name,
 		"status":            "UP",
 		"selfLink":          absLink(nr, "compute-region", name),
-		"creationTimestamp": "2014-01-01T00:00:00.000-07:00",
+		"creationTimestamp": catalogCreationTimestamp,
 		"zones":             zones,
 		"quotas": []any{
 			map[string]any{"metric": "CPUS", "limit": float64(24), "usage": float64(0)},
@@ -1624,7 +1709,7 @@ func machineTypeObject(nr *model.NormalizedRequest, zone string, spec machineTyp
 		"name":                         spec.Name,
 		"zone":                         absLink(nr, "compute-zone", zone),
 		"selfLink":                     absLink(nr, "compute-machine-type", zone+"/"+spec.Name),
-		"creationTimestamp":            "2014-01-01T00:00:00.000-07:00",
+		"creationTimestamp":            catalogCreationTimestamp,
 		"description":                  spec.Name + " machine type",
 		"guestCpus":                    spec.CPUs,
 		"memoryMb":                     spec.MemMB,
@@ -1707,9 +1792,18 @@ func numericID(s string) string {
 	return strconv.FormatUint(n, 10)
 }
 
-// serviceAccountEmail synthesizes the project's Compute Engine service account.
+// serviceAccountEmail is the project's Compute Engine default service account,
+// the identity compute.projects.get reports as defaultServiceAccount. Compute
+// operations are not attributed to a caller, so the operation envelope's `user`
+// carries that same account (real GCP stamps the requesting principal there).
 func serviceAccountEmail(project string) string {
-	return numericID(project) + "-compute@developer.gserviceaccount.com"
+	return defaultServiceAccountForNumber(projectNumber(project))
+}
+
+// defaultServiceAccountForNumber renders the Compute Engine default service
+// account of a project number: {number}-compute@developer.gserviceaccount.com.
+func defaultServiceAccountForNumber(number string) string {
+	return number + "-compute@developer.gserviceaccount.com"
 }
 
 // synthIP derives a stable cosmetic IPv4 address from a seed. Nothing listens
