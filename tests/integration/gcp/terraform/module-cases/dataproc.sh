@@ -14,7 +14,8 @@
 #
 # The generated root module adds a `google_dataproc_job` (pyspark) in the
 # module's cluster, so the served job path (jobs.submit / .get / .list /
-# .delete) is gated by the same case.
+# .delete) is gated by the same case, plus a `google_dataproc_job_iam_member`
+# that drives the jobs IAM mixin (TF1-2; the fixture covers the cluster one).
 #
 # Pruned surface, recorded rather than worked around:
 #
@@ -25,9 +26,10 @@
 #    `projects.get` (`GET /compute/v1/projects/{project}`), which the emulator
 #    does not serve yet — a 501 recorded as TF2-1
 #    (`fix/gcp-compute-projects-get`). Everything the case targets is the
-#    module's cluster plus the root module's job; the module's IAM prerequisite
-#    is not part of the measured surface. This is the same "prune the input that
-#    reaches an unserved surface and record it" rule the other cases follow.
+#    module's cluster, the root module's job and its job IAM member; the
+#    module's IAM prerequisite is not part of the measured surface. This is the
+#    same "prune the input that reaches an unserved surface and record it" rule
+#    the other cases follow.
 #  * `virtual_cluster_config` is not driven here: the fixture already covers the
 #    GKE-shaped cluster and its NodePool reconciliation, and this case is the
 #    GCE-shaped consumer path. The module's GKE inputs are left null.
@@ -62,7 +64,7 @@ STAGING="gs://jc-tf-dataproc-staging"
 # The module reads default service account through Compute projects.get, which
 # is not served yet (TF2-1), and grants it a project role. Target the two
 # resources the case measures, for plan, apply and destroy alike.
-TARGETS="-target=module.dataproc.google_dataproc_cluster.cluster -target=google_dataproc_job.job"
+TARGETS="-target=module.dataproc.google_dataproc_cluster.cluster -target=google_dataproc_job.job -target=google_dataproc_job_iam_member.job"
 export TF_CLI_ARGS_plan="$TARGETS"
 export TF_CLI_ARGS_apply="$TARGETS"
 export TF_CLI_ARGS_destroy="$TARGETS"
@@ -146,6 +148,19 @@ resource "google_dataproc_job" "job" {
   }
 }
 
+# Job resource-level IAM (TF1-2): google_dataproc_job_iam_member drives
+# jobs.getIamPolicy/setIamPolicy on projects/{p}/regions/{r}/jobs/{job_id}. The
+# job id is server-generated, so it is taken from the resource's computed
+# reference. A non-authoritative member keeps the policy read-modify-write
+# non-empty, and the read-back etag must converge (plan No changes below).
+resource "google_dataproc_job_iam_member" "job" {
+  project = var.project
+  region  = "us-central1"
+  job_id  = google_dataproc_job.job.reference[0].job_id
+  role    = "roles/dataproc.viewer"
+  member  = "user:tf-dataproc-iam@example.com"
+}
+
 output "job_id" {
   value = google_dataproc_job.job.id
 }
@@ -162,6 +177,30 @@ job_url() {
 
 body_of() {
   curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$1" 2>/dev/null || true
+}
+
+post_body() {
+  curl -sf -X POST -H "Content-Type: application/json" -d '{}' \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$1" 2>/dev/null || true
+}
+
+# check_post_body is check_body for the IAM custom methods.
+check_post_body() {
+  local name="$1" url="$2"
+  shift 2
+  local body want
+  body="$(post_body "$url")"
+  if [[ -z "$body" ]]; then
+    fail "$name (no response from $url)"
+    return 0
+  fi
+  for want in "$@"; do
+    if [[ "$body" != *"$want"* ]]; then
+      fail "$name (missing: $want)"
+      return 0
+    fi
+  done
+  pass "$name"
 }
 
 status_of() {
@@ -222,6 +261,9 @@ case_main() {
       '"revision":"v1"' \
       "$STAGING/wordcount.py" \
       '"state":"DONE"'
+    check_post_body "job IAM policy carries the granted member" \
+      "$(job_url "$id"):getIamPolicy" \
+      '"bindings"' '"role":"roles/dataproc.viewer"' '"user:tf-dataproc-iam@example.com"'
   fi
 
   echo "== $TF: second plan (permadiff check)"

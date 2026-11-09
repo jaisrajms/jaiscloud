@@ -96,6 +96,53 @@ func TestCodecWorkflowTemplateIAM(t *testing.T) {
 	}
 }
 
+// TestCodecClusterAndJobIAM covers the IAM mixin on the other two regional
+// collections the provider's google_dataproc_{cluster,job}_iam_* resources use.
+// They are POST custom verbs too; the canonical iamName keeps the collection so
+// the core can tell a cluster policy from a job policy.
+func TestCodecClusterAndJobIAM(t *testing.T) {
+	c := NewCodec()
+	cases := []struct {
+		path, action, iamName string
+	}{
+		{"/v1/projects/proj/regions/us-central1/clusters/c1:getIamPolicy",
+			"ClusterGetIamPolicy", "projects/proj/regions/us-central1/clusters/c1"},
+		{"/v1/projects/proj/regions/us-central1/clusters/c1:setIamPolicy",
+			"ClusterSetIamPolicy", "projects/proj/regions/us-central1/clusters/c1"},
+		{"/v1/projects/proj/regions/us-central1/clusters/c1:testIamPermissions",
+			"ClusterTestIamPermissions", "projects/proj/regions/us-central1/clusters/c1"},
+		{"/v1/projects/proj/regions/us-central1/jobs/9e0d4c31:getIamPolicy",
+			"JobGetIamPolicy", "projects/proj/regions/us-central1/jobs/9e0d4c31"},
+		{"/v1/projects/proj/regions/us-central1/jobs/9e0d4c31:setIamPolicy",
+			"JobSetIamPolicy", "projects/proj/regions/us-central1/jobs/9e0d4c31"},
+		{"/v1/projects/proj/regions/us-central1/jobs/9e0d4c31:testIamPermissions",
+			"JobTestIamPermissions", "projects/proj/regions/us-central1/jobs/9e0d4c31"},
+	}
+	for _, tc := range cases {
+		nr, err := c.Decode(httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader("{}")), []byte("{}"))
+		if err != nil {
+			t.Fatalf("POST %s: %v", tc.path, err)
+		}
+		if nr.Action != tc.action {
+			t.Fatalf("POST %s: action = %q, want %q", tc.path, nr.Action, tc.action)
+		}
+		if got, _ := nr.Params["iamName"].(string); got != tc.iamName {
+			t.Fatalf("POST %s: iamName = %q, want %q", tc.path, got, tc.iamName)
+		}
+	}
+
+	// An unknown custom verb on a cluster or job must stay a 404, not fall
+	// through to the DELETE/PATCH handler for the same path.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodDelete, "/v1/projects/proj/regions/us-central1/clusters/c1:frobnicate"},
+		{http.MethodPatch, "/v1/projects/proj/regions/us-central1/jobs/j1:frobnicate"},
+	} {
+		if _, err := c.Decode(httptest.NewRequest(tc.method, tc.path, nil), nil); err == nil {
+			t.Fatalf("%s %s: unknown custom verb decoded successfully", tc.method, tc.path)
+		}
+	}
+}
+
 // The serverless paths must decode to a Dataproc action (so the provider can
 // answer 501) rather than falling through as an unknown resource.
 func TestDecodeServerlessPaths(t *testing.T) {

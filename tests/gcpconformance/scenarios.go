@@ -1460,6 +1460,25 @@ func Scenarios(suffix string) []Scenario {
 				`{"job":{"reference":{"jobId":%q},"placement":{"clusterName":%q},"pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract.py"}}}`,
 				dpJob, dpCluster, suffix)},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/jobs/" + dpJob},
+		// The jobs IAM mixin: the same stored policy plane as clusters and
+		// workflow templates, keyed by the job's regional resource name. The
+		// stale-etag write proves OCC, and the absent-job read proves the
+		// existence check runs before the policy plane.
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/jobs/" + dpJob + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/jobs/" + dpJob + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/dataproc.viewer","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/jobs/" + dpJob + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/jobs/" + dpJob + ":testIamPermissions",
+			Body: `{"permissions":["dataproc.jobs.get","dataproc.jobs.delete"]}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/jobs/" + dpJob + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:stale@example.com"]}],"etag":"stale"}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/jobs/" + dpJob + "-absent:getIamPolicy", Body: `{}`},
 		Scenario{Service: "dataproc", Method: "PATCH",
 			Path: dpBase + "/jobs/" + dpJob + "?updateMask=labels",
 			Body: `{"labels":{"conformance":"true"}}`},
@@ -1505,6 +1524,23 @@ func Scenarios(suffix string) []Scenario {
 			Body: fmt.Sprintf(
 				`{"projectId":%q,"clusterName":%q,"virtualClusterConfig":{"stagingBucket":"conf-phs-%s","kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/%s/locations/us-central1/clusters/gke-1"}},"auxiliaryServicesConfig":{"sparkHistoryServerConfig":{"dataprocCluster":"projects/%s/regions/us-central1/clusters/missing-%s"}}}}`,
 				p, dpPHS, suffix, p, p, suffix)},
+		// The clusters IAM mixin mirrors the job one; the cluster still exists
+		// here (the delete is the last step of the chain).
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/clusters/" + dpCluster + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/clusters/" + dpCluster + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/dataproc.worker","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/clusters/" + dpCluster + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/clusters/" + dpCluster + ":testIamPermissions",
+			Body: `{"permissions":["dataproc.clusters.get","dataproc.clusters.delete"]}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/clusters/" + dpCluster + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:stale@example.com"]}],"etag":"stale"}}`},
+		Scenario{Service: "dataproc", Method: "POST",
+			Path: dpBase + "/clusters/" + dpCluster + "-absent:getIamPolicy", Body: `{}`},
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpCluster},
 	)
 

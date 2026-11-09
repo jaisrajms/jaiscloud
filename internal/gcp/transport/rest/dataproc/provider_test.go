@@ -51,10 +51,10 @@ func gceBody(clusterName string, labels map[string]any) map[string]any {
 }
 
 // decodeIAM builds the NormalizedRequest the adapter would hand the provider for
-// a workflowTemplates IAM POST.
-func decodeIAM(t *testing.T, verb, resourceID, body string) *model.NormalizedRequest {
+// a Dataproc IAM POST. collection is one of clusters/jobs/workflowTemplates.
+func decodeIAM(t *testing.T, collection, verb, resourceID, body string) *model.NormalizedRequest {
 	t.Helper()
-	path := "/v1/projects/proj/regions/us-central1/workflowTemplates/" + resourceID + ":" + verb
+	path := "/v1/projects/proj/regions/us-central1/" + collection + "/" + resourceID + ":" + verb
 	nr, err := NewCodec().Decode(httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)), []byte(body))
 	if err != nil {
 		t.Fatalf("decode %s: %v", path, err)
@@ -79,7 +79,7 @@ func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
 	}
 
 	// An unset policy is the empty default.
-	resp, err := p.WorkflowTemplateGetIamPolicy(ctx, decodeIAM(t, "getIamPolicy", "t1", "{}"))
+	resp, err := p.GetIamPolicy(ctx, decodeIAM(t, "workflowTemplates", "getIamPolicy", "t1", "{}"))
 	if err != nil {
 		t.Fatalf("getIamPolicy: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
 
 	body := `{"policy":{"bindings":[{"role":"roles/dataproc.worker","members":["user:a@example.com"],` +
 		`"condition":{"title":"expires-soon","expression":"request.time < timestamp(\"2027-01-01T00:00:00Z\")"}}]}}`
-	set, err := p.WorkflowTemplateSetIamPolicy(ctx, decodeIAM(t, "setIamPolicy", "t1", body))
+	set, err := p.SetIamPolicy(ctx, decodeIAM(t, "workflowTemplates", "setIamPolicy", "t1", body))
 	if err != nil {
 		t.Fatalf("setIamPolicy: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
 		t.Fatalf("set version = %v, want 3", set.Data["version"])
 	}
 
-	got, err := p.WorkflowTemplateGetIamPolicy(ctx, decodeIAM(t, "getIamPolicy", "t1", "{}"))
+	got, err := p.GetIamPolicy(ctx, decodeIAM(t, "workflowTemplates", "getIamPolicy", "t1", "{}"))
 	if err != nil {
 		t.Fatalf("getIamPolicy: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
 		t.Fatalf("condition did not round-trip: %v", bm)
 	}
 
-	perms, err := p.WorkflowTemplateTestIamPermissions(ctx, decodeIAM(t, "testIamPermissions", "t1",
+	perms, err := p.TestIamPermissions(ctx, decodeIAM(t, "workflowTemplates", "testIamPermissions", "t1",
 		`{"permissions":["dataproc.workflowTemplates.get","dataproc.workflowTemplates.update"]}`))
 	if err != nil {
 		t.Fatalf("testIamPermissions: %v", err)
@@ -125,25 +125,87 @@ func TestWorkflowTemplateIAMProviderRoundTrip(t *testing.T) {
 	}
 
 	// A missing template is NotFound for every verb.
+	missingIAM(t, p, "workflowTemplates", "absent", "dataproc.workflowTemplates.get")
+}
+
+// missingIAM asserts every IAM verb is 404 for an absent resource.
+func missingIAM(t *testing.T, p *Provider, collection, id, permission string) {
+	t.Helper()
+	ctx := context.Background()
 	for _, verb := range []string{"getIamPolicy", "setIamPolicy", "testIamPermissions"} {
 		body := "{}"
 		if verb == "testIamPermissions" {
-			body = `{"permissions":["dataproc.workflowTemplates.get"]}`
+			body = `{"permissions":["` + permission + `"]}`
 		}
-		nr := decodeIAM(t, verb, "absent", body)
+		nr := decodeIAM(t, collection, verb, id, body)
 		var err error
 		switch verb {
 		case "getIamPolicy":
-			_, err = p.WorkflowTemplateGetIamPolicy(ctx, nr)
+			_, err = p.GetIamPolicy(ctx, nr)
 		case "setIamPolicy":
-			_, err = p.WorkflowTemplateSetIamPolicy(ctx, nr)
+			_, err = p.SetIamPolicy(ctx, nr)
 		default:
-			_, err = p.WorkflowTemplateTestIamPermissions(ctx, nr)
+			_, err = p.TestIamPermissions(ctx, nr)
 		}
 		pe, ok := err.(*model.ProviderError)
 		if !ok || pe.HTTPStatus != 404 {
-			t.Fatalf("%s(absent) = %v, want 404", verb, err)
+			t.Fatalf("%s(%s/%s) = %v, want 404", verb, collection, id, err)
 		}
+	}
+}
+
+// TestClusterAndJobIAMProviderRoundTrip drives the cluster and job policy
+// planes through the REST provider: the canonical name the codec builds maps
+// back to the resource, the policy is stored per collection, and an absent
+// cluster/job is NotFound.
+func TestClusterAndJobIAMProviderRoundTrip(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   gceBody("c1", nil),
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if _, err := p.SubmitJob(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{"job": map[string]any{
+			"reference":  map[string]any{"jobId": "j1"},
+			"placement":  map[string]any{"clusterName": "c1"},
+			"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+		}},
+	})); err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+
+	for _, tc := range []struct{ collection, id, resourceName string }{
+		{"clusters", "c1", "projects/proj/regions/us-central1/clusters/c1"},
+		{"jobs", "j1", "projects/proj/regions/us-central1/jobs/j1"},
+	} {
+		nr := decodeIAM(t, tc.collection, "getIamPolicy", tc.id, "{}")
+		if got := nr.Params["iamName"]; got != tc.resourceName {
+			t.Fatalf("%s iamName = %v, want %s", tc.collection, got, tc.resourceName)
+		}
+		if _, err := p.GetIamPolicy(ctx, nr); err != nil {
+			t.Fatalf("%s getIamPolicy: %v", tc.collection, err)
+		}
+		body := `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:a@example.com"]}]}}`
+		set, err := p.SetIamPolicy(ctx, decodeIAM(t, tc.collection, "setIamPolicy", tc.id, body))
+		if err != nil {
+			t.Fatalf("%s setIamPolicy: %v", tc.collection, err)
+		}
+		if set.Data["etag"] == "" {
+			t.Fatalf("%s set returned no etag: %v", tc.collection, set.Data)
+		}
+		got, err := p.GetIamPolicy(ctx, decodeIAM(t, tc.collection, "getIamPolicy", tc.id, "{}"))
+		if err != nil {
+			t.Fatalf("%s getIamPolicy: %v", tc.collection, err)
+		}
+		bindings, _ := got.Data["bindings"].([]any)
+		if len(bindings) != 1 {
+			t.Fatalf("%s bindings = %v", tc.collection, got.Data["bindings"])
+		}
+		missingIAM(t, p, tc.collection, tc.id+"-absent", "dataproc."+tc.collection+".get")
 	}
 }
 

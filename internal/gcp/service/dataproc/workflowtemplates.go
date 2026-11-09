@@ -149,6 +149,7 @@ func (s *Service) DeleteWorkflowTemplate(ctx context.Context, project, region, i
 	if err := s.store.DeleteWorkflowTemplate(ctx, project, region, id); err != nil {
 		return mapErr(err)
 	}
+	s.purgeIAMPolicy(ctx, IAMResource{Project: project, Region: region, Kind: IAMWorkflowTemplate, ID: id})
 	return nil
 }
 

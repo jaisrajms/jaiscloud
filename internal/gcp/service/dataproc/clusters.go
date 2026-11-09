@@ -556,6 +556,9 @@ func (s *Service) advanceCluster(ctx context.Context, project, region, name stri
 		// DELETING cluster cannot both publish it. The delete happens outside
 		// the atomic mutate (which aborted), so existence is decided here.
 		if delErr == nil {
+			// The policy is bound to the cluster's lifetime: drop it so a
+			// cluster re-created with the same name starts with an empty policy.
+			s.purgeIAMPolicy(ctx, IAMResource{Project: project, Region: region, Kind: IAMCluster, ID: name})
 			gone := deleted
 			gone.Status = dpstore.ClusterStatus{State: clusterDeletedState, StateStartTime: clock.Now().UTC()}
 			s.emitClusterStateChange(ctx, project, region, gone, deleted.Status)

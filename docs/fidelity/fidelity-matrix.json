@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1225,
+    "total": 1231,
     "by_state": {
-      "ga": 1019,
+      "ga": 1025,
       "limited": 153,
       "preview": 14,
       "unsupported": 39
@@ -15,7 +15,7 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 569,
+        "ga": 575,
         "limited": 130,
         "preview": 14,
         "unsupported": 11
@@ -44,7 +44,7 @@
         "unsupported": 7
       },
       "dataproc": {
-        "ga": 46,
+        "ga": 52,
         "unsupported": 3
       },
       "datastore": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 678
+        "rest": 684
       },
       "unverified": {
         "grpc": 46,
@@ -355,8 +355,8 @@
       "source": "discovery",
       "source_ref": "dataproc.v1",
       "published": 136,
-      "served": 90,
-      "graded": 26,
+      "served": 96,
+      "graded": 32,
       "unserved": [
         "dataproc.projects.locations.autoscalingPolicies.create",
         "dataproc.projects.locations.autoscalingPolicies.delete",
@@ -388,17 +388,11 @@
         "dataproc.projects.regions.autoscalingPolicies.setIamPolicy",
         "dataproc.projects.regions.autoscalingPolicies.testIamPermissions",
         "dataproc.projects.regions.autoscalingPolicies.update",
-        "dataproc.projects.regions.clusters.getIamPolicy",
         "dataproc.projects.regions.clusters.injectCredentials",
         "dataproc.projects.regions.clusters.nodeGroups.create",
         "dataproc.projects.regions.clusters.nodeGroups.repair",
         "dataproc.projects.regions.clusters.nodeGroups.resize",
         "dataproc.projects.regions.clusters.repair",
-        "dataproc.projects.regions.clusters.setIamPolicy",
-        "dataproc.projects.regions.clusters.testIamPermissions",
-        "dataproc.projects.regions.jobs.getIamPolicy",
-        "dataproc.projects.regions.jobs.setIamPolicy",
-        "dataproc.projects.regions.jobs.testIamPermissions",
         "dataproc.projects.regions.operations.cancel",
         "dataproc.projects.regions.operations.delete",
         "dataproc.projects.regions.operations.getIamPolicy",
@@ -4131,6 +4125,46 @@
     },
     {
       "service": "dataproc",
+      "operation": "Dataproc.ClusterGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.clusters.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.clusters.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 3 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.ClusterSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.clusters.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.clusters.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.ClusterTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.clusters.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.clusters.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "Dataproc.CreateCluster",
       "transport": "rest",
       "state": "ga",
@@ -4140,7 +4174,7 @@
         "discovery=dataproc.projects.regions.clusters.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 12 transcript entries)"
+        "verified=true (rest, 15 transcript entries)"
       ]
     },
     {
@@ -4287,6 +4321,46 @@
       "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.workflowTemplates.instantiate",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.JobGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.jobs.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.jobs.getIamPolicy",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.JobSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.jobs.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.jobs.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.JobTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "dataproc.projects.regions.jobs.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=dataproc.projects.regions.jobs.testIamPermissions",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]

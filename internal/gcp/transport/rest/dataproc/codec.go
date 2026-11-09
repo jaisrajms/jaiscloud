@@ -96,10 +96,14 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	case "clusters":
 		if len(tail) >= 2 {
 			nr.Params["clusterName"] = tail[1]
+			// iamName is the canonical google.iam.v1.IAMPolicy resource name,
+			// built after the custom suffix is stripped from `tail`.
+			nr.Params["iamName"] = strings.Join(seg[pi:], "/")
 		}
 	case "jobs":
 		if len(tail) >= 2 {
 			nr.Params["jobId"] = tail[1]
+			nr.Params["iamName"] = strings.Join(seg[pi:], "/")
 		}
 	case "operations":
 		if len(tail) >= 2 {
@@ -136,7 +140,17 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 				return "StopCluster"
 			case "diagnose":
 				return "DiagnoseCluster"
+			case "getIamPolicy":
+				return "ClusterGetIamPolicy"
+			case "setIamPolicy":
+				return "ClusterSetIamPolicy"
+			case "testIamPermissions":
+				return "ClusterTestIamPermissions"
 			}
+			// An unhandled custom verb must not fall through to the
+			// create/get method switch below (a custom DELETE would otherwise
+			// delete the cluster).
+			return ""
 		case "jobs":
 			switch custom {
 			case "submit":
@@ -145,7 +159,14 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 				return "SubmitJobAsOperation"
 			case "cancel":
 				return "CancelJob"
+			case "getIamPolicy":
+				return "JobGetIamPolicy"
+			case "setIamPolicy":
+				return "JobSetIamPolicy"
+			case "testIamPermissions":
+				return "JobTestIamPermissions"
 			}
+			return ""
 		case "workflowTemplates":
 			switch custom {
 			case "instantiate":

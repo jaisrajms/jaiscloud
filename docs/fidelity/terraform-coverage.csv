@@ -252,16 +252,16 @@ google_dataproc_autoscaling_policy_iam_member,dataproc,unsupported,none,unsuppor
 google_dataproc_autoscaling_policy_iam_policy,dataproc,unsupported,none,unsupported,Dataproc autoscalingPolicies are not in the operation registry.,2027-06-30
 google_dataproc_batch,dataproc,unsupported,none,unsupported,Dataproc Serverless (batches) is an explicit 501 stub in the operation registry (Dataproc.Serverless); the emulator models clusters and jobs.,2027-06-30
 google_dataproc_cluster,dataproc,served,"fixture:gce,fixture:gke",served,,2027-06-30
-google_dataproc_cluster_iam_binding,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
-google_dataproc_cluster_iam_member,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
-google_dataproc_cluster_iam_policy,dataproc,unsupported,none,unsupported,Cluster IAM (clusters.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_cluster_iam_binding,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_cluster_iam_member,dataproc,served,fixture:compat,served,,2027-06-30
+google_dataproc_cluster_iam_policy,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_gdc_application_environment,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
 google_dataproc_gdc_service_instance,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
 google_dataproc_gdc_spark_application,dataproc,unsupported,none,unsupported,Dataproc on GDC (distributed cloud) is a separate API; the emulator registers no gdc operation.,2027-06-30
 google_dataproc_job,dataproc,served,module:dataproc,served,,2027-06-30
-google_dataproc_job_iam_binding,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
-google_dataproc_job_iam_member,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
-google_dataproc_job_iam_policy,dataproc,unsupported,none,unsupported,Job IAM (jobs.getIamPolicy) is not in the operation registry; Dataproc IAM is served for workflow templates only.,2027-06-30
+google_dataproc_job_iam_binding,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_job_iam_member,dataproc,served,module:dataproc,served,,2027-06-30
+google_dataproc_job_iam_policy,dataproc,served,none,served,dataproc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_metastore_database_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_metastore_database_iam_member,metastore,served,fixture:compat,served,,2027-06-30
 google_dataproc_metastore_database_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
