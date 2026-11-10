@@ -28,6 +28,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
   in-place update of both, and the read-after-delete)
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
+- Compute Engine project metadata (`google_compute_project_metadata`, via
+  `projects.setCommonInstanceMetadata` + the `projects.get` read-back; TF1-5)
 - Service Usage (`/v1/projects/{project}/services`)
 - Cloud Billing — the `data "google_project"` `billing_account` read
   (`projects.getBillingInfo`) and `google_project`'s `billing_account`

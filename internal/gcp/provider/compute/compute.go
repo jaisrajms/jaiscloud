@@ -62,6 +62,11 @@ const (
 	rtFirewall   = "gcp_compute_firewall"
 	rtSubnetwork = "gcp_compute_subnetwork"
 	rtOperation  = "gcp_compute_operation"
+	// rtProjectMetadata holds a project's common instance metadata: the items
+	// projects.setCommonInstanceMetadata wrote plus the fingerprint and the
+	// write generation that the optimistic-concurrency check compares against.
+	// It is keyed by the project id at store.GlobalRegion.
+	rtProjectMetadata = "gcp_compute_project_metadata"
 	// rtRequestID holds the requestId → operation idempotency mapping for
 	// mutating methods, keyed by the requestId at the request's scope.
 	rtRequestID = "gcp_compute_request_id"
@@ -90,6 +95,7 @@ const (
 	kindOperation              = "compute#operation"
 	kindOperationList          = "compute#operationList"
 	kindProject                = "compute#project"
+	kindMetadata               = "compute#metadata"
 )
 
 // catalogCreationTimestamp is the synthesized creation time the emulator stamps
@@ -170,6 +176,20 @@ var customMachineTypeRE = regexp.MustCompile(`^(?:[a-z0-9]+-)?custom-[0-9]+-[0-9
 // unsupported for the requestId parameter.
 const zeroRequestID = "00000000-0000-0000-0000-000000000000"
 
+// maxMetadataValueBytes is the documented size ceiling of one metadata entry's
+// value (Discovery, Metadata.items[].value: "its size must be less than or equal
+// to 262144 bytes (256 KiB)").
+const maxMetadataValueBytes = 262144
+
+// maxProjectMetadataBytes is the documented total size of a project metadata
+// envelope (Discovery, Metadata.items: "The total size of all keys and values
+// must be less than 512 KB").
+const maxProjectMetadataBytes = 512 * 1024
+
+// metadataKeyRE is the documented metadata-key grammar (Discovery,
+// Metadata.items[].key: pattern [a-zA-Z0-9-_]{1,128}).
+var metadataKeyRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
 // requestIDRE matches the UUID form the Compute Engine API documents for the
 // requestId parameter.
 var requestIDRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -202,7 +222,8 @@ func New(resources store.ResourceStore) *Provider {
 // Routes maps "Compute.<Action>" keys to their handlers.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Compute.ProjectsGet": p.ProjectsGet,
+		"Compute.ProjectsGet":                       p.ProjectsGet,
+		"Compute.ProjectsSetCommonInstanceMetadata": p.ProjectsSetCommonInstanceMetadata,
 
 		"Compute.InstancesInsert":         p.InstancesInsert,
 		"Compute.InstancesGet":            p.InstancesGet,
@@ -266,9 +287,10 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 //     account. The hashicorp/google `google_compute_default_service_account`
 //     data source reads exactly this field, and the Dataproc module and the
 //     scheduler examples resolve their IAM grant from it (TF2-1).
-//   - commonInstanceMetadata carries the project-wide metadata envelope. There
-//     is no stored project metadata yet (projects.setCommonInstanceMetadata is
-//     TF1-5), so it reports the empty default with a stable fingerprint.
+//   - commonInstanceMetadata carries the project-wide metadata envelope. It is
+//     the record projects.setCommonInstanceMetadata writes (items plus the
+//     server fingerprint), or the empty default with a stable fingerprint when
+//     nothing has been written yet.
 func (p *Provider) ProjectsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	// The response describes the project named in the request path. Path and
 	// account agree for a wire request (the gateway derives AccountID from the
@@ -277,7 +299,214 @@ func (p *Provider) ProjectsGet(ctx context.Context, nr *model.NormalizedRequest)
 	if project == "" {
 		return nil, model.NewProviderError("InvalidArgument", "project is required", 400)
 	}
-	return provider.OK(projectObject(nr, project)), nil
+	rec, err := p.projectMetadataRecord(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(projectObject(nr, project, rec.metadata())), nil
+}
+
+// ProjectsSetCommonInstanceMetadata applies compute.projects.setCommonInstanceMetadata
+// (POST /compute/v1/projects/{project}/setCommonInstanceMetadata), the method
+// the hashicorp/google `google_compute_project_metadata` and
+// `google_compute_project_metadata_item` resources use to write the
+// project-wide metadata (TF1-5).
+//
+// The request body is Discovery's Metadata envelope. `items` replaces the
+// project's whole metadata set — the provider reads the project first, merges
+// its own keys in and sends the result — so an absent (or null) `items` clears
+// it, which is also how the provider's destroy path removes the metadata. Each
+// entry is validated against the documented key grammar and size ceilings; a
+// malformed entry is 400 instead of being stored.
+//
+// `fingerprint` is the optimistic-concurrency token Discovery describes: it is
+// optional (the schema carries no required annotation for it), and when present
+// it must be the project's current fingerprint — anything else is the
+// documented 412 (Metadata.fingerprint: "otherwise the request will fail with
+// error412 conditionNotMet"). The provider always sends the fingerprint it read
+// from projects.get. A fingerprint that is not a base64 byte string cannot be
+// the API's `format: byte` value at all, so it is 400 INVALID_ARGUMENT.
+//
+// The response is Compute Engine's own DONE Operation envelope (the provider
+// polls it through ComputeOperationWaitTime) and the stored metadata is
+// readable through projects.get, with a fingerprint that changes on every
+// write (Discovery: "changes after every request to modify or update metadata")
+// even when the items are byte-identical.
+func (p *Provider) ProjectsSetCommonInstanceMetadata(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := strParam(nr, "project")
+	if project == "" {
+		return nil, model.NewProviderError("InvalidArgument", "project is required", 400)
+	}
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	body := bodyMap(nr)
+	items, err := projectMetadataItems(body["items"])
+	if err != nil {
+		return nil, err
+	}
+	fingerprint := stringField(body, "fingerprint")
+	if fingerprint != "" {
+		if _, err := base64.StdEncoding.DecodeString(fingerprint); err != nil {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.fingerprint': '%s'. A fingerprint is a base64-encoded byte string; call projects.get to retrieve the latest one", fingerprint), 400)
+		}
+	}
+	// The read-modify-write is atomic: a concurrent write with the same
+	// fingerprint must lose the precondition rather than silently clobber the
+	// winner's items.
+	_, err = p.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtProjectMetadata, project,
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			rec := newProjectMetadataRecord(project)
+			if exists {
+				stored, perr := parseProjectMetadataRecord(project, current.Data)
+				if perr != nil {
+					return store.ResourceEntry{}, perr
+				}
+				rec = stored
+			}
+			if fingerprint != "" && fingerprint != rec.Fingerprint {
+				return store.ResourceEntry{}, model.NewProviderError("PreconditionFailed",
+					fmt.Sprintf("Invalid fingerprint: the supplied fingerprint '%s' does not match the project's current fingerprint '%s'; call projects.get to retrieve the latest one", fingerprint, rec.Fingerprint), 412)
+			}
+			rec.Items = items
+			rec.Generation++
+			rec.Fingerprint = projectMetadataFingerprint(project, rec.Generation)
+			data, err := json.Marshal(rec)
+			if err != nil {
+				return store.ResourceEntry{}, err
+			}
+			return store.ResourceEntry{Type: rtProjectMetadata, ID: project, Data: data}, nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "setCommonInstanceMetadata", project, absLink(nr, "compute-project", project), requestID)), nil
+}
+
+// projectMetadataRecord is the persisted common-instance metadata of one
+// project. Fingerprint is derived from Generation rather than from the items so
+// Discovery's "changes after every request to modify or update metadata" holds
+// even for a write that repeats the previous items (a provider re-plan).
+type projectMetadataRecord struct {
+	Items       []any  `json:"items"`
+	Generation  int64  `json:"generation"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// newProjectMetadataRecord is the record a project that has never had its
+// metadata written reports: no items and the stable default fingerprint.
+func newProjectMetadataRecord(project string) projectMetadataRecord {
+	return projectMetadataRecord{Items: []any{}, Fingerprint: defaultProjectMetadataFingerprint(project)}
+}
+
+// metadata renders the record as Discovery's compute#metadata envelope.
+func (r projectMetadataRecord) metadata() map[string]any {
+	items := r.Items
+	if items == nil {
+		items = []any{}
+	}
+	return map[string]any{"kind": kindMetadata, "fingerprint": r.Fingerprint, "items": items}
+}
+
+// projectMetadataRecord loads a project's stored metadata, falling back to the
+// never-written default.
+func (p *Provider) projectMetadataRecord(ctx context.Context, project string) (projectMetadataRecord, error) {
+	e, err := p.resources.Get(ctx, project, store.GlobalRegion, rtProjectMetadata, project)
+	if errors.Is(err, store.ErrNotFound) {
+		return newProjectMetadataRecord(project), nil
+	}
+	if err != nil {
+		return projectMetadataRecord{}, err
+	}
+	return parseProjectMetadataRecord(project, e.Data)
+}
+
+// parseProjectMetadataRecord decodes a stored record, filling in the never-written
+// defaults a record written by an older build (or a hand-written one) may lack.
+func parseProjectMetadataRecord(project string, data []byte) (projectMetadataRecord, error) {
+	rec := newProjectMetadataRecord(project)
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return projectMetadataRecord{}, err
+	}
+	if rec.Items == nil {
+		rec.Items = []any{}
+	}
+	if rec.Fingerprint == "" {
+		rec.Fingerprint = defaultProjectMetadataFingerprint(project)
+	}
+	return rec, nil
+}
+
+// defaultProjectMetadataFingerprint is the fingerprint a project that has never
+// had its common instance metadata written reports. It stays byte-identical to
+// the value projects.get reported before TF1-5 so an untouched project does not
+// churn between reads.
+func defaultProjectMetadataFingerprint(project string) string {
+	return contentEtag("project/" + project + "/commonInstanceMetadata")
+}
+
+// projectMetadataFingerprint derives the fingerprint a project reports after its
+// generation-th write. The generation is part of the seed because Discovery
+// documents that the fingerprint changes after every write, including one that
+// repeats the previous items.
+func projectMetadataFingerprint(project string, generation int64) string {
+	return contentEtag(fmt.Sprintf("project/%s/commonInstanceMetadata/%d", project, generation))
+}
+
+// projectMetadataItems validates and normalizes a setCommonInstanceMetadata
+// request body's items. Discovery marks an entry's key and value required and
+// gives the key its grammar and both a per-value and a total size ceiling, so a
+// body that violates them is 400 before anything is stored. An absent (or null)
+// items list is the empty set, which clears the metadata.
+func projectMetadataItems(v any) ([]any, error) {
+	if v == nil {
+		return []any{}, nil
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument",
+			"Invalid value for field 'resource.items': must be a list of key/value entries", 400)
+	}
+	out := make([]any, 0, len(list))
+	total := 0
+	for i, raw := range list {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d]': must be an object with a key and a value", i), 400)
+		}
+		key, _ := item["key"].(string)
+		if key == "" {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].key': a metadata key is required", i), 400)
+		}
+		if !metadataKeyRE.MatchString(key) {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].key': '%s'. Must be 1-128 characters long and match the regular expression '[a-zA-Z0-9-_]{1,128}'", i, key), 400)
+		}
+		value, ok := item["value"].(string)
+		if !ok {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].value': a metadata value is required", i), 400)
+		}
+		if len(value) > maxMetadataValueBytes {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].value': the value of key '%s' is %d bytes; metadata values must be at most %d bytes (256 KiB)", i, key, len(value), maxMetadataValueBytes), 400)
+		}
+		total += len(key) + len(value)
+		out = append(out, map[string]any{"key": key, "value": value})
+	}
+	if total >= maxProjectMetadataBytes {
+		return nil, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.items': the total size of all keys and values is %d bytes; project metadata must be less than %d bytes (512 KiB)", total, maxProjectMetadataBytes), 400)
+	}
+	return out, nil
 }
 
 // projectNumber returns the number a project is addressed by: the synthesized
@@ -290,20 +519,16 @@ func projectNumber(project string) string {
 }
 
 // projectObject builds the compute#project payload.
-func projectObject(nr *model.NormalizedRequest, name string) map[string]any {
+func projectObject(nr *model.NormalizedRequest, name string, commonInstanceMetadata map[string]any) map[string]any {
 	number := projectNumber(name)
 	return map[string]any{
-		"kind":              kindProject,
-		"id":                number,
-		"name":              name,
-		"selfLink":          absLink(nr, "compute-project", name),
-		"creationTimestamp": catalogCreationTimestamp,
-		"commonInstanceMetadata": map[string]any{
-			"kind":        "compute#metadata",
-			"fingerprint": contentEtag("project/" + name + "/commonInstanceMetadata"),
-			"items":       []any{},
-		},
-		"defaultServiceAccount": defaultServiceAccountForNumber(number),
+		"kind":                   kindProject,
+		"id":                     number,
+		"name":                   name,
+		"selfLink":               absLink(nr, "compute-project", name),
+		"creationTimestamp":      catalogCreationTimestamp,
+		"commonInstanceMetadata": commonInstanceMetadata,
+		"defaultServiceAccount":  defaultServiceAccountForNumber(number),
 		// Real Compute reports PREMIUM as the default network tier and
 		// ZONAL_ONLY as the default internal-DNS setting for a project created
 		// with the current defaults (the project schema marks both output-only).
@@ -392,7 +617,7 @@ func (p *Provider) buildInstance(nr *model.NormalizedRequest, project, zone, nam
 	if v, ok := body["metadata"]; ok && v != nil {
 		inst["metadata"] = v
 	} else {
-		inst["metadata"] = map[string]any{"kind": "compute#metadata", "fingerprint": contentEtag(name)}
+		inst["metadata"] = map[string]any{"kind": kindMetadata, "fingerprint": contentEtag(name)}
 	}
 	if v, ok := body["labels"]; ok && v != nil {
 		inst["labels"] = v

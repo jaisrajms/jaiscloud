@@ -249,8 +249,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (synchronous DDL/DML jobs, serialized DML spans, atomic CTAS, immutable
   `getQueryResults` snapshots, documented divergences) are the cell reasons.
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (27 + 1 `unsupported` stub),
-  **Compute Engine** (35 + 1), **Cloud DNS** (20 + 1), **Memorystore** (13). No control plane,
-  VM/disk/network data plane, authoritative DNS server, or Redis data plane.
+  **Compute Engine** (36 + 1), **Cloud DNS** (20 + 1), **Memorystore** (13). No control plane,
+  VM/disk/network data plane, authoritative DNS server, or Redis data plane. Compute's project
+  record keeps one written field — `commonInstanceMetadata`, through
+  `projects.setCommonInstanceMetadata` (items + a fingerprint that advances per write, `412`
+  on a stale fingerprint) — so `google_compute_project_metadata{,_item}` round-trips.
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the

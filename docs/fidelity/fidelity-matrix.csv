@@ -116,6 +116,7 @@ compute,Compute.NetworksPatch,rest,limited,true,metadata-only over ResourceStore
 compute,Compute.OperationsGet,rest,limited,false,metadata-only over ResourceStore (no control plane)
 compute,Compute.OperationsList,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.ProjectsGet,rest,limited,true,metadata-only over ResourceStore (no control plane)
+compute,Compute.ProjectsSetCommonInstanceMetadata,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.RegionsGet,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.RegionsList,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.SubnetworksDelete,rest,limited,true,metadata-only over ResourceStore (no control plane)

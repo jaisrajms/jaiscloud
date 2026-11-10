@@ -37,13 +37,15 @@ func TestComputeCodecDecode(t *testing.T) {
 		{"DELETE", "/compute/v1/projects/p/regions/us-central1/subnetworks/s", "SubnetworksDelete"},
 		{"GET", "/compute/v1/projects/p/zones/us-central1-a/machineTypes", "MachineTypesList"},
 		{"GET", "/compute/v1/projects/p/zones/us-central1-a/machineTypes/e2-micro", "MachineTypesGet"},
-		// The project resource itself: projects.get is the one served method on
-		// the bare projects/{project} path; a non-GET request there is not a
-		// Discovery method and must fail loud, and the POST siblings
-		// (setCommonInstanceMetadata, setDefaultNetworkTier, moveDisk, ...) stay
-		// deferred.
+		// The project resource itself: projects.get is the one read on the bare
+		// projects/{project} path and setCommonInstanceMetadata is the one
+		// published method that follows it. A non-GET request on the bare path
+		// is not a Discovery method and must fail loud, and the other POST
+		// siblings (setDefaultNetworkTier, moveDisk, ...) stay deferred.
 		{"GET", "/compute/v1/projects/p", "ProjectsGet"},
-		{"POST", "/compute/v1/projects/p/setCommonInstanceMetadata", "Unimplemented"},
+		{"POST", "/compute/v1/projects/p/setCommonInstanceMetadata", "ProjectsSetCommonInstanceMetadata"},
+		{"PUT", "/compute/v1/projects/p/setCommonInstanceMetadata", "Unimplemented"},
+		{"POST", "/compute/v1/projects/p/setDefaultNetworkTier", "Unimplemented"},
 		{"POST", "/compute/v1/projects/p", "Unimplemented"},
 		{"GET", "/compute/v1/projects/p/zones", "ZonesList"},
 		{"GET", "/compute/v1/projects/p/zones/us-central1-a", "ZonesGet"},

@@ -1840,3 +1840,226 @@ func TestListHandlersRejectBadMaxResults(t *testing.T) {
 		}
 	}
 }
+
+// ─── Project common instance metadata (TF1-5) ────────────────────────────────
+
+// projectMetadata calls compute.projects.get and returns the
+// commonInstanceMetadata envelope it reports.
+func projectMetadata(t *testing.T, p *Provider, project string) map[string]any {
+	t.Helper()
+	resp, err := p.ProjectsGet(context.Background(), newNR(map[string]any{"project": project}))
+	if err != nil {
+		t.Fatalf("projects get %s: %v", project, err)
+	}
+	md, ok := resp.Data["commonInstanceMetadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("commonInstanceMetadata = %v, want an object", resp.Data["commonInstanceMetadata"])
+	}
+	return md
+}
+
+// setProjectMetadata calls compute.projects.setCommonInstanceMetadata.
+func setProjectMetadata(t *testing.T, p *Provider, project string, body map[string]any) (map[string]any, error) {
+	t.Helper()
+	resp, err := p.ProjectsSetCommonInstanceMetadata(context.Background(),
+		newNR(map[string]any{"project": project, "body": body}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// metadataItems renders the metadata envelope's items as key=value pairs so a
+// test can compare the stored set without depending on map iteration order.
+func metadataItems(md map[string]any) map[string]string {
+	out := map[string]string{}
+	list, _ := md["items"].([]any)
+	for _, raw := range list {
+		item, _ := raw.(map[string]any)
+		key, _ := item["key"].(string)
+		value, _ := item["value"].(string)
+		out[key] = value
+	}
+	return out
+}
+
+// TestProjectMetadataSetGetRoundTrip pins compute.projects.setCommonInstanceMetadata
+// against compute.projects.get: the metadata the write stores is what the
+// project resource reports, and the fingerprint advances on every write (even a
+// write that repeats the previous items), which is what makes the provider's
+// read-modify-write converge instead of permadiffing (TF1-5).
+func TestProjectMetadataSetGetRoundTrip(t *testing.T) {
+	p := newProvider()
+
+	before := projectMetadata(t, p, "proj")
+	if before["kind"] != kindMetadata {
+		t.Errorf("commonInstanceMetadata.kind = %v, want %s", before["kind"], kindMetadata)
+	}
+	if items := metadataItems(before); len(items) != 0 {
+		t.Errorf("a never-written project reports items %v, want none", items)
+	}
+	fp0 := str(before["fingerprint"])
+	if fp0 == "" {
+		t.Fatal("a never-written project must still report a fingerprint")
+	}
+
+	// The provider's create path: GET the project, then POST items + the
+	// fingerprint it just read.
+	op, err := setProjectMetadata(t, p, "proj", map[string]any{
+		"items": []any{
+			map[string]any{"key": "foo", "value": "bar"},
+			map[string]any{"key": "fizz", "value": "buzz"},
+		},
+		"fingerprint": fp0,
+	})
+	if err != nil {
+		t.Fatalf("setCommonInstanceMetadata: %v", err)
+	}
+	// The response is Compute Engine's own DONE Operation envelope, not a
+	// google.longrunning.Operation: the provider polls it with
+	// ComputeOperationWaitTime.
+	if op["kind"] != kindOperation || op["status"] != "DONE" {
+		t.Errorf("operation = %v, want a DONE %s", op, kindOperation)
+	}
+	if op["operationType"] != "setCommonInstanceMetadata" {
+		t.Errorf("operationType = %v, want setCommonInstanceMetadata", op["operationType"])
+	}
+	if got, want := op["targetLink"], computeBasePath+"projects/proj"; got != want {
+		t.Errorf("targetLink = %v, want %s", got, want)
+	}
+	if got, want := op["progress"], int64(100); got != want {
+		t.Errorf("progress = %v, want %v", got, want)
+	}
+	if got, want := op["selfLink"], computeBasePath+"projects/proj/global/operations/"+str(op["name"]); got != want {
+		t.Errorf("selfLink = %v, want %s", got, want)
+	}
+	if op["name"] == "" {
+		t.Error("operation name is empty")
+	}
+
+	after := projectMetadata(t, p, "proj")
+	fp1 := str(after["fingerprint"])
+	if fp1 == "" || fp1 == fp0 {
+		t.Errorf("fingerprint after write = %q, want a fresh value (was %q)", fp1, fp0)
+	}
+	if got, want := metadataItems(after), map[string]string{"foo": "bar", "fizz": "buzz"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("items after write = %v, want %v", got, want)
+	}
+
+	// A write that repeats the same items still advances the fingerprint
+	// (Discovery: it "changes after every request to modify or update metadata").
+	if _, err := setProjectMetadata(t, p, "proj", map[string]any{
+		"items":       after["items"],
+		"fingerprint": fp1,
+	}); err != nil {
+		t.Fatalf("repeated write: %v", err)
+	}
+	again := projectMetadata(t, p, "proj")
+	fp2 := str(again["fingerprint"])
+	if fp2 == fp1 {
+		t.Errorf("fingerprint did not advance on a repeated write: %q", fp2)
+	}
+	if got, want := metadataItems(again), map[string]string{"foo": "bar", "fizz": "buzz"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("items after repeated write = %v, want %v", got, want)
+	}
+
+	// A stale fingerprint is the documented 412 conditionNotMet; nothing is
+	// stored.
+	_, err = setProjectMetadata(t, p, "proj", map[string]any{
+		"items":       []any{map[string]any{"key": "nope", "value": "1"}},
+		"fingerprint": fp1,
+	})
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "PreconditionFailed" || perr.HTTPStatus != 412 {
+		t.Fatalf("stale fingerprint = %v, want PreconditionFailed/412", err)
+	}
+	if got := metadataItems(projectMetadata(t, p, "proj")); got["nope"] != "" || len(got) != 2 {
+		t.Errorf("a rejected write changed the metadata: %v", got)
+	}
+
+	// The fingerprint is optional in Discovery (the schema marks no required
+	// annotation for it): a body without one is accepted, which is also what a
+	// bare client call and the conformance probe send.
+	if _, err := setProjectMetadata(t, p, "proj", map[string]any{
+		"items": []any{map[string]any{"key": "solo", "value": "1"}},
+	}); err != nil {
+		t.Fatalf("write without fingerprint: %v", err)
+	}
+	if got := metadataItems(projectMetadata(t, p, "proj")); !reflect.DeepEqual(got, map[string]string{"solo": "1"}) {
+		t.Errorf("items after fingerprintless write = %v, want the replacement set", got)
+	}
+
+	// The provider's destroy path sends the fingerprint and no items, which
+	// clears the set.
+	current := str(projectMetadata(t, p, "proj")["fingerprint"])
+	if _, err := setProjectMetadata(t, p, "proj", map[string]any{"fingerprint": current}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	cleared := projectMetadata(t, p, "proj")
+	if items := metadataItems(cleared); len(items) != 0 {
+		t.Errorf("items after clear = %v, want none", items)
+	}
+	if str(cleared["fingerprint"]) == current {
+		t.Error("clearing did not advance the fingerprint")
+	}
+
+	// Metadata is per project: a write to one project must not leak into
+	// another (projects.get answers any id).
+	if items := metadataItems(projectMetadata(t, p, "other")); len(items) != 0 {
+		t.Errorf("project other reports items %v, want none", items)
+	}
+}
+
+// TestProjectMetadataValidation pins the 400 paths Discovery documents for the
+// write: a fingerprint that is not a base64 byte string, a metadata key outside
+// the documented grammar, a missing value, and over-size values.
+func TestProjectMetadataValidation(t *testing.T) {
+	p := newProvider()
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"malformed fingerprint", map[string]any{"fingerprint": "not base64!"}},
+		{"key outside the grammar", map[string]any{
+			"items": []any{map[string]any{"key": "has space", "value": "v"}},
+		}},
+		{"over-long key", map[string]any{
+			"items": []any{map[string]any{"key": strings.Repeat("k", 129), "value": "v"}},
+		}},
+		{"missing value", map[string]any{
+			"items": []any{map[string]any{"key": "foo"}},
+		}},
+		{"missing key", map[string]any{
+			"items": []any{map[string]any{"value": "v"}},
+		}},
+		{"over-size value", map[string]any{
+			"items": []any{map[string]any{"key": "big", "value": strings.Repeat("v", maxMetadataValueBytes+1)}},
+		}},
+		{"items not a list", map[string]any{"items": "nope"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ProjectsSetCommonInstanceMetadata(ctx, newNR(map[string]any{"project": "proj", "body": tc.body}))
+			if !isCode(err, "InvalidArgument") {
+				t.Fatalf("err = %v, want InvalidArgument", err)
+			}
+			if items := metadataItems(projectMetadata(t, p, "proj")); len(items) != 0 {
+				t.Errorf("a rejected write stored %v", items)
+			}
+		})
+	}
+
+	// The documented total-size ceiling (less than 512 KiB across all keys and
+	// values) is enforced even when each value is individually legal.
+	items := make([]any, 0, 3)
+	for _, key := range []string{"a", "b", "c"} {
+		items = append(items, map[string]any{"key": key, "value": strings.Repeat("v", maxMetadataValueBytes)})
+	}
+	if _, err := p.ProjectsSetCommonInstanceMetadata(ctx, newNR(map[string]any{
+		"project": "proj", "body": map[string]any{"items": items},
+	})); !isCode(err, "InvalidArgument") {
+		t.Fatalf("over-size total = %v, want InvalidArgument", err)
+	}
+}

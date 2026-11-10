@@ -67,14 +67,19 @@ func (c *ComputeCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRe
 func computeAction(rest []string, method string, nr *model.NormalizedRequest) string {
 	if len(rest) == 0 {
 		// GET /compute/v1/projects/{project} is the project resource itself
-		// (compute.projects.get). The other methods on the project resource
-		// (setCommonInstanceMetadata, setDefaultNetworkTier, moveDisk, …) carry
-		// another segment and fall through to the catch-all, as does any
-		// non-GET request on this bare path (Discovery publishes none).
+		// (compute.projects.get). POST .../setCommonInstanceMetadata is the
+		// project-wide metadata write (compute.projects.setCommonInstanceMetadata);
+		// the other methods on the project resource (setDefaultNetworkTier,
+		// moveDisk, …) carry another segment and fall through to the catch-all, as
+		// does any other non-GET request on the bare path (Discovery publishes
+		// none).
 		if method == http.MethodGet {
 			return "ProjectsGet"
 		}
 		return "Unimplemented"
+	}
+	if len(rest) == 1 && rest[0] == "setCommonInstanceMetadata" && method == http.MethodPost {
+		return "ProjectsSetCommonInstanceMetadata"
 	}
 	switch rest[0] {
 	case "aggregated":
