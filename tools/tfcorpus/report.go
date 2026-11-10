@@ -63,8 +63,8 @@ func BuildReport(m *Manifest, tfVersion, endpoint, project string, plan, apply [
 		Corpora:         append([]CorpusRef{}, m.Corpora...),
 		Cases:           len(m.Cases),
 		ZeroExample:     zeroExample,
-		Plan:            plan,
-		Apply:           apply,
+		Plan:            sortedResults(plan),
+		Apply:           sortedResults(apply),
 	}
 	reasons := map[string]int{}
 	for _, c := range m.Cases {
@@ -134,6 +134,22 @@ func BuildReport(m *Manifest, tfVersion, endpoint, project string, plan, apply [
 	return r
 }
 
+// sortedResults orders case results by name so a report built from merged
+// sources (docs first, samples second) is deterministic.
+func sortedResults(in []CaseResult) []CaseResult {
+	out := append([]CaseResult{}, in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Service != out[j].Service {
+			return out[i].Service < out[j].Service
+		}
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 func exclusionClass(reason string) string {
 	if strings.HasPrefix(reason, "unsupported-service") {
 		return "unsupported-service"
@@ -143,6 +159,9 @@ func exclusionClass(reason string) string {
 	}
 	if strings.HasPrefix(reason, "beta-provider") {
 		return "beta-provider"
+	}
+	if strings.HasPrefix(reason, "provider-version") {
+		return "provider-version"
 	}
 	if strings.Contains(reason, "deferred") {
 		return "deferred-sample"

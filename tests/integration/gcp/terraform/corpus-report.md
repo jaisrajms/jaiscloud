@@ -11,44 +11,44 @@ gate: every failure class below is owned by a ledger row in
 - corpus `docs-samples`: terraform-google-modules/terraform-docs-samples @ `fbf08aa52ee5a2ff5510b2791ae77230ae1a7a85` (., 2026-10-26)
 - corpus `provider-docs`: hashicorp/terraform-provider-google @ `5dbfd8a3d1eafa32db6a3afbc1c63924370fdfc6` (website/docs/r, 2026-10-23)
 
-3581 manifest cases: 393 candidates, 3188 excluded.
+3581 manifest cases: 627 candidates, 2954 excluded.
 
 ## Excluded cases
 
 | reason | cases |
 |---|---|
-| beta-provider | 323 |
-| deferred-sample | 212 |
-| helper-provider | 8 |
-| unsupported-service | 2645 |
+| beta-provider | 388 |
+| helper-provider | 30 |
+| provider-version | 1 |
+| unsupported-service | 2535 |
 
 ## Plan-only triage
 
 | service | planned | plan-ok | failures |
 |---|---|---|---|
-| bigquery | 5 | 5 | 0 |
-| clouddns | 5 | 5 | 0 |
-| cloudsql | 5 | 5 | 0 |
-| compute | 5 | 5 | 0 |
-| container | 5 | 5 | 0 |
+| bigquery | 21 | 21 | 0 |
+| clouddns | 12 | 12 | 0 |
+| cloudsql | 97 | 97 | 0 |
+| compute | 18 | 18 | 0 |
+| container | 29 | 29 | 0 |
 | dataproc | 5 | 3 | 2 |
-| eventarc | 5 | 4 | 1 |
+| eventarc | 9 | 8 | 1 |
 | firestore | 1 | 1 | 0 |
 | firestoreadmin | 5 | 5 | 0 |
 | functions | 5 | 5 | 0 |
-| iam | 5 | 5 | 0 |
+| iam | 6 | 6 | 0 |
 | kms | 5 | 4 | 1 |
 | logging | 5 | 5 | 0 |
-| managedkafka | 2 | 2 | 0 |
+| managedkafka | 4 | 4 | 0 |
 | memorystore | 4 | 1 | 3 |
 | metastore | 5 | 5 | 0 |
 | monitoring | 5 | 5 | 0 |
 | pubsub | 5 | 5 | 0 |
 | resourcemanager | 4 | 4 | 0 |
-| run | 5 | 5 | 0 |
-| scheduler | 5 | 3 | 2 |
+| run | 34 | 34 | 0 |
+| scheduler | 5 | 5 | 0 |
 | secretmanager | 5 | 5 | 0 |
-| storage | 5 | 5 | 0 |
+| storage | 11 | 11 | 0 |
 | tasks | 5 | 3 | 2 |
 | workflows | 1 | 1 | 0 |
 
@@ -60,7 +60,6 @@ gate: every failure class below is owned by a ledger row in
 | eventarc | `google_eventarc_enrollment` | config | Reference to undeclared resource: A managed resource "google_eventarc_message_bus" "primary" has not been declared in the root module. | 1 | `eventarc_enrollment-example-1` |
 | kms | `google_kms_key_ring` | config | terraform init | 1 | `kms_key_ring_import_job-example-1` |
 | memorystore | `google_redis_instance` | unrouted | projects/test-project/global/networks/redis-test-network not found: | 3 | `redis_instance-example-2` |
-| scheduler | `google_cloud_scheduler_job` | unimplemented | Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator: | 2 | `cloud_scheduler_job-example-5` |
 | tasks | `google_cloud_tasks_queue_iam_binding` | config | Reference to undeclared resource: A managed resource "google_cloud_tasks_queue" "default" has not been declared in the root module. | 1 | `cloud_tasks_queue_iam-example-2` |
 | tasks | `google_cloud_tasks_queue_iam_policy` | config | Reference to undeclared resource: A managed resource "google_cloud_tasks_queue" "default" has not been declared in the root module. | 1 | `cloud_tasks_queue_iam-example-1` |
 
@@ -68,36 +67,192 @@ gate: every failure class below is owned by a ledger row in
 
 | service | case | class | diagnostic |
 |---|---|---|---|
+| bigquery | `bigquery/bigquery_authorized_view_tutorial` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_dataset` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_dataset_cmek` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_dataset_iam` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_materialized_view` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_spanner_external_dataset` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_stored_procedure` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table_clustered` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table_cmek` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table_iam` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table_ingestion_partitioned` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table_partitioned` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_table_range_partitioned` | plan-ok | — |
+| bigquery | `bigquery/bigquery_create_view` | plan-ok | — |
+| bigquery | `bigquery/bigquery_query` | plan-ok | — |
 | bigquery | `bigquery_dataset-example-1` | plan-ok | — |
 | bigquery | `bigquery_dataset-example-2` | plan-ok | — |
 | bigquery | `bigquery_dataset-example-3` | plan-ok | — |
 | bigquery | `bigquery_dataset-example-5` | plan-ok | — |
 | bigquery | `bigquery_dataset-example-6` | plan-ok | — |
+| clouddns | `dns/managed_zone_basic` | plan-ok | — |
+| clouddns | `dns/managed_zone_private` | plan-ok | — |
+| clouddns | `dns/managed_zone_private_forwarding` | plan-ok | — |
+| clouddns | `dns/managed_zone_private_peering` | plan-ok | — |
+| clouddns | `dns/managed_zone_quickstart` | plan-ok | — |
+| clouddns | `dns/managed_zone_with_dnssec` | plan-ok | — |
+| clouddns | `dns/record_set_basic` | plan-ok | — |
 | clouddns | `dns_managed_zone-example-1` | plan-ok | — |
 | clouddns | `dns_managed_zone-example-2` | plan-ok | — |
 | clouddns | `dns_managed_zone-example-3` | plan-ok | — |
 | clouddns | `dns_managed_zone-example-4` | plan-ok | — |
 | clouddns | `dns_managed_zone-example-5` | plan-ok | — |
+| cloudsql | `cloud_sql/instance_ha` | plan-ok | — |
+| cloudsql | `cloud_sql/instance_labels` | plan-ok | — |
+| cloudsql | `cloud_sql/instance_pitr` | plan-ok | — |
+| cloudsql | `cloud_sql/instance_ssl_cert` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_database_basic` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_database_instance` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_enterprise_plus_instance_clone` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_enterprise_plus_instance_labels` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_enterprise_plus_instance_pvp` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_authorized_network` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_backup` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_backup_location` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_backup_retention` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_clone` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_final_backup` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_flags` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_google_managed_cas_ca` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_ha` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_iam_db_auth` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_iam_group_auth` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_labels` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_managed_connection_pooling` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_pitr` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_psc_sa` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_public_ip` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_pvp` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_read_pool` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_read_pool_auto_scale` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_replica` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_ssl_cert` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_ssm` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_switchover/dr_replica_create` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_switchover/dr_replica_designate` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_switchover/switchover_begin` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_instance_switchover/switchover_finish` | plan-ok | — |
+| cloudsql | `cloud_sql/mysql_user_db_role` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_database_basic` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_database_instance` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_enterprise_edition_instance` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_enterprise_plus_edition_instance` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_enterprise_plus_instance_clone` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_enterprise_plus_instance_labels` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_enterprise_plus_instance_pvp` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_authorized_network` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_backup` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_backup_location` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_backup_retention` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_clone` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_final_backup` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_flags` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_google_managed_cas_ca` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_ha` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_iam_db_auth` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_iam_group_auth` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_labels` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_managed_connection_pooling` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_pitr` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_psc_sa` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_public_ip` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_pvp` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_read_pool` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_read_pool_auto_scale` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_replica` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_ssl_cert` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_ssm` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_switchover/dr_replica_create` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_switchover/dr_replica_designate` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_switchover/switchover_begin` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_instance_switchover/switchover_finish` | plan-ok | — |
+| cloudsql | `cloud_sql/postgres_user_db_role` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_database_basic` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_database_instance` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_authorized_network` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_backup` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_backup_location` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_backup_retention` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_clone` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_final_backup` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_flags` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_google_managed_cas_ca` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_ha` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_labels` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_pitr` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_psc_sa` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_public_ip` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_read_pool_auto_scale` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_replica` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_ssl_cert` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_ssm` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_switchover/create_dr_replica` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_switchover/switchover_begin` | plan-ok | — |
+| cloudsql | `cloud_sql/sqlserver_instance_switchover/switchover_finish` | plan-ok | — |
 | cloudsql | `sql_database-example-1` | plan-ok | — |
 | cloudsql | `sql_database-example-2` | plan-ok | — |
 | cloudsql | `sql_database_instance-example-1` | plan-ok | — |
 | cloudsql | `sql_database_instance-example-10` | plan-ok | — |
 | cloudsql | `sql_database_instance-example-11` | plan-ok | — |
+| compute | `compute/add_persistent_disk` | plan-ok | — |
+| compute | `compute/basic_vm` | plan-ok | — |
+| compute | `compute/firewall_rule_for_health_check` | plan-ok | — |
+| compute | `compute/instance_custom_hostname` | plan-ok | — |
+| compute | `compute/instance_virtual_display_enabled` | plan-ok | — |
+| compute | `compute/local_ssd` | plan-ok | — |
+| compute | `compute/quickstart/create_vm` | plan-ok | — |
+| compute | `compute/run_shutdown_scripts` | plan-ok | — |
+| compute | `compute/service_account_for_instances` | plan-ok | — |
+| compute | `compute/spot_instance_basic` | plan-ok | — |
+| compute | `vpc/firewall_with_target_tags` | plan-ok | — |
+| compute | `vpc/network_custom_mtu` | plan-ok | — |
+| compute | `vpc/network_ipv6` | plan-ok | — |
 | compute | `compute_disk-example-1` | plan-ok | — |
 | compute | `compute_disk-example-2` | plan-ok | — |
 | compute | `compute_disk-example-3` | plan-ok | — |
 | compute | `compute_firewall-example-1` | plan-ok | — |
 | compute | `compute_firewall-example-2` | plan-ok | — |
+| container | `gke/autopilot/basic` | plan-ok | — |
+| container | `gke/autopilot/custom_service_account` | plan-ok | — |
+| container | `gke/autopilot/labels` | plan-ok | — |
+| container | `gke/autopilot/release_channel` | plan-ok | — |
+| container | `gke/enterprise/enable` | plan-ok | — |
+| container | `gke/standard/regional/binary-authorization` | plan-ok | — |
+| container | `gke/standard/regional/hpa-logs` | plan-ok | — |
+| container | `gke/standard/regional/labels` | plan-ok | — |
+| container | `gke/standard/regional/multi-zone` | plan-ok | — |
+| container | `gke/standard/regional/node_pool` | plan-ok | — |
+| container | `gke/standard/regional/node_system_config` | plan-ok | — |
+| container | `gke/standard/regional/ray` | plan-ok | — |
+| container | `gke/standard/regional/single-zone` | plan-ok | — |
+| container | `gke/standard/regional/windows` | plan-ok | — |
+| container | `gke/standard/zonal/arm` | plan-ok | — |
+| container | `gke/standard/zonal/gpu` | plan-ok | — |
+| container | `gke/standard/zonal/multi-zone` | plan-ok | — |
+| container | `gke/standard/zonal/no-channel-to-release-channel/no_minor_or_node_upgrade` | plan-ok | — |
+| container | `gke/standard/zonal/no-channel-to-release-channel/no_upgrade` | plan-ok | — |
+| container | `gke/standard/zonal/no-channel-to-release-channel/rc_none` | plan-ok | — |
+| container | `gke/standard/zonal/no-channel-to-release-channel/rc_regular` | plan-ok | — |
+| container | `gke/standard/zonal/node_image` | plan-ok | — |
+| container | `gke/standard/zonal/secondary-boot-disk` | plan-ok | — |
+| container | `gke/standard/zonal/single-zone` | plan-ok | — |
 | container | `container_cluster-example-1` | plan-ok | — |
+| container | `container_cluster-example-2` | plan-ok | — |
 | container | `container_cluster-example-3` | plan-ok | — |
 | container | `container_cluster-example-4` | plan-ok | — |
 | container | `container_node_pool-example-1` | plan-ok | — |
-| container | `container_node_pool-example-2` | plan-ok | — |
 | dataproc | `dataproc_cluster-example-2` | plan-ok | — |
 | dataproc | `dataproc_cluster-example-3` | plan-ok | — |
 | dataproc | `dataproc_job-example-1` | plan-ok | — |
 | dataproc | `dataproc_job-example-2` | config | Insufficient placement blocks: At least 1 "placement" blocks are required. |
 | dataproc | `dataproc_job-example-3` | config | Insufficient placement blocks: At least 1 "placement" blocks are required. |
+| eventarc | `eventarc/advanced` | plan-ok | — |
+| eventarc | `eventarc/basic` | plan-ok | — |
+| eventarc | `eventarc/basic_pubsub` | plan-ok | — |
+| eventarc | `eventarc/workflows` | plan-ok | — |
 | eventarc | `eventarc_enrollment-example-1` | config | Reference to undeclared resource: A managed resource "google_eventarc_message_bus" "primary" has not been declared in the root module. |
 | eventarc | `eventarc_pipeline-example-1` | plan-ok | — |
 | eventarc | `eventarc_pipeline-example-2` | plan-ok | — |
@@ -114,11 +269,12 @@ gate: every failure class below is owned by a ledger row in
 | functions | `cloudfunctions2_function-example-2` | plan-ok | — |
 | functions | `cloudfunctions2_function-example-7` | plan-ok | — |
 | functions | `cloudfunctions2_function-example-8` | plan-ok | — |
+| iam | `workflows/basic` | plan-ok | — |
+| iam | `google_project_iam-example-2` | plan-ok | — |
+| iam | `google_project_iam-example-3` | plan-ok | — |
 | iam | `google_service_account-example-1` | plan-ok | — |
 | iam | `google_service_account_key-example-1` | plan-ok | — |
 | iam | `google_service_account_key-example-2` | plan-ok | — |
-| iam | `google_project_iam-example-2` | plan-ok | — |
-| iam | `google_project_iam-example-3` | plan-ok | — |
 | kms | `kms_crypto_key-example-1` | plan-ok | — |
 | kms | `kms_crypto_key-example-2` | plan-ok | — |
 | kms | `kms_crypto_key_version-example-1` | plan-ok | — |
@@ -129,6 +285,8 @@ gate: every failure class below is owned by a ledger row in
 | logging | `logging_log_scope-example-1` | plan-ok | — |
 | logging | `logging_log_view-example-1` | plan-ok | — |
 | logging | `logging_metric-example-2` | plan-ok | — |
+| managedkafka | `managedkafka/managedkafka_create_cluster` | plan-ok | — |
+| managedkafka | `managedkafka/managedkafka_create_topic` | plan-ok | — |
 | managedkafka | `managed_kafka_acl-example-1` | plan-ok | — |
 | managedkafka | `managed_kafka_topic-example-1` | plan-ok | — |
 | memorystore | `redis_instance-example-2` | unrouted | projects/test-project/global/networks/redis-test-network not found: |
@@ -138,8 +296,8 @@ gate: every failure class below is owned by a ledger row in
 | metastore | `dataproc_metastore_federation-example-1` | plan-ok | — |
 | metastore | `dataproc_metastore_federation-example-2` | plan-ok | — |
 | metastore | `dataproc_metastore_service-example-1` | plan-ok | — |
-| metastore | `dataproc_metastore_service-example-10` | plan-ok | — |
 | metastore | `dataproc_metastore_service-example-11` | plan-ok | — |
+| metastore | `dataproc_metastore_service-example-12` | plan-ok | — |
 | monitoring | `monitoring_alert_policy-example-1` | plan-ok | — |
 | monitoring | `monitoring_alert_policy-example-2` | plan-ok | — |
 | monitoring | `monitoring_alert_policy-example-3` | plan-ok | — |
@@ -154,6 +312,35 @@ gate: every failure class below is owned by a ledger row in
 | resourcemanager | `google_project-example-3` | plan-ok | — |
 | resourcemanager | `google_project_default_service_accounts-example-1` | plan-ok | — |
 | resourcemanager | `google_project_default_service_accounts-example-2` | plan-ok | — |
+| run | `run/add_tag` | plan-ok | — |
+| run | `run/cloud_run_configuration_concurrency` | plan-ok | — |
+| run | `run/cloud_run_configuration_containers` | plan-ok | — |
+| run | `run/cloud_run_configuration_cpu` | plan-ok | — |
+| run | `run/cloud_run_configuration_cpu_allocation` | plan-ok | — |
+| run | `run/cloud_run_configuration_description` | plan-ok | — |
+| run | `run/cloud_run_configuration_environment_variables` | plan-ok | — |
+| run | `run/cloud_run_configuration_http2` | plan-ok | — |
+| run | `run/cloud_run_configuration_labels` | plan-ok | — |
+| run | `run/cloud_run_configuration_max_instances` | plan-ok | — |
+| run | `run/cloud_run_configuration_memory_limits` | plan-ok | — |
+| run | `run/cloud_run_configuration_min_instances` | plan-ok | — |
+| run | `run/cloud_run_configuration_request_timeout` | plan-ok | — |
+| run | `run/connect_cloud_sql` | plan-ok | — |
+| run | `run/deploy_tag` | plan-ok | — |
+| run | `run/direct_vpc` | plan-ok | — |
+| run | `run/healthchecks_liveness_probe_grpc` | plan-ok | — |
+| run | `run/healthchecks_liveness_probe_http` | plan-ok | — |
+| run | `run/healthchecks_startup_probe_grpc` | plan-ok | — |
+| run | `run/healthchecks_startup_probe_http` | plan-ok | — |
+| run | `run/healthchecks_startup_probe_tcp` | plan-ok | — |
+| run | `run/identity` | plan-ok | — |
+| run | `run/remove_tag` | plan-ok | — |
+| run | `run/secret_manager` | plan-ok | — |
+| run | `run/traffic_gradual_rollout` | plan-ok | — |
+| run | `run/traffic_latest_revision` | plan-ok | — |
+| run | `run/traffic_rollback` | plan-ok | — |
+| run | `run/traffic_split` | plan-ok | — |
+| run | `run/traffic_split_tag` | plan-ok | — |
 | run | `cloud_run_v2_service-example-11` | plan-ok | — |
 | run | `cloud_run_v2_service-example-12` | plan-ok | — |
 | run | `cloud_run_v2_service-example-16` | plan-ok | — |
@@ -162,13 +349,19 @@ gate: every failure class below is owned by a ledger row in
 | scheduler | `cloud_scheduler_job-example-1` | plan-ok | — |
 | scheduler | `cloud_scheduler_job-example-2` | plan-ok | — |
 | scheduler | `cloud_scheduler_job-example-4` | plan-ok | — |
-| scheduler | `cloud_scheduler_job-example-5` | unimplemented | Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator: |
-| scheduler | `cloud_scheduler_job-example-6` | unimplemented | Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator: |
-| secretmanager | `secret_manager_secret-example-2` | plan-ok | — |
-| secretmanager | `secret_manager_secret-example-3` | plan-ok | — |
-| secretmanager | `secret_manager_secret_version-example-1` | plan-ok | — |
-| secretmanager | `secret_manager_secret_version-example-2` | plan-ok | — |
-| secretmanager | `secret_manager_secret_version-example-3` | plan-ok | — |
+| scheduler | `cloud_scheduler_job-example-5` | plan-ok | — |
+| scheduler | `cloud_scheduler_job-example-6` | plan-ok | — |
+| secretmanager | `secret_manager_regional_secret-example-1` | plan-ok | — |
+| secretmanager | `secret_manager_regional_secret-example-4` | plan-ok | — |
+| secretmanager | `secret_manager_regional_secret-example-5` | plan-ok | — |
+| secretmanager | `secret_manager_regional_secret-example-6` | plan-ok | — |
+| secretmanager | `secret_manager_regional_secret_version-example-1` | plan-ok | — |
+| storage | `storage/flask_google_cloud_quickstart` | plan-ok | — |
+| storage | `storage/hmac_key` | plan-ok | — |
+| storage | `storage/make_data_public` | plan-ok | — |
+| storage | `storage/new_bucket` | plan-ok | — |
+| storage | `storage/static_website` | plan-ok | — |
+| storage | `vertex_ai/api` | plan-ok | — |
 | storage | `storage_bucket-example-2` | plan-ok | — |
 | storage | `storage_bucket-example-4` | plan-ok | — |
 | storage | `storage_bucket-example-5` | plan-ok | — |
@@ -186,23 +379,23 @@ gate: every failure class below is owned by a ledger row in
 | service | case | result | detail |
 |---|---|---|---|
 | bigquery | `bigquery_dataset-example-4` | apply-ok | apply, no changes, destroy |
-| run | `cloud_run_v2_service-example-1` | apply-ok | apply, no changes, destroy |
-| scheduler | `cloud_scheduler_job-example-3` | apply-ok | apply, no changes, destroy |
-| tasks | `cloud_tasks_queue-example-1` | apply-ok | apply, no changes, destroy |
-| dataproc | `dataproc_cluster-example-1` | apply-ok | apply, no changes, destroy |
-| metastore | `dataproc_metastore_service-example-10` | apply-ok | apply, no changes, destroy |
 | clouddns | `dns_record_set-example-2` | apply-ok | apply, no changes, destroy |
+| dataproc | `dataproc_cluster-example-1` | apply-ok | apply, no changes, destroy |
 | eventarc | `eventarc_channel-example-1` | apply-ok | apply, no changes, destroy |
-| firestoreadmin | `firestore_database-example-1` | apply-ok | apply, no changes, destroy |
 | firestore | `firestore_document-example-1` | apply-ok | apply, no changes, destroy |
+| firestoreadmin | `firestore_database-example-1` | apply-ok | apply, no changes, destroy |
 | iam | `google_project_iam-example-1` | apply-ok | apply, no changes, destroy |
-| serviceusage | `google_project_service-example-1` | apply-ok | apply, no changes, destroy |
 | kms | `kms_key_ring-example-1` | apply-ok | apply, no changes, destroy |
 | logging | `logging_metric-example-1` | apply-ok | apply, no changes, destroy |
 | managedkafka | `managed_kafka_cluster-example-1` | apply-ok | apply, no changes, destroy |
+| memorystore | `redis_instance-example-1` | apply-ok | apply, no changes, destroy |
+| metastore | `dataproc_metastore_service-example-10` | apply-ok | apply, no changes, destroy |
 | monitoring | `monitoring_custom_service-example-1` | apply-ok | apply, no changes, destroy |
 | pubsub | `pubsub_topic-example-1` | apply-ok | apply, no changes, destroy |
-| memorystore | `redis_instance-example-1` | apply-ok | apply, no changes, destroy |
+| run | `cloud_run_v2_service-example-1` | apply-ok | apply, no changes, destroy |
+| scheduler | `cloud_scheduler_job-example-3` | apply-ok | apply, no changes, destroy |
 | secretmanager | `secret_manager_secret-example-1` | apply-ok | apply, no changes, destroy |
+| serviceusage | `google_project_service-example-1` | apply-ok | apply, no changes, destroy |
 | storage | `storage_bucket-example-1` | apply-ok | apply, no changes, destroy |
+| tasks | `cloud_tasks_queue-example-1` | apply-ok | apply, no changes, destroy |
 

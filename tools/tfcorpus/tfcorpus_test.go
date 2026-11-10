@@ -154,22 +154,219 @@ func TestDiscoverSamples(t *testing.T) {
 		`resource "google_storage_bucket" "b" { name = "b" }`)
 	writeFile(t, filepath.Join(root, "composer", "env", "main.tf"),
 		`resource "google_composer_environment" "e" {}`)
-	cases, err := DiscoverSamples(root, testCoverage())
+	writeFile(t, filepath.Join(root, "storage", "beta", "main.tf"),
+		`resource "google_storage_bucket" "b" {
+  provider = google-beta
+  name     = "b"
+}`)
+	writeFile(t, filepath.Join(root, "storage", "helper", "main.tf"),
+		`resource "kubernetes_secret" "s" {}
+
+resource "google_storage_bucket" "b" { name = "b" }`)
+	cases, err := DiscoverSamples(root, testCoverage(), "7.46.2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 2 {
-		t.Fatalf("cases = %d, want 2", len(cases))
+	if len(cases) != 4 {
+		t.Fatalf("cases = %d, want 4", len(cases))
 	}
 	byName := map[string]ManifestCase{}
 	for _, c := range cases {
 		byName[c.Name] = c
 	}
-	if c := byName["storage/basic"]; c.Status != StatusExcluded || !strings.Contains(c.Reason, "deferred") {
+	if c := byName["storage/basic"]; c.Status != StatusCandidate || c.Mode != ModePlan || c.Service != "storage" || c.Reason != "" {
 		t.Errorf("storage/basic = %+v", c)
 	}
 	if c := byName["composer/env"]; c.Status != StatusExcluded || !strings.Contains(c.Reason, "unsupported-service") {
 		t.Errorf("composer/env = %+v", c)
+	}
+	if c := byName["storage/beta"]; c.Status != StatusExcluded || !strings.Contains(c.Reason, "beta-provider") {
+		t.Errorf("storage/beta = %+v", c)
+	}
+	if c := byName["storage/helper"]; c.Status != StatusExcluded || !strings.Contains(c.Reason, "kubernetes_secret") {
+		t.Errorf("storage/helper = %+v", c)
+	}
+}
+
+func TestSampleServicesUseScenarioGroup(t *testing.T) {
+	coverage := map[string]CoverageRow{
+		"google_project_service":       {Service: "serviceusage", Classification: "served"},
+		"google_compute_network":       {Service: "compute", Classification: "served"},
+		"google_sql_database_instance": {Service: "cloudsql", Classification: "served"},
+		"google_sql_database":          {Service: "cloudsql", Classification: "served"},
+		"google_container_cluster":     {Service: "container", Classification: "served"},
+		"google_storage_bucket":        {Service: "storage", Classification: "served"},
+	}
+	got := sampleServices(map[string][]string{
+		// Cloud SQL scenarios declare a project-service or network prerequisite
+		// first; the group majority must still file them under cloudsql.
+		"cloud_sql/mysql_basic":  {"google_project_service", "google_sql_database_instance"},
+		"cloud_sql/mysql_psc_sa": {"google_compute_network", "google_sql_database_instance"},
+		"cloud_sql/mysql_db":     {"google_sql_database"},
+		"gke/cluster":            {"google_container_cluster"},
+		"storage/basic":          {"google_storage_bucket"},
+	}, coverage)
+	want := map[string]string{
+		"cloud_sql/mysql_basic":  "cloudsql",
+		"cloud_sql/mysql_psc_sa": "cloudsql",
+		"cloud_sql/mysql_db":     "cloudsql",
+		"gke/cluster":            "container",
+		"storage/basic":          "storage",
+	}
+	for name, svc := range want {
+		if got[name] != svc {
+			t.Errorf("sampleServices[%q] = %q, want %q", name, got[name], svc)
+		}
+	}
+}
+
+func TestUnroutableDataSources(t *testing.T) {
+	coverage := map[string]CoverageRow{
+		"google_storage_bucket": {ProviderResource: "google_storage_bucket", Service: "storage", Classification: "served"},
+		"google_project":        {ProviderResource: "google_project", Service: "resourcemanager", Classification: "served"},
+	}
+	body := `data "google_project" "p" {}
+data "google_storage_project_service_account" "sa" {}
+data "google_iam_policy" "policy" {}
+data "google_compute_network" "n" {}
+data "google_backup_dr_backup_vault" "v" {}`
+	missing := unroutableDataSources(body, coverage)
+	if len(missing) != 2 {
+		t.Fatalf("missing = %v, want compute network and backup vault", missing)
+	}
+	want := map[string]bool{"google_compute_network": true, "google_backup_dr_backup_vault": true}
+	for _, m := range missing {
+		if !want[m] {
+			t.Errorf("unexpected missing data source %q", m)
+		}
+	}
+}
+
+func TestFutureProviderRequirement(t *testing.T) {
+	body := `terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 8.8.0"
+    }
+  }
+}
+
+resource "google_storage_bucket" "b" { name = "b" }`
+	if got := futureProviderRequirement(body, "7.46.2"); got != ">= 8.8.0" {
+		t.Fatalf("got %q", got)
+	}
+	if got := futureProviderRequirement(body, "8.9.0"); got != "" {
+		t.Fatalf("pinned provider satisfies the constraint, got %q", got)
+	}
+	old := `terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 6.0, < 8.0"
+    }
+  }
+}`
+	if got := futureProviderRequirement(old, "7.46.2"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+	// A different provider's version inside the same block is not the corpus pin.
+	other := `terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 7.0"
+    }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = ">= 9.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = ">= 9.0"
+    }
+  }
+}`
+	if got := futureProviderRequirement(other, "7.46.2"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestDiscoverSamplesExcludesUnroutableDataAndNewerProvider(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "cloud_sql", "backupdr", "main.tf"),
+		`resource "google_sql_database_instance" "i" {}
+data "google_backup_dr_backup_vault" "v" {}`)
+	writeFile(t, filepath.Join(root, "compute", "newer", "main.tf"),
+		`terraform {
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 8.8.0"
+    }
+  }
+}
+resource "google_compute_instance" "i" {}`)
+	coverage := map[string]CoverageRow{
+		"google_sql_database_instance": {ProviderResource: "google_sql_database_instance", Service: "cloudsql", Classification: "served"},
+		"google_compute_instance":      {ProviderResource: "google_compute_instance", Service: "compute", Classification: "served"},
+	}
+	cases, err := DiscoverSamples(root, coverage, "7.46.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]ManifestCase{}
+	for _, c := range cases {
+		byName[c.Name] = c
+	}
+	if c := byName["cloud_sql/backupdr"]; c.Status != StatusExcluded || !strings.Contains(c.Reason, "google_backup_dr_backup_vault") {
+		t.Errorf("backupdr = %+v", c)
+	}
+	if c := byName["compute/newer"]; c.Status != StatusExcluded || !strings.Contains(c.Reason, "provider-version") {
+		t.Errorf("newer = %+v", c)
+	}
+}
+
+func TestSelectPlanCasesPerSourceCap(t *testing.T) {
+	m := &Manifest{Cases: []ManifestCase{
+		{Name: "storage_bucket-example-1", Source: "provider-docs", Service: "storage", Mode: ModePlan, Status: StatusCandidate},
+		{Name: "storage_bucket-example-2", Source: "provider-docs", Service: "storage", Mode: ModePlan, Status: StatusCandidate},
+		{Name: "storage/basic", Source: "docs-samples", Service: "storage", Mode: ModePlan, Status: StatusCandidate},
+		{Name: "storage/helpers", Source: "docs-samples", Service: "storage", Mode: ModePlan, Status: StatusCandidate},
+		{Name: "storage/older", Source: "docs-samples", Service: "storage", Mode: ModePlan, Status: StatusExcluded, Reason: "unsupported-service: x"},
+	}}
+	got := selectPlanCases(m, 1, "", "", "")
+	if len(got) != 2 {
+		t.Fatalf("cases = %d, want 2 (one per source): %+v", len(got), got)
+	}
+	seen := map[string]bool{}
+	for _, c := range got {
+		seen[c.Source] = true
+	}
+	if !seen["provider-docs"] || !seen["docs-samples"] {
+		t.Fatalf("cap dropped a source: %+v", got)
+	}
+	if names := selectPlanCases(m, 0, "", "", "docs-samples"); len(names) != 2 {
+		t.Fatalf("source filter = %+v", names)
+	}
+	if names := selectPlanCases(m, 0, "", "", "docs-samples"); names[0].Source != "docs-samples" || names[1].Source != "docs-samples" {
+		t.Fatalf("source filter leaked other sources: %+v", names)
+	}
+}
+
+func TestRequireCorpora(t *testing.T) {
+	docs := ManifestCase{Name: "a", Source: "provider-docs"}
+	sample := ManifestCase{Name: "b", Source: "docs-samples"}
+	if err := requireCorpora([]ManifestCase{sample}, "", "/tmp/samples"); err != nil {
+		t.Fatalf("samples-only should not need TF_PROVIDER_DOCS: %v", err)
+	}
+	err := requireCorpora([]ManifestCase{docs, sample}, "/tmp/docs", "")
+	if err == nil || !strings.Contains(err.Error(), "TF_SAMPLES_DIR") {
+		t.Fatalf("err = %v", err)
+	}
+	err = requireCorpora([]ManifestCase{docs}, "", "/tmp/samples")
+	if err == nil || !strings.Contains(err.Error(), "TF_PROVIDER_DOCS") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -521,6 +718,32 @@ func TestSelectModesAndZeroExampleServices(t *testing.T) {
 	zero := servicesWithoutCandidates(got, coverage)
 	if len(zero) != 1 || zero[0] != "composer" {
 		t.Errorf("zero = %v", zero)
+	}
+}
+
+func TestMergeResults(t *testing.T) {
+	old := []CaseResult{
+		{Name: "doc-1", Source: "provider-docs", Service: "storage", Class: "plan-ok"},
+		{Name: "sample-1", Source: "docs-samples", Service: "storage", Class: "plan-ok"},
+	}
+	// A filtered samples run updates only the case it ran and keeps everything
+	// else, including the other samples case.
+	fresh := []CaseResult{{Name: "sample-2", Source: "docs-samples", Service: "run", Class: "plan-ok"}}
+	got := mergeResults(fresh, old, nil)
+	if len(got) != 3 {
+		t.Fatalf("merged = %+v", got)
+	}
+	// An exhaustive samples run replaces the whole source and keeps the other.
+	got = mergeResults(fresh, old, map[string]bool{"docs-samples": true})
+	if len(got) != 2 {
+		t.Fatalf("merged = %+v", got)
+	}
+	if got[0].Name != "sample-2" || got[1].Name != "doc-1" {
+		t.Fatalf("merged = %+v", got)
+	}
+	rep := BuildReport(&Manifest{}, "tf", "http://x", "p", got, nil, nil)
+	if len(rep.Plan) != 2 || rep.Plan[0].Source != "docs-samples" || rep.Plan[1].Source != "provider-docs" {
+		t.Fatalf("report plan not deterministic: %+v", rep.Plan)
 	}
 }
 

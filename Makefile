@@ -2149,19 +2149,25 @@ check-gcp-terraform-coverage: ## Fail if the Terraform coverage inventory is sta
 # TF2: the provider-docs / Google-samples web corpus. Nothing here clones from
 # the network: point TF_PROVIDER_DOCS (and optionally TF_SAMPLES_DIR) at local
 # checkouts. Without them the targets SKIP, and STRICT=1 makes a SKIP fatal (CI).
+# -max-per-service caps per service *and corpus source*, so the samples subset
+# never pushes the provider-docs cases out of the triage.
 TF_PROVIDER_DOCS ?=
 TF_SAMPLES_DIR ?=
 TF_CORPUS_MAX_PER_SERVICE ?= 5
 CORPUS_SERVICES ?=
 CORPUS_CASES ?=
+# `$(comma)` keeps the samples source inside the `then` branch of $(if).
+comma := ,
+CORPUS_SOURCES ?= provider-docs$(if $(TF_SAMPLES_DIR),$(comma)docs-samples)
 gen-gcp-terraform-corpus: ## Extract the corpus manifest from a pinned provider-docs checkout (TF2)
 	@test -n "$(TF_PROVIDER_DOCS)" || { echo "ERROR: set TF_PROVIDER_DOCS=/path/to/terraform-provider-google"; exit 1; }
 	TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" go run ./tools/tfcorpus -discover
 
-test-gcp-terraform-corpus: ## Plan-only web-corpus triage + curated apply allowlist (TF2; needs TF_PROVIDER_DOCS)
+test-gcp-terraform-corpus: ## Plan-only web-corpus triage (provider-docs + docs-samples) + curated apply allowlist (TF2; needs TF_PROVIDER_DOCS)
 	@set -e; \
 	  command -v "$(TF_BIN)" >/dev/null 2>&1 || { echo "SKIP: $(TF_BIN) not installed"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
 	  [ -n "$(TF_PROVIDER_DOCS)" ] || { echo "SKIP: TF_PROVIDER_DOCS is not set (clone hashicorp/terraform-provider-google and pass it)"; [ -n "$(STRICT)" ] && exit 1; exit 0; }; \
+	  [ -n "$(TF_SAMPLES_DIR)" ] || { echo "SKIP: TF_SAMPLES_DIR is not set (clone terraform-google-modules/terraform-docs-samples and pass it; docs-samples candidates would not run)"; [ -n "$(STRICT)" ] && exit 1; }; \
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
@@ -2172,9 +2178,12 @@ test-gcp-terraform-corpus: ## Plan-only web-corpus triage + curated apply allowl
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-corpus.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
-	  TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
-	    go run ./tools/tfcorpus -run -max-per-service "$(TF_CORPUS_MAX_PER_SERVICE)" \
-	      $(if $(CORPUS_SERVICES),-service "$(CORPUS_SERVICES)",) $(if $(CORPUS_CASES),-case "$(CORPUS_CASES)",); \
+	  for source in $$(echo "$(CORPUS_SOURCES)" | tr ',' ' '); do \
+	    echo "  corpus source: $$source"; \
+	    TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
+	      go run ./tools/tfcorpus -run -source "$$source" -max-per-service "$(TF_CORPUS_MAX_PER_SERVICE)" \
+	        $(if $(CORPUS_SERVICES),-service "$(CORPUS_SERVICES)",) $(if $(CORPUS_CASES),-case "$(CORPUS_CASES)",); \
+	  done; \
 	  TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
 	    go run ./tools/tfcorpus -apply \
 	      $(if $(CORPUS_SERVICES),-service "$(CORPUS_SERVICES)",) $(if $(CORPUS_CASES),-case "$(CORPUS_CASES)",)

@@ -185,7 +185,10 @@ func MergeCases(old *Manifest, discovered []ManifestCase) []ManifestCase {
 // re-discovery may replace it.
 func generatedReason(reason string) bool {
 	return strings.HasPrefix(reason, "unsupported-service:") ||
+		strings.HasPrefix(reason, "unsupported-service (data source):") ||
 		strings.HasPrefix(reason, "helper-provider:") ||
+		strings.HasPrefix(reason, "beta-provider:") ||
+		strings.HasPrefix(reason, "provider-version:") ||
 		strings.Contains(reason, "deferred")
 }
 
