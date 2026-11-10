@@ -281,7 +281,28 @@ resource "google_sql_ssl_cert" "compat" {
   instance    = google_sql_database_instance.compat.name
 }
 
-# ── Dataproc Metastore — federation + database IAM ────────────────────────────
+# ── Dataproc Metastore — service port + federation + database IAM ─────────────
+# google_dataproc_metastore_service requests an explicit `port` (TF2-13): real
+# Metastore echoes a requested port and the provider's port is Optional+Computed,
+# so a Service that assigned its own port instead would permadiff on the second
+# plan. The service is the backend the federation and the database IAM grant
+# below name, and its read-back port/endpointUri are assertions in run.sh.
+resource "google_dataproc_metastore_service" "compat" {
+  service_id = "jaiscloud-tf-metastore"
+  location   = var.region
+  project    = var.project
+  port       = 9080
+  tier       = "DEVELOPER"
+
+  hive_metastore_config {
+    version = "3.1.2"
+  }
+
+  labels = {
+    env = "compat-test"
+  }
+}
+
 # google_dataproc_metastore_federation exercises the separate
 # DataprocMetastoreFederation surface (create/get/update/delete + LRO), and
 # google_dataproc_metastore_database_iam_member exercises the IAM mixin at the
@@ -565,6 +586,10 @@ output "sql_ssl_cert_fingerprint" {
 
 output "enabled_service" {
   value = google_project_service.run_api.service
+}
+
+output "metastore_service_name" {
+  value = google_dataproc_metastore_service.compat.name
 }
 
 output "metastore_federation_name" {

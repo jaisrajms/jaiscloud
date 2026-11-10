@@ -54,9 +54,12 @@ func TestSDKMetastore(t *testing.T) {
 	parent := fmt.Sprintf("projects/%s/locations/%s", project, location)
 	serviceID := unique("ms")
 
-	// CreateService returns a done LRO (Dataproc shape).
+	// CreateService returns a done LRO (Dataproc shape). A requested port is
+	// honored (TF2-13): real Metastore echoes it and the Terraform provider is
+	// Optional+Computed, so a different read-back permadiffs.
 	op, err := svc.Projects.Locations.Services.Create(parent, &metastore.Service{
 		Labels: map[string]string{"env": "test"},
+		Port:   9080,
 		HiveMetastoreConfig: &metastore.HiveMetastoreConfig{
 			Version: "3.1.2",
 		},
@@ -73,17 +76,37 @@ func TestSDKMetastore(t *testing.T) {
 	require.Equal(t, "DEVELOPER", created.Tier)
 	require.NotEmpty(t, created.EndpointUri)
 	require.Equal(t, "test", created.Labels["env"])
+	require.Equal(t, int64(9080), created.Port, "the requested port must be echoed")
+	require.Contains(t, created.EndpointUri, ":9080", "the endpoint must name the catalog listener")
 
 	// GetService returns the logical service (created synchronously).
 	got, err := svc.Projects.Locations.Services.Get(wantName).Do()
 	require.NoError(t, err)
 	require.Equal(t, wantName, got.Name)
 	require.Equal(t, "ACTIVE", got.State)
+	require.Equal(t, int64(9080), got.Port)
 
 	// ListServices includes it.
 	list, err := svc.Projects.Locations.Services.List(parent).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, list.Services)
+
+	// PatchService(updateMask=port) moves the port, and the read-back agrees —
+	// the path the Terraform provider drives on a port change.
+	patchOp, err := svc.Projects.Locations.Services.Patch(wantName, &metastore.Service{
+		Name: wantName,
+		Port: 9081,
+	}).UpdateMask("port").Do()
+	require.NoError(t, err)
+	require.True(t, patchOp.Done)
+	var patched metastore.Service
+	require.NoError(t, json.Unmarshal(patchOp.Response, &patched))
+	require.Equal(t, int64(9081), patched.Port)
+	require.Contains(t, patched.EndpointUri, ":9081")
+	got, err = svc.Projects.Locations.Services.Get(wantName).Do()
+	require.NoError(t, err)
+	require.Equal(t, int64(9081), got.Port)
+	require.Contains(t, got.EndpointUri, ":9081")
 
 	// CreateBackup returns a done LRO.
 	backupID := unique("bk")

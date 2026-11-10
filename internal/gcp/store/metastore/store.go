@@ -41,11 +41,12 @@ type ServiceState struct {
 // databaseType, telemetryConfig, scalingConfig, ...) verbatim as JSON; Labels
 // are the extracted labels map.
 //
-// Port is the Hive Metastore Thrift port assigned to this Service's own
-// catalog. Real Dataproc Metastore gives every Service its own HMS; the
-// emulator models that with one catalog (and one listener) per Service, so the
-// port is a real routing address rather than a cosmetic output. It is output
-// only and assigned once, at create time.
+// Port is the Hive Metastore Thrift port serving this Service's own catalog.
+// Real Dataproc Metastore gives every Service its own HMS; the emulator models
+// that with one catalog (and one listener) per Service, so the port is a real
+// routing address rather than a cosmetic output. A caller may request it at
+// create/update (the API field is Optional); when it does not, the emulator
+// assigns one above the base --hms-port at create time and never reuses it.
 type Service struct {
 	ProjectID    string            `json:"projectId"`
 	Location     string            `json:"location"`

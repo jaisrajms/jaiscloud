@@ -269,7 +269,7 @@ google_dataproc_metastore_federation,metastore,served,fixture:compat,served,,202
 google_dataproc_metastore_federation_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_metastore_federation_iam_member,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_metastore_federation_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
-google_dataproc_metastore_service,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
+google_dataproc_metastore_service,metastore,served,fixture:compat,served,,2027-06-30
 google_dataproc_metastore_service_iam_binding,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_metastore_service_iam_member,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_dataproc_metastore_service_iam_policy,metastore,served,none,served,metastore is served; no fixture or module case declares this resource type yet,2027-06-30

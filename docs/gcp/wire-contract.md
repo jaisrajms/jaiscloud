@@ -356,10 +356,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   while a k8s-executor job is still in flight (the generic `google.longrunning.Operations` stub
   does not read the Dataproc store; the REST `operations.get` path does); Metastore's Hive Thrift
   serving plane implements databases/tables/partitions/locks with one catalog per Service: each
-  Service is assigned its own port at create time and its `port`/`endpointUri` name the listener
-  that serves only its catalog, so two Services (same project or different projects/locations) do
-  not collide on a database name, each owns its `default`, and Iceberg commit locks are per
-  catalog. The Thrift protocol carries no service identity, so the port is the catalog selector.
+  Service gets its own port (a request's `port` is honored — the API field is Optional and real
+  Metastore echoes it; otherwise `--hms-port`+1 and upward), and its `port`/`endpointUri` name the
+  listener that serves only its catalog, so two Services (same project or different
+  projects/locations) do not collide on a database name, each owns its `default`, and Iceberg
+  commit locks are per catalog. The Thrift protocol carries no service identity, so the port is
+  the catalog selector: a requested port must be free and must not be the base `--hms-port`
+  (duplicate `ALREADY_EXISTS`, reserved base `INVALID_ARGUMENT`), and an update with
+  `updateMask=port` moves the listener with it.
   The base `--hms-port` (:9083) keeps serving the legacy shared catalog for clients that name no
   Service (the AWS Glue Data Catalog analogue: one catalog per account+region), and a pre-NF32
   snapshot restores into it; deleting a Service closes its listener and drops its catalog; a
