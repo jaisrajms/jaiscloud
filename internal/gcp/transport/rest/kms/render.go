@@ -55,6 +55,12 @@ func cryptoKeyBaseMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey) map[str
 		"name":       kmscore.CryptoKeyName(nr.AccountID, k.Location, k.KeyRingID, k.ID),
 		"purpose":    k.Purpose,
 		"createTime": timestamp.Canonical(k.CreateTime),
+		// Cloud KMS always reports the destruction window: a create that does
+		// not carry destroy_scheduled_duration gets the documented 30-day
+		// default (measured against real GCP: a CryptoKey created with only
+		// purpose=ENCRYPT_DECRYPT reads back 2592000s, TF6-1). The per-key
+		// override is not modelled (docs/gcp/wire-contract.md).
+		"destroyScheduledDuration": durationString(kmsstore.DefaultDestroyScheduledDuration),
 		"versionTemplate": map[string]any{
 			"algorithm":       k.Algorithm,
 			"protectionLevel": protectionLevel(k.ProtectionLevel),

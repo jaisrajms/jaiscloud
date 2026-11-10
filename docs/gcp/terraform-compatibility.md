@@ -110,8 +110,6 @@ broken gate, not a pass: the nightly and drift workflows run with `STRICT=1`.
 The committed report (`tests/integration/gcp/terraform/differential/report.md`)
 is the authoritative, regenerated table. It currently classifies:
 
-- `TF6-1` KMS `CryptoKey.get` omits `destroyScheduledDuration` (real GCP:
-  `2592000s`) — emulator gap, scheduled.
 - `TF6-2` BigQuery `datasets.get` omits `selfLink` — emulator gap, scheduled.
 - `TF6-3` GCS object `mediaLink` omits the `generation` query parameter —
   emulator gap, scheduled.
