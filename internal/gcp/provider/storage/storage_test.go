@@ -170,8 +170,9 @@ func TestBucketLabels(t *testing.T) {
 		t.Fatalf("labels not preserved: %v", labels)
 	}
 
-	// A PATCH supplying labels replaces the whole set (real GCS semantics for a
-	// map field): the omitted "team" label is removed.
+	// buckets.update (PUT) replaces the whole label set: the omitted "team"
+	// label is cleared. (buckets.patch merges instead — see
+	// TestBucketsPatchMergesLabels.)
 	nr = bucketParams()
 	nr.Params["bucket"] = "labeled"
 	nr.Params["body"] = map[string]any{"labels": map[string]any{"env": "updated"}}
@@ -2704,8 +2705,8 @@ func TestBucketLabelsKeepEmptyValues(t *testing.T) {
 		}
 	}
 
-	// The update path (a label-set PATCH) keeps an empty value too, and still
-	// replaces the set as a whole.
+	// The buckets.update (PUT) path keeps an empty value too, and replaces the
+	// set as a whole.
 	nr = bucketParams()
 	nr.Params["bucket"] = "empty-label-bucket"
 	nr.Params["body"] = map[string]any{"labels": map[string]any{"team": "", "env": "staging"}}
@@ -2726,7 +2727,7 @@ func TestBucketLabelsKeepEmptyValues(t *testing.T) {
 		t.Fatalf("team after update = %q (present=%v), want the empty value preserved", v, present)
 	}
 	if _, present := labels["project"]; present {
-		t.Fatalf("project should be replaced away by the label-set PATCH: %v", labels)
+		t.Fatalf("project should be replaced away by the PUT label set: %v", labels)
 	}
 }
 

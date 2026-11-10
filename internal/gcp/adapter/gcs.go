@@ -190,6 +190,12 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 			}
 			nr.Params["body"] = m
+			// buckets.patch is a JSON merge patch (RFC 7386); buckets.update
+			// (PUT) replaces. The provider needs to tell them apart for the
+			// fields where the two rules differ, e.g. the labels map.
+			if r.Method == http.MethodPatch {
+				nr.Params[wire.MergePatchKey] = true
+			}
 		case http.MethodDelete:
 			nr.Action = "BucketsDelete"
 		default:

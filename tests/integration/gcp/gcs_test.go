@@ -173,6 +173,52 @@ func TestGCSPagination(t *testing.T) {
 	require.False(t, hasNext)
 }
 
+// TestGCSBucketLabelsPatchMerges pins TF5-2 over the wire: a buckets.patch body
+// is a JSON merge patch for the labels map. A key carried with a value is set,
+// a key sent as an explicit null is removed, and a key absent from the request
+// is preserved — the shape hashicorp/google sends when it clears a removed
+// label (Bucket.NullFields["Labels.<key>"]) rather than replacing the map.
+// buckets.update (PUT) still replaces the whole map.
+func TestGCSBucketLabelsPatchMerges(t *testing.T) {
+	resetState(t)
+
+	resp, body := do(t, "POST", "/storage/v1/b?project=proj",
+		[]byte(`{"name":"label-merge-bucket","labels":{"a":"1","b":"2"}}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	// PATCH {a:"9"} keeps b.
+	resp, body = do(t, "PATCH", "/storage/v1/b/label-merge-bucket",
+		[]byte(`{"labels":{"a":"9"}}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	labels, _ := jsonMap(t, body)["labels"].(map[string]any)
+	require.Equal(t, "9", labels["a"])
+	require.Equal(t, "2", labels["b"])
+
+	// PATCH {b:null} removes b and keeps a.
+	resp, body = do(t, "PATCH", "/storage/v1/b/label-merge-bucket",
+		[]byte(`{"labels":{"b":null}}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	labels, _ = jsonMap(t, body)["labels"].(map[string]any)
+	require.Equal(t, "9", labels["a"])
+	require.NotContains(t, labels, "b")
+
+	// The same map is served by a read-back.
+	resp, body = do(t, "GET", "/storage/v1/b/label-merge-bucket", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	labels, _ = jsonMap(t, body)["labels"].(map[string]any)
+	require.Equal(t, "9", labels["a"])
+	require.NotContains(t, labels, "b")
+
+	// PUT replaces: a body carrying only c clears a.
+	resp, body = do(t, "PUT", "/storage/v1/b/label-merge-bucket",
+		[]byte(`{"labels":{"c":"3"}}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	labels, _ = jsonMap(t, body)["labels"].(map[string]any)
+	require.Len(t, labels, 1)
+	require.Equal(t, "3", labels["c"])
+}
+
 func TestGCSBucketIAMAndACL(t *testing.T) {
 	resetState(t)
 	createBucket(t, "iam-bucket")
