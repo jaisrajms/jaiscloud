@@ -57,6 +57,33 @@ func callLogLevelToProto(s string) workflowspb.Workflow_CallLogLevel {
 	}
 }
 
+// executionHistoryLevelName maps the proto enum to the string the shared store
+// persists (matching the REST wire enum name). The proto's zero value means
+// "unset" and is stored as "" so a read omits it exactly as the REST transport
+// does.
+func executionHistoryLevelName(l workflowspb.ExecutionHistoryLevel) string {
+	switch l {
+	case workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_BASIC:
+		return "EXECUTION_HISTORY_BASIC"
+	case workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_DETAILED:
+		return "EXECUTION_HISTORY_DETAILED"
+	default:
+		return ""
+	}
+}
+
+// executionHistoryLevelToProto maps the stored string back to the proto enum.
+func executionHistoryLevelToProto(s string) workflowspb.ExecutionHistoryLevel {
+	switch s {
+	case "EXECUTION_HISTORY_BASIC":
+		return workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_BASIC
+	case "EXECUTION_HISTORY_DETAILED":
+		return workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_DETAILED
+	default:
+		return workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_LEVEL_UNSPECIFIED
+	}
+}
+
 // workflowToProto renders a stored workflow as the proto Workflow. An unset
 // service account is reported as the project default, matching real GCP (and
 // the REST transport).
@@ -66,17 +93,18 @@ func workflowToProto(w workflowsstore.Workflow, project string) *workflowspb.Wor
 		revisionCreateTime = w.UpdateTime
 	}
 	out := &workflowspb.Workflow{
-		Name:               core.WorkflowName(project, w.Location, w.ID),
-		Description:        w.Description,
-		State:              stateToProto(w.State),
-		RevisionId:         w.RevisionID,
-		CreateTime:         timestamp.Proto(w.CreateTime),
-		UpdateTime:         timestamp.Proto(w.UpdateTime),
-		RevisionCreateTime: timestamp.Proto(revisionCreateTime),
-		Labels:             w.Labels,
-		UserEnvVars:        w.UserEnvVars,
-		Tags:               w.Tags,
-		CallLogLevel:       callLogLevelToProto(w.CallLogLevel),
+		Name:                  core.WorkflowName(project, w.Location, w.ID),
+		Description:           w.Description,
+		State:                 stateToProto(w.State),
+		RevisionId:            w.RevisionID,
+		CreateTime:            timestamp.Proto(w.CreateTime),
+		UpdateTime:            timestamp.Proto(w.UpdateTime),
+		RevisionCreateTime:    timestamp.Proto(revisionCreateTime),
+		Labels:                w.Labels,
+		UserEnvVars:           w.UserEnvVars,
+		Tags:                  w.Tags,
+		CallLogLevel:          callLogLevelToProto(w.CallLogLevel),
+		ExecutionHistoryLevel: executionHistoryLevelToProto(w.ExecutionHistoryLevel),
 	}
 	if w.SourceContents != "" {
 		out.SourceCode = &workflowspb.Workflow_SourceContents{SourceContents: w.SourceContents}
@@ -182,6 +210,7 @@ func createInputFromProto(w *workflowspb.Workflow, id string) core.CreateInput {
 		in.ServiceAccount = w.GetServiceAccount()
 		in.SourceContents = w.GetSourceContents()
 		in.CallLogLevel = callLogLevelName(w.GetCallLogLevel())
+		in.ExecutionHistoryLevel = executionHistoryLevelName(w.GetExecutionHistoryLevel())
 		in.UserEnvVars = w.GetUserEnvVars()
 		in.Tags = w.GetTags()
 	}
@@ -199,6 +228,7 @@ func updateInputFromProto(w *workflowspb.Workflow, mask *fieldmaskpb.FieldMask, 
 		in.ServiceAccount = w.GetServiceAccount()
 		in.SourceContents = w.GetSourceContents()
 		in.CallLogLevel = callLogLevelName(w.GetCallLogLevel())
+		in.ExecutionHistoryLevel = executionHistoryLevelName(w.GetExecutionHistoryLevel())
 	}
 	return in
 }

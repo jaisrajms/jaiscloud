@@ -172,14 +172,15 @@ func (p *Provider) CreateWorkflow(ctx context.Context, nr *model.NormalizedReque
 		id = core.WorkflowIDFromName(strFrom(body["name"]))
 	}
 	_, op, err := p.core.CreateWorkflow(ctx, project, strParam(nr, "location"), core.CreateInput{
-		ID:             id,
-		Description:    strFrom(body["description"]),
-		Labels:         stringMapFrom(body["labels"]),
-		ServiceAccount: strFrom(body["serviceAccount"]),
-		SourceContents: strFrom(body["sourceContents"]),
-		CallLogLevel:   strFrom(body["callLogLevel"]),
-		UserEnvVars:    stringMapFrom(body["userEnvVars"]),
-		Tags:           stringMapFrom(body["tags"]),
+		ID:                    id,
+		Description:           strFrom(body["description"]),
+		Labels:                stringMapFrom(body["labels"]),
+		ServiceAccount:        strFrom(body["serviceAccount"]),
+		SourceContents:        strFrom(body["sourceContents"]),
+		CallLogLevel:          strFrom(body["callLogLevel"]),
+		ExecutionHistoryLevel: strFrom(body["executionHistoryLevel"]),
+		UserEnvVars:           stringMapFrom(body["userEnvVars"]),
+		Tags:                  stringMapFrom(body["tags"]),
 	})
 	if err != nil {
 		return nil, err
@@ -196,14 +197,15 @@ func (p *Provider) UpdateWorkflow(ctx context.Context, nr *model.NormalizedReque
 	}
 	body := bodyOf(nr)
 	_, op, err := p.core.UpdateWorkflow(ctx, project, location, core.UpdateInput{
-		ID:             core.WorkflowIDFromName(name),
-		UpdateMask:     strParam(nr, "updateMask"),
-		Description:    strFrom(body["description"]),
-		Labels:         stringMapFrom(body["labels"]),
-		UserEnvVars:    stringMapFrom(body["userEnvVars"]),
-		ServiceAccount: strFrom(body["serviceAccount"]),
-		SourceContents: strFrom(body["sourceContents"]),
-		CallLogLevel:   strFrom(body["callLogLevel"]),
+		ID:                    core.WorkflowIDFromName(name),
+		UpdateMask:            strParam(nr, "updateMask"),
+		Description:           strFrom(body["description"]),
+		Labels:                stringMapFrom(body["labels"]),
+		UserEnvVars:           stringMapFrom(body["userEnvVars"]),
+		ServiceAccount:        strFrom(body["serviceAccount"]),
+		SourceContents:        strFrom(body["sourceContents"]),
+		CallLogLevel:          strFrom(body["callLogLevel"]),
+		ExecutionHistoryLevel: strFrom(body["executionHistoryLevel"]),
 	})
 	if err != nil {
 		return nil, err

@@ -28,6 +28,15 @@
 #   destroy: the workflow through the API, then the service account and IAM
 #     grant through Terraform; all are 404
 #
+# The `modules/simple_workflow` submodule does not expose
+# `execution_history_level`, so the generated root module also declares the
+# provider's own `google_workflows_workflow` resource with the attribute set
+# (BASIC, then DETAILED on the in-place mutate). That is the permadiff
+# assertion for the field: apply stores it, the read-back echoes it, the
+# post-apply re-plan is clean, and the second apply PATCHes it
+# (`updateMask=executionHistoryLevel`). The module workflow, which does not set
+# it, must not gain the field on read (an unset value stays unset).
+#
 # Provider note 1: the module declares `google >= 3.53, < 7.0`, so this case
 # pins `= 6.49.3` (the latest 6.x) while every other case pins 7.46.2. The FC6
 # capture is therefore scoped to google_workflows_workflow and tolerates an
@@ -44,11 +53,13 @@
 # ledger row; it is not an emulator gap.
 #
 # Boundaries: `crypto_key_name` (CMEK; README-GCP records workflow CMEK as not
-# implemented), `call_log_level`, `execution_history_level` and `user_env_vars`
-# are not exposed by the submodule and stay unconfigured. Workflow IAM is not a
-# provider resource type, and the emulator serves no workflows getIamPolicy/
-# setIamPolicy (README-GCP records workflow IAM as not implemented); the
-# `roles/workflows.invoker` grant is project-level IAM, which is served.
+# implemented), `call_log_level` and `user_env_vars` are not exposed by the
+# submodule and stay unconfigured; `execution_history_level` is not exposed
+# either, so a root-level `google_workflows_workflow` covers it. Workflow IAM is
+# not a provider resource type, and the emulator serves no workflows
+# getIamPolicy/setIamPolicy (README-GCP records workflow IAM as not
+# implemented); the `roles/workflows.invoker` grant is project-level IAM, which
+# is served.
 #
 # Provider note 3: `workflows_custom_endpoint`, `resource_manager_custom_endpoint`
 # are versioned base URLs (one trailing slash); `iam_custom_endpoint` is the
@@ -71,8 +82,9 @@ WORKFLOW="jc-tf-workflow"
 #   $1 description (HCL string literal)
 #   $2 labels (HCL map literal)
 #   $3 workflow source (HCL string literal)
+#   $4 execution history level (HCL string literal)
 write_module() {
-  local description="$1" labels="$2" source="$3"
+  local description="$1" labels="$2" source="$3" history_level="$4"
 
   cat >"$WORK/main.tf" <<EOF
 terraform {
@@ -132,11 +144,35 @@ module "workflow" {
   workflow_source       = $source
   service_account_email = google_service_account.workflow.email
 }
+
+# The submodule does not expose execution_history_level, so this root-level
+# resource pins the provider attribute: it must be stored, echoed on read and
+# applied by an in-place update, with no permadiff on the post-apply re-plan.
+# deletion_protection is cleared explicitly so terraform destroy deletes it.
+resource "google_workflows_workflow" "history" {
+  name                    = "jc-tf-workflow-history"
+  region                  = "us-central1"
+  project                 = var.project
+  description             = "jaiscloud execution history level case"
+  source_contents         = $source
+  execution_history_level = $history_level
+  deletion_protection     = false
+}
 EOF
 }
 
 workflow_url() {
   echo "$ENDPOINT/v1/projects/$PROJECT/locations/us-central1/workflows/$WORKFLOW"
+}
+
+# history_url is the root-level google_workflows_workflow that pins
+# execution_history_level.
+history_url() {
+  echo "$ENDPOINT/v1/projects/$PROJECT/locations/us-central1/workflows/jc-tf-workflow-history"
+}
+
+workflows_url() {
+  echo "$ENDPOINT/v1/projects/$PROJECT/locations/us-central1/workflows"
 }
 
 service_account_url() {
@@ -163,6 +199,27 @@ check_body() {
 
 body_of() {
   curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$1" 2>/dev/null || true
+}
+
+# check_body_absent asserts the API body carries none of the given substrings:
+# an unset optional field must stay unset instead of being invented by the
+# emulator (executionHistoryLevel's documented default is UNSPECIFIED).
+check_body_absent() {
+  local name="$1" url="$2"
+  shift 2
+  local body want
+  body="$(body_of "$url")"
+  if [[ -z "$body" ]]; then
+    fail "$name (no response from $url)"
+    return 0
+  fi
+  for want in "$@"; do
+    if [[ "$body" == *"$want"* ]]; then
+      fail "$name (unexpected: $want)"
+      return 0
+    fi
+  done
+  pass "$name"
 }
 
 post_body() {
@@ -199,7 +256,7 @@ case_main() {
   local source_v1='main:\n  steps:\n    - hello:\n        return: \"hello\"\n'
   local source_v2='main:\n  steps:\n    - hello:\n        return: \"goodbye\"\n'
 
-  write_module '"jaiscloud terraform workflow case"' '{ env = "compat-test" }' "\"$source_v1\""
+  write_module '"jaiscloud terraform workflow case"' '{ env = "compat-test" }' "\"$source_v1\"" '"EXECUTION_HISTORY_BASIC"'
   init_phase
   plan_phase "plan (module workflow + service account + IAM)"
   apply_phase "apply (module workflow + service account + IAM)"
@@ -216,6 +273,12 @@ case_main() {
     '"revisionId":"000001-'
   check_body "workflow echoes the service account" "$(workflow_url)" \
     "jc-tf-workflow@$PROJECT.iam.gserviceaccount.com"
+  check_body "the bare workflow echoes executionHistoryLevel" "$(history_url)" \
+    '"executionHistoryLevel":"EXECUTION_HISTORY_BASIC"'
+  check_body "the workflow list echoes executionHistoryLevel" "$(workflows_url)" \
+    '"executionHistoryLevel":"EXECUTION_HISTORY_BASIC"'
+  check_body_absent "the module workflow omits the unset executionHistoryLevel" "$(workflow_url)" \
+    '"executionHistoryLevel"'
   check_body "the workflow identity exists" "$(service_account_url)" \
     '"email":"jc-tf-workflow@'"$PROJECT"'.iam.gserviceaccount.com"'
   check_post_body "the project IAM grant is present" \
@@ -227,9 +290,11 @@ case_main() {
   plan_no_changes "re-plan reports no changes"
 
   # An in-place mutate: a new source (bumps the revision), description and a
-  # second label.
-  write_module '"jaiscloud terraform workflow case v2"' '{ env = "compat-test", tier = "gold" }' "\"$source_v2\""
-  apply_phase "apply (source + description + labels)"
+  # second label. The bare workflow's executionHistoryLevel moves BASIC ->
+  # DETAILED, which the provider sends as a PATCH with
+  # updateMask=executionHistoryLevel.
+  write_module '"jaiscloud terraform workflow case v2"' '{ env = "compat-test", tier = "gold" }' "\"$source_v2\"" '"EXECUTION_HISTORY_DETAILED"'
+  apply_phase "apply (source + description + labels + executionHistoryLevel)"
   assert_no_api_errors
 
   echo "== spot checks (mutate)"
@@ -239,6 +304,8 @@ case_main() {
   check_body "workflow echoes the new source and revision 2" "$(workflow_url)" \
     'return: \"goodbye\"' \
     '"revisionId":"000002-'
+  check_body "the bare workflow echoes the updated executionHistoryLevel" "$(history_url)" \
+    '"executionHistoryLevel":"EXECUTION_HISTORY_DETAILED"'
 
   echo "== $TF: second plan after the mutate (permadiff check)"
   plan_no_changes "re-plan after the mutate reports no changes"
@@ -263,6 +330,12 @@ case_main() {
     pass "workflow GET after destroy is 404"
   else
     fail "workflow GET after destroy = HTTP $status, want 404"
+  fi
+  status="$(status_of "$(history_url)")"
+  if [[ "$status" == "404" ]]; then
+    pass "the bare workflow GET after destroy is 404"
+  else
+    fail "the bare workflow GET after destroy = HTTP $status, want 404"
   fi
   status="$(status_of "$(service_account_url)")"
   if [[ "$status" == "404" ]]; then

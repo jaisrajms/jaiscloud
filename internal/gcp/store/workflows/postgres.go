@@ -77,10 +77,12 @@ func (s *PostgresStore) CreateWorkflow(ctx context.Context, projectID, location,
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO jc_workflows
 			(project_id, location, workflow_id, description, labels, service_account, source_contents,
-			 state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			 state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+			 execution_history_level, user_env_vars, tags)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 	`, projectID, location, id, w.Description, json.RawMessage(labels), w.ServiceAccount, w.SourceContents,
-		w.State, w.RevisionID, w.CreateTime, w.UpdateTime, w.RevisionCreateTime, w.CallLogLevel, json.RawMessage(userEnvVars),
+		w.State, w.RevisionID, w.CreateTime, w.UpdateTime, w.RevisionCreateTime, w.CallLogLevel,
+		w.ExecutionHistoryLevel, json.RawMessage(userEnvVars),
 		json.RawMessage(tags)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -100,7 +102,8 @@ func scanWorkflow(row pgx.Row) (Workflow, error) {
 	var w Workflow
 	var labels, userEnvVars, tags []byte
 	err := row.Scan(&w.ID, &w.Location, &w.Description, &labels, &w.ServiceAccount, &w.SourceContents,
-		&w.State, &w.RevisionID, &w.CreateTime, &w.UpdateTime, &w.RevisionCreateTime, &w.CallLogLevel, &userEnvVars, &tags)
+		&w.State, &w.RevisionID, &w.CreateTime, &w.UpdateTime, &w.RevisionCreateTime, &w.CallLogLevel,
+		&w.ExecutionHistoryLevel, &userEnvVars, &tags)
 	if err != nil {
 		return Workflow{}, err
 	}
@@ -113,7 +116,8 @@ func scanWorkflow(row pgx.Row) (Workflow, error) {
 func (s *PostgresStore) GetWorkflow(ctx context.Context, projectID, location, id string) (Workflow, error) {
 	w, err := scanWorkflow(s.pool.QueryRow(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+		       execution_history_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 AND location=$2 AND workflow_id=$3
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -142,10 +146,12 @@ func (s *PostgresStore) UpdateWorkflow(ctx context.Context, projectID, location,
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE jc_workflows SET description=$4, labels=$5, service_account=$6, source_contents=$7,
-		       state=$8, revision_id=$9, update_time=$10, revision_create_time=$11, call_log_level=$12, user_env_vars=$13, tags=$14
+		       state=$8, revision_id=$9, update_time=$10, revision_create_time=$11, call_log_level=$12,
+		       execution_history_level=$13, user_env_vars=$14, tags=$15
 		WHERE project_id=$1 AND location=$2 AND workflow_id=$3
 	`, projectID, location, id, w.Description, json.RawMessage(labels), w.ServiceAccount, w.SourceContents,
-		w.State, w.RevisionID, w.UpdateTime, revisionCreateTime(w), w.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
+		w.State, w.RevisionID, w.UpdateTime, revisionCreateTime(w), w.CallLogLevel, w.ExecutionHistoryLevel,
+		json.RawMessage(userEnvVars), json.RawMessage(tags))
 	if err != nil {
 		return err
 	}
@@ -183,7 +189,8 @@ func (s *PostgresStore) updateWorkflowAtomicOnce(ctx context.Context, projectID,
 
 	current, err := scanWorkflow(tx.QueryRow(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+		       execution_history_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 AND location=$2 AND workflow_id=$3 FOR UPDATE
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -203,10 +210,12 @@ func (s *PostgresStore) updateWorkflowAtomicOnce(ctx context.Context, projectID,
 	tags, _ := json.Marshal(next.Tags)
 	tag, err := tx.Exec(ctx, `
 		UPDATE jc_workflows SET description=$4, labels=$5, service_account=$6, source_contents=$7,
-		       state=$8, revision_id=$9, update_time=$10, revision_create_time=$11, call_log_level=$12, user_env_vars=$13, tags=$14
+		       state=$8, revision_id=$9, update_time=$10, revision_create_time=$11, call_log_level=$12,
+		       execution_history_level=$13, user_env_vars=$14, tags=$15
 		WHERE project_id=$1 AND location=$2 AND workflow_id=$3
 	`, projectID, location, id, next.Description, json.RawMessage(labels), next.ServiceAccount, next.SourceContents,
-		next.State, next.RevisionID, next.UpdateTime, revisionCreateTime(next), next.CallLogLevel, json.RawMessage(userEnvVars), json.RawMessage(tags))
+		next.State, next.RevisionID, next.UpdateTime, revisionCreateTime(next), next.CallLogLevel, next.ExecutionHistoryLevel,
+		json.RawMessage(userEnvVars), json.RawMessage(tags))
 	if err != nil {
 		return Workflow{}, err
 	}
@@ -301,7 +310,8 @@ func (s *PostgresStore) GetRevision(ctx context.Context, projectID, location, wo
 func (s *PostgresStore) ListWorkflows(ctx context.Context, projectID, location string) ([]Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+		       execution_history_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 AND location=$2 ORDER BY workflow_id
 	`, projectID, location)
 	if err != nil {
@@ -323,7 +333,8 @@ func (s *PostgresStore) ListWorkflows(ctx context.Context, projectID, location s
 func (s *PostgresStore) ListWorkflowsByProject(ctx context.Context, projectID string) ([]Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+		       execution_history_level, user_env_vars, tags
 		FROM jc_workflows WHERE project_id=$1 ORDER BY location, workflow_id
 	`, projectID)
 	if err != nil {

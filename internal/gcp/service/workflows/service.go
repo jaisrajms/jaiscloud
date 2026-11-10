@@ -81,14 +81,15 @@ func NewService(workflows workflowsstore.Store, opts ...Option) *Service {
 // CreateInput carries the caller-supplied fields of a workflow create. The
 // transports resolve the owning project/location and the workflow ID.
 type CreateInput struct {
-	ID             string
-	Description    string
-	Labels         map[string]string
-	ServiceAccount string
-	SourceContents string
-	CallLogLevel   string
-	UserEnvVars    map[string]string
-	Tags           map[string]string
+	ID                    string
+	Description           string
+	Labels                map[string]string
+	ServiceAccount        string
+	SourceContents        string
+	CallLogLevel          string
+	ExecutionHistoryLevel string
+	UserEnvVars           map[string]string
+	Tags                  map[string]string
 }
 
 // UpdateInput carries the caller-supplied fields of a workflow update. The
@@ -96,14 +97,15 @@ type CreateInput struct {
 // UserEnvVars are nil when the request omitted the map (as opposed to supplying
 // an empty one), so an omitted map never clears the stored value.
 type UpdateInput struct {
-	ID             string
-	UpdateMask     string
-	Description    string
-	Labels         map[string]string
-	UserEnvVars    map[string]string
-	ServiceAccount string
-	SourceContents string
-	CallLogLevel   string
+	ID                    string
+	UpdateMask            string
+	Description           string
+	Labels                map[string]string
+	UserEnvVars           map[string]string
+	ServiceAccount        string
+	SourceContents        string
+	CallLogLevel          string
+	ExecutionHistoryLevel string
 }
 
 // ListWorkflows returns a cursor page of the workflows in a location, applying
@@ -317,22 +319,26 @@ func (s *Service) CreateWorkflow(ctx context.Context, project, location string, 
 	if err := validateSource(in.SourceContents); err != nil {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
 	}
+	if err := validateExecutionHistoryLevel(in.ExecutionHistoryLevel); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+	}
 	now := clock.Now().UTC()
 	w := workflowsstore.Workflow{
-		ID:                 in.ID,
-		Location:           location,
-		Description:        in.Description,
-		Labels:             in.Labels,
-		ServiceAccount:     in.ServiceAccount,
-		SourceContents:     in.SourceContents,
-		State:              "ACTIVE",
-		RevisionID:         nextRevision(""),
-		CreateTime:         now,
-		UpdateTime:         now,
-		RevisionCreateTime: now,
-		CallLogLevel:       in.CallLogLevel,
-		UserEnvVars:        in.UserEnvVars,
-		Tags:               in.Tags,
+		ID:                    in.ID,
+		Location:              location,
+		Description:           in.Description,
+		Labels:                in.Labels,
+		ServiceAccount:        in.ServiceAccount,
+		SourceContents:        in.SourceContents,
+		State:                 "ACTIVE",
+		RevisionID:            nextRevision(""),
+		CreateTime:            now,
+		UpdateTime:            now,
+		RevisionCreateTime:    now,
+		CallLogLevel:          in.CallLogLevel,
+		ExecutionHistoryLevel: normalizeExecutionHistoryLevel(in.ExecutionHistoryLevel),
+		UserEnvVars:           in.UserEnvVars,
+		Tags:                  in.Tags,
 	}
 	if err := s.workflows.CreateWorkflow(ctx, project, location, in.ID, w); err != nil {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, mapStoreError(err)
@@ -370,6 +376,11 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 			return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
 		}
 	}
+	if apply("executionHistoryLevel") {
+		if err := validateExecutionHistoryLevel(in.ExecutionHistoryLevel); err != nil {
+			return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+		}
+	}
 	w, err := s.workflows.UpdateWorkflowAtomic(ctx, project, location, in.ID, func(w workflowsstore.Workflow) (workflowsstore.Workflow, error) {
 		now := clock.Now().UTC()
 		sourceChanged := false
@@ -400,6 +411,9 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 		}
 		if apply("callLogLevel") {
 			w.CallLogLevel = in.CallLogLevel
+		}
+		if apply("executionHistoryLevel") {
+			w.ExecutionHistoryLevel = normalizeExecutionHistoryLevel(in.ExecutionHistoryLevel)
 		}
 		if sourceChanged {
 			w.RevisionID = nextRevision(w.RevisionID)
@@ -570,6 +584,7 @@ var workflowUpdateFields = map[string]string{
 	"sourcecontents":           "sourceContents",
 	"sourcecodesourcecontents": "sourceContents",
 	"callloglevel":             "callLogLevel",
+	"executionhistorylevel":    "executionHistoryLevel",
 }
 
 // canonicalMaskField normalizes an updateMask path to its canonical workflow

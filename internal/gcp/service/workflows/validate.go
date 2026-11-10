@@ -50,6 +50,46 @@ func isLetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
+// executionHistoryLevels are the documented values of
+// workflows.v1.Workflow.executionHistoryLevel (the
+// google.cloud.workflows.v1.ExecutionHistoryLevel enum). The proto's first
+// value, EXECUTION_HISTORY_LEVEL_UNSPECIFIED (0), is the default and means
+// "unset": the emulator stores it as "" so a read omits the field exactly as
+// real GCP does (the differential golden for workflows.get omits it).
+var executionHistoryLevels = []string{
+	"EXECUTION_HISTORY_BASIC",
+	"EXECUTION_HISTORY_DETAILED",
+}
+
+// validateExecutionHistoryLevel rejects a value outside the documented enum.
+// Real GCP parses the field with proto3 JSON, which rejects an unknown enum
+// name with INVALID_ARGUMENT, and the gRPC transport cannot even carry one —
+// so the check lives in the shared core and both transports agree. An empty
+// value and the proto default name both mean "unset" (stored as "").
+func validateExecutionHistoryLevel(level string) error {
+	switch level {
+	case "", "EXECUTION_HISTORY_LEVEL_UNSPECIFIED":
+		return nil
+	}
+	for _, ok := range executionHistoryLevels {
+		if level == ok {
+			return nil
+		}
+	}
+	return invalidArgument("executionHistoryLevel must be one of EXECUTION_HISTORY_LEVEL_UNSPECIFIED, EXECUTION_HISTORY_BASIC, EXECUTION_HISTORY_DETAILED")
+}
+
+// normalizeExecutionHistoryLevel maps the proto default enum name onto the
+// stored "unset" value, so an explicitly supplied
+// EXECUTION_HISTORY_LEVEL_UNSPECIFIED is rendered the same way as an omitted
+// field (proto3 omits a zero enum on read).
+func normalizeExecutionHistoryLevel(level string) string {
+	if level == "EXECUTION_HISTORY_LEVEL_UNSPECIFIED" {
+		return ""
+	}
+	return level
+}
+
 // validateSource rejects a malformed workflow definition with the same
 // structural validation the engine applies before executing, so create/update
 // fail loud at the management-plane call instead of deferring the error to the

@@ -36,7 +36,8 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	s.Reset(ctx)
 
 	const source = "main:\n  params: [a]\n  steps:\n    - r:\n        return: ${a + 1}\n"
-	w := Workflow{ID: "a", SourceContents: source, State: "ACTIVE", Labels: map[string]string{"k": "v"}}
+	w := Workflow{ID: "a", SourceContents: source, State: "ACTIVE", Labels: map[string]string{"k": "v"},
+		ExecutionHistoryLevel: "EXECUTION_HISTORY_DETAILED"}
 	if err := s.CreateWorkflow(ctx, "proj", "us-central1", "a", w); err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
@@ -66,6 +67,9 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	}
 	if got.Labels["k"] != "v" {
 		t.Fatalf("labels lost: %+v", got.Labels)
+	}
+	if got.ExecutionHistoryLevel != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("execution_history_level lost: %q", got.ExecutionHistoryLevel)
 	}
 
 	gex, err := s.GetExecution(ctx, "proj", "us-central1", "a", "e1")

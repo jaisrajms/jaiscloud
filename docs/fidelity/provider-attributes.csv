@@ -937,7 +937,7 @@ google_workflows_workflow,,,deletion_policy,,client-side,provider-local destruct
 google_workflows_workflow,,,deletion_protection,,client-side,provider-local destroy guard; never part of a request body
 google_workflows_workflow,,,description,description,no-catalog,
 google_workflows_workflow,,,effective_labels,,output-only,computed-only attribute; the body's labels member is mapped by the labels row
-google_workflows_workflow,,,execution_history_level,executionHistoryLevel,unsupported,executionHistoryLevel is not modelled by the workflows service (the wire renderer omits it); the submodule does not expose it
+google_workflows_workflow,,,execution_history_level,executionHistoryLevel,no-catalog,
 google_workflows_workflow,,,id,,client-side,provider identity attribute; never part of a request body
 google_workflows_workflow,,,labels,labels,no-catalog,
 google_workflows_workflow,,,name,name,no-catalog,
