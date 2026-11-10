@@ -113,6 +113,23 @@ const defaultDiskSizeGb = "10"
 // (an absent value reads as 0 and permadiffs the ForceNew field).
 const defaultDiskPhysicalBlockSizeBytes = "4096"
 
+// defaultNetworkMtu is the MTU a network reports when the create request omits
+// it: Discovery (Network.mtu) documents "If unspecified, the value defaults to
+// 1460". The hashicorp/google provider reads mtu back (Optional+Computed) and
+// records an absent response as 0, so a network created with an explicit mtu
+// re-plans as `mtu = 0 -> <configured>` on every plan (TF2-17).
+const defaultNetworkMtu = 1460
+
+// defaultNetworkFirewallPolicyEnforcementOrder is the order a network reports
+// when the create request omits it: Discovery
+// (Network.networkFirewallPolicyEnforcementOrder) documents "Defaults to
+// AFTER_CLASSIC_FIREWALL if the field is not specified", and the
+// hashicorp/google provider gives the attribute a Default of the same value. A
+// network that never sets it must therefore read the value back rather than
+// nothing (an absent value re-plans as
+// `+ network_firewall_policy_enforcement_order` on every plan).
+const defaultNetworkFirewallPolicyEnforcementOrder = "AFTER_CLASSIC_FIREWALL"
+
 // defaultMachineType is used when an instance create request omits machineType.
 const defaultMachineType = "e2-micro"
 
@@ -778,14 +795,24 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	if v, ok := body["autoCreateSubnetworks"].(bool); ok {
 		auto = v
 	}
+	firewallOrder := stringField(body, "networkFirewallPolicyEnforcementOrder")
+	if firewallOrder == "" {
+		firewallOrder = defaultNetworkFirewallPolicyEnforcementOrder
+	}
+	mtu := defaultNetworkMtu
+	if n, err := strconv.Atoi(stringifyInt(body["mtu"])); err == nil && n > 0 {
+		mtu = n
+	}
 	network := map[string]any{
-		"kind":                  kindNetwork,
-		"id":                    numericID(project + "/global/networks/" + name),
-		"name":                  name,
-		"autoCreateSubnetworks": auto,
-		"creationTimestamp":     formatTimestamp(clock.Now()),
-		"selfLink":              absLink(nr, "compute-network", name),
-		"targetLink":            absLink(nr, "compute-network", name),
+		"kind":                                  kindNetwork,
+		"id":                                    numericID(project + "/global/networks/" + name),
+		"name":                                  name,
+		"autoCreateSubnetworks":                 auto,
+		"mtu":                                   mtu,
+		"networkFirewallPolicyEnforcementOrder": firewallOrder,
+		"creationTimestamp":                     formatTimestamp(clock.Now()),
+		"selfLink":                              absLink(nr, "compute-network", name),
+		"targetLink":                            absLink(nr, "compute-network", name),
 	}
 	if v, ok := body["description"]; ok && v != nil {
 		network["description"] = v

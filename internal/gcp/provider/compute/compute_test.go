@@ -551,6 +551,41 @@ func TestNetworkAndFirewallCRUD(t *testing.T) {
 	if net.Data["kind"] != kindNetwork || net.Data["autoCreateSubnetworks"] != false {
 		t.Errorf("network = %v", net.Data)
 	}
+	// networkFirewallPolicyEnforcementOrder is Optional with a provider Default
+	// (AFTER_CLASSIC_FIREWALL); Discovery documents the same server default, so
+	// a create that omits it must read the default back (TF2-17).
+	if net.Data["networkFirewallPolicyEnforcementOrder"] != defaultNetworkFirewallPolicyEnforcementOrder {
+		t.Errorf("networkFirewallPolicyEnforcementOrder = %v, want the %s default",
+			net.Data["networkFirewallPolicyEnforcementOrder"], defaultNetworkFirewallPolicyEnforcementOrder)
+	}
+	// mtu is Optional+Computed with a documented server default; a network that
+	// omits it must read 1460 back, and one that sets it must echo the caller's
+	// value (an absent mtu reads as 0 and permadiffs mtu = 0 -> <configured>).
+	if mtu, ok := net.Data["mtu"].(float64); !ok || int(mtu) != defaultNetworkMtu {
+		t.Errorf("mtu = %v, want the %d default", net.Data["mtu"], defaultNetworkMtu)
+	}
+	// A caller-supplied order and mtu are echoed verbatim.
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "vpc-b", "autoCreateSubnetworks": false,
+		"networkFirewallPolicyEnforcementOrder": "BEFORE_CLASSIC_FIREWALL",
+		"mtu":                                   1500,
+	}})); err != nil {
+		t.Fatalf("create network with explicit order: %v", err)
+	}
+	explicit, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-b"}))
+	if err != nil {
+		t.Fatalf("get network with explicit order: %v", err)
+	}
+	if explicit.Data["networkFirewallPolicyEnforcementOrder"] != "BEFORE_CLASSIC_FIREWALL" {
+		t.Errorf("networkFirewallPolicyEnforcementOrder = %v, want the requested BEFORE_CLASSIC_FIREWALL",
+			explicit.Data["networkFirewallPolicyEnforcementOrder"])
+	}
+	if mtu, ok := explicit.Data["mtu"].(float64); !ok || int(mtu) != 1500 {
+		t.Errorf("mtu = %v, want the requested 1500", explicit.Data["mtu"])
+	}
+	if _, err := p.NetworksDelete(ctx, newNR(map[string]any{"network": "vpc-b"})); err != nil {
+		t.Fatalf("delete network with explicit order: %v", err)
+	}
 	nets, err := p.NetworksList(ctx, newNR(nil))
 	if err != nil {
 		t.Fatalf("list networks: %v", err)
