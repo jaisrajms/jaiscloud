@@ -41,16 +41,21 @@ func jobToProto(j schedstore.Job) *schedulerpb.Job {
 	if j.AttemptDeadline > 0 {
 		out.AttemptDeadline = durationpb.New(j.AttemptDeadline)
 	}
-	if !j.ScheduleTime.IsZero() {
-		out.ScheduleTime = timestamp.Proto(j.ScheduleTime)
-	}
-	if !j.LastAttemptTime.IsZero() {
-		out.LastAttemptTime = timestamp.Proto(j.LastAttemptTime)
+	// A paused job answers no run state: pausing removes the next run and
+	// clears the last attempt, so scheduleTime/lastAttemptTime/status stay
+	// unset (TF2-12-1).
+	if j.RunStateReported() {
+		if !j.ScheduleTime.IsZero() {
+			out.ScheduleTime = timestamp.Proto(j.ScheduleTime)
+		}
+		if !j.LastAttemptTime.IsZero() {
+			out.LastAttemptTime = timestamp.Proto(j.LastAttemptTime)
+		}
 	}
 	if !j.UserUpdateTime.IsZero() {
 		out.UserUpdateTime = timestamp.Proto(j.UserUpdateTime)
 	}
-	if j.Status != nil {
+	if j.RunStateReported() && j.Status != nil {
 		out.Status = &statuspb.Status{Code: j.Status.Code, Message: j.Status.Message}
 	}
 	return out

@@ -249,6 +249,12 @@ func TestSDKSchedulerLifecycle(t *testing.T) {
 	paused, err := svc.Projects.Locations.Jobs.Pause(jobName, &scheduler.PauseJobRequest{}).Do()
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", paused.State)
+	// A paused job answers no run state: real Cloud Scheduler removes the next
+	// run on pause and clears the last attempt with it, so scheduleTime,
+	// lastAttemptTime and status are absent (measured 2026-10-19/20, TF2-12-1).
+	require.Empty(t, paused.ScheduleTime, "a paused job must not report a scheduleTime")
+	require.Empty(t, paused.LastAttemptTime, "a paused job must not report a lastAttemptTime")
+	require.Nil(t, paused.Status, "a paused job must not report a status")
 	samePause, err := svc.Projects.Locations.Jobs.Pause(jobName, &scheduler.PauseJobRequest{}).Do()
 	require.NoError(t, err, "pausing a PAUSED job must be a no-op")
 	require.Equal(t, "PAUSED", samePause.State)

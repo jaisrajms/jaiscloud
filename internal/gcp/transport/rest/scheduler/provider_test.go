@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"testing"
+	"time"
 
 	core "jaiscloud/internal/gcp/service/scheduler"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
@@ -122,6 +123,64 @@ func TestProviderListJobsNegativePageSize(t *testing.T) {
 		perr, ok := err.(*model.ProviderError)
 		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 			t.Fatalf("ListJobs(pageSize=%#v) err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+}
+
+func TestProviderPauseClearsRunState(t *testing.T) {
+	ctx := context.Background()
+	mem := schedstore.NewMemoryStore()
+	p := NewProvider(core.NewService(mem))
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Seed an ENABLED job that has already fired with a failed status; the REST
+	// read reports all three run-state fields.
+	if err := mem.CreateJob(ctx, "p", "l", schedstore.Job{
+		Name:            "j1",
+		State:           schedstore.StateEnabled,
+		Schedule:        "* * * * *",
+		TimeZone:        "UTC",
+		Target:          schedstore.TargetHTTP,
+		HTTP:            &schedstore.HttpTarget{URI: "http://example.test/hook"},
+		ScheduleTime:    at.Add(time.Minute),
+		LastAttemptTime: at,
+		Status:          &schedstore.Status{Code: 13, Message: "boom"},
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	resp, err := p.GetJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if _, ok := resp.Data[field]; !ok {
+			t.Fatalf("an ENABLED job that fired did not render %s", field)
+		}
+	}
+
+	// Real Cloud Scheduler answers a paused job with no next run and no last
+	// attempt: :pause removes them from the job and both the response and a
+	// subsequent read leave scheduleTime/lastAttemptTime/status absent
+	// (TF2-12-1).
+	paused, err := p.PauseJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("PauseJob: %v", err)
+	}
+	if got := paused.Data["state"]; got != "PAUSED" {
+		t.Fatalf("PauseJob state = %v, want PAUSED", got)
+	}
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if v, ok := paused.Data[field]; ok {
+			t.Fatalf("pause response rendered %s = %v", field, v)
+		}
+	}
+	read, err := p.GetJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob after pause: %v", err)
+	}
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if v, ok := read.Data[field]; ok {
+			t.Fatalf("a paused job read back %s = %v", field, v)
 		}
 	}
 }

@@ -274,7 +274,71 @@ func TestPauseResumeRun(t *testing.T) {
 	if ran.LastAttemptTime.IsZero() {
 		t.Fatalf("RunJob did not record lastAttemptTime")
 	}
-	_ = mem
+
+	// Pausing a job that has fired clears its run state (TF2-12-1): real Cloud
+	// Scheduler removes the next run on pause and clears the last attempt with
+	// it, so the job reads as never scheduled and never attempted. A target that
+	// fails leaves a status to clear as well as a lastAttemptTime.
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failing.Close()
+	fired, err := core.CreateJob(ctx, "proj", "us-central1", schedstore.Job{
+		Schedule: "* * * * *",
+		TimeZone: "UTC",
+		Target:   schedstore.TargetHTTP,
+		HTTP:     &schedstore.HttpTarget{URI: failing.URL},
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	clock.SetGlobalClock(clock.FixedClock{T: at.Add(3 * time.Minute)})
+	attempted, err := core.RunJob(ctx, "proj", "us-central1", fired.Name)
+	if err != nil {
+		t.Fatalf("RunJob: %v", err)
+	}
+	if attempted.LastAttemptTime.IsZero() || attempted.Status == nil || attempted.ScheduleTime.IsZero() {
+		t.Fatalf("a failed attempt did not record run state: scheduleTime=%v lastAttemptTime=%v status=%v",
+			attempted.ScheduleTime, attempted.LastAttemptTime, attempted.Status)
+	}
+	assertPausedNoRunState := func(where string, j schedstore.Job) {
+		t.Helper()
+		if j.State != schedstore.StatePaused {
+			t.Fatalf("%s: state = %q, want PAUSED", where, j.State)
+		}
+		if !j.ScheduleTime.IsZero() || !j.LastAttemptTime.IsZero() || j.Status != nil {
+			t.Fatalf("%s: paused job kept run state: scheduleTime=%v lastAttemptTime=%v status=%v",
+				where, j.ScheduleTime, j.LastAttemptTime, j.Status)
+		}
+	}
+	pausedFired, err := core.PauseJob(ctx, "proj", "us-central1", fired.Name)
+	if err != nil {
+		t.Fatalf("PauseJob after a fired attempt: %v", err)
+	}
+	assertPausedNoRunState("pause response", pausedFired)
+	if got, err := core.GetJob(ctx, "proj", "us-central1", fired.Name); err != nil {
+		t.Fatalf("GetJob after pause: %v", err)
+	} else {
+		assertPausedNoRunState("get after pause", got)
+	}
+	// The store itself is cleared, not just the answered copy.
+	if got, err := mem.GetJob(ctx, "proj", "us-central1", fired.Name); err != nil {
+		t.Fatalf("store GetJob after pause: %v", err)
+	} else {
+		assertPausedNoRunState("stored job after pause", got)
+	}
+
+	// A repeated pause still answers the job unchanged (TF2-12): cleared state
+	// and the same userUpdateTime.
+	clock.SetGlobalClock(clock.FixedClock{T: at.Add(4 * time.Minute)})
+	again, err := core.PauseJob(ctx, "proj", "us-central1", fired.Name)
+	if err != nil {
+		t.Fatalf("repeated PauseJob: %v", err)
+	}
+	assertPausedNoRunState("repeated pause", again)
+	if !again.UserUpdateTime.Equal(pausedFired.UserUpdateTime) {
+		t.Fatalf("repeated pause bumped userUpdateTime: %v -> %v", pausedFired.UserUpdateTime, again.UserUpdateTime)
+	}
 }
 
 // TestPauseResumeIdempotent pins the measured Cloud Scheduler behaviour the

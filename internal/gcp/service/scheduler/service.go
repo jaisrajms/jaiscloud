@@ -150,6 +150,11 @@ func (s *Service) DeleteJob(ctx context.Context, project, location, name string)
 // in Job.State.ENABLED to be paused". Clients retry :pause like a read (the
 // Terraform provider issues it on every update that sets paused), so a 400 here
 // would be a wire divergence.
+//
+// The transition removes the run state: real Cloud Scheduler answers a paused
+// job with no scheduleTime (its next run is gone) and with lastAttemptTime and
+// status cleared, so a paused job reads as never attempted (measured
+// 2026-10-19/20, TF2-12-1).
 func (s *Service) PauseJob(ctx context.Context, project, location, name string) (schedstore.Job, error) {
 	return s.mutateState(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, bool, error) {
 		switch cur.State {
@@ -157,6 +162,7 @@ func (s *Service) PauseJob(ctx context.Context, project, location, name string) 
 			return cur, false, nil
 		case schedstore.StateEnabled:
 			cur.State = schedstore.StatePaused
+			cur.ClearRunState()
 			return cur, true, nil
 		default:
 			return cur, false, failedPrecondition("job must be ENABLED to pause")
