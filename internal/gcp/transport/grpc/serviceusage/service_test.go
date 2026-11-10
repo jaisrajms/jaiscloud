@@ -218,3 +218,31 @@ func TestProjectFallsBackToDefault(t *testing.T) {
 		t.Fatalf("fallback name = %q", got.GetName())
 	}
 }
+
+// TestUnknownProjectNumberPermissionDenied pins the gRPC half of the rule: a
+// project number no known project carries is PERMISSION_DENIED with the same
+// message REST returns, while a project ID keeps the synthesize-on-read
+// DISABLED answer (TF4-1-1).
+func TestUnknownProjectNumberPermissionDenied(t *testing.T) {
+	ctx := context.Background()
+	s := newService()
+
+	_, err := s.GetService(ctx, &serviceusagepb.GetServiceRequest{
+		Name: "projects/00000000000/services/serviceusage.googleapis.com",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want PermissionDenied (err=%v)", status.Code(err), err)
+	}
+	if msg := status.Convert(err).Message(); !strings.Contains(msg, "Project '00000000000' not found or permission denied.") {
+		t.Fatalf("message = %q", msg)
+	}
+
+	// The project-ID form still resolves to a synthesized project.
+	got, err := s.GetService(ctx, &serviceusagepb.GetServiceRequest{Name: serviceName})
+	if err != nil {
+		t.Fatalf("GetService by id: %v", err)
+	}
+	if got.GetState() != serviceusagepb.State_DISABLED || got.GetParent() != "projects/proj" {
+		t.Fatalf("project id service = %+v, want synthesized DISABLED", got)
+	}
+}

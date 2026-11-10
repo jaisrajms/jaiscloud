@@ -15,6 +15,16 @@
 // ResourceStore (memory + PostgreSQL backends), so no provider-level Reset or
 // Snapshotter is needed.
 //
+// A request's project reference is either a project ID or a project NUMBER
+// (the Discovery document's parent/name parameters accept both). A project ID
+// keeps Cloud Resource Manager's synthesize-on-read contract: an id the
+// emulator never created is still a project, so its service state starts
+// DISABLED. A project number is only legitimate when a known project carries
+// it; an unknown number is the 403 real Service Usage returns ("Project
+// '<n>' not found or permission denied."). The rule is enforced in this core,
+// so REST and gRPC cannot drift, and the number is resolved to the project ID
+// so both forms share one stored state.
+//
 // Mutations return a google.longrunning.Operation. By default it is done
 // inline (jaiscloud completes operations synchronously), so SDK/terraform
 // operation futures resolve immediately. The LRO timing is opt-in via
@@ -38,6 +48,7 @@ import (
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -126,10 +137,22 @@ type Operation struct {
 	Services []API
 }
 
+// ProjectResolver resolves a project number to a known project ID. It is
+// implemented by the Cloud Resource Manager core, which owns the project
+// registry (configured projects, created projects, and projects the wire
+// observed). ok=false means no known project carries that number.
+type ProjectResolver interface {
+	ProjectByNumber(ctx context.Context, number string) (string, bool, error)
+}
+
 // Service is the transport-neutral Service Usage v1 service over the shared
 // ResourceStore.
 type Service struct {
 	resources store.ResourceStore
+	// projects resolves a project-number reference to a project ID. Nil means
+	// no project registry is wired, so no numeric reference can be resolved and
+	// every one is the unknown-project 403.
+	projects ProjectResolver
 	// lroMode controls operation timing. The zero value is synchronous: every
 	// operation is stored done=true inline, matching the default synchronous contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
@@ -149,6 +172,14 @@ func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
 }
 
+// WithProjectResolver wires the project registry used to resolve a
+// project-number reference (e.g. projects/1234.../services/...) to its project
+// ID. Without it a numeric reference cannot be resolved and is rejected with
+// the same 403 an unknown number gets; project-ID references are unaffected.
+func WithProjectResolver(r ProjectResolver) Option {
+	return func(s *Service) { s.projects = r }
+}
+
 // WithEventBus wires the shared event bus the console's live status stream
 // subscribes to. Nil (the default) disables status events.
 func WithEventBus(bus *events.EventBus) Option {
@@ -166,6 +197,35 @@ func NewService(resources store.ResourceStore, opts ...Option) *Service {
 		o(s)
 	}
 	return s
+}
+
+// resolveProject maps a request's project reference to the store scope. A
+// project ID (any non-numeric reference, including the documented `-` token)
+// keeps the synthesize-on-read contract, so ids the emulator never created
+// still resolve. A project NUMBER is only valid when a known project carries
+// it: the Resource Manager registry maps it to the project ID, so the id form
+// and the number form share one state. An unresolvable number is the 403 real
+// Service Usage returns, never a synthesized project.
+func (s *Service) resolveProject(ctx context.Context, project string) (string, error) {
+	if !resource.IsProjectNumber(project) {
+		return project, nil
+	}
+	// No real project number is all zeros, and a synthesized number is never
+	// all zeros in practice; reject it before consulting the registry so the
+	// provider's dummy 00000000000 can never accidentally match a hash.
+	if strings.Trim(project, "0") == "" {
+		return "", unknownProject(project)
+	}
+	if s.projects != nil {
+		id, ok, err := s.projects.ProjectByNumber(ctx, project)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return id, nil
+		}
+	}
+	return "", unknownProject(project)
 }
 
 // ParseFilter maps a wire filter string ("state:ENABLED", "state:DISABLED", or
@@ -190,6 +250,10 @@ func ParseFilter(filter string) (StateFilter, error) {
 func (s *Service) ListAPIs(ctx context.Context, project string, filter StateFilter, pageSize int, pageToken string) ([]API, string, error) {
 	if project == "" {
 		return nil, "", invalidArgument("missing project")
+	}
+	project, err := s.resolveProject(ctx, project)
+	if err != nil {
+		return nil, "", err
 	}
 	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtService, "")
 	if err != nil {
@@ -225,10 +289,16 @@ func (s *Service) ListAPIs(ctx context.Context, project string, filter StateFilt
 
 // GetAPI returns one service. An unknown service resolves to DISABLED rather
 // than NotFound: real GCP lists every public API, and the emulator has no
-// catalog, so a never-enabled id is simply disabled.
+// catalog, so a never-enabled id is simply disabled. An unknown project NUMBER
+// is the one exception — it is the 403 real Service Usage returns, because a
+// number must name a project (see resolveProject).
 func (s *Service) GetAPI(ctx context.Context, project, service string) (API, error) {
 	if project == "" || service == "" {
 		return API{}, invalidArgument("missing project or service")
+	}
+	project, err := s.resolveProject(ctx, project)
+	if err != nil {
+		return API{}, err
 	}
 	st, err := s.readState(ctx, project, service)
 	if err != nil {
@@ -253,11 +323,23 @@ func (s *Service) BatchGetAPIs(ctx context.Context, project string, names []stri
 		return nil, invalidArgument(fmt.Sprintf(
 			"A single request can get a maximum of %d services at a time.", maxBatchGet))
 	}
+	if project != "" {
+		var err error
+		project, err = s.resolveProject(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+	}
 	apis := make([]API, 0, len(names))
 	for _, name := range names {
 		nameProject, service, ok := splitServiceName(name)
 		if !ok {
 			return nil, invalidArgument(fmt.Sprintf("Invalid service name %q.", name))
+		}
+		var err error
+		nameProject, err = s.resolveProject(ctx, nameProject)
+		if err != nil {
+			return nil, err
 		}
 		if project != "" && nameProject != project {
 			return nil, invalidArgument(fmt.Sprintf(
@@ -277,6 +359,10 @@ func (s *Service) EnableAPI(ctx context.Context, project, service string) (API, 
 	if project == "" || service == "" {
 		return API{}, Operation{}, invalidArgument("missing project or service")
 	}
+	project, err := s.resolveProject(ctx, project)
+	if err != nil {
+		return API{}, Operation{}, err
+	}
 	api, err := s.setServiceState(ctx, project, service, StateEnabled)
 	if err != nil {
 		return API{}, Operation{}, err
@@ -294,6 +380,10 @@ func (s *Service) EnableAPI(ctx context.Context, project, service string) (API, 
 func (s *Service) DisableAPI(ctx context.Context, project, service string) (API, Operation, error) {
 	if project == "" || service == "" {
 		return API{}, Operation{}, invalidArgument("missing project or service")
+	}
+	project, err := s.resolveProject(ctx, project)
+	if err != nil {
+		return API{}, Operation{}, err
 	}
 	st, err := s.readState(ctx, project, service)
 	if err != nil {
@@ -326,6 +416,10 @@ func (s *Service) BatchEnableAPIs(ctx context.Context, project string, serviceID
 	if len(serviceIDs) > maxBatchEnable {
 		return nil, Operation{}, invalidArgument(fmt.Sprintf(
 			"A single request can enable a maximum of %d services at a time.", maxBatchEnable))
+	}
+	project, err := s.resolveProject(ctx, project)
+	if err != nil {
+		return nil, Operation{}, err
 	}
 	apis := make([]API, 0, len(serviceIDs))
 	for _, id := range serviceIDs {
@@ -642,6 +736,18 @@ func decodeRecord(data json.RawMessage) record {
 // transports map onto their wire status.
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// unknownProject builds the 403 real Service Usage returns for a project
+// reference it cannot resolve: HTTP 403, PERMISSION_DENIED, and the documented
+// "Project '<ref>' not found or permission denied." message. The legacy
+// apiary errors[] entry (reason "forbidden") is carried because the Terraform
+// Google provider matches that exact *googleapi.Error string before creating a
+// project with auto_create_network = false; real GCP sends it too.
+func unknownProject(ref string) error {
+	return model.NewProviderError("PermissionDenied",
+		fmt.Sprintf("Project '%s' not found or permission denied.", ref), 403).
+		WithData(map[string]any{"reason": "forbidden"})
 }
 
 // notFound builds the canonical NotFound provider error.

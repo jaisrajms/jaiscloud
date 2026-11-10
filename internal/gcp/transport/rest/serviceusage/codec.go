@@ -147,6 +147,13 @@ func (c *Codec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse)
 }
 
 // EncodeError serialises a ProviderError as a GCP error envelope.
+//
+// A provider may carry the legacy pre-google.rpc errors[] entry in
+// ProviderError.Data["reason"] (the same convention the GCS codec uses). Real
+// Service Usage includes it on the 403 for an unknown project, and the
+// Google apiary client surfaces it as *googleapi.Error.Errors — its Error()
+// string then ends with the reason ("…, forbidden"), which the Terraform
+// Google provider matches (TF4-1-1).
 func (c *Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	status := perr.HTTPStatus
 	if status == 0 {
@@ -155,13 +162,19 @@ func (c *Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderErro
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
 	statusStr, _ := gcperr.Resolve(perr)
-	env := map[string]any{
-		"error": map[string]any{
-			"code":    status,
-			"message": perr.Message,
-			"status":  statusStr,
-		},
+	errObj := map[string]any{
+		"code":    status,
+		"message": perr.Message,
+		"status":  statusStr,
 	}
+	if reason, _ := perr.Data["reason"].(string); reason != "" {
+		errObj["errors"] = []map[string]any{{
+			"domain":  "global",
+			"reason":  reason,
+			"message": perr.Message,
+		}}
+	}
+	env := map[string]any{"error": errObj}
 	out, _ := json.Marshal(env)
 	return status, headers, out
 }

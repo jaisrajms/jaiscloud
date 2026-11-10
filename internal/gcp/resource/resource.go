@@ -603,18 +603,26 @@ func ProjectNumberFor(project string) string {
 	return ProjectNumber(project)
 }
 
-// numericProjectRef reports whether project is an all-digit project number
-// reference (real project numbers are at most 19 digits).
-func numericProjectRef(project string) bool {
-	if project == "" || len(project) > 19 {
+// IsProjectNumber reports whether ref is an all-digit project-number
+// reference. Every real project ID starts with a letter, so an all-digit
+// reference is always a number (Discovery's project/parent parameters accept
+// either form, e.g. "projects/123" where 123 is the project number).
+func IsProjectNumber(ref string) bool {
+	if ref == "" {
 		return false
 	}
-	for i := 0; i < len(project); i++ {
-		if project[i] < '0' || project[i] > '9' {
+	for i := 0; i < len(ref); i++ {
+		if ref[i] < '0' || ref[i] > '9' {
 			return false
 		}
 	}
 	return true
+}
+
+// numericProjectRef reports whether project is an all-digit project number
+// reference (real project numbers are at most 19 digits).
+func numericProjectRef(project string) bool {
+	return len(project) <= 19 && IsProjectNumber(project)
 }
 
 // ResourceID returns a function that formats GCP resource names for a project.

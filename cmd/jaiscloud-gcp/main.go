@@ -865,10 +865,35 @@ func startCmd() *cobra.Command {
 				eventarcCore.SetCloudRunInvoker(gcpSeams.Run())
 			}
 
+			// Cloud Resource Manager's transport-neutral core is shared by the
+			// v1 REST provider and the v3 gRPC adapter below, so project IAM
+			// policy lives in one store and the two transports cannot drift.
+			// The core is only built when resourcemanager is enabled. Service
+			// Usage uses it to resolve a project-number reference to its
+			// project ID (TF4-1-1), so it is constructed first.
+			var resourceManagerCore *resourcemanagercore.Service
+			if serviceEnabled("resourcemanager") {
+				resourceManagerCore = resourcemanagercore.NewService(stores.resources,
+					resourcemanagercore.WithKnownProjects(cfg.ProjectID, cfg.ExtraAccounts),
+					resourcemanagercore.WithLROMode(lroMode),
+					resourcemanagercore.WithEventBus(eventBus))
+			}
+			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
+
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
-			// against one store and cannot drift.
-			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode), serviceusagecore.WithEventBus(eventBus))
+			// against one store and cannot drift. The project registry resolves
+			// a project-number reference (projects/{number}/services/...) to its
+			// project ID; a number no known project carries is the same 403 real
+			// Service Usage returns (TF4-1-1).
+			serviceUsageOpts := []serviceusagecore.Option{
+				serviceusagecore.WithLROMode(lroMode),
+				serviceusagecore.WithEventBus(eventBus),
+			}
+			if resourceManagerCore != nil {
+				serviceUsageOpts = append(serviceUsageOpts, serviceusagecore.WithProjectResolver(resourceManagerCore))
+			}
+			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceUsageOpts...)
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
 			// Cloud Billing v1's transport-neutral core backs the REST
@@ -900,18 +925,8 @@ func startCmd() *cobra.Command {
 			tasksCore.SetEngine(tasksEngine)
 			tasksP := resttasks.NewProvider(tasksCore, cfg.ProjectID)
 
-			// Cloud Resource Manager's transport-neutral core is shared by the
-			// v1 REST provider and the v3 gRPC adapter below, so project IAM
-			// policy lives in one store and the two transports cannot drift.
-			// The core is only built when resourcemanager is enabled.
-			var resourceManagerCore *resourcemanagercore.Service
-			if serviceEnabled("resourcemanager") {
-				resourceManagerCore = resourcemanagercore.NewService(stores.resources,
-					resourcemanagercore.WithKnownProjects(cfg.ProjectID, cfg.ExtraAccounts),
-					resourcemanagercore.WithLROMode(lroMode),
-					resourcemanagercore.WithEventBus(eventBus))
-			}
-			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
+			// Cloud Resource Manager's project-number resolver is wired into IAM
+			// below; the core itself is built above, before Service Usage.
 			// A Google-managed default service account addressed through the
 			// projects/- wildcard carries only its project number, so IAM needs
 			// the project registry to map it back to a project id (TF2-1-1).

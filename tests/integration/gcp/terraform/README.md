@@ -896,13 +896,17 @@ map the fixture, the module driver and the corpus tool consume. A bare
 
 Recorded boundaries, not worked around:
 
-- **`auto_create_network`.** The bootstrap project keeps the provider default
-  (`true`). Setting it `false` makes provider 7.46.2 probe Service Usage for the
-  dummy project `00000000000`; real GCP answers `403` and the provider's
-  pre-requisite switch assumes an error, but the emulator answers `200` with
-  `DISABLED`, so the provider dereferences a nil error and panics. That is
-  TF4-1-1 (`fix/gcp-serviceusage-unknown-project`); Compute networking is
-  outside this stack's scope either way.
+- **`auto_create_network`.** The bootstrap project sets it `false`, which
+  exercises the provider's pre-requisite probe: provider 7.46.2 asks Service
+  Usage about the dummy project `00000000000` and calls `err.Error()` with no
+  nil guard, so a `200` from that call crashes it mid-create. The emulator now
+  answers real GCP's `403` (`Project '00000000000' not found or permission
+  denied.`, TF4-1-1), and the pattern's shared provider block carries the Compute
+  custom endpoint so the follow-up `networks.get(default)` reaches the emulator:
+  no default network is synthesized, the provider's documented `404` branch logs
+  "no need to delete it", and the apply converges (measured PASS, Terraform
+  1.16.3 + provider 7.46.2). Creating and deleting an actual default network is
+  still outside the stack's scope (TF4-1-2).
 - **KMS objects survive destroy.** The provider never calls the documented
   `keyRings.delete`/`cryptoKeys.delete` (TF5-3); both methods are served over REST
   (TF5-4 added `projects.locations.keyRings.delete`), so the patterns assert the

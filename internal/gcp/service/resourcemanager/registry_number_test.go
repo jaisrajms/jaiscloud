@@ -2,6 +2,7 @@ package resourcemanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -14,7 +15,7 @@ import (
 // registered, and the observed project ids and compares synthesized numbers.
 func TestProjectByNumber(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newRegistryService()
+	s, res := newRegistryService()
 
 	// A configured project resolves without any registry entry.
 	number := resource.ProjectNumber("default-proj")
@@ -46,6 +47,34 @@ func TestProjectByNumber(t *testing.T) {
 	}
 	if got, ok, err := s.ProjectByNumber(ctx, ""); err != nil || ok || got != "" {
 		t.Errorf("empty number = (%q, %v, %v), want no match", got, ok, err)
+	}
+
+	// A numeric account is a project-number reference the wire addressed, not a
+	// project identity: it must not be observed, and it must never resolve its
+	// own number. The Terraform provider's projects/00000000000 probe relies on
+	// staying unknown (TF4-1-1).
+	s.ObserveAccount(ctx, "00000000000", "serviceusage")
+	for _, id := range s.observedProjectIDs(ctx) {
+		if id == "00000000000" {
+			t.Fatalf("numeric account %q was recorded as an observed project", id)
+		}
+	}
+	if got, ok, err := s.ProjectByNumber(ctx, "00000000000"); err != nil || ok || got != "" {
+		t.Errorf("zero number = (%q, %v, %v), want no match", got, ok, err)
+	}
+
+	// An older state may already hold a numeric registry key; the resolver
+	// skips it rather than resolving the key to itself.
+	data, err := json.Marshal(synthesizeProject("00000000000"))
+	if err != nil {
+		t.Fatalf("marshal legacy row: %v", err)
+	}
+	if err := res.Upsert(ctx, "00000000000", store.GlobalRegion,
+		store.ResourceEntry{Type: rtProject, ID: "00000000000", Data: data}); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	if got, ok, err := s.ProjectByNumber(ctx, "00000000000"); err != nil || ok || got != "" {
+		t.Errorf("legacy numeric row = (%q, %v, %v), want no match", got, ok, err)
 	}
 
 	// A registry read failure is surfaced, never reported as a miss.

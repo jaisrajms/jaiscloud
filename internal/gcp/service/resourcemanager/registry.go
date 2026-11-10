@@ -246,12 +246,23 @@ func (s *Service) ProjectByNumber(ctx context.Context, number string) (string, b
 	}
 	ids := make([]string, 0, len(byID))
 	for id := range byID {
+		// A project ID always starts with a letter, so an all-digit key is a
+		// number reference the wire observed, never a project identity. Skip it:
+		// otherwise ProjectNumberFor returns the number itself and the bogus key
+		// would resolve its own number (the Terraform provider's dummy
+		// projects/00000000000 probe must stay unknown, TF4-1-1).
+		if resource.IsProjectNumber(id) {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	// Observed projects are not part of collectProjects (the console shows them
 	// in their own group), but a request that reached the wire named one, so it
 	// resolves a wildcard number too.
 	for _, id := range s.observedProjectIDs(ctx) {
+		if resource.IsProjectNumber(id) {
+			continue
+		}
 		if _, ok := byID[id]; !ok {
 			ids = append(ids, id)
 		}
