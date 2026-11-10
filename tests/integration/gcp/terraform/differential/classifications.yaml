@@ -13,16 +13,6 @@
 # a scheduled fix can close its classification when it lands.
 rules:
   - case: "*"
-    path: resources.google_bigquery_dataset.*.self_link
-    verdict: emulator-gap
-    id: TF6-2
-    branch: fix/gcp-bigquery-dataset-selflink
-    reason: >-
-      datasets.get omits selfLink. Real GCP returns
-      https://bigquery.googleapis.com/bigquery/v2/projects/{p}/datasets/{d};
-      the provider exposes it as a computed self_link.
-
-  - case: "*"
     path: resources.google_storage_bucket_object.*.media_link
     verdict: emulator-gap
     id: TF6-3
