@@ -315,7 +315,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   promotion flips it to the terminal `DESTROYED` (recording `destroyEventTime`) once the window
   elapses; `Encrypt`/asymmetric/MAC on a scheduled version fail with `FAILED_PRECONDITION` and
   `DestroyCryptoKeyVersion` is idempotent on an already-scheduled/destroyed version. The
-  per-key `destroy_scheduled_duration` override (and the org-policy minimum) is not modelled —
+  CryptoKey response carries the 30-day `destroyScheduledDuration`; the per-key
+  `destroy_scheduled_duration` override (and the org-policy minimum) is not modelled —
   the documented 30-day default applies. As with
   rotation, promotion runs on access (no background scheduler); KMS rotation schedules
   execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,

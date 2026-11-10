@@ -190,6 +190,12 @@ func (s *Service) RunJob(ctx context.Context, project, location, name string) (s
 	if err != nil {
 		return schedstore.Job{}, mapStoreErr(err)
 	}
+	// Real Cloud Scheduler refuses :run on anything but an ENABLED job
+	// (400 FAILED_PRECONDITION, measured; TF2-12-2). Guarding here, before the
+	// delivery, also covers a job created paused.
+	if cur.State != schedstore.StateEnabled {
+		return schedstore.Job{}, failedPrecondition("Job.state must be ENABLED for RunJob.")
+	}
 	if s.engine == nil || s.engine.disp == nil {
 		return cur, nil
 	}

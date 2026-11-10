@@ -110,6 +110,25 @@ tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
 ```
 
+### Parallel worktrees and the series gate (TF)
+
+Every Terraform target starts its own ephemeral emulator, so parallel worktrees
+must each pick a distinct listener pair (the default is 8080/8081) and use it
+for every gate in that worktree:
+
+```bash
+GCP_HTTP_PORT=18080 GCP_GRPC_PORT=18081 make test-gcp-terraform
+GCP_HTTP_PORT=18080 GCP_GRPC_PORT=18081 make tf-series-gate SERVICES=kms
+```
+
+`make tf-series-gate SERVICES="kms scheduler"` is the per-item gate for the
+`tf_series` branch: build + vet + unit, the Terraform fixture, every pinned
+consumer-module case that covers the services, and the web corpus restricted to
+them (plan + curated apply). It needs `TF_PROVIDER_DOCS`/`TF_SAMPLES_DIR`, and a
+SKIP — a missing binary, module checkout or corpus — fails the run: provision
+the worktree before starting an item. The emulator log name carries the REST
+port, so parallel runs do not overwrite each other's log.
+
 ## Real-GCP differential (TF6)
 
 Every gate above is emulator-only. `differential/` closes that gap: a small

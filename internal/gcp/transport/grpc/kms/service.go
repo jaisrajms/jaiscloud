@@ -879,6 +879,10 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsst
 		Name:       kmscore.CryptoKeyName(project, k.Location, k.KeyRingID, k.ID),
 		Purpose:    purposeToProto(k.Purpose),
 		ImportOnly: k.ImportOnly,
+		// Cloud KMS always reports the destruction window; a create without an
+		// explicit value gets the documented 30-day default (TF6-1). The
+		// per-key override is not modelled (docs/gcp/wire-contract.md).
+		DestroyScheduledDuration: durationpb.New(kmsstore.DefaultDestroyScheduledDuration),
 		VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
 			Algorithm:       algorithmToProto(k.Algorithm),
 			ProtectionLevel: pl,

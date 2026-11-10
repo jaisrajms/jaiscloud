@@ -73,6 +73,49 @@ func TestKMSEncryptDecryptRoundTrip(t *testing.T) {
 // three path segments, so the handler must parse it as a key ring rather than
 // with the five-segment crypto-key parser (which returned empty loc/ring and
 // silently listed nothing).
+func TestCryptoKeyDestroyScheduledDurationDefault(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := newNR(map[string]any{"location": "global", "keyRingId": "my-kr"})
+	if _, err := p.KeyRingCreate(ctx, nr); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	// A create that carries only purpose is what a raw client sends; Cloud KMS
+	// answers with the documented 30-day destruction window (TF6-1).
+	nr = newNR(map[string]any{"name": "locations/global/keyRings/my-kr", "cryptoKeyId": "my-key", "body": map[string]any{"purpose": "ENCRYPT_DECRYPT"}})
+	created, err := p.CryptoKeyCreate(ctx, nr)
+	if err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+	if got, _ := created.Data["destroyScheduledDuration"].(string); got != "2592000s" {
+		t.Fatalf("create destroyScheduledDuration = %q, want 2592000s", got)
+	}
+
+	nr = newNR(map[string]any{"name": "locations/global/keyRings/my-kr/cryptoKeys/my-key"})
+	got, err := p.CryptoKeyGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("cryptokey get: %v", err)
+	}
+	if v, _ := got.Data["destroyScheduledDuration"].(string); v != "2592000s" {
+		t.Fatalf("get destroyScheduledDuration = %q, want 2592000s", v)
+	}
+
+	nr = newNR(map[string]any{"name": "locations/global/keyRings/my-kr"})
+	list, err := p.CryptoKeyList(ctx, nr)
+	if err != nil {
+		t.Fatalf("cryptokey list: %v", err)
+	}
+	keys, _ := list.Data["cryptoKeys"].([]any)
+	if len(keys) != 1 {
+		t.Fatalf("list = %v, want one key", list.Data["cryptoKeys"])
+	}
+	first, _ := keys[0].(map[string]any)
+	if v, _ := first["destroyScheduledDuration"].(string); v != "2592000s" {
+		t.Fatalf("list destroyScheduledDuration = %q, want 2592000s", v)
+	}
+}
+
 func TestCryptoKeyList(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()

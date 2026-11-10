@@ -205,7 +205,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         gen-gcp-field-coverage gen-gcp-reference-coverage check-gcp-field-coverage \
         gen-gcp-terraform-coverage check-gcp-terraform-coverage gen-gcp-terraform-provider-schema-full \
         check-gcp-terraform-differential record-gcp-terraform-differential test-gcp-terraform-differential \
-        test-gcp-terraform-corpus gen-gcp-terraform-corpus gcp-terraform-endpoints \
+        test-gcp-terraform-corpus gen-gcp-terraform-corpus gcp-terraform-endpoints tf-series-gate \
         security-scan security-scan-go security-scan-ui security-scan-python security-scan-images security-tool-trivy \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
 
@@ -1271,14 +1271,14 @@ test-gcp-terraform: ## Opt-in GCP Terraform compat suite (requires terraform; sk
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_BIN=terraform tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_BIN=terraform tests/integration/gcp/terraform/run.sh http://localhost:$(GCP_HTTP_PORT) test-project
 
 # Aggregate entry point for the baseline/nightly: one emulator, then the fixture
 # and every pinned module case (tests/integration/gcp/terraform/run-all.sh).
@@ -1287,6 +1287,14 @@ test-gcp-terraform: ## Opt-in GCP Terraform compat suite (requires terraform; sk
 # checkout) a failure, which is what CI wants and a local run does not. The
 # per-case logs and summary land in /tmp/jaiscloud-gcp-terraform-all/.
 TF_BIN ?= terraform
+# The emulator listener every Terraform gate starts for itself. Parallel
+# worktrees must pick a distinct pair and pass the same pair to every gate in
+# that worktree, e.g.
+#   GCP_HTTP_PORT=18080 GCP_GRPC_PORT=18081 make tf-series-gate SERVICES=kms
+# CI keeps the defaults. The log file name carries the REST port, so two
+# worktrees never overwrite each other's emulator log.
+GCP_HTTP_PORT ?= 8080
+GCP_GRPC_PORT ?= 8081
 STRICT ?=
 test-gcp-terraform-all: ## Run the Terraform fixture + every pinned module case (TF_BIN=tofu, STRICT=1)
 	@set -e; \
@@ -1294,14 +1302,14 @@ test-gcp-terraform-all: ## Run the Terraform fixture + every pinned module case 
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-all.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-all-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-all.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-all.sh http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-all-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-all.sh http://localhost:$(GCP_HTTP_PORT) test-project
 
 # Lifecycle depth (TF5): import, refresh-only, -replace, out-of-band drift,
 # negative paths and parallel IAM, one representative case per service plus the
@@ -1314,14 +1322,14 @@ test-gcp-terraform-lifecycle: ## Lifecycle gate: import/refresh/replace/drift/ne
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-lifecycle.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-lifecycle-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-lifecycle.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-lifecycle.sh http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-lifecycle-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-lifecycle.sh http://localhost:$(GCP_HTTP_PORT) test-project
 
 # Composition patterns (TF4): the canonical provisioning stacks — a project
 # bootstrap (project + billing + APIs + IAM + storage + pubsub + secret + KMS),
@@ -1340,14 +1348,14 @@ test-gcp-terraform-patterns: ## Composition patterns: bootstrap + CMEK + event c
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-patterns.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-patterns-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-patterns.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-patterns.sh http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-patterns-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/run-patterns.sh http://localhost:$(GCP_HTTP_PORT) test-project
 
 # One composition pattern (a developer entry point like the per-case module
 # targets). PATTERN is the directory name under patterns/, e.g. 00-bootstrap.
@@ -1360,14 +1368,14 @@ test-gcp-terraform-pattern: ## Run one composition pattern (PATTERN=00-bootstrap
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-pattern.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-pattern-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pattern.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/patterns/$(PATTERN)/run.sh http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pattern-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_BIN="$(TF_BIN)" STRICT="$(STRICT)" tests/integration/gcp/terraform/patterns/$(PATTERN)/run.sh http://localhost:$(GCP_HTTP_PORT) test-project
 
 # ── Terraform differential (TF6) ───────────────────────────────────────────
 # tools/tfdifferential records a curated corpus against REAL GCP and replays it
@@ -1392,17 +1400,17 @@ test-gcp-terraform-differential: ## Replay the TF6 real-GCP goldens against an e
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-differential.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-differential-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-differential.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-differential-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
 	  go run ./tools/tfcorpus -emit-tfvars /tmp/jaiscloud-gcp-terraform-differential-endpoints.auto.tfvars.json \
-	    -endpoint http://localhost:8080 >/dev/null; \
+	    -endpoint http://localhost:$(GCP_HTTP_PORT) >/dev/null; \
 	  TF_BIN="$(TF_BIN)" go run ./tools/tfdifferential -mode compare \
-	    -endpoint http://localhost:8080 -project test-project -tf-bin "$(TF_BIN)" \
+	    -endpoint http://localhost:$(GCP_HTTP_PORT) -project test-project -tf-bin "$(TF_BIN)" \
 	    -endpoints-tfvars /tmp/jaiscloud-gcp-terraform-differential-endpoints.auto.tfvars.json \
 	    $(if $(CASES),-cases "$(CASES)")
 
@@ -1411,7 +1419,7 @@ test-gcp-terraform-differential: ## Replay the TF6 real-GCP goldens against an e
 # "nothing left". Kept separate from the k3d lifecycle so a developer can iterate
 # on the module against a local emulator without a cluster. Skips when
 # terraform is absent.
-DPGKE_TF_ENDPOINT ?= http://localhost:8080
+DPGKE_TF_ENDPOINT ?= http://localhost:$(GCP_HTTP_PORT)
 test-dpgke-demo-terraform: ## Dataproc-on-GKE Terraform module gate (apply/re-plan/destroy; skips without terraform)
 	./demo/dpgke-lifecycle/terraform/run.sh $(DPGKE_TF_ENDPOINT)
 
@@ -1427,14 +1435,14 @@ test-gcp-terraform-pubsub: ## Opt-in terraform-google-pubsub module gate (needs 
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-pubsub.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-pubsub-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pubsub.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh pubsub http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pubsub-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh pubsub http://localhost:$(GCP_HTTP_PORT) test-project
 
 # PTF2: the topic half of the same module — the full apply -> change -> re-apply
 # -> clear lifecycle, with `plan -detailed-exitcode` = 0 after every step. Before
@@ -1452,14 +1460,14 @@ test-gcp-terraform-pubsub-topic: ## Opt-in terraform-google-pubsub topic-field u
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-pubsub-topic.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-pubsub-topic-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pubsub-topic.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh pubsub-topic http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-pubsub-topic-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh pubsub-topic http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-storage case (TGM1): buckets
 # created by the module carry autoclass/hierarchicalNamespace on every bucket
@@ -1479,14 +1487,14 @@ test-gcp-terraform-storage: ## Opt-in terraform-google-cloud-storage module gate
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-storage.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-storage-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-storage.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_STORAGE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh storage http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-storage-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_STORAGE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh storage http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-memorystore case (TGM2): the module
 # always sends auth_enabled/connect_mode/transit_encryption_mode/
@@ -1507,14 +1515,14 @@ test-gcp-terraform-memorystore: ## Opt-in terraform-google-memorystore module ga
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-memorystore.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-memorystore-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-memorystore.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_MEMORYSTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh memorystore http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-memorystore-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_MEMORYSTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh memorystore http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-event-function case (TGM3): the v1
 # module always sends ingress_settings (ALLOW_ALL) and an event_trigger with
@@ -1535,14 +1543,14 @@ test-gcp-terraform-functions: ## Opt-in terraform-google-event-function module g
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-functions.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-functions-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-functions.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_FUNCTIONS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh functions http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-functions-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_FUNCTIONS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh functions http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-dns case (TGM4): the module
 # defaults to a private zone and emits private_visibility_config (VPC networks /
@@ -1564,14 +1572,14 @@ test-gcp-terraform-clouddns: ## Opt-in terraform-google-cloud-dns module gate (s
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-clouddns.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-clouddns-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-clouddns.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_CLOUDDNS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh clouddns http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-clouddns-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_CLOUDDNS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh clouddns http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-operations
 # (modules/simple-uptime-check) case (TGM5): the module emits the alert
@@ -1594,14 +1602,14 @@ test-gcp-terraform-cloud-operations: ## Opt-in terraform-google-cloud-operations
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-cloud-operations.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-cloud-operations-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-cloud-operations.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_CLOUD_OPERATIONS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh cloud-operations http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-cloud-operations-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_CLOUD_OPERATIONS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh cloud-operations http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-kms case (TGM6): the module always
 # emits the crypto key's `version_template`, so changing `key_algorithm` sends
@@ -1622,14 +1630,14 @@ test-gcp-terraform-kms: ## Opt-in terraform-google-kms module gate (skips withou
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-kms.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-kms-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-kms.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_KMS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh kms http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-kms-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_KMS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh kms http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-firestore case (TGM11): that CFT
 # module emits the database's `cmek_config` block whenever `kms_key_name` is set.
@@ -1650,14 +1658,14 @@ test-gcp-terraform-firestore: ## Opt-in terraform-google-firestore module gate (
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-firestore.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-firestore-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-firestore.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_FIRESTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh firestore http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-firestore-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_FIRESTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh firestore http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-run case (TF3-1). The repo's
 # root module is the v1 service, which the emulator does not serve (TF1-6), so
@@ -1678,14 +1686,14 @@ test-gcp-terraform-cloudrun: ## Opt-in terraform-google-cloud-run (modules/v2) m
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-cloudrun.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-cloudrun-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-cloudrun.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_CLOUD_RUN_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh cloudrun http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-cloudrun-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_CLOUD_RUN_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh cloudrun http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-bigquery case (TF3-2). The CFT
 # blueprint's root module creates the served control plane (dataset + tables),
@@ -1706,14 +1714,14 @@ test-gcp-terraform-bigquery: ## Opt-in terraform-google-bigquery module gate (sk
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-bigquery.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-bigquery-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-bigquery.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_BIGQUERY_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh bigquery http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-bigquery-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_BIGQUERY_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh bigquery http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-secret-manager case (TF3-3). The CFT
 # blueprint's root module creates the served global secret surface (secrets,
@@ -1734,14 +1742,14 @@ test-gcp-terraform-secret-manager: ## Opt-in terraform-google-secret-manager mod
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-secret-manager.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-secret-manager-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-secret-manager.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_SECRET_MANAGER_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh secret-manager http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-secret-manager-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_SECRET_MANAGER_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh secret-manager http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-workflows case (TF3-3). The
 # module's ROOT blueprint always creates a Scheduler or Eventarc trigger, so the
@@ -1764,14 +1772,14 @@ test-gcp-terraform-workflows: ## Opt-in terraform-google-cloud-workflows module 
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-workflows.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-workflows-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-workflows.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_WORKFLOWS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh workflows http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-workflows-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_WORKFLOWS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh workflows http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-scheduler case (TF3-4). The
 # CFT blueprint creates one google_cloud_scheduler_job (its null_resource is a
@@ -1795,14 +1803,14 @@ test-gcp-terraform-scheduler: ## Opt-in terraform-google-cloud-scheduler module 
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-scheduler.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-scheduler-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-scheduler.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_SCHEDULER_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh scheduler http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-scheduler-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_SCHEDULER_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh scheduler http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-cloud-tasks case (TF3-4). The CFT
 # blueprint creates one google_cloud_tasks_queue (rate limits, retry config,
@@ -1825,14 +1833,14 @@ test-gcp-terraform-tasks: ## Opt-in terraform-google-cloud-tasks module gate (sk
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-tasks.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-tasks-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-tasks.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_TASKS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh tasks http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-tasks-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_TASKS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh tasks http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-dataproc case (TF3-5). The CFT
 # blueprint renders a GCE-shaped cluster, and the generated root module adds a
@@ -1856,14 +1864,14 @@ test-gcp-terraform-dataproc: ## Opt-in terraform-google-dataproc module gate (sk
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-dataproc.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-dataproc-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-dataproc.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_DATAPROC_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh dataproc http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-dataproc-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_DATAPROC_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh dataproc http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-service-accounts case (TF3-5). The
 # CFT module creates three service accounts and a project binding per
@@ -1884,14 +1892,14 @@ test-gcp-terraform-service-accounts: ## Opt-in terraform-google-service-accounts
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-service-accounts.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-service-accounts-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-service-accounts.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_SERVICE_ACCOUNTS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh service-accounts http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-service-accounts-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_SERVICE_ACCOUNTS_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh service-accounts http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The same driver with the terraform-google-iam case (TF3-5). The repo is a
 # collection of IAM submodules, so the case pins modules/projects_iam and drives
@@ -1916,14 +1924,14 @@ test-gcp-terraform-iam: ## Opt-in terraform-google-iam module gate (skips withou
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-iam.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-iam-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-iam.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_IAM_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh iam http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-iam-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_IAM_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh iam http://localhost:$(GCP_HTTP_PORT) test-project
 
 # The plan-only tier (TF3-6). Cloud SQL's module applies (so its default target
 # runs the full lifecycle), but the same case can be measured without applying
@@ -1944,14 +1952,14 @@ test-gcp-terraform-sql-db: ## Opt-in terraform-google-sql-db (postgresql) module
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-sql-db.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-sql-db-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-sql-db.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_SQLDB_MODULE_DIR)" TF_BIN=terraform PLAN_ONLY="$(PLAN_ONLY)" tests/integration/gcp/terraform/run-module.sh sql-db http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-sql-db-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_SQLDB_MODULE_DIR)" TF_BIN=terraform PLAN_ONLY="$(PLAN_ONLY)" tests/integration/gcp/terraform/run-module.sh sql-db http://localhost:$(GCP_HTTP_PORT) test-project
 
 TF_GKE_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-kubernetes-engine
 test-gcp-terraform-gke: ## Opt-in terraform-google-kubernetes-engine plan-only gate (skips without terraform/module)
@@ -1966,14 +1974,14 @@ test-gcp-terraform-gke: ## Opt-in terraform-google-kubernetes-engine plan-only g
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-gke.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-gke-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-gke.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_GKE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh gke http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-gke-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_GKE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh gke http://localhost:$(GCP_HTTP_PORT) test-project
 
 TF_DATASTORE_MODULE_DIR ?= $(HOME)/.cache/terraform-modules/terraform-google-cloud-datastore
 test-gcp-terraform-datastore: ## Opt-in terraform-google-cloud-datastore plan-only gate (skips without terraform/module)
@@ -1988,14 +1996,14 @@ test-gcp-terraform-datastore: ## Opt-in terraform-google-cloud-datastore plan-on
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-datastore.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-datastore-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-datastore.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$(TF_DATASTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh datastore http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-datastore-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$(TF_DATASTORE_MODULE_DIR)" TF_BIN=terraform tests/integration/gcp/terraform/run-module.sh datastore http://localhost:$(GCP_HTTP_PORT) test-project
 
 # Generic plan-only entry point: measure any pinned module case without applying.
 # CASE names a module-cases/*.sh file; its MODULE_REPO decides the default
@@ -2020,14 +2028,14 @@ test-gcp-terraform-plan-only: ## Plan-only tier: make test-gcp-terraform-plan-on
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-plan-only.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-plan-only-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-plan-only.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_MODULE_DIR="$$dir" TF_BIN=terraform PLAN_ONLY=1 tests/integration/gcp/terraform/run-module.sh "$$case_name" http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-plan-only-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_MODULE_DIR="$$dir" TF_BIN=terraform PLAN_ONLY=1 tests/integration/gcp/terraform/run-module.sh "$$case_name" http://localhost:$(GCP_HTTP_PORT) test-project
 
 test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
 	@set -e; \
@@ -2035,38 +2043,38 @@ test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if 
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-opentofu.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-opentofu-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-opentofu.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-opentofu-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:$(GCP_HTTP_PORT) test-project
 
 test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via the official Google clients (tests/gcpconformance/grpc)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@set -e; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-grpc-conformance.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-grpc-conformance-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8081 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_GRPC_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-grpc-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"; \
-	  ( cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 go test -count=1 -v -timeout 180s ./... )
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-grpc-conformance-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT), gRPC :$(GCP_GRPC_PORT))"; \
+	  ( cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:$(GCP_GRPC_PORT) go test -count=1 -v -timeout 180s ./... )
 
 test-gcp-rest-grpc-parity: build-gcp ## REST<->gRPC cross-transport parity suite (tags: gcp_parity,gcp_differential,gcp_conformance)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@set -e; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-parity.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-parity-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-parity.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"; \
-	  GCP_EMULATOR_ENDPOINT_REST=http://localhost:8080 GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 \
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-parity-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT), gRPC :$(GCP_GRPC_PORT))"; \
+	  GCP_EMULATOR_ENDPOINT_REST=http://localhost:$(GCP_HTTP_PORT) GCP_EMULATOR_ENDPOINT_GRPC=localhost:$(GCP_GRPC_PORT) \
 	    go test -count=1 -tags gcp_conformance,gcp_differential,gcp_parity -v -timeout 300s ./tests/gcpparity/
 
 test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs ephemeral emulator (tag: gcloud_conformance)
@@ -2074,14 +2082,14 @@ test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs eph
 	@go build -o /tmp/jc-gcloud ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@set -e; \
-	  /tmp/jc-gcloud start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-gcloud-conformance.log 2>&1 & \
+	  /tmp/jc-gcloud start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-gcloud-conformance-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :$(GCP_HTTP_PORT))..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-gcloud-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
-	  ( cd tests/gcpconformance/gcloud && GCP_EMULATOR_ENDPOINT=http://localhost:8080 go test -tags gcloud_conformance -count=1 -v -timeout 600s ./... )
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-gcloud-conformance-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
+	  ( cd tests/gcpconformance/gcloud && GCP_EMULATOR_ENDPOINT=http://localhost:$(GCP_HTTP_PORT) go test -tags gcloud_conformance -count=1 -v -timeout 600s ./... )
 
 test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite vs ephemeral emulator (tests/clients/python)
 	@echo "Creating Python venv -> tests/clients/python/.venv ..."
@@ -2094,13 +2102,13 @@ test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite v
 	@go build -o /tmp/jc-py ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@set -e; \
-	  /tmp/jc-py start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-python-conformance.log 2>&1 & \
+	  /tmp/jc-py start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-python-conformance-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :$(GCP_HTTP_PORT))..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-python-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-python-conformance-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT), gRPC :$(GCP_GRPC_PORT))"; \
 	  tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python
 
 demo-sdk-tour: ## Official-client SDK tour (Go/Python/Java/Node) vs ephemeral jaiscloud-gcp -> PASS/FAIL matrix (demo/sdk-tour)
@@ -2171,25 +2179,35 @@ test-gcp-terraform-corpus: ## Plan-only web-corpus triage (provider-docs + docs-
 	  echo "Building jaiscloud-gcp..."; \
 	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
 	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
-	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform-corpus.log 2>&1 & \
+	  ./jaiscloud-gcp start --port $(GCP_HTTP_PORT) --grpc-port $(GCP_GRPC_PORT) --ephemeral > /tmp/jaiscloud-gcp-terraform-corpus-$(GCP_HTTP_PORT).log 2>&1 & \
 	  pid=$$!; \
-	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:$(GCP_HTTP_PORT) 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
 	  trap cleanup EXIT INT TERM; \
-	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
-	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-corpus.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"; \
+	  n=0; until curl -sf http://localhost:$(GCP_HTTP_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform-corpus-$(GCP_HTTP_PORT).log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :$(GCP_HTTP_PORT))"; \
 	  for source in $$(echo "$(CORPUS_SOURCES)" | tr ',' ' '); do \
 	    echo "  corpus source: $$source"; \
-	    TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
+	    TF_ENDPOINT="http://localhost:$(GCP_HTTP_PORT)" TF_BIN="$(TF_BIN)" TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
 	      go run ./tools/tfcorpus -run -source "$$source" -max-per-service "$(TF_CORPUS_MAX_PER_SERVICE)" \
 	        $(if $(CORPUS_SERVICES),-service "$(CORPUS_SERVICES)",) $(if $(CORPUS_CASES),-case "$(CORPUS_CASES)",); \
 	  done; \
-	  TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
+	  TF_ENDPOINT="http://localhost:$(GCP_HTTP_PORT)" TF_BIN="$(TF_BIN)" TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
 	    go run ./tools/tfcorpus -apply \
 	      $(if $(CORPUS_SERVICES),-service "$(CORPUS_SERVICES)",) $(if $(CORPUS_CASES),-case "$(CORPUS_CASES)",)
 
 gcp-terraform-endpoints: ## Print the provider snippet generated from terraform-endpoints.yaml (TF2)
 	@go run ./tools/tfcorpus -print-endpoints
+
+# The per-item gate for the TF confidence series (tf_series): build + vet +
+# unit, the Terraform fixture, every consumer-module case that covers the
+# service, and the corpus restricted to it. A SKIP is a setup failure.
+SERVICES ?=
+tf-series-gate: ## Per-item TF-series gate: fixture + module case(s) + corpus for SERVICES="kms scheduler" (TF_BIN=tofu, GCP_HTTP_PORT=18080)
+	@test -n "$(SERVICES)" || { echo "ERROR: set SERVICES=<service[,service...]>"; exit 1; }
+	@TF_BIN="$(TF_BIN)" GCP_HTTP_PORT="$(GCP_HTTP_PORT)" GCP_GRPC_PORT="$(GCP_GRPC_PORT)" \
+	  TF_PROVIDER_DOCS="$(TF_PROVIDER_DOCS)" TF_SAMPLES_DIR="$(TF_SAMPLES_DIR)" \
+	  tests/integration/gcp/terraform/series-gate.sh $(SERVICES)
 
 # The full snapshot is committed so the gate never downloads a provider. It is
 # regenerated by the weekly drift workflow; locally, an existing plugin cache
