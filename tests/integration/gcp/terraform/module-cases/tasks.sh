@@ -38,10 +38,11 @@
 #    deliver.
 #  * `rate_limits.max_burst_size` is **computed-only** in the provider's 6.x
 #    schema (7.x made it Optional+Computed), so the module's optional input must
-#    stay null. The emulator's queue renderer reports `maxBurstSize` 0 when the
-#    field is absent from the create body, where real Cloud Tasks defaults it to
-#    100; that is a recorded reader gap (TF3-4-2), and because the attribute is
-#    computed-only the provider never plans a diff for it.
+#    stay null and the provider never plans a diff for it. The create body
+#    therefore omits it, and the emulator applies the documented Cloud Tasks
+#    default: maxBurstSize 100 when the field is absent (output only, set from
+#    maxDispatchesPerSecond), alongside maxConcurrentDispatches 1000 when that is
+#    absent too. The spot checks below assert the default on read-back (TF3-4-3).
 #
 # Provider note: the module declares `google >= 3.53, < 7.0`, so this case pins
 # `google = 6.49.3` while the 7.x cases pin 7.46.2. `cloud_tasks_custom_endpoint`
@@ -196,6 +197,7 @@ case_main() {
   check_body "queue echoes its rate limits" "$(queue_url)" \
     '"rateLimits"' \
     '"maxDispatchesPerSecond":5' \
+    '"maxBurstSize":100' \
     '"maxConcurrentDispatches":3'
   check_body "queue echoes its retry config" "$(queue_url)" \
     '"retryConfig"' \
@@ -233,6 +235,7 @@ case_main() {
   echo "== spot checks (mutate)"
   check_body "queue echoes the mutated rate limits" "$(queue_url)" \
     '"maxDispatchesPerSecond":8' \
+    '"maxBurstSize":100' \
     '"maxConcurrentDispatches":2'
   check_body "queue echoes the mutated retry config" "$(queue_url)" \
     '"maxAttempts":6' \

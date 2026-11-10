@@ -39,6 +39,12 @@ func TestGRPCQueueLifecycle(t *testing.T) {
 	if !strings.HasPrefix(q.GetName(), parent+"/queues/") || q.GetState() != cloudtaskspb.Queue_RUNNING {
 		t.Fatalf("queue = %+v", q)
 	}
+	// A partial rateLimits message reads back the documented defaults for the
+	// fields it omits (maxBurstSize is output only; real Cloud Tasks answers 100
+	// and 1000 concurrent dispatches), never 0 — TF3-4-3.
+	if rl := q.GetRateLimits(); rl.GetMaxDispatchesPerSecond() != 5 || rl.GetMaxBurstSize() != 100 || rl.GetMaxConcurrentDispatches() != 1000 {
+		t.Fatalf("created queue rateLimits = %+v, want 5/100/1000", rl)
+	}
 	name := q.GetName()
 
 	if _, err := s.GetQueue(ctx, &cloudtaskspb.GetQueueRequest{Name: name}); err != nil {
@@ -59,11 +65,17 @@ func TestGRPCQueueLifecycle(t *testing.T) {
 	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `bogus="x"`}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("ListQueues(bad filter) code = %v", status.Code(err))
 	}
-	if _, err := s.UpdateQueue(ctx, &cloudtaskspb.UpdateQueueRequest{
+	upd, err := s.UpdateQueue(ctx, &cloudtaskspb.UpdateQueueRequest{
 		Queue:      &cloudtaskspb.Queue{Name: name, RateLimits: &cloudtaskspb.RateLimits{MaxDispatchesPerSecond: 9}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"rate_limits"}},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("UpdateQueue: %v", err)
+	}
+	// The mask replaces the whole rateLimits message, so the fields it omits
+	// take the defaults rather than 0 or the previous queue's values.
+	if rl := upd.GetRateLimits(); rl.GetMaxDispatchesPerSecond() != 9 || rl.GetMaxBurstSize() != 100 || rl.GetMaxConcurrentDispatches() != 1000 {
+		t.Fatalf("updated queue rateLimits = %+v, want 9/100/1000", rl)
 	}
 	if _, err := s.PauseQueue(ctx, &cloudtaskspb.PauseQueueRequest{Name: name}); err != nil {
 		t.Fatalf("PauseQueue: %v", err)
