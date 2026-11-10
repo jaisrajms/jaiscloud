@@ -33,6 +33,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"KMS.KeyRingCreate":                     p.KeyRingCreate,
 		"KMS.KeyRingList":                       p.KeyRingList,
 		"KMS.KeyRingGet":                        p.KeyRingGet,
+		"KMS.KeyRingDelete":                     p.KeyRingDelete,
 		"KMS.CryptoKeyCreate":                   p.CryptoKeyCreate,
 		"KMS.CryptoKeyList":                     p.CryptoKeyList,
 		"KMS.CryptoKeyGet":                      p.CryptoKeyGet,
@@ -153,6 +154,23 @@ func (p *Provider) KeyRingGet(ctx context.Context, nr *model.NormalizedRequest) 
 		"name":       kmscore.KeyRingName(nr.AccountID, loc, meta.ID),
 		"createTime": timestamp.Canonical(meta.CreateTime),
 	}), nil
+}
+
+// KeyRingDelete serves keyRings.delete (Discovery: DELETE v1/{+name}, an LRO
+// whose response is an empty google.protobuf.Empty). Cloud KMS requires every
+// child of the ring to be deleted first, so a ring that still holds a CryptoKey
+// is 400 FAILED_PRECONDITION; the shared core enforces that and records nothing
+// that would retire the ring's name.
+func (p *Provider) KeyRingDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	loc, kr := parseKeyRing(name)
+	if err := p.core.DeleteKeyRing(ctx, nr.AccountID, loc, kr); err != nil {
+		return nil, err
+	}
+	return provider.OK(doneOperation(kmscore.KeyRingName(nr.AccountID, loc, kr))), nil
 }
 
 // ─── CryptoKeys ───────────────────────────────────────────────────────────────

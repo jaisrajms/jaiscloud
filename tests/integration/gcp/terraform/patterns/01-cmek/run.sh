@@ -32,7 +32,7 @@ PATTERN_NAME="01-cmek"
 # shellcheck source=../lib.sh
 source "$PATTERN_DIR/../lib.sh"
 
-# Per-run suffix: the provider never deletes a key ring (TF5-4), so the rings
+# Per-run suffix: the provider never deletes a key ring (TF5-3), so the rings
 # survive destroy and a fixed name would collide on the next run against the
 # same emulator.
 SUFFIX="${JC_TF_CMEK_SUFFIX:-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -157,10 +157,10 @@ check_status "the BigQuery dataset is gone" \
 check_status "the secret is gone" \
   "$ENDPOINT/v1/projects/$PROJECT/secrets/jc-tf-cmek-secret-$SUFFIX" 404
 
-# Recorded provider/emulator boundary (TF5-3/TF5-4): hashicorp/google never
-# calls the documented keyRings.delete (state-only) or cryptoKeys.delete, and
-# projects.locations.keyRings.delete is a 501 in the emulator, so the KMS
-# objects outlive the destroy that removed every data resource.
+# Recorded provider boundary (TF5-3): hashicorp/google never calls the documented
+# keyRings.delete (state-only) or cryptoKeys.delete, so the KMS objects outlive
+# the destroy that removed every data resource. Both methods are served over
+# REST (TF5-4 added keyRings.delete); the provider simply does not use them.
 check_status "the primary key ring survives destroy (the provider never calls delete)" \
   "$ENDPOINT/v1/$PRIMARY_KEY" 200
 check_status "the global key ring survives destroy" "$ENDPOINT/v1/$GLOBAL_KEY" 200

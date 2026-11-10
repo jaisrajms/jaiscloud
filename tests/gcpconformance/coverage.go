@@ -82,6 +82,9 @@ var actionOverrides = map[string]string{
 	"KMS.CryptoKeyVersionRestore":       "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.restore",
 	"KMS.CryptoKeyVersionDelete":        "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
 	"KMS.CryptoKeyDelete":               "cloudkms.projects.locations.keyRings.cryptoKeys.delete",
+	// keyRings.delete is served on REST only (the Cloud KMS proto declares no
+	// DeleteKeyRing RPC), so pin the cell to the Discovery method.
+	"KMS.KeyRingDelete": "cloudkms.projects.locations.keyRings.delete",
 
 	// Secret Manager's bare Get/List are the secret get/list methods, not the
 	// (unimplemented) project-level locations.get/locations.list that the
