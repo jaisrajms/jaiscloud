@@ -332,7 +332,10 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, model.NewProviderError("InvalidRequest",
 			accountID+" does not match [a-z]([-a-z0-9]*[a-z0-9])?", 400)
 	}
-	displayName := accountID
+	// displayName is optional in the API: a create that does not supply one
+	// keeps it absent (real IAM omits the field rather than defaulting it to
+	// the account id — TF2-14, measured 2026-11-10).
+	displayName := ""
 	description := ""
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if sa, ok := body["serviceAccount"].(map[string]any); ok {
@@ -839,10 +842,9 @@ func saToMap(m serviceAccountMeta) map[string]any {
 	if uniqueID == "" {
 		uniqueID = m.Email
 	}
-	return map[string]any{
+	out := map[string]any{
 		"name":           m.Name,
 		"email":          m.Email,
-		"displayName":    m.DisplayName,
 		"projectId":      m.ProjectID,
 		"uniqueId":       uniqueID,
 		"description":    m.Description,
@@ -850,4 +852,10 @@ func saToMap(m serviceAccountMeta) map[string]any {
 		"oauth2ClientId": m.Oauth2ClientID,
 		"etag":           m.Etag,
 	}
+	// displayName is omitted when it was never set: real IAM does not default
+	// it to the account id (TF2-14).
+	if m.DisplayName != "" {
+		out["displayName"] = m.DisplayName
+	}
+	return out
 }
