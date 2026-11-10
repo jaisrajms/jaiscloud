@@ -33,6 +33,10 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Compute Engine disk CMEK (`google_compute_disk` with a
   `disk_encryption_key` block, read back through
   `diskEncryptionKey.kmsKeyName`; TF2-11-4)
+- Compute Engine network read shape (`google_compute_network` with
+  `routing_mode`, the BGP members, `network_profile` and the ULA IPv6 pair,
+  read back through `routingConfig`/`networkProfile`/`enableUlaInternalIpv6`/
+  `internalIpv6Range`; TF2-17-2)
 - Service Usage (`/v1/projects/{project}/services`)
 - Cloud Billing — the `data "google_project"` `billing_account` read
   (`projects.getBillingInfo`) and `google_project`'s `billing_account`

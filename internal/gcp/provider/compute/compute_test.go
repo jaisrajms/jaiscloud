@@ -820,14 +820,16 @@ func TestNetworkAndFirewallCRUD(t *testing.T) {
 	}
 }
 
-// TestNetworksPatchAppliesMutableFields pins compute.networks.patch (TF2-17-1).
-// A Terraform google_compute_network update path PATCHes the network (with a
-// fingerprinted body for mtu) whenever mtu, network_firewall_policy_enforcement_order,
-// routing_mode or a bgp_* field changes, then polls the operation it returns —
-// before this, every such apply failed with a 501 after the resource was already
-// created. The two fields the record stores are applied in place, an absent field
-// keeps its stored value (merge semantics), the identity of the record is
-// untouched, and the response is the Operation envelope Discovery declares.
+// TestNetworksPatchAppliesMutableFields pins compute.networks.patch (TF2-17-1)
+// and its read shape (TF2-17-2). A Terraform google_compute_network update path
+// PATCHes the network (with a fingerprinted body for mtu) whenever mtu,
+// network_firewall_policy_enforcement_order, routing_mode or a bgp_* field
+// changes, then polls the operation it returns — before TF2-17-1, every such
+// apply failed with a 501 after the resource was already created. The stored
+// fields are applied in place, an absent field keeps its stored value (merge
+// semantics, including member-wise for routingConfig), the identity of the
+// record is untouched, and the response is the Operation envelope Discovery
+// declares.
 func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -897,10 +899,10 @@ func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 		t.Errorf("mtu = %v, want the patched 1500 to survive an order-only patch", afterOrder.Data["mtu"])
 	}
 
-	// The provider's routing_mode/BGP path sends a collapsed routingConfig (and
-	// the ULA pair when it changes). Those are outside the record's stored shape
-	// (TF2-17-2): the call succeeds — the provider's apply must not fail — and
-	// the record reports no routing config rather than a fabricated one.
+	// The provider's routing_mode/BGP path sends a collapsed routingConfig and
+	// the ULA pair when those change. Both are part of the record's stored shape
+	// now (TF2-17-2): the members the body carries are applied, ones it does not
+	// carry keep their stored value, and a raw reader sees them.
 	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
 		"network": "vpc-patch",
 		"body": map[string]any{
@@ -915,8 +917,66 @@ func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get network after routingConfig patch: %v", err)
 	}
-	if _, ok := afterRouting.Data["routingConfig"]; ok {
-		t.Errorf("routingConfig = %v, want it unpersisted (TF2-17-2)", afterRouting.Data["routingConfig"])
+	routing, ok := afterRouting.Data["routingConfig"].(map[string]any)
+	if !ok || routing["routingMode"] != "REGIONAL" {
+		t.Errorf("routingConfig = %v, want routingMode REGIONAL", afterRouting.Data["routingConfig"])
+	}
+	if afterRouting.Data["enableUlaInternalIpv6"] != true || afterRouting.Data["internalIpv6Range"] != "fd20:0:0::/48" {
+		t.Errorf("ULA IPv6 pair = %v / %v, want true / fd20:0:0::/48",
+			afterRouting.Data["enableUlaInternalIpv6"], afterRouting.Data["internalIpv6Range"])
+	}
+
+	// A second routingConfig patch merges member-wise: the BGP members land and
+	// the routingMode a previous patch set survives.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body": map[string]any{"routingConfig": map[string]any{
+			"bgpBestPathSelectionMode": "STANDARD",
+			"bgpInterRegionCost":       "ADD_COST_TO_MED",
+			"bgpAlwaysCompareMed":      true,
+		}},
+	})); err != nil {
+		t.Fatalf("patch BGP members: %v", err)
+	}
+	afterBGP, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after BGP patch: %v", err)
+	}
+	routing, _ = afterBGP.Data["routingConfig"].(map[string]any)
+	wantRouting := map[string]any{
+		"routingMode":              "REGIONAL",
+		"bgpBestPathSelectionMode": "STANDARD",
+		"bgpInterRegionCost":       "ADD_COST_TO_MED",
+		"bgpAlwaysCompareMed":      true,
+	}
+	for field, want := range wantRouting {
+		if routing[field] != want {
+			t.Errorf("routingConfig.%s = %v, want %v (member-wise merge)", field, routing[field], want)
+		}
+	}
+	// The earlier mtu/order patches are untouched by the routing patch.
+	if mtu, ok := afterBGP.Data["mtu"].(float64); !ok || int(mtu) != 1500 {
+		t.Errorf("mtu = %v, want the patched 1500 to survive a routing patch", afterBGP.Data["mtu"])
+	}
+	if afterBGP.Data["networkFirewallPolicyEnforcementOrder"] != "BEFORE_CLASSIC_FIREWALL" {
+		t.Errorf("networkFirewallPolicyEnforcementOrder = %v, want the previously patched BEFORE_CLASSIC_FIREWALL",
+			afterBGP.Data["networkFirewallPolicyEnforcementOrder"])
+	}
+
+	// networkProfile is creation-time only (Discovery) and ForceNew in the
+	// provider, so a patch that carries it is ignored.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body":    map[string]any{"networkProfile": "projects/proj/global/networkProfiles/p"},
+	})); err != nil {
+		t.Fatalf("patch networkProfile: %v", err)
+	}
+	afterProfile, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after networkProfile patch: %v", err)
+	}
+	if _, ok := afterProfile.Data["networkProfile"]; ok {
+		t.Errorf("networkProfile = %v, want it not patchable", afterProfile.Data["networkProfile"])
 	}
 
 	// A retried patch replays its operation instead of mutating twice.
@@ -953,12 +1013,58 @@ func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 	})); !isCode(err, "InvalidArgument") {
 		t.Errorf("patch bad enforcement order = %v, want InvalidArgument", err)
 	}
+	// The routingConfig members and the ULA range are validated on patch the same
+	// way they are on create.
+	for _, bad := range []map[string]any{
+		{"routingConfig": map[string]any{"routingMode": "SIDEWAYS"}},
+		{"routingConfig": map[string]any{"bgpBestPathSelectionMode": "BEST"}},
+		{"routingConfig": map[string]any{"bgpInterRegionCost": "CHEAP"}},
+		{"routingConfig": map[string]any{"bgpAlwaysCompareMed": "yes"}},
+		{"routingConfig": "REGIONAL"},
+		{"internalIpv6Range": "fd30:0:0::/48"},
+		{"internalIpv6Range": "fd20:0:0::/56"},
+		{"internalIpv6Range": "not-a-range"},
+	} {
+		if _, err := p.NetworksPatch(ctx, newNR(map[string]any{"network": "vpc-patch", "body": bad})); !isCode(err, "InvalidArgument") {
+			t.Errorf("patch %v = %v, want InvalidArgument", bad, err)
+		}
+	}
 	final, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
 	if err != nil {
 		t.Fatalf("get network after rejected patches: %v", err)
 	}
 	if mtu, ok := final.Data["mtu"].(float64); !ok || int(mtu) != 1400 {
 		t.Errorf("mtu = %v, want the last accepted 1400 (a rejected patch must not mutate)", final.Data["mtu"])
+	}
+	if routing, _ := final.Data["routingConfig"].(map[string]any); routing["routingMode"] != "REGIONAL" || routing["bgpAlwaysCompareMed"] != true {
+		t.Errorf("routingConfig = %v, want the accepted REGIONAL/true pair after the rejected patches", final.Data["routingConfig"])
+	}
+	if final.Data["internalIpv6Range"] != "fd20:0:0::/48" {
+		t.Errorf("internalIpv6Range = %v, want the accepted fd20:0:0::/48 after the rejected patches", final.Data["internalIpv6Range"])
+	}
+
+	// delete_bgp_always_compare_med: the hashicorp provider clears the member by
+	// sending it as JSON null (plus its undocumented deleteBgpAlwaysCompareMed
+	// flag); the other routingConfig members stay.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body": map[string]any{"routingConfig": map[string]any{
+			"bgpAlwaysCompareMed":       nil,
+			"deleteBgpAlwaysCompareMed": true,
+		}},
+	})); err != nil {
+		t.Fatalf("clear bgpAlwaysCompareMed: %v", err)
+	}
+	cleared, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after clearing bgpAlwaysCompareMed: %v", err)
+	}
+	clearedRouting, _ := cleared.Data["routingConfig"].(map[string]any)
+	if v, ok := clearedRouting["bgpAlwaysCompareMed"]; ok {
+		t.Errorf("bgpAlwaysCompareMed = %v, want the member cleared", v)
+	}
+	if clearedRouting["routingMode"] != "REGIONAL" || clearedRouting["bgpBestPathSelectionMode"] != "STANDARD" {
+		t.Errorf("routingConfig = %v, want the other members kept across the clear", clearedRouting)
 	}
 }
 
@@ -981,6 +1087,161 @@ func TestNetworkCreateValidatesMutableFieldRanges(t *testing.T) {
 	}
 	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{"name": "jumbo", "mtu": 8896}})); err != nil {
 		t.Errorf("create mtu=8896 = %v, want success (documented maximum)", err)
+	}
+}
+
+// TestNetworkReadShapeEchoesRoutingConfigAndUla pins TF2-17-2: the network
+// record now keeps the documented read shape a create request carries —
+// routingConfig (routingMode and the BGP members), networkProfile, and the ULA
+// IPv6 pair — so a raw reader (`gcloud compute networks describe`, which showed
+// no routing mode or BGP state) sees what was set. Only supplied fields are
+// echoed: Network.routingConfig documents no server default, and while
+// Discovery says real Compute allocates a /48 when ULA is enabled without a
+// range, the emulator has no ULA allocator and does not invent one.
+func TestNetworkReadShapeEchoesRoutingConfigAndUla(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	const profile = "projects/proj/global/networkProfiles/global-profiles"
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name":                  "vpc-shape",
+		"autoCreateSubnetworks": false,
+		"networkProfile":        profile,
+		"enableUlaInternalIpv6": true,
+		"internalIpv6Range":     "fd20:0:1234::/48",
+		"routingConfig": map[string]any{
+			"routingMode":              "GLOBAL",
+			"bgpBestPathSelectionMode": "STANDARD",
+			"bgpInterRegionCost":       "ADD_COST_TO_MED",
+			"bgpAlwaysCompareMed":      true,
+			// Output-only members are never persisted or echoed.
+			"effectiveBgpAlwaysCompareMed": true,
+			"effectiveBgpInterRegionCost":  "ADD_COST_TO_MED",
+		},
+	}})); err != nil {
+		t.Fatalf("create network with the full read shape: %v", err)
+	}
+	got, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-shape"}))
+	if err != nil {
+		t.Fatalf("get network: %v", err)
+	}
+	routing, ok := got.Data["routingConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("routingConfig = %v, want the persisted message", got.Data["routingConfig"])
+	}
+	for field, want := range map[string]any{
+		"routingMode":              "GLOBAL",
+		"bgpBestPathSelectionMode": "STANDARD",
+		"bgpInterRegionCost":       "ADD_COST_TO_MED",
+		"bgpAlwaysCompareMed":      true,
+	} {
+		if routing[field] != want {
+			t.Errorf("routingConfig.%s = %v, want %v", field, routing[field], want)
+		}
+	}
+	for _, outputOnly := range []string{"effectiveBgpAlwaysCompareMed", "effectiveBgpInterRegionCost"} {
+		if _, ok := routing[outputOnly]; ok {
+			t.Errorf("routingConfig.%s = %v, want the output-only member dropped", outputOnly, routing[outputOnly])
+		}
+	}
+	if got.Data["networkProfile"] != profile {
+		t.Errorf("networkProfile = %v, want the supplied %s", got.Data["networkProfile"], profile)
+	}
+	if got.Data["enableUlaInternalIpv6"] != true {
+		t.Errorf("enableUlaInternalIpv6 = %v, want true", got.Data["enableUlaInternalIpv6"])
+	}
+	if got.Data["internalIpv6Range"] != "fd20:0:1234::/48" {
+		t.Errorf("internalIpv6Range = %v, want the supplied fd20:0:1234::/48", got.Data["internalIpv6Range"])
+	}
+
+	// networks.list renders the same record.
+	list, err := p.NetworksList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list networks: %v", err)
+	}
+	items, _ := list.Data["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("network list items = %v, want 1", list.Data["items"])
+	}
+	listed, _ := items[0].(map[string]any)
+	if listed["networkProfile"] != profile || listed["enableUlaInternalIpv6"] != true {
+		t.Errorf("listed network = %v, want the same networkProfile/ULA pair as get", listed)
+	}
+
+	// A network created without any of them reads none of them back — no
+	// fabricated routingConfig and no invented /48.
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "vpc-bare", "autoCreateSubnetworks": false,
+	}})); err != nil {
+		t.Fatalf("create bare network: %v", err)
+	}
+	bare, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-bare"}))
+	if err != nil {
+		t.Fatalf("get bare network: %v", err)
+	}
+	for _, field := range []string{"routingConfig", "networkProfile", "enableUlaInternalIpv6", "internalIpv6Range"} {
+		if v, ok := bare.Data[field]; ok {
+			t.Errorf("%s = %v on a network created without it, want absent", field, v)
+		}
+	}
+
+	// ULA enabled without a range keeps enableUlaInternalIpv6 but invents no
+	// range (Discovery documents a server allocation the emulator does not do).
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "vpc-ula", "enableUlaInternalIpv6": true,
+	}})); err != nil {
+		t.Fatalf("create ULA network without a range: %v", err)
+	}
+	ula, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-ula"}))
+	if err != nil {
+		t.Fatalf("get ULA network: %v", err)
+	}
+	if ula.Data["enableUlaInternalIpv6"] != true {
+		t.Errorf("enableUlaInternalIpv6 = %v, want true", ula.Data["enableUlaInternalIpv6"])
+	}
+	if v, ok := ula.Data["internalIpv6Range"]; ok {
+		t.Errorf("internalIpv6Range = %v, want absent (the emulator allocates no /48)", v)
+	}
+}
+
+// TestNetworkCreateValidatesReadShapeFields pins that create rejects the invalid
+// enum/range a patch rejects, because real Compute validates a field whichever
+// method carries it.
+func TestNetworkCreateValidatesReadShapeFields(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, bad := range []map[string]any{
+		{"routingConfig": map[string]any{"routingMode": "SIDEWAYS"}},
+		{"routingConfig": map[string]any{"bgpBestPathSelectionMode": "BEST"}},
+		{"routingConfig": map[string]any{"bgpInterRegionCost": "CHEAP"}},
+		{"routingConfig": map[string]any{"bgpAlwaysCompareMed": "yes"}},
+		{"routingConfig": []any{"REGIONAL"}},
+		{"networkProfile": 7},
+		{"enableUlaInternalIpv6": "yes"},
+		{"internalIpv6Range": "fd30:0:0::/48"},
+		{"internalIpv6Range": "fd20:0:0::/56"},
+		{"internalIpv6Range": "fd20:1234:5678:9::/48"},
+	} {
+		body := map[string]any{"name": "bad-shape"}
+		for k, v := range bad {
+			body[k] = v
+		}
+		if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": body})); !isCode(err, "InvalidArgument") {
+			t.Errorf("create %v = %v, want InvalidArgument", bad, err)
+		}
+	}
+	// The documented boundaries are accepted: a /48 at the start of fd20::/20
+	// and the enum members in any combination.
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name":              "good-shape",
+		"internalIpv6Range": "fd20::/48",
+		"routingConfig": map[string]any{
+			"routingMode":              "REGIONAL",
+			"bgpBestPathSelectionMode": "LEGACY",
+			"bgpInterRegionCost":       "DEFAULT",
+			"bgpAlwaysCompareMed":      false,
+		},
+	}})); err != nil {
+		t.Errorf("create with documented boundary values = %v, want success", err)
 	}
 }
 

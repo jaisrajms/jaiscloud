@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -144,6 +145,11 @@ const (
 // nothing (an absent value re-plans as
 // `+ network_firewall_policy_enforcement_order` on every plan).
 const defaultNetworkFirewallPolicyEnforcementOrder = "AFTER_CLASSIC_FIREWALL"
+
+// internalULAIPv6Prefix is the ULA prefix Discovery (Network.internalIpv6Range)
+// bounds a caller's /48 to: "The input must be a valid /48 ULA IPv6 address and
+// must be within the fd20::/20."
+var internalULAIPv6Prefix = netip.MustParsePrefix("fd20::/20")
 
 // defaultMachineType is used when an instance create request omits machineType.
 const defaultMachineType = "e2-micro"
@@ -1058,6 +1064,22 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
+	routingConfig, hasRoutingConfig, err := networkRoutingConfig(body, nil)
+	if err != nil {
+		return nil, err
+	}
+	networkProfile, hasNetworkProfile, err := networkProfileField(body)
+	if err != nil {
+		return nil, err
+	}
+	ulaIPv6, hasULAIPv6, err := networkEnableUlaInternalIpv6(body)
+	if err != nil {
+		return nil, err
+	}
+	ipv6Range, hasIPv6Range, err := networkInternalIPv6Range(body)
+	if err != nil {
+		return nil, err
+	}
 	network := map[string]any{
 		"kind":                                  kindNetwork,
 		"id":                                    numericID(project + "/global/networks/" + name),
@@ -1071,6 +1093,25 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	}
 	if v, ok := body["description"]; ok && v != nil {
 		network["description"] = v
+	}
+	// routingConfig, networkProfile and the ULA IPv6 pair are echoed only when
+	// the create request carried them: Network.routingConfig documents no
+	// server default (the hashicorp provider skips an absent collapsed
+	// routingConfig and leaves the configured optional attributes in state),
+	// networkProfile is a creation-time string, and Discovery documents a
+	// server-allocated /48 for internalIpv6Range but no emulator-side ULA
+	// allocator exists, so no range is invented (TF2-17-2).
+	if hasRoutingConfig {
+		network["routingConfig"] = routingConfig
+	}
+	if hasNetworkProfile {
+		network["networkProfile"] = networkProfile
+	}
+	if hasULAIPv6 {
+		network["enableUlaInternalIpv6"] = ulaIPv6
+	}
+	if hasIPv6Range {
+		network["internalIpv6Range"] = ipv6Range
 	}
 	data, err := json.Marshal(network)
 	if err != nil {
@@ -1095,13 +1136,13 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 // Discovery's own method description names only routingConfig, but the field set
 // `gcloud compute networks update` and the provider's update path actually send
 // is mtu, networkFirewallPolicyEnforcementOrder, routingConfig and the ULA IPv6
-// pair — the first two are the ones this record stores.
+// pair — all of them are stored on the record now (TF2-17-2).
 //
 // The body is a merge patch, not a replacement: an absent (or JSON-null) field
 // keeps its stored value, so a PATCH that carries only mtu cannot reset the
-// enforcement order. The fields the record does not keep (routingConfig/BGP,
-// networkProfile, the ULA IPv6 pair) are accepted and dropped, the same boundary
-// the create path has (TF2-17-2). Identity fields — name, id, description,
+// enforcement order, and a routingConfig that carries only routingMode keeps the
+// stored BGP members. networkProfile is creation-time only per Discovery, so a
+// body that carries it is ignored. Identity fields — name, id, description,
 // autoCreateSubnetworks — are not patchable by any published client (the provider
 // marks name, description and auto mode ForceNew and recreates instead), so a
 // body that carries one is ignored rather than modeling a change real Compute
@@ -1146,6 +1187,33 @@ func (p *Provider) NetworksPatch(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	network["networkFirewallPolicyEnforcementOrder"] = order
+	// routingConfig is a nested merge too: the members the body carries are
+	// applied over the stored ones, so a PATCH that names only routingMode
+	// cannot clear a stored BGP setting (and the provider always sends the
+	// collapsed block it renders from config, which this reproduces member for
+	// member). The ULA IPv6 pair is applied when carried. networkProfile is
+	// creation-time only (Discovery: "This field can be set only at resource
+	// creation time") and the provider marks it ForceNew, so a body that
+	// carries it is ignored rather than modeling a change this method does not
+	// offer.
+	storedRoutingConfig, _ := network["routingConfig"].(map[string]any)
+	routingConfig, hasRoutingConfig, err := networkRoutingConfig(body, storedRoutingConfig)
+	if err != nil {
+		return nil, err
+	}
+	if hasRoutingConfig {
+		network["routingConfig"] = routingConfig
+	}
+	if ulaIPv6, present, err := networkEnableUlaInternalIpv6(body); err != nil {
+		return nil, err
+	} else if present {
+		network["enableUlaInternalIpv6"] = ulaIPv6
+	}
+	if ipv6Range, present, err := networkInternalIPv6Range(body); err != nil {
+		return nil, err
+	} else if present {
+		network["internalIpv6Range"] = ipv6Range
+	}
 	data, err := json.Marshal(network)
 	if err != nil {
 		return nil, err
@@ -1188,6 +1256,163 @@ func networkFirewallPolicyEnforcementOrder(body map[string]any, fallback string)
 	}
 	return "", model.NewProviderError("InvalidArgument",
 		fmt.Sprintf("Invalid value for field 'resource.networkFirewallPolicyEnforcementOrder': '%v'. Must be one of AFTER_CLASSIC_FIREWALL or BEFORE_CLASSIC_FIREWALL", v), 400)
+}
+
+// networkRoutingConfig reads a request body's routingConfig and merges it into
+// existing (nil on create), returning the merged message and whether the record
+// should carry one. Discovery (Network.routingConfig → NetworkRoutingConfig)
+// publishes four caller-settable members and two read-only ones:
+//
+//   - routingMode — enum GLOBAL, REGIONAL ("The network-wide routing mode to
+//     use").
+//   - bgpBestPathSelectionMode — enum LEGACY, STANDARD.
+//   - bgpInterRegionCost — enum ADD_COST_TO_MED, DEFAULT.
+//   - bgpAlwaysCompareMed — boolean.
+//   - effectiveBgpAlwaysCompareMed / effectiveBgpInterRegionCost — "Output
+//     only", never stored or echoed.
+//
+// A member the body does not carry keeps its stored value; an explicit JSON null
+// clears it, which is the signal the hashicorp provider uses for
+// delete_bgp_always_compare_med (it sends `bgpAlwaysCompareMed: null` to revert
+// the member to the API default, alongside an undocumented
+// deleteBgpAlwaysCompareMed flag that is not a NetworkRoutingConfig field in the
+// Discovery document and is ignored here). An unknown or read-only member is
+// ignored. The message is stored only when it has at least one member, so a
+// network created without a routingConfig reads none back rather than a
+// fabricated empty message.
+func networkRoutingConfig(body map[string]any, existing map[string]any) (map[string]any, bool, error) {
+	v, ok := body["routingConfig"]
+	if !ok || v == nil {
+		return existing, existing != nil, nil
+	}
+	in, ok := v.(map[string]any)
+	if !ok {
+		return nil, false, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.routingConfig': '%v'. Must be an object", v), 400)
+	}
+	out := make(map[string]any, len(existing)+len(in))
+	for k, val := range existing {
+		out[k] = val
+	}
+	if raw, ok := in["routingMode"]; ok {
+		if raw == nil {
+			delete(out, "routingMode")
+		} else if mode, ok := raw.(string); !ok || (mode != "GLOBAL" && mode != "REGIONAL") {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.routingMode': '%v'. Must be one of GLOBAL or REGIONAL", raw), 400)
+		} else {
+			out["routingMode"] = mode
+		}
+	}
+	if raw, ok := in["bgpBestPathSelectionMode"]; ok {
+		if raw == nil {
+			delete(out, "bgpBestPathSelectionMode")
+		} else if mode, ok := raw.(string); !ok || (mode != "LEGACY" && mode != "STANDARD") {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.bgpBestPathSelectionMode': '%v'. Must be one of LEGACY or STANDARD", raw), 400)
+		} else {
+			out["bgpBestPathSelectionMode"] = mode
+		}
+	}
+	if raw, ok := in["bgpInterRegionCost"]; ok {
+		if raw == nil {
+			delete(out, "bgpInterRegionCost")
+		} else if cost, ok := raw.(string); !ok || (cost != "DEFAULT" && cost != "ADD_COST_TO_MED") {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.bgpInterRegionCost': '%v'. Must be one of DEFAULT or ADD_COST_TO_MED", raw), 400)
+		} else {
+			out["bgpInterRegionCost"] = cost
+		}
+	}
+	if raw, ok := in["bgpAlwaysCompareMed"]; ok {
+		if raw == nil {
+			delete(out, "bgpAlwaysCompareMed")
+		} else if med, ok := raw.(bool); !ok {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.bgpAlwaysCompareMed': '%v'. Must be a boolean", raw), 400)
+		} else {
+			out["bgpAlwaysCompareMed"] = med
+		}
+	}
+	// effectiveBgpAlwaysCompareMed and effectiveBgpInterRegionCost are
+	// output-only: a caller-supplied value is ignored, never persisted.
+	if len(out) == 0 {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+// networkProfileField reads a request body's networkProfile. Discovery
+// (Network.networkProfile) documents it as "A full or partial URL of the network
+// profile to apply to this network. This field can be set only at resource
+// creation time" with no enum or range, so the value is echoed as the caller
+// spelled it (the provider's CompareSelfLinkRelativePaths suppresses the
+// URL/relative-name difference) and a JSON non-string is the only 400. An empty
+// string is treated as absent.
+func networkProfileField(body map[string]any) (string, bool, error) {
+	v, ok := body["networkProfile"]
+	if !ok || v == nil {
+		return "", false, nil
+	}
+	profile, ok := v.(string)
+	if !ok {
+		return "", false, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.networkProfile': '%v'. Must be a string", v), 400)
+	}
+	if profile == "" {
+		return "", false, nil
+	}
+	return profile, true, nil
+}
+
+// networkEnableUlaInternalIpv6 reads a request body's enableUlaInternalIpv6.
+// Discovery (Network.enableUlaInternalIpv6): "Enable ULA internal ipv6 on this
+// network. Enabling this feature will assign a /48 from google defined ULA
+// prefix fd20::/20." A non-boolean value is the 400 real Compute answers.
+func networkEnableUlaInternalIpv6(body map[string]any) (bool, bool, error) {
+	v, ok := body["enableUlaInternalIpv6"]
+	if !ok || v == nil {
+		return false, false, nil
+	}
+	enabled, ok := v.(bool)
+	if !ok {
+		return false, false, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.enableUlaInternalIpv6': '%v'. Must be a boolean", v), 400)
+	}
+	return enabled, true, nil
+}
+
+// networkInternalIPv6Range reads and validates a request body's
+// internalIpv6Range. Discovery (Network.internalIpv6Range): "caller optionally
+// can specify the /48 range they want from the google defined ULA prefix
+// fd20::/20. The input must be a valid /48 ULA IPv6 address and must be within
+// the fd20::/20." The range is echoed exactly as the caller spelled it; the
+// emulator does not allocate one when the caller enables ULA without naming a
+// range (Discovery says real Compute allocates a random /48 and returns it, but
+// a synthesized allocation would be an emulator-only value, so an unset range
+// stays unset).
+func networkInternalIPv6Range(body map[string]any) (string, bool, error) {
+	v, ok := body["internalIpv6Range"]
+	if !ok || v == nil {
+		return "", false, nil
+	}
+	raw, ok := v.(string)
+	if !ok {
+		return "", false, invalidInternalIPv6Range(v)
+	}
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil || !prefix.Addr().Is6() || prefix.Bits() != 48 || prefix.Masked() != prefix ||
+		!internalULAIPv6Prefix.Contains(prefix.Addr()) {
+		return "", false, invalidInternalIPv6Range(v)
+	}
+	return raw, true, nil
+}
+
+// invalidInternalIPv6Range is the 400 the ULA range validation answers, worded
+// after the Discovery description.
+func invalidInternalIPv6Range(v any) error {
+	return model.NewProviderError("InvalidArgument",
+		fmt.Sprintf("Invalid value for field 'resource.internalIpv6Range': '%v'. Must be a valid /48 ULA IPv6 range within fd20::/20", v), 400)
 }
 
 func (p *Provider) NetworksGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

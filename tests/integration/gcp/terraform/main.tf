@@ -285,6 +285,24 @@ resource "google_compute_disk" "cmek" {
   }
 }
 
+# ── Compute Engine: network read shape ───────────────────────────────────────
+# google_compute_network reads routingConfig (routing_mode + the BGP members),
+# networkProfile and the ULA IPv6 pair back from the network record. Real
+# Compute echoes what the create carried, so the emulator does too; the second
+# plan above is the assertion that a network created with them is not re-planned
+# (TF2-17-2), and run.sh checks the wire body.
+resource "google_compute_network" "compat" {
+  name                         = "jaiscloud-tf-network"
+  auto_create_subnetworks      = false
+  routing_mode                 = "GLOBAL"
+  bgp_best_path_selection_mode = "STANDARD"
+  bgp_always_compare_med       = true
+  bgp_inter_region_cost        = "ADD_COST_TO_MED"
+  enable_ula_internal_ipv6     = true
+  internal_ipv6_range          = "fd20:0:abcd::/48"
+  network_profile              = "projects/${var.project}/global/networkProfiles/global-profiles"
+}
+
 # ── Cloud SQL for PostgreSQL ──────────────────────────────────────────────────
 resource "google_sql_database_instance" "compat" {
   name                = "jaiscloud-tf-postgres"
