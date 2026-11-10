@@ -32,12 +32,14 @@ package compute
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -62,6 +64,11 @@ const (
 	rtFirewall   = "gcp_compute_firewall"
 	rtSubnetwork = "gcp_compute_subnetwork"
 	rtOperation  = "gcp_compute_operation"
+	// rtProjectMetadata holds a project's common instance metadata: the items
+	// projects.setCommonInstanceMetadata wrote plus the fingerprint and the
+	// write generation that the optimistic-concurrency check compares against.
+	// It is keyed by the project id at store.GlobalRegion.
+	rtProjectMetadata = "gcp_compute_project_metadata"
 	// rtRequestID holds the requestId → operation idempotency mapping for
 	// mutating methods, keyed by the requestId at the request's scope.
 	rtRequestID = "gcp_compute_request_id"
@@ -90,6 +97,7 @@ const (
 	kindOperation              = "compute#operation"
 	kindOperationList          = "compute#operationList"
 	kindProject                = "compute#project"
+	kindMetadata               = "compute#metadata"
 )
 
 // catalogCreationTimestamp is the synthesized creation time the emulator stamps
@@ -138,6 +146,11 @@ const (
 // `+ network_firewall_policy_enforcement_order` on every plan).
 const defaultNetworkFirewallPolicyEnforcementOrder = "AFTER_CLASSIC_FIREWALL"
 
+// internalULAIPv6Prefix is the ULA prefix Discovery (Network.internalIpv6Range)
+// bounds a caller's /48 to: "The input must be a valid /48 ULA IPv6 address and
+// must be within the fd20::/20."
+var internalULAIPv6Prefix = netip.MustParsePrefix("fd20::/20")
+
 // defaultMachineType is used when an instance create request omits machineType.
 const defaultMachineType = "e2-micro"
 
@@ -169,6 +182,20 @@ var customMachineTypeRE = regexp.MustCompile(`^(?:[a-z0-9]+-)?custom-[0-9]+-[0-9
 // zeroRequestID is the all-zero UUID the Compute Engine API documents as
 // unsupported for the requestId parameter.
 const zeroRequestID = "00000000-0000-0000-0000-000000000000"
+
+// maxMetadataValueBytes is the documented size ceiling of one metadata entry's
+// value (Discovery, Metadata.items[].value: "its size must be less than or equal
+// to 262144 bytes (256 KiB)").
+const maxMetadataValueBytes = 262144
+
+// maxProjectMetadataBytes is the documented total size of a project metadata
+// envelope (Discovery, Metadata.items: "The total size of all keys and values
+// must be less than 512 KB").
+const maxProjectMetadataBytes = 512 * 1024
+
+// metadataKeyRE is the documented metadata-key grammar (Discovery,
+// Metadata.items[].key: pattern [a-zA-Z0-9-_]{1,128}).
+var metadataKeyRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 // requestIDRE matches the UUID form the Compute Engine API documents for the
 // requestId parameter.
@@ -202,7 +229,8 @@ func New(resources store.ResourceStore) *Provider {
 // Routes maps "Compute.<Action>" keys to their handlers.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Compute.ProjectsGet": p.ProjectsGet,
+		"Compute.ProjectsGet":                       p.ProjectsGet,
+		"Compute.ProjectsSetCommonInstanceMetadata": p.ProjectsSetCommonInstanceMetadata,
 
 		"Compute.InstancesInsert":         p.InstancesInsert,
 		"Compute.InstancesGet":            p.InstancesGet,
@@ -266,9 +294,10 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 //     account. The hashicorp/google `google_compute_default_service_account`
 //     data source reads exactly this field, and the Dataproc module and the
 //     scheduler examples resolve their IAM grant from it (TF2-1).
-//   - commonInstanceMetadata carries the project-wide metadata envelope. There
-//     is no stored project metadata yet (projects.setCommonInstanceMetadata is
-//     TF1-5), so it reports the empty default with a stable fingerprint.
+//   - commonInstanceMetadata carries the project-wide metadata envelope. It is
+//     the record projects.setCommonInstanceMetadata writes (items plus the
+//     server fingerprint), or the empty default with a stable fingerprint when
+//     nothing has been written yet.
 func (p *Provider) ProjectsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	// The response describes the project named in the request path. Path and
 	// account agree for a wire request (the gateway derives AccountID from the
@@ -277,7 +306,214 @@ func (p *Provider) ProjectsGet(ctx context.Context, nr *model.NormalizedRequest)
 	if project == "" {
 		return nil, model.NewProviderError("InvalidArgument", "project is required", 400)
 	}
-	return provider.OK(projectObject(nr, project)), nil
+	rec, err := p.projectMetadataRecord(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(projectObject(nr, project, rec.metadata())), nil
+}
+
+// ProjectsSetCommonInstanceMetadata applies compute.projects.setCommonInstanceMetadata
+// (POST /compute/v1/projects/{project}/setCommonInstanceMetadata), the method
+// the hashicorp/google `google_compute_project_metadata` and
+// `google_compute_project_metadata_item` resources use to write the
+// project-wide metadata (TF1-5).
+//
+// The request body is Discovery's Metadata envelope. `items` replaces the
+// project's whole metadata set — the provider reads the project first, merges
+// its own keys in and sends the result — so an absent (or null) `items` clears
+// it, which is also how the provider's destroy path removes the metadata. Each
+// entry is validated against the documented key grammar and size ceilings; a
+// malformed entry is 400 instead of being stored.
+//
+// `fingerprint` is the optimistic-concurrency token Discovery describes: it is
+// optional (the schema carries no required annotation for it), and when present
+// it must be the project's current fingerprint — anything else is the
+// documented 412 (Metadata.fingerprint: "otherwise the request will fail with
+// error412 conditionNotMet"). The provider always sends the fingerprint it read
+// from projects.get. A fingerprint that is not a base64 byte string cannot be
+// the API's `format: byte` value at all, so it is 400 INVALID_ARGUMENT.
+//
+// The response is Compute Engine's own DONE Operation envelope (the provider
+// polls it through ComputeOperationWaitTime) and the stored metadata is
+// readable through projects.get, with a fingerprint that changes on every
+// write (Discovery: "changes after every request to modify or update metadata")
+// even when the items are byte-identical.
+func (p *Provider) ProjectsSetCommonInstanceMetadata(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := strParam(nr, "project")
+	if project == "" {
+		return nil, model.NewProviderError("InvalidArgument", "project is required", 400)
+	}
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	body := bodyMap(nr)
+	items, err := projectMetadataItems(body["items"])
+	if err != nil {
+		return nil, err
+	}
+	fingerprint := stringField(body, "fingerprint")
+	if fingerprint != "" {
+		if _, err := base64.StdEncoding.DecodeString(fingerprint); err != nil {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.fingerprint': '%s'. A fingerprint is a base64-encoded byte string; call projects.get to retrieve the latest one", fingerprint), 400)
+		}
+	}
+	// The read-modify-write is atomic: a concurrent write with the same
+	// fingerprint must lose the precondition rather than silently clobber the
+	// winner's items.
+	_, err = p.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtProjectMetadata, project,
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			rec := newProjectMetadataRecord(project)
+			if exists {
+				stored, perr := parseProjectMetadataRecord(project, current.Data)
+				if perr != nil {
+					return store.ResourceEntry{}, perr
+				}
+				rec = stored
+			}
+			if fingerprint != "" && fingerprint != rec.Fingerprint {
+				return store.ResourceEntry{}, model.NewProviderError("PreconditionFailed",
+					fmt.Sprintf("Invalid fingerprint: the supplied fingerprint '%s' does not match the project's current fingerprint '%s'; call projects.get to retrieve the latest one", fingerprint, rec.Fingerprint), 412)
+			}
+			rec.Items = items
+			rec.Generation++
+			rec.Fingerprint = projectMetadataFingerprint(project, rec.Generation)
+			data, err := json.Marshal(rec)
+			if err != nil {
+				return store.ResourceEntry{}, err
+			}
+			return store.ResourceEntry{Type: rtProjectMetadata, ID: project, Data: data}, nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "setCommonInstanceMetadata", project, absLink(nr, "compute-project", project), requestID)), nil
+}
+
+// projectMetadataRecord is the persisted common-instance metadata of one
+// project. Fingerprint is derived from Generation rather than from the items so
+// Discovery's "changes after every request to modify or update metadata" holds
+// even for a write that repeats the previous items (a provider re-plan).
+type projectMetadataRecord struct {
+	Items       []any  `json:"items"`
+	Generation  int64  `json:"generation"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// newProjectMetadataRecord is the record a project that has never had its
+// metadata written reports: no items and the stable default fingerprint.
+func newProjectMetadataRecord(project string) projectMetadataRecord {
+	return projectMetadataRecord{Items: []any{}, Fingerprint: defaultProjectMetadataFingerprint(project)}
+}
+
+// metadata renders the record as Discovery's compute#metadata envelope.
+func (r projectMetadataRecord) metadata() map[string]any {
+	items := r.Items
+	if items == nil {
+		items = []any{}
+	}
+	return map[string]any{"kind": kindMetadata, "fingerprint": r.Fingerprint, "items": items}
+}
+
+// projectMetadataRecord loads a project's stored metadata, falling back to the
+// never-written default.
+func (p *Provider) projectMetadataRecord(ctx context.Context, project string) (projectMetadataRecord, error) {
+	e, err := p.resources.Get(ctx, project, store.GlobalRegion, rtProjectMetadata, project)
+	if errors.Is(err, store.ErrNotFound) {
+		return newProjectMetadataRecord(project), nil
+	}
+	if err != nil {
+		return projectMetadataRecord{}, err
+	}
+	return parseProjectMetadataRecord(project, e.Data)
+}
+
+// parseProjectMetadataRecord decodes a stored record, filling in the never-written
+// defaults a record written by an older build (or a hand-written one) may lack.
+func parseProjectMetadataRecord(project string, data []byte) (projectMetadataRecord, error) {
+	rec := newProjectMetadataRecord(project)
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return projectMetadataRecord{}, err
+	}
+	if rec.Items == nil {
+		rec.Items = []any{}
+	}
+	if rec.Fingerprint == "" {
+		rec.Fingerprint = defaultProjectMetadataFingerprint(project)
+	}
+	return rec, nil
+}
+
+// defaultProjectMetadataFingerprint is the fingerprint a project that has never
+// had its common instance metadata written reports. It stays byte-identical to
+// the value projects.get reported before TF1-5 so an untouched project does not
+// churn between reads.
+func defaultProjectMetadataFingerprint(project string) string {
+	return contentEtag("project/" + project + "/commonInstanceMetadata")
+}
+
+// projectMetadataFingerprint derives the fingerprint a project reports after its
+// generation-th write. The generation is part of the seed because Discovery
+// documents that the fingerprint changes after every write, including one that
+// repeats the previous items.
+func projectMetadataFingerprint(project string, generation int64) string {
+	return contentEtag(fmt.Sprintf("project/%s/commonInstanceMetadata/%d", project, generation))
+}
+
+// projectMetadataItems validates and normalizes a setCommonInstanceMetadata
+// request body's items. Discovery marks an entry's key and value required and
+// gives the key its grammar and both a per-value and a total size ceiling, so a
+// body that violates them is 400 before anything is stored. An absent (or null)
+// items list is the empty set, which clears the metadata.
+func projectMetadataItems(v any) ([]any, error) {
+	if v == nil {
+		return []any{}, nil
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument",
+			"Invalid value for field 'resource.items': must be a list of key/value entries", 400)
+	}
+	out := make([]any, 0, len(list))
+	total := 0
+	for i, raw := range list {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d]': must be an object with a key and a value", i), 400)
+		}
+		key, _ := item["key"].(string)
+		if key == "" {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].key': a metadata key is required", i), 400)
+		}
+		if !metadataKeyRE.MatchString(key) {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].key': '%s'. Must be 1-128 characters long and match the regular expression '[a-zA-Z0-9-_]{1,128}'", i, key), 400)
+		}
+		value, ok := item["value"].(string)
+		if !ok {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].value': a metadata value is required", i), 400)
+		}
+		if len(value) > maxMetadataValueBytes {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.items[%d].value': the value of key '%s' is %d bytes; metadata values must be at most %d bytes (256 KiB)", i, key, len(value), maxMetadataValueBytes), 400)
+		}
+		total += len(key) + len(value)
+		out = append(out, map[string]any{"key": key, "value": value})
+	}
+	if total >= maxProjectMetadataBytes {
+		return nil, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.items': the total size of all keys and values is %d bytes; project metadata must be less than %d bytes (512 KiB)", total, maxProjectMetadataBytes), 400)
+	}
+	return out, nil
 }
 
 // projectNumber returns the number a project is addressed by: the synthesized
@@ -290,20 +526,16 @@ func projectNumber(project string) string {
 }
 
 // projectObject builds the compute#project payload.
-func projectObject(nr *model.NormalizedRequest, name string) map[string]any {
+func projectObject(nr *model.NormalizedRequest, name string, commonInstanceMetadata map[string]any) map[string]any {
 	number := projectNumber(name)
 	return map[string]any{
-		"kind":              kindProject,
-		"id":                number,
-		"name":              name,
-		"selfLink":          absLink(nr, "compute-project", name),
-		"creationTimestamp": catalogCreationTimestamp,
-		"commonInstanceMetadata": map[string]any{
-			"kind":        "compute#metadata",
-			"fingerprint": contentEtag("project/" + name + "/commonInstanceMetadata"),
-			"items":       []any{},
-		},
-		"defaultServiceAccount": defaultServiceAccountForNumber(number),
+		"kind":                   kindProject,
+		"id":                     number,
+		"name":                   name,
+		"selfLink":               absLink(nr, "compute-project", name),
+		"creationTimestamp":      catalogCreationTimestamp,
+		"commonInstanceMetadata": commonInstanceMetadata,
+		"defaultServiceAccount":  defaultServiceAccountForNumber(number),
 		// Real Compute reports PREMIUM as the default network tier and
 		// ZONAL_ONLY as the default internal-DNS setting for a project created
 		// with the current defaults (the project schema marks both output-only).
@@ -392,7 +624,7 @@ func (p *Provider) buildInstance(nr *model.NormalizedRequest, project, zone, nam
 	if v, ok := body["metadata"]; ok && v != nil {
 		inst["metadata"] = v
 	} else {
-		inst["metadata"] = map[string]any{"kind": "compute#metadata", "fingerprint": contentEtag(name)}
+		inst["metadata"] = map[string]any{"kind": kindMetadata, "fingerprint": contentEtag(name)}
 	}
 	if v, ok := body["labels"]; ok && v != nil {
 		inst["labels"] = v
@@ -652,9 +884,8 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	// and invent state the caller never sent.
 	//
 	// Deliberately not echoed: params (Discovery: "input only … not persisted as
-	// part of resource payload"), and the three CustomerEncryptionKey blocks
-	// (real Compute returns only the key's sha256/kmsKeyName, never the raw or
-	// RSA-wrapped key material).
+	// part of resource payload"). The three CustomerEncryptionKey blocks are
+	// echoed in their server-visible shape only — see below.
 	for _, field := range []string{
 		"accessMode",
 		"architecture",
@@ -680,6 +911,27 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	for _, field := range []string{"provisionedIops", "provisionedThroughput"} {
 		if v := stringifyInt(body[field]); v != "" {
 			disk[field] = v
+		}
+	}
+	// The three CustomerEncryptionKey blocks are persisted in the shape real
+	// Compute returns, never verbatim (TF2-11-4): a CMEK block echoes the key
+	// name and service account, a CSEK block only the documented sha256. Raw and
+	// RSA-wrapped key material is request-only and must never be stored or
+	// echoed. hashicorp/google reads the block back into its ForceNew
+	// disk_encryption_key / source_*_encryption_key blocks, so without the echo
+	// a disk created with a CMEK key re-plans "forces replacement" on every
+	// plan.
+	for _, field := range []string{"diskEncryptionKey", "sourceImageEncryptionKey", "sourceSnapshotEncryptionKey"} {
+		v, ok := body[field]
+		if !ok || v == nil {
+			continue
+		}
+		key, err := encryptionKeyResponse(field, v)
+		if err != nil {
+			return nil, err
+		}
+		if key != nil {
+			disk[field] = key
 		}
 	}
 	// A disk created from an image records the image it resolved to, exactly as
@@ -812,6 +1064,22 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
+	routingConfig, hasRoutingConfig, err := networkRoutingConfig(body, nil)
+	if err != nil {
+		return nil, err
+	}
+	networkProfile, hasNetworkProfile, err := networkProfileField(body)
+	if err != nil {
+		return nil, err
+	}
+	ulaIPv6, hasULAIPv6, err := networkEnableUlaInternalIpv6(body)
+	if err != nil {
+		return nil, err
+	}
+	ipv6Range, hasIPv6Range, err := networkInternalIPv6Range(body)
+	if err != nil {
+		return nil, err
+	}
 	network := map[string]any{
 		"kind":                                  kindNetwork,
 		"id":                                    numericID(project + "/global/networks/" + name),
@@ -825,6 +1093,25 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	}
 	if v, ok := body["description"]; ok && v != nil {
 		network["description"] = v
+	}
+	// routingConfig, networkProfile and the ULA IPv6 pair are echoed only when
+	// the create request carried them: Network.routingConfig documents no
+	// server default (the hashicorp provider skips an absent collapsed
+	// routingConfig and leaves the configured optional attributes in state),
+	// networkProfile is a creation-time string, and Discovery documents a
+	// server-allocated /48 for internalIpv6Range but no emulator-side ULA
+	// allocator exists, so no range is invented (TF2-17-2).
+	if hasRoutingConfig {
+		network["routingConfig"] = routingConfig
+	}
+	if hasNetworkProfile {
+		network["networkProfile"] = networkProfile
+	}
+	if hasULAIPv6 {
+		network["enableUlaInternalIpv6"] = ulaIPv6
+	}
+	if hasIPv6Range {
+		network["internalIpv6Range"] = ipv6Range
 	}
 	data, err := json.Marshal(network)
 	if err != nil {
@@ -849,13 +1136,13 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 // Discovery's own method description names only routingConfig, but the field set
 // `gcloud compute networks update` and the provider's update path actually send
 // is mtu, networkFirewallPolicyEnforcementOrder, routingConfig and the ULA IPv6
-// pair — the first two are the ones this record stores.
+// pair — all of them are stored on the record now (TF2-17-2).
 //
 // The body is a merge patch, not a replacement: an absent (or JSON-null) field
 // keeps its stored value, so a PATCH that carries only mtu cannot reset the
-// enforcement order. The fields the record does not keep (routingConfig/BGP,
-// networkProfile, the ULA IPv6 pair) are accepted and dropped, the same boundary
-// the create path has (TF2-17-2). Identity fields — name, id, description,
+// enforcement order, and a routingConfig that carries only routingMode keeps the
+// stored BGP members. networkProfile is creation-time only per Discovery, so a
+// body that carries it is ignored. Identity fields — name, id, description,
 // autoCreateSubnetworks — are not patchable by any published client (the provider
 // marks name, description and auto mode ForceNew and recreates instead), so a
 // body that carries one is ignored rather than modeling a change real Compute
@@ -900,6 +1187,33 @@ func (p *Provider) NetworksPatch(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	network["networkFirewallPolicyEnforcementOrder"] = order
+	// routingConfig is a nested merge too: the members the body carries are
+	// applied over the stored ones, so a PATCH that names only routingMode
+	// cannot clear a stored BGP setting (and the provider always sends the
+	// collapsed block it renders from config, which this reproduces member for
+	// member). The ULA IPv6 pair is applied when carried. networkProfile is
+	// creation-time only (Discovery: "This field can be set only at resource
+	// creation time") and the provider marks it ForceNew, so a body that
+	// carries it is ignored rather than modeling a change this method does not
+	// offer.
+	storedRoutingConfig, _ := network["routingConfig"].(map[string]any)
+	routingConfig, hasRoutingConfig, err := networkRoutingConfig(body, storedRoutingConfig)
+	if err != nil {
+		return nil, err
+	}
+	if hasRoutingConfig {
+		network["routingConfig"] = routingConfig
+	}
+	if ulaIPv6, present, err := networkEnableUlaInternalIpv6(body); err != nil {
+		return nil, err
+	} else if present {
+		network["enableUlaInternalIpv6"] = ulaIPv6
+	}
+	if ipv6Range, present, err := networkInternalIPv6Range(body); err != nil {
+		return nil, err
+	} else if present {
+		network["internalIpv6Range"] = ipv6Range
+	}
 	data, err := json.Marshal(network)
 	if err != nil {
 		return nil, err
@@ -942,6 +1256,163 @@ func networkFirewallPolicyEnforcementOrder(body map[string]any, fallback string)
 	}
 	return "", model.NewProviderError("InvalidArgument",
 		fmt.Sprintf("Invalid value for field 'resource.networkFirewallPolicyEnforcementOrder': '%v'. Must be one of AFTER_CLASSIC_FIREWALL or BEFORE_CLASSIC_FIREWALL", v), 400)
+}
+
+// networkRoutingConfig reads a request body's routingConfig and merges it into
+// existing (nil on create), returning the merged message and whether the record
+// should carry one. Discovery (Network.routingConfig → NetworkRoutingConfig)
+// publishes four caller-settable members and two read-only ones:
+//
+//   - routingMode — enum GLOBAL, REGIONAL ("The network-wide routing mode to
+//     use").
+//   - bgpBestPathSelectionMode — enum LEGACY, STANDARD.
+//   - bgpInterRegionCost — enum ADD_COST_TO_MED, DEFAULT.
+//   - bgpAlwaysCompareMed — boolean.
+//   - effectiveBgpAlwaysCompareMed / effectiveBgpInterRegionCost — "Output
+//     only", never stored or echoed.
+//
+// A member the body does not carry keeps its stored value; an explicit JSON null
+// clears it, which is the signal the hashicorp provider uses for
+// delete_bgp_always_compare_med (it sends `bgpAlwaysCompareMed: null` to revert
+// the member to the API default, alongside an undocumented
+// deleteBgpAlwaysCompareMed flag that is not a NetworkRoutingConfig field in the
+// Discovery document and is ignored here). An unknown or read-only member is
+// ignored. The message is stored only when it has at least one member, so a
+// network created without a routingConfig reads none back rather than a
+// fabricated empty message.
+func networkRoutingConfig(body map[string]any, existing map[string]any) (map[string]any, bool, error) {
+	v, ok := body["routingConfig"]
+	if !ok || v == nil {
+		return existing, existing != nil, nil
+	}
+	in, ok := v.(map[string]any)
+	if !ok {
+		return nil, false, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.routingConfig': '%v'. Must be an object", v), 400)
+	}
+	out := make(map[string]any, len(existing)+len(in))
+	for k, val := range existing {
+		out[k] = val
+	}
+	if raw, ok := in["routingMode"]; ok {
+		if raw == nil {
+			delete(out, "routingMode")
+		} else if mode, ok := raw.(string); !ok || (mode != "GLOBAL" && mode != "REGIONAL") {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.routingMode': '%v'. Must be one of GLOBAL or REGIONAL", raw), 400)
+		} else {
+			out["routingMode"] = mode
+		}
+	}
+	if raw, ok := in["bgpBestPathSelectionMode"]; ok {
+		if raw == nil {
+			delete(out, "bgpBestPathSelectionMode")
+		} else if mode, ok := raw.(string); !ok || (mode != "LEGACY" && mode != "STANDARD") {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.bgpBestPathSelectionMode': '%v'. Must be one of LEGACY or STANDARD", raw), 400)
+		} else {
+			out["bgpBestPathSelectionMode"] = mode
+		}
+	}
+	if raw, ok := in["bgpInterRegionCost"]; ok {
+		if raw == nil {
+			delete(out, "bgpInterRegionCost")
+		} else if cost, ok := raw.(string); !ok || (cost != "DEFAULT" && cost != "ADD_COST_TO_MED") {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.bgpInterRegionCost': '%v'. Must be one of DEFAULT or ADD_COST_TO_MED", raw), 400)
+		} else {
+			out["bgpInterRegionCost"] = cost
+		}
+	}
+	if raw, ok := in["bgpAlwaysCompareMed"]; ok {
+		if raw == nil {
+			delete(out, "bgpAlwaysCompareMed")
+		} else if med, ok := raw.(bool); !ok {
+			return nil, false, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.routingConfig.bgpAlwaysCompareMed': '%v'. Must be a boolean", raw), 400)
+		} else {
+			out["bgpAlwaysCompareMed"] = med
+		}
+	}
+	// effectiveBgpAlwaysCompareMed and effectiveBgpInterRegionCost are
+	// output-only: a caller-supplied value is ignored, never persisted.
+	if len(out) == 0 {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+// networkProfileField reads a request body's networkProfile. Discovery
+// (Network.networkProfile) documents it as "A full or partial URL of the network
+// profile to apply to this network. This field can be set only at resource
+// creation time" with no enum or range, so the value is echoed as the caller
+// spelled it (the provider's CompareSelfLinkRelativePaths suppresses the
+// URL/relative-name difference) and a JSON non-string is the only 400. An empty
+// string is treated as absent.
+func networkProfileField(body map[string]any) (string, bool, error) {
+	v, ok := body["networkProfile"]
+	if !ok || v == nil {
+		return "", false, nil
+	}
+	profile, ok := v.(string)
+	if !ok {
+		return "", false, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.networkProfile': '%v'. Must be a string", v), 400)
+	}
+	if profile == "" {
+		return "", false, nil
+	}
+	return profile, true, nil
+}
+
+// networkEnableUlaInternalIpv6 reads a request body's enableUlaInternalIpv6.
+// Discovery (Network.enableUlaInternalIpv6): "Enable ULA internal ipv6 on this
+// network. Enabling this feature will assign a /48 from google defined ULA
+// prefix fd20::/20." A non-boolean value is the 400 real Compute answers.
+func networkEnableUlaInternalIpv6(body map[string]any) (bool, bool, error) {
+	v, ok := body["enableUlaInternalIpv6"]
+	if !ok || v == nil {
+		return false, false, nil
+	}
+	enabled, ok := v.(bool)
+	if !ok {
+		return false, false, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.enableUlaInternalIpv6': '%v'. Must be a boolean", v), 400)
+	}
+	return enabled, true, nil
+}
+
+// networkInternalIPv6Range reads and validates a request body's
+// internalIpv6Range. Discovery (Network.internalIpv6Range): "caller optionally
+// can specify the /48 range they want from the google defined ULA prefix
+// fd20::/20. The input must be a valid /48 ULA IPv6 address and must be within
+// the fd20::/20." The range is echoed exactly as the caller spelled it; the
+// emulator does not allocate one when the caller enables ULA without naming a
+// range (Discovery says real Compute allocates a random /48 and returns it, but
+// a synthesized allocation would be an emulator-only value, so an unset range
+// stays unset).
+func networkInternalIPv6Range(body map[string]any) (string, bool, error) {
+	v, ok := body["internalIpv6Range"]
+	if !ok || v == nil {
+		return "", false, nil
+	}
+	raw, ok := v.(string)
+	if !ok {
+		return "", false, invalidInternalIPv6Range(v)
+	}
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil || !prefix.Addr().Is6() || prefix.Bits() != 48 || prefix.Masked() != prefix ||
+		!internalULAIPv6Prefix.Contains(prefix.Addr()) {
+		return "", false, invalidInternalIPv6Range(v)
+	}
+	return raw, true, nil
+}
+
+// invalidInternalIPv6Range is the 400 the ULA range validation answers, worded
+// after the Discovery description.
+func invalidInternalIPv6Range(v any) error {
+	return model.NewProviderError("InvalidArgument",
+		fmt.Sprintf("Invalid value for field 'resource.internalIpv6Range': '%v'. Must be a valid /48 ULA IPv6 range within fd20::/20", v), 400)
 }
 
 func (p *Provider) NetworksGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -2251,6 +2722,48 @@ func stringifyInt(v any) string {
 		return ""
 	}
 	return fmt.Sprint(v)
+}
+
+// encryptionKeyResponse renders a request's CustomerEncryptionKey block in the
+// shape real Compute returns on a disk GET (TF2-11-4). Discovery documents
+// rawKey and rsaEncryptedKey as request material and marks sha256
+// "[Output only] The RFC 4648 base64 encoded SHA-256 hash of the
+// customer-supplied encryption key that protects this resource", so only
+// kmsKeyName, kmsKeyServiceAccount and a synthesized sha256 are ever persisted:
+// the raw and RSA-wrapped key material is neither stored nor echoed.
+//
+// The digest is over the decoded 32-byte key, the same value GCS reports for a
+// CSEK object (see the storage provider's CSEK read path). A CSEK block whose
+// rawKey is not a base64-encoded 256-bit key is rejected the way real Compute
+// rejects it, and a sha256 the caller sent is ignored because the field is
+// output-only. A block with nothing server-visible to report (no key material
+// and no kmsKeyName, e.g. only rsaEncryptedKey) yields nil, so no empty block is
+// rendered.
+func encryptionKeyResponse(field string, v any) (map[string]any, error) {
+	block, ok := v.(map[string]any)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.%s': must be a CustomerEncryptionKey object", field), 400)
+	}
+	out := map[string]any{}
+	for _, name := range []string{"kmsKeyName", "kmsKeyServiceAccount"} {
+		if s, _ := block[name].(string); s != "" {
+			out[name] = s
+		}
+	}
+	if raw, _ := block["rawKey"].(string); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != 32 {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.%s.rawKey': a 256-bit customer-supplied encryption key encoded in RFC 4648 base64 is required", field), 400)
+		}
+		sum := sha256.Sum256(key)
+		out["sha256"] = base64.StdEncoding.EncodeToString(sum[:])
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func formatTimestamp(t time.Time) string {

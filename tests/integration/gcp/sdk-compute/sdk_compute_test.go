@@ -21,6 +21,8 @@ package sdk_compute_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -224,6 +226,61 @@ func TestSDKCompute(t *testing.T) {
 	_, err = svc.Disks.Delete(project, zone, features).Do()
 	require.NoError(t, err)
 
+	// --- disk CustomerEncryptionKey echo (TF2-11-4) ---
+	// Real Compute returns the key's kmsKeyName for a CMEK disk and only the
+	// documented sha256 for a CSEK disk; rawKey/rsaEncryptedKey never come back.
+	// The provider reads the block into its ForceNew disk_encryption_key, so the
+	// echo is what stops a CMEK config re-planning as a replacement.
+	kmsKey := "projects/" + project + "/locations/us-central1/keyRings/compat/cryptoKeys/compat"
+	cmek := unique("disk-cmek")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{
+		Name:              cmek,
+		Type:              "pd-ssd",
+		DiskEncryptionKey: &compute.CustomerEncryptionKey{KmsKeyName: kmsKey},
+	}).Do()
+	require.NoError(t, err)
+	gotCMEK, err := svc.Disks.Get(project, zone, cmek).Do()
+	require.NoError(t, err)
+	require.NotNil(t, gotCMEK.DiskEncryptionKey)
+	require.Equal(t, kmsKey, gotCMEK.DiskEncryptionKey.KmsKeyName)
+	require.Empty(t, gotCMEK.DiskEncryptionKey.RawKey)
+	require.Empty(t, gotCMEK.DiskEncryptionKey.RsaEncryptedKey)
+	require.Empty(t, gotCMEK.DiskEncryptionKey.Sha256)
+	_, err = svc.Disks.Delete(project, zone, cmek).Do()
+	require.NoError(t, err)
+
+	// A CSEK disk reports the RFC 4648 base64 SHA-256 of the decoded 32-byte key
+	// and nothing of the key material itself.
+	keyBytes := []byte("0123456789abcdef0123456789abcdef")
+	sum := sha256.Sum256(keyBytes)
+	wantSHA := base64.StdEncoding.EncodeToString(sum[:])
+	csek := unique("disk-csek")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{
+		Name:              csek,
+		Type:              "pd-ssd",
+		DiskEncryptionKey: &compute.CustomerEncryptionKey{RawKey: base64.StdEncoding.EncodeToString(keyBytes)},
+	}).Do()
+	require.NoError(t, err)
+	gotCSEK, err := svc.Disks.Get(project, zone, csek).Do()
+	require.NoError(t, err)
+	require.NotNil(t, gotCSEK.DiskEncryptionKey)
+	require.Equal(t, wantSHA, gotCSEK.DiskEncryptionKey.Sha256)
+	require.Empty(t, gotCSEK.DiskEncryptionKey.RawKey)
+	require.Empty(t, gotCSEK.DiskEncryptionKey.RsaEncryptedKey)
+	_, err = svc.Disks.Delete(project, zone, csek).Do()
+	require.NoError(t, err)
+
+	// A disk created without a key reports no block (Google-managed default),
+	// not an empty one.
+	plain := unique("disk-plain")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{Name: plain, Type: "pd-ssd"}).Do()
+	require.NoError(t, err)
+	gotPlain, err := svc.Disks.Get(project, zone, plain).Do()
+	require.NoError(t, err)
+	require.Nil(t, gotPlain.DiskEncryptionKey)
+	_, err = svc.Disks.Delete(project, zone, plain).Do()
+	require.NoError(t, err)
+
 	// --- networks (global) ---
 	network := unique("net")
 	netOp, err := svc.Networks.Insert(project, &compute.Network{
@@ -391,6 +448,117 @@ func TestSDKCompute(t *testing.T) {
 	require.Error(t, err, "a deleted instance must not be readable")
 	require.ErrorAs(t, err, &apiErr)
 	require.Equal(t, 404, apiErr.Code)
+}
+
+// TestSDKComputeNetworkReadShape drives the TF2-17-2 network read shape through
+// the official compute/v1 client: the routingConfig/BGP members, networkProfile
+// and the ULA IPv6 pair the create request carries are echoed by get, the
+// nested routingConfig patch merges member-wise, a network created without them
+// reports none of them, and an invalid enum/range is the documented 400.
+func TestSDKComputeNetworkReadShape(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project := projectID()
+
+	network := unique("net-shape")
+	const profile = "projects/test-project/global/networkProfiles/test-profile"
+	insertOp, err := svc.Networks.Insert(project, &compute.Network{
+		Name:                  network,
+		AutoCreateSubnetworks: false,
+		ForceSendFields:       []string{"AutoCreateSubnetworks"},
+		NetworkProfile:        profile,
+		EnableUlaInternalIpv6: true,
+		InternalIpv6Range:     "fd20:0:1234::/48",
+		RoutingConfig: &compute.NetworkRoutingConfig{
+			RoutingMode:              "GLOBAL",
+			BgpBestPathSelectionMode: "STANDARD",
+			BgpInterRegionCost:       "ADD_COST_TO_MED",
+			BgpAlwaysCompareMed:      true,
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, "DONE", insertOp.Status)
+
+	got, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.RoutingConfig)
+	require.Equal(t, "GLOBAL", got.RoutingConfig.RoutingMode)
+	require.Equal(t, "STANDARD", got.RoutingConfig.BgpBestPathSelectionMode)
+	require.Equal(t, "ADD_COST_TO_MED", got.RoutingConfig.BgpInterRegionCost)
+	require.True(t, got.RoutingConfig.BgpAlwaysCompareMed)
+	require.Equal(t, profile, got.NetworkProfile)
+	require.True(t, got.EnableUlaInternalIpv6)
+	require.Equal(t, "fd20:0:1234::/48", got.InternalIpv6Range)
+
+	// A routingConfig patch merges member-wise: routingMode changes and the BGP
+	// members a previous write set survive.
+	patchOp, err := svc.Networks.Patch(project, network, &compute.Network{
+		RoutingConfig: &compute.NetworkRoutingConfig{RoutingMode: "REGIONAL"},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, "patch", patchOp.OperationType)
+	require.Equal(t, "DONE", patchOp.Status)
+	patched, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.NotNil(t, patched.RoutingConfig)
+	require.Equal(t, "REGIONAL", patched.RoutingConfig.RoutingMode)
+	require.Equal(t, "STANDARD", patched.RoutingConfig.BgpBestPathSelectionMode)
+	require.Equal(t, "ADD_COST_TO_MED", patched.RoutingConfig.BgpInterRegionCost)
+	require.True(t, patched.RoutingConfig.BgpAlwaysCompareMed)
+
+	// A network created without the fields reads none of them back.
+	bare := unique("net-bare")
+	_, err = svc.Networks.Insert(project, &compute.Network{Name: bare}).Do()
+	require.NoError(t, err)
+	bareGot, err := svc.Networks.Get(project, bare).Do()
+	require.NoError(t, err)
+	require.Nil(t, bareGot.RoutingConfig)
+	require.Empty(t, bareGot.NetworkProfile)
+	require.False(t, bareGot.EnableUlaInternalIpv6)
+	require.Empty(t, bareGot.InternalIpv6Range)
+
+	// Invalid enum/range values are the documented 400 on create and on patch.
+	_, err = svc.Networks.Insert(project, &compute.Network{
+		Name:          unique("net-bad-enum"),
+		RoutingConfig: &compute.NetworkRoutingConfig{RoutingMode: "SIDEWAYS"},
+	}).Do()
+	requireAPICode(t, err, 400)
+	_, err = svc.Networks.Insert(project, &compute.Network{
+		Name:              unique("net-bad-range"),
+		InternalIpv6Range: "fd30:0:0::/48",
+	}).Do()
+	requireAPICode(t, err, 400)
+	_, err = svc.Networks.Patch(project, network, &compute.Network{
+		RoutingConfig: &compute.NetworkRoutingConfig{BgpBestPathSelectionMode: "BEST"},
+	}).Do()
+	requireAPICode(t, err, 400)
+	_, err = svc.Networks.Patch(project, network, &compute.Network{
+		InternalIpv6Range: "fd20:0:0::/56",
+	}).Do()
+	requireAPICode(t, err, 400)
+	final, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.Equal(t, "REGIONAL", final.RoutingConfig.RoutingMode, "a rejected patch must not mutate")
+	require.Equal(t, "STANDARD", final.RoutingConfig.BgpBestPathSelectionMode)
+	require.Equal(t, "fd20:0:1234::/48", final.InternalIpv6Range)
+
+	// delete_bgp_always_compare_med clears the member with an explicit JSON null;
+	// the other routingConfig members survive.
+	_, err = svc.Networks.Patch(project, network, &compute.Network{
+		RoutingConfig: &compute.NetworkRoutingConfig{NullFields: []string{"BgpAlwaysCompareMed"}},
+	}).Do()
+	require.NoError(t, err)
+	cleared, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.False(t, cleared.RoutingConfig.BgpAlwaysCompareMed)
+	require.Equal(t, "REGIONAL", cleared.RoutingConfig.RoutingMode)
+	require.Equal(t, "STANDARD", cleared.RoutingConfig.BgpBestPathSelectionMode)
+
+	for _, n := range []string{network, bare} {
+		_, err = svc.Networks.Delete(project, n).Do()
+		require.NoError(t, err)
+	}
 }
 
 // requireAPICode asserts err is a googleapi.Error with the given HTTP status.

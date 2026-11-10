@@ -253,6 +253,56 @@ resource "google_project_service" "run_api" {
   disable_on_destroy = true
 }
 
+# ── Compute Engine: project common instance metadata ─────────────────────────
+# google_compute_project_metadata is the writable half of the project resource:
+# the provider GETs projects/{p} to read commonInstanceMetadata.fingerprint,
+# POSTs projects/{p}/setCommonInstanceMetadata with items + that fingerprint,
+# polls the returned DONE operation, then re-reads the project. The second plan
+# above is the assertion that projects.get reports the same set (TF1-5), and
+# run.sh checks the wire body.
+resource "google_compute_project_metadata" "compat" {
+  project = var.project
+
+  metadata = {
+    compat-key = "compat-value"
+  }
+}
+
+# ── Compute Engine: disk CMEK echo ───────────────────────────────────────────
+# google_compute_disk reads disk_encryption_key back from
+# diskEncryptionKey.kmsKeyName into a ForceNew block. Real Compute returns the
+# key name (and never raw/rsa-wrapped material), so the emulator echoes the CMEK
+# shape; the second plan above is the assertion that the disk is not replaced
+# on every plan (TF2-11-4), and run.sh checks the wire body.
+resource "google_compute_disk" "cmek" {
+  name = "jaiscloud-tf-cmek"
+  type = "pd-ssd"
+  zone = "${var.region}-a"
+  size = 10
+
+  disk_encryption_key {
+    kms_key_self_link = google_kms_crypto_key.compat.id
+  }
+}
+
+# ── Compute Engine: network read shape ───────────────────────────────────────
+# google_compute_network reads routingConfig (routing_mode + the BGP members),
+# networkProfile and the ULA IPv6 pair back from the network record. Real
+# Compute echoes what the create carried, so the emulator does too; the second
+# plan above is the assertion that a network created with them is not re-planned
+# (TF2-17-2), and run.sh checks the wire body.
+resource "google_compute_network" "compat" {
+  name                         = "jaiscloud-tf-network"
+  auto_create_subnetworks      = false
+  routing_mode                 = "GLOBAL"
+  bgp_best_path_selection_mode = "STANDARD"
+  bgp_always_compare_med       = true
+  bgp_inter_region_cost        = "ADD_COST_TO_MED"
+  enable_ula_internal_ipv6     = true
+  internal_ipv6_range          = "fd20:0:abcd::/48"
+  network_profile              = "projects/${var.project}/global/networkProfiles/global-profiles"
+}
+
 # ── Cloud SQL for PostgreSQL ──────────────────────────────────────────────────
 resource "google_sql_database_instance" "compat" {
   name                = "jaiscloud-tf-postgres"
@@ -598,6 +648,14 @@ output "sql_ssl_cert_fingerprint" {
 
 output "enabled_service" {
   value = google_project_service.run_api.service
+}
+
+output "project_metadata_project" {
+  value = google_compute_project_metadata.compat.project
+}
+
+output "disk_cmek_key" {
+  value = google_compute_disk.cmek.disk_encryption_key[0].kms_key_self_link
 }
 
 output "metastore_service_name" {

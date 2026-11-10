@@ -28,6 +28,15 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
   in-place update of both, and the read-after-delete)
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
+- Compute Engine project metadata (`google_compute_project_metadata`, via
+  `projects.setCommonInstanceMetadata` + the `projects.get` read-back; TF1-5)
+- Compute Engine disk CMEK (`google_compute_disk` with a
+  `disk_encryption_key` block, read back through
+  `diskEncryptionKey.kmsKeyName`; TF2-11-4)
+- Compute Engine network read shape (`google_compute_network` with
+  `routing_mode`, the BGP members, `network_profile` and the ULA IPv6 pair,
+  read back through `routingConfig`/`networkProfile`/`enableUlaInternalIpv6`/
+  `internalIpv6Range`; TF2-17-2)
 - Service Usage (`/v1/projects/{project}/services`)
 - Cloud Billing — the `data "google_project"` `billing_account` read
   (`projects.getBillingInfo`) and `google_project`'s `billing_account`
@@ -1142,9 +1151,17 @@ the provider over the network (~1 minute per case instead of ~0.1s).
   fails on a case that does not converge. An example that cannot converge — a
   recorded emulator gap or an upstream example defect — stays `mode: plan`, and
   the gap is a TF2-x row in the wave plan; the committed allowlist is green.
-  It covers 20 of the 26 served services; the remaining six are plan-only
-  because their published examples cannot complete the destroy half (TF2-15,
-  TF2-18), while the fixture and module gates already apply those services.
+  It covers 21 of the 26 served services; the remaining five (cloudsql,
+  container, functions, resourcemanager, workflows) are plan-only because their
+  published examples cannot complete the destroy half (TF2-15, TF2-18), while
+  the fixture and module gates already apply those services. The `compute`
+  entry pairs `compute_network-example-3` — the caller-supplied
+  `network_firewall_policy_enforcement_order` must read back, and the network
+  must report the documented `mtu` default 1460 (the TF2-17/TF2-17-1 mutable
+  path) — with `compute_disk-example-1`, whose concrete `image` must resolve to
+  the image's absolute selfLink and whose `physical_block_size_bytes` reads the
+  documented 4096 default (TF2-11). Both asserts run before the re-plan and
+  after destroy.
 
 The committed report's provider-docs section is a 5-examples-per-service smoke
 (`-max-per-service 5`); its docs-samples section is the full runnable set (194

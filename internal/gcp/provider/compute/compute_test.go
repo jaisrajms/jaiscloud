@@ -2,7 +2,9 @@ package compute
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -370,10 +372,10 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 		"sourceSnapshot":            "projects/proj/global/snapshots/snap",
 		"sourceInstantSnapshot":     "projects/proj/zones/us-central1-a/instantSnapshots/instant",
 		"sourceStorageObject":       "gs://bucket/disk.tar.gz",
-		// Input-only and secret material: real Compute never returns either, so
-		// the record must not, however persistently the caller sent it.
-		"params":            map[string]any{"resourceManagerTags": map[string]any{"tagKeys/1": "tagValues/2"}},
-		"diskEncryptionKey": map[string]any{"rawKey": "c2VjcmV0"},
+		// Input-only material: real Compute does not persist `params` as part of
+		// the resource payload, so the record must not either. The encryption-key
+		// blocks are covered by TestDiskInsertEncryptionKeyShapes.
+		"params": map[string]any{"resourceManagerTags": map[string]any{"tagKeys/1": "tagValues/2"}},
 	}}))); err != nil {
 		t.Fatalf("create disk: %v", err)
 	}
@@ -402,10 +404,8 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 			t.Errorf("%s = %v (%T), want %v", field, got.Data[field], got.Data[field], want)
 		}
 	}
-	for _, field := range []string{"params", "diskEncryptionKey"} {
-		if v, ok := got.Data[field]; ok {
-			t.Errorf("%s must not be recorded, got %v", field, v)
-		}
+	if v, ok := got.Data["params"]; ok {
+		t.Errorf("params must not be recorded, got %v", v)
 	}
 
 	// A create that omits the optional inputs keeps them absent, except the one
@@ -422,6 +422,7 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 		"guestOsFeatures", "licenses", "provisionedIops", "provisionedThroughput",
 		"replicaZones", "resourcePolicies", "sourceDisk", "sourceInstantSnapshot",
 		"sourceSnapshot", "sourceStorageObject", "storagePool",
+		"diskEncryptionKey", "sourceImageEncryptionKey", "sourceSnapshotEncryptionKey",
 	} {
 		if v, ok := bare.Data[field]; ok {
 			t.Errorf("bare disk must omit %s, got %v", field, v)
@@ -429,6 +430,185 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 	}
 	if bare.Data["physicalBlockSizeBytes"] != defaultDiskPhysicalBlockSizeBytes {
 		t.Errorf("physicalBlockSizeBytes = %v, want the %s default", bare.Data["physicalBlockSizeBytes"], defaultDiskPhysicalBlockSizeBytes)
+	}
+}
+
+// TestDiskInsertEncryptionKeyShapes pins the CustomerEncryptionKey echo
+// (TF2-11-4). Discovery types the disk's diskEncryptionKey,
+// sourceImageEncryptionKey and sourceSnapshotEncryptionKey as
+// CustomerEncryptionKey blocks whose rawKey/rsaEncryptedKey are request-only
+// material and whose sha256 is "[Output only] The RFC 4648 base64 encoded
+// SHA-256 hash of the customer-supplied encryption key that protects this
+// resource" — so the record keeps the server-visible shape alone. The provider
+// reads the block back into its ForceNew disk_encryption_key (and source_*)
+// block, which is what stopped a CMEK disk re-planning "forces replacement".
+func TestDiskInsertEncryptionKeyShapes(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	zone := "us-central1-a"
+	kmsKey := "projects/proj/locations/us-central1/keyRings/ring/cryptoKeys/key"
+	kmsSA := "service-123@compute-system.iam.gserviceaccount.com"
+	keyBytes := []byte("0123456789abcdef0123456789abcdef")
+	rawKey := base64.StdEncoding.EncodeToString(keyBytes)
+	sum := sha256.Sum256(keyBytes)
+	wantSHA := base64.StdEncoding.EncodeToString(sum[:])
+
+	insert := func(name string, body map[string]any) map[string]any {
+		t.Helper()
+		if body == nil {
+			body = map[string]any{}
+		}
+		body["name"] = name
+		if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": body}))); err != nil {
+			t.Fatalf("create disk %s: %v", name, err)
+		}
+		got, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": name})))
+		if err != nil {
+			t.Fatalf("get disk %s: %v", name, err)
+		}
+		return got.Data
+	}
+
+	// CMEK: the key name and its service account echo. There is no key material
+	// to leak; real Compute may additionally qualify the name with a key
+	// version once the disk exists, which the emulator does not invent.
+	cmek := insert("disk-cmek", map[string]any{"diskEncryptionKey": map[string]any{
+		"kmsKeyName":           kmsKey,
+		"kmsKeyServiceAccount": kmsSA,
+	}})
+	wantCMEK := map[string]any{"kmsKeyName": kmsKey, "kmsKeyServiceAccount": kmsSA}
+	if !reflect.DeepEqual(cmek["diskEncryptionKey"], wantCMEK) {
+		t.Errorf("diskEncryptionKey = %v, want %v", cmek["diskEncryptionKey"], wantCMEK)
+	}
+
+	// CSEK: only the documented sha256 is echoed — a caller-supplied sha256 is
+	// ignored (output-only) and the raw key never comes back.
+	csek := insert("disk-csek", map[string]any{"diskEncryptionKey": map[string]any{
+		"rawKey": rawKey,
+		"sha256": base64.StdEncoding.EncodeToString([]byte("caller-supplied")),
+	}})
+	wantCSEK := map[string]any{"sha256": wantSHA}
+	if !reflect.DeepEqual(csek["diskEncryptionKey"], wantCSEK) {
+		t.Errorf("diskEncryptionKey = %v, want %v", csek["diskEncryptionKey"], wantCSEK)
+	}
+
+	// The source-image and source-snapshot keys follow the same rule.
+	source := insert("disk-source-keys", map[string]any{
+		"sourceImageEncryptionKey":    map[string]any{"kmsKeyName": kmsKey},
+		"sourceSnapshotEncryptionKey": map[string]any{"rawKey": rawKey},
+	})
+	if want := map[string]any{"kmsKeyName": kmsKey}; !reflect.DeepEqual(source["sourceImageEncryptionKey"], want) {
+		t.Errorf("sourceImageEncryptionKey = %v, want %v", source["sourceImageEncryptionKey"], want)
+	}
+	if want := map[string]any{"sha256": wantSHA}; !reflect.DeepEqual(source["sourceSnapshotEncryptionKey"], want) {
+		t.Errorf("sourceSnapshotEncryptionKey = %v, want %v", source["sourceSnapshotEncryptionKey"], want)
+	}
+
+	// An rsa-wrapped key alone carries no server-derivable member: the wrapped
+	// material is never echoed, and its sha256 needs the private key real
+	// Compute holds. No block is rendered rather than an empty one.
+	rsa := insert("disk-rsa", map[string]any{"diskEncryptionKey": map[string]any{
+		"rsaEncryptedKey": base64.StdEncoding.EncodeToString([]byte("wrapped")),
+	}})
+	if v, ok := rsa["diskEncryptionKey"]; ok {
+		t.Errorf("rsa-only create must render no block, got %v", v)
+	}
+
+	// A plain create renders no block, not an empty one.
+	if v, ok := insert("disk-no-key", nil)["diskEncryptionKey"]; ok {
+		t.Errorf("plain create must render no block, got %v", v)
+	}
+
+	// A rawKey that is not a base64-encoded 256-bit key is the documented 400.
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"disk-bad-base64", map[string]any{"diskEncryptionKey": map[string]any{"rawKey": "not base64!"}}},
+		{"disk-short-key", map[string]any{"diskEncryptionKey": map[string]any{"rawKey": base64.StdEncoding.EncodeToString([]byte("short"))}}},
+	} {
+		tc.body["name"] = tc.name
+		_, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": tc.body})))
+		if !isCode(err, "InvalidArgument") {
+			t.Errorf("%s: expected InvalidArgument, got %v", tc.name, err)
+		}
+	}
+}
+
+// TestDiskEncryptionKeyStoreRoundTrip checks the persisted record itself (the
+// JSON the ResourceStore keeps) rather than only the rendered read: a CSEK
+// key's raw material must not be persisted anywhere, a CMEK key name must
+// survive the store round trip, and disks.list renders the same block as
+// disks.get.
+func TestDiskEncryptionKeyStoreRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	zone := "us-central1-a"
+	kmsKey := "projects/proj/locations/us-central1/keyRings/ring/cryptoKeys/key"
+	keyBytes := []byte("0123456789abcdef0123456789abcdef")
+	rawKey := base64.StdEncoding.EncodeToString(keyBytes)
+	sum := sha256.Sum256(keyBytes)
+	wantSHA := base64.StdEncoding.EncodeToString(sum[:])
+
+	for name, body := range map[string]map[string]any{
+		// A CMEK request never carries raw material in practice; the extra
+		// rsaEncryptedKey here is the leak check (it must be dropped, not
+		// sanitized into an invented sha256).
+		"disk-store-cmek": {"diskEncryptionKey": map[string]any{
+			"kmsKeyName": kmsKey, "rsaEncryptedKey": "d3JhcHBlZA==",
+		}},
+		"disk-store-csek": {"diskEncryptionKey": map[string]any{"rawKey": rawKey}},
+	} {
+		body["name"] = name
+		if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": body}))); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		entry, err := p.resources.Get(ctx, "proj", zone, rtDisk, name)
+		if err != nil {
+			t.Fatalf("store get %s: %v", name, err)
+		}
+		record := string(entry.Data)
+		for _, secret := range []string{rawKey, "d3JhcHBlZA==", "rawKey", "rsaEncryptedKey"} {
+			if strings.Contains(record, secret) {
+				t.Errorf("%s: stored record leaks key material %q: %s", name, secret, record)
+			}
+		}
+		var stored map[string]any
+		if err := json.Unmarshal(entry.Data, &stored); err != nil {
+			t.Fatalf("unmarshal %s: %v", name, err)
+		}
+		block, _ := stored["diskEncryptionKey"].(map[string]any)
+		if name == "disk-store-cmek" {
+			if block["kmsKeyName"] != kmsKey {
+				t.Errorf("%s: stored kmsKeyName = %v, want %v", name, block["kmsKeyName"], kmsKey)
+			}
+			if _, ok := block["sha256"]; ok {
+				t.Errorf("%s: stored block has an invented sha256: %v", name, block["sha256"])
+			}
+			continue
+		}
+		if block["sha256"] != wantSHA {
+			t.Errorf("%s: stored sha256 = %v, want %v", name, block["sha256"], wantSHA)
+		}
+	}
+
+	// The list path renders the stored block exactly as get does.
+	list, err := p.DisksList(ctx, newNR(zonal(zone, map[string]any{})))
+	if err != nil {
+		t.Fatalf("list disks: %v", err)
+	}
+	items, _ := list.Data["items"].([]any)
+	var listed map[string]any
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok && m["name"] == "disk-store-csek" {
+			listed = m
+		}
+	}
+	if listed == nil {
+		t.Fatal("disk-store-csek missing from disks.list")
+	}
+	if want := map[string]any{"sha256": wantSHA}; !reflect.DeepEqual(listed["diskEncryptionKey"], want) {
+		t.Errorf("disks.list diskEncryptionKey = %v, want %v", listed["diskEncryptionKey"], want)
 	}
 }
 
@@ -640,14 +820,16 @@ func TestNetworkAndFirewallCRUD(t *testing.T) {
 	}
 }
 
-// TestNetworksPatchAppliesMutableFields pins compute.networks.patch (TF2-17-1).
-// A Terraform google_compute_network update path PATCHes the network (with a
-// fingerprinted body for mtu) whenever mtu, network_firewall_policy_enforcement_order,
-// routing_mode or a bgp_* field changes, then polls the operation it returns —
-// before this, every such apply failed with a 501 after the resource was already
-// created. The two fields the record stores are applied in place, an absent field
-// keeps its stored value (merge semantics), the identity of the record is
-// untouched, and the response is the Operation envelope Discovery declares.
+// TestNetworksPatchAppliesMutableFields pins compute.networks.patch (TF2-17-1)
+// and its read shape (TF2-17-2). A Terraform google_compute_network update path
+// PATCHes the network (with a fingerprinted body for mtu) whenever mtu,
+// network_firewall_policy_enforcement_order, routing_mode or a bgp_* field
+// changes, then polls the operation it returns — before TF2-17-1, every such
+// apply failed with a 501 after the resource was already created. The stored
+// fields are applied in place, an absent field keeps its stored value (merge
+// semantics, including member-wise for routingConfig), the identity of the
+// record is untouched, and the response is the Operation envelope Discovery
+// declares.
 func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -717,10 +899,10 @@ func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 		t.Errorf("mtu = %v, want the patched 1500 to survive an order-only patch", afterOrder.Data["mtu"])
 	}
 
-	// The provider's routing_mode/BGP path sends a collapsed routingConfig (and
-	// the ULA pair when it changes). Those are outside the record's stored shape
-	// (TF2-17-2): the call succeeds — the provider's apply must not fail — and
-	// the record reports no routing config rather than a fabricated one.
+	// The provider's routing_mode/BGP path sends a collapsed routingConfig and
+	// the ULA pair when those change. Both are part of the record's stored shape
+	// now (TF2-17-2): the members the body carries are applied, ones it does not
+	// carry keep their stored value, and a raw reader sees them.
 	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
 		"network": "vpc-patch",
 		"body": map[string]any{
@@ -735,8 +917,66 @@ func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get network after routingConfig patch: %v", err)
 	}
-	if _, ok := afterRouting.Data["routingConfig"]; ok {
-		t.Errorf("routingConfig = %v, want it unpersisted (TF2-17-2)", afterRouting.Data["routingConfig"])
+	routing, ok := afterRouting.Data["routingConfig"].(map[string]any)
+	if !ok || routing["routingMode"] != "REGIONAL" {
+		t.Errorf("routingConfig = %v, want routingMode REGIONAL", afterRouting.Data["routingConfig"])
+	}
+	if afterRouting.Data["enableUlaInternalIpv6"] != true || afterRouting.Data["internalIpv6Range"] != "fd20:0:0::/48" {
+		t.Errorf("ULA IPv6 pair = %v / %v, want true / fd20:0:0::/48",
+			afterRouting.Data["enableUlaInternalIpv6"], afterRouting.Data["internalIpv6Range"])
+	}
+
+	// A second routingConfig patch merges member-wise: the BGP members land and
+	// the routingMode a previous patch set survives.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body": map[string]any{"routingConfig": map[string]any{
+			"bgpBestPathSelectionMode": "STANDARD",
+			"bgpInterRegionCost":       "ADD_COST_TO_MED",
+			"bgpAlwaysCompareMed":      true,
+		}},
+	})); err != nil {
+		t.Fatalf("patch BGP members: %v", err)
+	}
+	afterBGP, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after BGP patch: %v", err)
+	}
+	routing, _ = afterBGP.Data["routingConfig"].(map[string]any)
+	wantRouting := map[string]any{
+		"routingMode":              "REGIONAL",
+		"bgpBestPathSelectionMode": "STANDARD",
+		"bgpInterRegionCost":       "ADD_COST_TO_MED",
+		"bgpAlwaysCompareMed":      true,
+	}
+	for field, want := range wantRouting {
+		if routing[field] != want {
+			t.Errorf("routingConfig.%s = %v, want %v (member-wise merge)", field, routing[field], want)
+		}
+	}
+	// The earlier mtu/order patches are untouched by the routing patch.
+	if mtu, ok := afterBGP.Data["mtu"].(float64); !ok || int(mtu) != 1500 {
+		t.Errorf("mtu = %v, want the patched 1500 to survive a routing patch", afterBGP.Data["mtu"])
+	}
+	if afterBGP.Data["networkFirewallPolicyEnforcementOrder"] != "BEFORE_CLASSIC_FIREWALL" {
+		t.Errorf("networkFirewallPolicyEnforcementOrder = %v, want the previously patched BEFORE_CLASSIC_FIREWALL",
+			afterBGP.Data["networkFirewallPolicyEnforcementOrder"])
+	}
+
+	// networkProfile is creation-time only (Discovery) and ForceNew in the
+	// provider, so a patch that carries it is ignored.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body":    map[string]any{"networkProfile": "projects/proj/global/networkProfiles/p"},
+	})); err != nil {
+		t.Fatalf("patch networkProfile: %v", err)
+	}
+	afterProfile, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after networkProfile patch: %v", err)
+	}
+	if _, ok := afterProfile.Data["networkProfile"]; ok {
+		t.Errorf("networkProfile = %v, want it not patchable", afterProfile.Data["networkProfile"])
 	}
 
 	// A retried patch replays its operation instead of mutating twice.
@@ -773,12 +1013,58 @@ func TestNetworksPatchAppliesMutableFields(t *testing.T) {
 	})); !isCode(err, "InvalidArgument") {
 		t.Errorf("patch bad enforcement order = %v, want InvalidArgument", err)
 	}
+	// The routingConfig members and the ULA range are validated on patch the same
+	// way they are on create.
+	for _, bad := range []map[string]any{
+		{"routingConfig": map[string]any{"routingMode": "SIDEWAYS"}},
+		{"routingConfig": map[string]any{"bgpBestPathSelectionMode": "BEST"}},
+		{"routingConfig": map[string]any{"bgpInterRegionCost": "CHEAP"}},
+		{"routingConfig": map[string]any{"bgpAlwaysCompareMed": "yes"}},
+		{"routingConfig": "REGIONAL"},
+		{"internalIpv6Range": "fd30:0:0::/48"},
+		{"internalIpv6Range": "fd20:0:0::/56"},
+		{"internalIpv6Range": "not-a-range"},
+	} {
+		if _, err := p.NetworksPatch(ctx, newNR(map[string]any{"network": "vpc-patch", "body": bad})); !isCode(err, "InvalidArgument") {
+			t.Errorf("patch %v = %v, want InvalidArgument", bad, err)
+		}
+	}
 	final, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
 	if err != nil {
 		t.Fatalf("get network after rejected patches: %v", err)
 	}
 	if mtu, ok := final.Data["mtu"].(float64); !ok || int(mtu) != 1400 {
 		t.Errorf("mtu = %v, want the last accepted 1400 (a rejected patch must not mutate)", final.Data["mtu"])
+	}
+	if routing, _ := final.Data["routingConfig"].(map[string]any); routing["routingMode"] != "REGIONAL" || routing["bgpAlwaysCompareMed"] != true {
+		t.Errorf("routingConfig = %v, want the accepted REGIONAL/true pair after the rejected patches", final.Data["routingConfig"])
+	}
+	if final.Data["internalIpv6Range"] != "fd20:0:0::/48" {
+		t.Errorf("internalIpv6Range = %v, want the accepted fd20:0:0::/48 after the rejected patches", final.Data["internalIpv6Range"])
+	}
+
+	// delete_bgp_always_compare_med: the hashicorp provider clears the member by
+	// sending it as JSON null (plus its undocumented deleteBgpAlwaysCompareMed
+	// flag); the other routingConfig members stay.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body": map[string]any{"routingConfig": map[string]any{
+			"bgpAlwaysCompareMed":       nil,
+			"deleteBgpAlwaysCompareMed": true,
+		}},
+	})); err != nil {
+		t.Fatalf("clear bgpAlwaysCompareMed: %v", err)
+	}
+	cleared, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after clearing bgpAlwaysCompareMed: %v", err)
+	}
+	clearedRouting, _ := cleared.Data["routingConfig"].(map[string]any)
+	if v, ok := clearedRouting["bgpAlwaysCompareMed"]; ok {
+		t.Errorf("bgpAlwaysCompareMed = %v, want the member cleared", v)
+	}
+	if clearedRouting["routingMode"] != "REGIONAL" || clearedRouting["bgpBestPathSelectionMode"] != "STANDARD" {
+		t.Errorf("routingConfig = %v, want the other members kept across the clear", clearedRouting)
 	}
 }
 
@@ -801,6 +1087,161 @@ func TestNetworkCreateValidatesMutableFieldRanges(t *testing.T) {
 	}
 	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{"name": "jumbo", "mtu": 8896}})); err != nil {
 		t.Errorf("create mtu=8896 = %v, want success (documented maximum)", err)
+	}
+}
+
+// TestNetworkReadShapeEchoesRoutingConfigAndUla pins TF2-17-2: the network
+// record now keeps the documented read shape a create request carries —
+// routingConfig (routingMode and the BGP members), networkProfile, and the ULA
+// IPv6 pair — so a raw reader (`gcloud compute networks describe`, which showed
+// no routing mode or BGP state) sees what was set. Only supplied fields are
+// echoed: Network.routingConfig documents no server default, and while
+// Discovery says real Compute allocates a /48 when ULA is enabled without a
+// range, the emulator has no ULA allocator and does not invent one.
+func TestNetworkReadShapeEchoesRoutingConfigAndUla(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	const profile = "projects/proj/global/networkProfiles/global-profiles"
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name":                  "vpc-shape",
+		"autoCreateSubnetworks": false,
+		"networkProfile":        profile,
+		"enableUlaInternalIpv6": true,
+		"internalIpv6Range":     "fd20:0:1234::/48",
+		"routingConfig": map[string]any{
+			"routingMode":              "GLOBAL",
+			"bgpBestPathSelectionMode": "STANDARD",
+			"bgpInterRegionCost":       "ADD_COST_TO_MED",
+			"bgpAlwaysCompareMed":      true,
+			// Output-only members are never persisted or echoed.
+			"effectiveBgpAlwaysCompareMed": true,
+			"effectiveBgpInterRegionCost":  "ADD_COST_TO_MED",
+		},
+	}})); err != nil {
+		t.Fatalf("create network with the full read shape: %v", err)
+	}
+	got, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-shape"}))
+	if err != nil {
+		t.Fatalf("get network: %v", err)
+	}
+	routing, ok := got.Data["routingConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("routingConfig = %v, want the persisted message", got.Data["routingConfig"])
+	}
+	for field, want := range map[string]any{
+		"routingMode":              "GLOBAL",
+		"bgpBestPathSelectionMode": "STANDARD",
+		"bgpInterRegionCost":       "ADD_COST_TO_MED",
+		"bgpAlwaysCompareMed":      true,
+	} {
+		if routing[field] != want {
+			t.Errorf("routingConfig.%s = %v, want %v", field, routing[field], want)
+		}
+	}
+	for _, outputOnly := range []string{"effectiveBgpAlwaysCompareMed", "effectiveBgpInterRegionCost"} {
+		if _, ok := routing[outputOnly]; ok {
+			t.Errorf("routingConfig.%s = %v, want the output-only member dropped", outputOnly, routing[outputOnly])
+		}
+	}
+	if got.Data["networkProfile"] != profile {
+		t.Errorf("networkProfile = %v, want the supplied %s", got.Data["networkProfile"], profile)
+	}
+	if got.Data["enableUlaInternalIpv6"] != true {
+		t.Errorf("enableUlaInternalIpv6 = %v, want true", got.Data["enableUlaInternalIpv6"])
+	}
+	if got.Data["internalIpv6Range"] != "fd20:0:1234::/48" {
+		t.Errorf("internalIpv6Range = %v, want the supplied fd20:0:1234::/48", got.Data["internalIpv6Range"])
+	}
+
+	// networks.list renders the same record.
+	list, err := p.NetworksList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list networks: %v", err)
+	}
+	items, _ := list.Data["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("network list items = %v, want 1", list.Data["items"])
+	}
+	listed, _ := items[0].(map[string]any)
+	if listed["networkProfile"] != profile || listed["enableUlaInternalIpv6"] != true {
+		t.Errorf("listed network = %v, want the same networkProfile/ULA pair as get", listed)
+	}
+
+	// A network created without any of them reads none of them back — no
+	// fabricated routingConfig and no invented /48.
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "vpc-bare", "autoCreateSubnetworks": false,
+	}})); err != nil {
+		t.Fatalf("create bare network: %v", err)
+	}
+	bare, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-bare"}))
+	if err != nil {
+		t.Fatalf("get bare network: %v", err)
+	}
+	for _, field := range []string{"routingConfig", "networkProfile", "enableUlaInternalIpv6", "internalIpv6Range"} {
+		if v, ok := bare.Data[field]; ok {
+			t.Errorf("%s = %v on a network created without it, want absent", field, v)
+		}
+	}
+
+	// ULA enabled without a range keeps enableUlaInternalIpv6 but invents no
+	// range (Discovery documents a server allocation the emulator does not do).
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "vpc-ula", "enableUlaInternalIpv6": true,
+	}})); err != nil {
+		t.Fatalf("create ULA network without a range: %v", err)
+	}
+	ula, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-ula"}))
+	if err != nil {
+		t.Fatalf("get ULA network: %v", err)
+	}
+	if ula.Data["enableUlaInternalIpv6"] != true {
+		t.Errorf("enableUlaInternalIpv6 = %v, want true", ula.Data["enableUlaInternalIpv6"])
+	}
+	if v, ok := ula.Data["internalIpv6Range"]; ok {
+		t.Errorf("internalIpv6Range = %v, want absent (the emulator allocates no /48)", v)
+	}
+}
+
+// TestNetworkCreateValidatesReadShapeFields pins that create rejects the invalid
+// enum/range a patch rejects, because real Compute validates a field whichever
+// method carries it.
+func TestNetworkCreateValidatesReadShapeFields(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, bad := range []map[string]any{
+		{"routingConfig": map[string]any{"routingMode": "SIDEWAYS"}},
+		{"routingConfig": map[string]any{"bgpBestPathSelectionMode": "BEST"}},
+		{"routingConfig": map[string]any{"bgpInterRegionCost": "CHEAP"}},
+		{"routingConfig": map[string]any{"bgpAlwaysCompareMed": "yes"}},
+		{"routingConfig": []any{"REGIONAL"}},
+		{"networkProfile": 7},
+		{"enableUlaInternalIpv6": "yes"},
+		{"internalIpv6Range": "fd30:0:0::/48"},
+		{"internalIpv6Range": "fd20:0:0::/56"},
+		{"internalIpv6Range": "fd20:1234:5678:9::/48"},
+	} {
+		body := map[string]any{"name": "bad-shape"}
+		for k, v := range bad {
+			body[k] = v
+		}
+		if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": body})); !isCode(err, "InvalidArgument") {
+			t.Errorf("create %v = %v, want InvalidArgument", bad, err)
+		}
+	}
+	// The documented boundaries are accepted: a /48 at the start of fd20::/20
+	// and the enum members in any combination.
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name":              "good-shape",
+		"internalIpv6Range": "fd20::/48",
+		"routingConfig": map[string]any{
+			"routingMode":              "REGIONAL",
+			"bgpBestPathSelectionMode": "LEGACY",
+			"bgpInterRegionCost":       "DEFAULT",
+			"bgpAlwaysCompareMed":      false,
+		},
+	}})); err != nil {
+		t.Errorf("create with documented boundary values = %v, want success", err)
 	}
 }
 
@@ -1838,5 +2279,228 @@ func TestListHandlersRejectBadMaxResults(t *testing.T) {
 				t.Errorf("%s(maxResults=%v) = %v, want InvalidArgument", h.name, v, err)
 			}
 		}
+	}
+}
+
+// ─── Project common instance metadata (TF1-5) ────────────────────────────────
+
+// projectMetadata calls compute.projects.get and returns the
+// commonInstanceMetadata envelope it reports.
+func projectMetadata(t *testing.T, p *Provider, project string) map[string]any {
+	t.Helper()
+	resp, err := p.ProjectsGet(context.Background(), newNR(map[string]any{"project": project}))
+	if err != nil {
+		t.Fatalf("projects get %s: %v", project, err)
+	}
+	md, ok := resp.Data["commonInstanceMetadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("commonInstanceMetadata = %v, want an object", resp.Data["commonInstanceMetadata"])
+	}
+	return md
+}
+
+// setProjectMetadata calls compute.projects.setCommonInstanceMetadata.
+func setProjectMetadata(t *testing.T, p *Provider, project string, body map[string]any) (map[string]any, error) {
+	t.Helper()
+	resp, err := p.ProjectsSetCommonInstanceMetadata(context.Background(),
+		newNR(map[string]any{"project": project, "body": body}))
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// metadataItems renders the metadata envelope's items as key=value pairs so a
+// test can compare the stored set without depending on map iteration order.
+func metadataItems(md map[string]any) map[string]string {
+	out := map[string]string{}
+	list, _ := md["items"].([]any)
+	for _, raw := range list {
+		item, _ := raw.(map[string]any)
+		key, _ := item["key"].(string)
+		value, _ := item["value"].(string)
+		out[key] = value
+	}
+	return out
+}
+
+// TestProjectMetadataSetGetRoundTrip pins compute.projects.setCommonInstanceMetadata
+// against compute.projects.get: the metadata the write stores is what the
+// project resource reports, and the fingerprint advances on every write (even a
+// write that repeats the previous items), which is what makes the provider's
+// read-modify-write converge instead of permadiffing (TF1-5).
+func TestProjectMetadataSetGetRoundTrip(t *testing.T) {
+	p := newProvider()
+
+	before := projectMetadata(t, p, "proj")
+	if before["kind"] != kindMetadata {
+		t.Errorf("commonInstanceMetadata.kind = %v, want %s", before["kind"], kindMetadata)
+	}
+	if items := metadataItems(before); len(items) != 0 {
+		t.Errorf("a never-written project reports items %v, want none", items)
+	}
+	fp0 := str(before["fingerprint"])
+	if fp0 == "" {
+		t.Fatal("a never-written project must still report a fingerprint")
+	}
+
+	// The provider's create path: GET the project, then POST items + the
+	// fingerprint it just read.
+	op, err := setProjectMetadata(t, p, "proj", map[string]any{
+		"items": []any{
+			map[string]any{"key": "foo", "value": "bar"},
+			map[string]any{"key": "fizz", "value": "buzz"},
+		},
+		"fingerprint": fp0,
+	})
+	if err != nil {
+		t.Fatalf("setCommonInstanceMetadata: %v", err)
+	}
+	// The response is Compute Engine's own DONE Operation envelope, not a
+	// google.longrunning.Operation: the provider polls it with
+	// ComputeOperationWaitTime.
+	if op["kind"] != kindOperation || op["status"] != "DONE" {
+		t.Errorf("operation = %v, want a DONE %s", op, kindOperation)
+	}
+	if op["operationType"] != "setCommonInstanceMetadata" {
+		t.Errorf("operationType = %v, want setCommonInstanceMetadata", op["operationType"])
+	}
+	if got, want := op["targetLink"], computeBasePath+"projects/proj"; got != want {
+		t.Errorf("targetLink = %v, want %s", got, want)
+	}
+	if got, want := op["progress"], int64(100); got != want {
+		t.Errorf("progress = %v, want %v", got, want)
+	}
+	if got, want := op["selfLink"], computeBasePath+"projects/proj/global/operations/"+str(op["name"]); got != want {
+		t.Errorf("selfLink = %v, want %s", got, want)
+	}
+	if op["name"] == "" {
+		t.Error("operation name is empty")
+	}
+
+	after := projectMetadata(t, p, "proj")
+	fp1 := str(after["fingerprint"])
+	if fp1 == "" || fp1 == fp0 {
+		t.Errorf("fingerprint after write = %q, want a fresh value (was %q)", fp1, fp0)
+	}
+	if got, want := metadataItems(after), map[string]string{"foo": "bar", "fizz": "buzz"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("items after write = %v, want %v", got, want)
+	}
+
+	// A write that repeats the same items still advances the fingerprint
+	// (Discovery: it "changes after every request to modify or update metadata").
+	if _, err := setProjectMetadata(t, p, "proj", map[string]any{
+		"items":       after["items"],
+		"fingerprint": fp1,
+	}); err != nil {
+		t.Fatalf("repeated write: %v", err)
+	}
+	again := projectMetadata(t, p, "proj")
+	fp2 := str(again["fingerprint"])
+	if fp2 == fp1 {
+		t.Errorf("fingerprint did not advance on a repeated write: %q", fp2)
+	}
+	if got, want := metadataItems(again), map[string]string{"foo": "bar", "fizz": "buzz"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("items after repeated write = %v, want %v", got, want)
+	}
+
+	// A stale fingerprint is the documented 412 conditionNotMet; nothing is
+	// stored.
+	_, err = setProjectMetadata(t, p, "proj", map[string]any{
+		"items":       []any{map[string]any{"key": "nope", "value": "1"}},
+		"fingerprint": fp1,
+	})
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "PreconditionFailed" || perr.HTTPStatus != 412 {
+		t.Fatalf("stale fingerprint = %v, want PreconditionFailed/412", err)
+	}
+	if got := metadataItems(projectMetadata(t, p, "proj")); got["nope"] != "" || len(got) != 2 {
+		t.Errorf("a rejected write changed the metadata: %v", got)
+	}
+
+	// The fingerprint is optional in Discovery (the schema marks no required
+	// annotation for it): a body without one is accepted, which is also what a
+	// bare client call and the conformance probe send.
+	if _, err := setProjectMetadata(t, p, "proj", map[string]any{
+		"items": []any{map[string]any{"key": "solo", "value": "1"}},
+	}); err != nil {
+		t.Fatalf("write without fingerprint: %v", err)
+	}
+	if got := metadataItems(projectMetadata(t, p, "proj")); !reflect.DeepEqual(got, map[string]string{"solo": "1"}) {
+		t.Errorf("items after fingerprintless write = %v, want the replacement set", got)
+	}
+
+	// The provider's destroy path sends the fingerprint and no items, which
+	// clears the set.
+	current := str(projectMetadata(t, p, "proj")["fingerprint"])
+	if _, err := setProjectMetadata(t, p, "proj", map[string]any{"fingerprint": current}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	cleared := projectMetadata(t, p, "proj")
+	if items := metadataItems(cleared); len(items) != 0 {
+		t.Errorf("items after clear = %v, want none", items)
+	}
+	if str(cleared["fingerprint"]) == current {
+		t.Error("clearing did not advance the fingerprint")
+	}
+
+	// Metadata is per project: a write to one project must not leak into
+	// another (projects.get answers any id).
+	if items := metadataItems(projectMetadata(t, p, "other")); len(items) != 0 {
+		t.Errorf("project other reports items %v, want none", items)
+	}
+}
+
+// TestProjectMetadataValidation pins the 400 paths Discovery documents for the
+// write: a fingerprint that is not a base64 byte string, a metadata key outside
+// the documented grammar, a missing value, and over-size values.
+func TestProjectMetadataValidation(t *testing.T) {
+	p := newProvider()
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"malformed fingerprint", map[string]any{"fingerprint": "not base64!"}},
+		{"key outside the grammar", map[string]any{
+			"items": []any{map[string]any{"key": "has space", "value": "v"}},
+		}},
+		{"over-long key", map[string]any{
+			"items": []any{map[string]any{"key": strings.Repeat("k", 129), "value": "v"}},
+		}},
+		{"missing value", map[string]any{
+			"items": []any{map[string]any{"key": "foo"}},
+		}},
+		{"missing key", map[string]any{
+			"items": []any{map[string]any{"value": "v"}},
+		}},
+		{"over-size value", map[string]any{
+			"items": []any{map[string]any{"key": "big", "value": strings.Repeat("v", maxMetadataValueBytes+1)}},
+		}},
+		{"items not a list", map[string]any{"items": "nope"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.ProjectsSetCommonInstanceMetadata(ctx, newNR(map[string]any{"project": "proj", "body": tc.body}))
+			if !isCode(err, "InvalidArgument") {
+				t.Fatalf("err = %v, want InvalidArgument", err)
+			}
+			if items := metadataItems(projectMetadata(t, p, "proj")); len(items) != 0 {
+				t.Errorf("a rejected write stored %v", items)
+			}
+		})
+	}
+
+	// The documented total-size ceiling (less than 512 KiB across all keys and
+	// values) is enforced even when each value is individually legal.
+	items := make([]any, 0, 3)
+	for _, key := range []string{"a", "b", "c"} {
+		items = append(items, map[string]any{"key": key, "value": strings.Repeat("v", maxMetadataValueBytes)})
+	}
+	if _, err := p.ProjectsSetCommonInstanceMetadata(ctx, newNR(map[string]any{
+		"project": "proj", "body": map[string]any{"items": items},
+	})); !isCode(err, "InvalidArgument") {
+		t.Fatalf("over-size total = %v, want InvalidArgument", err)
 	}
 }

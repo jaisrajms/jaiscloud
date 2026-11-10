@@ -249,8 +249,20 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (synchronous DDL/DML jobs, serialized DML spans, atomic CTAS, immutable
   `getQueryResults` snapshots, documented divergences) are the cell reasons.
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (27 + 1 `unsupported` stub),
-  **Compute Engine** (35 + 1), **Cloud DNS** (20 + 1), **Memorystore** (13). No control plane,
-  VM/disk/network data plane, authoritative DNS server, or Redis data plane.
+  **Compute Engine** (36 + 1), **Cloud DNS** (20 + 1), **Memorystore** (13). No control plane,
+  VM/disk/network data plane, authoritative DNS server, or Redis data plane. Compute's project
+  record keeps one written field — `commonInstanceMetadata`, through
+  `projects.setCommonInstanceMetadata` (items + a fingerprint that advances per write, `412`
+  on a stale fingerprint) — so `google_compute_project_metadata{,_item}` round-trips. A disk
+  record echoes the persisted create inputs the provider reads back, in the server-visible
+  `CustomerEncryptionKey` shape only: `kmsKeyName`/`kmsKeyServiceAccount` for a CMEK block and
+  the base64 SHA-256 of the decoded key for a CSEK block, never `rawKey`/`rsaEncryptedKey`, so
+  `google_compute_disk`'s ForceNew encryption-key blocks converge instead of re-planning as a
+  replacement (TF2-11-4). A network record keeps the read shape a create or patch carries —
+  `routingConfig` (`routingMode` and the BGP members), `networkProfile` and the ULA IPv6 pair,
+  each echoed only when the request carried it and validated against the documented enums and the
+  `/48`-within-`fd20::/20` range — so raw readers see the routing mode and BGP state that was set
+  (TF2-17-2).
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the

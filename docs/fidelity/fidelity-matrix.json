@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1256,
+    "total": 1257,
     "by_state": {
       "ga": 1043,
-      "limited": 160,
+      "limited": 161,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 593,
-        "limited": 137,
+        "limited": 138,
         "preview": 14,
         "unsupported": 11
       }
@@ -36,7 +36,7 @@
         "unsupported": 1
       },
       "compute": {
-        "limited": 36,
+        "limited": 37,
         "unsupported": 1
       },
       "container": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 709
+        "rest": 710
       },
       "unverified": {
         "grpc": 46,
@@ -234,7 +234,7 @@
       "source_ref": "compute.v1",
       "published": 1011,
       "served": 974,
-      "graded": 36,
+      "graded": 37,
       "unserved": [
         "compute.firewallPolicies.addAssociation",
         "compute.firewallPolicies.addRule",
@@ -274,9 +274,9 @@
         "compute.organizationSecurityPolicies.removeAssociation",
         "compute.organizationSecurityPolicies.removeRule"
       ],
-      "ungraded": 938,
-      "unimplemented": 930,
-      "note": "938 served method(s) have no graded cell; 930 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
+      "ungraded": 937,
+      "unimplemented": 929,
+      "note": "937 served method(s) have no graded cell; 929 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
     },
     {
       "service": "compute",
@@ -3121,6 +3121,21 @@
       "verified": true,
       "evidence": [
         "discovery=compute.projects.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "compute",
+      "operation": "Compute.ProjectsSetCommonInstanceMetadata",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "compute.projects.setCommonInstanceMetadata",
+      "verified": true,
+      "evidence": [
+        "discovery=compute.projects.setCommonInstanceMetadata",
+        "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
