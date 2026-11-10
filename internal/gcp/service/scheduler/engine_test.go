@@ -250,6 +250,18 @@ func TestPauseResumeRun(t *testing.T) {
 		t.Fatalf("paused job fired")
 	}
 
+	// :run on a paused job is refused (TF2-12-2): real Cloud Scheduler answers
+	// 400 FAILED_PRECONDITION and performs no delivery.
+	clock.SetGlobalClock(clock.FixedClock{T: at.Add(2 * time.Minute)})
+	if _, err := core.RunJob(ctx, "proj", "us-central1", created.Name); err == nil {
+		t.Fatalf("RunJob on a PAUSED job: expected FAILED_PRECONDITION")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "FailedPrecondition" || perr.HTTPStatus != 400 {
+		t.Fatalf("RunJob on a PAUSED job: err = %v, want FailedPrecondition 400", err)
+	}
+	if j, _ := core.GetJob(ctx, "proj", "us-central1", created.Name); !j.LastAttemptTime.IsZero() {
+		t.Fatalf("refused RunJob recorded an attempt")
+	}
+
 	resumed, err := core.ResumeJob(ctx, "proj", "us-central1", created.Name)
 	if err != nil || resumed.State != schedstore.StateEnabled {
 		t.Fatalf("ResumeJob state = %q err %v", resumed.State, err)
