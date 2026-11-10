@@ -321,6 +321,12 @@ func databaseMap(d databaseDef) map[string]any {
 	if d.DatabaseEdition != "" {
 		m["databaseEdition"] = d.DatabaseEdition
 	}
+	if d.FirestoreDataAccessMode != "" {
+		m["firestoreDataAccessMode"] = d.FirestoreDataAccessMode
+	}
+	if d.MongodbCompatibleDataAccessMode != "" {
+		m["mongodbCompatibleDataAccessMode"] = d.MongodbCompatibleDataAccessMode
+	}
 	if d.KeyPrefix != "" {
 		m["keyPrefix"] = d.KeyPrefix
 	}
@@ -385,6 +391,16 @@ var databaseEnumFields = map[string]map[string]bool{
 		"STANDARD":                     true,
 		"ENTERPRISE":                   true,
 	},
+	"firestoreDataAccessMode": {
+		"DATA_ACCESS_MODE_UNSPECIFIED": true,
+		"DATA_ACCESS_MODE_ENABLED":     true,
+		"DATA_ACCESS_MODE_DISABLED":    true,
+	},
+	"mongodbCompatibleDataAccessMode": {
+		"DATA_ACCESS_MODE_UNSPECIFIED": true,
+		"DATA_ACCESS_MODE_ENABLED":     true,
+		"DATA_ACCESS_MODE_DISABLED":    true,
+	},
 }
 
 // validateDatabaseEnumFields applies proto3 JSON's enum-name rule to every
@@ -436,6 +452,15 @@ func databaseFromREST(body map[string]any) (databaseDef, error) {
 	}
 	if s, _ := body["databaseEdition"].(string); s != "" {
 		d.DatabaseEdition = s
+	}
+	// Both data-access modes are OPTIONAL enums (database.proto): the proto3 zero
+	// value means "not set on write", so it is normalized to unset and the
+	// service derives the edition default instead of storing the sentinel.
+	if s, _ := body["firestoreDataAccessMode"].(string); s != "" && s != dataAccessModeUnspecified {
+		d.FirestoreDataAccessMode = s
+	}
+	if s, _ := body["mongodbCompatibleDataAccessMode"].(string); s != "" && s != dataAccessModeUnspecified {
+		d.MongodbCompatibleDataAccessMode = s
 	}
 	if s, _ := body["keyPrefix"].(string); s != "" {
 		d.KeyPrefix = s

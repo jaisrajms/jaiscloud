@@ -53,6 +53,18 @@
 # `google_kms_crypto_key`, location us-central1) and its `.id` is passed as the
 # module's `kms_key_name`, so the request carries a real KMS resource name.
 #
+# TF6-6 adds a raw `google_firestore_database` phase (the pinned module exposes
+# no input for the data-access modes), in its own workdir/state:
+#
+#   STANDARD create with firestore_data_access_mode = ENABLED -> GET carries it
+#   and the derived Mongo-compatible default DISABLED -> No changes
+#   ENTERPRISE create with both modes away from their defaults -> GET carries
+#   both explicit values -> No changes -> destroy
+#
+# Before TF6-6 the create accepted both fields and dropped them, so the
+# provider's Read stored an empty value and the (ForceNew, Optional+Computed)
+# attribute re-planned a replacement forever.
+#
 # Module note: the module defaults `delete_protection_state` to
 # DELETE_PROTECTION_ENABLED; the case disables it because real GCP (and this
 # emulator) refuses to delete a protected database, so destroy would fail. Its
@@ -71,6 +83,8 @@ MODULE_GIT="https://github.com/GoogleCloudPlatform/terraform-google-firestore"
 DB="jc-cmek"
 PLAIN_DB="jc-plain"
 RECREATE_DB="jc-recreate"
+DAM_STANDARD_DB="jc-dam-standard"
+DAM_ENTERPRISE_DB="jc-dam-enterprise"
 KEYRING="jc-firestore-ring"
 KEY="jc-firestore-key"
 
@@ -209,10 +223,135 @@ module "firestore" {
 EOF
 }
 
+# write_data_access_module generates the root module for the TF6-6 phase: two
+# raw `google_firestore_database` resources that configure the data-access modes
+# directly. The pinned module has no input for them, so the raw resource is the
+# only way to measure the field.
+#
+# TF6-6: projects.databases.create accepted `firestoreDataAccessMode` and
+# `mongodbCompatibleDataAccessMode` but the emulator dropped them, and
+# Database never rendered them, so the provider's Read stored an empty value.
+# Both attributes are Optional+Computed and ForceNew, so every re-plan reported
+#
+#   + firestore_data_access_mode = "DATA_ACCESS_MODE_ENABLED" # forces replacement
+#
+# and an accepted apply destroyed and re-created the database. database.proto
+# marks both fields OPTIONAL with documented defaults (STANDARD: Firestore
+# ENABLED / Mongo-compatible DISABLED; ENTERPRISE: the reverse), so serving them
+# is not fabrication.
+#
+# The STANDARD instance carries exactly the measured config (STANDARD edition,
+# Firestore ENABLED) and omits the Mongo-compatible mode, which must read back
+# as its documented STANDARD default (DISABLED) rather than as an empty value.
+# The ENTERPRISE instance flips both modes away from their ENTERPRISE defaults
+# (Firestore DISABLED, Mongo-compatible ENABLED), so a converged plan proves an
+# explicit write is stored and echoed, not merely a derived default.
+write_data_access_module() {
+  cat >"$DAM_WORK/main.tf" <<EOF
+terraform {
+  required_version = ">= 1.3"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "= 7.46.2"
+    }
+  }
+}
+
+variable "endpoint" {
+  type    = string
+  default = "$ENDPOINT"
+}
+
+variable "project" {
+  type    = string
+  default = "$PROJECT"
+}
+
+provider "google" {
+  project = var.project
+  region  = "us-central1"
+
+  user_project_override = false
+
+  # Versioned API base URL: exactly one trailing slash.
+  firestore_custom_endpoint = "\${var.endpoint}/v1/"
+}
+
+# The TF6-6 measurement: STANDARD Edition with the Firestore API mode set to its
+# documented STANDARD default. Before the fix the Read lost the value and the
+# next plan forced a replacement.
+resource "google_firestore_database" "standard" {
+  project     = var.project
+  name        = "$DAM_STANDARD_DB"
+  location_id = "nam5"
+  type        = "FIRESTORE_NATIVE"
+
+  firestore_data_access_mode = "DATA_ACCESS_MODE_ENABLED"
+
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = "DELETE"
+}
+
+# An ENTERPRISE database with both modes written away from their ENTERPRISE
+# defaults (Firestore DISABLED, Mongo-compatible ENABLED).
+resource "google_firestore_database" "enterprise" {
+  project     = var.project
+  name        = "$DAM_ENTERPRISE_DB"
+  location_id = "nam5"
+  type        = "FIRESTORE_NATIVE"
+
+  database_edition = "ENTERPRISE"
+
+  firestore_data_access_mode          = "DATA_ACCESS_MODE_ENABLED"
+  mongodb_compatible_data_access_mode = "DATA_ACCESS_MODE_DISABLED"
+
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = "DELETE"
+}
+EOF
+}
+
+# data_access_phase drives the TF6-6 resources in their own working directory and
+# state, so the CMEK key ring and the (default) database of the other phases are
+# untouched. It runs after default_phase and before the main init_phase, which
+# restores TF_LOG_PATH to the main work dir for the FC6 capture.
+data_access_phase() {
+  local saved="$WORK"
+  WORK="$DAM_WORK"
+  mkdir -p "$DAM_WORK"
+  write_data_access_module
+
+  init_phase
+  plan_phase "plan (raw google_firestore_database data-access modes)"
+  apply_phase "apply (raw google_firestore_database data-access modes)"
+  assert_no_api_errors
+
+  echo "== spot checks (data-access modes)"
+  check_db "STANDARD database echoes the configured Firestore mode" "$(db_url "$DAM_STANDARD_DB")" \
+    '"firestoreDataAccessMode":"DATA_ACCESS_MODE_ENABLED"'
+  check_db "STANDARD database derives the Mongo-compatible default" "$(db_url "$DAM_STANDARD_DB")" \
+    '"mongodbCompatibleDataAccessMode":"DATA_ACCESS_MODE_DISABLED"'
+  check_db "ENTERPRISE database echoes both explicit modes" "$(db_url "$DAM_ENTERPRISE_DB")" \
+    '"firestoreDataAccessMode":"DATA_ACCESS_MODE_ENABLED"' \
+    '"mongodbCompatibleDataAccessMode":"DATA_ACCESS_MODE_DISABLED"'
+
+  plan_no_changes "re-plan reports no changes (data-access modes are not a forced replacement)"
+
+  echo "== destroy (data-access phase)"
+  if "$TF" -chdir="$DAM_WORK" destroy -input=false -auto-approve -no-color >"$DAM_WORK/destroy.log" 2>&1; then
+    pass "destroy (data-access phase)"
+  else
+    cat "$DAM_WORK/destroy.log"
+    fail "destroy (data-access phase) (see the log above)"
+  fi
+  WORK="$saved"
+}
+
 db_url() {
   echo "$ENDPOINT/v1/projects/$PROJECT/databases/$1"
 }
-
 body_of() {
   curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" "$1" 2>/dev/null || true
 }
@@ -387,6 +526,12 @@ case_main() {
   # and state, so no earlier read of this project's default has materialised it.
   DEFAULT_WORK="$WORK/default"
   default_phase
+
+  # TF6-6: the raw data-access-mode resources, in their own workdir/state. They
+  # run before the main init_phase so the FC6 capture keeps reading the main
+  # work dir's provider log.
+  DAM_WORK="$WORK/data-access"
+  data_access_phase
 
   write_module '"POINT_IN_TIME_RECOVERY_ENABLED"'
   init_phase

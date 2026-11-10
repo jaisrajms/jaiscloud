@@ -133,6 +133,11 @@ func databaseFromProto(p *adminpb.Database) firestoreprovider.DatabaseDef {
 		PointInTimeRecoveryEnablement: enumName(int32(p.GetPointInTimeRecoveryEnablement()), adminpb.Database_PointInTimeRecoveryEnablement_name),
 		DeleteProtectionState:         enumName(int32(p.GetDeleteProtectionState()), adminpb.Database_DeleteProtectionState_name),
 		DatabaseEdition:               enumName(int32(p.GetDatabaseEdition()), adminpb.Database_DatabaseEdition_name),
+		// Both data-access modes are OPTIONAL enums; enumName maps the proto3 zero
+		// value to "", so the service applies the documented edition default
+		// instead of storing the sentinel (TF6-6).
+		FirestoreDataAccessMode:         enumName(int32(p.GetFirestoreDataAccessMode()), adminpb.Database_DataAccessMode_name),
+		MongodbCompatibleDataAccessMode: enumName(int32(p.GetMongodbCompatibleDataAccessMode()), adminpb.Database_DataAccessMode_name),
 	}
 	if ts := p.GetCreateTime(); ts != nil {
 		d.CreateTime = ts.AsTime()
@@ -190,6 +195,12 @@ func databaseToProto(d firestoreprovider.DatabaseDef) *adminpb.Database {
 	}
 	if d.DatabaseEdition != "" {
 		out.DatabaseEdition = adminpb.Database_DatabaseEdition(adminpb.Database_DatabaseEdition_value[d.DatabaseEdition])
+	}
+	if d.FirestoreDataAccessMode != "" {
+		out.FirestoreDataAccessMode = adminpb.Database_DataAccessMode(adminpb.Database_DataAccessMode_value[d.FirestoreDataAccessMode])
+	}
+	if d.MongodbCompatibleDataAccessMode != "" {
+		out.MongodbCompatibleDataAccessMode = adminpb.Database_DataAccessMode(adminpb.Database_DataAccessMode_value[d.MongodbCompatibleDataAccessMode])
 	}
 	if d.VersionRetentionPeriod > 0 {
 		out.VersionRetentionPeriod = durationpb.New(d.VersionRetentionPeriod)

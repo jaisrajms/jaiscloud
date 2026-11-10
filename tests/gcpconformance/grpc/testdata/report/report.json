@@ -1092,7 +1092,7 @@
       "rpc": "CreateDatabase",
       "method": "CreateDatabase",
       "status": "pass",
-      "key_field": "operation done=true; database name; edition-default concurrency_mode; earliest_version_time about now-1h"
+      "key_field": "operation done=true; database name; edition-default concurrency_mode + data-access modes; earliest_version_time about now-1h"
     },
     {
       "service": "firestoreadmin",
@@ -1113,7 +1113,7 @@
       "rpc": "UpdateDatabase",
       "method": "UpdateDatabase",
       "status": "pass",
-      "key_field": "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected"
+      "key_field": "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected, data-access modes mutable"
     },
     {
       "service": "firestoreadmin",

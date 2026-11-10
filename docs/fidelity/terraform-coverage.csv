@@ -295,7 +295,7 @@ google_eventarc_pipeline,eventarc,served,none,served,eventarc is served; no fixt
 google_eventarc_trigger,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_backup_schedule,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_change_stream,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
-google_firestore_database,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_database,firestoreadmin,served,module:firestore,served,,2027-06-30
 google_firestore_document,firestore,served,none,served,firestore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_field,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_index,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30

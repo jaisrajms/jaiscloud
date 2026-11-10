@@ -90,6 +90,47 @@ const (
 	concurrencyPessimistic = "PESSIMISTIC"
 )
 
+// Database.DataAccessMode values, shared by firestore_data_access_mode and
+// mongodb_compatible_data_access_mode.
+const (
+	dataAccessModeUnspecified = "DATA_ACCESS_MODE_UNSPECIFIED"
+	dataAccessModeEnabled     = "DATA_ACCESS_MODE_ENABLED"
+	dataAccessModeDisabled    = "DATA_ACCESS_MODE_DISABLED"
+)
+
+// defaultFirestoreDataAccessMode is the documented default for
+// Database.firestore_data_access_mode when a write leaves it unset
+// (database.proto): "the default value is DATA_ACCESS_MODE_DISABLED for
+// Enterprise Edition" and DATA_ACCESS_MODE_ENABLED for Standard Edition.
+func defaultFirestoreDataAccessMode(edition string) string {
+	if edition == databaseEditionEnterprise {
+		return dataAccessModeDisabled
+	}
+	return dataAccessModeEnabled
+}
+
+// defaultMongodbCompatibleDataAccessMode is the documented default for
+// Database.mongodb_compatible_data_access_mode when a write leaves it unset:
+// DATA_ACCESS_MODE_ENABLED for Enterprise Edition, and DATA_ACCESS_MODE_DISABLED
+// for Standard Edition (database.proto).
+func defaultMongodbCompatibleDataAccessMode(edition string) string {
+	if edition == databaseEditionEnterprise {
+		return dataAccessModeEnabled
+	}
+	return dataAccessModeDisabled
+}
+
+// dataAccessModeOrDefault maps an unset/zero-value mode onto its documented
+// edition default. Both access-mode fields are OPTIONAL, so the proto3 zero value
+// means "not set on write": the server picks the edition default rather than
+// serving an unspecified mode (FC2-9 reversal, TF6-6).
+func dataAccessModeOrDefault(stored, fallback string) string {
+	if stored == "" || stored == dataAccessModeUnspecified {
+		return fallback
+	}
+	return stored
+}
+
 // ttlConfigActive is the terminal Field.TtlConfig.State real GCP reports for a
 // configured TTL policy. The field is OUTPUT_ONLY, so it is derived rather than
 // stored from a request (DC49).
@@ -121,8 +162,13 @@ type databaseDef struct {
 	KeyPrefix                     string         `json:"keyPrefix,omitempty"`
 	VersionRetentionPeriod        time.Duration  `json:"versionRetentionPeriod,omitempty"`
 	CmekConfig                    *cmekConfigDef `json:"cmekConfig,omitempty"`
-	Etag                          string         `json:"etag,omitempty"`
-	Deleted                       bool           `json:"deleted,omitempty"`
+	// The two data-access modes are OPTIONAL in database.proto with documented
+	// edition defaults; both are stored when a client writes them and derived on
+	// read when a record predates this field (see normalizeDatabase).
+	FirestoreDataAccessMode         string `json:"firestoreDataAccessMode,omitempty"`
+	MongodbCompatibleDataAccessMode string `json:"mongodbCompatibleDataAccessMode,omitempty"`
+	Etag                            string `json:"etag,omitempty"`
+	Deleted                         bool   `json:"deleted,omitempty"`
 }
 
 // cmekConfigDef mirrors google.firestore.admin.v1.Database.CmekConfig. The
@@ -438,6 +484,11 @@ func EarliestVersionTime(d DatabaseDef) time.Time {
 func normalizeDatabase(rec databaseDef) databaseDef {
 	rec.DeleteProtectionState = normalizeDeleteProtection(rec.DeleteProtectionState)
 	rec.VersionRetentionPeriod = databaseRetentionPeriod(rec.PointInTimeRecoveryEnablement)
+	// Both data-access modes are OPTIONAL with edition-dependent defaults, and a
+	// record written by a build before this field existed carries neither: derive
+	// the documented value rather than serving an unspecified mode (TF6-6).
+	rec.FirestoreDataAccessMode = dataAccessModeOrDefault(rec.FirestoreDataAccessMode, defaultFirestoreDataAccessMode(rec.DatabaseEdition))
+	rec.MongodbCompatibleDataAccessMode = dataAccessModeOrDefault(rec.MongodbCompatibleDataAccessMode, defaultMongodbCompatibleDataAccessMode(rec.DatabaseEdition))
 	return rec
 }
 
@@ -463,7 +514,11 @@ func newDefaultDatabase(project string) databaseDef {
 		PointInTimeRecoveryEnablement: pitrDisabled,
 		DeleteProtectionState:         deleteProtectionDisabled,
 		DatabaseEdition:               databaseEditionStandard,
-		Etag:                          randomHex(16),
+		// The implicit database is a STANDARD Edition database, so it serves the
+		// documented defaults for both data-access modes (TF6-6).
+		FirestoreDataAccessMode:         defaultFirestoreDataAccessMode(databaseEditionStandard),
+		MongodbCompatibleDataAccessMode: defaultMongodbCompatibleDataAccessMode(databaseEditionStandard),
+		Etag:                            randomHex(16),
 	}
 }
 
@@ -614,6 +669,10 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 		// Pessimistic for all other databases."
 		db.ConcurrencyMode = defaultConcurrencyMode(db.DatabaseEdition)
 	}
+	// Both data-access modes are OPTIONAL and default by edition when a create
+	// leaves them unset (TF6-6); the proto3 zero value is "not set on write".
+	db.FirestoreDataAccessMode = dataAccessModeOrDefault(db.FirestoreDataAccessMode, defaultFirestoreDataAccessMode(db.DatabaseEdition))
+	db.MongodbCompatibleDataAccessMode = dataAccessModeOrDefault(db.MongodbCompatibleDataAccessMode, defaultMongodbCompatibleDataAccessMode(db.DatabaseEdition))
 	// version_retention_period is OUTPUT_ONLY: derive it from the requested PITR
 	// toggle rather than accepting the value in the create body. key_prefix is
 	// OUTPUT_ONLY as well, so a supplied value is not stored either.
@@ -906,6 +965,10 @@ func applyDatabaseReplace(cur *databaseDef, patch databaseDef) {
 		cur.PointInTimeRecoveryEnablement = pitrDisabled
 	}
 	cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
+	// Both data-access modes fall back to their documented edition default when
+	// the replacement body omits them (TF6-6).
+	cur.FirestoreDataAccessMode = dataAccessModeOrDefault(patch.FirestoreDataAccessMode, defaultFirestoreDataAccessMode(cur.DatabaseEdition))
+	cur.MongodbCompatibleDataAccessMode = dataAccessModeOrDefault(patch.MongodbCompatibleDataAccessMode, defaultMongodbCompatibleDataAccessMode(cur.DatabaseEdition))
 }
 
 // UpdateDatabaseDef applies patch to the database record under mask (field
@@ -1175,6 +1238,12 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 		if patch.DeleteProtectionState != "" {
 			cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
 		}
+		if patch.FirestoreDataAccessMode != "" {
+			cur.FirestoreDataAccessMode = patch.FirestoreDataAccessMode
+		}
+		if patch.MongodbCompatibleDataAccessMode != "" {
+			cur.MongodbCompatibleDataAccessMode = patch.MongodbCompatibleDataAccessMode
+		}
 	case "concurrency_mode":
 		cur.ConcurrencyMode = patch.ConcurrencyMode
 	case "app_engine_integration_mode":
@@ -1183,6 +1252,13 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 		cur.PointInTimeRecoveryEnablement = patch.PointInTimeRecoveryEnablement
 	case "delete_protection_state":
 		cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
+	case "firestore_data_access_mode":
+		// A masked write of the proto3 zero value means "clear it": the server
+		// then applies the documented edition default, exactly as it would on a
+		// create that omits the field (TF6-6).
+		cur.FirestoreDataAccessMode = dataAccessModeOrDefault(patch.FirestoreDataAccessMode, defaultFirestoreDataAccessMode(cur.DatabaseEdition))
+	case "mongodb_compatible_data_access_mode":
+		cur.MongodbCompatibleDataAccessMode = dataAccessModeOrDefault(patch.MongodbCompatibleDataAccessMode, defaultMongodbCompatibleDataAccessMode(cur.DatabaseEdition))
 	case "type":
 		cur.Type = patch.Type
 	}
