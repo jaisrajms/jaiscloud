@@ -460,4 +460,4 @@ google_storage_managed_folder_iam_policy,storage,unsupported,none,unsupported,Ma
 google_storage_notification,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_object_access_control,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_object_acl,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
-google_workflows_workflow,workflows,served,none,served,workflows is served; no fixture or module case declares this resource type yet,2027-06-30
+google_workflows_workflow,workflows,served,module:workflows,served,,2027-06-30

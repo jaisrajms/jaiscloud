@@ -94,7 +94,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 
 	wrows, err := s.pool.Query(ctx, `
 		SELECT project_id, workflow_id, location, description, labels, service_account, source_contents,
-		       state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags
+		       state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+		       execution_history_level, user_env_vars, tags
 		FROM jc_workflows ORDER BY project_id, location, workflow_id
 	`)
 	if err != nil {
@@ -105,7 +106,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var labels, userEnvVars, tags []byte
 		if err := wrows.Scan(&r.ProjectID, &r.Workflow.ID, &r.Workflow.Location, &r.Workflow.Description, &labels,
 			&r.Workflow.ServiceAccount, &r.Workflow.SourceContents, &r.Workflow.State, &r.Workflow.RevisionID,
-			&r.Workflow.CreateTime, &r.Workflow.UpdateTime, &r.Workflow.RevisionCreateTime, &r.Workflow.CallLogLevel, &userEnvVars, &tags); err != nil {
+			&r.Workflow.CreateTime, &r.Workflow.UpdateTime, &r.Workflow.RevisionCreateTime, &r.Workflow.CallLogLevel,
+			&r.Workflow.ExecutionHistoryLevel, &userEnvVars, &tags); err != nil {
 			wrows.Close()
 			return err
 		}
@@ -252,11 +254,13 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_workflows
 				(project_id, location, workflow_id, description, labels, service_account, source_contents,
-				 state, revision_id, create_time, update_time, revision_create_time, call_log_level, user_env_vars, tags)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+				 state, revision_id, create_time, update_time, revision_create_time, call_log_level,
+				 execution_history_level, user_env_vars, tags)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		`, r.ProjectID, r.Workflow.Location, r.Workflow.ID, r.Workflow.Description, json.RawMessage(labels),
 			r.Workflow.ServiceAccount, r.Workflow.SourceContents, r.Workflow.State, r.Workflow.RevisionID,
-			r.Workflow.CreateTime, r.Workflow.UpdateTime, revisionCreateTime(r.Workflow), r.Workflow.CallLogLevel, json.RawMessage(userEnvVars),
+			r.Workflow.CreateTime, r.Workflow.UpdateTime, revisionCreateTime(r.Workflow), r.Workflow.CallLogLevel,
+			r.Workflow.ExecutionHistoryLevel, json.RawMessage(userEnvVars),
 			json.RawMessage(tags)); err != nil {
 			return err
 		}

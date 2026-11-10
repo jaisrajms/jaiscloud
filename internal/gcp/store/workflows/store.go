@@ -39,10 +39,11 @@ type Workflow struct {
 	// UpdateTime it does not advance on a workflow-wide update (description,
 	// labels) that does not mint a revision. Zero on legacy records; readers
 	// fall back to UpdateTime.
-	RevisionCreateTime time.Time
-	CallLogLevel       string            // CALL_LOG_LEVEL_UNSPECIFIED / LOG_*_CALLS / LOG_NONE
-	UserEnvVars        map[string]string // user-defined environment variables (workflow revision)
-	Tags               map[string]string // immutable input-only tags (echoed verbatim)
+	RevisionCreateTime    time.Time
+	CallLogLevel          string            // CALL_LOG_LEVEL_UNSPECIFIED / LOG_*_CALLS / LOG_NONE
+	ExecutionHistoryLevel string            // "" (default/UNSPECIFIED) / EXECUTION_HISTORY_BASIC / EXECUTION_HISTORY_DETAILED
+	UserEnvVars           map[string]string // user-defined environment variables (workflow revision)
+	Tags                  map[string]string // immutable input-only tags (echoed verbatim)
 }
 
 // Revision is an immutable snapshot of a workflow's revision-scoped fields at
