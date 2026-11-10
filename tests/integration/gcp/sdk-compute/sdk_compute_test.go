@@ -450,6 +450,117 @@ func TestSDKCompute(t *testing.T) {
 	require.Equal(t, 404, apiErr.Code)
 }
 
+// TestSDKComputeNetworkReadShape drives the TF2-17-2 network read shape through
+// the official compute/v1 client: the routingConfig/BGP members, networkProfile
+// and the ULA IPv6 pair the create request carries are echoed by get, the
+// nested routingConfig patch merges member-wise, a network created without them
+// reports none of them, and an invalid enum/range is the documented 400.
+func TestSDKComputeNetworkReadShape(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project := projectID()
+
+	network := unique("net-shape")
+	const profile = "projects/test-project/global/networkProfiles/test-profile"
+	insertOp, err := svc.Networks.Insert(project, &compute.Network{
+		Name:                  network,
+		AutoCreateSubnetworks: false,
+		ForceSendFields:       []string{"AutoCreateSubnetworks"},
+		NetworkProfile:        profile,
+		EnableUlaInternalIpv6: true,
+		InternalIpv6Range:     "fd20:0:1234::/48",
+		RoutingConfig: &compute.NetworkRoutingConfig{
+			RoutingMode:              "GLOBAL",
+			BgpBestPathSelectionMode: "STANDARD",
+			BgpInterRegionCost:       "ADD_COST_TO_MED",
+			BgpAlwaysCompareMed:      true,
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, "DONE", insertOp.Status)
+
+	got, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.RoutingConfig)
+	require.Equal(t, "GLOBAL", got.RoutingConfig.RoutingMode)
+	require.Equal(t, "STANDARD", got.RoutingConfig.BgpBestPathSelectionMode)
+	require.Equal(t, "ADD_COST_TO_MED", got.RoutingConfig.BgpInterRegionCost)
+	require.True(t, got.RoutingConfig.BgpAlwaysCompareMed)
+	require.Equal(t, profile, got.NetworkProfile)
+	require.True(t, got.EnableUlaInternalIpv6)
+	require.Equal(t, "fd20:0:1234::/48", got.InternalIpv6Range)
+
+	// A routingConfig patch merges member-wise: routingMode changes and the BGP
+	// members a previous write set survive.
+	patchOp, err := svc.Networks.Patch(project, network, &compute.Network{
+		RoutingConfig: &compute.NetworkRoutingConfig{RoutingMode: "REGIONAL"},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, "patch", patchOp.OperationType)
+	require.Equal(t, "DONE", patchOp.Status)
+	patched, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.NotNil(t, patched.RoutingConfig)
+	require.Equal(t, "REGIONAL", patched.RoutingConfig.RoutingMode)
+	require.Equal(t, "STANDARD", patched.RoutingConfig.BgpBestPathSelectionMode)
+	require.Equal(t, "ADD_COST_TO_MED", patched.RoutingConfig.BgpInterRegionCost)
+	require.True(t, patched.RoutingConfig.BgpAlwaysCompareMed)
+
+	// A network created without the fields reads none of them back.
+	bare := unique("net-bare")
+	_, err = svc.Networks.Insert(project, &compute.Network{Name: bare}).Do()
+	require.NoError(t, err)
+	bareGot, err := svc.Networks.Get(project, bare).Do()
+	require.NoError(t, err)
+	require.Nil(t, bareGot.RoutingConfig)
+	require.Empty(t, bareGot.NetworkProfile)
+	require.False(t, bareGot.EnableUlaInternalIpv6)
+	require.Empty(t, bareGot.InternalIpv6Range)
+
+	// Invalid enum/range values are the documented 400 on create and on patch.
+	_, err = svc.Networks.Insert(project, &compute.Network{
+		Name:          unique("net-bad-enum"),
+		RoutingConfig: &compute.NetworkRoutingConfig{RoutingMode: "SIDEWAYS"},
+	}).Do()
+	requireAPICode(t, err, 400)
+	_, err = svc.Networks.Insert(project, &compute.Network{
+		Name:              unique("net-bad-range"),
+		InternalIpv6Range: "fd30:0:0::/48",
+	}).Do()
+	requireAPICode(t, err, 400)
+	_, err = svc.Networks.Patch(project, network, &compute.Network{
+		RoutingConfig: &compute.NetworkRoutingConfig{BgpBestPathSelectionMode: "BEST"},
+	}).Do()
+	requireAPICode(t, err, 400)
+	_, err = svc.Networks.Patch(project, network, &compute.Network{
+		InternalIpv6Range: "fd20:0:0::/56",
+	}).Do()
+	requireAPICode(t, err, 400)
+	final, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.Equal(t, "REGIONAL", final.RoutingConfig.RoutingMode, "a rejected patch must not mutate")
+	require.Equal(t, "STANDARD", final.RoutingConfig.BgpBestPathSelectionMode)
+	require.Equal(t, "fd20:0:1234::/48", final.InternalIpv6Range)
+
+	// delete_bgp_always_compare_med clears the member with an explicit JSON null;
+	// the other routingConfig members survive.
+	_, err = svc.Networks.Patch(project, network, &compute.Network{
+		RoutingConfig: &compute.NetworkRoutingConfig{NullFields: []string{"BgpAlwaysCompareMed"}},
+	}).Do()
+	require.NoError(t, err)
+	cleared, err := svc.Networks.Get(project, network).Do()
+	require.NoError(t, err)
+	require.False(t, cleared.RoutingConfig.BgpAlwaysCompareMed)
+	require.Equal(t, "REGIONAL", cleared.RoutingConfig.RoutingMode)
+	require.Equal(t, "STANDARD", cleared.RoutingConfig.BgpBestPathSelectionMode)
+
+	for _, n := range []string{network, bare} {
+		_, err = svc.Networks.Delete(project, n).Do()
+		require.NoError(t, err)
+	}
+}
+
 // requireAPICode asserts err is a googleapi.Error with the given HTTP status.
 func requireAPICode(t *testing.T, err error, code int) {
 	t.Helper()

@@ -307,6 +307,21 @@ check "Compute disk CMEK key echoed" "$DISK_CMEK" \
   "\"kmsKeyName\":\"projects/$PROJECT/locations/$REGION/keyRings/jaiscloud-tf-keyring/cryptoKeys/jaiscloud-tf-key\""
 check_absent "Compute disk CMEK echo has no key material" "$DISK_CMEK" \
   '"rawKey"' '"rsaEncryptedKey"'
+# TF2-17-2: a network created with routing_mode, the BGP members, networkProfile
+# and the ULA IPv6 pair reads them back from routingConfig/networkProfile/
+# enableUlaInternalIpv6/internalIpv6Range; the clean re-plan above is the
+# permadiff assertion.
+NETWORK_SHAPE="$ENDPOINT/compute/v1/projects/$PROJECT/global/networks/jaiscloud-tf-network"
+check "Compute network read shape echoed" "$NETWORK_SHAPE" \
+  '"routingConfig"' \
+  '"routingMode":"GLOBAL"' \
+  '"bgpBestPathSelectionMode":"STANDARD"' \
+  '"bgpAlwaysCompareMed":true' \
+  '"bgpInterRegionCost":"ADD_COST_TO_MED"' \
+  "\"networkProfile\":\"projects/$PROJECT/global/networkProfiles/global-profiles\"" \
+  '"enableUlaInternalIpv6":true' '"internalIpv6Range":"fd20:0:abcd::/48"'
+check_absent "Compute network read shape has no output-only BGP members" "$NETWORK_SHAPE" \
+  '"effectiveBgpAlwaysCompareMed"' '"effectiveBgpInterRegionCost"'
 # Cloud Billing: data "google_project" reads projects.getBillingInfo to populate
 # billing_account. The emulator models only the association, so the four-field
 # default (no account, billing disabled) is what both the wire and the data

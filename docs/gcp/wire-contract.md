@@ -258,7 +258,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `CustomerEncryptionKey` shape only: `kmsKeyName`/`kmsKeyServiceAccount` for a CMEK block and
   the base64 SHA-256 of the decoded key for a CSEK block, never `rawKey`/`rsaEncryptedKey`, so
   `google_compute_disk`'s ForceNew encryption-key blocks converge instead of re-planning as a
-  replacement (TF2-11-4).
+  replacement (TF2-11-4). A network record keeps the read shape a create or patch carries —
+  `routingConfig` (`routingMode` and the BGP members), `networkProfile` and the ULA IPv6 pair,
+  each echoed only when the request carried it and validated against the documented enums and the
+  `/48`-within-`fd20::/20` range — so raw readers see the routing mode and BGP state that was set
+  (TF2-17-2).
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the
