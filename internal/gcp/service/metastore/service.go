@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
@@ -66,6 +67,11 @@ type Service struct {
 	catalogHost CatalogHost
 	// hmsPort is the base Hive Metastore port; see WithHMSPort.
 	hmsPort int
+	// portMu serializes port selection with the store write in
+	// CreateService/UpdateService, so two concurrent requests cannot claim one
+	// catalog port. The listener — the port — is what selects a catalog, so a
+	// duplicate would make one Service unreachable (see ports.go).
+	portMu sync.Mutex
 }
 
 // Option configures Service.
@@ -200,6 +206,24 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 	if err := s.validateNetwork(ctx, project, cfg); err != nil {
 		return metastorestore.Service{}, metastorestore.Operation{}, err
 	}
+	// A caller-supplied port is honored: real Metastore echoes it, and the
+	// provider (Optional+Computed) permadiffs when the read does not match the
+	// config. No port keeps the emulator assignment above --hms-port. The lock
+	// keeps selection and the write atomic, so a concurrent create cannot claim
+	// the same port.
+	s.portMu.Lock()
+	defer s.portMu.Unlock()
+	port, err := requestedPort(cfg)
+	if err != nil {
+		return metastorestore.Service{}, metastorestore.Operation{}, err
+	}
+	if port != 0 {
+		if err := s.validateServicePort(ctx, port, ""); err != nil {
+			return metastorestore.Service{}, metastorestore.Operation{}, err
+		}
+	} else {
+		port = s.nextServicePort(ctx)
+	}
 	now := clock.Now().UTC()
 	svc := metastorestore.Service{
 		Location:     location,
@@ -207,7 +231,7 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 		Labels:       labelsFromConfig(cfg),
 		State:        "ACTIVE",
 		StateHistory: []metastorestore.ServiceState{{State: "CREATING", StateStartTime: now}},
-		Port:         s.nextServicePort(ctx),
+		Port:         port,
 		CreateTime:   now,
 		UpdateTime:   now,
 	}
@@ -272,11 +296,28 @@ func (s *Service) UpdateService(ctx context.Context, project, location, serviceI
 	if err := validateEndpointProtocol(cfg); err != nil {
 		return metastorestore.Service{}, metastorestore.Operation{}, err
 	}
+	// A requested port change is honored (the provider sends updateMask=port
+	// when the config changes it and then reads the Service back). The
+	// requesting Service is excluded from the uniqueness check, so an
+	// unchanged port is a no-op. The lock keeps validation, the write and the
+	// listener rebind atomic against a concurrent create/update.
+	s.portMu.Lock()
+	defer s.portMu.Unlock()
+	port, err := requestedPort(cfg)
+	if err != nil {
+		return metastorestore.Service{}, metastorestore.Operation{}, err
+	}
+	if port != 0 {
+		if err := s.validateServicePort(ctx, port, CatalogID(project, location, serviceID)); err != nil {
+			return metastorestore.Service{}, metastorestore.Operation{}, err
+		}
+	}
 	if mask == "" || containsMaskField(mask, "network") {
 		if err := s.validateNetwork(ctx, project, cfg); err != nil {
 			return metastorestore.Service{}, metastorestore.Operation{}, err
 		}
 	}
+	portChanged := false
 	updated, err := s.store.UpdateServiceAtomic(ctx, project, location, serviceID, func(current metastorestore.Service) (metastorestore.Service, error) {
 		apply := func(field string) bool {
 			return mask == "" || containsMaskField(mask, field)
@@ -285,6 +326,12 @@ func (s *Service) UpdateService(ctx context.Context, project, location, serviceI
 			if labels := labelsFromConfig(cfg); labels != nil {
 				current.Labels = labels
 			}
+		}
+		// The port is row state, not config: the catalog listener it names has
+		// to move with it, which happens after the store accepts the update.
+		if port != 0 && apply("port") && current.Port != port {
+			current.Port = port
+			portChanged = true
 		}
 		// Echo the remaining body fields into the stored config verbatim
 		// (top-level keys overwrite), honoring the updateMask's named paths.
@@ -319,6 +366,12 @@ func (s *Service) UpdateService(ctx context.Context, project, location, serviceI
 	})
 	if err != nil {
 		return metastorestore.Service{}, metastorestore.Operation{}, mapErr(err)
+	}
+	// Move the catalog listener to the new port; its data is keyed by catalog
+	// id, so only the listener moves. A bind failure is logged by the host and
+	// does not fail the update, exactly as on create.
+	if portChanged && s.catalogHost != nil {
+		_ = s.catalogHost.OpenCatalog(ctx, CatalogID(project, location, serviceID), updated.Port)
 	}
 	target := ServiceName(project, location, serviceID)
 	op, err := s.storeOperation(ctx, project, location, "update", target, operationResponse(serviceTypeURL, ServiceJSON(updated, project)))

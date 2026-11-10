@@ -3,6 +3,7 @@ package grpcconformance
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	metastore "cloud.google.com/go/metastore/apiv1"
 	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
@@ -35,10 +36,10 @@ func metastoreChecks() []Check {
 
 func metastoreBaseChecks() []Check {
 	return []Check{
-		{Service: "metastore", RPC: "CreateService", Method: "CreateService", KeyField: "LRO done + ACTIVE service", Run: checkMSCreateService},
+		{Service: "metastore", RPC: "CreateService", Method: "CreateService", KeyField: "LRO done + ACTIVE service, requested port echoed", Run: checkMSCreateService},
 		{Service: "metastore", RPC: "GetService", Method: "GetService", KeyField: "name/state round-trip", Run: checkMSGetService},
 		{Service: "metastore", RPC: "ListServices", Method: "ListServices", KeyField: "created service present", Run: checkMSListServices},
-		{Service: "metastore", RPC: "UpdateService", Method: "UpdateService", KeyField: "labels updated via LRO", Run: checkMSUpdateService},
+		{Service: "metastore", RPC: "UpdateService", Method: "UpdateService", KeyField: "labels + port updated via LRO", Run: checkMSUpdateService},
 		{Service: "metastore", RPC: "DeleteService", Method: "DeleteService", KeyField: "LRO done + NotFound after", Run: checkMSDeleteService},
 		{Service: "metastore", RPC: "CreateMetadataImport", Method: "CreateMetadataImport", KeyField: "LRO done + SUCCEEDED import", Run: checkMSCreateMetadataImport},
 		{Service: "metastore", RPC: "GetMetadataImport", Method: "GetMetadataImport", KeyField: "name/state round-trip", Run: checkMSGetMetadataImport},
@@ -164,7 +165,11 @@ func checkMSCreateService(ctx context.Context, cfg Config) error {
 	op, err := client.CreateService(ctx, &metastorepb.CreateServiceRequest{
 		Parent:    metastoreParent(cfg),
 		ServiceId: id,
-		Service:   &metastorepb.Service{Labels: map[string]string{"probe": "gcpc"}},
+		// The API's port is Optional and real Metastore echoes a requested one;
+		// the Terraform provider model is Optional+Computed, so a read-back of a
+		// different port permadiffs. 9080 is free: assigned ports start at
+		// --hms-port + 1 and the other probes request nothing.
+		Service: &metastorepb.Service{Labels: map[string]string{"probe": "gcpc"}, Port: 9080},
 	})
 	if err != nil {
 		return fmt.Errorf("CreateService: %w", err)
@@ -191,6 +196,12 @@ func checkMSCreateService(ctx context.Context, cfg Config) error {
 	}
 	if svc.GetLabels()["probe"] != "gcpc" {
 		return fmt.Errorf("service labels = %v", svc.GetLabels())
+	}
+	if svc.GetPort() != 9080 {
+		return fmt.Errorf("service port = %d, want the requested 9080", svc.GetPort())
+	}
+	if !strings.Contains(svc.GetEndpointUri(), ":9080") {
+		return fmt.Errorf("endpointUri = %q, want it to carry the requested port 9080", svc.GetEndpointUri())
 	}
 	return nil
 }
@@ -266,6 +277,26 @@ func checkMSUpdateService(ctx context.Context, cfg Config) error {
 	}
 	if svc.GetLabels()["updated"] != "yes" {
 		return fmt.Errorf("updated labels = %v", svc.GetLabels())
+	}
+
+	// A port change travels the same way the provider sends it (updateMask
+	// names port) and is echoed back with the endpoint it selects.
+	op, err = client.UpdateService(ctx, &metastorepb.UpdateServiceRequest{
+		Service:    &metastorepb.Service{Name: name, Port: 9081},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"port"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateService port: %w", err)
+	}
+	svc, err = op.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("operation Wait (port): %w", err)
+	}
+	if svc.GetPort() != 9081 {
+		return fmt.Errorf("updated port = %d, want 9081", svc.GetPort())
+	}
+	if !strings.Contains(svc.GetEndpointUri(), ":9081") {
+		return fmt.Errorf("updated endpointUri = %q, want it to carry port 9081", svc.GetEndpointUri())
 	}
 	return nil
 }

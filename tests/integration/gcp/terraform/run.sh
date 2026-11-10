@@ -195,6 +195,7 @@ SQL_DB="$(out sql_database_name)"
 SQL_USER="$(out sql_user_name)"
 SQL_CERT_FP="$(out sql_ssl_cert_fingerprint)"
 ENABLED_SERVICE="$(out enabled_service)"
+MS_SERVICE="$(out metastore_service_name)"
 FED_NAME="$(out metastore_federation_name)"
 GKE_CLUSTER_DP="$(out dataproc_gke_cluster_name)"
 GCE_CLUSTER_DP="$(out dataproc_gce_cluster_name)"
@@ -349,6 +350,8 @@ check "Cloud SQL client certificate created" \
 check "Cloud SQL instance exposes its server CA" \
   "$ENDPOINT/sql/v1beta4/projects/$PROJECT/instances/$SQL_INSTANCE" \
   '"serverCaCert"' 'BEGIN CERTIFICATE'
+check "Dataproc Metastore service echoes its requested port" \
+  "$ENDPOINT/v1/$MS_SERVICE" '"port":9080' ':9080' '"state":"ACTIVE"'
 check "Dataproc Metastore federation created" \
   "$ENDPOINT/v1/$FED_NAME" 'jaiscloud-tf-federation' '"state":"ACTIVE"'
 check "Dataproc Metastore database IAM grant" \
@@ -597,6 +600,19 @@ if [[ "$UPTIME_STATUS" == "404" ]]; then
   PASS=$((PASS + 1))
 else
   printf '  [FAIL] uptime check get after destroy = HTTP %s, want 404\n' "$UPTIME_STATUS"
+  FAIL=$((FAIL + 1))
+fi
+
+# Destroy removed the Metastore service too — and with it the catalog listener
+# its requested port named.
+MS_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+  "$ENDPOINT/v1/$MS_SERVICE" 2>/dev/null || true)"
+if [[ "$MS_STATUS" == "404" ]]; then
+  printf '  [PASS] Dataproc Metastore service deleted on destroy\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] Metastore service get after destroy = HTTP %s, want 404\n' "$MS_STATUS"
   FAIL=$((FAIL + 1))
 fi
 

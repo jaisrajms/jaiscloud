@@ -2,6 +2,7 @@ package metastore
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
@@ -479,6 +480,75 @@ func TestUpdateService_UnrecognizedNestedMaskFailsLoud(t *testing.T) {
 	}
 	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
 		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+}
+
+// TestServicePortEchoAndUpdate pins TF2-13 on the REST adapter: the create
+// body's port becomes the wire port and the Service's catalog listener, the
+// Provider PATCH with updateMask=port moves it, and a duplicate request is
+// AlreadyExists on the wire (the port is the catalog selector, so it is unique).
+func TestServicePortEchoAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	resp, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc1", map[string]any{"port": 9080})))
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	created, _ := resp.Data["response"].(map[string]any)
+	if got := asInt(t, created["port"]); got != 9080 {
+		t.Fatalf("created port = %d, want the requested 9080", got)
+	}
+	if want := "thrift://svc1.us-central1.metastore.jaiscloud.local:9080"; created["endpointUri"] != want {
+		t.Fatalf("created endpointUri = %v, want %s", created["endpointUri"], want)
+	}
+
+	upd, err := p.UpdateService(ctx, newNR(map[string]any{
+		"location": "us-central1", "serviceId": "svc1",
+		"updateMask": "port",
+		"body":       map[string]any{"port": 9082},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateService port: %v", err)
+	}
+	updated, _ := upd.Data["response"].(map[string]any)
+	if got := asInt(t, updated["port"]); got != 9082 {
+		t.Fatalf("updated port = %d, want 9082", got)
+	}
+
+	got, err := p.GetService(ctx, newNR(map[string]any{"location": "us-central1", "serviceId": "svc1"}))
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if got := asInt(t, got.Data["port"]); got != 9082 {
+		t.Fatalf("read-back port = %d, want 9082", got)
+	}
+	if want := "thrift://svc1.us-central1.metastore.jaiscloud.local:9082"; got.Data["endpointUri"] != want {
+		t.Fatalf("read-back endpointUri = %v, want %s", got.Data["endpointUri"], want)
+	}
+
+	if _, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc2", map[string]any{"port": 9082}))); err == nil {
+		t.Fatal("duplicate port create = nil, want AlreadyExists")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "AlreadyExists" || perr.HTTPStatus != 409 {
+		t.Fatalf("duplicate port create = %v, want AlreadyExists/409", err)
+	}
+}
+
+// asInt reads a port from a provider response map: the LRO path JSON-round-trips
+// (numbers are float64) while a direct read carries the core's int.
+func asInt(t *testing.T, v any) int {
+	t.Helper()
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		if n != math.Trunc(n) {
+			t.Fatalf("port %v is not an integer", n)
+		}
+		return int(n)
+	default:
+		t.Fatalf("port = %v (%T), want a number", v, v)
+		return 0
 	}
 }
 

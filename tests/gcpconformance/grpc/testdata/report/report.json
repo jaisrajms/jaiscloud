@@ -2527,7 +2527,7 @@
       "rpc": "CreateService",
       "method": "CreateService",
       "status": "pass",
-      "key_field": "LRO done + ACTIVE service"
+      "key_field": "LRO done + ACTIVE service, requested port echoed"
     },
     {
       "service": "metastore",
@@ -2548,7 +2548,7 @@
       "rpc": "UpdateService",
       "method": "UpdateService",
       "status": "pass",
-      "key_field": "labels updated via LRO"
+      "key_field": "labels + port updated via LRO"
     },
     {
       "service": "metastore",

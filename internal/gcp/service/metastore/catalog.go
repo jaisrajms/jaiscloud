@@ -81,8 +81,9 @@ func (s *Service) baseHMSPort() int {
 
 // nextServicePort returns the port to assign a new Service: one above the
 // highest port already assigned (so ports are never reused while a Service
-// holds one) and never below base+1. Service ports are output-only row state,
-// so a restart keeps every endpoint stable.
+// holds one) and never below base+1. A caller-requested port is honored in
+// CreateService (see ports.go); this is only the fallback. Assigned ports are
+// row state, so a restart keeps every endpoint stable.
 func (s *Service) nextServicePort(ctx context.Context) int {
 	port := s.baseHMSPort()
 	services, err := s.store.ListAllServices(ctx)

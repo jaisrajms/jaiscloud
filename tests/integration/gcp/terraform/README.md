@@ -18,7 +18,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Cloud KMS (key ring + crypto key)
 - Pub/Sub (topic + subscription + topic/subscription IAM members)
 - Cloud SQL for PostgreSQL (instance + database + user + client SSL certificate)
-- Dataproc Metastore (federation + database IAM member)
+- Dataproc Metastore (service with an explicit `port` + federation + database
+  IAM member)
 - Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets, plus a
   Compute-Engine `cluster_config` cluster)
 - GKE (`google_container_cluster`, the Dataproc-on-GKE prerequisite)
@@ -916,6 +917,13 @@ Recorded boundaries, not worked around:
   `additionalProperties: BackendMetastore`, and `BackendMetastore` has no rank
   member, so the provider's `rank` becomes the map key (`"backendMetastores":
   {"0": …}`). `03-datalake` asserts that shape rather than a repeated list.
+- **A Metastore service's `port` is requestable.** The provider's `port` is
+  Optional+Computed and real Metastore echoes a requested value (TF2-13), so
+  the fixture requests `9080` and asserts the read-back `port`/`endpointUri`;
+  a Service that assigned its own port would permadiff on the second plan. On
+  the emulator the port is also the catalog listener, so it must be free and
+  must not be the base `--hms-port` (9083, the legacy shared catalog); a
+  container/k3d deployment has to expose any port a config requests.
 
 ## What it does
 
@@ -942,6 +950,9 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
 - Cloud SQL instance is `RUNNABLE`, database and user exist, and the
   `google_sql_ssl_cert` fingerprint resolves under the instance (`sslCerts.get`),
   with the instance exposing its synthesized `serverCaCert`
+- The Dataproc Metastore service exists with the **requested** `port` (9080)
+  and an `endpointUri` naming that port, the federation is `ACTIVE`, the
+  database IAM grant is readable, and `destroy` leaves the service `404`
 - The CRM project lookup resolves (`lifecycleState: ACTIVE`)
 - The project IAM policy keeps the `google_project_iam_member` grant across
   the provider's `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC),
