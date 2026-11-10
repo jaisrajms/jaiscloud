@@ -110,8 +110,6 @@ broken gate, not a pass: the nightly and drift workflows run with `STRICT=1`.
 The committed report (`tests/integration/gcp/terraform/differential/report.md`)
 is the authoritative, regenerated table. It currently classifies:
 
-- `TF6-3` GCS object `mediaLink` omits the `generation` query parameter —
-  emulator gap, scheduled.
 - `TF6-4` a bucket that never configured versioning is returned as
   `versioning:{enabled:false}` where real GCP omits the block — accepted risk
   (both are valid API shapes; Terraform reports no diff).

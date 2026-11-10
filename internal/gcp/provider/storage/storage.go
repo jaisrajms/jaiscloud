@@ -625,8 +625,15 @@ func objectSelfLink(base, bucket, name string) string {
 	return base + "/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name)
 }
 
-func objectMediaLink(base, bucket, name string) string {
-	return base + "/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name) + "?alt=media"
+// objectMediaLink is the Object.mediaLink real GCS returns for one object
+// generation: the download URL for that exact generation, with the generation
+// query parameter ahead of alt=media
+// (`.../o/<name>?generation=<n>&alt=media`, the recorded real-GCP order in
+// tests/integration/gcp/terraform/differential/golden/foundation.json). Each
+// Object resource describes a single generation, so a get/list of a non-live
+// generation links to that generation too.
+func objectMediaLink(base, bucket, name, generation string) string {
+	return base + "/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name) + "?generation=" + generation + "&alt=media"
 }
 
 func bucketSelfLink(base, name string) string {
@@ -700,7 +707,7 @@ func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	o.ID = m.Bucket + "/" + m.Name + "/" + m.Generation
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, m.Bucket, m.Name)
-	o.MediaLink = objectMediaLink(base, m.Bucket, m.Name)
+	o.MediaLink = objectMediaLink(base, m.Bucket, m.Name, m.Generation)
 	return o
 }
 
@@ -2553,7 +2560,7 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, bucket, object)
-	o.MediaLink = objectMediaLink(base, bucket, object)
+	o.MediaLink = objectMediaLink(base, bucket, object, o.Generation)
 
 	// Capture the prior live generation's blob key so a non-versioned overwrite
 	// can clean it up after the new generation is durably stored.
@@ -3259,7 +3266,7 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
-	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
+	o.MediaLink = objectMediaLink(base, dstBucket, dstObject, o.Generation)
 
 	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
 	if err != nil {
@@ -3405,7 +3412,7 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
-	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
+	o.MediaLink = objectMediaLink(base, dstBucket, dstObject, o.Generation)
 
 	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
 	if err != nil {
@@ -3542,7 +3549,7 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, bucket, object)
-	o.MediaLink = objectMediaLink(base, bucket, object)
+	o.MediaLink = objectMediaLink(base, bucket, object, o.Generation)
 
 	final, err := p.writeObjectRaw(ctx, nr, bucket, object, o, buf.Bytes(), p.bucketVersioned(ctx, bucket), "", false)
 	if err != nil {

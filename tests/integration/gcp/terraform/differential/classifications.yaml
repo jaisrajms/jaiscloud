@@ -13,15 +13,6 @@
 # a scheduled fix can close its classification when it lands.
 rules:
   - case: "*"
-    path: resources.google_storage_bucket_object.*.media_link
-    verdict: emulator-gap
-    id: TF6-3
-    branch: fix/gcp-storage-object-media-link-generation
-    reason: >-
-      The object mediaLink omits the generation query parameter. Real GCP
-      returns ?generation=<n>&alt=media; the emulator returns ?alt=media.
-
-  - case: "*"
     path: resources.google_storage_bucket.*.versioning.length
     verdict: accepted-risk
     id: TF6-4

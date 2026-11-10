@@ -2885,3 +2885,85 @@ func isInvalidRequest(err error) bool {
 	var perr *model.ProviderError
 	return errors.As(err, &perr) && perr.Code == "InvalidRequest" && perr.HTTPStatus == 400
 }
+
+// TestObjectMediaLinkCarriesGeneration pins Object.mediaLink to the shape real
+// GCS returns (recorded in the TF6 real-GCP differential golden
+// tests/integration/gcp/terraform/differential/golden/foundation.json):
+// <origin>/download/storage/v1/b/<bucket>/o/<name>?generation=<n>&alt=media —
+// the generation first, then alt=media, and the value equal to the generation
+// the same Object resource reports. objects.insert, objects.get, objects.list
+// and a generation-addressed get all carry it, and each generation's link names
+// that generation.
+func TestObjectMediaLinkCarriesGeneration(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	// Versioning keeps the first generation addressable after the overwrite.
+	insertVersionedBucket(t, p, "ml-bucket")
+
+	// Overwrite: a new live generation, the old one still addressable.
+	put := func() *model.ProviderResponse {
+		nr := bucketParamsWithObj("ml-bucket", "dir/hello.txt")
+		nr.Params[wire.MediaKey] = []byte("hello")
+		nr.Params[wire.ContentTypeKey] = "text/plain"
+		nr.Params["body"] = map[string]any{"metadata": nil}
+		resp, err := p.ObjectsInsert(ctx, nr)
+		if err != nil {
+			t.Fatalf("insert object: %v", err)
+		}
+		return resp
+	}
+	first := put()
+	firstGen, _ := first.Data["generation"].(string)
+	firstLink, _ := first.Data["mediaLink"].(string)
+	wantFirst := "http://localhost:8080/download/storage/v1/b/ml-bucket/o/dir%2Fhello.txt?generation=" + firstGen + "&alt=media"
+	if firstLink != wantFirst {
+		t.Errorf("objects.insert mediaLink = %q, want %q", firstLink, wantFirst)
+	}
+	if !strings.Contains(firstLink, "generation="+firstGen+"&alt=media") {
+		t.Errorf("objects.insert mediaLink %q does not carry generation=%s before alt=media", firstLink, firstGen)
+	}
+
+	overwritten := put()
+	liveGen, _ := overwritten.Data["generation"].(string)
+	if liveGen == firstGen {
+		t.Fatalf("expected a fresh generation on overwrite, both %q", liveGen)
+	}
+
+	// Live get: the current generation's link.
+	got, err := p.ObjectsGet(ctx, bucketParamsWithObj("ml-bucket", "dir/hello.txt"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	wantLive := "http://localhost:8080/download/storage/v1/b/ml-bucket/o/dir%2Fhello.txt?generation=" + liveGen + "&alt=media"
+	if link, _ := got.Data["mediaLink"].(string); link != wantLive {
+		t.Errorf("objects.get mediaLink = %q, want %q", link, wantLive)
+	}
+
+	// Generation-addressed get: that generation's link, not the live one.
+	nr := bucketParamsWithObj("ml-bucket", "dir/hello.txt")
+	nr.Params["generation"] = firstGen
+	old, err := p.ObjectsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("get generation %s: %v", firstGen, err)
+	}
+	if link, _ := old.Data["mediaLink"].(string); link != wantFirst {
+		t.Errorf("objects.get?generation=%s mediaLink = %q, want %q", firstGen, link, wantFirst)
+	}
+
+	// objects.list: every item's link names its own generation.
+	nr = bucketParams()
+	nr.Params["bucket"] = "ml-bucket"
+	lst, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := lst.Data["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 live item, got %d", len(items))
+	}
+	item, _ := items[0].(map[string]any)
+	gen, _ := item["generation"].(string)
+	if link, _ := item["mediaLink"].(string); !strings.HasSuffix(link, "?generation="+gen+"&alt=media") {
+		t.Errorf("objects.list mediaLink = %q, want suffix ?generation=%s&alt=media", link, gen)
+	}
+}

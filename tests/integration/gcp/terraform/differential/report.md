@@ -1,6 +1,6 @@
 # Terraform differential report
 
-Generated: 2026-11-10T16:40:59Z
+Generated: 2026-11-10T17:09:59Z
 
 - corpus: `tests/integration/gcp/terraform/differential/corpus.yaml`
 - goldens: `tests/integration/gcp/terraform/differential/golden`
@@ -14,7 +14,7 @@ this table is the emulator replay. Every difference is classified in
 
 | case | status | differences | unclassified | re-plan |
 |---|---|---|---|---|
-| foundation | compared | 1 | 0 | no changes |
+| foundation | compared | 0 | 0 | no changes |
 | cmek | compared | 2 | 0 | no changes |
 | bootstrap | not-recorded (excluded) | 0 | 0 | — |
 | events | not-recorded (excluded) | 0 | 0 | — |
@@ -27,7 +27,6 @@ this table is the emulator replay. Every difference is classified in
 |---|---|---|---|---|---|---|
 | cmek | `resources.google_bigquery_dataset.cmek.access[0].user_by_email` | `"\u003cuser\u003e"` | `"jaiscloud@example.iam.gserviceaccount.com"` | accepted-risk | TF6-5 | Real GCP adds the authenticated user to a dataset's default ACL; the emulator is unauthenticated and names jaiscloud@example.iam.gserviceaccount.com. Identity/authz is outside the local trust boundary. |
 | cmek | `resources.google_storage_bucket.cmek.versioning.length` | `0` | `1` | accepted-risk | TF6-4 | A bucket that never configured versioning is returned as versioning:{enabled:false} by the emulator; real GCP omits the block. Both are valid API shapes and Terraform reports no diff either way, so the omission is not chased. Recorded in docs/gcp/terraform-compatibility.md. |
-| foundation | `resources.google_storage_bucket_object.diff.media_link` | `"\u003corigin\u003e/download/storage/v1/b/jc-tf-diff-\u003csuffix\u003e/o/hello.txt?generation=\u003cgeneration\u003e\u0026alt=media"` | `"\u003corigin\u003e/download/storage/v1/b/jc-tf-diff-\u003csuffix\u003e/o/hello.txt?alt=media"` | emulator-gap | TF6-3 | The object mediaLink omits the generation query parameter. Real GCP returns ?generation=<n>&alt=media; the emulator returns ?alt=media. |
 
 ## Not recorded
 
