@@ -26,6 +26,24 @@ var (
 // maximum."), shared by the REST and gRPC adapters.
 const MaxPageSize = 500
 
+// The documented RetryConfig defaults. The Cloud Scheduler Discovery/proto
+// field descriptions state them explicitly:
+//
+//   - retryCount: "The default value of retry_count is zero." (0 = a failed
+//     attempt is not retried; the job waits for the next scheduled execution)
+//   - minBackoffDuration: "The default value of this field is 5 seconds."
+//   - maxBackoffDuration: "The default value of this field is 1 hour."
+//   - maxDoublings: "The default value of this field is 5."
+//   - maxRetryDuration: "The default value for max_retry_duration is zero,
+//     which means retry duration is unlimited."
+const (
+	defaultRetryCount         int32 = 0
+	DefaultMinBackoffDuration       = 5 * time.Second
+	DefaultMaxBackoffDuration       = time.Hour
+	DefaultMaxDoublings       int32 = 5
+	defaultMaxRetryDuration         = 0
+)
+
 // Service is the transport-neutral Cloud Scheduler core. Both the REST and gRPC
 // adapters share one instance (and one store), so the two transports cannot
 // drift.
@@ -74,6 +92,10 @@ func (s *Service) CreateJob(ctx context.Context, project, location string, j sch
 		return schedstore.Job{}, err
 	}
 	applyServerDefaults(&j)
+	// The API answers a RetryConfig even for a create body without one, so the
+	// stored job carries the documented defaults; a supplied config is kept
+	// verbatim (TF3-4-2).
+	j.RetryConfig = EffectiveRetryConfig(j)
 	j.ScheduleTime = nextFireFor(j, now)
 	if err := s.store.CreateJob(ctx, project, location, j); err != nil {
 		return schedstore.Job{}, mapStoreErr(err)
@@ -124,6 +146,7 @@ func (s *Service) UpdateJob(ctx context.Context, project, location, name string,
 			return cur, err
 		}
 		applyServerDefaults(&next)
+		next.RetryConfig = EffectiveRetryConfig(next)
 		next.UserUpdateTime = clock.Now()
 		if next.State == schedstore.StateEnabled {
 			next.ScheduleTime = nextFireFor(next, clock.Now())
@@ -150,6 +173,11 @@ func (s *Service) DeleteJob(ctx context.Context, project, location, name string)
 // in Job.State.ENABLED to be paused". Clients retry :pause like a read (the
 // Terraform provider issues it on every update that sets paused), so a 400 here
 // would be a wire divergence.
+//
+// The transition removes the run state: real Cloud Scheduler answers a paused
+// job with no scheduleTime (its next run is gone) and with lastAttemptTime and
+// status cleared, so a paused job reads as never attempted (measured
+// 2026-10-19/20, TF2-12-1).
 func (s *Service) PauseJob(ctx context.Context, project, location, name string) (schedstore.Job, error) {
 	return s.mutateState(ctx, project, location, name, func(cur schedstore.Job) (schedstore.Job, bool, error) {
 		switch cur.State {
@@ -157,6 +185,7 @@ func (s *Service) PauseJob(ctx context.Context, project, location, name string) 
 			return cur, false, nil
 		case schedstore.StateEnabled:
 			cur.State = schedstore.StatePaused
+			cur.ClearRunState()
 			return cur, true, nil
 		default:
 			return cur, false, failedPrecondition("job must be ENABLED to pause")
@@ -291,6 +320,41 @@ func validateHTTP(t *schedstore.HttpTarget) error {
 		return invalidArgument("httpTarget.body is only allowed for POST, PUT, or PATCH")
 	}
 	return nil
+}
+
+// EffectiveRetryConfig resolves the RetryConfig Cloud Scheduler answers for a
+// job. It is applied on create/update too, so a stored job carries the message
+// the API answers, and both wire adapters render it, so REST and gRPC cannot
+// drift (TF3-4-2).
+//
+// A job created without a retryConfig — including the all-zero
+// `{ retry_count = 0 }` block the Terraform provider drops from the create body,
+// because every expanded field is its zero value — reads back the documented
+// defaults rather than an absent message. RetryConfig is proto3 without field
+// presence, so an unset field and a zero-valued one are indistinguishable on the
+// wire: every zero field resolves to its documented default, and an explicitly
+// stored non-default value is echoed verbatim.
+//
+// The consequence worth knowing: an explicitly stored max_doublings = 0 reads
+// back as 5, the documented default, exactly as it would against real Cloud
+// Scheduler. That is also why the provider's read can now fill retry_config for
+// a dropped all-zero block, so `retry_config = { retry_count = 0 }` stops
+// re-planning forever.
+func EffectiveRetryConfig(j schedstore.Job) *schedstore.RetryConfig {
+	rc := schedstore.RetryConfig{RetryCount: defaultRetryCount, MaxRetryDuration: defaultMaxRetryDuration}
+	if j.RetryConfig != nil {
+		rc = *j.RetryConfig
+	}
+	if rc.MinBackoffDuration == 0 {
+		rc.MinBackoffDuration = DefaultMinBackoffDuration
+	}
+	if rc.MaxBackoffDuration == 0 {
+		rc.MaxBackoffDuration = DefaultMaxBackoffDuration
+	}
+	if rc.MaxDoublings == 0 {
+		rc.MaxDoublings = DefaultMaxDoublings
+	}
+	return &rc
 }
 
 // applyServerDefaults records the output-only httpTarget headers real Cloud

@@ -165,11 +165,11 @@ done
 check "the project is DELETE_REQUESTED after destroy" \
   "$ENDPOINT/v1/projects/$PROJECT_ID" '"lifecycleState":"DELETE_REQUESTED"'
 
-# Recorded provider/emulator boundary, not a stack defect: hashicorp/google
-# never calls the documented keyRings.delete (state-only) or cryptoKeys.delete,
-# and projects.locations.keyRings.delete is TF5-4 (501 in the emulator), so the
-# KMS objects survive a destroy that removed everything else. The lifecycle kms
-# case gates the same boundary in detail.
+# Recorded provider boundary, not a stack defect: hashicorp/google never calls
+# the documented keyRings.delete (state-only) or cryptoKeys.delete, so the KMS
+# objects survive a destroy that removed everything else. Both delete methods are
+# served over REST (TF5-4 added keyRings.delete); the provider simply does not
+# use them. The lifecycle kms case gates the same boundary in detail.
 check_status "the KMS key ring survives destroy (the provider never calls delete)" \
   "$ENDPOINT/v1/projects/$PROJECT_ID/locations/$REGION/keyRings/jc-tf-boot-ring" 200
 check_status "the KMS crypto key survives destroy (versions only are scheduled)" \

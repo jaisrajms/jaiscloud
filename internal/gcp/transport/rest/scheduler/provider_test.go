@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"testing"
+	"time"
 
 	core "jaiscloud/internal/gcp/service/scheduler"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
@@ -74,6 +75,78 @@ func TestProviderCRUD(t *testing.T) {
 	}
 }
 
+// TestProviderRetryConfigDefaults pins the REST read of the RetryConfig a job
+// answers when its create body carried none — the shape the Terraform provider
+// produces for `retry_config = { retry_count = 0 }`, whose all-zero block it
+// drops from the create body. The documented defaults (retry_count 0,
+// min_backoff_duration 5s, max_backoff_duration 1h, max_doublings 5,
+// max_retry_duration 0 = unlimited) must come back so the provider's read fills
+// retry_config instead of leaving the block empty (TF3-4-2).
+func TestProviderRetryConfigDefaults(t *testing.T) {
+	ctx := context.Background()
+	p, _ := newProvider(t)
+
+	// No retryConfig in the create body.
+	if _, err := p.CreateJob(ctx, req(map[string]any{"project": "p", "location": "l", "body": jobBody()})); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	resp, err := p.GetJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	got, ok := resp.Data["retryConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("retryConfig = %#v, want the documented defaults", resp.Data["retryConfig"])
+	}
+	want := map[string]any{
+		"retryCount":         int32(0),
+		"maxRetryDuration":   "0s",
+		"minBackoffDuration": "5s",
+		"maxBackoffDuration": "3600s",
+		"maxDoublings":       int32(5),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("retryConfig = %#v, want %#v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("retryConfig.%s = %#v, want %#v", k, got[k], v)
+		}
+	}
+
+	// An all-zero retryConfig (the provider's dropped block, if a client sends
+	// it explicitly) reads back the same defaults.
+	body := jobBody()
+	body["name"] = "projects/p/locations/l/jobs/j2"
+	body["retryConfig"] = map[string]any{}
+	created, err := p.CreateJob(ctx, req(map[string]any{"project": "p", "location": "l", "body": body}))
+	if err != nil {
+		t.Fatalf("CreateJob(all-zero retryConfig): %v", err)
+	}
+	if rc, ok := created.Data["retryConfig"].(map[string]any); !ok || rc["minBackoffDuration"] != "5s" {
+		t.Fatalf("all-zero retryConfig read = %#v, want the documented defaults", created.Data["retryConfig"])
+	}
+
+	// A non-default config is echoed verbatim.
+	body["name"] = "projects/p/locations/l/jobs/j3"
+	body["retryConfig"] = map[string]any{
+		"retryCount":         float64(3),
+		"maxDoublings":       float64(2),
+		"minBackoffDuration": "2s",
+		"maxBackoffDuration": "20s",
+		"maxRetryDuration":   "1m",
+	}
+	created, err = p.CreateJob(ctx, req(map[string]any{"project": "p", "location": "l", "body": body}))
+	if err != nil {
+		t.Fatalf("CreateJob(custom retryConfig): %v", err)
+	}
+	rc, ok := created.Data["retryConfig"].(map[string]any)
+	if !ok || rc["retryCount"] != int32(3) || rc["maxDoublings"] != int32(2) ||
+		rc["minBackoffDuration"] != "2s" || rc["maxBackoffDuration"] != "20s" || rc["maxRetryDuration"] != "60s" {
+		t.Fatalf("custom retryConfig read = %#v", created.Data["retryConfig"])
+	}
+}
+
 func TestProviderListPagination(t *testing.T) {
 	ctx := context.Background()
 	p, c := newProvider(t)
@@ -122,6 +195,64 @@ func TestProviderListJobsNegativePageSize(t *testing.T) {
 		perr, ok := err.(*model.ProviderError)
 		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 			t.Fatalf("ListJobs(pageSize=%#v) err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+}
+
+func TestProviderPauseClearsRunState(t *testing.T) {
+	ctx := context.Background()
+	mem := schedstore.NewMemoryStore()
+	p := NewProvider(core.NewService(mem))
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Seed an ENABLED job that has already fired with a failed status; the REST
+	// read reports all three run-state fields.
+	if err := mem.CreateJob(ctx, "p", "l", schedstore.Job{
+		Name:            "j1",
+		State:           schedstore.StateEnabled,
+		Schedule:        "* * * * *",
+		TimeZone:        "UTC",
+		Target:          schedstore.TargetHTTP,
+		HTTP:            &schedstore.HttpTarget{URI: "http://example.test/hook"},
+		ScheduleTime:    at.Add(time.Minute),
+		LastAttemptTime: at,
+		Status:          &schedstore.Status{Code: 13, Message: "boom"},
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	resp, err := p.GetJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if _, ok := resp.Data[field]; !ok {
+			t.Fatalf("an ENABLED job that fired did not render %s", field)
+		}
+	}
+
+	// Real Cloud Scheduler answers a paused job with no next run and no last
+	// attempt: :pause removes them from the job and both the response and a
+	// subsequent read leave scheduleTime/lastAttemptTime/status absent
+	// (TF2-12-1).
+	paused, err := p.PauseJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("PauseJob: %v", err)
+	}
+	if got := paused.Data["state"]; got != "PAUSED" {
+		t.Fatalf("PauseJob state = %v, want PAUSED", got)
+	}
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if v, ok := paused.Data[field]; ok {
+			t.Fatalf("pause response rendered %s = %v", field, v)
+		}
+	}
+	read, err := p.GetJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob after pause: %v", err)
+	}
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if v, ok := read.Data[field]; ok {
+			t.Fatalf("a paused job read back %s = %v", field, v)
 		}
 	}
 }

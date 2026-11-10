@@ -134,6 +134,23 @@ type Job struct {
 	Status          *Status   `json:"status,omitempty"`
 }
 
+// ClearRunState drops the output-only run state: the next fire time, the last
+// attempt's time, and its status. Real Cloud Scheduler removes the next run when
+// a job is paused and clears the last attempt with it, so a paused job reads as
+// never scheduled and never attempted (measured 2026-10-19/20, TF2-12-1).
+func (j *Job) ClearRunState() {
+	j.ScheduleTime = time.Time{}
+	j.LastAttemptTime = time.Time{}
+	j.Status = nil
+}
+
+// RunStateReported reports whether the job answers its run state (scheduleTime,
+// lastAttemptTime, status). A paused job answers none of them: pausing removes
+// the next run and clears the last attempt (TF2-12-1). Both wire adapters gate
+// those three fields on this predicate, so REST and gRPC cannot drift, and a
+// record persisted before the core cleared it still cannot render stale state.
+func (j Job) RunStateReported() bool { return j.State != StatePaused }
+
 // Store is the Cloud Scheduler job store.
 type Store interface {
 	CreateJob(ctx context.Context, projectID, location string, j Job) error

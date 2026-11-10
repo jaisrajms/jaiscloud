@@ -320,7 +320,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   the documented 30-day default applies. As with
   rotation, promotion runs on access (no background scheduler); KMS rotation schedules
   execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,
-  creating a new primary and advancing the schedule — there is no background scheduler); Logging
+  creating a new primary and advancing the schedule — there is no background scheduler); KMS
+  `keyRings.delete` is **REST-only** — the Discovery declares `DELETE v1/{+name}` (an LRO) but
+  the `google.cloud.kms.v1.KeyManagementService` proto declares no `DeleteKeyRing` RPC, so the
+  gRPC surface has no such method — and it deletes only an **empty** ring (a ring that still holds
+  a `CryptoKey` is `400 FAILED_PRECONDITION`), leaving the ring's name reusable because
+  `RetiredResource` models deleted `CryptoKeys` only; Logging
   `TailLogEntries` is a bounded, at-most-once poll;
   Eventarc delivers Pub/Sub- and Cloud Storage-sourced events to `cloudFunction`, `cloudRun` and
   `httpEndpoint` destinations (fire-and-forget binary-mode CloudEvents POST, no retries; a `cloudRun`
@@ -421,6 +426,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   echoed but never delivered (no App Engine router) — its attempts are recorded as `Unimplemented`
   and are terminal: the job is attempted once, the status is recorded, no retries are consumed and
   the job waits for its next cron slot.
+  `RetryConfig` is proto3 without field presence, so a read always answers it: a job created without
+  one (including the all-zero `{ retry_count = 0 }` block the Terraform provider drops from the
+  create body) reads back the documented defaults — `retryCount` 0, `minBackoffDuration` 5s,
+  `maxBackoffDuration` 1h, `maxDoublings` 5, `maxRetryDuration` 0 (unlimited) — an unset field of a
+  supplied config takes its documented default, and stored non-default values are echoed verbatim
+  (TF3-4-2). The engine applies `retryCount` with exponential backoff bounded by
+  `minBackoffDuration`/`maxBackoffDuration`; it does not switch to the documented linear growth after
+  `maxDoublings`, nor stop at `maxRetryDuration`.
   English-like schedules ("every 5 minutes") are not parsed (unix-cron plus `@` descriptors only);
   `oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token, not a real Google token.
 - **Cloud Tasks** — the v2 control plane plus a dispatch engine: queue CRUD plus
@@ -434,7 +447,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   response deletes the task, a failure retries until the attempt's effective
   `retryConfig.maxAttempts`/`maxRetryDuration` is exhausted — a task-level `retryConfig` overrides
   the queue's wholesale (never a field merge), and a zero `maxAttempts` means "unspecified" (the
-  documented default of 100), not "inherit the queue". A task is deleted once it has been retained
+  documented default of 100), not "inherit the queue". Queue `rateLimits` behaves the same way
+  per field: `RateLimits` is proto3 without field presence, so an omitted `maxDispatchesPerSecond`,
+  `maxBurstSize` or `maxConcurrentDispatches` resolves to the documented default (500/s, 100, 1000 —
+  `maxBurstSize` is output-only on the wire and the Discovery document states no numeric default, so
+  the emulator uses the value real Cloud Tasks answers) instead of being stored as 0; a supplied
+  value is echoed, and a `rateLimits` update-mask entry replaces the whole message (its unset
+  subfields take the defaults) while any other mask leaves the stored message alone. A task is
+  deleted once it has been retained
   for 31 days past its `scheduleTime` (the maximum task retention), on the dispatch tick and before
   the due check; reads never delete. `RunTask` / REST `:run` forces a synchronous attempt that
   bypasses pause and rate limits. `appEngineHttpRequest` is never delivered (no App Engine router) —

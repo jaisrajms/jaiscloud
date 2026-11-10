@@ -424,7 +424,7 @@ google_secret_manager_secret_iam_binding,secretmanager,served,none,served,secret
 google_secret_manager_secret_iam_member,secretmanager,served,fixture:accessor,served,,2027-06-30
 google_secret_manager_secret_iam_policy,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
 google_secret_manager_secret_version,secretmanager,served,fixture:compat,served,,2027-06-30
-google_service_account,iam,served,"fixture:compat,module:iam,module:secret-manager,module:storage,module:workflows",served,,2027-06-30
+google_service_account,iam,served,"fixture:compat,fixture:nodesc,module:iam,module:secret-manager,module:storage,module:workflows",served,,2027-06-30
 google_service_account_iam_binding,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_service_account_iam_member,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30
 google_service_account_iam_policy,iam,served,none,served,iam is served; no fixture or module case declares this resource type yet,2027-06-30

@@ -3,10 +3,12 @@ package scheduler
 import (
 	"context"
 	"testing"
+	"time"
 
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	core "jaiscloud/internal/gcp/service/scheduler"
@@ -64,6 +66,65 @@ func TestGRPCCRUD(t *testing.T) {
 	}
 	if _, err := svc.GetJob(ctx, &schedulerpb.GetJobRequest{Name: name}); err == nil {
 		t.Fatalf("GetJob after delete: expected NotFound")
+	}
+}
+
+// TestGRPCRetryConfigDefaults pins the gRPC read of the RetryConfig a job
+// answers when its create body carried none. The documented defaults
+// (retry_count 0, min_backoff_duration 5s, max_backoff_duration 1h,
+// max_doublings 5, max_retry_duration 0 = unlimited) must be present, and a
+// non-default config must be echoed verbatim (TF3-4-2).
+func TestGRPCRetryConfigDefaults(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/l"
+
+	for _, tc := range []struct {
+		job  string
+		cfg  *schedulerpb.RetryConfig
+		want *schedulerpb.RetryConfig
+	}{
+		{job: "plain", want: &schedulerpb.RetryConfig{
+			RetryCount:         0,
+			MinBackoffDuration: durationpb.New(5 * time.Second),
+			MaxBackoffDuration: durationpb.New(time.Hour),
+			MaxRetryDuration:   durationpb.New(0),
+			MaxDoublings:       5,
+		}},
+		{job: "custom", cfg: &schedulerpb.RetryConfig{
+			RetryCount:         3,
+			MaxDoublings:       2,
+			MinBackoffDuration: durationpb.New(2 * time.Second),
+			MaxBackoffDuration: durationpb.New(20 * time.Second),
+			MaxRetryDuration:   durationpb.New(time.Minute),
+		}, want: &schedulerpb.RetryConfig{
+			RetryCount:         3,
+			MaxDoublings:       2,
+			MinBackoffDuration: durationpb.New(2 * time.Second),
+			MaxBackoffDuration: durationpb.New(20 * time.Second),
+			MaxRetryDuration:   durationpb.New(time.Minute),
+		}},
+	} {
+		job := pbJob(parent + "/jobs/" + tc.job)
+		job.RetryConfig = tc.cfg
+		if _, err := svc.CreateJob(ctx, &schedulerpb.CreateJobRequest{Parent: parent, Job: job}); err != nil {
+			t.Fatalf("CreateJob(%s): %v", tc.job, err)
+		}
+		got, err := svc.GetJob(ctx, &schedulerpb.GetJobRequest{Name: parent + "/jobs/" + tc.job})
+		if err != nil {
+			t.Fatalf("GetJob(%s): %v", tc.job, err)
+		}
+		rc := got.GetRetryConfig()
+		if rc == nil {
+			t.Fatalf("%s: retryConfig = nil, want %v", tc.job, tc.want)
+		}
+		if rc.GetRetryCount() != tc.want.GetRetryCount() ||
+			rc.GetMaxDoublings() != tc.want.GetMaxDoublings() ||
+			rc.GetMinBackoffDuration().AsDuration() != tc.want.GetMinBackoffDuration().AsDuration() ||
+			rc.GetMaxBackoffDuration().AsDuration() != tc.want.GetMaxBackoffDuration().AsDuration() ||
+			rc.GetMaxRetryDuration().AsDuration() != tc.want.GetMaxRetryDuration().AsDuration() {
+			t.Fatalf("%s: retryConfig = %v, want %v", tc.job, rc, tc.want)
+		}
 	}
 }
 

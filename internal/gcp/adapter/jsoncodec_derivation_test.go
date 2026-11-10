@@ -85,9 +85,11 @@ func TestJSONCodecResourceMethodMatrix(t *testing.T) {
 			collWant: map[string]string{"POST": "Create", "GET": "List", "PATCH": "Update", "DELETE": "Delete"},
 			itemWant: map[string]string{"GET": "Get", "PATCH": "Update", "DELETE": "Delete"}},
 		// ── Cloud KMS ──────────────────────────────────────────────────────
+		// keyRings.delete is the documented DELETE v1/{+name} (an LRO) and is
+		// REST-only: the Cloud KMS proto declares no DeleteKeyRing RPC.
 		{res: "keyRings", coll: p + "/locations/us/keyRings", item: kms,
-			collWant: map[string]string{"POST": "KeyRingCreate", "GET": "KeyRingList"},
-			itemWant: map[string]string{"GET": "KeyRingGet"}},
+			collWant: map[string]string{"POST": "KeyRingCreate", "GET": "KeyRingList", "DELETE": "KeyRingDelete"},
+			itemWant: map[string]string{"GET": "KeyRingGet", "DELETE": "KeyRingDelete"}},
 		// cryptoKeys.patch is the real REST key update (mirrors gRPC
 		// UpdateCryptoKey).
 		{res: "cryptoKeys", coll: kms + "/cryptoKeys", item: kms + "/cryptoKeys/k",

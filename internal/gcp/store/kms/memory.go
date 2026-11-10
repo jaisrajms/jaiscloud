@@ -448,6 +448,20 @@ func (s *MemoryStore) DeleteCryptoKey(_ context.Context, projectID, location, ke
 	return nil
 }
 
+func (s *MemoryStore) DeleteKeyRing(_ context.Context, projectID, location, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := krKey(projectID, location)
+	if _, ok := s.keyrings[key][id]; !ok {
+		return ErrNoSuchKeyRing
+	}
+	delete(s.keyrings[key], id)
+	// Drop the (empty) child maps so a re-created ring of the same name never
+	// inherits a previous ring's key records.
+	delete(s.cryptokeys, ckKey(projectID, location, id))
+	return nil
+}
+
 func (s *MemoryStore) KeyMaterial(_ context.Context, projectID, location, keyringID, keyID, version string) ([]byte, error) {
 	dek, err := s.dek()
 	if err != nil {

@@ -275,6 +275,33 @@ func (s *Service) ListAllKeyRings(ctx context.Context, project string) ([]kmssto
 	return s.keys.ListKeyRingsByProject(ctx, project)
 }
 
+// DeleteKeyRing permanently deletes an empty key ring (Discovery
+// keyRings.delete: "All child resources of the KeyRing must have been previously
+// deleted using their corresponding Delete operations"). A ring that still holds
+// a crypto key is 400 FAILED_PRECONDITION, mirroring DeleteCryptoKey's version
+// precondition; an unknown ring is 404 NOT_FOUND.
+//
+// A deleted ring's name is not retired: Discovery's RetiredResource models a
+// deleted CryptoKey ("prevent reuse of these names for new CryptoKeys"), so the
+// same key-ring name can be created again. The ring's retired crypto-key records
+// are location-scoped and stay behind, so those key names remain unusable.
+func (s *Service) DeleteKeyRing(ctx context.Context, project, location, id string) error {
+	if _, err := s.keys.GetKeyRing(ctx, project, location, id); err != nil {
+		return keyRingErr(err)
+	}
+	keys, err := s.keys.ListCryptoKeys(ctx, project, location, id)
+	if err != nil {
+		return err
+	}
+	if len(keys) > 0 {
+		return failedPrecondition("all CryptoKeys must be deleted before the KeyRing")
+	}
+	if err := s.keys.DeleteKeyRing(ctx, project, location, id); err != nil {
+		return keyRingErr(err)
+	}
+	return nil
+}
+
 // ─── CryptoKeys ───────────────────────────────────────────────────────────────
 
 // CreateCryptoKey creates a crypto key and its implicit primary version.

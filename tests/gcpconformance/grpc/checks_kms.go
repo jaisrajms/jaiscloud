@@ -15,13 +15,14 @@ import (
 // kmsChecks covers the Cloud KMS surface
 // (google.cloud.kms.v1.KeyManagementService) via the official KMS client.
 //
-// Cloud KMS has no DeleteKeyRing/DeleteCryptoKey RPC (keys are scheduled for
-// destruction, not deleted), so the delete-side probe uses
-// DestroyCryptoKeyVersion, which is the real API's delete analogue. Destroying
-// a live version must report DESTROY_SCHEDULED with a destroy_time (the
-// emulator promotes to DESTROYED lazily once the window elapses); DESTROYED is
-// tolerated only for a version that was already promoted, so the probe remains
-// safe if it re-runs against the same version.
+// Cloud KMS has no DeleteKeyRing RPC in its proto (the REST Discovery declares
+// keyRings.delete, but no generated client can call it), so the delete-side
+// probe below uses DestroyCryptoKeyVersion, which is the real API's delete
+// analogue for a key version. Destroying a live version must report
+// DESTROY_SCHEDULED with a destroy_time (the emulator promotes to DESTROYED
+// lazily once the window elapses); DESTROYED is tolerated only for a version
+// that was already promoted, so the probe remains safe if it re-runs against
+// the same version.
 func kmsChecks() []Check {
 	checks := []Check{
 		{Service: "kms", RPC: "CreateKeyRing", KeyField: "success", Run: checkKMSCreateKeyRing},

@@ -200,15 +200,18 @@ Three boundaries are recorded, not worked around:
   HTTP target and 7.x added a nil guard). That is TF3-4-1
   (`fix/gcp-scheduler-http-target-headers`), so the HTTP-target path is
   unmeasured until it is fixed.
-- The module's default `retry_config = { retry_count = 0 }` is dropped from the
-  create body by the provider and the emulator does not synthesize the
-  documented RetryConfig defaults, so that input re-plans
-  `+ retry_config { retry_count = 0 }` forever; the case creates a non-default
-  retry config and default synthesis is TF3-4-2
-  (`fix/gcp-scheduler-retry-config-defaults`). The task queue's omitted
-  `maxBurstSize` reads back 0 where real Cloud Tasks defaults 100 (TF3-4-3,
-  `fix/gcp-tasks-queue-rate-limit-defaults`); it is computed-only in the
-  provider, so it cannot permadiff, but a raw reader sees the wrong value.
+- The module's default `retry_config = { retry_count = 0 }` expands to an
+  all-zero block that the provider drops from the create body; the emulator now
+  synthesizes the documented RetryConfig defaults on the read (retryCount 0,
+  minBackoffDuration 5s, maxBackoffDuration 1h, maxDoublings 5,
+  maxRetryDuration 0), so the case drives the module default and re-plans clean,
+  then mutates to a non-default config that must be echoed verbatim (TF3-4-2,
+  `fix/gcp-scheduler-retry-config-defaults`). The task queue's `maxBurstSize`
+  is computed-only in the provider (so it cannot permadiff) and the create body
+  omits it; the emulator now applies the documented Cloud Tasks default and
+  reads back 100 (with `maxConcurrentDispatches` defaulting to 1000 when
+  omitted), which the case asserts (TF3-4-3,
+  `fix/gcp-tasks-queue-rate-limit-defaults`).
 
 The paused create also keeps the case off TF2-12 (the provider always issues
 `:resume` after an enabled create, and the emulator's resume is not idempotent
@@ -262,12 +265,12 @@ Boundaries, recorded rather than worked around:
   GKE-shaped cluster and its NodePool reconciliation.
 - `service-accounts` passes the module's documented `"project=>role"` format;
   a bare `"roles/viewer"` makes the module parse the role as both the project
-  and the role. `display_name` is set explicitly because the provider's
-  attribute is Optional (not Computed) while the emulator defaults an omitted
-  `serviceAccount.displayName` to the account id — TF2-14
-  (`fix/gcp-iam-serviceaccount-display-name`); the module's own default is a
-  non-empty display name, so a real consumer does not hit it. Billing/org IAM
-  and key generation are disabled (outside the project-scoped surface).
+  and the role. `display_name` is set explicitly by the case; the emulator no
+  longer defaults an omitted `serviceAccount.displayName` to the account id
+  (TF2-14). The fixture's `google_service_account.nodesc` and its second plan
+  gate that an absent value stays absent; the module's own default is a
+  non-empty display name, so a real consumer does not hit that path. Billing/org
+  IAM and key generation are disabled (outside the project-scoped surface).
 - The IAM repo's submodules reference `../helper`; a plain local-path module
   source makes Terraform treat the submodule directory as the package root and
   rejects the relative helper path. The case uses an offline
@@ -363,7 +366,7 @@ What each case proves:
 |---|---|
 | `storage` | import → clean plan; `-replace` re-creates the bucket (new `timeCreated`, `metageneration=1`); a ForceNew rename leaves the old bucket 404; an out-of-band label PATCH is detected and the managed key converges; duplicate create 409, invalid name 400 and a provider-surfaced 409; destroy leaves 404 |
 | `pubsub` | topic and subscription import → clean plan; `refresh-only` clean (labels normalization classified); `-replace` the subscription; ForceNew rename leaves the old subscription 404; `updateMask=labels` drift converges; duplicate 409, unsupported mask 400, invalid duration 400 and a provider-surfaced 409 |
-| `kms` | key ring and key import → clean plan; label drift; crypto-key `-replace` is an expected 409 (the provider never calls the documented delete; re-import and rotation repair); duplicate 409, invalid algorithm 400, unsupported mask 400 and the live-version `cryptoKeys.delete` 400; after destroy the key ring/key are still readable and the version is `DESTROY_SCHEDULED` |
+| `kms` | key ring and key import → clean plan; label drift; crypto-key `-replace` is an expected 409 (the provider never calls the documented delete; re-import and rotation repair); duplicate 409, invalid algorithm 400, unsupported mask 400, the live-version `cryptoKeys.delete` 400 and the ring-with-a-key `keyRings.delete` 400 (an empty ring deletes and a follow-up GET is 404); after destroy the key ring/key are still readable and the version is `DESTROY_SCHEDULED` |
 | `iam-parallel` | 10 accounts + 10 project bindings at `-parallelism=10`; the policy holds all 10 (a lost update fails); destroy at parallelism 10 leaves no member |
 | `tftest` | `terraform test` conditions on computed ids, `self_link`, `url`, `time_created`, topic/subscription ids, crypto-key `primary.state` and `version_template` |
 
@@ -396,7 +399,7 @@ and an import starts empty), not an emulator gap.
 | TF5-1 | `fix` — `fix/gcp-storage-bucket-validation` | `storage.buckets.insert` accepts `storageClass=BOGUS`, `publicAccessPrevention=BOGUS` and `location=NOT-A-LOCATION` with HTTP 200; real GCS rejects each with 400. The case records the measurement and uses the invalid-bucket-name 400 that the emulator does validate. |
 | TF5-2 | `fix` — `fix/gcp-storage-bucket-labels-merge` | `storage.buckets.patch` replaces the whole `labels` object instead of merging it: patching `{"a":"9"}` on `{a,b}` drops `b`, where real GCS keeps it (null deletes one key). Low impact through Terraform (the provider sends the effective map), wrong for a raw client. |
 | TF5-3 | `no fix` (upstream provider) | The provider's crypto-key delete destroys the versions and drops the key from state without calling the documented `cryptoKeys.delete`, so `-replace` re-creates the same name → 409. The Cloud KMS Discovery does define the delete methods; this is the behavior a real-GCP user sees with provider 7.46.2. The gate asserts the failure, re-imports and repairs the rotation schedule. |
-| TF5-4 | `fix` — `fix/gcp-kms-keyring-delete` | `projects.locations.keyRings.delete` is documented in the Cloud KMS Discovery (`DELETE v1/{+name}`, an LRO) but the emulator answers 501 `UNIMPLEMENTED`; real KMS deletes an empty ring and rejects one with children with 400 `FAILED_PRECONDITION`. `cryptoKeys.delete` is served and enforces that child precondition. |
+| TF5-4 | fixed — `fix/gcp-kms-keyring-delete` | `projects.locations.keyRings.delete` is documented in the Cloud KMS Discovery (`DELETE v1/{+name}`, an LRO) but the emulator answered 501 `UNIMPLEMENTED`; real KMS deletes an empty ring and rejects one with children with 400 `FAILED_PRECONDITION`. `cryptoKeys.delete` was already served and enforces that child precondition. The method is now served over REST (the Cloud KMS proto declares no `DeleteKeyRing` RPC, so there is no gRPC surface): an empty ring is deleted, a ring holding a `CryptoKey` is `400 FAILED_PRECONDITION`, and the ring's name stays reusable while its retired crypto-key names do not. |
 | TF5-5 | `no fix` (provider artifact) | A `refresh-only` plan reports `labels = {}` for a resource with no managed labels (`SetLabels` normalizes an absent map). `refresh_phase labels-artifact` accepts exactly that attribute. |
 | TF5-6 | `no fix` (provider artifact) | An unmanaged extra label key is filtered out of `labels` by `SetLabels` and preserved by the update; the gate asserts the managed key converges and records the extra key. |
 
@@ -439,9 +442,10 @@ Recorded gap and boundaries:
 | TF4-1-2 | `out of scope` | The bootstrap project keeps `auto_create_network = true`; the default Compute network it implies, and the network-deletion path `false` would take, are outside this stack's measured surface (wave-plan §6). `compute.projects.get` itself is served (TF2-1). |
 | TF4-1-3 | `no fix` (provider schema) | `google_secret_manager_secret.replication` is ForceNew, so the CMEK pattern rotates the bucket/dataset key in place but creates the secret's key once. The emulator's replication PATCH path is covered by the service/REST tests. |
 
-The KMS objects that survive each destroy are the TF5-3/TF5-4 boundary (the
-provider never calls the documented delete methods and `keyRings.delete` is a
-`501`), not a separate gap.
+The KMS objects that survive each destroy are the TF5-3 boundary (the provider
+never calls the documented delete methods), not a separate gap: `keyRings.delete`
+is now served over REST (TF5-4), so the objects outlive destroy only because the
+provider does not use it.
 
 ## TF4-2 — Composition pattern: event-driven chain (2026-11-07)
 
@@ -493,7 +497,7 @@ Recorded gaps and boundaries:
 | TF4-2-1 | `fix` (fixed here) | The bootstrap assertion compared the provider's `google_project.number` (decimal, no leading zero) with the API's zero-padded `projectNumber`; the synthesized number starts with zero for about one id in ten, so the aggregate flaked. The assertion now pads before comparing. |
 | TF4-2-2 | `no fix` | Function delivery records are served only by the console API (`/api/ui/v1/gcp/functions/.../deliveries`), which a non-UI build does not mount; real Cloud Functions exposes no delivery log either. The pattern asserts invocation through `GET /_jaiscloud/export` (`envelope.json` → `stores.functions.deliveries`). |
 | TF2-12 | known, separate session | Provider 7.46.2 calls `jobs:resume` after every create when `paused` is false and the emulator rejects resuming an ENABLED job, so the job is created paused and fired with `jobs.run`; `fix/gcp-scheduler-resume-enabled` owns the enabled path. |
-| TF3-4-2 | known, separate session | An all-zero `retry_config` is dropped by the provider and not synthesized by the emulator's read, so the pattern omits the block; `fix/gcp-scheduler-retry-config-defaults` owns the defaults. |
+| TF3-4-2 | `fix` (fixed) | An all-zero `retry_config` is dropped by the provider; the emulator now synthesizes the documented RetryConfig defaults on the read, so the module case drives the default block and re-plans clean (`fix/gcp-scheduler-retry-config-defaults`). |
 
 ## TF4-3 — Composition pattern: data lake + GKE/Dataproc (2026-11-07)
 

@@ -195,7 +195,7 @@ func checkSchedulerUpdateJob(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 5: PauseJob transitions ENABLED -> PAUSED.
+// Check 5: PauseJob transitions ENABLED -> PAUSED and removes the run state.
 func checkSchedulerPauseJob(ctx context.Context, cfg Config) error {
 	client, err := newSchedulerClient(ctx, cfg)
 	if err != nil {
@@ -207,12 +207,38 @@ func checkSchedulerPauseJob(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	// Fire once so the pause has a recorded attempt to clear.
+	if _, err := client.RunJob(ctx, &schedulerpb.RunJobRequest{Name: created.GetName()}); err != nil {
+		return fmt.Errorf("RunJob: %w", err)
+	}
 	paused, err := client.PauseJob(ctx, &schedulerpb.PauseJobRequest{Name: created.GetName()})
 	if err != nil {
 		return fmt.Errorf("PauseJob: %w", err)
 	}
 	if paused.GetState() != schedulerpb.Job_PAUSED {
 		return fmt.Errorf("PauseJob state = %v, want PAUSED", paused.GetState())
+	}
+	// Real Cloud Scheduler removes the next run on pause and clears the last
+	// attempt, so a paused job answers no scheduleTime/lastAttemptTime/status
+	// (TF2-12-1). Absent means the field is unset.
+	for field, set := range map[string]bool{
+		"scheduleTime":    paused.GetScheduleTime() != nil,
+		"lastAttemptTime": paused.GetLastAttemptTime() != nil,
+		"status":          paused.GetStatus() != nil,
+	} {
+		if set {
+			return fmt.Errorf("PauseJob response still carries %s", field)
+		}
+	}
+	// The stored job reads back the same way.
+	read, err := client.GetJob(ctx, &schedulerpb.GetJobRequest{Name: created.GetName()})
+	if err != nil {
+		return fmt.Errorf("GetJob after pause: %w", err)
+	}
+	if read.GetState() != schedulerpb.Job_PAUSED || read.GetScheduleTime() != nil ||
+		read.GetLastAttemptTime() != nil || read.GetStatus() != nil {
+		return fmt.Errorf("GetJob after pause = %v/%v/%v/%v, want PAUSED with no run state",
+			read.GetState(), read.GetScheduleTime(), read.GetLastAttemptTime(), read.GetStatus())
 	}
 	return nil
 }

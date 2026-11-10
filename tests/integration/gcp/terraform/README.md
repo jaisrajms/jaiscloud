@@ -647,11 +647,11 @@ DELETE the provider guards; that is an upstream module limitation, not an
 emulator gap. Workflow CMEK and resource-level IAM are not implemented
 (README-GCP) and the provider has no workflow IAM resource type.
 
-**scheduler** — the CFT `terraform-google-cloud-scheduler` root module is applied twice: one job with a header-less **HTTP target** (the module's input exposes no `headers` field) and one with a **Pub/Sub target** (the case's root module owns the topic), both on a far-future schedule (`0 0 1 1 *`), `UTC`, and a `retry_config`. The gate:
+**scheduler** — the CFT `terraform-google-cloud-scheduler` root module is applied twice: one job with a header-less **HTTP target** (the module's input exposes no `headers` field) and one with a **Pub/Sub target** (the case's root module owns the topic), both on a far-future schedule (`0 0 1 1 *`), `UTC`, and the module's **default** `retry_config = { retry_count = 0 }`. The gate:
 
-1. `apply`; assert through REST that each GET returns the reference, description, schedule, `timeZone`, `state: ENABLED`, `scheduleTime` and the retry config; the HTTP job also returns `httpTarget.uri`/`httpMethod`/`body` and the **server-filled headers map** (`User-Agent: Google-Cloud-Scheduler`, plus `Content-Type: application/octet-stream` because the job has a body), while the Pub/Sub job returns `pubsubTarget.topicName`/`data`/`attributes`; the apply log must contain no `400`, `501` or `unsupported update_mask`
-2. `plan -detailed-exitcode` → **no changes**
-3. change the schedule, description, retry config, HTTP body and Pub/Sub payload/attributes; `apply`; assert the new values; `plan` → **no changes**
+1. `apply`; assert through REST that each GET returns the reference, description, schedule, `timeZone`, `state: ENABLED`, `scheduleTime` and the retry config — the default block is dropped from the create body by the provider, so the read must carry the synthesized documented defaults (`retryCount` 0, `minBackoffDuration` 5s, `maxBackoffDuration` 3600s, `maxDoublings` 5, `maxRetryDuration` 0s); the HTTP job also returns `httpTarget.uri`/`httpMethod`/`body` and the **server-filled headers map** (`User-Agent: Google-Cloud-Scheduler`, plus `Content-Type: application/octet-stream` because the job has a body), while the Pub/Sub job returns `pubsubTarget.topicName`/`data`/`attributes`; the apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes** (this is the permadiff gate for the default `retry_config`)
+3. change the schedule, description, retry config (to a non-default one, which must be echoed verbatim), HTTP body and Pub/Sub payload/attributes; `apply`; assert the new values; `plan` → **no changes**
 4. pause (`paused = true`): the provider calls `:pause`; assert `state: PAUSED` on both jobs; `plan` → **no changes**
 5. unpause (`paused = false`): the provider calls `:resume`; assert `state: ENABLED` and that `scheduleTime` is present; `plan` → **no changes**
 6. `destroy`; both jobs and the topic are `404`
@@ -664,7 +664,7 @@ diffing), and the emulator now synthesizes them (TF3-4-1,
 
 One boundary is recorded, not worked around:
 
-- The module's default `retry_config = { retry_count = 0 }` is not sent (the provider drops an all-empty block) and the emulator does not synthesize the documented RetryConfig defaults, so that input re-plans `+ retry_config { retry_count = 0 }`; the case creates a non-default retry config and the default synthesis is TF3-4-2 (`fix/gcp-scheduler-retry-config-defaults`).
+- The module's default `retry_config = { retry_count = 0 }` expands to an all-zero block, which the provider drops from the create body. The emulator synthesizes the documented RetryConfig defaults on the read, so the provider's refresh fills `retry_config` and the input converges instead of re-planning `+ retry_config { retry_count = 0 }` forever (TF3-4-2, `fix/gcp-scheduler-retry-config-defaults`). The case drives both shapes: the module default in the first phase and a non-default config in the mutate phase.
 
 **tasks** — the CFT `terraform-google-cloud-tasks` root module is applied with a queue, rate limits, a retry config, a Stackdriver logging config and one queue IAM member (`queue_iam_choice = "iam_member"`). No task is created, so the dispatch engine never runs. The gate:
 
@@ -673,7 +673,7 @@ One boundary is recorded, not worked around:
 3. change a rate limit, a retry limit and the IAM member; `apply`; assert the new values, that the replaced member is gone, and `plan` → **no changes**
 4. `destroy`; the queue is `404`
 
-`rate_limits.max_burst_size` is computed-only in the provider's 6.x schema (7.x made it Optional+Computed), so the module input stays null; the emulator reports `maxBurstSize` 0 when the create body omits it while real Cloud Tasks defaults it to 100 — a recorded reader gap (TF3-4-3, `fix/gcp-tasks-queue-rate-limit-defaults`). `app_engine_routing_override` and the queue-level `http_target` are left null: they are defaults for App Engine/HTTP tasks, and the case creates no task.
+`rate_limits.max_burst_size` is computed-only in the provider's 6.x schema (7.x made it Optional+Computed), so the module input stays null; the create body therefore omits it and the emulator applies the documented Cloud Tasks default, reading back `maxBurstSize` 100 (and `maxConcurrentDispatches` 1000 when that is omitted too) instead of 0. The case asserts the defaulted burst on read-back (TF3-4-3). `app_engine_routing_override` and the queue-level `http_target` are left null: they are defaults for App Engine/HTTP tasks, and the case creates no task.
 
 **dataproc** — the CFT `terraform-google-dataproc` root module is applied with a GCE-shaped `cluster_config` (one master, two workers, `n1-standard-4`, image `2.2-debian12`, labels), and the generated root module submits a pyspark job into the module's cluster. The gate:
 
@@ -691,7 +691,7 @@ The module's `main.tf` unconditionally reads `data.google_compute_default_servic
 3. replace `roles/storage.objectViewer` with `roles/pubsub.viewer`; `apply`; assert the new role holds all three accounts, `roles/viewer` still does, and the replaced role is gone; `plan` → **no changes**
 4. `destroy`; the accounts are `404`
 
-`display_name` is set explicitly: the provider's attribute is Optional (not Computed) while the emulator defaults an omitted `serviceAccount.displayName` to the account id, so an omitted value permadiffs — TF2-14 (`fix/gcp-iam-serviceaccount-display-name`). The module's own default is non-empty, so a real consumer does not hit it. Billing/org IAM (`grant_billing_role`, `grant_xpn_roles`) and key generation are disabled: they are outside the project-scoped surface this case measures.
+`display_name` is set explicitly; the provider's attribute is Optional (not Computed) and the emulator no longer defaults an omitted `serviceAccount.displayName` to the account id (TF2-14, gated by the fixture's `google_service_account.nodesc` and its second plan). The module's own default is non-empty. Billing/org IAM (`grant_billing_role`, `grant_xpn_roles`) and key generation are disabled: they are outside the project-scoped surface this case measures.
 
 **iam** — the `terraform-google-iam` repo is a collection of scope submodules, so the case pins `modules/projects_iam` and drives three of them on one project: project IAM, bucket IAM (one bucket) and Pub/Sub topic IAM (one topic), all in additive mode with multiple members per role. The submodules reference `../helper`; a plain local-path module source makes Terraform treat the submodule directory as the package root and rejects the relative helper path, so the case uses `git::file://<checkout>//modules/<name>?ref=<HEAD>` (offline; the checkout already exists) and presents the whole repo as the package, exactly as the registry does. Every phase runs with `-parallelism=10`. The gate:
 
@@ -895,12 +895,11 @@ Recorded boundaries, not worked around:
   TF4-1-1 (`fix/gcp-serviceusage-unknown-project`); Compute networking is
   outside this stack's scope either way.
 - **KMS objects survive destroy.** The provider never calls the documented
-  `keyRings.delete`/`cryptoKeys.delete` (TF5-3), and
-  `projects.locations.keyRings.delete` is a `501` in the emulator (TF5-4), so
-  the patterns assert the rings are still readable after destroy while every
-  resource the provider does delete is `404`. Neither pattern uses a fixed key
-  ring name for that reason: names carry a per-run suffix (the bootstrap
-  project id is unique per run too).
+  `keyRings.delete`/`cryptoKeys.delete` (TF5-3); both methods are served over REST
+  (TF5-4 added `projects.locations.keyRings.delete`), so the patterns assert the
+  rings are still readable after destroy while every resource the provider does
+  delete is `404`. Neither pattern uses a fixed key ring name for that reason:
+  names carry a per-run suffix (the bootstrap project id is unique per run too).
 - **Secret Manager replication key rotation** is not driven: the provider models
   the `replication` block as ForceNew, so a Terraform change would replace the
   secret. The emulator's PATCH path for that field is covered by the
@@ -912,10 +911,10 @@ Recorded boundaries, not worked around:
   pattern creates the job paused with a far-future cron and fires it with
   `projects.locations.jobs.run`, Cloud Scheduler's documented "force it now"
   call, which goes through the same target dispatcher the cron engine uses.
-  `retry_config` is omitted for the same reason: the provider only sends a
-  non-zero expanded block and the emulator does not synthesize the API's retry
-  defaults on a read yet (TF3-4-2, `fix/gcp-scheduler-retry-config-defaults`),
-  so an explicit zero block would permadiff.
+  `retry_config` is omitted too — not because it would permadiff (the emulator
+  now synthesizes the API's documented retry defaults on a read, TF3-4-2) but
+  because the pattern relies on those defaults; one run is one delivery either
+  way.
 - **Event deliveries are asserted at a local HTTP sink.** `patterns/helpers/echo-sink`
   is a small Go program (`patterns/lib.sh` builds it, so Go is already a
   prerequisite of the driver) that records every request it receives. The push

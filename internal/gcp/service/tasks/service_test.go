@@ -73,6 +73,104 @@ func TestServiceQueueLifecycle(t *testing.T) {
 	}
 }
 
+// TestServiceQueueRateLimitDefaults pins the documented RateLimits defaults
+// (TF3-4-3). RateLimits is proto3 without field presence, so a create whose
+// rateLimits omits a field must read back Cloud Tasks' default for it — not 0 —
+// while a caller-supplied value is echoed. The update cases pin the two mask
+// semantics: `rateLimits` replaces the whole message (so its unset subfields
+// take the defaults), any other mask leaves the stored message alone.
+func TestServiceQueueRateLimitDefaults(t *testing.T) {
+	ctx := context.Background()
+	s := newService()
+	full := func(rate float64, burst, conc int32) tasksstore.RateLimits {
+		return tasksstore.RateLimits{MaxDispatchesPerSecond: rate, MaxBurstSize: burst, MaxConcurrentDispatches: conc}
+	}
+	// want asserts the queue's stored and read-back rate limits.
+	want := func(t *testing.T, id string, exp tasksstore.RateLimits) tasksstore.Queue {
+		t.Helper()
+		got, err := s.GetQueue(ctx, "p", "l", id)
+		if err != nil {
+			t.Fatalf("GetQueue(%s): %v", id, err)
+		}
+		if got.RateLimits == nil || *got.RateLimits != exp {
+			t.Fatalf("queue %s rateLimits = %+v, want %+v", id, got.RateLimits, exp)
+		}
+		return got
+	}
+
+	// Create: rateLimits omitted entirely, and an empty message, both take every
+	// default.
+	if _, err := s.CreateQueue(ctx, "p", "l", tasksstore.Queue{Name: "nil"}); err != nil {
+		t.Fatalf("CreateQueue(no rateLimits): %v", err)
+	}
+	want(t, "nil", full(500, 100, 1000))
+	if _, err := s.CreateQueue(ctx, "p", "l", tasksstore.Queue{Name: "empty", RateLimits: &tasksstore.RateLimits{}}); err != nil {
+		t.Fatalf("CreateQueue(empty rateLimits): %v", err)
+	}
+	want(t, "empty", full(500, 100, 1000))
+
+	// Create: a partial message keeps the supplied value and defaults the rest —
+	// the TF3-4-3 reader gap (maxBurstSize read back 0 where real Cloud Tasks
+	// answers 100).
+	if _, err := s.CreateQueue(ctx, "p", "l", tasksstore.Queue{
+		Name:       "partial",
+		RateLimits: &tasksstore.RateLimits{MaxDispatchesPerSecond: 12},
+	}); err != nil {
+		t.Fatalf("CreateQueue(partial rateLimits): %v", err)
+	}
+	want(t, "partial", full(12, 100, 1000))
+	if _, err := s.CreateQueue(ctx, "p", "l", tasksstore.Queue{
+		Name:       "burst-only",
+		RateLimits: &tasksstore.RateLimits{MaxBurstSize: 7},
+	}); err != nil {
+		t.Fatalf("CreateQueue(burst-only rateLimits): %v", err)
+	}
+	want(t, "burst-only", full(500, 7, 1000))
+
+	// Create: every caller-supplied value is echoed unchanged.
+	supplied := full(20, 7, 9)
+	if _, err := s.CreateQueue(ctx, "p", "l", tasksstore.Queue{Name: "supplied", RateLimits: &supplied}); err != nil {
+		t.Fatalf("CreateQueue(supplied rateLimits): %v", err)
+	}
+	want(t, "supplied", full(20, 7, 9))
+	// The core must not mutate the caller's message through the shared pointer.
+	if supplied != full(20, 7, 9) {
+		t.Fatalf("CreateQueue mutated the caller's rateLimits: %+v", supplied)
+	}
+
+	// Update with a mask that does not name rateLimits preserves the stored
+	// message, defaulted values included.
+	if _, err := s.UpdateQueue(ctx, "p", "l", "partial", tasksstore.Queue{}, []string{"labels"}); err != nil {
+		t.Fatalf("UpdateQueue(labels): %v", err)
+	}
+	want(t, "partial", full(12, 100, 1000))
+
+	// Update that names rateLimits replaces the whole message: the supplied
+	// rate is kept and the omitted subfields take the defaults, exactly as a
+	// create does (they are not inherited from the stored message and not 0).
+	if _, err := s.UpdateQueue(ctx, "p", "l", "partial", tasksstore.Queue{
+		RateLimits: &tasksstore.RateLimits{MaxDispatchesPerSecond: 3},
+	}, []string{"rateLimits"}); err != nil {
+		t.Fatalf("UpdateQueue(rateLimits partial): %v", err)
+	}
+	want(t, "partial", full(3, 100, 1000))
+
+	// A full rateLimits update is echoed as given.
+	if _, err := s.UpdateQueue(ctx, "p", "l", "partial", tasksstore.Queue{
+		RateLimits: &tasksstore.RateLimits{MaxDispatchesPerSecond: 25, MaxBurstSize: 30, MaxConcurrentDispatches: 7},
+	}, []string{"rateLimits"}); err != nil {
+		t.Fatalf("UpdateQueue(rateLimits full): %v", err)
+	}
+	want(t, "partial", full(25, 30, 7))
+
+	// An update mask with no rateLimits at all (empty mask = replace every
+	// mutable field) falls back to the documented defaults.
+	if _, err := s.UpdateQueue(ctx, "p", "l", "supplied", tasksstore.Queue{}, nil); err != nil {
+		t.Fatalf("UpdateQueue(empty mask): %v", err)
+	}
+	want(t, "supplied", full(500, 100, 1000))
+}
+
 func TestServiceListQueuesFilter(t *testing.T) {
 	ctx := context.Background()
 	s := newService()

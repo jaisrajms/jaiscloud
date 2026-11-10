@@ -62,6 +62,14 @@ resource "google_service_account" "compat" {
   display_name = "jaiscloud terraform compat service account"
 }
 
+# display_name is optional and the provider's attribute is not computed: an
+# account created without it must read back without the field, or the second
+# plan reports `display_name = "<account id>" -> null` (TF2-14). The re-plan
+# phase is the assertion; run.sh also checks the raw response omits the field.
+resource "google_service_account" "nodesc" {
+  account_id = "jaiscloud-tf-sa-nodesc"
+}
+
 # ── Secret Manager ────────────────────────────────────────────────────────────
 resource "google_secret_manager_secret" "compat" {
   secret_id = "jaiscloud-tf-secret"
@@ -546,6 +554,10 @@ output "uptime_check_id" {
 
 output "service_account_email" {
   value = google_service_account.compat.email
+}
+
+output "service_account_nodesc_email" {
+  value = google_service_account.nodesc.email
 }
 
 output "secret_id" {

@@ -117,10 +117,11 @@ resource "google_cloud_scheduler_job" "tick" {
     }
   }
 
-  # No retry_config block: the provider only sends a non-zero expanded config,
-  # and the emulator does not yet synthesize the API's retry defaults on a read
-  # (TF3-4-2, `fix/gcp-scheduler-retry-config-defaults`), so an explicit zero
-  # block would be a permadiff. One run is one delivery either way.
+  # No retry_config block: the pattern relies on the API's documented retry
+  # defaults, which the emulator synthesizes on a read (retryCount 0,
+  # minBackoffDuration 5s, maxBackoffDuration 1h, maxDoublings 5; TF3-4-2), so
+  # omitting the block and sending an explicit zero one read back the same.
+  # One run is one delivery either way.
 }
 
 # ── Cloud Storage: the event source ──────────────────────────────────────────
