@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/gcp/resource"
+	core "jaiscloud/internal/gcp/service/scheduler"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
 	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
@@ -251,9 +252,11 @@ func jobToJSON(j schedstore.Job) map[string]any {
 	case schedstore.TargetAppEngine:
 		out["appEngineHttpTarget"] = appEngineTargetToJSON(j.AppEngine)
 	}
-	if j.RetryConfig != nil {
-		out["retryConfig"] = retryToJSON(j.RetryConfig)
-	}
+	// Real Cloud Scheduler always answers a retryConfig; the core resolves the
+	// documented defaults for a job whose create body carried none (or carried
+	// the all-zero block the provider drops), so the read is a stable
+	// retry_config for Terraform (TF3-4-2).
+	out["retryConfig"] = retryToJSON(core.EffectiveRetryConfig(j))
 	if j.AttemptDeadline > 0 {
 		out["attemptDeadline"] = formatDuration(j.AttemptDeadline)
 	}
@@ -365,21 +368,18 @@ func appEngineTargetToJSON(t *schedstore.AppEngineTarget) map[string]any {
 	return out
 }
 
+// retryToJSON renders a RetryConfig. Every field is always present: the core
+// resolves the documented defaults first, and real Cloud Scheduler answers the
+// whole message (including maxRetryDuration "0s" for an unlimited retry
+// duration, which the recorded real-GCP read shows).
 func retryToJSON(rc *schedstore.RetryConfig) map[string]any {
-	out := map[string]any{"retryCount": rc.RetryCount}
-	if rc.MaxDoublings != 0 {
-		out["maxDoublings"] = rc.MaxDoublings
+	return map[string]any{
+		"retryCount":         rc.RetryCount,
+		"maxRetryDuration":   formatDuration(rc.MaxRetryDuration),
+		"minBackoffDuration": formatDuration(rc.MinBackoffDuration),
+		"maxBackoffDuration": formatDuration(rc.MaxBackoffDuration),
+		"maxDoublings":       rc.MaxDoublings,
 	}
-	if rc.MaxRetryDuration > 0 {
-		out["maxRetryDuration"] = formatDuration(rc.MaxRetryDuration)
-	}
-	if rc.MinBackoffDuration > 0 {
-		out["minBackoffDuration"] = formatDuration(rc.MinBackoffDuration)
-	}
-	if rc.MaxBackoffDuration > 0 {
-		out["maxBackoffDuration"] = formatDuration(rc.MaxBackoffDuration)
-	}
-	return out
 }
 
 // formatDuration renders a google.protobuf.Duration JSON value (seconds with a

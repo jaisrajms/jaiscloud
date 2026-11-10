@@ -75,6 +75,78 @@ func TestProviderCRUD(t *testing.T) {
 	}
 }
 
+// TestProviderRetryConfigDefaults pins the REST read of the RetryConfig a job
+// answers when its create body carried none — the shape the Terraform provider
+// produces for `retry_config = { retry_count = 0 }`, whose all-zero block it
+// drops from the create body. The documented defaults (retry_count 0,
+// min_backoff_duration 5s, max_backoff_duration 1h, max_doublings 5,
+// max_retry_duration 0 = unlimited) must come back so the provider's read fills
+// retry_config instead of leaving the block empty (TF3-4-2).
+func TestProviderRetryConfigDefaults(t *testing.T) {
+	ctx := context.Background()
+	p, _ := newProvider(t)
+
+	// No retryConfig in the create body.
+	if _, err := p.CreateJob(ctx, req(map[string]any{"project": "p", "location": "l", "body": jobBody()})); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	resp, err := p.GetJob(ctx, req(map[string]any{"project": "p", "location": "l", "job": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	got, ok := resp.Data["retryConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("retryConfig = %#v, want the documented defaults", resp.Data["retryConfig"])
+	}
+	want := map[string]any{
+		"retryCount":         int32(0),
+		"maxRetryDuration":   "0s",
+		"minBackoffDuration": "5s",
+		"maxBackoffDuration": "3600s",
+		"maxDoublings":       int32(5),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("retryConfig = %#v, want %#v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("retryConfig.%s = %#v, want %#v", k, got[k], v)
+		}
+	}
+
+	// An all-zero retryConfig (the provider's dropped block, if a client sends
+	// it explicitly) reads back the same defaults.
+	body := jobBody()
+	body["name"] = "projects/p/locations/l/jobs/j2"
+	body["retryConfig"] = map[string]any{}
+	created, err := p.CreateJob(ctx, req(map[string]any{"project": "p", "location": "l", "body": body}))
+	if err != nil {
+		t.Fatalf("CreateJob(all-zero retryConfig): %v", err)
+	}
+	if rc, ok := created.Data["retryConfig"].(map[string]any); !ok || rc["minBackoffDuration"] != "5s" {
+		t.Fatalf("all-zero retryConfig read = %#v, want the documented defaults", created.Data["retryConfig"])
+	}
+
+	// A non-default config is echoed verbatim.
+	body["name"] = "projects/p/locations/l/jobs/j3"
+	body["retryConfig"] = map[string]any{
+		"retryCount":         float64(3),
+		"maxDoublings":       float64(2),
+		"minBackoffDuration": "2s",
+		"maxBackoffDuration": "20s",
+		"maxRetryDuration":   "1m",
+	}
+	created, err = p.CreateJob(ctx, req(map[string]any{"project": "p", "location": "l", "body": body}))
+	if err != nil {
+		t.Fatalf("CreateJob(custom retryConfig): %v", err)
+	}
+	rc, ok := created.Data["retryConfig"].(map[string]any)
+	if !ok || rc["retryCount"] != int32(3) || rc["maxDoublings"] != int32(2) ||
+		rc["minBackoffDuration"] != "2s" || rc["maxBackoffDuration"] != "20s" || rc["maxRetryDuration"] != "60s" {
+		t.Fatalf("custom retryConfig read = %#v", created.Data["retryConfig"])
+	}
+}
+
 func TestProviderListPagination(t *testing.T) {
 	ctx := context.Background()
 	p, c := newProvider(t)

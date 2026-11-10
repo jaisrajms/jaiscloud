@@ -25,14 +25,21 @@
 #
 # The gate proves the lifecycle converges without the cron engine firing:
 #
-#   apply (two enabled jobs, far-future schedules, retry config)
+#   apply (two enabled jobs, far-future schedules, the module's default
+#   `retry_config = { retry_count = 0 }`)
 #     -> the provider's create issues POST then :resume on the already-ENABLED
 #        job, which real Cloud Scheduler answers 200 and the emulator now does
 #        too (TF2-12)
+#     -> the provider drops the all-zero retry_config block from the create
+#        body; the emulator synthesizes the documented RetryConfig defaults on
+#        the read (retry_count 0, min_backoff_duration 5s, max_backoff_duration
+#        1h, max_doublings 5, max_retry_duration 0 = unlimited), so the read
+#        fills retry_config instead of leaving it out (TF3-4-2)
 #     -> REST asserts (name, description, schedule, timeZone, state ENABLED,
-#        scheduleTime, retryConfig, the HTTP target with the synthesized
-#        headers, the Pub/Sub target topic/data/attributes)
-#   plan -detailed-exitcode -> No changes
+#        scheduleTime, the synthesized retryConfig, the HTTP target with the
+#        synthesized headers, the Pub/Sub target topic/data/attributes)
+#   plan -detailed-exitcode -> No changes (the default retry_config must not
+#     re-plan `+ retry_config { retry_count = 0 }`)
 #   mutate (schedule, description, retryConfig, HTTP body, Pub/Sub payload)
 #     -> apply -> REST asserts -> No changes
 #   pause (paused = true) -> the provider calls :pause -> both jobs PAUSED, with
@@ -61,12 +68,13 @@
 #    module's own conditional); the provider's `EmptyOrDefaultStringSuppress`
 #    keeps the 180s server default out of the plan. The HTTP instance uses the
 #    module default (15s), inside the documented 15s..30m HTTP window.
-#  * The module's default `retry_config = { retry_count = 0 }` is not sent: the
-#    provider drops an all-empty block and the emulator does not synthesize the
-#    documented RetryConfig defaults, so that input re-plans
-#    `+ retry_config { retry_count = 0 }`. The case creates a non-default retry
-#    config; default synthesis is TF3-4-2
-#    (`fix/gcp-scheduler-retry-config-defaults`).
+#  * The module's default `retry_config = { retry_count = 0 }` expands to an
+#    all-zero block, which the provider drops from the create body. The
+#    emulator synthesizes the documented RetryConfig defaults on the read
+#    (TF3-4-2), so the read fills `retry_config` and that input no longer
+#    re-plans; the case drives the module default in the first phase (and
+#    asserts the synthesized values over REST) before mutating to a non-default
+#    config, which must be echoed verbatim.
 #  * `paused` is a provider-local attribute: Cloud Scheduler's Job resource has
 #    no such field (Discovery), the provider deletes it from every request body
 #    and maps it onto the `:pause`/`:resume` methods.
@@ -235,10 +243,14 @@ case_main() {
   local body
 
   write_module '"jaiscloud terraform scheduler case"' '"0 0 1 1 *"' false \
-    '{ retry_count = 1 }' \
+    '{ retry_count = 0 }' \
     '"c2NoZWR1bGVyLXBheWxvYWQtdjE="' \
     '{ source = "jaiscloud" }' \
     "\"$HTTP_BODY_V1\"" # base64("scheduler-payload-v1")
+  # `{ retry_count = 0 }` is the module's default retry_config: the provider
+  # drops the all-zero block from the create body, the emulator synthesizes the
+  # documented RetryConfig defaults on the read, and the plan must still be
+  # empty (TF3-4-2).
   init_phase
   plan_phase "plan (module scheduler jobs)"
   apply_phase "apply (module scheduler jobs)"
@@ -270,6 +282,25 @@ case_main() {
     '"data":"c2NoZWR1bGVyLXBheWxvYWQtdjE="' \
     '"attributes":{"source":"jaiscloud"}'
   check_body "the target topic exists" "$(topic_url)" "\"name\":\"projects/$PROJECT/topics/$TOPIC\""
+  # The module default retry_config is dropped from the create body by the
+  # provider; the emulator answers the documented RetryConfig defaults so the
+  # provider's read fills retry_config (TF3-4-2). Both jobs go through the same
+  # core, so one assertion per target shape is enough, but both are checked to
+  # prove neither transport/target path drops the synthesized message.
+  check_body "the HTTP job reads back the synthesized retryConfig defaults" "$(job_url "$JOB_HTTP")" \
+    '"retryConfig"' \
+    '"retryCount":0' \
+    '"maxDoublings":5' \
+    '"minBackoffDuration":"5s"' \
+    '"maxBackoffDuration":"3600s"' \
+    '"maxRetryDuration":"0s"'
+  check_body "the pub/sub job reads back the synthesized retryConfig defaults" "$(job_url "$JOB_PUBSUB")" \
+    '"retryConfig"' \
+    '"retryCount":0' \
+    '"maxDoublings":5' \
+    '"minBackoffDuration":"5s"' \
+    '"maxBackoffDuration":"3600s"' \
+    '"maxRetryDuration":"0s"'
 
   echo "== $TF: second plan (permadiff check)"
   plan_no_changes "re-plan reports no changes"
