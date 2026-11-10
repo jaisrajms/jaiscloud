@@ -1084,13 +1084,28 @@ make test-gcp-terraform-corpus  # start the emulator, plan 5/service, run the ap
 
 A block that declares any resource type outside the TF1 served set is
 `excluded` with `unsupported-service: …`, so an unserved subsystem never
-becomes a case. `docs-samples` scenarios are recorded as `excluded` with a
-deferred reason: they are multi-service stacks and running them is a follow-up.
+becomes a case.
+
+`docs-samples` scenarios are runnable cases too (TF2-9): a scenario directory
+whose declared resource types are all served becomes a `candidate` plan case,
+and the per-service plan cap applies per corpus source, so the samples subset
+never crowds the provider-docs cases out of the triage. A scenario's `service`
+is its top directory's dominant service (`cloud_sql/*` -> `cloudsql`,
+`gke/*` -> `container`) rather than its first declared type, which is usually a
+prerequisite (`google_project_service`, `google_compute_network`). Scenarios
+that publish HCL for `google-beta`, need another provider (`kubernetes_*`,
+`archive_*`, ...) or touch an unserved type stay `excluded` with the same
+reasons the provider-docs blocks use.
+
+A scenario is assembled from its own directory: every `.tf` file is concatenated
+into the generated root module and its non-`.tf` siblings (a script read with
+`file()`) are copied next to it, so the case is evaluated as published.
 
 Some published examples use the client-side `hashicorp/random` and
 `hashicorp/time` providers for name uniqueness and waits; the generated module
-pins them (`= 3.9.1`, `= 0.14.2`). A block that needs any other non-google
-resource (e.g. `kubernetes_secret`) is `excluded` as `helper-provider: …`.
+pins them (`= 3.9.1`, `= 0.14.2`). A block or scenario that needs any other
+non-google resource (e.g. `kubernetes_secret`) is `excluded` as
+`helper-provider: …`.
 
 For a fast offline loop, point `TF_CLI_CONFIG_FILE` at a Terraform CLI config
 whose `provider_installation` is a `filesystem_mirror` over the plugin cache and
@@ -1113,8 +1128,13 @@ the provider over the network (~1 minute per case instead of ~0.1s).
   because their published examples cannot complete the destroy half (TF2-15,
   TF2-18), while the fixture and module gates already apply those services.
 
-The committed report is a 5-examples-per-service smoke (`-max-per-service 5`);
-run the whole in-scope corpus with `TF_CORPUS_MAX_PER_SERVICE=0`.
+The committed report's provider-docs section is a 5-examples-per-service smoke
+(`-max-per-service 5`); its docs-samples section is the full runnable set (194
+scenarios). Run the whole in-scope corpus with `TF_CORPUS_MAX_PER_SERVICE=0`.
+`-source provider-docs` (or `docs-samples`) narrows a run to one corpus; a run
+that selects one source refreshes only that source's section of the committed
+report. A filtered or capped run merges its cases into the report by name; add
+`-report-reset` to replace the whole section instead.
 
 ### Endpoint map
 
@@ -1128,5 +1148,5 @@ for every generated case. Print the user-facing block with:
 make gcp-terraform-endpoints
 ```
 
-`make test-gcp-terraform-corpus` SKIPs when `TF_PROVIDER_DOCS` is unset; set
-`STRICT=1` to make a SKIP fatal.
+`make test-gcp-terraform-corpus` SKIPs when `TF_PROVIDER_DOCS` (or, for the
+samples half, `TF_SAMPLES_DIR`) is unset; set `STRICT=1` to make a SKIP fatal.

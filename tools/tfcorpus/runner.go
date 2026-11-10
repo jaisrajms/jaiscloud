@@ -78,8 +78,14 @@ func NewRunner(tf, endpoint, project, region, providerVersion string, ep *Endpoi
 func (r *Runner) caseBody(c ManifestCase) (string, error) {
 	switch c.Source {
 	case "provider-docs":
+		if r.ProviderDocs == "" {
+			return "", fmt.Errorf("TF_PROVIDER_DOCS is not set but %s is a provider-docs case", c.Name)
+		}
 		return DocBlock(r.ProviderDocs, c.File, c.Block)
 	case "docs-samples":
+		if r.SamplesDir == "" {
+			return "", fmt.Errorf("TF_SAMPLES_DIR is not set but %s is a docs-samples case", c.Name)
+		}
 		dir := filepath.Dir(filepath.FromSlash(c.File))
 		files, err := SampleFiles(r.SamplesDir, filepath.ToSlash(dir))
 		if err != nil {
@@ -251,7 +257,36 @@ func (r *Runner) prepare(c ManifestCase) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(hcl), 0o644); err != nil {
 		return "", err
 	}
+	// A published scenario may read a sibling file (`file("script.sh")`) or
+	// feed it to a client-side helper. Copy those next to the generated module
+	// so the scenario is evaluated exactly as published; only *.tf is rewritten.
+	if c.Source == "docs-samples" && r.SamplesDir != "" {
+		if err := copySampleAux(r.SamplesDir, filepath.ToSlash(filepath.Dir(filepath.FromSlash(c.File))), dir); err != nil {
+			return "", err
+		}
+	}
 	return dir, nil
+}
+
+// copySampleAux copies a scenario's non-.tf files into the work directory.
+func copySampleAux(root, rel, dest string) error {
+	entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), ".tf") || strings.HasSuffix(e.Name(), ".tfstate") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel), e.Name()))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dest, e.Name()), raw, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Runner) cleanup(dir string) {

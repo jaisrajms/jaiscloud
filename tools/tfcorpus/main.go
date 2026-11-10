@@ -1,11 +1,12 @@
 // Command tfcorpus builds and triages the Terraform web corpora (wave plan
 // TF2).
 //
-//	# extract the candidate manifest from a pinned provider-docs checkout
+//	# extract the candidate manifest from local corpus checkouts
 //	tfcorpus -discover
 //
 //	# plan-only triage of the candidates against a running emulator
 //	tfcorpus -run -max-per-service 5
+//	tfcorpus -run -source docs-samples -max-per-service 5
 //
 //	# curated allowlist: apply -> assert -> plan No changes -> destroy
 //	tfcorpus -apply
@@ -16,8 +17,9 @@
 //	tfcorpus -emit-tfvars /tmp/endpoints.auto.tfvars.json
 //
 // Corpora are never vendored or cloned by a gate: point TF_PROVIDER_DOCS and
-// TF_SAMPLES_DIR at local checkouts and the tool reads them; without a checkout
-// it reports what is missing (the Makefile target then SKIPs).
+// TF_SAMPLES_DIR at local checkouts and the tool reads them; a selected case
+// whose checkout is missing fails before the first case runs (the Makefile
+// target SKIPs instead).
 package main
 
 import (
@@ -68,11 +70,13 @@ func run(args []string) error {
 	region := fs.String("region", firstNonEmpty(os.Getenv("TF_REGION"), "us-central1"), "default region")
 	tfBin := fs.String("tf-bin", firstNonEmpty(os.Getenv("TF_BIN"), "terraform"), "terraform or tofu binary")
 
-	maxPerService := fs.Int("max-per-service", 0, "cap planned cases per service (0 = all)")
+	maxPerService := fs.Int("max-per-service", 0, "cap planned cases per service and corpus source (0 = all)")
 	parallel := fs.Int("parallel", 4, "concurrent plan-only workers (apply is always sequential)")
 	serviceFilter := fs.String("service", "", "comma-separated service filter")
+	sourceFilter := fs.String("source", "", "comma-separated corpus source filter (provider-docs,docs-samples)")
 	caseFilter := fs.String("case", "", "case name substring filter")
 	keep := fs.Bool("keep", false, "keep the generated work directories")
+	resetReport := fs.Bool("report-reset", false, "replace the selected corpus sources' previous plan results instead of merging them")
 	pluginDir := fs.String("plugin-dir", os.Getenv("TF_PLUGIN_DIR"), "flat provider plugin dir passed to terraform init")
 	pluginCache := fs.String("plugin-cache", os.Getenv("TF_PLUGIN_CACHE_DIR"), "TF_PLUGIN_CACHE_DIR for terraform init")
 
@@ -146,12 +150,12 @@ func run(args []string) error {
 	zeroExample := servicesWithoutCandidates(manifest, coverage)
 
 	if *runFlag {
-		if *providerDocs == "" {
-			return fmt.Errorf("TF_PROVIDER_DOCS is not set; point it at a terraform-provider-google checkout")
-		}
-		cases := selectPlanCases(manifest, *maxPerService, *serviceFilter, *caseFilter)
+		cases := selectPlanCases(manifest, *maxPerService, *serviceFilter, *caseFilter, *sourceFilter)
 		if len(cases) == 0 {
 			return fmt.Errorf("no plan cases selected (manifest %s)", *manifestPath)
+		}
+		if err := requireCorpora(cases, *providerDocs, *samplesDir); err != nil {
+			return err
 		}
 		runner := NewRunner(*tfBin, *endpoint, *project, *region, manifest.ProviderVersion, ep)
 		runner.ProviderDocs = *providerDocs
@@ -203,7 +207,13 @@ func run(args []string) error {
 			}
 		}
 		fmt.Printf("tfcorpus: planned %d cases (%d had setup/panic errors)\n", len(results), bad)
-		if err := writeReport(manifest, runner, *reportPath, *reportJSON, *endpoint, *project, zeroExample, nil, results); err != nil {
+		replace := replacedSources(results, *serviceFilter, *caseFilter, *maxPerService == 0)
+		if *resetReport {
+			for _, res := range results {
+				replace[res.Source] = true
+			}
+		}
+		if err := writeReport(manifest, runner, *reportPath, *reportJSON, *endpoint, *project, zeroExample, nil, results, replace); err != nil {
 			return err
 		}
 		if bad > 0 {
@@ -213,9 +223,12 @@ func run(args []string) error {
 	}
 
 	// -apply
-	cases := selectApplyCases(manifest, *serviceFilter, *caseFilter)
+	cases := selectApplyCases(manifest, *serviceFilter, *caseFilter, *sourceFilter)
 	if len(cases) == 0 {
 		return fmt.Errorf("no apply cases selected (mark curated manifest cases mode: apply)")
+	}
+	if err := requireCorpora(cases, *providerDocs, *samplesDir); err != nil {
+		return err
 	}
 	runner := NewRunner(*tfBin, *endpoint, *project, *region, manifest.ProviderVersion, ep)
 	runner.ProviderDocs = *providerDocs
@@ -234,7 +247,8 @@ func run(args []string) error {
 		}
 	}
 	fmt.Printf("tfcorpus: applied %d cases (%d failed)\n", len(results), failed)
-	if err := writeReport(manifest, runner, *reportPath, *reportJSON, *endpoint, *project, zeroExample, results, nil); err != nil {
+	if err := writeReport(manifest, runner, *reportPath, *reportJSON, *endpoint, *project, zeroExample, results, nil,
+		replacedSources(results, *serviceFilter, *caseFilter, true)); err != nil {
 		return err
 	}
 	if failed > 0 {
@@ -261,8 +275,9 @@ func discover(manifestPath, coveragePath, providerDocs, samplesDir, providerVers
 	}
 	corpora := []CorpusRef{corpusRef("provider-docs", "hashicorp/terraform-provider-google", providerDocs, "website/docs/r")}
 	all := docs
+	pinned := firstNonEmpty(providerVersion, old.ProviderVersion)
 	if samplesDir != "" {
-		samples, err := DiscoverSamples(samplesDir, coverage)
+		samples, err := DiscoverSamples(samplesDir, coverage, pinned)
 		if err != nil {
 			return err
 		}
@@ -284,7 +299,16 @@ func discover(manifestPath, coveragePath, providerDocs, samplesDir, providerVers
 	fmt.Printf("tfcorpus: discovered %d docs (%d fenced blocks, %d resource blocks: %d in scope, %d excluded)\n",
 		stats.Docs, stats.FencedBlocks, stats.ResourceBlocks, stats.InScope, stats.Excluded)
 	if samplesDir != "" {
-		fmt.Printf("tfcorpus: %d sample scenarios recorded as deferred\n", len(all)-len(docs))
+		runnable, excluded := 0, 0
+		for _, c := range all[len(docs):] {
+			if c.Status == StatusCandidate {
+				runnable++
+			} else {
+				excluded++
+			}
+		}
+		fmt.Printf("tfcorpus: %d sample scenarios recorded (%d runnable, %d excluded)\n",
+			len(all)-len(docs), runnable, excluded)
 	}
 	fmt.Printf("tfcorpus: wrote %s (%d cases)\n", manifestPath, len(m.Cases))
 	return nil
@@ -308,17 +332,23 @@ func corpusRef(name, repo, root, path string) CorpusRef {
 	return ref
 }
 
-// selectPlanCases picks candidate plan cases, filtered and capped per service.
-// Within a service, non-IAM examples come first: an *_iam_* resource is a
-// weaker example of the service's provisioning surface.
-func selectPlanCases(m *Manifest, maxPerService int, serviceFilter, caseFilter string) []ManifestCase {
+// selectPlanCases picks candidate plan cases, filtered and capped per service
+// and corpus source. Within a service, non-IAM examples come first: an
+// `*_iam_*` resource is a weaker example of the service's provisioning
+// surface. The cap is per source so a docs-samples subset never crowds the
+// provider-docs cases out of the triage.
+func selectPlanCases(m *Manifest, maxPerService int, serviceFilter, caseFilter, sourceFilter string) []ManifestCase {
 	want := csvSet(serviceFilter)
+	wantSource := csvSet(sourceFilter)
 	var selected []ManifestCase
 	for _, c := range m.Cases {
 		if c.Status != StatusCandidate || c.Mode != ModePlan {
 			continue
 		}
 		if len(want) > 0 && !want[c.Service] {
+			continue
+		}
+		if len(wantSource) > 0 && !wantSource[c.Source] {
 			continue
 		}
 		if caseFilter != "" && !strings.Contains(c.Name, caseFilter) {
@@ -331,6 +361,9 @@ func selectPlanCases(m *Manifest, maxPerService int, serviceFilter, caseFilter s
 		if a.Service != b.Service {
 			return a.Service < b.Service
 		}
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
 		ai, bi := isIAMCase(a), isIAMCase(b)
 		if ai != bi {
 			return !ai
@@ -341,10 +374,11 @@ func selectPlanCases(m *Manifest, maxPerService int, serviceFilter, caseFilter s
 		count := map[string]int{}
 		kept := selected[:0]
 		for _, c := range selected {
-			if count[c.Service] >= maxPerService {
+			key := c.Source + "\x00" + c.Service
+			if count[key] >= maxPerService {
 				continue
 			}
-			count[c.Service]++
+			count[key]++
 			kept = append(kept, c)
 		}
 		selected = kept
@@ -352,14 +386,18 @@ func selectPlanCases(m *Manifest, maxPerService int, serviceFilter, caseFilter s
 	return selected
 }
 
-func selectApplyCases(m *Manifest, serviceFilter, caseFilter string) []ManifestCase {
+func selectApplyCases(m *Manifest, serviceFilter, caseFilter, sourceFilter string) []ManifestCase {
 	want := csvSet(serviceFilter)
+	wantSource := csvSet(sourceFilter)
 	var out []ManifestCase
 	for _, c := range m.Cases {
 		if c.Status != StatusCandidate || c.Mode != ModeApply {
 			continue
 		}
 		if len(want) > 0 && !want[c.Service] {
+			continue
+		}
+		if len(wantSource) > 0 && !wantSource[c.Source] {
 			continue
 		}
 		if caseFilter != "" && !strings.Contains(c.Name, caseFilter) {
@@ -369,6 +407,26 @@ func selectApplyCases(m *Manifest, serviceFilter, caseFilter string) []ManifestC
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// requireCorpora fails before the first case runs when a selected case's
+// corpus checkout was not provided, naming the variable that unblocks it.
+func requireCorpora(cases []ManifestCase, providerDocs, samplesDir string) error {
+	need := map[string]bool{}
+	for _, c := range cases {
+		need[c.Source] = true
+	}
+	var missing []string
+	if need["provider-docs"] && providerDocs == "" {
+		missing = append(missing, "TF_PROVIDER_DOCS (terraform-provider-google checkout)")
+	}
+	if need["docs-samples"] && samplesDir == "" {
+		missing = append(missing, "TF_SAMPLES_DIR (terraform-docs-samples checkout)")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("selected cases need a corpus checkout: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func isIAMCase(c ManifestCase) bool {
@@ -465,15 +523,22 @@ func servicesWithoutCandidates(m *Manifest, coverage map[string]CoverageRow) []s
 	return out
 }
 
-func writeReport(m *Manifest, r *Runner, mdPath, jsonPath, endpoint, project string, zeroExample []string, apply, plan []CaseResult) error {
+func writeReport(m *Manifest, r *Runner, mdPath, jsonPath, endpoint, project string, zeroExample []string, apply, plan []CaseResult, replace map[string]bool) error {
 	tfVersion := terraformVersion(r.TF)
 	old := LoadReport(jsonPath)
 	if old != nil {
+		// A run that only selected one corpus source refreshes that source's
+		// results and keeps the other's, so the committed report always covers
+		// both corpora.
 		if plan == nil {
 			plan = old.Plan
+		} else {
+			plan = mergeResults(plan, old.Plan, replace)
 		}
 		if apply == nil {
 			apply = old.Apply
+		} else {
+			apply = mergeResults(apply, old.Apply, replace)
 		}
 	}
 	rep := BuildReport(m, tfVersion, endpoint, project, plan, apply, zeroExample)
@@ -481,6 +546,38 @@ func writeReport(m *Manifest, r *Runner, mdPath, jsonPath, endpoint, project str
 		return err
 	}
 	return rep.WriteMarkdown(mdPath)
+}
+
+// replacedSources marks the corpus sources a run covered exhaustively: no
+// service/case filter and no per-service cap. Only those replace the previous
+// results; a filtered or capped run merges by case so running one case does
+// not erase the rest of the committed report.
+func replacedSources(results []CaseResult, serviceFilter, caseFilter string, uncapped bool) map[string]bool {
+	out := map[string]bool{}
+	if serviceFilter != "" || caseFilter != "" || !uncapped {
+		return out
+	}
+	for _, r := range results {
+		out[r.Source] = true
+	}
+	return out
+}
+
+// mergeResults keeps the previous results a run did not cover: all of a source
+// the run skipped, and the cases of a source it covered partially.
+func mergeResults(fresh, old []CaseResult, replace map[string]bool) []CaseResult {
+	seen := map[string]bool{}
+	for _, r := range fresh {
+		seen[r.Name] = true
+	}
+	out := append([]CaseResult{}, fresh...)
+	for _, r := range old {
+		if replace[r.Source] || seen[r.Name] {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func terraformVersion(tf string) string {

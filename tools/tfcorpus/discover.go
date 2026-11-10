@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -112,10 +113,22 @@ func DiscoverDocs(root string, coverage map[string]CoverageRow) ([]ManifestCase,
 	return cases, stats, nil
 }
 
-// DiscoverSamples records the scenario samples as classified-but-deferred
-// cases (the follow-up row TF2-x owns running them).
-func DiscoverSamples(root string, coverage map[string]CoverageRow) ([]ManifestCase, error) {
+// DiscoverSamples turns the terraform-docs-samples scenarios into manifest
+// cases. A scenario directory is runnable when every declared resource type is
+// served, every data source it reads is served (or computed locally), it needs
+// no helper provider and it does not demand a provider newer than the pinned
+// one; those become candidate plan cases. The rest are recorded as excluded with
+// the reason (TF2-9).
+//
+// A scenario's service is its *scenario group's* dominant service (the top
+// directory, e.g. cloud_sql -> cloudsql) rather than its first declared type:
+// samples commonly declare a prerequisite from another service first
+// (google_project_service, google_compute_network), which would otherwise file
+// a Cloud SQL scenario under serviceusage or compute and skew both the
+// per-service cap and the triage report.
+func DiscoverSamples(root string, coverage map[string]CoverageRow, pinnedProvider string) ([]ManifestCase, error) {
 	dirs := map[string][]string{}
+	typesByDir := map[string][]string{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -147,40 +160,321 @@ func DiscoverSamples(root string, coverage map[string]CoverageRow) ([]ManifestCa
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	cases := make([]ManifestCase, 0, len(names))
+
+	// First pass: read every scenario once, keeping the body for the
+	// classification below.
+	bodies := make(map[string]string, len(names))
 	for _, name := range names {
+		var b strings.Builder
 		var types []string
 		for _, f := range dirs[name] {
 			raw, err := os.ReadFile(f)
 			if err != nil {
 				return nil, err
 			}
+			b.Write(raw)
+			b.WriteString("\n")
 			types = append(types, resourceTypes(string(raw))...)
 		}
 		types = dedupe(types)
 		if len(types) == 0 {
 			continue
 		}
+		bodies[name] = b.String()
+		typesByDir[name] = types
+	}
+	services := sampleServices(typesByDir, coverage)
+
+	cases := make([]ManifestCase, 0, len(bodies))
+	for _, name := range names {
+		body, ok := bodies[name]
+		if !ok {
+			continue
+		}
+		types := typesByDir[name]
 		c := ManifestCase{
 			Name:          name,
 			Source:        "docs-samples",
 			File:          filepath.ToSlash(filepath.Join(name, "main.tf")),
 			ResourceTypes: types,
+			Service:       services[name],
 			Mode:          ModePlan,
-			Status:        StatusExcluded,
-		}
-		if row, ok := coverage[types[0]]; ok {
-			c.Service = row.Service
+			Status:        StatusCandidate,
 		}
 		_, missing := outOfScope(types, coverage)
-		if len(missing) > 0 {
+		missingData := unroutableDataSources(body, coverage)
+		helpers := helperProviders(body)
+		newer := futureProviderRequirement(body, pinnedProvider)
+		switch {
+		case newer != "":
+			c.Status = StatusExcluded
+			c.Reason = "provider-version: sample requires hashicorp/google " + newer + " (corpus pins " + pinnedProvider + ")"
+		case strings.Contains(body, "google-beta"):
+			c.Status = StatusExcluded
+			c.Reason = "beta-provider: sample is written for hashicorp/google-beta"
+		case len(helpers) > 0:
+			c.Status = StatusExcluded
+			c.Reason = "helper-provider: " + strings.Join(helpers, ", ")
+		case len(missing) > 0:
+			c.Status = StatusExcluded
 			c.Reason = "unsupported-service: " + strings.Join(missing, ", ")
-		} else {
-			c.Reason = "sample scenario; plan-run deferred to a follow-up session (TF2-x)"
+		case len(missingData) > 0:
+			c.Status = StatusExcluded
+			c.Reason = "unsupported-service (data source): " + strings.Join(missingData, ", ")
 		}
 		cases = append(cases, c)
 	}
 	return cases, nil
+}
+
+// sampleServices assigns each scenario the dominant service of its scenario
+// group (the first path segment). Groups whose scenarios share no served
+// resource keep the first declared type's service, which is what discovery
+// used before TF2-9.
+func sampleServices(typesByDir map[string][]string, coverage map[string]CoverageRow) map[string]string {
+	groups := map[string]map[string]int{}
+	for name, types := range typesByDir {
+		group := sampleGroup(name)
+		counts := groups[group]
+		if counts == nil {
+			counts = map[string]int{}
+			groups[group] = counts
+		}
+		for _, t := range types {
+			if row, ok := coverage[t]; ok && row.Service != "" {
+				counts[row.Service]++
+			}
+		}
+	}
+	dominant := map[string]string{}
+	for group, counts := range groups {
+		best, bestCount := "", -1
+		for svc, n := range counts {
+			// Highest count wins; the name breaks a tie so a re-discovery
+			// writes the same manifest.
+			if n > bestCount || (n == bestCount && svc < best) {
+				best, bestCount = svc, n
+			}
+		}
+		dominant[group] = best
+	}
+	out := map[string]string{}
+	for name, types := range typesByDir {
+		out[name] = dominant[sampleGroup(name)]
+		if out[name] == "" {
+			for _, t := range types {
+				if row, ok := coverage[t]; ok {
+					out[name] = row.Service
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// sampleGroup is the top directory of a scenario ("gke" for
+// "gke/standard/regional/loadbalancer").
+func sampleGroup(name string) string {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i]
+	}
+	return name
+}
+
+// clientSideDataSources are computed by the provider from their arguments and
+// never reach a Google API, so they are not a coverage gap.
+var clientSideDataSources = map[string]bool{
+	"google_iam_policy":             true,
+	"google_client_config":          true,
+	"google_client_openid_userinfo": true,
+}
+
+// unroutableDataSources lists the data sources a scenario reads that the
+// coverage inventory does not serve. A read is a plan-time API call: an
+// unserved one does not answer 501 like an unserved resource hook would (the
+// provider falls back to its default host and talks to real GCP), so a
+// scenario that reads it is not a case the emulator can run. Data sources are
+// matched by the longest provider-resource prefix the inventory serves
+// (google_storage_project_service_account -> google_storage_*).
+func unroutableDataSources(body string, coverage map[string]CoverageRow) []string {
+	served := servedResourcePrefixes(coverage)
+	var missing []string
+	for _, t := range dataSourceTypes(body) {
+		if clientSideDataSources[t] {
+			continue
+		}
+		if row, ok := coverage[t]; ok {
+			if row.Classification == "served" {
+				continue
+			}
+			missing = append(missing, t)
+			continue
+		}
+		if servedByPrefix(t, served) {
+			continue
+		}
+		missing = append(missing, t)
+	}
+	return missing
+}
+
+// servedResourcePrefixes is every underscore-boundary prefix of a served
+// provider resource type, so a data source can be matched to its service family.
+func servedResourcePrefixes(coverage map[string]CoverageRow) map[string]bool {
+	out := map[string]bool{}
+	for name, row := range coverage {
+		if row.Classification != "served" {
+			continue
+		}
+		parts := strings.Split(name, "_")
+		for i := 2; i <= len(parts); i++ {
+			out[strings.Join(parts[:i], "_")] = true
+		}
+	}
+	return out
+}
+
+func servedByPrefix(t string, served map[string]bool) bool {
+	parts := strings.Split(t, "_")
+	for i := len(parts); i >= 2; i-- {
+		if served[strings.Join(parts[:i], "_")] {
+			return true
+		}
+	}
+	return false
+}
+
+// futureProviderRequirement returns the sample's own minimum hashicorp/google
+// version when it is above the pinned one ("" otherwise). A published scenario
+// may be written for a newer provider whose schema the pinned version does not
+// have; that is a corpus boundary, not an emulator gap.
+func futureProviderRequirement(body, pinned string) string {
+	if pinned == "" {
+		return ""
+	}
+	pinnedV, ok := parseVersion(pinned)
+	if !ok {
+		return ""
+	}
+	for _, block := range requiredProviderBlocks(body) {
+		for _, inner := range googleProviderBlocks(block) {
+			if strings.Contains(inner, "source") && !strings.Contains(inner, `"hashicorp/google"`) {
+				continue
+			}
+			for _, m := range versionRe.FindAllStringSubmatch(inner, -1) {
+				for _, constraint := range strings.Split(m[1], ",") {
+					constraint = strings.TrimSpace(constraint)
+					min, ok := constraintMinimum(constraint)
+					if !ok {
+						continue
+					}
+					if compareVersions(min, pinnedV) > 0 {
+						return constraint
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// googleProviderBlocks returns the `google = { ... }` bodies inside a
+// required_providers block (not google-beta, not another provider's version).
+func googleProviderBlocks(block string) []string {
+	var out []string
+	for _, loc := range googleProviderAttrRe.FindAllStringIndex(block, -1) {
+		open := strings.IndexByte(block[loc[0]:], '{')
+		if open < 0 {
+			continue
+		}
+		inner, _ := braceBlock(block, loc[0]+open)
+		out = append(out, inner)
+	}
+	return out
+}
+
+// requiredProviderBlocks returns the bodies of every required_providers block,
+// brace-matched so a nested provider block does not truncate it.
+func requiredProviderBlocks(body string) []string {
+	var out []string
+	for i := 0; ; {
+		j := strings.Index(body[i:], "required_providers")
+		if j < 0 {
+			return out
+		}
+		start := i + j
+		open := strings.IndexByte(body[start:], '{')
+		if open < 0 {
+			return out
+		}
+		inner, end := braceBlock(body, start+open)
+		out = append(out, inner)
+		i = end
+	}
+}
+
+// braceBlock returns the text inside the brace at open and the index just past
+// its matching close.
+func braceBlock(s string, open int) (string, int) {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[open+1 : i], i + 1
+			}
+		}
+	}
+	return s[open+1:], len(s)
+}
+
+var (
+	versionRe            = regexp.MustCompile(`version\s*=\s*"([^"]+)"`)
+	googleProviderAttrRe = regexp.MustCompile(`(?m)^[ \t]*google[ \t]*=[ \t]*\{`)
+)
+
+// constraintMinimum is the lower bound a version constraint implies.
+func constraintMinimum(constraint string) ([3]int, bool) {
+	var zero [3]int
+	for _, op := range []string{">=", "=", "~>"} {
+		if strings.HasPrefix(constraint, op) {
+			return parseVersion(strings.TrimSpace(strings.TrimPrefix(constraint, op)))
+		}
+	}
+	return zero, false
+}
+
+func parseVersion(s string) ([3]int, bool) {
+	var v [3]int
+	parts := strings.Split(strings.TrimSpace(s), ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return v, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return v, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+// compareVersions compares the numeric major.minor.patch triples.
+func compareVersions(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 // outOfScope returns the declared resource types the TF1 inventory does not

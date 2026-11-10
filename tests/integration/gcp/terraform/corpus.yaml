@@ -1876,7 +1876,7 @@ cases:
     resource_types:
       - google_integrations_client
       - google_integrations_auth_config
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_integrations_client, google_integrations_auth_config'
@@ -2377,10 +2377,10 @@ cases:
     resource_types:
       - google_backup_dr_backup_vault
       - google_backup_dr_backup_plan
-    service: ""
+    service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_backup_dr_backup_vault, google_backup_dr_backup_plan'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: backupdr/backup_plan_association
     source: docs-samples
     file: backupdr/backup_plan_association/main.tf
@@ -2392,19 +2392,19 @@ cases:
       - google_backup_dr_backup_vault
       - google_backup_dr_backup_plan
       - google_backup_dr_backup_plan_association
-    service: iam
+    service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_backup_dr_backup_vault, google_backup_dr_backup_plan, google_backup_dr_backup_plan_association'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: backupdr/backup_vault
     source: docs-samples
     file: backupdr/backup_vault/main.tf
     resource_types:
       - google_backup_dr_backup_vault
-    service: ""
+    service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_backup_dr_backup_vault'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: beyondcorp_app_gateway-example-1
     source: provider-docs
     file: website/docs/r/beyondcorp_app_gateway.html.markdown
@@ -2996,7 +2996,7 @@ cases:
       - google_storage_bucket_object
       - google_biglake_database
       - google_biglake_table
-    service: ""
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_biglake_catalog, google_biglake_database, google_biglake_table'
@@ -3023,7 +3023,7 @@ cases:
       - google_project_iam_member
       - google_bigquery_dataset
       - google_bigquery_table
-    service: storage
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_bigquery_connection'
@@ -3036,7 +3036,7 @@ cases:
       - google_project_iam_member
       - google_bigquery_dataset
       - google_bigquery_table
-    service: storage
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_bigquery_connection'
@@ -3050,8 +3050,7 @@ cases:
       - google_bigquery_table_iam_policy
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_table_iam_policy'
+    status: candidate
   - name: bigquery/bigquery_create_connection_cloud_resource
     source: docs-samples
     file: bigquery/bigquery_create_connection_cloud_resource/main.tf
@@ -3069,8 +3068,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_dataset_attach_tag
     source: docs-samples
     file: bigquery/bigquery_create_dataset_attach_tag/main.tf
@@ -3078,7 +3076,7 @@ cases:
       - google_tags_tag_key
       - google_tags_tag_value
       - google_bigquery_dataset
-    service: ""
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_tags_tag_key, google_tags_tag_value'
@@ -3092,8 +3090,7 @@ cases:
       - google_project_iam_member
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_dataset_iam
     source: docs-samples
     file: bigquery/bigquery_create_dataset_iam/main.tf
@@ -3102,8 +3099,7 @@ cases:
       - google_bigquery_dataset_iam_policy
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_policy'
+    status: candidate
   - name: bigquery/bigquery_create_materialized_view
     source: docs-samples
     file: bigquery/bigquery_create_materialized_view/main.tf
@@ -3112,8 +3108,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_reservation
     source: docs-samples
     file: bigquery/bigquery_create_reservation/main.tf
@@ -3150,7 +3145,7 @@ cases:
     service: bigquery
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_bigquery_reservation'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: bigquery/bigquery_create_spanner_external_dataset
     source: docs-samples
     file: bigquery/bigquery_create_spanner_external_dataset/main.tf
@@ -3158,8 +3153,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_stored_procedure
     source: docs-samples
     file: bigquery/bigquery_create_stored_procedure/main.tf
@@ -3168,8 +3162,7 @@ cases:
       - google_bigquery_routine
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_table
     source: docs-samples
     file: bigquery/bigquery_create_table/main.tf
@@ -3178,8 +3171,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_table_attach_tag
     source: docs-samples
     file: bigquery/bigquery_create_table_attach_tag/main.tf
@@ -3188,7 +3180,7 @@ cases:
       - google_tags_tag_value
       - google_bigquery_dataset
       - google_bigquery_table
-    service: ""
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_tags_tag_key, google_tags_tag_value'
@@ -3200,8 +3192,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_table_cmek
     source: docs-samples
     file: bigquery/bigquery_create_table_cmek/main.tf
@@ -3213,8 +3204,7 @@ cases:
       - google_project_iam_member
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_table_iam
     source: docs-samples
     file: bigquery/bigquery_create_table_iam/main.tf
@@ -3224,8 +3214,7 @@ cases:
       - google_bigquery_table_iam_policy
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_table_iam_policy'
+    status: candidate
   - name: bigquery/bigquery_create_table_ingestion_partitioned
     source: docs-samples
     file: bigquery/bigquery_create_table_ingestion_partitioned/main.tf
@@ -3234,8 +3223,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_table_partitioned
     source: docs-samples
     file: bigquery/bigquery_create_table_partitioned/main.tf
@@ -3244,8 +3232,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_table_range_partitioned
     source: docs-samples
     file: bigquery/bigquery_create_table_range_partitioned/main.tf
@@ -3254,8 +3241,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_create_view
     source: docs-samples
     file: bigquery/bigquery_create_view/main.tf
@@ -3264,8 +3250,7 @@ cases:
       - google_bigquery_table
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_query
     source: docs-samples
     file: bigquery/bigquery_query/main.tf
@@ -3273,14 +3258,13 @@ cases:
       - google_bigquery_job
     service: bigquery
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: bigquery/bigquery_tags_tag_key
     source: docs-samples
     file: bigquery/bigquery_tags_tag_key/main.tf
     resource_types:
       - google_tags_tag_key
-    service: ""
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_tags_tag_key'
@@ -3290,7 +3274,7 @@ cases:
     resource_types:
       - google_tags_tag_key
       - google_tags_tag_value
-    service: ""
+    service: bigquery
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_tags_tag_key, google_tags_tag_value'
@@ -4002,8 +3986,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_policy'
+    status: candidate
   - name: bigquery_dataset_iam-example-2
     source: provider-docs
     file: website/docs/r/bigquery_dataset_iam.html.markdown
@@ -4013,8 +3996,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_policy'
+    status: candidate
   - name: bigquery_dataset_iam-example-3
     source: provider-docs
     file: website/docs/r/bigquery_dataset_iam.html.markdown
@@ -4024,8 +4006,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_binding'
+    status: candidate
   - name: bigquery_dataset_iam-example-4
     source: provider-docs
     file: website/docs/r/bigquery_dataset_iam.html.markdown
@@ -4035,8 +4016,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_binding'
+    status: candidate
   - name: bigquery_dataset_iam-example-5
     source: provider-docs
     file: website/docs/r/bigquery_dataset_iam.html.markdown
@@ -4046,8 +4026,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_member'
+    status: candidate
   - name: bigquery_dataset_iam-example-6
     source: provider-docs
     file: website/docs/r/bigquery_dataset_iam.html.markdown
@@ -4057,8 +4036,7 @@ cases:
       - google_bigquery_dataset
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_member'
+    status: candidate
   - name: bigquery_job-example-1
     source: provider-docs
     file: website/docs/r/bigquery_job.html.markdown
@@ -4338,8 +4316,7 @@ cases:
       - google_bigquery_table_iam_policy
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_table_iam_policy'
+    status: candidate
   - name: bigquery_table_iam-example-2
     source: provider-docs
     file: website/docs/r/bigquery_table_iam.html.markdown
@@ -4348,8 +4325,7 @@ cases:
       - google_bigquery_table_iam_binding
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_table_iam_binding'
+    status: candidate
   - name: bigquery_table_iam-example-3
     source: provider-docs
     file: website/docs/r/bigquery_table_iam.html.markdown
@@ -4358,8 +4334,7 @@ cases:
       - google_bigquery_table_iam_member
     service: bigquery
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_bigquery_table_iam_member'
+    status: candidate
   - name: bigtable_app_profile-example-1
     source: provider-docs
     file: website/docs/r/bigtable_app_profile.html.markdown
@@ -4798,7 +4773,7 @@ cases:
       - google_certificate_manager_certificate
       - google_certificate_manager_certificate_map
       - google_certificate_manager_certificate_map_entry
-    service: serviceusage
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_certificate_manager_dns_authorization, google_certificate_manager_certificate, google_certificate_manager_certificate_map, google_certificate_manager_certificate_map_entry'
@@ -4808,7 +4783,7 @@ cases:
     resource_types:
       - google_project_service
       - google_certificate_manager_certificate
-    service: serviceusage
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_certificate_manager_certificate'
@@ -4828,10 +4803,10 @@ cases:
       - google_storage_bucket_iam_member
       - google_compute_backend_bucket
       - google_compute_url_map
-    service: serviceusage
+    service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_certificate_manager_certificate, google_certificate_manager_certificate_map, google_certificate_manager_certificate_map_entry, google_compute_global_address, google_compute_managed_ssl_certificate, google_compute_target_https_proxy, google_compute_global_forwarding_rule, google_compute_backend_bucket, google_compute_url_map'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: certificate_manager_certificate-example-1
     source: provider-docs
     file: website/docs/r/certificate_manager_certificate.html.markdown
@@ -6717,10 +6692,10 @@ cases:
       - google_pubsub_topic
       - google_pubsub_subscription
       - google_cloud_scheduler_job
-    service: serviceusage
+    service: pubsub
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: null_resource'
   - name: cloud_scheduler_job-example-1
     source: provider-docs
     file: website/docs/r/cloud_scheduler_job.html.markdown
@@ -6939,10 +6914,10 @@ cases:
       - google_kms_crypto_key
       - google_kms_crypto_key_iam_binding
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/instance_ha
     source: docs-samples
     file: cloud_sql/instance_ha/main.tf
@@ -6950,8 +6925,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/instance_iam_condition
     source: docs-samples
     file: cloud_sql/instance_iam_condition/main.tf
@@ -6959,10 +6933,10 @@ cases:
       - google_project_service_identity
       - google_project_iam_policy
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/instance_labels
     source: docs-samples
     file: cloud_sql/instance_labels/main.tf
@@ -6970,8 +6944,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/instance_pitr
     source: docs-samples
     file: cloud_sql/instance_pitr/main.tf
@@ -6979,8 +6952,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/instance_ssl_cert
     source: docs-samples
     file: cloud_sql/instance_ssl_cert/main.tf
@@ -6989,8 +6961,7 @@ cases:
       - google_sql_ssl_cert
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert'
+    status: candidate
   - name: cloud_sql/mysql_database_basic
     source: docs-samples
     file: cloud_sql/mysql_database_basic/main.tf
@@ -6999,8 +6970,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_database_instance
     source: docs-samples
     file: cloud_sql/mysql_database_instance/main.tf
@@ -7009,8 +6979,7 @@ cases:
       - google_sql_user
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_enterprise_plus_instance_clone
     source: docs-samples
     file: cloud_sql/mysql_enterprise_plus_instance_clone/main.tf
@@ -7018,8 +6987,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_enterprise_plus_instance_labels
     source: docs-samples
     file: cloud_sql/mysql_enterprise_plus_instance_labels/main.tf
@@ -7027,8 +6995,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_enterprise_plus_instance_pvp
     source: docs-samples
     file: cloud_sql/mysql_enterprise_plus_instance_pvp/main.tf
@@ -7036,8 +7003,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_authorized_network
     source: docs-samples
     file: cloud_sql/mysql_instance_authorized_network/main.tf
@@ -7045,8 +7011,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_backup
     source: docs-samples
     file: cloud_sql/mysql_instance_backup/main.tf
@@ -7054,8 +7019,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_backup_location
     source: docs-samples
     file: cloud_sql/mysql_instance_backup_location/main.tf
@@ -7063,8 +7027,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_backup_retention
     source: docs-samples
     file: cloud_sql/mysql_instance_backup_retention/main.tf
@@ -7072,8 +7035,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_backupdr_backup
     source: docs-samples
     file: cloud_sql/mysql_instance_backupdr_backup/main.tf
@@ -7082,7 +7044,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup'
   - name: cloud_sql/mysql_instance_clone
     source: docs-samples
     file: cloud_sql/mysql_instance_clone/main.tf
@@ -7090,8 +7052,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_cmek
     source: docs-samples
     file: cloud_sql/mysql_instance_cmek/main.tf
@@ -7101,10 +7062,10 @@ cases:
       - google_kms_crypto_key
       - google_kms_crypto_key_iam_binding
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/mysql_instance_custom_subject_alternative_names
     source: docs-samples
     file: cloud_sql/mysql_instance_custom_subject_alternative_names/main.tf
@@ -7114,10 +7075,10 @@ cases:
       - google_privateca_certificate_authority
       - google_privateca_ca_pool_iam_member
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_ca_pool_iam_member'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/mysql_instance_customer_managed_cas_ca
     source: docs-samples
     file: cloud_sql/mysql_instance_customer_managed_cas_ca/main.tf
@@ -7127,10 +7088,10 @@ cases:
       - google_privateca_certificate_authority
       - google_privateca_ca_pool_iam_member
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_ca_pool_iam_member'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/mysql_instance_final_backup
     source: docs-samples
     file: cloud_sql/mysql_instance_final_backup/main.tf
@@ -7138,8 +7099,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_flags
     source: docs-samples
     file: cloud_sql/mysql_instance_flags/main.tf
@@ -7147,8 +7107,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_gcbdr_mr_pitr
     source: docs-samples
     file: cloud_sql/mysql_instance_gcbdr_mr_pitr/main.tf
@@ -7157,7 +7116,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup_plan_association'
   - name: cloud_sql/mysql_instance_gcbdr_pitr
     source: docs-samples
     file: cloud_sql/mysql_instance_gcbdr_pitr/main.tf
@@ -7166,7 +7125,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup_plan_association'
   - name: cloud_sql/mysql_instance_google_managed_cas_ca
     source: docs-samples
     file: cloud_sql/mysql_instance_google_managed_cas_ca/main.tf
@@ -7174,8 +7133,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_ha
     source: docs-samples
     file: cloud_sql/mysql_instance_ha/main.tf
@@ -7183,8 +7141,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_iam_db_auth
     source: docs-samples
     file: cloud_sql/mysql_instance_iam_db_auth/main.tf
@@ -7195,8 +7152,7 @@ cases:
       - google_project_iam_binding
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_iam_group_auth
     source: docs-samples
     file: cloud_sql/mysql_instance_iam_group_auth/main.tf
@@ -7206,8 +7162,7 @@ cases:
       - google_project_iam_binding
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_labels
     source: docs-samples
     file: cloud_sql/mysql_instance_labels/main.tf
@@ -7215,8 +7170,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_managed_connection_pooling
     source: docs-samples
     file: cloud_sql/mysql_instance_managed_connection_pooling/main.tf
@@ -7224,8 +7178,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_pitr
     source: docs-samples
     file: cloud_sql/mysql_instance_pitr/main.tf
@@ -7233,8 +7186,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_private_ip
     source: docs-samples
     file: cloud_sql/mysql_instance_private_ip/main.tf
@@ -7244,7 +7196,7 @@ cases:
       - google_service_networking_connection
       - google_sql_database_instance
       - google_compute_network_peering_routes_config
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection, google_compute_network_peering_routes_config'
@@ -7259,7 +7211,7 @@ cases:
       - google_compute_network_peering_routes_config
       - google_compute_address
       - google_compute_forwarding_rule
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection, google_compute_network_peering_routes_config, google_compute_address, google_compute_forwarding_rule'
@@ -7282,10 +7234,9 @@ cases:
     resource_types:
       - google_compute_network
       - google_sql_database_instance
-    service: compute
+    service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_public_ip
     source: docs-samples
     file: cloud_sql/mysql_instance_public_ip/main.tf
@@ -7293,8 +7244,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_pvp
     source: docs-samples
     file: cloud_sql/mysql_instance_pvp/main.tf
@@ -7302,8 +7252,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_read_pool
     source: docs-samples
     file: cloud_sql/mysql_instance_read_pool/main.tf
@@ -7311,8 +7260,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_read_pool_auto_scale
     source: docs-samples
     file: cloud_sql/mysql_instance_read_pool_auto_scale/main.tf
@@ -7320,8 +7268,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_replica
     source: docs-samples
     file: cloud_sql/mysql_instance_replica/main.tf
@@ -7329,8 +7276,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_ssl_cert
     source: docs-samples
     file: cloud_sql/mysql_instance_ssl_cert/main.tf
@@ -7339,8 +7285,7 @@ cases:
       - google_sql_ssl_cert
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert'
+    status: candidate
   - name: cloud_sql/mysql_instance_ssm
     source: docs-samples
     file: cloud_sql/mysql_instance_ssm/main.tf
@@ -7348,8 +7293,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_switchover/dr_replica_create
     source: docs-samples
     file: cloud_sql/mysql_instance_switchover/dr_replica_create/main.tf
@@ -7357,8 +7301,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_switchover/dr_replica_designate
     source: docs-samples
     file: cloud_sql/mysql_instance_switchover/dr_replica_designate/main.tf
@@ -7366,8 +7309,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_switchover/switchover_begin
     source: docs-samples
     file: cloud_sql/mysql_instance_switchover/switchover_begin/main.tf
@@ -7375,8 +7317,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_instance_switchover/switchover_finish
     source: docs-samples
     file: cloud_sql/mysql_instance_switchover/switchover_finish/main.tf
@@ -7384,8 +7325,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/mysql_user_db_role
     source: docs-samples
     file: cloud_sql/mysql_user_db_role/main.tf
@@ -7394,8 +7334,7 @@ cases:
       - google_sql_user
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_database_basic
     source: docs-samples
     file: cloud_sql/postgres_database_basic/main.tf
@@ -7404,8 +7343,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_database_instance
     source: docs-samples
     file: cloud_sql/postgres_database_instance/main.tf
@@ -7414,8 +7352,7 @@ cases:
       - google_sql_user
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_enterprise_edition_instance
     source: docs-samples
     file: cloud_sql/postgres_enterprise_edition_instance/main.tf
@@ -7423,8 +7360,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_enterprise_plus_edition_instance
     source: docs-samples
     file: cloud_sql/postgres_enterprise_plus_edition_instance/main.tf
@@ -7432,8 +7368,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_enterprise_plus_instance_clone
     source: docs-samples
     file: cloud_sql/postgres_enterprise_plus_instance_clone/main.tf
@@ -7441,8 +7376,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_enterprise_plus_instance_labels
     source: docs-samples
     file: cloud_sql/postgres_enterprise_plus_instance_labels/main.tf
@@ -7450,8 +7384,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_enterprise_plus_instance_pvp
     source: docs-samples
     file: cloud_sql/postgres_enterprise_plus_instance_pvp/main.tf
@@ -7459,8 +7392,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_authorized_network
     source: docs-samples
     file: cloud_sql/postgres_instance_authorized_network/main.tf
@@ -7468,8 +7400,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_backup
     source: docs-samples
     file: cloud_sql/postgres_instance_backup/main.tf
@@ -7477,8 +7408,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_backup_location
     source: docs-samples
     file: cloud_sql/postgres_instance_backup_location/main.tf
@@ -7486,8 +7416,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_backup_retention
     source: docs-samples
     file: cloud_sql/postgres_instance_backup_retention/main.tf
@@ -7495,8 +7424,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_backupdr_backup
     source: docs-samples
     file: cloud_sql/postgres_instance_backupdr_backup/main.tf
@@ -7505,7 +7433,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup'
   - name: cloud_sql/postgres_instance_clone
     source: docs-samples
     file: cloud_sql/postgres_instance_clone/main.tf
@@ -7513,8 +7441,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_cmek
     source: docs-samples
     file: cloud_sql/postgres_instance_cmek/main.tf
@@ -7524,10 +7451,10 @@ cases:
       - google_kms_crypto_key
       - google_kms_crypto_key_iam_binding
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/postgres_instance_custom_subject_alternative_names
     source: docs-samples
     file: cloud_sql/postgres_instance_custom_subject_alternative_names/main.tf
@@ -7537,10 +7464,10 @@ cases:
       - google_privateca_certificate_authority
       - google_privateca_ca_pool_iam_member
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_ca_pool_iam_member'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/postgres_instance_customer_managed_cas_ca
     source: docs-samples
     file: cloud_sql/postgres_instance_customer_managed_cas_ca/main.tf
@@ -7550,10 +7477,10 @@ cases:
       - google_privateca_certificate_authority
       - google_privateca_ca_pool_iam_member
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_ca_pool_iam_member'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/postgres_instance_final_backup
     source: docs-samples
     file: cloud_sql/postgres_instance_final_backup/main.tf
@@ -7561,8 +7488,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_flags
     source: docs-samples
     file: cloud_sql/postgres_instance_flags/main.tf
@@ -7570,8 +7496,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_gcbdr_mr_pitr
     source: docs-samples
     file: cloud_sql/postgres_instance_gcbdr_mr_pitr/main.tf
@@ -7580,7 +7505,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup_plan_association'
   - name: cloud_sql/postgres_instance_gcbdr_pitr
     source: docs-samples
     file: cloud_sql/postgres_instance_gcbdr_pitr/main.tf
@@ -7589,7 +7514,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup_plan_association'
   - name: cloud_sql/postgres_instance_google_managed_cas_ca
     source: docs-samples
     file: cloud_sql/postgres_instance_google_managed_cas_ca/main.tf
@@ -7597,8 +7522,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_ha
     source: docs-samples
     file: cloud_sql/postgres_instance_ha/main.tf
@@ -7606,8 +7530,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_iam_db_auth
     source: docs-samples
     file: cloud_sql/postgres_instance_iam_db_auth/main.tf
@@ -7618,8 +7541,7 @@ cases:
       - google_project_iam_binding
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_iam_group_auth
     source: docs-samples
     file: cloud_sql/postgres_instance_iam_group_auth/main.tf
@@ -7629,8 +7551,7 @@ cases:
       - google_project_iam_binding
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_labels
     source: docs-samples
     file: cloud_sql/postgres_instance_labels/main.tf
@@ -7638,8 +7559,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_managed_connection_pooling
     source: docs-samples
     file: cloud_sql/postgres_instance_managed_connection_pooling/main.tf
@@ -7647,8 +7567,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_pitr
     source: docs-samples
     file: cloud_sql/postgres_instance_pitr/main.tf
@@ -7656,8 +7575,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_private_ip
     source: docs-samples
     file: cloud_sql/postgres_instance_private_ip/main.tf
@@ -7667,7 +7585,7 @@ cases:
       - google_service_networking_connection
       - google_sql_database_instance
       - google_compute_network_peering_routes_config
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection, google_compute_network_peering_routes_config'
@@ -7682,7 +7600,7 @@ cases:
       - google_compute_network_peering_routes_config
       - google_compute_address
       - google_compute_forwarding_rule
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection, google_compute_network_peering_routes_config, google_compute_address, google_compute_forwarding_rule'
@@ -7705,10 +7623,9 @@ cases:
     resource_types:
       - google_compute_network
       - google_sql_database_instance
-    service: compute
+    service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_public_ip
     source: docs-samples
     file: cloud_sql/postgres_instance_public_ip/main.tf
@@ -7716,8 +7633,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_pvp
     source: docs-samples
     file: cloud_sql/postgres_instance_pvp/main.tf
@@ -7725,8 +7641,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_read_pool
     source: docs-samples
     file: cloud_sql/postgres_instance_read_pool/main.tf
@@ -7734,8 +7649,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_read_pool_auto_scale
     source: docs-samples
     file: cloud_sql/postgres_instance_read_pool_auto_scale/main.tf
@@ -7743,8 +7657,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_replica
     source: docs-samples
     file: cloud_sql/postgres_instance_replica/main.tf
@@ -7752,8 +7665,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_ssl_cert
     source: docs-samples
     file: cloud_sql/postgres_instance_ssl_cert/main.tf
@@ -7762,8 +7674,7 @@ cases:
       - google_sql_ssl_cert
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert'
+    status: candidate
   - name: cloud_sql/postgres_instance_ssm
     source: docs-samples
     file: cloud_sql/postgres_instance_ssm/main.tf
@@ -7771,8 +7682,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_switchover/dr_replica_create
     source: docs-samples
     file: cloud_sql/postgres_instance_switchover/dr_replica_create/main.tf
@@ -7780,8 +7690,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_switchover/dr_replica_designate
     source: docs-samples
     file: cloud_sql/postgres_instance_switchover/dr_replica_designate/main.tf
@@ -7789,8 +7698,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_switchover/switchover_begin
     source: docs-samples
     file: cloud_sql/postgres_instance_switchover/switchover_begin/main.tf
@@ -7798,8 +7706,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_instance_switchover/switchover_finish
     source: docs-samples
     file: cloud_sql/postgres_instance_switchover/switchover_finish/main.tf
@@ -7807,8 +7714,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/postgres_user_db_role
     source: docs-samples
     file: cloud_sql/postgres_user_db_role/main.tf
@@ -7817,8 +7723,7 @@ cases:
       - google_sql_user
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_database_basic
     source: docs-samples
     file: cloud_sql/sqlserver_database_basic/main.tf
@@ -7827,8 +7732,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_database_instance
     source: docs-samples
     file: cloud_sql/sqlserver_database_instance/main.tf
@@ -7837,8 +7741,7 @@ cases:
       - google_sql_user
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_active_directory
     source: docs-samples
     file: cloud_sql/sqlserver_instance_active_directory/main.tf
@@ -7847,7 +7750,7 @@ cases:
       - google_compute_global_address
       - google_service_networking_connection
       - google_sql_database_instance
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection'
@@ -7858,8 +7761,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_backup
     source: docs-samples
     file: cloud_sql/sqlserver_instance_backup/main.tf
@@ -7867,8 +7769,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_backup_location
     source: docs-samples
     file: cloud_sql/sqlserver_instance_backup_location/main.tf
@@ -7876,8 +7777,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_backup_retention
     source: docs-samples
     file: cloud_sql/sqlserver_instance_backup_retention/main.tf
@@ -7885,8 +7785,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_backupdr_backup
     source: docs-samples
     file: cloud_sql/sqlserver_instance_backupdr_backup/main.tf
@@ -7895,7 +7794,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup'
   - name: cloud_sql/sqlserver_instance_clone
     source: docs-samples
     file: cloud_sql/sqlserver_instance_clone/main.tf
@@ -7903,8 +7802,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_cmek
     source: docs-samples
     file: cloud_sql/sqlserver_instance_cmek/main.tf
@@ -7914,10 +7812,10 @@ cases:
       - google_kms_crypto_key
       - google_kms_crypto_key_iam_binding
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/sqlserver_instance_custom_subject_alternative_names
     source: docs-samples
     file: cloud_sql/sqlserver_instance_custom_subject_alternative_names/main.tf
@@ -7927,10 +7825,10 @@ cases:
       - google_privateca_certificate_authority
       - google_privateca_ca_pool_iam_member
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_ca_pool_iam_member'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/sqlserver_instance_customer_managed_cas_ca
     source: docs-samples
     file: cloud_sql/sqlserver_instance_customer_managed_cas_ca/main.tf
@@ -7940,10 +7838,10 @@ cases:
       - google_privateca_certificate_authority
       - google_privateca_ca_pool_iam_member
       - google_sql_database_instance
-    service: ""
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_ca_pool_iam_member'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_sql/sqlserver_instance_final_backup
     source: docs-samples
     file: cloud_sql/sqlserver_instance_final_backup/main.tf
@@ -7951,8 +7849,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_flags
     source: docs-samples
     file: cloud_sql/sqlserver_instance_flags/main.tf
@@ -7960,8 +7857,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_gcbdr_mr_pitr
     source: docs-samples
     file: cloud_sql/sqlserver_instance_gcbdr_mr_pitr/main.tf
@@ -7970,7 +7866,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup_plan_association'
   - name: cloud_sql/sqlserver_instance_gcbdr_pitr
     source: docs-samples
     file: cloud_sql/sqlserver_instance_gcbdr_pitr/main.tf
@@ -7979,7 +7875,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'unsupported-service (data source): google_backup_dr_backup_plan_association'
   - name: cloud_sql/sqlserver_instance_google_managed_cas_ca
     source: docs-samples
     file: cloud_sql/sqlserver_instance_google_managed_cas_ca/main.tf
@@ -7987,8 +7883,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_ha
     source: docs-samples
     file: cloud_sql/sqlserver_instance_ha/main.tf
@@ -7996,8 +7891,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_labels
     source: docs-samples
     file: cloud_sql/sqlserver_instance_labels/main.tf
@@ -8005,8 +7899,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_pitr
     source: docs-samples
     file: cloud_sql/sqlserver_instance_pitr/main.tf
@@ -8014,8 +7907,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_private_ip
     source: docs-samples
     file: cloud_sql/sqlserver_instance_private_ip/main.tf
@@ -8025,7 +7917,7 @@ cases:
       - google_service_networking_connection
       - google_sql_database_instance
       - google_compute_network_peering_routes_config
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection, google_compute_network_peering_routes_config'
@@ -8040,7 +7932,7 @@ cases:
       - google_compute_network_peering_routes_config
       - google_compute_address
       - google_compute_forwarding_rule
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection, google_compute_network_peering_routes_config, google_compute_address, google_compute_forwarding_rule'
@@ -8063,10 +7955,9 @@ cases:
     resource_types:
       - google_compute_network
       - google_sql_database_instance
-    service: compute
+    service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_public_ip
     source: docs-samples
     file: cloud_sql/sqlserver_instance_public_ip/main.tf
@@ -8074,8 +7965,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_read_pool
     source: docs-samples
     file: cloud_sql/sqlserver_instance_read_pool/main.tf
@@ -8084,7 +7974,7 @@ cases:
       - google_compute_global_address
       - google_service_networking_connection
       - google_sql_database_instance
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_service_networking_connection'
@@ -8095,8 +7985,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_replica
     source: docs-samples
     file: cloud_sql/sqlserver_instance_replica/main.tf
@@ -8104,8 +7993,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_ssl_cert
     source: docs-samples
     file: cloud_sql/sqlserver_instance_ssl_cert/main.tf
@@ -8113,8 +8001,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_ssm
     source: docs-samples
     file: cloud_sql/sqlserver_instance_ssm/main.tf
@@ -8122,8 +8009,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_switchover/create_dr_replica
     source: docs-samples
     file: cloud_sql/sqlserver_instance_switchover/create_dr_replica/main.tf
@@ -8131,8 +8017,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_switchover/switchover_begin
     source: docs-samples
     file: cloud_sql/sqlserver_instance_switchover/switchover_begin/main.tf
@@ -8140,8 +8025,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_instance_switchover/switchover_finish
     source: docs-samples
     file: cloud_sql/sqlserver_instance_switchover/switchover_finish/main.tf
@@ -8149,8 +8033,7 @@ cases:
       - google_sql_database_instance
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: cloud_sql/sqlserver_vm_instance
     source: docs-samples
     file: cloud_sql/sqlserver_vm_instance/main.tf
@@ -8159,10 +8042,10 @@ cases:
       - google_compute_subnetwork
       - google_compute_instance
       - google_compute_firewall
-    service: compute
+    service: cloudsql
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: cloud_support_support_event_subscription-example-1
     source: provider-docs
     file: website/docs/r/cloud_support_support_event_subscription.html.markdown
@@ -9372,7 +9255,7 @@ cases:
       - google_monitoring_monitored_project
       - google_monitoring_alert_policy
       - google_monitoring_dashboard
-    service: monitoring
+    service: iam
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_monitoring_monitored_project'
@@ -9392,10 +9275,10 @@ cases:
       - google_cloudfunctions_function
       - google_storage_bucket
       - google_storage_bucket_object
-    service: serviceusage
+    service: iam
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_composer_environment, google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: composer_environment-example-1
     source: provider-docs
     file: website/docs/r/composer_environment.html.markdown
@@ -9548,10 +9431,9 @@ cases:
       - google_project_service
       - google_compute_disk
       - google_compute_instance
-    service: serviceusage
+    service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/autoscaler_instance_group
     source: docs-samples
     file: compute/autoscaler_instance_group/main.tf
@@ -9562,7 +9444,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_autoscaler, google_compute_instance_template, google_compute_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: compute/basic_vm
     source: docs-samples
     file: compute/basic_vm/main.tf
@@ -9572,8 +9454,7 @@ cases:
       - google_compute_subnetwork
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/disk
     source: docs-samples
     file: compute/disk/main.tf
@@ -9623,8 +9504,7 @@ cases:
       - google_compute_firewall
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/health_check
     source: docs-samples
     file: compute/health_check/main.tf
@@ -9641,8 +9521,7 @@ cases:
       - google_compute_instance
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/instance_template_preemptible
     source: docs-samples
     file: compute/instance_template_preemptible/main.tf
@@ -9668,8 +9547,7 @@ cases:
       - google_compute_instance
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/local_ssd
     source: docs-samples
     file: compute/local_ssd/main.tf
@@ -9677,8 +9555,7 @@ cases:
       - google_compute_instance
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/mig_stateful_disk_basic
     source: docs-samples
     file: compute/mig_stateful_disk_basic/main.tf
@@ -9694,7 +9571,7 @@ cases:
     file: compute/os_config_policy/main.tf
     resource_types:
       - google_os_config_os_policy_assignment
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_os_config_os_policy_assignment'
@@ -9706,7 +9583,7 @@ cases:
       - google_compute_project_metadata
       - google_compute_instance
       - google_project_iam_member
-    service: serviceusage
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_project_metadata'
@@ -9717,7 +9594,7 @@ cases:
       - google_os_login_ssh_public_key
       - google_compute_project_metadata
       - google_compute_instance
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_os_login_ssh_public_key, google_compute_project_metadata'
@@ -9787,8 +9664,7 @@ cases:
       - google_compute_instance
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/region_autoscaler_basic
     source: docs-samples
     file: compute/region_autoscaler_basic/main.tf
@@ -9829,7 +9705,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_instance_group_manager, google_compute_resize_request'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: compute/rmig_cross_zone_repair
     source: docs-samples
     file: compute/rmig_cross_zone_repair/main.tf
@@ -9839,7 +9715,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_region_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: compute/rmig_default_action_on_failure
     source: docs-samples
     file: compute/rmig_default_action_on_failure/main.tf
@@ -9869,7 +9745,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_region_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: compute/rmig_instance_flexibility_policy_without_preferences
     source: docs-samples
     file: compute/rmig_instance_flexibility_policy_without_preferences/main.tf
@@ -9940,18 +9816,16 @@ cases:
       - google_compute_instance
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/service_account_for_instances
     source: docs-samples
     file: compute/service_account_for_instances/main.tf
     resource_types:
       - google_service_account
       - google_compute_instance
-    service: iam
+    service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/spot_instance_basic
     source: docs-samples
     file: compute/spot_instance_basic/main.tf
@@ -9959,8 +9833,7 @@ cases:
       - google_compute_instance
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: compute/zonal_instance_group_manager
     source: docs-samples
     file: compute/zonal_instance_group_manager/main.tf
@@ -17551,7 +17424,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile'
   - name: database_migration_service_connection_profile-example-2
     source: provider-docs
     file: website/docs/r/database_migration_service_connection_profile.html.markdown
@@ -17564,7 +17437,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile'
   - name: database_migration_service_connection_profile-example-3
     source: provider-docs
     file: website/docs/r/database_migration_service_connection_profile.html.markdown
@@ -17577,7 +17450,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile'
   - name: database_migration_service_connection_profile-example-4
     source: provider-docs
     file: website/docs/r/database_migration_service_connection_profile.html.markdown
@@ -17590,7 +17463,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile'
   - name: database_migration_service_connection_profile-example-5
     source: provider-docs
     file: website/docs/r/database_migration_service_connection_profile.html.markdown
@@ -17665,7 +17538,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile, google_database_migration_service_migration_job'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile, google_database_migration_service_migration_job'
   - name: database_migration_service_migration_job-example-2
     source: provider-docs
     file: website/docs/r/database_migration_service_migration_job.html.markdown
@@ -17679,7 +17552,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile, google_database_migration_service_migration_job'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile, google_database_migration_service_migration_job'
   - name: database_migration_service_migration_job-example-3
     source: provider-docs
     file: website/docs/r/database_migration_service_migration_job.html.markdown
@@ -17693,7 +17566,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile, google_database_migration_service_migration_job'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile, google_database_migration_service_migration_job'
   - name: database_migration_service_migration_job-example-4
     source: provider-docs
     file: website/docs/r/database_migration_service_migration_job.html.markdown
@@ -17712,7 +17585,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_database_migration_service_connection_profile, google_alloydb_cluster, google_alloydb_instance, google_compute_global_address, google_service_networking_connection, google_database_migration_service_migration_job'
+    reason: 'unsupported-service: google_database_migration_service_connection_profile, google_alloydb_cluster, google_alloydb_instance, google_compute_global_address, google_service_networking_connection, google_database_migration_service_migration_job'
   - name: database_migration_service_private_connection-example-1
     source: provider-docs
     file: website/docs/r/database_migration_service_private_connection.html.markdown
@@ -18949,8 +18822,7 @@ cases:
       - google_dataproc_cluster_iam_policy
     service: dataproc
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dataproc_cluster_iam_policy'
+    status: candidate
   - name: dataproc_cluster_iam-example-2
     source: provider-docs
     file: website/docs/r/dataproc_cluster_iam.html.markdown
@@ -18959,8 +18831,7 @@ cases:
       - google_dataproc_cluster_iam_binding
     service: dataproc
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dataproc_cluster_iam_binding'
+    status: candidate
   - name: dataproc_cluster_iam-example-3
     source: provider-docs
     file: website/docs/r/dataproc_cluster_iam.html.markdown
@@ -18969,8 +18840,7 @@ cases:
       - google_dataproc_cluster_iam_member
     service: dataproc
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dataproc_cluster_iam_member'
+    status: candidate
   - name: dataproc_gdc_application_environment-example-1
     source: provider-docs
     file: website/docs/r/dataproc_gdc_application_environment.html.markdown
@@ -19143,8 +19013,7 @@ cases:
       - google_dataproc_job_iam_policy
     service: dataproc
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dataproc_job_iam_policy'
+    status: candidate
   - name: dataproc_job_iam-example-2
     source: provider-docs
     file: website/docs/r/dataproc_job_iam.html.markdown
@@ -19153,8 +19022,7 @@ cases:
       - google_dataproc_job_iam_binding
     service: dataproc
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dataproc_job_iam_binding'
+    status: candidate
   - name: dataproc_job_iam-example-3
     source: provider-docs
     file: website/docs/r/dataproc_job_iam.html.markdown
@@ -19163,8 +19031,7 @@ cases:
       - google_dataproc_job_iam_member
     service: dataproc
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dataproc_job_iam_member'
+    status: candidate
   - name: dataproc_metastore_database_iam-example-1
     source: provider-docs
     file: website/docs/r/dataproc_metastore_database_iam.html.markdown
@@ -19567,7 +19434,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert, google_datastream_connection_profile'
+    reason: 'unsupported-service: google_datastream_connection_profile'
   - name: datastream_connection_profile-example-7
     source: provider-docs
     file: website/docs/r/datastream_connection_profile.html.markdown
@@ -20923,8 +20790,7 @@ cases:
       - google_dns_managed_zone
     service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/managed_zone_private
     source: docs-samples
     file: dns/managed_zone_private/main.tf
@@ -20933,8 +20799,7 @@ cases:
       - google_compute_network
     service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/managed_zone_private_forwarding
     source: docs-samples
     file: dns/managed_zone_private_forwarding/main.tf
@@ -20943,8 +20808,7 @@ cases:
       - google_compute_network
     service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/managed_zone_private_peering
     source: docs-samples
     file: dns/managed_zone_private_peering/main.tf
@@ -20953,8 +20817,7 @@ cases:
       - google_compute_network
     service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/managed_zone_quickstart
     source: docs-samples
     file: dns/managed_zone_quickstart/main.tf
@@ -20963,10 +20826,9 @@ cases:
       - google_compute_firewall
       - google_dns_managed_zone
       - google_dns_record_set
-    service: compute
+    service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/managed_zone_reverse_lookup
     source: docs-samples
     file: dns/managed_zone_reverse_lookup/main.tf
@@ -20975,7 +20837,7 @@ cases:
     service: clouddns
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: dns/managed_zone_service_directory
     source: docs-samples
     file: dns/managed_zone_service_directory/main.tf
@@ -20986,7 +20848,7 @@ cases:
     service: clouddns
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_service_directory_namespace'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: dns/managed_zone_with_dnssec
     source: docs-samples
     file: dns/managed_zone_with_dnssec/main.tf
@@ -20994,8 +20856,7 @@ cases:
       - google_dns_managed_zone
     service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/policy_basic
     source: docs-samples
     file: dns/policy_basic/main.tf
@@ -21034,18 +20895,17 @@ cases:
       - google_dns_record_set
     service: clouddns
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: dns/response_policy_basic
     source: docs-samples
     file: dns/response_policy_basic/main.tf
     resource_types:
       - google_compute_network
       - google_dns_response_policy
-    service: compute
+    service: clouddns
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_dns_response_policy'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: dns/response_policy_rule_basic
     source: docs-samples
     file: dns/response_policy_rule_basic/main.tf
@@ -21053,10 +20913,10 @@ cases:
       - google_compute_network
       - google_dns_response_policy
       - google_dns_response_policy_rule
-    service: compute
+    service: clouddns
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_dns_response_policy, google_dns_response_policy_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: dns_managed_zone-example-1
     source: provider-docs
     file: website/docs/r/dns_managed_zone.html.markdown
@@ -21148,8 +21008,7 @@ cases:
       - google_dns_managed_zone_iam_member
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_member'
+    status: candidate
   - name: dns_managed_zone_iam-example-1
     source: provider-docs
     file: website/docs/r/dns_managed_zone_iam.html.markdown
@@ -21158,8 +21017,7 @@ cases:
       - google_dns_managed_zone_iam_policy
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_policy'
+    status: candidate
   - name: dns_managed_zone_iam-example-2
     source: provider-docs
     file: website/docs/r/dns_managed_zone_iam.html.markdown
@@ -21168,8 +21026,7 @@ cases:
       - google_dns_managed_zone_iam_policy
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_policy'
+    status: candidate
   - name: dns_managed_zone_iam-example-3
     source: provider-docs
     file: website/docs/r/dns_managed_zone_iam.html.markdown
@@ -21178,8 +21035,7 @@ cases:
       - google_dns_managed_zone_iam_binding
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_binding'
+    status: candidate
   - name: dns_managed_zone_iam-example-4
     source: provider-docs
     file: website/docs/r/dns_managed_zone_iam.html.markdown
@@ -21188,8 +21044,7 @@ cases:
       - google_dns_managed_zone_iam_binding
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_binding'
+    status: candidate
   - name: dns_managed_zone_iam-example-5
     source: provider-docs
     file: website/docs/r/dns_managed_zone_iam.html.markdown
@@ -21198,8 +21053,7 @@ cases:
       - google_dns_managed_zone_iam_member
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_member'
+    status: candidate
   - name: dns_managed_zone_iam-example-6
     source: provider-docs
     file: website/docs/r/dns_managed_zone_iam.html.markdown
@@ -21208,8 +21062,7 @@ cases:
       - google_dns_managed_zone_iam_member
     service: clouddns
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_dns_managed_zone_iam_member'
+    status: candidate
   - name: dns_policy-example-1
     source: provider-docs
     file: website/docs/r/dns_policy.html.markdown
@@ -21561,10 +21414,9 @@ cases:
       - google_eventarc_google_api_source
       - google_eventarc_pipeline
       - google_eventarc_enrollment
-    service: serviceusage
+    service: eventarc
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: eventarc/basic
     source: docs-samples
     file: eventarc/basic/main.tf
@@ -21575,10 +21427,9 @@ cases:
       - google_storage_bucket
       - google_cloud_run_v2_service
       - google_eventarc_trigger
-    service: serviceusage
+    service: eventarc
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: eventarc/basic_pubsub
     source: docs-samples
     file: eventarc/basic_pubsub/main.tf
@@ -21590,10 +21441,9 @@ cases:
       - google_cloud_run_v2_service
       - google_cloud_run_v2_service_iam_member
       - google_eventarc_trigger
-    service: serviceusage
+    service: eventarc
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: eventarc/use_cmek
     source: docs-samples
     file: eventarc/use_cmek/main.tf
@@ -21604,10 +21454,10 @@ cases:
       - google_kms_crypto_key
       - google_kms_crypto_key_iam_member
       - google_eventarc_google_channel_config
-    service: serviceusage
+    service: eventarc
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: eventarc/use_cmek/advanced
     source: docs-samples
     file: eventarc/use_cmek/advanced/main.tf
@@ -21623,10 +21473,10 @@ cases:
       - google_eventarc_message_bus
       - google_eventarc_google_api_source
       - google_eventarc_pipeline
-    service: serviceusage
+    service: eventarc
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: eventarc/workflows
     source: docs-samples
     file: eventarc/workflows/main.tf
@@ -21637,10 +21487,9 @@ cases:
       - google_storage_bucket
       - google_workflows_workflow
       - google_eventarc_trigger
-    service: serviceusage
+    service: eventarc
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: eventarc_channel-example-1
     source: provider-docs
     file: website/docs/r/eventarc_channel.html.markdown
@@ -23084,7 +22933,7 @@ cases:
     service: storage
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_service_iam_member'
+    reason: 'helper-provider: archive_file'
   - name: functions/basic_audit_logs
     source: docs-samples
     file: functions/basic_audit_logs/main.tf
@@ -23097,7 +22946,7 @@ cases:
     service: storage
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: archive_file'
   - name: functions/basic_gcs
     source: docs-samples
     file: functions/basic_gcs/main.tf
@@ -23110,7 +22959,7 @@ cases:
     service: storage
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: archive_file'
   - name: functions/pubsub
     source: docs-samples
     file: functions/pubsub/main.tf
@@ -23120,10 +22969,10 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_cloudfunctions2_function
-    service: iam
+    service: storage
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: archive_file'
   - name: gemini_code_repository_index-example-1
     source: provider-docs
     file: website/docs/r/gemini_code_repository_index.html.markdown
@@ -23286,8 +23135,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/autopilot/config_sync/git
     source: docs-samples
     file: gke/autopilot/config_sync/git/main.tf
@@ -23317,10 +23165,9 @@ cases:
       - google_service_account
       - google_project_iam_member
       - google_container_cluster
-    service: iam
+    service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/autopilot/iap
     source: docs-samples
     file: gke/autopilot/iap/main.tf
@@ -23332,7 +23179,7 @@ cases:
     service: container
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_address, google_compute_region_ssl_certificate'
+    reason: 'helper-provider: kubernetes_deployment_v1, kubernetes_service_v1, kubernetes_ingress_v1, kubernetes_manifest, tls_private_key, tls_self_signed_cert'
   - name: gke/autopilot/labels
     source: docs-samples
     file: gke/autopilot/labels/main.tf
@@ -23340,8 +23187,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/autopilot/mesh
     source: docs-samples
     file: gke/autopilot/mesh/main.tf
@@ -23350,7 +23196,7 @@ cases:
       - google_container_cluster
       - google_gke_hub_feature
       - google_gke_hub_feature_membership
-    service: serviceusage
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_gke_hub_feature, google_gke_hub_feature_membership'
@@ -23362,7 +23208,7 @@ cases:
       - google_container_cluster
       - google_gke_hub_feature
       - google_gke_hub_feature_membership
-    service: serviceusage
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_gke_hub_feature, google_gke_hub_feature_membership'
@@ -23373,8 +23219,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/autopilot/reservation
     source: docs-samples
     file: gke/autopilot/reservation/main.tf
@@ -23384,7 +23229,7 @@ cases:
     service: container
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_reservation'
+    reason: 'helper-provider: kubernetes_pod_v1'
   - name: gke/autopilot/tag
     source: docs-samples
     file: gke/autopilot/tag/main.tf
@@ -23402,7 +23247,7 @@ cases:
     file: gke/enterprise/config_sync/git/main.tf
     resource_types:
       - google_gke_hub_feature
-    service: ""
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_gke_hub_feature'
@@ -23411,7 +23256,7 @@ cases:
     file: gke/enterprise/config_sync/oci/main.tf
     resource_types:
       - google_gke_hub_feature
-    service: ""
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_gke_hub_feature'
@@ -23420,17 +23265,16 @@ cases:
     file: gke/enterprise/enable/main.tf
     resource_types:
       - google_project_service
-    service: serviceusage
+    service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/enterprise/mesh
     source: docs-samples
     file: gke/enterprise/mesh/main.tf
     resource_types:
       - google_project_service
       - google_gke_hub_feature
-    service: serviceusage
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_gke_hub_feature'
@@ -23440,7 +23284,7 @@ cases:
     resource_types:
       - google_project_service
       - google_gke_hub_feature
-    service: serviceusage
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_gke_hub_feature'
@@ -23451,10 +23295,10 @@ cases:
       - google_compute_network
       - google_compute_subnetwork
       - google_container_cluster
-    service: compute
+    service: container
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: kubernetes_deployment_v1, kubernetes_service_v1'
   - name: gke/quickstart/multitenant
     source: docs-samples
     file: gke/quickstart/multitenant/main.tf
@@ -23470,10 +23314,10 @@ cases:
       - google_sql_database
       - google_sql_database_instance
       - google_sql_user
-    service: iam
+    service: container
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_gke_hub_feature, google_gke_hub_scope, google_gke_hub_namespace, google_gke_hub_membership_binding, google_gke_hub_scope_rbac_role_binding'
+    reason: 'helper-provider: kubernetes_config_map'
   - name: gke/standard/regional/binary-authorization
     source: docs-samples
     file: gke/standard/regional/binary-authorization/main.tf
@@ -23481,8 +23325,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/gemma-tgi
     source: docs-samples
     file: gke/standard/regional/gemma-tgi/main.tf
@@ -23492,7 +23335,7 @@ cases:
     service: container
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: kubernetes_secret_v1, kubernetes_deployment_v1, kubernetes_service_v1'
   - name: gke/standard/regional/hpa-logs
     source: docs-samples
     file: gke/standard/regional/hpa-logs/main.tf
@@ -23500,8 +23343,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/labels
     source: docs-samples
     file: gke/standard/regional/labels/main.tf
@@ -23509,8 +23351,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/loadbalancer
     source: docs-samples
     file: gke/standard/regional/loadbalancer/main.tf
@@ -23519,7 +23360,7 @@ cases:
     service: container
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: kubernetes_deployment_v1, kubernetes_service_v1'
   - name: gke/standard/regional/managed_opentelemetry
     source: docs-samples
     file: gke/standard/regional/managed_opentelemetry/main.tf
@@ -23528,7 +23369,7 @@ cases:
     service: container
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'provider-version: sample requires hashicorp/google >= 8.8.0 (corpus pins 7.46.2)'
   - name: gke/standard/regional/multi-zone
     source: docs-samples
     file: gke/standard/regional/multi-zone/main.tf
@@ -23536,8 +23377,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/node_pool
     source: docs-samples
     file: gke/standard/regional/node_pool/main.tf
@@ -23546,10 +23386,9 @@ cases:
       - google_project_iam_member
       - google_container_cluster
       - google_container_node_pool
-    service: iam
+    service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/node_system_config
     source: docs-samples
     file: gke/standard/regional/node_system_config/main.tf
@@ -23558,8 +23397,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/ray
     source: docs-samples
     file: gke/standard/regional/ray/main.tf
@@ -23567,8 +23405,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/single-zone
     source: docs-samples
     file: gke/standard/regional/single-zone/main.tf
@@ -23576,8 +23413,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/regional/windows
     source: docs-samples
     file: gke/standard/regional/windows/main.tf
@@ -23586,8 +23422,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/arm
     source: docs-samples
     file: gke/standard/zonal/arm/main.tf
@@ -23595,10 +23430,9 @@ cases:
       - google_service_account
       - google_container_cluster
       - google_container_node_pool
-    service: iam
+    service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/dws
     source: docs-samples
     file: gke/standard/zonal/dws/main.tf
@@ -23608,7 +23442,7 @@ cases:
     service: container
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: gke/standard/zonal/gpu
     source: docs-samples
     file: gke/standard/zonal/gpu/main.tf
@@ -23616,8 +23450,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/multi-zone
     source: docs-samples
     file: gke/standard/zonal/multi-zone/main.tf
@@ -23625,8 +23458,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/no-channel-to-release-channel/no_minor_or_node_upgrade
     source: docs-samples
     file: gke/standard/zonal/no-channel-to-release-channel/no_minor_or_node_upgrade/main.tf
@@ -23635,8 +23467,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/no-channel-to-release-channel/no_upgrade
     source: docs-samples
     file: gke/standard/zonal/no-channel-to-release-channel/no_upgrade/main.tf
@@ -23645,8 +23476,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/no-channel-to-release-channel/rc_none
     source: docs-samples
     file: gke/standard/zonal/no-channel-to-release-channel/rc_none/main.tf
@@ -23655,8 +23485,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/no-channel-to-release-channel/rc_regular
     source: docs-samples
     file: gke/standard/zonal/no-channel-to-release-channel/rc_regular/main.tf
@@ -23665,8 +23494,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/node_image
     source: docs-samples
     file: gke/standard/zonal/node_image/main.tf
@@ -23674,8 +23502,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/reservation
     source: docs-samples
     file: gke/standard/zonal/reservation/main.tf
@@ -23683,7 +23510,7 @@ cases:
       - google_compute_reservation
       - google_container_cluster
       - google_container_node_pool
-    service: compute
+    service: container
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_reservation'
@@ -23695,8 +23522,7 @@ cases:
       - google_container_node_pool
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke/standard/zonal/single-zone
     source: docs-samples
     file: gke/standard/zonal/single-zone/main.tf
@@ -23704,8 +23530,7 @@ cases:
       - google_container_cluster
     service: container
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: gke_backup_backup_channel-example-1
     source: provider-docs
     file: website/docs/r/gke_backup_backup_channel.html.markdown
@@ -25716,17 +25541,17 @@ cases:
     service: iam
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_iam_deny_policy'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: iam/create_service_agent
     source: docs-samples
     file: iam/create_service_agent/main.tf
     resource_types:
       - google_project_service_identity
       - google_project_iam_member
-    service: ""
+    service: iam
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: iam_access_boundary_policy-example-1
     source: provider-docs
     file: website/docs/r/iam_access_boundary_policy.html.markdown
@@ -27621,7 +27446,7 @@ cases:
     file: integrationconnectors/endpointattachment/main.tf
     resource_types:
       - google_integration_connectors_endpoint_attachment
-    service: ""
+    service: secretmanager
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_integration_connectors_endpoint_attachment'
@@ -27633,7 +27458,7 @@ cases:
       - google_compute_network
       - google_dns_managed_zone
       - google_integration_connectors_managed_zone
-    service: iam
+    service: secretmanager
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_integration_connectors_managed_zone'
@@ -27903,7 +27728,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_forwarding_rule, google_compute_target_http_proxy, google_compute_url_map, google_compute_backend_service, google_compute_instance_template, google_compute_health_check, google_compute_region_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/external_cdn_lb_with_backend_bucket
     source: docs-samples
     file: lb/external_cdn_lb_with_backend_bucket/main.tf
@@ -27916,7 +27741,7 @@ cases:
       - google_compute_target_http_proxy
       - google_compute_url_map
       - google_compute_backend_bucket
-    service: storage
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_compute_global_forwarding_rule, google_compute_target_http_proxy, google_compute_url_map, google_compute_backend_bucket'
@@ -27932,7 +27757,7 @@ cases:
       - google_compute_url_map
       - google_compute_target_http_proxy
       - google_compute_global_forwarding_rule
-    service: storage
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_global_address, google_compute_backend_bucket, google_compute_url_map, google_compute_target_http_proxy, google_compute_global_forwarding_rule'
@@ -27971,7 +27796,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_global_forwarding_rule, google_compute_target_http_proxy, google_compute_url_map, google_compute_backend_service, google_compute_instance_template, google_compute_health_check, google_compute_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/external_ssl_proxy_lb_mig_backend
     source: docs-samples
     file: lb/external_ssl_proxy_lb_mig_backend/main.tf
@@ -27990,7 +27815,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_ssl_certificate, google_compute_target_ssl_proxy, google_compute_global_forwarding_rule, google_compute_backend_service, google_compute_health_check, google_compute_instance_template, google_compute_instance_group_manager'
+    reason: 'helper-provider: tls_private_key, tls_self_signed_cert'
   - name: lb/external_ssl_proxy_lb_mig_backend_custom_header
     source: docs-samples
     file: lb/external_ssl_proxy_lb_mig_backend_custom_header/main.tf
@@ -28009,7 +27834,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_ssl_certificate, google_compute_target_ssl_proxy, google_compute_global_forwarding_rule, google_compute_backend_service, google_compute_health_check, google_compute_instance_template, google_compute_instance_group_manager'
+    reason: 'helper-provider: tls_private_key, tls_self_signed_cert'
   - name: lb/external_tcp_proxy_lb_mig_backend
     source: docs-samples
     file: lb/external_tcp_proxy_lb_mig_backend/main.tf
@@ -28027,7 +27852,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_global_forwarding_rule, google_compute_target_tcp_proxy, google_compute_backend_service, google_compute_health_check, google_compute_instance_template, google_compute_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/external_tcp_proxy_lb_mig_backend_custom_header
     source: docs-samples
     file: lb/external_tcp_proxy_lb_mig_backend_custom_header/main.tf
@@ -28045,7 +27870,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_global_forwarding_rule, google_compute_target_tcp_proxy, google_compute_backend_service, google_compute_health_check, google_compute_instance_template, google_compute_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/health_check_region
     source: docs-samples
     file: lb/health_check_region/main.tf
@@ -28063,7 +27888,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_health_check'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/int_https_lb_https_redirect
     source: docs-samples
     file: lb/int_https_lb_https_redirect/main.tf
@@ -28085,7 +27910,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_address, google_compute_forwarding_rule, google_compute_region_ssl_certificate, google_compute_region_target_https_proxy, google_compute_region_url_map, google_compute_region_backend_service, google_compute_instance_template, google_compute_region_health_check, google_compute_region_instance_group_manager, google_compute_region_target_http_proxy'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/internal_http_lb_with_mig_backend
     source: docs-samples
     file: lb/internal_http_lb_with_mig_backend/main.tf
@@ -28104,7 +27929,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_forwarding_rule, google_compute_region_target_http_proxy, google_compute_region_url_map, google_compute_region_backend_service, google_compute_instance_template, google_compute_region_health_check, google_compute_region_instance_group_manager'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/internal_tcp_udp_lb_with_mig_backend
     source: docs-samples
     file: lb/internal_tcp_udp_lb_with_mig_backend/main.tf
@@ -28140,7 +27965,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_instance_group_manager, google_compute_address, google_compute_region_health_check, google_compute_region_backend_service, google_compute_region_url_map, google_compute_region_target_http_proxy, google_compute_forwarding_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/shared_vpc_http_ilb_with_mig_backend
     source: docs-samples
     file: lb/shared_vpc_http_ilb_with_mig_backend/main.tf
@@ -28181,7 +28006,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_instance_group_manager, google_compute_health_check, google_compute_region_backend_service, google_compute_region_url_map, google_compute_region_target_http_proxy, google_compute_forwarding_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/shared_vpc_http_ilb_with_mig_backend_cross_reference_example
     source: docs-samples
     file: lb/shared_vpc_http_ilb_with_mig_backend_cross_reference_example/main.tf
@@ -28201,7 +28026,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_instance_group_manager, google_compute_health_check, google_compute_region_backend_service, google_compute_region_url_map, google_compute_region_target_http_proxy, google_compute_forwarding_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/shared_vpc_https_ilb_with_mig_backend_basic_example
     source: docs-samples
     file: lb/shared_vpc_https_ilb_with_mig_backend_basic_example/main.tf
@@ -28222,7 +28047,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_instance_group_manager, google_compute_health_check, google_compute_region_backend_service, google_compute_region_url_map, google_compute_region_ssl_certificate, google_compute_region_target_https_proxy, google_compute_forwarding_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/shared_vpc_https_ilb_with_mig_backend_cross_reference_example
     source: docs-samples
     file: lb/shared_vpc_https_ilb_with_mig_backend_cross_reference_example/main.tf
@@ -28243,7 +28068,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_instance_template, google_compute_instance_group_manager, google_compute_health_check, google_compute_region_backend_service, google_compute_region_url_map, google_compute_region_ssl_certificate, google_compute_region_target_https_proxy, google_compute_forwarding_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: lb/target_grpc_proxy_basic
     source: docs-samples
     file: lb/target_grpc_proxy_basic/main.tf
@@ -28290,7 +28115,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_target_https_proxy, google_compute_ssl_certificate, google_compute_url_map, google_compute_backend_service, google_compute_http_health_check'
+    reason: 'helper-provider: tls_private_key, tls_self_signed_cert'
   - name: lb/target_ssl_proxy_basic
     source: docs-samples
     file: lb/target_ssl_proxy_basic/main.tf
@@ -28302,7 +28127,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_target_ssl_proxy, google_compute_ssl_certificate, google_compute_backend_service, google_compute_health_check'
+    reason: 'helper-provider: tls_private_key, tls_self_signed_cert'
   - name: lb/target_tcp_proxy_basic
     source: docs-samples
     file: lb/target_tcp_proxy_basic/main.tf
@@ -28752,7 +28577,7 @@ cases:
     file: looker/looker-core-psc/main.tf
     resource_types:
       - google_looker_instance
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_looker_instance'
@@ -28761,7 +28586,7 @@ cases:
     file: looker/looker_instance_basic/main.tf
     resource_types:
       - google_looker_instance
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_looker_instance'
@@ -28775,7 +28600,7 @@ cases:
       - google_service_networking_connection
       - google_compute_global_address
       - google_kms_crypto_key_iam_member
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_looker_instance, google_service_networking_connection, google_compute_global_address'
@@ -28784,7 +28609,7 @@ cases:
     file: looker/looker_instance_full/main.tf
     resource_types:
       - google_looker_instance
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_looker_instance'
@@ -28959,8 +28784,7 @@ cases:
       - google_compute_network
     service: managedkafka
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: managedkafka/managedkafka_create_connect_cluster
     source: docs-samples
     file: managedkafka/managedkafka_create_connect_cluster/main.tf
@@ -28972,7 +28796,7 @@ cases:
     service: managedkafka
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_managed_kafka_connect_cluster'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: managedkafka/managedkafka_create_connector_bigquery_sink
     source: docs-samples
     file: managedkafka/managedkafka_create_connector_bigquery_sink/main.tf
@@ -28985,7 +28809,7 @@ cases:
     service: managedkafka
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_managed_kafka_connect_cluster, google_managed_kafka_connector'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: managedkafka/managedkafka_create_connector_cloud_storage_sink
     source: docs-samples
     file: managedkafka/managedkafka_create_connector_cloud_storage_sink/main.tf
@@ -28998,7 +28822,7 @@ cases:
     service: managedkafka
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_managed_kafka_connect_cluster, google_managed_kafka_connector'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: managedkafka/managedkafka_create_connector_mirrormaker2_source
     source: docs-samples
     file: managedkafka/managedkafka_create_connector_mirrormaker2_source/main.tf
@@ -29011,7 +28835,7 @@ cases:
     service: managedkafka
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_managed_kafka_connect_cluster, google_managed_kafka_connector'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: managedkafka/managedkafka_create_connector_pubsub_sink
     source: docs-samples
     file: managedkafka/managedkafka_create_connector_pubsub_sink/main.tf
@@ -29024,7 +28848,7 @@ cases:
     service: managedkafka
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_managed_kafka_connect_cluster, google_managed_kafka_connector'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: managedkafka/managedkafka_create_connector_pubsub_source
     source: docs-samples
     file: managedkafka/managedkafka_create_connector_pubsub_source/main.tf
@@ -29037,7 +28861,7 @@ cases:
     service: managedkafka
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_managed_kafka_connect_cluster, google_managed_kafka_connector'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: managedkafka/managedkafka_create_topic
     source: docs-samples
     file: managedkafka/managedkafka_create_topic/main.tf
@@ -29048,8 +28872,7 @@ cases:
       - google_managed_kafka_topic
     service: managedkafka
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: media_cdn/custom_headers
     source: docs-samples
     file: media_cdn/custom_headers/main.tf
@@ -29077,7 +28900,7 @@ cases:
     file: media_cdn/keyset/main.tf
     resource_types:
       - google_network_services_edge_cache_keyset
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_services_edge_cache_keyset'
@@ -29097,7 +28920,7 @@ cases:
     file: media_cdn/security_policies/main.tf
     resource_types:
       - google_compute_security_policy
-    service: compute
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_compute_security_policy'
@@ -29107,7 +28930,7 @@ cases:
     resource_types:
       - google_certificate_manager_dns_authorization
       - google_certificate_manager_certificate
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_certificate_manager_dns_authorization, google_certificate_manager_certificate'
@@ -29891,7 +29714,7 @@ cases:
       - google_compute_firewall
       - google_compute_address
       - google_compute_instance
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_connectivity_test, google_compute_address'
@@ -29901,7 +29724,7 @@ cases:
     resource_types:
       - google_network_management_connectivity_test
       - google_compute_instance
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_connectivity_test'
@@ -30324,7 +30147,7 @@ cases:
       - google_compute_subnetwork
       - google_compute_network
       - google_compute_firewall
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_connectivity_test'
@@ -30336,7 +30159,7 @@ cases:
       - google_compute_network
       - google_compute_router
       - google_compute_interconnect_attachment
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_vpc_flow_logs_config, google_compute_router, google_compute_interconnect_attachment'
@@ -30348,7 +30171,7 @@ cases:
       - google_compute_network
       - google_compute_router
       - google_compute_interconnect_attachment
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_vpc_flow_logs_config, google_compute_router, google_compute_interconnect_attachment'
@@ -30363,7 +30186,7 @@ cases:
       - google_compute_address
       - google_compute_forwarding_rule
       - google_compute_route
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_vpc_flow_logs_config, google_compute_vpn_tunnel, google_compute_vpn_gateway, google_compute_address, google_compute_forwarding_rule, google_compute_route'
@@ -30378,7 +30201,7 @@ cases:
       - google_compute_address
       - google_compute_forwarding_rule
       - google_compute_route
-    service: ""
+    service: compute
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_network_management_vpc_flow_logs_config, google_compute_vpn_tunnel, google_compute_vpn_gateway, google_compute_address, google_compute_forwarding_rule, google_compute_route'
@@ -30557,7 +30380,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_network_security_mirroring_deployment_group, google_network_security_mirroring_endpoint_group, google_network_security_mirroring_endpoint_group_association, google_network_security_security_profile, google_network_security_security_profile_group, google_compute_network_firewall_policy, google_compute_network_firewall_policy_packet_mirroring_rule, google_compute_network_firewall_policy_association'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: network_security/mirroring/basic/producer
     source: docs-samples
     file: network_security/mirroring/basic/producer/main.tf
@@ -30590,7 +30413,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_network_security_mirroring_deployment_group, google_network_security_mirroring_endpoint_group, google_network_security_mirroring_endpoint_group_association, google_network_security_security_profile, google_network_security_security_profile_group, google_compute_network_firewall_policy, google_compute_network_firewall_policy_packet_mirroring_rule, google_compute_network_firewall_policy_association'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: network_security_address_group-example-1
     source: provider-docs
     file: website/docs/r/network_security_address_group.html.markdown
@@ -33107,7 +32930,7 @@ cases:
     file: privateca/capool_all_fields/main.tf
     resource_types:
       - google_privateca_ca_pool
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_privateca_ca_pool'
@@ -33116,7 +32939,7 @@ cases:
     file: privateca/capool_basic/main.tf
     resource_types:
       - google_privateca_ca_pool
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_privateca_ca_pool'
@@ -33125,7 +32948,7 @@ cases:
     file: privateca/certificate_authority_basic/main.tf
     resource_types:
       - google_privateca_certificate_authority
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_privateca_certificate_authority'
@@ -33136,16 +32959,16 @@ cases:
       - google_project_service_identity
       - google_kms_crypto_key_iam_binding
       - google_privateca_certificate_authority
-    service: ""
+    service: kms
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_project_service_identity, google_privateca_certificate_authority'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: privateca/certificate_authority_subordinate
     source: docs-samples
     file: privateca/certificate_authority_subordinate/main.tf
     resource_types:
       - google_privateca_certificate_authority
-    service: ""
+    service: kms
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_privateca_certificate_authority'
@@ -33155,30 +32978,30 @@ cases:
     resource_types:
       - google_privateca_certificate_authority
       - google_privateca_certificate
-    service: ""
+    service: kms
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_privateca_certificate_authority, google_privateca_certificate'
+    reason: 'helper-provider: tls_private_key, tls_public_key'
   - name: privateca/certificate_csr
     source: docs-samples
     file: privateca/certificate_csr/main.tf
     resource_types:
       - google_privateca_certificate_authority
       - google_privateca_certificate
-    service: ""
+    service: kms
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_privateca_certificate_authority, google_privateca_certificate'
+    reason: 'helper-provider: tls_private_key, tls_cert_request'
   - name: privateca/certificate_no_authority
     source: docs-samples
     file: privateca/certificate_no_authority/main.tf
     resource_types:
       - google_privateca_certificate_authority
       - google_privateca_certificate
-    service: ""
+    service: kms
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_privateca_certificate_authority, google_privateca_certificate'
+    reason: 'helper-provider: tls_private_key, tls_public_key'
   - name: privateca/certificate_with_template
     source: docs-samples
     file: privateca/certificate_with_template/main.tf
@@ -33186,10 +33009,10 @@ cases:
       - google_privateca_certificate_template
       - google_privateca_certificate_authority
       - google_privateca_certificate
-    service: ""
+    service: kms
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_privateca_certificate_template, google_privateca_certificate_authority, google_privateca_certificate'
+    reason: 'helper-provider: tls_private_key, tls_cert_request'
   - name: privateca/quickstart
     source: docs-samples
     file: privateca/quickstart/main.tf
@@ -33198,10 +33021,10 @@ cases:
       - google_privateca_ca_pool
       - google_privateca_certificate_authority
       - google_privateca_certificate
-    service: serviceusage
+    service: kms
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_privateca_ca_pool, google_privateca_certificate_authority, google_privateca_certificate'
+    reason: 'helper-provider: tls_private_key, tls_cert_request'
   - name: privateca_ca_pool-example-1
     source: provider-docs
     file: website/docs/r/privateca_ca_pool.html.markdown
@@ -34316,8 +34139,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_concurrency
     source: docs-samples
     file: run/cloud_run_configuration_concurrency/main.tf
@@ -34325,8 +34147,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_containers
     source: docs-samples
     file: run/cloud_run_configuration_containers/main.tf
@@ -34334,8 +34155,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_cpu
     source: docs-samples
     file: run/cloud_run_configuration_cpu/main.tf
@@ -34343,8 +34163,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_cpu_allocation
     source: docs-samples
     file: run/cloud_run_configuration_cpu_allocation/main.tf
@@ -34352,8 +34171,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_description
     source: docs-samples
     file: run/cloud_run_configuration_description/main.tf
@@ -34361,8 +34179,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_environment_variables
     source: docs-samples
     file: run/cloud_run_configuration_environment_variables/main.tf
@@ -34370,8 +34187,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_http2
     source: docs-samples
     file: run/cloud_run_configuration_http2/main.tf
@@ -34379,8 +34195,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_labels
     source: docs-samples
     file: run/cloud_run_configuration_labels/main.tf
@@ -34388,8 +34203,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_max_instances
     source: docs-samples
     file: run/cloud_run_configuration_max_instances/main.tf
@@ -34397,8 +34211,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_memory_limits
     source: docs-samples
     file: run/cloud_run_configuration_memory_limits/main.tf
@@ -34406,8 +34219,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_min_instances
     source: docs-samples
     file: run/cloud_run_configuration_min_instances/main.tf
@@ -34415,8 +34227,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/cloud_run_configuration_request_timeout
     source: docs-samples
     file: run/cloud_run_configuration_request_timeout/main.tf
@@ -34424,8 +34235,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/connect_cloud_sql
     source: docs-samples
     file: run/connect_cloud_sql/main.tf
@@ -34436,10 +34246,9 @@ cases:
       - google_secret_manager_secret_version
       - google_secret_manager_secret_iam_member
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/custom_domain_mapping
     source: docs-samples
     file: run/custom_domain_mapping/main.tf
@@ -34457,8 +34266,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/direct_vpc
     source: docs-samples
     file: run/direct_vpc/main.tf
@@ -34466,68 +34274,61 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/healthchecks_liveness_probe_grpc
     source: docs-samples
     file: run/healthchecks_liveness_probe_grpc/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/healthchecks_liveness_probe_http
     source: docs-samples
     file: run/healthchecks_liveness_probe_http/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/healthchecks_startup_probe_grpc
     source: docs-samples
     file: run/healthchecks_startup_probe_grpc/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/healthchecks_startup_probe_http
     source: docs-samples
     file: run/healthchecks_startup_probe_http/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/healthchecks_startup_probe_tcp
     source: docs-samples
     file: run/healthchecks_startup_probe_tcp/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/identity
     source: docs-samples
     file: run/identity/main.tf
     resource_types:
       - google_service_account
       - google_cloud_run_v2_service
-    service: iam
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/image_processing
     source: docs-samples
     file: run/image_processing/main.tf
@@ -34542,20 +34343,20 @@ cases:
       - google_cloud_run_v2_service
       - google_pubsub_topic_iam_binding
       - google_storage_notification
-    service: iam
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_service_iam_binding, google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/ingress
     source: docs-samples
     file: run/ingress/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/interservice
     source: docs-samples
     file: run/interservice/main.tf
@@ -34573,10 +34374,10 @@ cases:
     resource_types:
       - google_project_service
       - google_cloud_run_v2_job
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_v2_job'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/jobs_execute_jobs_on_schedule
     source: docs-samples
     file: run/jobs_execute_jobs_on_schedule/main.tf
@@ -34587,40 +34388,40 @@ cases:
       - google_cloud_run_v2_job
       - google_cloud_run_v2_job_iam_binding
       - google_cloud_scheduler_job
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_v2_job, google_cloud_run_v2_job_iam_binding'
+    reason: 'helper-provider: null_resource'
   - name: run/jobs_max_retries_create
     source: docs-samples
     file: run/jobs_max_retries_create/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_job
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_v2_job'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/jobs_task_parallelism_create
     source: docs-samples
     file: run/jobs_task_parallelism_create/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_job
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_v2_job'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/jobs_task_timeout_create
     source: docs-samples
     file: run/jobs_task_timeout_create/main.tf
     resource_types:
       - google_project_service
       - google_cloud_run_v2_job
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_v2_job'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/multiple_regions
     source: docs-samples
     file: run/multiple_regions/main.tf
@@ -34636,10 +34437,10 @@ cases:
       - google_cloud_run_v2_service
       - google_cloud_run_service_iam_member
       - google_compute_target_http_proxy
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_backend_service, google_compute_url_map, google_compute_managed_ssl_certificate, google_compute_target_https_proxy, google_compute_global_forwarding_rule, google_compute_region_network_endpoint_group, google_cloud_run_service_iam_member, google_compute_target_http_proxy'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/noauth
     source: docs-samples
     file: run/noauth/main.tf
@@ -34662,10 +34463,10 @@ cases:
       - google_project_iam_binding
       - google_pubsub_topic
       - google_pubsub_subscription
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_cloud_run_service_iam_binding, google_project_service_identity'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: run/remove_tag
     source: docs-samples
     file: run/remove_tag/main.tf
@@ -34673,8 +34474,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/scheduled
     source: docs-samples
     file: run/scheduled/main.tf
@@ -34684,7 +34484,7 @@ cases:
       - google_service_account
       - google_cloud_run_service_iam_member
       - google_cloud_scheduler_job
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_cloud_run_service_iam_member'
@@ -34697,10 +34497,9 @@ cases:
       - google_service_account
       - google_secret_manager_secret_iam_member
       - google_cloud_run_v2_service
-    service: secretmanager
+    service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/secure_services
     source: docs-samples
     file: run/secure_services/main.tf
@@ -34725,7 +34524,7 @@ cases:
       - google_compute_address
       - google_compute_router_nat
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vpc_access_connector, google_compute_router, google_compute_address, google_compute_router_nat'
@@ -34736,7 +34535,7 @@ cases:
       - google_service_account
       - google_cloud_run_v2_service
       - google_cloud_run_service_iam_member
-    service: iam
+    service: run
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_cloud_run_service_iam_member'
@@ -34760,8 +34559,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/traffic_latest_revision
     source: docs-samples
     file: run/traffic_latest_revision/main.tf
@@ -34769,8 +34567,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/traffic_rollback
     source: docs-samples
     file: run/traffic_rollback/main.tf
@@ -34778,8 +34575,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/traffic_split
     source: docs-samples
     file: run/traffic_split/main.tf
@@ -34787,8 +34583,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/traffic_split_tag
     source: docs-samples
     file: run/traffic_split_tag/main.tf
@@ -34796,8 +34591,7 @@ cases:
       - google_cloud_run_v2_service
     service: run
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: run/vpc_access_connector
     source: docs-samples
     file: run/vpc_access_connector/main.tf
@@ -34808,7 +34602,7 @@ cases:
       - google_compute_router
       - google_compute_router_nat
       - google_cloud_run_v2_service
-    service: serviceusage
+    service: run
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vpc_access_connector, google_compute_router, google_compute_router_nat'
@@ -35382,8 +35176,7 @@ cases:
       - google_secret_manager_regional_secret
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret'
+    status: candidate
   - name: secret_manager_regional_secret-example-2
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret.html.markdown
@@ -35393,8 +35186,7 @@ cases:
       - google_secret_manager_regional_secret
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret'
+    status: candidate
   - name: secret_manager_regional_secret-example-3
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret.html.markdown
@@ -35405,8 +35197,7 @@ cases:
       - google_secret_manager_regional_secret
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret'
+    status: candidate
   - name: secret_manager_regional_secret-example-4
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret.html.markdown
@@ -35415,8 +35206,7 @@ cases:
       - google_secret_manager_regional_secret
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret'
+    status: candidate
   - name: secret_manager_regional_secret-example-5
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret.html.markdown
@@ -35425,8 +35215,7 @@ cases:
       - google_secret_manager_regional_secret
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret'
+    status: candidate
   - name: secret_manager_regional_secret-example-6
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret.html.markdown
@@ -35435,8 +35224,7 @@ cases:
       - google_secret_manager_regional_secret
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret'
+    status: candidate
   - name: secret_manager_regional_secret_iam-example-1
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_iam.html.markdown
@@ -35445,8 +35233,7 @@ cases:
       - google_secret_manager_regional_secret_iam_policy
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret_iam_policy'
+    status: candidate
   - name: secret_manager_regional_secret_iam-example-2
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_iam.html.markdown
@@ -35455,8 +35242,7 @@ cases:
       - google_secret_manager_regional_secret_iam_policy
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret_iam_policy'
+    status: candidate
   - name: secret_manager_regional_secret_iam-example-3
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_iam.html.markdown
@@ -35465,8 +35251,7 @@ cases:
       - google_secret_manager_regional_secret_iam_binding
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret_iam_binding'
+    status: candidate
   - name: secret_manager_regional_secret_iam-example-4
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_iam.html.markdown
@@ -35475,8 +35260,7 @@ cases:
       - google_secret_manager_regional_secret_iam_binding
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret_iam_binding'
+    status: candidate
   - name: secret_manager_regional_secret_iam-example-5
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_iam.html.markdown
@@ -35485,8 +35269,7 @@ cases:
       - google_secret_manager_regional_secret_iam_member
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret_iam_member'
+    status: candidate
   - name: secret_manager_regional_secret_iam-example-6
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_iam.html.markdown
@@ -35495,8 +35278,7 @@ cases:
       - google_secret_manager_regional_secret_iam_member
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret_iam_member'
+    status: candidate
   - name: secret_manager_regional_secret_version-example-1
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_version.html.markdown
@@ -35506,8 +35288,7 @@ cases:
       - google_secret_manager_regional_secret_version
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret, google_secret_manager_regional_secret_version'
+    status: candidate
   - name: secret_manager_regional_secret_version-example-2
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_version.html.markdown
@@ -35517,8 +35298,7 @@ cases:
       - google_secret_manager_regional_secret_version
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret, google_secret_manager_regional_secret_version'
+    status: candidate
   - name: secret_manager_regional_secret_version-example-3
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_version.html.markdown
@@ -35528,8 +35308,7 @@ cases:
       - google_secret_manager_regional_secret_version
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret, google_secret_manager_regional_secret_version'
+    status: candidate
   - name: secret_manager_regional_secret_version-example-4
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_version.html.markdown
@@ -35539,8 +35318,7 @@ cases:
       - google_secret_manager_regional_secret_version
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret, google_secret_manager_regional_secret_version'
+    status: candidate
   - name: secret_manager_regional_secret_version-example-5
     source: provider-docs
     file: website/docs/r/secret_manager_regional_secret_version.html.markdown
@@ -35550,8 +35328,7 @@ cases:
       - google_secret_manager_regional_secret_version
     service: secretmanager
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret, google_secret_manager_regional_secret_version'
+    status: candidate
   - name: secret_manager_secret-example-1
     source: provider-docs
     file: website/docs/r/secret_manager_secret.html.markdown
@@ -36626,7 +36403,7 @@ cases:
     service: cloudsql
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_secret_manager_regional_secret, google_secret_manager_regional_secret_version, google_sql_provision_script'
+    reason: 'unsupported-service: google_sql_provision_script'
   - name: sql_source_representation_instance-example-1
     source: provider-docs
     file: website/docs/r/sql_source_representation_instance.html.markdown
@@ -36654,8 +36431,7 @@ cases:
       - google_sql_ssl_cert
     service: cloudsql
     mode: plan
-    status: excluded
-    reason: 'unsupported-service: google_sql_ssl_cert'
+    status: candidate
   - name: sql_user-example-1
     source: provider-docs
     file: website/docs/r/sql_user.html.markdown
@@ -36708,20 +36484,18 @@ cases:
       - google_kms_crypto_key
       - google_project_iam_member
       - google_storage_bucket
-    service: compute
+    service: storage
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: storage/hmac_key
     source: docs-samples
     file: storage/hmac_key/main.tf
     resource_types:
       - google_service_account
       - google_storage_hmac_key
-    service: iam
+    service: storage
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: storage/make_data_public
     source: docs-samples
     file: storage/make_data_public/main.tf
@@ -36730,8 +36504,7 @@ cases:
       - google_storage_bucket_iam_member
     service: storage
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: storage/new_bucket
     source: docs-samples
     file: storage/new_bucket/main.tf
@@ -36740,8 +36513,7 @@ cases:
       - google_storage_bucket_object
     service: storage
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: storage/object_lifecycle_setting
     source: docs-samples
     file: storage/object_lifecycle_setting/main.tf
@@ -36750,7 +36522,7 @@ cases:
     service: storage
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: storage/pubsub_notifications
     source: docs-samples
     file: storage/pubsub_notifications/main.tf
@@ -36762,7 +36534,7 @@ cases:
     service: storage
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: storage/remote_terraform_backend_template
     source: docs-samples
     file: storage/remote_terraform_backend_template/main.tf
@@ -36771,7 +36543,7 @@ cases:
     service: storage
     mode: plan
     status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    reason: 'helper-provider: local_file'
   - name: storage/static_website
     source: docs-samples
     file: storage/static_website/main.tf
@@ -36781,8 +36553,7 @@ cases:
       - google_storage_bucket_object
     service: storage
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: storage_anywhere_cache-example-1
     source: provider-docs
     file: website/docs/r/storage_anywhere_cache.html.markdown
@@ -37699,16 +37470,15 @@ cases:
     file: vertex_ai/api/main.tf
     resource_types:
       - google_project_service
-    service: serviceusage
+    service: storage
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: vertex_ai/dataset
     source: docs-samples
     file: vertex_ai/dataset/main.tf
     resource_types:
       - google_vertex_ai_dataset
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_dataset'
@@ -37717,7 +37487,7 @@ cases:
     file: vertex_ai/endpoint/main.tf
     resource_types:
       - google_vertex_ai_endpoint
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_endpoint'
@@ -37726,7 +37496,7 @@ cases:
     file: vertex_ai/featurestore/main.tf
     resource_types:
       - google_vertex_ai_featurestore
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_featurestore'
@@ -37736,7 +37506,7 @@ cases:
     resource_types:
       - google_vertex_ai_featurestore
       - google_vertex_ai_featurestore_entitytype
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_featurestore, google_vertex_ai_featurestore_entitytype'
@@ -37759,7 +37529,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint, google_vertex_ai_index'
@@ -37772,7 +37542,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint_deployed_index, google_vertex_ai_index_endpoint, google_vertex_ai_index'
@@ -37785,7 +37555,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint_deployed_index, google_vertex_ai_index_endpoint, google_vertex_ai_index'
@@ -37801,7 +37571,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint_deployed_index, google_vertex_ai_index_endpoint, google_service_networking_connection, google_compute_global_address, google_vertex_ai_index'
@@ -37814,7 +37584,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint_deployed_index, google_vertex_ai_index_endpoint, google_vertex_ai_index'
@@ -37827,7 +37597,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint_deployed_index, google_vertex_ai_index_endpoint, google_vertex_ai_index'
@@ -37843,7 +37613,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint_deployed_index, google_vertex_ai_index_endpoint, google_service_networking_connection, google_compute_global_address, google_vertex_ai_index'
@@ -37855,7 +37625,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint, google_vertex_ai_index'
@@ -37870,7 +37640,7 @@ cases:
       - google_storage_bucket
       - google_storage_bucket_object
       - google_vertex_ai_index
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_index_endpoint, google_service_networking_connection, google_compute_global_address, google_vertex_ai_index'
@@ -37890,7 +37660,7 @@ cases:
     file: vertex_ai/managed_notebooks_runtime/main.tf
     resource_types:
       - google_notebooks_runtime
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_notebooks_runtime'
@@ -37899,10 +37669,10 @@ cases:
     file: vertex_ai/metadata_store/main.tf
     resource_types:
       - google_vertex_ai_metadata_store
-    service: ""
+    service: storage
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_vertex_ai_metadata_store'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: vertex_ai/metadata_store_cmek
     source: docs-samples
     file: vertex_ai/metadata_store_cmek/main.tf
@@ -37911,16 +37681,16 @@ cases:
       - google_kms_key_ring
       - google_kms_crypto_key
       - google_project_iam_member
-    service: ""
+    service: storage
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_vertex_ai_metadata_store'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: vertex_ai/tensorboard
     source: docs-samples
     file: vertex_ai/tensorboard/main.tf
     resource_types:
       - google_vertex_ai_tensorboard
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_vertex_ai_tensorboard'
@@ -37929,7 +37699,7 @@ cases:
     file: vertex_ai/workbench/main.tf
     resource_types:
       - google_workbench_instance
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workbench_instance'
@@ -37938,7 +37708,7 @@ cases:
     file: vertex_ai/workbench_create_metadata/main.tf
     resource_types:
       - google_workbench_instance
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workbench_instance'
@@ -37947,7 +37717,7 @@ cases:
     file: vertex_ai/workbench_dataproc/main.tf
     resource_types:
       - google_workbench_instance
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workbench_instance'
@@ -37956,7 +37726,7 @@ cases:
     file: vertex_ai/workbench_idle_shutdown/main.tf
     resource_types:
       - google_workbench_instance
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workbench_instance'
@@ -37965,7 +37735,7 @@ cases:
     file: vertex_ai/workbench_remove_metadata/main.tf
     resource_types:
       - google_workbench_instance
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workbench_instance'
@@ -37974,7 +37744,7 @@ cases:
     file: vertex_ai/workbench_update_metadata/main.tf
     resource_types:
       - google_workbench_instance
-    service: ""
+    service: storage
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workbench_instance'
@@ -38308,7 +38078,7 @@ cases:
     service: resourcemanager
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_bigquery_dataset_iam_member, google_vertex_ai_feature_online_store, google_vertex_ai_feature_group, google_vertex_ai_feature_group_feature, google_vertex_ai_feature_online_store_featureview'
+    reason: 'unsupported-service: google_vertex_ai_feature_online_store, google_vertex_ai_feature_group, google_vertex_ai_feature_group_feature, google_vertex_ai_feature_online_store_featureview'
   - name: vertex_ai_feature_online_store_featureview-example-4
     source: provider-docs
     file: website/docs/r/vertex_ai_feature_online_store_featureview.html.markdown
@@ -39148,8 +38918,7 @@ cases:
       - google_compute_firewall
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: vpc/network_custom_mtu
     source: docs-samples
     file: vpc/network_custom_mtu/main.tf
@@ -39157,8 +38926,7 @@ cases:
       - google_compute_network
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: vpc/network_ipv6
     source: docs-samples
     file: vpc/network_ipv6/main.tf
@@ -39167,8 +38935,7 @@ cases:
       - google_compute_subnetwork
     service: compute
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: vpc/private_service_connect/private_service_connect_google_apis
     source: docs-samples
     file: vpc/private_service_connect/private_service_connect_google_apis/main.tf
@@ -39180,7 +38947,7 @@ cases:
     service: compute
     mode: plan
     status: excluded
-    reason: 'unsupported-service: google_compute_global_address, google_compute_global_forwarding_rule'
+    reason: 'beta-provider: sample is written for hashicorp/google-beta'
   - name: vpc_access_connector-example-1
     source: provider-docs
     file: website/docs/r/vpc_access_connector.html.markdown
@@ -39348,10 +39115,9 @@ cases:
       - google_project_service
       - google_service_account
       - google_workflows_workflow
-    service: serviceusage
+    service: iam
     mode: plan
-    status: excluded
-    reason: sample scenario; plan-run deferred to a follow-up session (TF2-x)
+    status: candidate
   - name: workflows/cloud_run_job
     source: docs-samples
     file: workflows/cloud_run_job/main.tf
@@ -39364,7 +39130,7 @@ cases:
       - google_cloud_run_v2_job
       - google_workflows_workflow
       - google_eventarc_trigger
-    service: serviceusage
+    service: iam
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_artifact_registry_repository, google_cloud_run_v2_job'
@@ -39415,7 +39181,7 @@ cases:
     resource_types:
       - google_workload_identity_service_agent
       - google_project_iam_member
-    service: ""
+    service: iam
     mode: plan
     status: excluded
     reason: 'unsupported-service: google_workload_identity_service_agent'

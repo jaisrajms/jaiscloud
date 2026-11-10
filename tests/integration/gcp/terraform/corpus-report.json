@@ -21,38 +21,38 @@
     }
   ],
   "cases": 3581,
-  "candidates": 393,
-  "excluded": 3188,
+  "candidates": 627,
+  "excluded": 2954,
   "zero_example_services": null,
   "services": [
     {
       "service": "bigquery",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 21,
+      "plan_ok": 21,
       "failures": {}
     },
     {
       "service": "clouddns",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 12,
+      "plan_ok": 12,
       "failures": {}
     },
     {
       "service": "cloudsql",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 97,
+      "plan_ok": 97,
       "failures": {}
     },
     {
       "service": "compute",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 18,
+      "plan_ok": 18,
       "failures": {}
     },
     {
       "service": "container",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 29,
+      "plan_ok": 29,
       "failures": {}
     },
     {
@@ -65,8 +65,8 @@
     },
     {
       "service": "eventarc",
-      "planned": 5,
-      "plan_ok": 4,
+      "planned": 9,
+      "plan_ok": 8,
       "failures": {
         "config": 1
       }
@@ -91,8 +91,8 @@
     },
     {
       "service": "iam",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 6,
+      "plan_ok": 6,
       "failures": {}
     },
     {
@@ -111,8 +111,8 @@
     },
     {
       "service": "managedkafka",
-      "planned": 2,
-      "plan_ok": 2,
+      "planned": 4,
+      "plan_ok": 4,
       "failures": {}
     },
     {
@@ -149,17 +149,15 @@
     },
     {
       "service": "run",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 34,
+      "plan_ok": 34,
       "failures": {}
     },
     {
       "service": "scheduler",
       "planned": 5,
-      "plan_ok": 3,
-      "failures": {
-        "unimplemented": 2
-      }
+      "plan_ok": 5,
+      "failures": {}
     },
     {
       "service": "secretmanager",
@@ -169,8 +167,8 @@
     },
     {
       "service": "storage",
-      "planned": 5,
-      "plan_ok": 5,
+      "planned": 11,
+      "plan_ok": 11,
       "failures": {}
     },
     {
@@ -237,18 +235,6 @@
       ]
     },
     {
-      "service": "scheduler",
-      "resource_type": "google_cloud_scheduler_job",
-      "class": "unimplemented",
-      "signature": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:",
-      "count": 2,
-      "example": "cloud_scheduler_job-example-5",
-      "cases": [
-        "cloud_scheduler_job-example-5",
-        "cloud_scheduler_job-example-6"
-      ]
-    },
-    {
       "service": "tasks",
       "resource_type": "google_cloud_tasks_queue_iam_binding",
       "class": "config",
@@ -274,22 +260,235 @@
   "excluded_reasons": [
     {
       "class": "beta-provider",
-      "count": 323
-    },
-    {
-      "class": "deferred-sample",
-      "count": 212
+      "count": 388
     },
     {
       "class": "helper-provider",
-      "count": 8
+      "count": 30
+    },
+    {
+      "class": "provider-version",
+      "count": 1
     },
     {
       "class": "unsupported-service",
-      "count": 2645
+      "count": 2535
     }
   ],
   "plan": [
+    {
+      "name": "bigquery/bigquery_authorized_view_tutorial",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_authorized_view_tutorial/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table",
+        "google_bigquery_dataset_access",
+        "google_bigquery_table_iam_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_dataset",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_dataset/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_dataset_cmek",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_dataset_cmek/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_kms_crypto_key",
+        "google_kms_key_ring",
+        "google_project_iam_member"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_dataset_iam",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_dataset_iam/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_dataset_iam_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_materialized_view",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_materialized_view/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_spanner_external_dataset",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_spanner_external_dataset/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_stored_procedure",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_stored_procedure/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_routine"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table_clustered",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table_clustered/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table_cmek",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table_cmek/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table",
+        "google_kms_crypto_key",
+        "google_kms_key_ring",
+        "google_project_iam_member"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table_iam",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table_iam/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table",
+        "google_bigquery_table_iam_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table_ingestion_partitioned",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table_ingestion_partitioned/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table_partitioned",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table_partitioned/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_table_range_partitioned",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_table_range_partitioned/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_create_view",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_create_view/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_dataset",
+        "google_bigquery_table"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "bigquery/bigquery_query",
+      "source": "docs-samples",
+      "file": "bigquery/bigquery_query/main.tf",
+      "service": "bigquery",
+      "resource_types": [
+        "google_bigquery_job"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
     {
       "name": "bigquery_dataset-example-1",
       "source": "provider-docs",
@@ -354,6 +553,97 @@
       "service": "bigquery",
       "resource_types": [
         "google_bigquery_dataset"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/managed_zone_basic",
+      "source": "docs-samples",
+      "file": "dns/managed_zone_basic/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/managed_zone_private",
+      "source": "docs-samples",
+      "file": "dns/managed_zone_private/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/managed_zone_private_forwarding",
+      "source": "docs-samples",
+      "file": "dns/managed_zone_private_forwarding/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/managed_zone_private_peering",
+      "source": "docs-samples",
+      "file": "dns/managed_zone_private_peering/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/managed_zone_quickstart",
+      "source": "docs-samples",
+      "file": "dns/managed_zone_quickstart/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_compute_instance",
+        "google_compute_firewall",
+        "google_dns_managed_zone",
+        "google_dns_record_set"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/managed_zone_with_dnssec",
+      "source": "docs-samples",
+      "file": "dns/managed_zone_with_dnssec/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "dns/record_set_basic",
+      "source": "docs-samples",
+      "file": "dns/record_set_basic/main.tf",
+      "service": "clouddns",
+      "resource_types": [
+        "google_dns_managed_zone",
+        "google_dns_record_set"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -431,6 +721,1134 @@
       "summary": ""
     },
     {
+      "name": "cloud_sql/instance_ha",
+      "source": "docs-samples",
+      "file": "cloud_sql/instance_ha/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/instance_labels",
+      "source": "docs-samples",
+      "file": "cloud_sql/instance_labels/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/instance_pitr",
+      "source": "docs-samples",
+      "file": "cloud_sql/instance_pitr/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/instance_ssl_cert",
+      "source": "docs-samples",
+      "file": "cloud_sql/instance_ssl_cert/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_ssl_cert"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_database_basic",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_database_basic/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_database_instance",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_database_instance/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_enterprise_plus_instance_clone",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_enterprise_plus_instance_clone/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_enterprise_plus_instance_labels",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_enterprise_plus_instance_labels/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_enterprise_plus_instance_pvp",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_enterprise_plus_instance_pvp/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_authorized_network",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_authorized_network/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_backup",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_backup/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_backup_location",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_backup_location/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_backup_retention",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_backup_retention/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_clone",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_clone/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_final_backup",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_final_backup/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_flags",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_flags/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_google_managed_cas_ca",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_google_managed_cas_ca/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_ha",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_ha/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_iam_db_auth",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_iam_db_auth/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user",
+        "google_service_account",
+        "google_project_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_iam_group_auth",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_iam_group_auth/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user",
+        "google_project_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_labels",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_labels/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_managed_connection_pooling",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_managed_connection_pooling/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_pitr",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_pitr/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_psc_sa",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_psc_sa/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_compute_network",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_public_ip",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_public_ip/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_pvp",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_pvp/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_read_pool",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_read_pool/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_read_pool_auto_scale",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_read_pool_auto_scale/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_replica",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_replica/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_ssl_cert",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_ssl_cert/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_ssl_cert"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_ssm",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_ssm/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_switchover/dr_replica_create",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_switchover/dr_replica_create/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_switchover/dr_replica_designate",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_switchover/dr_replica_designate/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_switchover/switchover_begin",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_switchover/switchover_begin/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_instance_switchover/switchover_finish",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_instance_switchover/switchover_finish/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/mysql_user_db_role",
+      "source": "docs-samples",
+      "file": "cloud_sql/mysql_user_db_role/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_database_basic",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_database_basic/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_database_instance",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_database_instance/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_enterprise_edition_instance",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_enterprise_edition_instance/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_enterprise_plus_edition_instance",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_enterprise_plus_edition_instance/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_enterprise_plus_instance_clone",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_enterprise_plus_instance_clone/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_enterprise_plus_instance_labels",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_enterprise_plus_instance_labels/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_enterprise_plus_instance_pvp",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_enterprise_plus_instance_pvp/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_authorized_network",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_authorized_network/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_backup",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_backup/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_backup_location",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_backup_location/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_backup_retention",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_backup_retention/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_clone",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_clone/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_final_backup",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_final_backup/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_flags",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_flags/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_google_managed_cas_ca",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_google_managed_cas_ca/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_ha",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_ha/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_iam_db_auth",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_iam_db_auth/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user",
+        "google_service_account",
+        "google_project_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_iam_group_auth",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_iam_group_auth/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user",
+        "google_project_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_labels",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_labels/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_managed_connection_pooling",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_managed_connection_pooling/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_pitr",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_pitr/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_psc_sa",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_psc_sa/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_compute_network",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_public_ip",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_public_ip/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_pvp",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_pvp/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_read_pool",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_read_pool/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_read_pool_auto_scale",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_read_pool_auto_scale/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_replica",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_replica/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_ssl_cert",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_ssl_cert/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_ssl_cert"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_ssm",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_ssm/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_switchover/dr_replica_create",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_switchover/dr_replica_create/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_switchover/dr_replica_designate",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_switchover/dr_replica_designate/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_switchover/switchover_begin",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_switchover/switchover_begin/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_instance_switchover/switchover_finish",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_instance_switchover/switchover_finish/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/postgres_user_db_role",
+      "source": "docs-samples",
+      "file": "cloud_sql/postgres_user_db_role/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_database_basic",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_database_basic/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_database_instance",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_database_instance/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance",
+        "google_sql_user"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_authorized_network",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_authorized_network/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_backup",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_backup/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_backup_location",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_backup_location/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_backup_retention",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_backup_retention/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_clone",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_clone/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_final_backup",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_final_backup/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_flags",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_flags/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_google_managed_cas_ca",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_google_managed_cas_ca/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_ha",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_ha/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_labels",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_labels/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_pitr",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_pitr/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_psc_sa",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_psc_sa/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_compute_network",
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_public_ip",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_public_ip/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_read_pool_auto_scale",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_read_pool_auto_scale/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_replica",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_replica/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_ssl_cert",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_ssl_cert/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_ssm",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_ssm/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_switchover/create_dr_replica",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_switchover/create_dr_replica/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_switchover/switchover_begin",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_switchover/switchover_begin/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "cloud_sql/sqlserver_instance_switchover/switchover_finish",
+      "source": "docs-samples",
+      "file": "cloud_sql/sqlserver_instance_switchover/switchover_finish/main.tf",
+      "service": "cloudsql",
+      "resource_types": [
+        "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
       "name": "sql_database-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/sql_database.html.markdown",
@@ -492,6 +1910,168 @@
       "service": "cloudsql",
       "resource_types": [
         "google_sql_database_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/add_persistent_disk",
+      "source": "docs-samples",
+      "file": "compute/add_persistent_disk/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_project_service",
+        "google_compute_disk",
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/basic_vm",
+      "source": "docs-samples",
+      "file": "compute/basic_vm/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance",
+        "google_compute_network",
+        "google_compute_subnetwork"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/firewall_rule_for_health_check",
+      "source": "docs-samples",
+      "file": "compute/firewall_rule_for_health_check/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_firewall"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/instance_custom_hostname",
+      "source": "docs-samples",
+      "file": "compute/instance_custom_hostname/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/instance_virtual_display_enabled",
+      "source": "docs-samples",
+      "file": "compute/instance_virtual_display_enabled/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/local_ssd",
+      "source": "docs-samples",
+      "file": "compute/local_ssd/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/quickstart/create_vm",
+      "source": "docs-samples",
+      "file": "compute/quickstart/create_vm/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/run_shutdown_scripts",
+      "source": "docs-samples",
+      "file": "compute/run_shutdown_scripts/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/service_account_for_instances",
+      "source": "docs-samples",
+      "file": "compute/service_account_for_instances/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_service_account",
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute/spot_instance_basic",
+      "source": "docs-samples",
+      "file": "compute/spot_instance_basic/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_instance"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "vpc/firewall_with_target_tags",
+      "source": "docs-samples",
+      "file": "vpc/firewall_with_target_tags/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_firewall"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "vpc/network_custom_mtu",
+      "source": "docs-samples",
+      "file": "vpc/network_custom_mtu/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "vpc/network_ipv6",
+      "source": "docs-samples",
+      "file": "vpc/network_ipv6/main.tf",
+      "service": "compute",
+      "resource_types": [
+        "google_compute_network",
+        "google_compute_subnetwork"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -564,6 +2144,308 @@
       "summary": ""
     },
     {
+      "name": "gke/autopilot/basic",
+      "source": "docs-samples",
+      "file": "gke/autopilot/basic/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/autopilot/custom_service_account",
+      "source": "docs-samples",
+      "file": "gke/autopilot/custom_service_account/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_project_iam_member",
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/autopilot/labels",
+      "source": "docs-samples",
+      "file": "gke/autopilot/labels/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/autopilot/release_channel",
+      "source": "docs-samples",
+      "file": "gke/autopilot/release_channel/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/enterprise/enable",
+      "source": "docs-samples",
+      "file": "gke/enterprise/enable/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_project_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/binary-authorization",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/binary-authorization/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/hpa-logs",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/hpa-logs/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/labels",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/labels/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/multi-zone",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/multi-zone/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/node_pool",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/node_pool/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_project_iam_member",
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/node_system_config",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/node_system_config/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/ray",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/ray/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/single-zone",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/single-zone/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/regional/windows",
+      "source": "docs-samples",
+      "file": "gke/standard/regional/windows/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/arm",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/arm/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/gpu",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/gpu/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/multi-zone",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/multi-zone/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/no-channel-to-release-channel/no_minor_or_node_upgrade",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/no-channel-to-release-channel/no_minor_or_node_upgrade/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/no-channel-to-release-channel/no_upgrade",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/no-channel-to-release-channel/no_upgrade/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/no-channel-to-release-channel/rc_none",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/no-channel-to-release-channel/rc_none/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/no-channel-to-release-channel/rc_regular",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/no-channel-to-release-channel/rc_regular/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/node_image",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/node_image/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/secondary-boot-disk",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/secondary-boot-disk/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster",
+        "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "gke/standard/zonal/single-zone",
+      "source": "docs-samples",
+      "file": "gke/standard/zonal/single-zone/main.tf",
+      "service": "container",
+      "resource_types": [
+        "google_container_cluster"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
       "name": "container_cluster-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/container_cluster.html.markdown",
@@ -573,6 +2455,20 @@
         "google_service_account",
         "google_container_cluster",
         "google_container_node_pool"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "container_cluster-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/container_cluster.html.markdown",
+      "block": 2,
+      "service": "container",
+      "resource_types": [
+        "google_service_account",
+        "google_container_cluster"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -614,21 +2510,6 @@
         "google_service_account",
         "google_container_cluster",
         "google_container_node_pool"
-      ],
-      "mode": "plan",
-      "class": "plan-ok",
-      "summary": ""
-    },
-    {
-      "name": "container_node_pool-example-2",
-      "source": "provider-docs",
-      "file": "website/docs/r/container_node_pool.html.markdown",
-      "block": 2,
-      "service": "container",
-      "resource_types": [
-        "google_service_account",
-        "google_container_node_pool",
-        "google_container_cluster"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -702,6 +2583,77 @@
       "class": "config",
       "summary": "Insufficient placement blocks: At least 1 \"placement\" blocks are required.",
       "detail": "Insufficient placement blocks: At least 1 \"placement\" blocks are required."
+    },
+    {
+      "name": "eventarc/advanced",
+      "source": "docs-samples",
+      "file": "eventarc/advanced/main.tf",
+      "service": "eventarc",
+      "resource_types": [
+        "google_project_service",
+        "google_service_account",
+        "google_project_iam_member",
+        "google_cloud_run_v2_service",
+        "google_eventarc_message_bus",
+        "google_eventarc_google_api_source",
+        "google_eventarc_pipeline",
+        "google_eventarc_enrollment"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "eventarc/basic",
+      "source": "docs-samples",
+      "file": "eventarc/basic/main.tf",
+      "service": "eventarc",
+      "resource_types": [
+        "google_project_service",
+        "google_service_account",
+        "google_project_iam_member",
+        "google_storage_bucket",
+        "google_cloud_run_v2_service",
+        "google_eventarc_trigger"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "eventarc/basic_pubsub",
+      "source": "docs-samples",
+      "file": "eventarc/basic_pubsub/main.tf",
+      "service": "eventarc",
+      "resource_types": [
+        "google_project_service",
+        "google_service_account",
+        "google_pubsub_topic",
+        "google_pubsub_topic_iam_member",
+        "google_cloud_run_v2_service",
+        "google_cloud_run_v2_service_iam_member",
+        "google_eventarc_trigger"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "eventarc/workflows",
+      "source": "docs-samples",
+      "file": "eventarc/workflows/main.tf",
+      "service": "eventarc",
+      "resource_types": [
+        "google_project_service",
+        "google_service_account",
+        "google_project_iam_member",
+        "google_storage_bucket",
+        "google_workflows_workflow",
+        "google_eventarc_trigger"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
     },
     {
       "name": "eventarc_enrollment-example-1",
@@ -940,6 +2892,46 @@
       "summary": ""
     },
     {
+      "name": "workflows/basic",
+      "source": "docs-samples",
+      "file": "workflows/basic/main.tf",
+      "service": "iam",
+      "resource_types": [
+        "google_project_service",
+        "google_service_account",
+        "google_workflows_workflow"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project_iam-example-2",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_iam.html.markdown",
+      "block": 2,
+      "service": "iam",
+      "resource_types": [
+        "google_project_iam_policy"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "google_project_iam-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_iam.html.markdown",
+      "block": 3,
+      "service": "iam",
+      "resource_types": [
+        "google_project_iam_binding"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
       "name": "google_service_account-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/google_service_account.html.markdown",
@@ -975,32 +2967,6 @@
       "resource_types": [
         "google_service_account",
         "google_service_account_key"
-      ],
-      "mode": "plan",
-      "class": "plan-ok",
-      "summary": ""
-    },
-    {
-      "name": "google_project_iam-example-2",
-      "source": "provider-docs",
-      "file": "website/docs/r/google_project_iam.html.markdown",
-      "block": 2,
-      "service": "iam",
-      "resource_types": [
-        "google_project_iam_policy"
-      ],
-      "mode": "plan",
-      "class": "plan-ok",
-      "summary": ""
-    },
-    {
-      "name": "google_project_iam-example-3",
-      "source": "provider-docs",
-      "file": "website/docs/r/google_project_iam.html.markdown",
-      "block": 3,
-      "service": "iam",
-      "resource_types": [
-        "google_project_iam_binding"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -1063,7 +3029,7 @@
       "mode": "plan",
       "class": "config",
       "summary": "terraform init",
-      "detail": "…, in resource \"google_kms_crypto_key\" \"example-key\":\n  87:   protection_level = \"SOFTWARE\"\n  88: }\n\nQuoted strings may not be split over multiple lines. To produce a multi-line\nstring, either use the \\n escape to represent a newline character or use the\n\"heredoc\" multi-line template syntax.\n\nError: Invalid multi-line string\n\n  on main.tf line 88, in resource \"google_kms_crypto_key\" \"example-key\":\n  88: }\n\nQuoted strings may not be split over multiple lines. To produce a multi-line\nstring, either use the \\n escape to represent a newline character or use the\n\"heredoc\" multi-line template syntax."
+      "detail": "…, in resource \"google_kms_crypto_key\" \"example-key\":\n  88:   protection_level = \"SOFTWARE\"\n  89: }\n\nQuoted strings may not be split over multiple lines. To produce a multi-line\nstring, either use the \\n escape to represent a newline character or use the\n\"heredoc\" multi-line template syntax.\n\nError: Invalid multi-line string\n\n  on main.tf line 89, in resource \"google_kms_crypto_key\" \"example-key\":\n  89: }\n\nQuoted strings may not be split over multiple lines. To produce a multi-line\nstring, either use the \\n escape to represent a newline character or use the\n\"heredoc\" multi-line template syntax."
     },
     {
       "name": "kms_secret_ciphertext-example-1",
@@ -1144,6 +3110,35 @@
       "service": "logging",
       "resource_types": [
         "google_logging_metric"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "managedkafka/managedkafka_create_cluster",
+      "source": "docs-samples",
+      "file": "managedkafka/managedkafka_create_cluster/main.tf",
+      "service": "managedkafka",
+      "resource_types": [
+        "google_managed_kafka_cluster",
+        "google_compute_subnetwork",
+        "google_compute_network"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "managedkafka/managedkafka_create_topic",
+      "source": "docs-samples",
+      "file": "managedkafka/managedkafka_create_topic/main.tf",
+      "service": "managedkafka",
+      "resource_types": [
+        "google_managed_kafka_cluster",
+        "google_compute_subnetwork",
+        "google_compute_network",
+        "google_managed_kafka_topic"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -1276,10 +3271,10 @@
       "summary": ""
     },
     {
-      "name": "dataproc_metastore_service-example-10",
+      "name": "dataproc_metastore_service-example-11",
       "source": "provider-docs",
       "file": "website/docs/r/dataproc_metastore_service.html.markdown",
-      "block": 10,
+      "block": 11,
       "service": "metastore",
       "resource_types": [
         "google_dataproc_metastore_service"
@@ -1289,10 +3284,10 @@
       "summary": ""
     },
     {
-      "name": "dataproc_metastore_service-example-11",
+      "name": "dataproc_metastore_service-example-12",
       "source": "provider-docs",
       "file": "website/docs/r/dataproc_metastore_service.html.markdown",
-      "block": 11,
+      "block": 12,
       "service": "metastore",
       "resource_types": [
         "google_dataproc_metastore_service"
@@ -1488,6 +3483,369 @@
       "summary": ""
     },
     {
+      "name": "run/add_tag",
+      "source": "docs-samples",
+      "file": "run/add_tag/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_concurrency",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_concurrency/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_containers",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_containers/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_cpu",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_cpu/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_cpu_allocation",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_cpu_allocation/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_description",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_description/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_environment_variables",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_environment_variables/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_http2",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_http2/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_labels",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_labels/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_max_instances",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_max_instances/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_memory_limits",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_memory_limits/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_min_instances",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_min_instances/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/cloud_run_configuration_request_timeout",
+      "source": "docs-samples",
+      "file": "run/cloud_run_configuration_request_timeout/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/connect_cloud_sql",
+      "source": "docs-samples",
+      "file": "run/connect_cloud_sql/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_project_service",
+        "google_sql_database_instance",
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version",
+        "google_secret_manager_secret_iam_member",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/deploy_tag",
+      "source": "docs-samples",
+      "file": "run/deploy_tag/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/direct_vpc",
+      "source": "docs-samples",
+      "file": "run/direct_vpc/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/healthchecks_liveness_probe_grpc",
+      "source": "docs-samples",
+      "file": "run/healthchecks_liveness_probe_grpc/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_project_service",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/healthchecks_liveness_probe_http",
+      "source": "docs-samples",
+      "file": "run/healthchecks_liveness_probe_http/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_project_service",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/healthchecks_startup_probe_grpc",
+      "source": "docs-samples",
+      "file": "run/healthchecks_startup_probe_grpc/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_project_service",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/healthchecks_startup_probe_http",
+      "source": "docs-samples",
+      "file": "run/healthchecks_startup_probe_http/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_project_service",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/healthchecks_startup_probe_tcp",
+      "source": "docs-samples",
+      "file": "run/healthchecks_startup_probe_tcp/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_project_service",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/identity",
+      "source": "docs-samples",
+      "file": "run/identity/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_service_account",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/remove_tag",
+      "source": "docs-samples",
+      "file": "run/remove_tag/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/secret_manager",
+      "source": "docs-samples",
+      "file": "run/secret_manager/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_secret_manager_secret",
+        "google_secret_manager_secret_version",
+        "google_service_account",
+        "google_secret_manager_secret_iam_member",
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/traffic_gradual_rollout",
+      "source": "docs-samples",
+      "file": "run/traffic_gradual_rollout/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/traffic_latest_revision",
+      "source": "docs-samples",
+      "file": "run/traffic_latest_revision/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/traffic_rollback",
+      "source": "docs-samples",
+      "file": "run/traffic_rollback/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/traffic_split",
+      "source": "docs-samples",
+      "file": "run/traffic_split/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "run/traffic_split_tag",
+      "source": "docs-samples",
+      "file": "run/traffic_split_tag/main.tf",
+      "service": "run",
+      "resource_types": [
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
       "name": "cloud_run_v2_service-example-11",
       "source": "provider-docs",
       "file": "website/docs/r/cloud_run_v2_service.html.markdown",
@@ -1603,9 +3961,8 @@
         "google_cloud_scheduler_job"
       ],
       "mode": "plan",
-      "class": "unimplemented",
-      "summary": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:",
-      "detail": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:"
+      "class": "plan-ok",
+      "summary": ""
     },
     {
       "name": "cloud_scheduler_job-example-6",
@@ -1617,73 +3974,154 @@
         "google_cloud_scheduler_job"
       ],
       "mode": "plan",
-      "class": "unimplemented",
-      "summary": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:",
-      "detail": "Error when reading or editing GCE default service account: googleapi: Error 501: operation is not supported by the Compute Engine emulator:"
-    },
-    {
-      "name": "secret_manager_secret-example-2",
-      "source": "provider-docs",
-      "file": "website/docs/r/secret_manager_secret.html.markdown",
-      "block": 2,
-      "service": "secretmanager",
-      "resource_types": [
-        "google_secret_manager_secret"
-      ],
-      "mode": "plan",
       "class": "plan-ok",
       "summary": ""
     },
     {
-      "name": "secret_manager_secret-example-3",
+      "name": "secret_manager_regional_secret-example-1",
       "source": "provider-docs",
-      "file": "website/docs/r/secret_manager_secret.html.markdown",
-      "block": 3,
-      "service": "secretmanager",
-      "resource_types": [
-        "google_secret_manager_secret"
-      ],
-      "mode": "plan",
-      "class": "plan-ok",
-      "summary": ""
-    },
-    {
-      "name": "secret_manager_secret_version-example-1",
-      "source": "provider-docs",
-      "file": "website/docs/r/secret_manager_secret_version.html.markdown",
+      "file": "website/docs/r/secret_manager_regional_secret.html.markdown",
       "block": 1,
       "service": "secretmanager",
       "resource_types": [
-        "google_secret_manager_secret",
-        "google_secret_manager_secret_version"
+        "google_secret_manager_regional_secret"
       ],
       "mode": "plan",
       "class": "plan-ok",
       "summary": ""
     },
     {
-      "name": "secret_manager_secret_version-example-2",
+      "name": "secret_manager_regional_secret-example-4",
       "source": "provider-docs",
-      "file": "website/docs/r/secret_manager_secret_version.html.markdown",
-      "block": 2,
+      "file": "website/docs/r/secret_manager_regional_secret.html.markdown",
+      "block": 4,
       "service": "secretmanager",
       "resource_types": [
-        "google_secret_manager_secret",
-        "google_secret_manager_secret_version"
+        "google_secret_manager_regional_secret"
       ],
       "mode": "plan",
       "class": "plan-ok",
       "summary": ""
     },
     {
-      "name": "secret_manager_secret_version-example-3",
+      "name": "secret_manager_regional_secret-example-5",
       "source": "provider-docs",
-      "file": "website/docs/r/secret_manager_secret_version.html.markdown",
-      "block": 3,
+      "file": "website/docs/r/secret_manager_regional_secret.html.markdown",
+      "block": 5,
       "service": "secretmanager",
       "resource_types": [
-        "google_secret_manager_secret",
-        "google_secret_manager_secret_version"
+        "google_secret_manager_regional_secret"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "secret_manager_regional_secret-example-6",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_regional_secret.html.markdown",
+      "block": 6,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_regional_secret"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "secret_manager_regional_secret_version-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/secret_manager_regional_secret_version.html.markdown",
+      "block": 1,
+      "service": "secretmanager",
+      "resource_types": [
+        "google_secret_manager_regional_secret",
+        "google_secret_manager_regional_secret_version"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage/flask_google_cloud_quickstart",
+      "source": "docs-samples",
+      "file": "storage/flask_google_cloud_quickstart/main.tf",
+      "service": "storage",
+      "resource_types": [
+        "google_compute_network",
+        "google_compute_subnetwork",
+        "google_compute_instance",
+        "google_compute_firewall",
+        "google_kms_key_ring",
+        "google_kms_crypto_key",
+        "google_project_iam_member",
+        "google_storage_bucket"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage/hmac_key",
+      "source": "docs-samples",
+      "file": "storage/hmac_key/main.tf",
+      "service": "storage",
+      "resource_types": [
+        "google_service_account",
+        "google_storage_hmac_key"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage/make_data_public",
+      "source": "docs-samples",
+      "file": "storage/make_data_public/main.tf",
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_iam_member"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage/new_bucket",
+      "source": "docs-samples",
+      "file": "storage/new_bucket/main.tf",
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_object"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "storage/static_website",
+      "source": "docs-samples",
+      "file": "storage/static_website/main.tf",
+      "service": "storage",
+      "resource_types": [
+        "google_storage_bucket",
+        "google_storage_bucket_iam_member",
+        "google_storage_bucket_object"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "vertex_ai/api",
+      "source": "docs-samples",
+      "file": "vertex_ai/api/main.tf",
+      "service": "storage",
+      "resource_types": [
+        "google_project_service"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -1854,39 +4292,14 @@
       "summary": "apply, no changes, destroy"
     },
     {
-      "name": "cloud_run_v2_service-example-1",
+      "name": "dns_record_set-example-2",
       "source": "provider-docs",
-      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
-      "block": 1,
-      "service": "run",
+      "file": "website/docs/r/dns_record_set.html.markdown",
+      "block": 2,
+      "service": "clouddns",
       "resource_types": [
-        "google_cloud_run_v2_service"
-      ],
-      "mode": "apply",
-      "class": "apply-ok",
-      "summary": "apply, no changes, destroy"
-    },
-    {
-      "name": "cloud_scheduler_job-example-3",
-      "source": "provider-docs",
-      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
-      "block": 3,
-      "service": "scheduler",
-      "resource_types": [
-        "google_cloud_scheduler_job"
-      ],
-      "mode": "apply",
-      "class": "apply-ok",
-      "summary": "apply, no changes, destroy"
-    },
-    {
-      "name": "cloud_tasks_queue-example-1",
-      "source": "provider-docs",
-      "file": "website/docs/r/cloud_tasks_queue.html.markdown",
-      "block": 1,
-      "service": "tasks",
-      "resource_types": [
-        "google_cloud_tasks_queue"
+        "google_dns_record_set",
+        "google_dns_managed_zone"
       ],
       "mode": "apply",
       "class": "apply-ok",
@@ -1906,33 +4319,6 @@
       "summary": "apply, no changes, destroy"
     },
     {
-      "name": "dataproc_metastore_service-example-10",
-      "source": "provider-docs",
-      "file": "website/docs/r/dataproc_metastore_service.html.markdown",
-      "block": 10,
-      "service": "metastore",
-      "resource_types": [
-        "google_dataproc_metastore_service"
-      ],
-      "mode": "apply",
-      "class": "apply-ok",
-      "summary": "apply, no changes, destroy"
-    },
-    {
-      "name": "dns_record_set-example-2",
-      "source": "provider-docs",
-      "file": "website/docs/r/dns_record_set.html.markdown",
-      "block": 2,
-      "service": "clouddns",
-      "resource_types": [
-        "google_dns_record_set",
-        "google_dns_managed_zone"
-      ],
-      "mode": "apply",
-      "class": "apply-ok",
-      "summary": "apply, no changes, destroy"
-    },
-    {
       "name": "eventarc_channel-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/eventarc_channel.html.markdown",
@@ -1940,19 +4326,6 @@
       "service": "eventarc",
       "resource_types": [
         "google_eventarc_channel"
-      ],
-      "mode": "apply",
-      "class": "apply-ok",
-      "summary": "apply, no changes, destroy"
-    },
-    {
-      "name": "firestore_database-example-1",
-      "source": "provider-docs",
-      "file": "website/docs/r/firestore_database.html.markdown",
-      "block": 1,
-      "service": "firestoreadmin",
-      "resource_types": [
-        "google_firestore_database"
       ],
       "mode": "apply",
       "class": "apply-ok",
@@ -1975,6 +4348,19 @@
       "summary": "apply, no changes, destroy"
     },
     {
+      "name": "firestore_database-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/firestore_database.html.markdown",
+      "block": 1,
+      "service": "firestoreadmin",
+      "resource_types": [
+        "google_firestore_database"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
       "name": "google_project_iam-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/google_project_iam.html.markdown",
@@ -1982,19 +4368,6 @@
       "service": "iam",
       "resource_types": [
         "google_project_iam_policy"
-      ],
-      "mode": "apply",
-      "class": "apply-ok",
-      "summary": "apply, no changes, destroy"
-    },
-    {
-      "name": "google_project_service-example-1",
-      "source": "provider-docs",
-      "file": "website/docs/r/google_project_service.html.markdown",
-      "block": 1,
-      "service": "serviceusage",
-      "resource_types": [
-        "google_project_service"
       ],
       "mode": "apply",
       "class": "apply-ok",
@@ -2040,6 +4413,32 @@
       "summary": "apply, no changes, destroy"
     },
     {
+      "name": "redis_instance-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/redis_instance.html.markdown",
+      "block": 1,
+      "service": "memorystore",
+      "resource_types": [
+        "google_redis_instance"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "dataproc_metastore_service-example-10",
+      "source": "provider-docs",
+      "file": "website/docs/r/dataproc_metastore_service.html.markdown",
+      "block": 10,
+      "service": "metastore",
+      "resource_types": [
+        "google_dataproc_metastore_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
       "name": "monitoring_custom_service-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/monitoring_custom_service.html.markdown",
@@ -2066,13 +4465,26 @@
       "summary": "apply, no changes, destroy"
     },
     {
-      "name": "redis_instance-example-1",
+      "name": "cloud_run_v2_service-example-1",
       "source": "provider-docs",
-      "file": "website/docs/r/redis_instance.html.markdown",
+      "file": "website/docs/r/cloud_run_v2_service.html.markdown",
       "block": 1,
-      "service": "memorystore",
+      "service": "run",
       "resource_types": [
-        "google_redis_instance"
+        "google_cloud_run_v2_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "cloud_scheduler_job-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_scheduler_job.html.markdown",
+      "block": 3,
+      "service": "scheduler",
+      "resource_types": [
+        "google_cloud_scheduler_job"
       ],
       "mode": "apply",
       "class": "apply-ok",
@@ -2092,6 +4504,19 @@
       "summary": "apply, no changes, destroy"
     },
     {
+      "name": "google_project_service-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/google_project_service.html.markdown",
+      "block": 1,
+      "service": "serviceusage",
+      "resource_types": [
+        "google_project_service"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
       "name": "storage_bucket-example-1",
       "source": "provider-docs",
       "file": "website/docs/r/storage_bucket.html.markdown",
@@ -2099,6 +4524,19 @@
       "service": "storage",
       "resource_types": [
         "google_storage_bucket"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "cloud_tasks_queue-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/cloud_tasks_queue.html.markdown",
+      "block": 1,
+      "service": "tasks",
+      "resource_types": [
+        "google_cloud_tasks_queue"
       ],
       "mode": "apply",
       "class": "apply-ok",
