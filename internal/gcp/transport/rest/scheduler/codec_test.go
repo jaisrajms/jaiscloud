@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
 )
@@ -74,6 +75,43 @@ func TestJobToJSONAlwaysEmitsHTTPHeaders(t *testing.T) {
 	}
 	if len(headers) != 0 {
 		t.Fatalf("httpTarget.headers = %v, want empty", headers)
+	}
+}
+
+func TestJobToJSONOmitsRunStateWhenPaused(t *testing.T) {
+	// Real Cloud Scheduler removes the next run on pause and clears the last
+	// attempt, so a paused job answers none of scheduleTime/lastAttemptTime/
+	// status. The adapter drops them even if a record persisted before the core
+	// cleared it still carries them (TF2-12-1).
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	stale := schedstore.Job{
+		Name:            "j1",
+		ProjectID:       "p",
+		Location:        "l",
+		Schedule:        "* * * * *",
+		Target:          schedstore.TargetHTTP,
+		HTTP:            &schedstore.HttpTarget{URI: "http://example.test/hook"},
+		ScheduleTime:    at,
+		LastAttemptTime: at,
+		UserUpdateTime:  at,
+		Status:          &schedstore.Status{Code: 13, Message: "boom"},
+	}
+	paused := stale
+	paused.State = schedstore.StatePaused
+	out := jobToJSON(paused)
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if _, ok := out[field]; ok {
+			t.Fatalf("paused job rendered %s = %v", field, out[field])
+		}
+	}
+	// An enabled job still answers them.
+	enabled := stale
+	enabled.State = schedstore.StateEnabled
+	out = jobToJSON(enabled)
+	for _, field := range []string{"scheduleTime", "lastAttemptTime", "status"} {
+		if _, ok := out[field]; !ok {
+			t.Fatalf("enabled job did not render %s", field)
+		}
 	}
 }
 

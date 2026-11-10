@@ -257,16 +257,21 @@ func jobToJSON(j schedstore.Job) map[string]any {
 	if j.AttemptDeadline > 0 {
 		out["attemptDeadline"] = formatDuration(j.AttemptDeadline)
 	}
-	if !j.ScheduleTime.IsZero() {
-		out["scheduleTime"] = timestamp.Canonical(j.ScheduleTime)
-	}
-	if !j.LastAttemptTime.IsZero() {
-		out["lastAttemptTime"] = timestamp.Canonical(j.LastAttemptTime)
+	// A paused job answers no run state: pausing removes the next run and
+	// clears the last attempt, so scheduleTime/lastAttemptTime/status are
+	// absent (TF2-12-1).
+	if j.RunStateReported() {
+		if !j.ScheduleTime.IsZero() {
+			out["scheduleTime"] = timestamp.Canonical(j.ScheduleTime)
+		}
+		if !j.LastAttemptTime.IsZero() {
+			out["lastAttemptTime"] = timestamp.Canonical(j.LastAttemptTime)
+		}
 	}
 	if !j.UserUpdateTime.IsZero() {
 		out["userUpdateTime"] = timestamp.Canonical(j.UserUpdateTime)
 	}
-	if j.Status != nil {
+	if j.RunStateReported() && j.Status != nil {
 		out["status"] = map[string]any{"code": j.Status.Code, "message": j.Status.Message}
 	}
 	return out

@@ -592,6 +592,9 @@ honoring `retryConfig.retryCount`/`minBackoffDuration`/`maxBackoffDuration`, the
 cron schedule. `:pause` and `:resume` are idempotent: repeating either answers `200` with the job
 unchanged (no `FAILED_PRECONDITION`, no `userUpdateTime` bump), which is how real Cloud Scheduler
 behaves and what the Terraform provider's post-create `:resume` on an enabled job relies on.
+Pausing removes the run state with the next run: a `PAUSED` job answers no `scheduleTime`,
+`lastAttemptTime` or `status` (measured; real Cloud Scheduler drops the next run and clears the
+last attempt), and `:resume` schedules a fresh run.
 
 Limitations: `appEngineHttpTarget` is stored and echoed but **never delivered** (the emulator has no
 App Engine router) — the attempt is recorded as `Unimplemented` and is terminal: the job is attempted

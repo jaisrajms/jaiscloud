@@ -35,8 +35,9 @@
 #   plan -detailed-exitcode -> No changes
 #   mutate (schedule, description, retryConfig, HTTP body, Pub/Sub payload)
 #     -> apply -> REST asserts -> No changes
-#   pause (paused = true) -> the provider calls :pause -> both jobs PAUSED
-#     -> No changes
+#   pause (paused = true) -> the provider calls :pause -> both jobs PAUSED, with
+#     no scheduleTime/lastAttemptTime/status (a paused job reads as never
+#     scheduled and never attempted) -> No changes
 #   resume (paused = false) -> the provider calls :resume -> both ENABLED and a
 #     fresh scheduleTime -> No changes
 #   destroy -> both job GETs and the topic GET are 404
@@ -312,6 +313,15 @@ case_main() {
   assert_no_api_errors
   check_body "pause leaves the HTTP job PAUSED" "$(job_url "$JOB_HTTP")" '"state":"PAUSED"'
   check_body "pause leaves the pub/sub job PAUSED" "$(job_url "$JOB_PUBSUB")" '"state":"PAUSED"'
+  # A paused job answers no run state: real Cloud Scheduler removes the next run
+  # and clears the last attempt, so scheduleTime/lastAttemptTime/status are
+  # absent (TF2-12-1).
+  body="$(body_of "$(job_url "$JOB_HTTP")")"
+  if [[ "$body" == *'"scheduleTime"'* || "$body" == *'"lastAttemptTime"'* || "$body" == *'"status"'* ]]; then
+    fail "a paused job still answers run state (scheduleTime/lastAttemptTime/status)"
+  else
+    pass "a paused job answers no scheduleTime/lastAttemptTime/status"
+  fi
   plan_no_changes "re-plan after :pause reports no changes"
 
   # Resume: the provider calls :resume on the PAUSED jobs.
