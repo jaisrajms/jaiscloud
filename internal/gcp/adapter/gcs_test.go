@@ -219,6 +219,38 @@ func TestGCSCodecObjectUpdateVsPatch(t *testing.T) {
 	}
 }
 
+func TestGCSCodecBucketPatchMarksMergePatch(t *testing.T) {
+	c := &GCSCodec{}
+	body := []byte(`{"labels":{"a":"9"}}`)
+
+	// PATCH → the shared BucketsUpdate path, marked as a JSON merge patch so the
+	// provider merges the labels map instead of replacing it.
+	r := httptest.NewRequest("PATCH", "/storage/v1/b/bkt", nil)
+	nr, err := c.Decode(r, body)
+	if err != nil {
+		t.Fatalf("decode PATCH: %v", err)
+	}
+	if nr.Action != "BucketsUpdate" {
+		t.Fatalf("expected BucketsUpdate for PATCH, got %q", nr.Action)
+	}
+	if v, _ := nr.Params[wire.MergePatchKey].(bool); !v {
+		t.Error("PATCH: expected wire.MergePatchKey set")
+	}
+
+	// PUT → the same handler without the merge marker (buckets.update replaces).
+	r = httptest.NewRequest("PUT", "/storage/v1/b/bkt", nil)
+	nr, err = c.Decode(r, body)
+	if err != nil {
+		t.Fatalf("decode PUT: %v", err)
+	}
+	if nr.Action != "BucketsUpdate" {
+		t.Fatalf("expected BucketsUpdate for PUT, got %q", nr.Action)
+	}
+	if v, _ := nr.Params[wire.MergePatchKey].(bool); v {
+		t.Error("PUT: wire.MergePatchKey must not be set")
+	}
+}
+
 func TestGCSCodecObjectAclPath(t *testing.T) {
 	c := &GCSCodec{}
 
