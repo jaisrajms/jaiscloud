@@ -23,10 +23,10 @@
 #     an empty map, so the next plan reconstructs labels/terraform_labels. The
 #     gate accepts exactly those two attributes and nothing else (the
 #     `label-artifact` mode); every other attribute must be unchanged.
-#   - an invalid storageClass/publicAccessPrevention/location is accepted by the
-#     emulator (HTTP 200) where real GCS rejects it (400) — TF5-1. The gate
-#     records it as a NOTE and uses the invalid-bucket-name 400 that GCS does
-#     validate; the enum gap has its own ledger row.
+#   - TF5-1 (fixed): real GCS rejects an invalid storageClass, location or
+#     iamConfiguration.publicAccessPrevention on buckets.insert with 400; the
+#     emulator now validates all three against their documented sets, so the
+#     negative block asserts the 400 plus a valid control.
 
 STRICT_BUCKET="lc-storage-strict"
 DRIFT_BUCKET="lc-storage-drift"
@@ -196,22 +196,28 @@ case_main() {
   expect_http_error "invalid bucket name" POST \
     "$ENDPOINT/storage/v1/b?project=$PROJECT" \
     '{"name":"LC-Bad_Name"}' 400
-  # Real GCS validates the storageClass enum and the location; the emulator does
-  # not yet (TF5-1). Record the measurement instead of asserting a green that
-  # does not exist, and clean up if the request was accepted.
-  local enum_code
-  enum_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
-    -H 'Content-Type: application/json' \
-    -d '{"name":"lc-storage-enum-probe","storageClass":"BOGUS"}' \
-    "$ENDPOINT/storage/v1/b?project=$PROJECT" 2>/dev/null || true)"
-  if [[ "$enum_code" == "400" ]]; then
-    pass "invalid storageClass is rejected (HTTP 400)"
-  else
-    note "invalid storageClass returned HTTP $enum_code, real GCS returns 400 (recorded gap TF5-1)"
-    curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
-      "$ENDPOINT/storage/v1/b/lc-storage-enum-probe" 2>/dev/null || true
-  fi
+  # TF5-1: real GCS validates the storage class enum, the location and the
+  # public-access-prevention mode on create; each invalid value is a 400 and the
+  # bucket is not created.
+  expect_http_error "invalid storageClass" POST \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" \
+    '{"name":"lc-storage-enum-probe","storageClass":"BOGUS"}' 400
+  expect_http_error "invalid location" POST \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" \
+    '{"name":"lc-storage-loc-probe","location":"NOT-A-LOCATION"}' 400
+  expect_http_error "invalid publicAccessPrevention" POST \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" \
+    '{"name":"lc-storage-pap-probe","iamConfiguration":{"publicAccessPrevention":"BOGUS"}}' 400
+  # The valid control: the documented values still create (HTTP 200) and read
+  # back canonicalised, so the validation did not narrow a legal request.
+  out_of_band "valid storageClass/location/publicAccessPrevention insert" POST \
+    "$ENDPOINT/storage/v1/b?project=$PROJECT" \
+    '{"name":"lc-storage-valid-probe","location":"eu","storageClass":"NEARLINE","iamConfiguration":{"publicAccessPrevention":"enforced"}}'
+  check "valid insert read-back" "$ENDPOINT/storage/v1/b/lc-storage-valid-probe" \
+    '"location":"EU"' '"locationType":"multi-region"' \
+    '"storageClass":"NEARLINE"' '"publicAccessPrevention":"enforced"'
+  curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    "$ENDPOINT/storage/v1/b/lc-storage-valid-probe" 2>/dev/null || true
 
   # The provider-facing half of the duplicate path: pre-create the bucket
   # out-of-band, then let a real `terraform apply` hit the 409 and surface it.

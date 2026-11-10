@@ -834,8 +834,11 @@ replaces the other.
   `SetLabels` (only keys already in state are planned) and preserved by the
   update; the gate asserts the managed key converges and records the extra key.
 - The storage bucket's invalid `storageClass`/`publicAccessPrevention`/`location`
-  are accepted today (real GCS rejects them) — TF5-1; the case records the
-  measurement and uses the invalid-bucket-name 400 that GCS does validate.
+  are rejected with 400: `storageClass` against the documented seven-value enum,
+  `publicAccessPrevention` against `inherited`/`enforced`, and `location` against
+  the documented location grammar (US/EU/ASIA, predefined dual-region codes,
+  region names and zonal suffixes). The negative block asserts each 400 plus a
+  valid control that creates and reads back (TF5-1).
 
 **Expansion list (the next services, in order).** Each needs an import id and,
 where the API supports it, a ForceNew identity change:

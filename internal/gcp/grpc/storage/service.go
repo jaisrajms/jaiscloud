@@ -875,9 +875,15 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if location == "" {
 		location = "US"
 	}
+	if err := storageprovider.ValidateBucketLocation(location); err != nil {
+		return nil, mapError(err)
+	}
 	storageClass := req.GetBucket().GetStorageClass()
 	if storageClass == "" {
 		storageClass = "STANDARD"
+	}
+	if err := storageprovider.ValidateBucketStorageClass(storageClass); err != nil {
+		return nil, mapError(err)
 	}
 	now := clock.Now().Format(time.RFC3339Nano)
 	meta := map[string]any{
@@ -1143,6 +1149,9 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 		}
 	}
 	if sc := pb.GetStorageClass(); sc != "" && maskIncludes(mask, "storage_class") {
+		if err := storageprovider.ValidateBucketStorageClass(sc); err != nil {
+			return err
+		}
 		meta["storageClass"] = sc
 	}
 	if maskIncludes(mask, "retention_policy") {
