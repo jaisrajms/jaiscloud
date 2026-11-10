@@ -426,6 +426,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   echoed but never delivered (no App Engine router) — its attempts are recorded as `Unimplemented`
   and are terminal: the job is attempted once, the status is recorded, no retries are consumed and
   the job waits for its next cron slot.
+  `RetryConfig` is proto3 without field presence, so a read always answers it: a job created without
+  one (including the all-zero `{ retry_count = 0 }` block the Terraform provider drops from the
+  create body) reads back the documented defaults — `retryCount` 0, `minBackoffDuration` 5s,
+  `maxBackoffDuration` 1h, `maxDoublings` 5, `maxRetryDuration` 0 (unlimited) — an unset field of a
+  supplied config takes its documented default, and stored non-default values are echoed verbatim
+  (TF3-4-2). The engine applies `retryCount` with exponential backoff bounded by
+  `minBackoffDuration`/`maxBackoffDuration`; it does not switch to the documented linear growth after
+  `maxDoublings`, nor stop at `maxRetryDuration`.
   English-like schedules ("every 5 minutes") are not parsed (unix-cron plus `@` descriptors only);
   `oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token, not a real Google token.
 - **Cloud Tasks** — the v2 control plane plus a dispatch engine: queue CRUD plus

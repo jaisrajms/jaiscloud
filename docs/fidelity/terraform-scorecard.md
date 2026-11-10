@@ -200,12 +200,13 @@ Three boundaries are recorded, not worked around:
   HTTP target and 7.x added a nil guard). That is TF3-4-1
   (`fix/gcp-scheduler-http-target-headers`), so the HTTP-target path is
   unmeasured until it is fixed.
-- The module's default `retry_config = { retry_count = 0 }` is dropped from the
-  create body by the provider and the emulator does not synthesize the
-  documented RetryConfig defaults, so that input re-plans
-  `+ retry_config { retry_count = 0 }` forever; the case creates a non-default
-  retry config and default synthesis is TF3-4-2
-  (`fix/gcp-scheduler-retry-config-defaults`). The task queue's `maxBurstSize`
+- The module's default `retry_config = { retry_count = 0 }` expands to an
+  all-zero block that the provider drops from the create body; the emulator now
+  synthesizes the documented RetryConfig defaults on the read (retryCount 0,
+  minBackoffDuration 5s, maxBackoffDuration 1h, maxDoublings 5,
+  maxRetryDuration 0), so the case drives the module default and re-plans clean,
+  then mutates to a non-default config that must be echoed verbatim (TF3-4-2,
+  `fix/gcp-scheduler-retry-config-defaults`). The task queue's `maxBurstSize`
   is computed-only in the provider (so it cannot permadiff) and the create body
   omits it; the emulator now applies the documented Cloud Tasks default and
   reads back 100 (with `maxConcurrentDispatches` defaulting to 1000 when
@@ -496,7 +497,7 @@ Recorded gaps and boundaries:
 | TF4-2-1 | `fix` (fixed here) | The bootstrap assertion compared the provider's `google_project.number` (decimal, no leading zero) with the API's zero-padded `projectNumber`; the synthesized number starts with zero for about one id in ten, so the aggregate flaked. The assertion now pads before comparing. |
 | TF4-2-2 | `no fix` | Function delivery records are served only by the console API (`/api/ui/v1/gcp/functions/.../deliveries`), which a non-UI build does not mount; real Cloud Functions exposes no delivery log either. The pattern asserts invocation through `GET /_jaiscloud/export` (`envelope.json` → `stores.functions.deliveries`). |
 | TF2-12 | known, separate session | Provider 7.46.2 calls `jobs:resume` after every create when `paused` is false and the emulator rejects resuming an ENABLED job, so the job is created paused and fired with `jobs.run`; `fix/gcp-scheduler-resume-enabled` owns the enabled path. |
-| TF3-4-2 | known, separate session | An all-zero `retry_config` is dropped by the provider and not synthesized by the emulator's read, so the pattern omits the block; `fix/gcp-scheduler-retry-config-defaults` owns the defaults. |
+| TF3-4-2 | `fix` (fixed) | An all-zero `retry_config` is dropped by the provider; the emulator now synthesizes the documented RetryConfig defaults on the read, so the module case drives the default block and re-plans clean (`fix/gcp-scheduler-retry-config-defaults`). |
 
 ## TF4-3 — Composition pattern: data lake + GKE/Dataproc (2026-11-07)
 

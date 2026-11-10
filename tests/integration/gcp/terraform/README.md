@@ -647,11 +647,11 @@ DELETE the provider guards; that is an upstream module limitation, not an
 emulator gap. Workflow CMEK and resource-level IAM are not implemented
 (README-GCP) and the provider has no workflow IAM resource type.
 
-**scheduler** — the CFT `terraform-google-cloud-scheduler` root module is applied twice: one job with a header-less **HTTP target** (the module's input exposes no `headers` field) and one with a **Pub/Sub target** (the case's root module owns the topic), both on a far-future schedule (`0 0 1 1 *`), `UTC`, and a `retry_config`. The gate:
+**scheduler** — the CFT `terraform-google-cloud-scheduler` root module is applied twice: one job with a header-less **HTTP target** (the module's input exposes no `headers` field) and one with a **Pub/Sub target** (the case's root module owns the topic), both on a far-future schedule (`0 0 1 1 *`), `UTC`, and the module's **default** `retry_config = { retry_count = 0 }`. The gate:
 
-1. `apply`; assert through REST that each GET returns the reference, description, schedule, `timeZone`, `state: ENABLED`, `scheduleTime` and the retry config; the HTTP job also returns `httpTarget.uri`/`httpMethod`/`body` and the **server-filled headers map** (`User-Agent: Google-Cloud-Scheduler`, plus `Content-Type: application/octet-stream` because the job has a body), while the Pub/Sub job returns `pubsubTarget.topicName`/`data`/`attributes`; the apply log must contain no `400`, `501` or `unsupported update_mask`
-2. `plan -detailed-exitcode` → **no changes**
-3. change the schedule, description, retry config, HTTP body and Pub/Sub payload/attributes; `apply`; assert the new values; `plan` → **no changes**
+1. `apply`; assert through REST that each GET returns the reference, description, schedule, `timeZone`, `state: ENABLED`, `scheduleTime` and the retry config — the default block is dropped from the create body by the provider, so the read must carry the synthesized documented defaults (`retryCount` 0, `minBackoffDuration` 5s, `maxBackoffDuration` 3600s, `maxDoublings` 5, `maxRetryDuration` 0s); the HTTP job also returns `httpTarget.uri`/`httpMethod`/`body` and the **server-filled headers map** (`User-Agent: Google-Cloud-Scheduler`, plus `Content-Type: application/octet-stream` because the job has a body), while the Pub/Sub job returns `pubsubTarget.topicName`/`data`/`attributes`; the apply log must contain no `400`, `501` or `unsupported update_mask`
+2. `plan -detailed-exitcode` → **no changes** (this is the permadiff gate for the default `retry_config`)
+3. change the schedule, description, retry config (to a non-default one, which must be echoed verbatim), HTTP body and Pub/Sub payload/attributes; `apply`; assert the new values; `plan` → **no changes**
 4. pause (`paused = true`): the provider calls `:pause`; assert `state: PAUSED` on both jobs; `plan` → **no changes**
 5. unpause (`paused = false`): the provider calls `:resume`; assert `state: ENABLED` and that `scheduleTime` is present; `plan` → **no changes**
 6. `destroy`; both jobs and the topic are `404`
@@ -664,7 +664,7 @@ diffing), and the emulator now synthesizes them (TF3-4-1,
 
 One boundary is recorded, not worked around:
 
-- The module's default `retry_config = { retry_count = 0 }` is not sent (the provider drops an all-empty block) and the emulator does not synthesize the documented RetryConfig defaults, so that input re-plans `+ retry_config { retry_count = 0 }`; the case creates a non-default retry config and the default synthesis is TF3-4-2 (`fix/gcp-scheduler-retry-config-defaults`).
+- The module's default `retry_config = { retry_count = 0 }` expands to an all-zero block, which the provider drops from the create body. The emulator synthesizes the documented RetryConfig defaults on the read, so the provider's refresh fills `retry_config` and the input converges instead of re-planning `+ retry_config { retry_count = 0 }` forever (TF3-4-2, `fix/gcp-scheduler-retry-config-defaults`). The case drives both shapes: the module default in the first phase and a non-default config in the mutate phase.
 
 **tasks** — the CFT `terraform-google-cloud-tasks` root module is applied with a queue, rate limits, a retry config, a Stackdriver logging config and one queue IAM member (`queue_iam_choice = "iam_member"`). No task is created, so the dispatch engine never runs. The gate:
 
@@ -911,10 +911,10 @@ Recorded boundaries, not worked around:
   pattern creates the job paused with a far-future cron and fires it with
   `projects.locations.jobs.run`, Cloud Scheduler's documented "force it now"
   call, which goes through the same target dispatcher the cron engine uses.
-  `retry_config` is omitted for the same reason: the provider only sends a
-  non-zero expanded block and the emulator does not synthesize the API's retry
-  defaults on a read yet (TF3-4-2, `fix/gcp-scheduler-retry-config-defaults`),
-  so an explicit zero block would permadiff.
+  `retry_config` is omitted too — not because it would permadiff (the emulator
+  now synthesizes the API's documented retry defaults on a read, TF3-4-2) but
+  because the pattern relies on those defaults; one run is one delivery either
+  way.
 - **Event deliveries are asserted at a local HTTP sink.** `patterns/helpers/echo-sink`
   is a small Go program (`patterns/lib.sh` builds it, so Go is already a
   prerequisite of the driver) that records every request it receives. The push

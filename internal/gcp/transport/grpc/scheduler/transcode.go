@@ -35,9 +35,11 @@ func jobToProto(j schedstore.Job) *schedulerpb.Job {
 			out.Target = &schedulerpb.Job_AppEngineHttpTarget{AppEngineHttpTarget: appEngineTargetToProto(j.AppEngine)}
 		}
 	}
-	if j.RetryConfig != nil {
-		out.RetryConfig = retryToProto(j.RetryConfig)
-	}
+	// Real Cloud Scheduler always answers a retryConfig; the core resolves the
+	// documented defaults for a job whose create body carried none (or carried
+	// the all-zero block the provider drops), so the read is a stable
+	// retry_config for Terraform (TF3-4-2).
+	out.RetryConfig = retryToProto(core.EffectiveRetryConfig(j))
 	if j.AttemptDeadline > 0 {
 		out.AttemptDeadline = durationpb.New(j.AttemptDeadline)
 	}
@@ -172,18 +174,17 @@ func appEngineTargetToProto(t *schedstore.AppEngineTarget) *schedulerpb.AppEngin
 	return out
 }
 
+// retryToProto renders a RetryConfig. Every field is set: the core resolves the
+// documented defaults first, and real Cloud Scheduler answers the whole message
+// (max_retry_duration included, at 0s when the retry duration is unlimited).
 func retryToProto(rc *schedstore.RetryConfig) *schedulerpb.RetryConfig {
-	out := &schedulerpb.RetryConfig{RetryCount: rc.RetryCount, MaxDoublings: rc.MaxDoublings}
-	if rc.MaxRetryDuration > 0 {
-		out.MaxRetryDuration = durationpb.New(rc.MaxRetryDuration)
+	return &schedulerpb.RetryConfig{
+		RetryCount:         rc.RetryCount,
+		MaxRetryDuration:   durationpb.New(rc.MaxRetryDuration),
+		MinBackoffDuration: durationpb.New(rc.MinBackoffDuration),
+		MaxBackoffDuration: durationpb.New(rc.MaxBackoffDuration),
+		MaxDoublings:       rc.MaxDoublings,
 	}
-	if rc.MinBackoffDuration > 0 {
-		out.MinBackoffDuration = durationpb.New(rc.MinBackoffDuration)
-	}
-	if rc.MaxBackoffDuration > 0 {
-		out.MaxBackoffDuration = durationpb.New(rc.MaxBackoffDuration)
-	}
-	return out
 }
 
 func durationFromProto(d *durationpb.Duration) time.Duration {

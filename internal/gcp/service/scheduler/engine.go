@@ -243,20 +243,14 @@ func (e *Engine) nextScheduleTime(j schedstore.Job, now time.Time, status scheds
 		e.mu.Unlock()
 		return nextFireFor(j, now)
 	}
-	minBackoff := 5 * time.Second
-	maxBackoff := time.Hour
-	retryCount := int32(0)
-	if j.RetryConfig != nil {
-		if j.RetryConfig.RetryCount > 0 {
-			retryCount = j.RetryConfig.RetryCount
-		}
-		if j.RetryConfig.MinBackoffDuration > 0 {
-			minBackoff = j.RetryConfig.MinBackoffDuration
-		}
-		if j.RetryConfig.MaxBackoffDuration > 0 {
-			maxBackoff = j.RetryConfig.MaxBackoffDuration
-		}
-	}
+	// The documented RetryConfig defaults (min_backoff_duration 5s,
+	// max_backoff_duration 1h, retry_count 0) come from the same helper the
+	// wire adapters render, so a job with no stored config schedules its retries
+	// exactly as it reads back (TF3-4-2).
+	rc := EffectiveRetryConfig(j)
+	retryCount := rc.RetryCount
+	minBackoff := rc.MinBackoffDuration
+	maxBackoff := rc.MaxBackoffDuration
 	e.mu.Lock()
 	state := e.retry[key]
 	// Record the run's cron slot on its first failed attempt. j.ScheduleTime is
