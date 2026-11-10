@@ -120,6 +120,14 @@ const defaultDiskPhysicalBlockSizeBytes = "4096"
 // re-plans as `mtu = 0 -> <configured>` on every plan (TF2-17).
 const defaultNetworkMtu = 1460
 
+// minNetworkMtu/maxNetworkMtu bound a caller-supplied mtu. Discovery
+// (Network.mtu): "The minimum value for this field is 1300 and the maximum value
+// is 8896 bytes (jumbo frames)."
+const (
+	minNetworkMtu = 1300
+	maxNetworkMtu = 8896
+)
+
 // defaultNetworkFirewallPolicyEnforcementOrder is the order a network reports
 // when the create request omits it: Discovery
 // (Network.networkFirewallPolicyEnforcementOrder) documents "Defaults to
@@ -213,6 +221,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Compute.NetworksInsert": p.NetworksInsert,
 		"Compute.NetworksGet":    p.NetworksGet,
 		"Compute.NetworksList":   p.NetworksList,
+		"Compute.NetworksPatch":  p.NetworksPatch,
 		"Compute.NetworksDelete": p.NetworksDelete,
 
 		"Compute.FirewallsInsert": p.FirewallsInsert,
@@ -795,13 +804,13 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	if v, ok := body["autoCreateSubnetworks"].(bool); ok {
 		auto = v
 	}
-	firewallOrder := stringField(body, "networkFirewallPolicyEnforcementOrder")
-	if firewallOrder == "" {
-		firewallOrder = defaultNetworkFirewallPolicyEnforcementOrder
+	firewallOrder, err := networkFirewallPolicyEnforcementOrder(body, defaultNetworkFirewallPolicyEnforcementOrder)
+	if err != nil {
+		return nil, err
 	}
-	mtu := defaultNetworkMtu
-	if n, err := strconv.Atoi(stringifyInt(body["mtu"])); err == nil && n > 0 {
-		mtu = n
+	mtu, err := networkMtu(body, defaultNetworkMtu)
+	if err != nil {
+		return nil, err
 	}
 	network := map[string]any{
 		"kind":                                  kindNetwork,
@@ -829,6 +838,110 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "insert", name, stringField(network, "targetLink"), requestID)), nil
+}
+
+// NetworksPatch applies a partial update to a network (compute.networks.patch,
+// PATCH /compute/v1/projects/{project}/global/networks/{network}) and returns
+// the operation envelope Discovery declares for it. This is the mutation path
+// Terraform's google_compute_network update uses: the provider PATCHes the
+// network whenever routing_mode, a bgp_* field, the MTU or the firewall-policy
+// enforcement order changes, then polls the returned operation (TF2-17-1).
+// Discovery's own method description names only routingConfig, but the field set
+// `gcloud compute networks update` and the provider's update path actually send
+// is mtu, networkFirewallPolicyEnforcementOrder, routingConfig and the ULA IPv6
+// pair — the first two are the ones this record stores.
+//
+// The body is a merge patch, not a replacement: an absent (or JSON-null) field
+// keeps its stored value, so a PATCH that carries only mtu cannot reset the
+// enforcement order. The fields the record does not keep (routingConfig/BGP,
+// networkProfile, the ULA IPv6 pair) are accepted and dropped, the same boundary
+// the create path has (TF2-17-2). Identity fields — name, id, description,
+// autoCreateSubnetworks — are not patchable by any published client (the provider
+// marks name, description and auto mode ForceNew and recreates instead), so a
+// body that carries one is ignored rather than modeling a change real Compute
+// does not offer through this method.
+func (p *Provider) NetworksPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr, "network")
+	if name == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing network", 400)
+	}
+	project := accountID(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	network, err := p.loadMap(ctx, project, store.GlobalRegion, rtNetwork, name, "network")
+	if err != nil {
+		return nil, err
+	}
+	body := bodyMap(nr)
+	// A merge patch keeps an absent field: the fallback is the stored value, not
+	// the create-time default, so a PATCH that names only the enforcement order
+	// cannot reset mtu. A JSON null is treated like an absent field.
+	currentMtu := defaultNetworkMtu
+	if n, ok := network["mtu"].(float64); ok {
+		currentMtu = int(n)
+	}
+	mtu, err := networkMtu(body, currentMtu)
+	if err != nil {
+		return nil, err
+	}
+	network["mtu"] = mtu
+	currentOrder := stringField(network, "networkFirewallPolicyEnforcementOrder")
+	if currentOrder == "" {
+		currentOrder = defaultNetworkFirewallPolicyEnforcementOrder
+	}
+	order, err := networkFirewallPolicyEnforcementOrder(body, currentOrder)
+	if err != nil {
+		return nil, err
+	}
+	network["networkFirewallPolicyEnforcementOrder"] = order
+	data, err := json.Marshal(network)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtNetwork, ID: name, Data: data}); err != nil {
+		return nil, storeError(err, "network")
+	}
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "patch", name, stringField(network, "targetLink"), requestID)), nil
+}
+
+// networkMtu reads a request body's mtu, falling back to fallback when the field
+// is absent or null, and enforces the range Discovery documents for it. Both the
+// create and the patch path share it: real Compute validates mtu the same way
+// whether it arrives in an insert or a patch.
+func networkMtu(body map[string]any, fallback int) (int, error) {
+	v, ok := body["mtu"]
+	if !ok || v == nil {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(stringifyInt(v))
+	if err != nil || n < minNetworkMtu || n > maxNetworkMtu {
+		return 0, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.mtu': '%v'. Must be between %d and %d", v, minNetworkMtu, maxNetworkMtu), 400)
+	}
+	return n, nil
+}
+
+// networkFirewallPolicyEnforcementOrder reads a request body's order, falling
+// back to fallback when the field is absent or null, and enforces the enum
+// Discovery documents for it.
+func networkFirewallPolicyEnforcementOrder(body map[string]any, fallback string) (string, error) {
+	v, ok := body["networkFirewallPolicyEnforcementOrder"]
+	if !ok || v == nil {
+		return fallback, nil
+	}
+	order, _ := v.(string)
+	switch order {
+	case "AFTER_CLASSIC_FIREWALL", "BEFORE_CLASSIC_FIREWALL":
+		return order, nil
+	}
+	return "", model.NewProviderError("InvalidArgument",
+		fmt.Sprintf("Invalid value for field 'resource.networkFirewallPolicyEnforcementOrder': '%v'. Must be one of AFTER_CLASSIC_FIREWALL or BEFORE_CLASSIC_FIREWALL", v), 400)
 }
 
 func (p *Provider) NetworksGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

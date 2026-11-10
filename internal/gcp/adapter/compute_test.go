@@ -25,6 +25,7 @@ func TestComputeCodecDecode(t *testing.T) {
 		{"POST", "/compute/v1/projects/p/global/networks", "NetworksInsert"},
 		{"GET", "/compute/v1/projects/p/global/networks", "NetworksList"},
 		{"GET", "/compute/v1/projects/p/global/networks/n", "NetworksGet"},
+		{"PATCH", "/compute/v1/projects/p/global/networks/n", "NetworksPatch"},
 		{"DELETE", "/compute/v1/projects/p/global/networks/n", "NetworksDelete"},
 		{"POST", "/compute/v1/projects/p/global/firewalls", "FirewallsInsert"},
 		{"GET", "/compute/v1/projects/p/global/firewalls", "FirewallsList"},
@@ -57,6 +58,10 @@ func TestComputeCodecDecode(t *testing.T) {
 		// Deferred surfaces fail loud rather than 404-ing.
 		{"POST", "/compute/v1/projects/p/zones/us-central1-a/instances/i/setMetadata", "Unimplemented"},
 		{"POST", "/compute/v1/projects/p/zones/us-central1-a/instances/i/attachDisk", "Unimplemented"},
+		// compute/v1 publishes no networks.update (Discovery lists insert, get,
+		// list, patch and delete only), so the PUT spelling stays a 501 rather
+		// than a second, invented mutation path (TF2-17-1).
+		{"PUT", "/compute/v1/projects/p/global/networks/n", "Unimplemented"},
 		{"GET", "/compute/v1/projects/p/global/addresses", "Unimplemented"},
 		{"GET", "/compute/v1/projects/p/global/images", "Unimplemented"},
 		{"GET", "/compute/v1/projects/p/aggregated/operations", "Unimplemented"},
