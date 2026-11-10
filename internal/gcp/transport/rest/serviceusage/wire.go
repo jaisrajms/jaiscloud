@@ -18,6 +18,11 @@ const (
 	enableResponseType    = "type.googleapis.com/google.api.serviceusage.v1.EnableServiceResponse"
 	disableResponseType   = "type.googleapis.com/google.api.serviceusage.v1.DisableServiceResponse"
 	batchEnableRespType   = "type.googleapis.com/google.api.serviceusage.v1.BatchEnableServicesResponse"
+	// generateServiceIdentity is a v1beta1 method; the proto declares its
+	// operation metadata as google.protobuf.Empty and its response as
+	// ServiceIdentity.
+	emptyMetadataType = "type.googleapis.com/google.protobuf.Empty"
+	identityRespType  = "type.googleapis.com/google.api.serviceusage.v1beta1.ServiceIdentity"
 )
 
 // ─── request helpers ──────────────────────────────────────────────────────────
@@ -103,15 +108,21 @@ func serviceToJSON(a core.API) map[string]any {
 
 // operationToJSON renders a core Operation as a google.longrunning.Operation.
 // response is the already-typed response envelope (nil to omit it). The metadata
-// carries only resourceNames, matching google.api.serviceusage.v1.OperationMetadata.
+// carries only resourceNames, matching google.api.serviceusage.v1.OperationMetadata;
+// a generateServiceIdentity operation (v1beta1) declares google.protobuf.Empty
+// metadata instead, because its observable payload is the ServiceIdentity.
 func operationToJSON(op core.Operation, response map[string]any) map[string]any {
+	metadata := map[string]any{
+		"@type":         operationMetadataType,
+		"resourceNames": op.ResourceNames,
+	}
+	if op.Verb == "generateServiceIdentity" {
+		metadata = map[string]any{"@type": emptyMetadataType}
+	}
 	out := map[string]any{
-		"name": op.Name,
-		"metadata": map[string]any{
-			"@type":         operationMetadataType,
-			"resourceNames": op.ResourceNames,
-		},
-		"done": op.Done,
+		"name":     op.Name,
+		"metadata": metadata,
+		"done":     op.Done,
 	}
 	if response != nil {
 		out["response"] = response
@@ -152,6 +163,13 @@ func operationResponse(op core.Operation) map[string]any {
 			services = append(services, serviceToJSON(a))
 		}
 		return typedResponse(batchEnableRespType, map[string]any{"services": services})
+	case "generateServiceIdentity":
+		if op.Identity != nil {
+			return typedResponse(identityRespType, map[string]any{
+				"email":    op.Identity.Email,
+				"uniqueId": op.Identity.UniqueID,
+			})
+		}
 	}
 	return nil
 }

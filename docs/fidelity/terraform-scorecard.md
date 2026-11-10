@@ -156,8 +156,10 @@ Three boundaries are recorded, not worked around:
   workflow from state and issues the DELETE the provider guards, then destroys
   the service account and IAM grant through Terraform.
 - Secret Manager's `add_kms_permissions`/`add_pubsub_permissions` inputs drive
-  `google_project_service_identity` (google-beta), which needs the unserved
-  Service Usage `generateServiceIdentity`; the CMEK keys are passed directly.
+  `google_project_service_identity` (google-beta), whose Service Usage
+  `generateServiceIdentity` v1beta1 method is now served (`fix/gcp-serviceusage-generate-service-identity`,
+  TF3-3-5): the module grants the synthesized service agent on both CMEK keys and
+  the rotation topic, and the identity is stable across applies.
 
 Workflow CMEK and resource-level IAM are not implemented (README-GCP), and the
 provider exposes no workflow IAM resource type; regional Secret Manager secrets
@@ -396,7 +398,7 @@ and an import starts empty), not an emulator gap.
 
 | ID | classification | evidence |
 |---|---|---|
-| TF5-1 | `fix` — `fix/gcp-storage-bucket-validation` | `storage.buckets.insert` accepts `storageClass=BOGUS`, `publicAccessPrevention=BOGUS` and `location=NOT-A-LOCATION` with HTTP 200; real GCS rejects each with 400. The case records the measurement and uses the invalid-bucket-name 400 that the emulator does validate. |
+| TF5-1 | fixed — `fix/gcp-storage-bucket-validation` | `storage.buckets.insert` accepted `storageClass=BOGUS`, `publicAccessPrevention=BOGUS` and `location=NOT-A-LOCATION` with HTTP 200; real GCS rejects each with 400. Create/patch now validate `storageClass` against the Discovery-documented enum (STANDARD, NEARLINE, COLDLINE, ARCHIVE, MULTI_REGIONAL, REGIONAL, DURABLE_REDUCED_AVAILABILITY), `publicAccessPrevention` against `inherited`/`enforced`, and `location` against the documented location grammar; the lifecycle case asserts each 400 and a valid 200 control. |
 | TF5-2 | `fix` — `fix/gcp-storage-bucket-labels-merge` | `storage.buckets.patch` replaces the whole `labels` object instead of merging it: patching `{"a":"9"}` on `{a,b}` drops `b`, where real GCS keeps it (null deletes one key). Low impact through Terraform (the provider sends the effective map), wrong for a raw client. |
 | TF5-3 | `no fix` (upstream provider) | The provider's crypto-key delete destroys the versions and drops the key from state without calling the documented `cryptoKeys.delete`, so `-replace` re-creates the same name → 409. The Cloud KMS Discovery does define the delete methods; this is the behavior a real-GCP user sees with provider 7.46.2. The gate asserts the failure, re-imports and repairs the rotation schedule. |
 | TF5-4 | fixed — `fix/gcp-kms-keyring-delete` | `projects.locations.keyRings.delete` is documented in the Cloud KMS Discovery (`DELETE v1/{+name}`, an LRO) but the emulator answered 501 `UNIMPLEMENTED`; real KMS deletes an empty ring and rejects one with children with 400 `FAILED_PRECONDITION`. `cryptoKeys.delete` was already served and enforces that child precondition. The method is now served over REST (the Cloud KMS proto declares no `DeleteKeyRing` RPC, so there is no gRPC surface): an empty ring is deleted, a ring holding a `CryptoKey` is `400 FAILED_PRECONDITION`, and the ring's name stays reusable while its retired crypto-key names do not. |
@@ -427,19 +429,26 @@ Runs (each against a fresh ephemeral emulator; `STRICT=1`, so a SKIP fails):
 | Terraform 1.16.3 | PASS (2 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27 |
 | OpenTofu 1.12.6 | PASS (2 passed, 0 failed, 0 skipped) | `00-bootstrap` 38 assertions, `01-cmek` 27 |
 
+Re-run after TF4-1-1 (`make test-gcp-terraform-pattern PATTERN=00-bootstrap
+STRICT=1`, Terraform 1.16.3 + provider 7.46.2): PASS, 38 assertions, with
+`auto_create_network = false` — the Service Usage probe gets the `403`, the
+provider enables `compute.googleapis.com`, tolerates the `404` from reading the
+(default) network that the emulator does not synthesize, and the rest of the
+stack converges.
+
 What each pattern proves:
 
 | pattern | proof |
 |---|---|
-| `00-bootstrap` | Terraform creates the project (unique per run), links the billing account, enables four Service Usage APIs, creates a service account + project IAM grant, a GCS bucket with a computed `self_link`, a Pub/Sub topic/subscription, a Secret Manager secret/version (payload readable) and a KMS key ring/key, all referencing the created project; the provider's post-create reads of the new project succeed; re-plan is clean; destroy disables the APIs, removes every resource, and leaves the project `DELETE_REQUESTED` |
+| `00-bootstrap` | Terraform creates the project (unique per run) with `auto_create_network = false` (the provider's unknown-project pre-requisite probe now gets real GCP's `403`, TF4-1-1), links the billing account, enables four Service Usage APIs, creates a service account + project IAM grant, a GCS bucket with a computed `self_link`, a Pub/Sub topic/subscription, a Secret Manager secret/version (payload readable) and a KMS key ring/key, all referencing the created project; the provider's post-create reads of the new project succeed; re-plan is clean; destroy disables the APIs, removes every resource, and leaves the project `DELETE_REQUESTED` |
 | `01-cmek` | the regional and global KMS keys are `ENCRYPT_DECRYPT`; the bucket echoes `encryption.defaultKmsKeyName`, the BigQuery dataset echoes `defaultEncryptionConfiguration.kmsKeyName` and the Secret Manager secret echoes `replication.automatic.customerManagedEncryption.kmsKeyName`; re-plan is clean; switching the bucket and dataset to the second regional key is in place (bucket `timeCreated` kept and metageneration 1 -> 2, dataset `creationTime` kept) and re-plans clean; destroy removes the data resources and leaves only the key rings |
 
 Recorded gap and boundaries:
 
 | ID | classification | evidence |
 |---|---|---|
-| TF4-1-1 | `fix` — `fix/gcp-serviceusage-unknown-project` | Service Usage answers `200` (`DISABLED`) for `projects/00000000000/services/serviceusage.googleapis.com`; real GCP answers `403` ("Project '00000000000' not found or permission denied"). Provider 7.46.2's `resourceGoogleProjectCheckPreRequisites` probes that dummy project when `auto_create_network = false` and calls `err.Error()` without a nil check, so the `200` panics the provider. The pattern keeps the provider default (`true`) and records the gap. |
-| TF4-1-2 | `out of scope` | The bootstrap project keeps `auto_create_network = true`; the default Compute network it implies, and the network-deletion path `false` would take, are outside this stack's measured surface (wave-plan §6). `compute.projects.get` itself is served (TF2-1). |
+| TF4-1-1 | fixed — `fix/gcp-serviceusage-unknown-project` | Service Usage answered `200` (`DISABLED`) for `projects/00000000000/services/serviceusage.googleapis.com`; real GCP answers `403` ("Project '00000000000' not found or permission denied."). Provider 7.46.2's `resourceGoogleProjectCheckPreRequisites` probes that dummy project when `auto_create_network = false` and calls `err.Error()` without a nil check, so the `200` panicked the provider mid-create. The core now rejects an unknown project NUMBER with the real `403 PERMISSION_DENIED` envelope (legacy `errors[].reason = "forbidden"`, so the apiary client's `googleapi: Error 403: …, forbidden` string matches), resolves a known number to its project ID, and keeps synthesize-on-read for project IDs. The bootstrap pattern sets `auto_create_network = false` and passes (38 assertions; Terraform 1.16.3 + provider 7.46.2). |
+| TF4-1-2 | `out of scope` | The emulator synthesizes no default Compute network, so with `auto_create_network = false` the provider's `networks.get(default)` is a `404` that its documented branch tolerates ("no need to delete it") — measured in the pattern run. Creating and deleting a real default network (firewall sweep, `networks.delete` success path) stays outside this stack's measured surface (wave-plan §6). `compute.projects.get` itself is served (TF2-1). |
 | TF4-1-3 | `no fix` (provider schema) | `google_secret_manager_secret.replication` is ForceNew, so the CMEK pattern rotates the bucket/dataset key in place but creates the secret's key once. The emulator's replication PATCH path is covered by the service/REST tests. |
 
 The KMS objects that survive each destroy are the TF5-3 boundary (the provider

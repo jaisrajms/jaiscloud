@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/store"
 )
 
@@ -67,6 +68,14 @@ type observedEntry struct {
 // instead of on the request path.
 func (s *Service) ObserveAccount(ctx context.Context, account, service string) {
 	if account == "" {
+		return
+	}
+	// A numeric account is a project-number reference the wire addressed, not a
+	// project identity. Recording it would invent a project (and, because
+	// ProjectNumberFor treats a numeric reference as its own number, let
+	// ProjectByNumber resolve that bogus id): the Terraform provider's
+	// projects/00000000000 probe must not become a project (TF4-1-1).
+	if resource.IsProjectNumber(account) {
 		return
 	}
 	now := clock.Now()

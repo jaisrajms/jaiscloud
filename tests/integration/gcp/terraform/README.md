@@ -609,12 +609,22 @@ applied with two secrets and drives the full gate:
      version payload;
    - one authoritative `google_secret_manager_secret_iam_binding` per secret
      carrying a `roles/secretmanager.secretAccessor` reader;
+   - `add_kms_permissions` naming the global and regional CMEK keys and
+     `add_pubsub_permissions` naming the rotation topic, so the module creates
+     `google_project_service_identity` (google-beta) and grants the Secret
+     Manager service agent `roles/cloudkms.cryptoKeyEncrypterDecrypter` on both
+     keys and `roles/pubsub.publisher` on the topic;
 
    assert through REST that each secret reads back its replication arm and keys,
    the automatic secret reads back its label, rotation schedule and topic, the
    user-managed secret both replica locations, and each `versions.access` call
-   returns the expected payload; `getIamPolicy` must carry the reader; the apply
-   log must contain no `400`, `501` or `unsupported update_mask`
+   returns the expected payload; `getIamPolicy` must carry the reader; a direct
+   `POST /v1beta1/projects/{project}/services/secretmanager.googleapis.com:generateServiceIdentity`
+   must return a done operation whose service-agent email is the stable
+   `service-{projectNumber}@gcp-sa-secretmanager.iam.gserviceaccount.com`; the
+   KMS key and Pub/Sub topic policies must carry `serviceAccount:{email}` under
+   the granted roles; the apply log must contain no `400`, `501` or
+   `unsupported update_mask`
 2. `plan -detailed-exitcode` → **no changes**
 3. change the label, the rotation period to `172800s`, the automatic secret's
    payload (a version replacement) and the IAM member list to two members;
@@ -622,11 +632,12 @@ applied with two secrets and drives the full gate:
    **no changes**
 4. `destroy`; both secrets and the versions are `404`
 
-`add_kms_permissions`/`add_pubsub_permissions` stay empty because both drive
-`google_project_service_identity` (google-beta), whose Service Usage
-`generateServiceIdentity` surface is not served; the CMEK keys are passed
-directly, which is the part the secret API validates. Regional secrets are not
-served (TF1-4); the case only creates global `projects.secrets` resources.
+The identity is created through the beta provider's
+`service_usage_custom_endpoint` (the v1beta1 base URL): `generateServiceIdentity`
+exists only on v1beta1, and repeating it returns the same agent (real GCP never
+answers `ALREADY_EXISTS`), which is what keeps the two grants from permadiffing.
+Regional secrets are not served (TF1-4); the case only creates global
+`projects.secrets` resources.
 
 **workflows** — the CFT `terraform-google-cloud-workflows` root module has no
 default for `workflow_trigger` and always creates a Scheduler or Eventarc
@@ -834,8 +845,11 @@ replaces the other.
   `SetLabels` (only keys already in state are planned) and preserved by the
   update; the gate asserts the managed key converges and records the extra key.
 - The storage bucket's invalid `storageClass`/`publicAccessPrevention`/`location`
-  are accepted today (real GCS rejects them) — TF5-1; the case records the
-  measurement and uses the invalid-bucket-name 400 that GCS does validate.
+  are rejected with 400: `storageClass` against the documented seven-value enum,
+  `publicAccessPrevention` against `inherited`/`enforced`, and `location` against
+  the documented location grammar (US/EU/ASIA, predefined dual-region codes,
+  region names and zonal suffixes). The negative block asserts each 400 plus a
+  valid control that creates and reads back (TF5-1).
 
 **Expansion list (the next services, in order).** Each needs an import id and,
 where the API supports it, a ForceNew identity change:
@@ -896,13 +910,17 @@ map the fixture, the module driver and the corpus tool consume. A bare
 
 Recorded boundaries, not worked around:
 
-- **`auto_create_network`.** The bootstrap project keeps the provider default
-  (`true`). Setting it `false` makes provider 7.46.2 probe Service Usage for the
-  dummy project `00000000000`; real GCP answers `403` and the provider's
-  pre-requisite switch assumes an error, but the emulator answers `200` with
-  `DISABLED`, so the provider dereferences a nil error and panics. That is
-  TF4-1-1 (`fix/gcp-serviceusage-unknown-project`); Compute networking is
-  outside this stack's scope either way.
+- **`auto_create_network`.** The bootstrap project sets it `false`, which
+  exercises the provider's pre-requisite probe: provider 7.46.2 asks Service
+  Usage about the dummy project `00000000000` and calls `err.Error()` with no
+  nil guard, so a `200` from that call crashes it mid-create. The emulator now
+  answers real GCP's `403` (`Project '00000000000' not found or permission
+  denied.`, TF4-1-1), and the pattern's shared provider block carries the Compute
+  custom endpoint so the follow-up `networks.get(default)` reaches the emulator:
+  no default network is synthesized, the provider's documented `404` branch logs
+  "no need to delete it", and the apply converges (measured PASS, Terraform
+  1.16.3 + provider 7.46.2). Creating and deleting an actual default network is
+  still outside the stack's scope (TF4-1-2).
 - **KMS objects survive destroy.** The provider never calls the documented
   `keyRings.delete`/`cryptoKeys.delete` (TF5-3); both methods are served over REST
   (TF5-4 added `projects.locations.keyRings.delete`), so the patterns assert the

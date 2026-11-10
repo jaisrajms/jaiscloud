@@ -2,11 +2,15 @@ package serviceusage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/serviceusage"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -74,11 +78,118 @@ func TestCodecDecodeUnsupported(t *testing.T) {
 		{http.MethodPost, "/v1/projects/proj/services/run.googleapis.com"},
 		{http.MethodGet, "/v1/projects/proj"},
 		{http.MethodGet, "/v1/projects/proj/services/run.googleapis.com:unsupported"},
+		// generateServiceIdentity is v1beta1-only; a v1 path is a 404 on real
+		// GCP and must stay unsupported here.
+		{http.MethodPost, "/v1/projects/proj/services/run.googleapis.com:generateServiceIdentity"},
+		{http.MethodPost, "/v1beta1/projects/proj/services/run.googleapis.com:disable"},
 	} {
 		r := httptest.NewRequest(tc.method, tc.path, nil)
 		if _, err := c.Decode(r, nil); err == nil {
 			t.Fatalf("%s %s: expected error", tc.method, tc.path)
 		}
+	}
+}
+
+// TestCodecDecodeV1Beta1 covers the v1beta1 paths: the services
+// generateServiceIdentity custom method and the top-level operations poll.
+func TestCodecDecodeV1Beta1(t *testing.T) {
+	c := NewCodec()
+
+	nr, err := c.Decode(httptest.NewRequest(http.MethodPost,
+		"/v1beta1/projects/proj/services/secretmanager.googleapis.com:generateServiceIdentity", nil), nil)
+	if err != nil {
+		t.Fatalf("decode generateServiceIdentity: %v", err)
+	}
+	if nr.Action != "ServicesGenerateServiceIdentity" {
+		t.Fatalf("action = %q", nr.Action)
+	}
+	if nr.Params["project"] != "proj" || nr.Params["service"] != "secretmanager.googleapis.com" {
+		t.Fatalf("params = %v", nr.Params)
+	}
+
+	nr, err = c.Decode(httptest.NewRequest(http.MethodGet, "/v1beta1/operations/op-1", nil), nil)
+	if err != nil {
+		t.Fatalf("decode operations.get: %v", err)
+	}
+	if nr.Action != "OperationsGet" || nr.Params["name"] != "operations/op-1" {
+		t.Fatalf("operations.get = action %q name %v", nr.Action, nr.Params["name"])
+	}
+}
+
+// TestGenerateServiceIdentityREST drives the raw v1beta1 request through the
+// codec, provider and encoder, the way the google-beta provider does: the
+// response is a done google.longrunning.Operation whose ServiceIdentity carries
+// the service agent email and uniqueId. A second request returns the same
+// identity, and the unsupported-service path is a 400 FAILED_PRECONDITION.
+func TestGenerateServiceIdentityREST(t *testing.T) {
+	resources := store.NewMemoryResourceStore()
+	p := NewProvider(core.NewService(resources), "default-proj")
+
+	status, body := serveBody(t, p, http.MethodPost,
+		"/v1beta1/projects/proj/services/secretmanager.googleapis.com:generateServiceIdentity", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	var op map[string]any
+	if err := json.Unmarshal(body, &op); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if done, _ := op["done"].(bool); !done {
+		t.Fatalf("operation not done: %s", body)
+	}
+	// The v1beta1 proto declares google.protobuf.Empty metadata for this method.
+	meta, _ := op["metadata"].(map[string]any)
+	if meta["@type"] != emptyMetadataType {
+		t.Errorf("metadata @type = %v, want %q", meta["@type"], emptyMetadataType)
+	}
+	resp, _ := op["response"].(map[string]any)
+	if resp["@type"] != identityRespType {
+		t.Errorf("response @type = %v, want %q", resp["@type"], identityRespType)
+	}
+	email, _ := resp["email"].(string)
+	if want := "service-" + resource.ProjectNumber("proj") + "@gcp-sa-secretmanager.iam.gserviceaccount.com"; email != want {
+		t.Errorf("email = %q, want %q", email, want)
+	}
+	if unique, _ := resp["uniqueId"].(string); !regexp.MustCompile(`^1[0-9]{20}$`).MatchString(unique) {
+		t.Errorf("uniqueId = %q", unique)
+	}
+
+	// Idempotence over the wire: a second call returns the same identity.
+	_, body2 := serveBody(t, p, http.MethodPost,
+		"/v1beta1/projects/proj/services/secretmanager.googleapis.com:generateServiceIdentity", "")
+	var op2 map[string]any
+	if err := json.Unmarshal(body2, &op2); err != nil {
+		t.Fatalf("unmarshal 2: %v", err)
+	}
+	resp2, _ := op2["response"].(map[string]any)
+	if resp2["email"] != resp["email"] || resp2["uniqueId"] != resp["uniqueId"] {
+		t.Errorf("identity changed: %v -> %v", resp, resp2)
+	}
+
+	// The operation is persisted and readable at the v1beta1 poll path.
+	name, _ := op["name"].(string)
+	status, body = serveBody(t, p, http.MethodGet, "/v1beta1/"+name, "")
+	if status != http.StatusOK {
+		t.Fatalf("operations.get status = %d, body = %s", status, body)
+	}
+	var polled map[string]any
+	if err := json.Unmarshal(body, &polled); err != nil {
+		t.Fatalf("unmarshal poll: %v", err)
+	}
+	if polled["name"] != name || polled["done"] != true {
+		t.Errorf("polled operation = %v", polled)
+	}
+
+	// Unsupported service: a name that is not a Google API service has no
+	// managed identity (real GCP also refuses to generate one).
+	status, body = serveBody(t, p, http.MethodPost,
+		"/v1beta1/projects/proj/services/example.com:generateServiceIdentity", "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("unsupported service status = %d, body = %s", status, body)
+	}
+	if !strings.Contains(string(body), "FAILED_PRECONDITION") ||
+		!strings.Contains(string(body), "No service identity exists for service") {
+		t.Errorf("unsupported service body = %s", body)
 	}
 }
 
@@ -175,6 +286,9 @@ func TestStorageErrorsPropagate(t *testing.T) {
 	if _, err := p.DisableService(ctx, newNR(map[string]any{"project": "proj", "service": "a.googleapis.com"})); !errors.Is(err, store.ErrStorageUnavailable) {
 		t.Errorf("DisableService error = %v, want ErrStorageUnavailable", err)
 	}
+	if _, err := p.GenerateServiceIdentity(ctx, newNR(map[string]any{"project": "proj", "service": "a.googleapis.com"})); !errors.Is(err, store.ErrStorageUnavailable) {
+		t.Errorf("GenerateServiceIdentity error = %v, want ErrStorageUnavailable", err)
+	}
 }
 
 func TestMissingParamsAreInvalidArgument(t *testing.T) {
@@ -187,6 +301,7 @@ func TestMissingParamsAreInvalidArgument(t *testing.T) {
 		"disable":     p.DisableService,
 		"batchGet":    p.BatchGetServices,
 		"batchEnable": p.BatchEnableServices,
+		"identity":    p.GenerateServiceIdentity,
 	}
 	// No project in the path, no account scope, and no configured default.
 	for name, fn := range handlers {
