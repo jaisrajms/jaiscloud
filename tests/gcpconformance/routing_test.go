@@ -109,6 +109,12 @@ var routeExemptions = []*routeExemption{
 		reason:  "a run operation get/delete id carries the run-owned 'operation-run-' prefix; the synthetic probe id does not, so the shared path resolves to Functions as documented",
 		match:   operationsProxy(http.MethodDelete),
 	},
+	{
+		service: "serviceusage",
+		owner:   "functions",
+		reason:  "Service Usage's v1 operations.get shares /v1/operations/{id} with Cloud Functions v1 on the single origin; the Functions provider consults the Service Usage operation resolver before answering, so a Service Usage operation id still resolves while the path-only detector reports functions (the v1beta1 poll path is owned by Service Usage directly)",
+		match:   operationsProxy(http.MethodGet),
+	},
 }
 
 // methodIDFor resolves the Discovery method id a probe path matches within the

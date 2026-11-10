@@ -156,8 +156,10 @@ Three boundaries are recorded, not worked around:
   workflow from state and issues the DELETE the provider guards, then destroys
   the service account and IAM grant through Terraform.
 - Secret Manager's `add_kms_permissions`/`add_pubsub_permissions` inputs drive
-  `google_project_service_identity` (google-beta), which needs the unserved
-  Service Usage `generateServiceIdentity`; the CMEK keys are passed directly.
+  `google_project_service_identity` (google-beta), whose Service Usage
+  `generateServiceIdentity` v1beta1 method is now served (`fix/gcp-serviceusage-generate-service-identity`,
+  TF3-3-5): the module grants the synthesized service agent on both CMEK keys and
+  the rotation topic, and the identity is stable across applies.
 
 Workflow CMEK and resource-level IAM are not implemented (README-GCP), and the
 provider exposes no workflow IAM resource type; regional Secret Manager secrets

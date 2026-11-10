@@ -32,6 +32,17 @@ defaults:
     reason: "BigLake Iceberg REST catalog; no official Discovery document"
 
 operations:
+  # Service Usage v1beta1 only: the vendored v1 Discovery declares no
+  # generateServiceIdentity method, so the cell cannot be derived from it. The
+  # emulator serves the v1beta1 path over REST and the shape is verified by the
+  # raw-REST tests plus the pinned secret-manager module case (google-beta
+  # 7.46.2); the agent identity itself is synthesized from the deterministic
+  # project number and persisted, not looked up in a real per-service catalog.
+  - service: serviceusage
+    operation: ServiceUsage.ServicesGenerateServiceIdentity
+    state: limited
+    reason: "v1beta1-only method (absent from the vendored v1 Discovery); the service-agent identity is synthesized from the deterministic project number and persisted, not derived from real GCP's per-service agent catalog"
+
   - service: dataproc
     operation: Dataproc.SubmitJob
     state: ga

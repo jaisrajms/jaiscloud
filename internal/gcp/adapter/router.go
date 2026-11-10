@@ -92,6 +92,19 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 			return svc, SourcePath
 		}
 	}
+	// Service Usage v1beta1 owns exactly two paths on this origin: the
+	// generateServiceIdentity custom method (POST
+	// /v1beta1/projects/{project}/services/{service}:generateServiceIdentity,
+	// which the google-beta provider's google_project_service_identity calls)
+	// and the top-level v1beta1 operations poll path it returns. Both are
+	// claimed here, before the raw-media fallback; the rest of the v1beta1
+	// Service Usage surface stays unclaimed because the emulator serves v1 for
+	// it and v1beta1's response shapes differ.
+	if strings.HasPrefix(p, "/v1beta1/") {
+		if detectServiceUsageV1Beta1(r.URL.EscapedPath()) {
+			return "serviceusage", SourcePath
+		}
+	}
 	// Cloud Functions v2 only. Resolved before the raw-media fallback for the
 	// same reason as /v1/... above.
 	if strings.HasPrefix(p, "/v2/") {
@@ -190,6 +203,37 @@ func detectBigQueryService(path string) string {
 		}
 	}
 	return ""
+}
+
+// detectServiceUsageV1Beta1 reports whether path is one of the two v1beta1
+// Service Usage paths the emulator serves: the services.generateServiceIdentity
+// custom method and the top-level operations poll path. It parses the path
+// rather than reusing detectV1Service so no other v1beta1 resource segment is
+// claimed for serviceusage (v1beta1 list/get/enable/disable return different
+// response shapes and are served on v1).
+func detectServiceUsageV1Beta1(path string) bool {
+	path = "/" + strings.TrimLeft(path, "/")
+	seg := splitEscaped(path)
+	if len(seg) < 2 || seg[0] != "v1beta1" {
+		return false
+	}
+	if seg[1] == "operations" {
+		return len(seg) == 3 && seg[2] != ""
+	}
+	pi := -1
+	for i, s := range seg {
+		if s == "projects" {
+			pi = i
+			break
+		}
+	}
+	if pi < 0 || pi+4 != len(seg) {
+		return false
+	}
+	if seg[pi+2] != "services" {
+		return false
+	}
+	return strings.HasSuffix(seg[pi+3], ":generateServiceIdentity")
 }
 
 // detectV1Service maps a /v1/projects/{project}/... path to a service name by

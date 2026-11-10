@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1257,
+    "total": 1259,
     "by_state": {
-      "ga": 1043,
-      "limited": 161,
+      "ga": 1044,
+      "limited": 162,
       "preview": 14,
       "unsupported": 39
     },
@@ -15,8 +15,8 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 593,
-        "limited": 138,
+        "ga": 594,
+        "limited": 139,
         "preview": 14,
         "unsupported": 11
       }
@@ -116,7 +116,8 @@
         "ga": 51
       },
       "serviceusage": {
-        "ga": 12
+        "ga": 13,
+        "limited": 1
       },
       "storage": {
         "ga": 63
@@ -138,7 +139,7 @@
       },
       "unverified": {
         "grpc": 46,
-        "rest": 46
+        "rest": 48
       }
     },
     "grpc_only_services": [
@@ -1288,12 +1289,11 @@
       "source": "discovery",
       "source_ref": "serviceusage.v1",
       "published": 10,
-      "served": 6,
-      "graded": 6,
+      "served": 7,
+      "graded": 7,
       "unserved": [
         "serviceusage.operations.cancel",
         "serviceusage.operations.delete",
-        "serviceusage.operations.get",
         "serviceusage.operations.list"
       ]
     },
@@ -16712,6 +16712,19 @@
     },
     {
       "service": "serviceusage",
+      "operation": "ServiceUsage.OperationsGet",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "serviceusage.operations.get",
+      "verified": false,
+      "evidence": [
+        "discovery=serviceusage.operations.get",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "serviceusage",
       "operation": "ServiceUsage.ServicesBatchEnable",
       "transport": "rest",
       "state": "ga",
@@ -16763,6 +16776,18 @@
         "mutating",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesGenerateServiceIdentity",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "v1beta1-only method (absent from the vendored v1 Discovery); the service-agent identity is synthesized from the deterministic project number and persisted, not derived from real GCP's per-service agent catalog",
+      "verified": false,
+      "evidence": [
+        "postgres=yes",
+        "verified=false (rest, no Discovery method)"
       ]
     },
     {

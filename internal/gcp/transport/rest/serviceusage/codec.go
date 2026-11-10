@@ -49,11 +49,22 @@ func NewCodec() *Codec { return &Codec{} }
 // ServiceName implements adapter.Codec.
 func (c *Codec) ServiceName() string { return ServiceName }
 
-// Decode parses a v1 services path into a NormalizedRequest. Params carry
-// project, name, service (item paths), and body (POST), plus any query
-// parameters (filter, pageSize, pageToken).
+// Decode parses a v1 (or v1beta1) services path into a NormalizedRequest.
+// Params carry project, name, service (item paths), and body (POST), plus any
+// query parameters (filter, pageSize, pageToken). The top-level v1beta1
+// operations path (GET /v1beta1/operations/{id}) decodes as OperationsGet.
 func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
+	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
+	queryToParams(r, nr.Params)
+	// Service Usage v1beta1's generateServiceIdentity returns a top-level
+	// operation (operations/{id}) that the client polls at the v1beta1 base URL.
+	// That path has no project segment, so it is decoded before the project scan.
+	if len(seg) == 3 && seg[0] == "v1beta1" && seg[1] == "operations" && r.Method == http.MethodGet {
+		nr.Params["name"] = "operations/" + seg[2]
+		nr.Action = "OperationsGet"
+		return nr, nil
+	}
 	pi := -1
 	for i, s := range seg {
 		if s == "projects" {
@@ -65,9 +76,7 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		return nil, model.NewProviderError("InvalidRequest", "missing project or services resource in path", 404)
 	}
 
-	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
-	queryToParams(r, nr.Params)
 	// `names` is a repeated query parameter (services:batchGet); keep every
 	// value, not just the first, so the handler sees the whole batch.
 	if names, ok := r.URL.Query()["names"]; ok {
@@ -81,10 +90,14 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Params["body"] = m
 	}
 
+	version := ""
+	if len(seg) > 0 {
+		version = seg[0]
+	}
 	rest := seg[pi+2:]
 	// Strip a trailing custom-method suffix (":batchEnable", ":enable",
-	// ":disable") so the "services" collection marker and the service id are
-	// the only remaining segments.
+	// ":disable", ":generateServiceIdentity") so the "services" collection marker
+	// and the service id are the only remaining segments.
 	custom := ""
 	if len(rest) > 0 {
 		last := rest[len(rest)-1]
@@ -101,7 +114,7 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Params["service"] = rest[1]
 	}
 
-	nr.Action = serviceUsageAction(rest, custom, r.Method)
+	nr.Action = serviceUsageAction(version, rest, custom, r.Method)
 	if nr.Action == "" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
@@ -109,21 +122,30 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 }
 
 // serviceUsageAction maps the path segments after projects/{project} (plus the
-// custom verb and HTTP method) to the provider action name.
-func serviceUsageAction(rest []string, custom, method string) string {
+// version, the custom verb and the HTTP method) to the provider action name.
+// The emulator serves the enable/disable/get/list family on v1 only, and
+// generateServiceIdentity on v1beta1 only (the v1 Discovery declares no such
+// method; real GCP answers 404 for a v1 path). Both versions therefore resolve
+// exactly the paths the router claims, and a wrong-version request stays
+// unsupported rather than being quietly served with the other version's shape.
+func serviceUsageAction(version string, rest []string, custom, method string) string {
 	switch {
-	case len(rest) == 1 && custom == "" && method == http.MethodGet:
+	case version != "v1" && version != "v1beta1":
+		return ""
+	case len(rest) == 1 && custom == "" && method == http.MethodGet && version == "v1":
 		return "ServicesList"
-	case len(rest) == 1 && custom == "batchGet" && method == http.MethodGet:
+	case len(rest) == 1 && custom == "batchGet" && method == http.MethodGet && version == "v1":
 		return "ServicesBatchGet"
-	case len(rest) == 1 && custom == "batchEnable" && method == http.MethodPost:
+	case len(rest) == 1 && custom == "batchEnable" && method == http.MethodPost && version == "v1":
 		return "ServicesBatchEnable"
-	case len(rest) == 2 && custom == "" && method == http.MethodGet:
+	case len(rest) == 2 && custom == "" && method == http.MethodGet && version == "v1":
 		return "ServicesGet"
-	case len(rest) == 2 && custom == "enable" && method == http.MethodPost:
+	case len(rest) == 2 && custom == "enable" && method == http.MethodPost && version == "v1":
 		return "ServicesEnable"
-	case len(rest) == 2 && custom == "disable" && method == http.MethodPost:
+	case len(rest) == 2 && custom == "disable" && method == http.MethodPost && version == "v1":
 		return "ServicesDisable"
+	case len(rest) == 2 && custom == "generateServiceIdentity" && method == http.MethodPost && version == "v1beta1":
+		return "ServicesGenerateServiceIdentity"
 	}
 	return ""
 }

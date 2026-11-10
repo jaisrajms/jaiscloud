@@ -86,8 +86,8 @@ func Defaults(project string) []DefaultAccount {
 	appspot := project + "@appspot.gserviceaccount.com"
 	compute := number + "-compute@developer.gserviceaccount.com"
 	return []DefaultAccount{
-		{Email: appspot, DisplayName: "App Engine default service account", UniqueID: defaultUniqueID(appspot)},
-		{Email: compute, DisplayName: "Compute Engine default service account", UniqueID: defaultUniqueID(compute)},
+		{Email: appspot, DisplayName: "App Engine default service account", UniqueID: ManagedUniqueID(appspot)},
+		{Email: compute, DisplayName: "Compute Engine default service account", UniqueID: ManagedUniqueID(compute)},
 	}
 }
 
@@ -145,12 +145,14 @@ func DefaultEmailNumber(email string) string {
 	return number
 }
 
-// defaultUniqueID derives the 21-digit numeric uniqueId of a managed default
-// account from its email. It is deterministic (a read must not churn) and in
-// the system-assigned range: real IAM's managed accounts carry 21-digit ids
-// beginning with "1" (captured: 111361368305025563191), so the hash supplies
-// the trailing digits.
-func defaultUniqueID(email string) string {
+// ManagedUniqueID returns the deterministic 21-digit numeric uniqueId of a
+// Google-managed service account derived from its email. It is deterministic (a
+// read must not churn) and in the system-assigned range: real IAM's managed
+// accounts carry 21-digit ids beginning with "1" (captured:
+// 111361368305025563191), so the hash supplies the trailing digits. It backs
+// both the App Engine/Compute default accounts and the service agents
+// synthesized by Service Usage's generateServiceIdentity.
+func ManagedUniqueID(email string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(email))
 	return fmt.Sprintf("1%020d", h.Sum64())

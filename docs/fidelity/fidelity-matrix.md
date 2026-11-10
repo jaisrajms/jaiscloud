@@ -12,14 +12,14 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1257**
+Cells: **1259**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1043 |
-| limited | 161 |
+| ga | 1044 |
+| limited | 162 |
 | preview | 14 |
 | unsupported | 39 |
 
@@ -27,7 +27,7 @@ Cells: **1257**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 593 | 138 | 14 | 11 |
+| rest | 594 | 139 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 710 | 46 |
+| rest | 710 | 48 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -99,7 +99,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | scheduler | grpc | 8 | 8 | 8 | 0 | 0 | google.cloud.scheduler.v1.CloudScheduler |
 | secretmanager | rest | 36 | 34 | 34 | 2 | 0 | secretmanager.v1 |
 | secretmanager | grpc | 17 | 17 | 17 | 0 | 0 | google.cloud.secretmanager.v1.SecretManagerService |
-| serviceusage | rest | 10 | 6 | 6 | 4 | 0 | serviceusage.v1 |
+| serviceusage | rest | 10 | 7 | 7 | 3 | 0 | serviceusage.v1 |
 | serviceusage | grpc | 6 | 6 | 6 | 0 | 0 | google.api.serviceusage.v1.ServiceUsage |
 | storage | rest | 87 | 44 | 36 | 43 | 8 | storage.v1 |
 | storage | grpc | 24 | 24 | 24 | 0 | 0 | google.storage.v2.Storage |
@@ -158,7 +158,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 - **run** REST (45): run.projects.locations.builds.submit, run.projects.locations.exportImage, run.projects.locations.exportImageMetadata, run.projects.locations.exportMetadata, run.projects.locations.exportProjectMetadata, run.projects.locations.instances.create, run.projects.locations.instances.delete, run.projects.locations.instances.get, run.projects.locations.instances.getIamPolicy, run.projects.locations.instances.list, run.projects.locations.instances.patch, run.projects.locations.instances.setIamPolicy, run.projects.locations.instances.start, run.projects.locations.instances.stop, run.projects.locations.instances.testIamPermissions, run.projects.locations.jobs.create, run.projects.locations.jobs.delete, run.projects.locations.jobs.executions.cancel, run.projects.locations.jobs.executions.delete, run.projects.locations.jobs.executions.exportStatus, run.projects.locations.jobs.executions.get, run.projects.locations.jobs.executions.list, run.projects.locations.jobs.executions.tasks.get, run.projects.locations.jobs.executions.tasks.list, run.projects.locations.jobs.get, run.projects.locations.jobs.getIamPolicy, run.projects.locations.jobs.list, run.projects.locations.jobs.patch, run.projects.locations.jobs.run, run.projects.locations.jobs.setIamPolicy, run.projects.locations.jobs.testIamPermissions, run.projects.locations.operations.wait, run.projects.locations.services.revisions.exportStatus, run.projects.locations.sourceUploads.upload, run.projects.locations.workerPools.create, run.projects.locations.workerPools.delete, run.projects.locations.workerPools.get, run.projects.locations.workerPools.getIamPolicy, run.projects.locations.workerPools.list, run.projects.locations.workerPools.patch, run.projects.locations.workerPools.revisions.delete, run.projects.locations.workerPools.revisions.get, run.projects.locations.workerPools.revisions.list, run.projects.locations.workerPools.setIamPolicy, run.projects.locations.workerPools.testIamPermissions
 - **scheduler** REST (8): cloudscheduler.projects.locations.get, cloudscheduler.projects.locations.getCmekConfig, cloudscheduler.projects.locations.list, cloudscheduler.projects.locations.operations.cancel, cloudscheduler.projects.locations.operations.delete, cloudscheduler.projects.locations.operations.get, cloudscheduler.projects.locations.operations.list, cloudscheduler.projects.locations.updateCmekConfig
 - **secretmanager** REST (2): secretmanager.projects.locations.get, secretmanager.projects.locations.list
-- **serviceusage** REST (4): serviceusage.operations.cancel, serviceusage.operations.delete, serviceusage.operations.get, serviceusage.operations.list
+- **serviceusage** REST (3): serviceusage.operations.cancel, serviceusage.operations.delete, serviceusage.operations.list
 - **storage** REST (43): storage.anywhereCaches.disable, storage.anywhereCaches.get, storage.anywhereCaches.insert, storage.anywhereCaches.list, storage.anywhereCaches.pause, storage.anywhereCaches.resume, storage.anywhereCaches.update, storage.bucketAccessControls.delete, storage.bucketAccessControls.get, storage.bucketAccessControls.patch, storage.bucketAccessControls.update, storage.buckets.operations.advanceRelocateBucket, storage.buckets.operations.cancel, storage.buckets.operations.get, storage.buckets.operations.list, storage.buckets.relocate, storage.buckets.restore, storage.channels.stop, storage.defaultObjectAccessControls.delete, storage.defaultObjectAccessControls.get, storage.defaultObjectAccessControls.insert, storage.defaultObjectAccessControls.list, storage.defaultObjectAccessControls.patch, storage.defaultObjectAccessControls.update, storage.folders.delete, storage.folders.deleteRecursive, storage.folders.get, storage.folders.insert, storage.folders.list, storage.folders.rename, storage.managedFolders.delete, storage.managedFolders.get, storage.managedFolders.getIamPolicy, storage.managedFolders.insert, storage.managedFolders.list, storage.managedFolders.setIamPolicy, storage.managedFolders.testIamPermissions, storage.managedFolders.update, storage.rapidCaches.disable, storage.rapidCaches.get, storage.rapidCaches.insert, storage.rapidCaches.list, storage.rapidCaches.update
 - **tasks** REST (3): cloudtasks.projects.locations.get, cloudtasks.projects.locations.list, cloudtasks.projects.locations.operations.get
 - **workflowexecutions** REST (6): workflowexecutions.projects.locations.workflows.executions.callbacks.list, workflowexecutions.projects.locations.workflows.executions.deleteExecutionHistory, workflowexecutions.projects.locations.workflows.executions.exportData, workflowexecutions.projects.locations.workflows.executions.stepEntries.get, workflowexecutions.projects.locations.workflows.executions.stepEntries.list, workflowexecutions.projects.locations.workflows.triggerPubsubExecution
@@ -1570,11 +1570,11 @@ _51 cell(s): ga=51 limited=0 preview=0 unsupported=0_
 
 ## serviceusage
 
-_Coverage: REST **6 of 10** published methods served · 4 not served · 6 graded (`serviceusage.v1` Discovery)_
+_Coverage: REST **7 of 10** published methods served · 3 not served · 7 graded (`serviceusage.v1` Discovery)_
 
 _Coverage: GRPC **6 of 6** published methods served · 6 graded (`google.api.serviceusage.v1.ServiceUsage` proto)_
 
-_12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
+_14 cell(s): ga=13 limited=1 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -1584,10 +1584,12 @@ _12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
 | EnableService | grpc | ga | yes | — |
 | GetService | grpc | ga | yes | — |
 | ListServices | grpc | ga | yes | — |
+| ServiceUsage.OperationsGet | rest | ga | no | — |
 | ServiceUsage.ServicesBatchEnable | rest | ga | yes | — |
 | ServiceUsage.ServicesBatchGet | rest | ga | yes | — |
 | ServiceUsage.ServicesDisable | rest | ga | yes | — |
 | ServiceUsage.ServicesEnable | rest | ga | yes | — |
+| ServiceUsage.ServicesGenerateServiceIdentity | rest | limited | no | v1beta1-only method (absent from the vendored v1 Discovery); the service-agent identity is synthesized from the deterministic project number and persisted, not derived from real GCP's per-service agent catalog |
 | ServiceUsage.ServicesGet | rest | ga | yes | — |
 | ServiceUsage.ServicesList | rest | ga | yes | — |
 
