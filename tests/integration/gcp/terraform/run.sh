@@ -290,6 +290,13 @@ check "Secret Manager regional IAM grant" \
   "$REGIONAL_SECRET:getIamPolicy" 'roles/secretmanager.secretAccessor'
 check "CRM project lookup reports ACTIVE" \
   "$ENDPOINT/v1/projects/$PROJECT" '"lifecycleState":"ACTIVE"'
+# TF1-5: google_compute_project_metadata writes the project's common instance
+# metadata through projects.setCommonInstanceMetadata (items + the fingerprint
+# projects.get reported) and reads it back. The clean re-plan above proves the
+# fingerprint round-trip does not permadiff.
+check "Compute project metadata stored" \
+  "$ENDPOINT/compute/v1/projects/$PROJECT" \
+  '"commonInstanceMetadata"' '"key":"compat-key"' '"value":"compat-value"' '"fingerprint":"'
 # Cloud Billing: data "google_project" reads projects.getBillingInfo to populate
 # billing_account. The emulator models only the association, so the four-field
 # default (no account, billing disabled) is what both the wire and the data

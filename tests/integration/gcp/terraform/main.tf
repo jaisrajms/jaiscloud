@@ -253,6 +253,21 @@ resource "google_project_service" "run_api" {
   disable_on_destroy = true
 }
 
+# ── Compute Engine: project common instance metadata ─────────────────────────
+# google_compute_project_metadata is the writable half of the project resource:
+# the provider GETs projects/{p} to read commonInstanceMetadata.fingerprint,
+# POSTs projects/{p}/setCommonInstanceMetadata with items + that fingerprint,
+# polls the returned DONE operation, then re-reads the project. The second plan
+# above is the assertion that projects.get reports the same set (TF1-5), and
+# run.sh checks the wire body.
+resource "google_compute_project_metadata" "compat" {
+  project = var.project
+
+  metadata = {
+    compat-key = "compat-value"
+  }
+}
+
 # ── Cloud SQL for PostgreSQL ──────────────────────────────────────────────────
 resource "google_sql_database_instance" "compat" {
   name                = "jaiscloud-tf-postgres"
@@ -598,6 +613,10 @@ output "sql_ssl_cert_fingerprint" {
 
 output "enabled_service" {
   value = google_project_service.run_api.service
+}
+
+output "project_metadata_project" {
+  value = google_compute_project_metadata.compat.project
 }
 
 output "metastore_service_name" {

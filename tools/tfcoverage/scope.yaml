@@ -592,6 +592,18 @@ rules:
   - match: google_compute_subnetwork
     service: compute
     state: limited
+  # The project's common instance metadata is the one writable project field:
+  # projects.setCommonInstanceMetadata stores the items and projects.get reports
+  # them with a server fingerprint (412 on a stale fingerprint), so both the
+  # authoritative and the single-key resource round-trip (TF1-5).
+  - match: google_compute_project_metadata
+    service: compute
+    state: limited
+    reason: projects.setCommonInstanceMetadata + projects.get over the shared ResourceStore (items + fingerprint OCC); no control plane.
+  - match: google_compute_project_metadata_item
+    service: compute
+    state: limited
+    reason: read-modify-write of the project metadata set through projects.setCommonInstanceMetadata + projects.get (fingerprint OCC); no control plane.
   - match: google_compute_*
     service: compute
     state: unsupported
