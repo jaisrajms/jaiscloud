@@ -152,6 +152,10 @@ func run(args []string) error {
 	if *runFlag {
 		cases := selectPlanCases(manifest, *maxPerService, *serviceFilter, *caseFilter, *sourceFilter)
 		if len(cases) == 0 {
+			if *serviceFilter != "" || *caseFilter != "" || *sourceFilter != "" {
+				fmt.Printf("tfcorpus: no plan cases matched the filter; nothing to do\n")
+				return nil
+			}
 			return fmt.Errorf("no plan cases selected (manifest %s)", *manifestPath)
 		}
 		if err := requireCorpora(cases, *providerDocs, *samplesDir); err != nil {
@@ -225,6 +229,10 @@ func run(args []string) error {
 	// -apply
 	cases := selectApplyCases(manifest, *serviceFilter, *caseFilter, *sourceFilter)
 	if len(cases) == 0 {
+		if *serviceFilter != "" || *caseFilter != "" || *sourceFilter != "" {
+			fmt.Printf("tfcorpus: no apply cases matched the filter; nothing to do\n")
+			return nil
+		}
 		return fmt.Errorf("no apply cases selected (mark curated manifest cases mode: apply)")
 	}
 	if err := requireCorpora(cases, *providerDocs, *samplesDir); err != nil {
