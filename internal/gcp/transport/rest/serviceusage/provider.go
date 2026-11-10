@@ -33,6 +33,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"ServiceUsage.ServicesBatchEnable": p.BatchEnableServices,
 		"ServiceUsage.ServicesEnable":      p.EnableService,
 		"ServiceUsage.ServicesDisable":     p.DisableService,
+		// generateServiceIdentity is a v1beta1-only method (the v1 Discovery
+		// declares no equivalent; a v1 call is a 404 on real GCP) and
+		// operations.get is its poll path on the same v1beta1 base URL.
+		"ServiceUsage.ServicesGenerateServiceIdentity": p.GenerateServiceIdentity,
+		"ServiceUsage.OperationsGet":                   p.GetOperation,
 	}
 }
 
@@ -112,6 +117,30 @@ func (p *Provider) DisableService(ctx context.Context, nr *model.NormalizedReque
 
 func (p *Provider) BatchEnableServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	_, op, err := p.core.BatchEnableAPIs(ctx, p.project(nr), stringSlice(bodyOf(nr)["serviceIds"]))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(operationToJSON(op, operationResponse(op))), nil
+}
+
+// GenerateServiceIdentity serves the v1beta1 services.generateServiceIdentity
+// method: POST /v1beta1/projects/{project}/services/{service}:generateServiceIdentity.
+// The operation carries the service agent's email and uniqueId, which the
+// google-beta provider reads before granting it KMS/Pub/Sub roles.
+func (p *Provider) GenerateServiceIdentity(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	op, err := p.core.GenerateServiceIdentity(ctx, p.project(nr), strParam(nr, "service"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(operationToJSON(op, operationResponse(op))), nil
+}
+
+// GetOperation serves GET /v1beta1/operations/{id}, the v1beta1 poll path for
+// the operations generateServiceIdentity returns. The default synchronous mode
+// returns a done operation so the provider's waiter never polls; this keeps the
+// opt-in async mode (and any client that polls anyway) resolvable.
+func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	op, err := p.core.GetOperation(ctx, p.project(nr), strParam(nr, "name"))
 	if err != nil {
 		return nil, err
 	}

@@ -49,6 +49,7 @@ import (
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/serviceaccount"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -64,6 +65,19 @@ const rtService = "gcp_serviceusage_service"
 // service states, so memory + PostgreSQL backends behave identically and a
 // poll survives a restart under --dsn.
 const rtOperation = "gcp_serviceusage_operation"
+
+// rtIdentity is the resource type for a generated service identity. The entry id
+// is the bare service name (e.g. "secretmanager.googleapis.com"); the account
+// scope is the project. Real GCP creates the Google-managed service agent once:
+// a second generateServiceIdentity call returns the same email and uniqueId, so
+// the emulator persists the first derivation and every later call reads it back.
+const rtIdentity = "gcp_serviceusage_service_identity"
+
+// googleAPIDomain is the suffix of a Google Cloud service name
+// (serviceusage.googleapis.com's `Service.config.name`). generateServiceIdentity
+// accepts a service, not a free-form name, so a reference outside this domain is
+// not a service with a Google-managed identity.
+const googleAPIDomain = ".googleapis.com"
 
 // maxBatchEnable mirrors real GCP's per-request batchEnable cap.
 const maxBatchEnable = 20
@@ -118,11 +132,15 @@ type API struct {
 // stored done=false and settles lazily on read. The transport renders the
 // verb-appropriate response payload from Services; the metadata carries the
 // affected resource names, matching google.api.serviceusage.v1.OperationMetadata.
+//
+// A generateServiceIdentity operation instead carries Identity: the v1beta1
+// proto declares its response as ServiceIdentity (and its metadata as
+// google.protobuf.Empty), so there is no service snapshot to render.
 type Operation struct {
 	// Name is the operation resource name: operations/{id}.
 	Name string
 	// Verb is the mutation that produced the operation: "enable", "disable",
-	// or "batchEnable".
+	// "batchEnable", or "generateServiceIdentity".
 	Verb string
 	// ResourceNames are the full names of the services the operation touched.
 	ResourceNames []string
@@ -135,6 +153,20 @@ type Operation struct {
 	// Services is the transport-neutral snapshot of the affected services, used
 	// to reconstruct the typed response on a poll.
 	Services []API
+	// Identity is the generated service identity for a generateServiceIdentity
+	// operation (nil for every other verb).
+	Identity *ServiceIdentity
+}
+
+// ServiceIdentity is the transport-neutral form of the v1beta1 ServiceIdentity
+// message: the Google-managed service agent a producer API uses to act in the
+// consumer project.
+type ServiceIdentity struct {
+	// Email is the service agent's email:
+	// service-{projectNumber}@gcp-sa-{service}.iam.gserviceaccount.com.
+	Email string `json:"email"`
+	// UniqueID is the service agent's numeric unique id.
+	UniqueID string `json:"uniqueId,omitempty"`
 }
 
 // ProjectResolver resolves a project number to a known project ID. It is
@@ -442,6 +474,143 @@ func (s *Service) BatchEnableAPIs(ctx context.Context, project string, serviceID
 	return apis, op, nil
 }
 
+// GenerateServiceIdentity returns a Google-managed service identity for a
+// service and the operation that reports it. This is the Service Usage v1beta1
+// services.generateServiceIdentity method (the v1 surface has no equivalent; a
+// v1 call is a 404 on real GCP and is not routed here), which the google-beta
+// provider's google_project_service_identity resource calls before granting the
+// service agent a role.
+//
+// Fulfilment is idempotent, as real GCP's is: the identity is derived once, then
+// persisted under the project scope and returned unchanged by every later call.
+// The email follows the documented general service-agent form
+// service-{projectNumber}@gcp-sa-{service}.iam.gserviceaccount.com, where
+// projectNumber is the emulator's synthesized project number (the same value
+// Compute/IAM use for the default accounts) and {service} is the DNS name with
+// its .googleapis.com suffix dropped. Real GCP's actual agent catalog has
+// per-service exceptions (Cloud Storage's gs-project-accounts, for example); the
+// emulator has no catalog and derives the general form mechanically. uniqueId is
+// a deterministic 21-digit numeric id derived from the email, so it never churns
+// across reads or restarts.
+//
+// The operation is stored done=true inline by default, matching real GCP, which
+// returns a finished operation from this method and rejects polling it; in the
+// opt-in async mode it settles lazily like every other mutation.
+func (s *Service) GenerateServiceIdentity(ctx context.Context, project, service string) (Operation, error) {
+	if project == "" || service == "" {
+		return Operation{}, invalidArgument("missing project or service")
+	}
+	project, err := s.resolveProject(ctx, project)
+	if err != nil {
+		return Operation{}, err
+	}
+	identity, err := s.readIdentity(ctx, project, service)
+	if err != nil {
+		return Operation{}, err
+	}
+	return s.newIdentityOperation(ctx, project, service, identity)
+}
+
+// readIdentity returns the persisted identity for a service, deriving and
+// persisting it on first use. A malformed stored record is an error rather than
+// a silently re-derived identity, so a corrupt store never changes an email an
+// IAM binding already references.
+func (s *Service) readIdentity(ctx context.Context, project, service string) (ServiceIdentity, error) {
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtIdentity, service)
+	if err == nil {
+		var rec identityRecord
+		if uerr := json.Unmarshal(e.Data, &rec); uerr != nil {
+			return ServiceIdentity{}, uerr
+		}
+		if rec.Email != "" {
+			return ServiceIdentity{Email: rec.Email, UniqueID: rec.UniqueID}, nil
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return ServiceIdentity{}, err
+	}
+	identity, err := serviceIdentity(project, service)
+	if err != nil {
+		return ServiceIdentity{}, err
+	}
+	data, err := json.Marshal(identityRecord{Email: identity.Email, UniqueID: identity.UniqueID})
+	if err != nil {
+		return ServiceIdentity{}, err
+	}
+	if err := s.resources.Upsert(ctx, project, store.GlobalRegion,
+		store.ResourceEntry{Type: rtIdentity, ID: service, Data: data}); err != nil {
+		return ServiceIdentity{}, err
+	}
+	return identity, nil
+}
+
+// serviceIdentity derives the documented service-agent identity. It fails loud
+// for a reference that is not a service name under .googleapis.com: the
+// emulator has no service catalog, so a non-Google-shaped name is the one case
+// it can reject without guessing (FAILED_PRECONDITION, the status real Service
+// Usage uses for a service it cannot generate an identity for).
+func serviceIdentity(project, service string) (ServiceIdentity, error) {
+	agent, ok := ServiceAgentName(service)
+	if !ok {
+		return ServiceIdentity{}, model.NewProviderError("FailedPrecondition",
+			fmt.Sprintf("No service identity exists for service %q.", service), 400)
+	}
+	email := fmt.Sprintf("service-%s@gcp-sa-%s.iam.gserviceaccount.com",
+		resource.ProjectNumberFor(project), agent)
+	return ServiceIdentity{Email: email, UniqueID: serviceaccount.ManagedUniqueID(email)}, nil
+}
+
+// ServiceAgentName returns the gcp-sa-{service} domain label for a Google Cloud
+// service DNS name (e.g. "pubsub" for "pubsub.googleapis.com"), and false when
+// name is not a well-formed service under .googleapis.com. It is exported so the
+// transports and tests share one rule for the documented agent-email format.
+func ServiceAgentName(name string) (string, bool) {
+	agent, ok := strings.CutSuffix(name, googleAPIDomain)
+	if !ok || agent == "" || strings.Contains(agent, "/") {
+		return "", false
+	}
+	for _, label := range strings.Split(agent, ".") {
+		if label == "" || len(label) > 63 {
+			return "", false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+				continue
+			}
+			return "", false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return "", false
+		}
+	}
+	return agent, true
+}
+
+// newIdentityOperation builds and persists the done operation that reports a
+// generated identity. Its metadata is google.protobuf.Empty and its response is
+// the ServiceIdentity, per the v1beta1 proto's operation_info.
+func (s *Service) newIdentityOperation(ctx context.Context, project, service string, identity ServiceIdentity) (Operation, error) {
+	now := clock.Now().UTC()
+	id := randomHex(12)
+	op := Operation{
+		Name:          OperationName(id),
+		Verb:          "generateServiceIdentity",
+		ResourceNames: []string{ServiceName(project, service)},
+		CreateTime:    now,
+		Identity:      &identity,
+	}
+	if s.lroMode.Async() {
+		op.Done = false
+	} else {
+		op.Done = true
+		op.EndTime = now
+	}
+	if err := s.persistOperation(ctx, project, id, op); err != nil {
+		return Operation{}, err
+	}
+	return op, nil
+}
+
 // setServiceState persists a service's state and returns its typed form. A
 // storage failure is propagated (never swallowed) so an outage surfaces as a
 // 5xx rather than a false done:true operation.
@@ -514,6 +683,7 @@ func (s *Service) persistOperation(ctx context.Context, project, id string, op O
 		CreateTime:    op.CreateTime,
 		EndTime:       op.EndTime,
 		Services:      op.Services,
+		Identity:      op.Identity,
 	})
 	if err != nil {
 		return err
@@ -589,6 +759,7 @@ func operationFromEntry(e store.ResourceEntry) (Operation, error) {
 		CreateTime:    rec.CreateTime,
 		EndTime:       rec.EndTime,
 		Services:      rec.Services,
+		Identity:      rec.Identity,
 	}, nil
 }
 
@@ -701,12 +872,20 @@ func IsTopLevelOperationName(name string) bool {
 
 // operationRecord is the persisted per-operation state.
 type operationRecord struct {
-	Verb          string    `json:"verb"`
-	ResourceNames []string  `json:"resourceNames"`
-	Done          bool      `json:"done"`
-	CreateTime    time.Time `json:"createTime"`
-	EndTime       time.Time `json:"endTime,omitempty"`
-	Services      []API     `json:"services,omitempty"`
+	Verb          string           `json:"verb"`
+	ResourceNames []string         `json:"resourceNames"`
+	Done          bool             `json:"done"`
+	CreateTime    time.Time        `json:"createTime"`
+	EndTime       time.Time        `json:"endTime,omitempty"`
+	Services      []API            `json:"services,omitempty"`
+	Identity      *ServiceIdentity `json:"identity,omitempty"`
+}
+
+// identityRecord is the persisted per-service identity. Only the two documented
+// ServiceIdentity fields are stored; everything else is derived on read.
+type identityRecord struct {
+	Email    string `json:"email"`
+	UniqueID string `json:"uniqueId,omitempty"`
 }
 
 // matches reports whether a state passes the filter.

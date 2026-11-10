@@ -609,12 +609,22 @@ applied with two secrets and drives the full gate:
      version payload;
    - one authoritative `google_secret_manager_secret_iam_binding` per secret
      carrying a `roles/secretmanager.secretAccessor` reader;
+   - `add_kms_permissions` naming the global and regional CMEK keys and
+     `add_pubsub_permissions` naming the rotation topic, so the module creates
+     `google_project_service_identity` (google-beta) and grants the Secret
+     Manager service agent `roles/cloudkms.cryptoKeyEncrypterDecrypter` on both
+     keys and `roles/pubsub.publisher` on the topic;
 
    assert through REST that each secret reads back its replication arm and keys,
    the automatic secret reads back its label, rotation schedule and topic, the
    user-managed secret both replica locations, and each `versions.access` call
-   returns the expected payload; `getIamPolicy` must carry the reader; the apply
-   log must contain no `400`, `501` or `unsupported update_mask`
+   returns the expected payload; `getIamPolicy` must carry the reader; a direct
+   `POST /v1beta1/projects/{project}/services/secretmanager.googleapis.com:generateServiceIdentity`
+   must return a done operation whose service-agent email is the stable
+   `service-{projectNumber}@gcp-sa-secretmanager.iam.gserviceaccount.com`; the
+   KMS key and Pub/Sub topic policies must carry `serviceAccount:{email}` under
+   the granted roles; the apply log must contain no `400`, `501` or
+   `unsupported update_mask`
 2. `plan -detailed-exitcode` → **no changes**
 3. change the label, the rotation period to `172800s`, the automatic secret's
    payload (a version replacement) and the IAM member list to two members;
@@ -622,11 +632,12 @@ applied with two secrets and drives the full gate:
    **no changes**
 4. `destroy`; both secrets and the versions are `404`
 
-`add_kms_permissions`/`add_pubsub_permissions` stay empty because both drive
-`google_project_service_identity` (google-beta), whose Service Usage
-`generateServiceIdentity` surface is not served; the CMEK keys are passed
-directly, which is the part the secret API validates. Regional secrets are not
-served (TF1-4); the case only creates global `projects.secrets` resources.
+The identity is created through the beta provider's
+`service_usage_custom_endpoint` (the v1beta1 base URL): `generateServiceIdentity`
+exists only on v1beta1, and repeating it returns the same agent (real GCP never
+answers `ALREADY_EXISTS`), which is what keeps the two grants from permadiffing.
+Regional secrets are not served (TF1-4); the case only creates global
+`projects.secrets` resources.
 
 **workflows** — the CFT `terraform-google-cloud-workflows` root module has no
 default for `workflow_trigger` and always creates a Scheduler or Eventarc

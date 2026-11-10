@@ -18,6 +18,44 @@ func freezeClock(t *testing.T, at time.Time) {
 	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
 }
 
+// TestGenerateServiceIdentityAsyncPoll covers the opt-in async mode for the
+// identity operation: the mutation returns it in flight, and a poll after the
+// delay returns the same identity as its response payload (the operation record
+// persists the identity, so settling cannot lose it).
+func TestGenerateServiceIdentityAsyncPoll(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+	ctx := context.Background()
+	s := NewService(store.NewMemoryResourceStore(),
+		WithLROMode(lro.Mode{Enabled: true, Delay: 30 * time.Second}))
+
+	op, err := s.GenerateServiceIdentity(ctx, "proj", "pubsub.googleapis.com")
+	if err != nil {
+		t.Fatalf("GenerateServiceIdentity: %v", err)
+	}
+	if op.Done || op.Identity == nil {
+		t.Fatalf("async identity operation = %+v", op)
+	}
+	identity := *op.Identity
+
+	polled, err := s.GetOperation(ctx, "proj", op.Name)
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if polled.Done {
+		t.Fatalf("operation before delay must be in flight: %+v", polled)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
+	polled, err = s.GetOperation(ctx, "proj", op.Name)
+	if err != nil {
+		t.Fatalf("GetOperation after delay: %v", err)
+	}
+	if !polled.Done || polled.Identity == nil || *polled.Identity != identity {
+		t.Fatalf("settled operation = %+v, want done with identity %+v", polled, identity)
+	}
+}
+
 // TestAsyncLROLifecycle verifies the opt-in async timing: a mutation persists an
 // in-flight operation, a poll before the delay keeps it in flight, and a poll
 // after the delay settles it done with the affected service snapshot.

@@ -67,6 +67,10 @@
     {
       "operation": "Metastore.RestoreService",
       "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "ServiceUsage.OperationsGet",
+      "reason": "Service Usage operations are long-running mutations with server-assigned ids, and the v1 operations.get path (/v1/operations/{id}) is shared with Cloud Functions v1 on the single origin; the Discovery-driven probe has no operation to stage. The emulator persists and serves the operation (both the v1beta1 poll path and the shared v1 path through the Functions resolver), and the module case asserts the done operation round-trip."
     }
   ]
 }
