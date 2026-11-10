@@ -32,6 +32,7 @@ package compute
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -877,9 +878,8 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	// and invent state the caller never sent.
 	//
 	// Deliberately not echoed: params (Discovery: "input only … not persisted as
-	// part of resource payload"), and the three CustomerEncryptionKey blocks
-	// (real Compute returns only the key's sha256/kmsKeyName, never the raw or
-	// RSA-wrapped key material).
+	// part of resource payload"). The three CustomerEncryptionKey blocks are
+	// echoed in their server-visible shape only — see below.
 	for _, field := range []string{
 		"accessMode",
 		"architecture",
@@ -905,6 +905,27 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	for _, field := range []string{"provisionedIops", "provisionedThroughput"} {
 		if v := stringifyInt(body[field]); v != "" {
 			disk[field] = v
+		}
+	}
+	// The three CustomerEncryptionKey blocks are persisted in the shape real
+	// Compute returns, never verbatim (TF2-11-4): a CMEK block echoes the key
+	// name and service account, a CSEK block only the documented sha256. Raw and
+	// RSA-wrapped key material is request-only and must never be stored or
+	// echoed. hashicorp/google reads the block back into its ForceNew
+	// disk_encryption_key / source_*_encryption_key blocks, so without the echo
+	// a disk created with a CMEK key re-plans "forces replacement" on every
+	// plan.
+	for _, field := range []string{"diskEncryptionKey", "sourceImageEncryptionKey", "sourceSnapshotEncryptionKey"} {
+		v, ok := body[field]
+		if !ok || v == nil {
+			continue
+		}
+		key, err := encryptionKeyResponse(field, v)
+		if err != nil {
+			return nil, err
+		}
+		if key != nil {
+			disk[field] = key
 		}
 	}
 	// A disk created from an image records the image it resolved to, exactly as
@@ -2476,6 +2497,48 @@ func stringifyInt(v any) string {
 		return ""
 	}
 	return fmt.Sprint(v)
+}
+
+// encryptionKeyResponse renders a request's CustomerEncryptionKey block in the
+// shape real Compute returns on a disk GET (TF2-11-4). Discovery documents
+// rawKey and rsaEncryptedKey as request material and marks sha256
+// "[Output only] The RFC 4648 base64 encoded SHA-256 hash of the
+// customer-supplied encryption key that protects this resource", so only
+// kmsKeyName, kmsKeyServiceAccount and a synthesized sha256 are ever persisted:
+// the raw and RSA-wrapped key material is neither stored nor echoed.
+//
+// The digest is over the decoded 32-byte key, the same value GCS reports for a
+// CSEK object (see the storage provider's CSEK read path). A CSEK block whose
+// rawKey is not a base64-encoded 256-bit key is rejected the way real Compute
+// rejects it, and a sha256 the caller sent is ignored because the field is
+// output-only. A block with nothing server-visible to report (no key material
+// and no kmsKeyName, e.g. only rsaEncryptedKey) yields nil, so no empty block is
+// rendered.
+func encryptionKeyResponse(field string, v any) (map[string]any, error) {
+	block, ok := v.(map[string]any)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.%s': must be a CustomerEncryptionKey object", field), 400)
+	}
+	out := map[string]any{}
+	for _, name := range []string{"kmsKeyName", "kmsKeyServiceAccount"} {
+		if s, _ := block[name].(string); s != "" {
+			out[name] = s
+		}
+	}
+	if raw, _ := block["rawKey"].(string); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != 32 {
+			return nil, model.NewProviderError("InvalidArgument",
+				fmt.Sprintf("Invalid value for field 'resource.%s.rawKey': a 256-bit customer-supplied encryption key encoded in RFC 4648 base64 is required", field), 400)
+		}
+		sum := sha256.Sum256(key)
+		out["sha256"] = base64.StdEncoding.EncodeToString(sum[:])
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func formatTimestamp(t time.Time) string {

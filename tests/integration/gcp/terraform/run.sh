@@ -297,6 +297,16 @@ check "CRM project lookup reports ACTIVE" \
 check "Compute project metadata stored" \
   "$ENDPOINT/compute/v1/projects/$PROJECT" \
   '"commonInstanceMetadata"' '"key":"compat-key"' '"value":"compat-value"' '"fingerprint":"'
+# TF2-11-4: a disk created with a CMEK key is read back with
+# diskEncryptionKey.kmsKeyName — the provider feeds it into the ForceNew
+# disk_encryption_key block, and never with raw or RSA-wrapped key material.
+# The clean re-plan above is the permadiff assertion.
+DISK_CMEK="$ENDPOINT/compute/v1/projects/$PROJECT/zones/$REGION-a/disks/jaiscloud-tf-cmek"
+check "Compute disk CMEK key echoed" "$DISK_CMEK" \
+  '"diskEncryptionKey"' \
+  "\"kmsKeyName\":\"projects/$PROJECT/locations/$REGION/keyRings/jaiscloud-tf-keyring/cryptoKeys/jaiscloud-tf-key\""
+check_absent "Compute disk CMEK echo has no key material" "$DISK_CMEK" \
+  '"rawKey"' '"rsaEncryptedKey"'
 # Cloud Billing: data "google_project" reads projects.getBillingInfo to populate
 # billing_account. The emulator models only the association, so the four-field
 # default (no account, billing disabled) is what both the wire and the data
