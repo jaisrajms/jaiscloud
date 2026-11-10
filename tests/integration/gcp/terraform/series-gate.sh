@@ -123,8 +123,12 @@ if [ "${SKIP_CORPUS:-0}" != "1" ]; then
   else
     services="$(IFS=,; echo "$*")"
     if run corpus mk STRICT=1 CORPUS_SERVICES="$services" test-gcp-terraform-corpus; then
-      if ! grep -q 'tfcorpus: planned' "$LOG_DIR/corpus.log"; then
-        echo "FAIL: corpus matched no plan case for SERVICES=$services (check the service names)"
+      # A service whose corpus cases are all curated applies (a mutation
+      # resource such as google_project_service has no plan-only example) has
+      # no "planned" line; a non-zero "applied" line is the same evidence that
+      # the per-service filter matched.
+      if ! grep -Eq 'tfcorpus: planned|tfcorpus: applied [1-9]' "$LOG_DIR/corpus.log"; then
+        echo "FAIL: corpus matched no case for SERVICES=$services (check the service names)"
         FAILED+=("corpus (no cases matched)")
       fi
     fi

@@ -50,18 +50,20 @@ locals {
 # DELETE the provider calls projects.delete, and the emulator — like real GCP —
 # moves the project to DELETE_REQUESTED rather than removing the row.
 #
-# auto_create_network keeps the provider default (true). Setting it false makes
-# provider 7.46.2 probe Service Usage for the dummy project `00000000000` and
-# then delete the default Compute network; the probe expects real GCP's 403 for
-# that nonexistent project, and the emulator answers 200 with DISABLED, so the
-# provider dereferences a nil error and panics. That gap is TF4-1-1
-# (`fix/gcp-serviceusage-unknown-project`); Compute networking is outside this
-# composition's scope either way, so the pattern takes the default.
+# auto_create_network = false exercises the provider's pre-requisite probe: it
+# first asks Service Usage about the dummy project `00000000000`, which the
+# emulator rejects with real GCP's 403 ("Project '00000000000' not found or
+# permission denied.") since TF4-1-1. It then enables compute.googleapis.com and
+# reads the project's default network, which the emulator does not synthesize,
+# so the provider's documented 404 branch logs "no need to delete it" and
+# continues. Actually creating/deleting a default network remains outside this
+# composition's scope (TF4-1-2).
 resource "google_project" "bootstrap" {
-  project_id      = var.bootstrap_project
-  name            = "jaiscloud tf bootstrap"
-  deletion_policy = "DELETE"
-  billing_account = var.billing_account
+  project_id          = var.bootstrap_project
+  name                = "jaiscloud tf bootstrap"
+  deletion_policy     = "DELETE"
+  billing_account     = var.billing_account
+  auto_create_network = false
 
   labels = {
     env = "compat-test"

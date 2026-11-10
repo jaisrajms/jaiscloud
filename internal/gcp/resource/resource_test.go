@@ -80,6 +80,23 @@ func TestLocRingKeyOf(t *testing.T) {
 	}
 }
 
+// TestIsProjectNumber pins the all-digit rule the Service Usage surface uses to
+// tell a project number from a project id: project ids start with a letter, so
+// an all-digit reference is always a number (no length cap — an over-long
+// number is still not an id).
+func TestIsProjectNumber(t *testing.T) {
+	for _, ref := range []string{"0", "00000000000", "123456789012", "12345678901234567890"} {
+		if !IsProjectNumber(ref) {
+			t.Errorf("IsProjectNumber(%q) = false, want true", ref)
+		}
+	}
+	for _, ref := range []string{"", "my-project", "12a4", "-", " 123"} {
+		if IsProjectNumber(ref) {
+			t.Errorf("IsProjectNumber(%q) = true, want false", ref)
+		}
+	}
+}
+
 // TestProjectNumberFor pins the project-number rule shared by Compute and IAM:
 // a numeric project reference is the number itself, while a project id gets the
 // synthesized stable value.

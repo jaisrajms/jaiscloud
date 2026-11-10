@@ -58,6 +58,7 @@ locals {
     cloud_billing_custom_endpoint      = "${var.endpoint}/v1/"
     cloud_functions_custom_endpoint    = "${var.endpoint}/v1/"
     cloud_scheduler_custom_endpoint    = "${var.endpoint}/v1/"
+    compute_custom_endpoint            = "${var.endpoint}/compute/v1/"
     container_custom_endpoint          = local.container_endpoint
     dataproc_custom_endpoint           = "${var.endpoint}/"
     dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
@@ -90,6 +91,7 @@ provider "google" {
   cloud_billing_custom_endpoint      = local.emulated ? local.endpoints["cloud_billing_custom_endpoint"] : null
   cloud_functions_custom_endpoint    = local.emulated ? local.endpoints["cloud_functions_custom_endpoint"] : null
   cloud_scheduler_custom_endpoint    = local.emulated ? local.endpoints["cloud_scheduler_custom_endpoint"] : null
+  compute_custom_endpoint            = local.emulated ? local.endpoints["compute_custom_endpoint"] : null
   container_custom_endpoint          = local.emulated ? local.endpoints["container_custom_endpoint"] : null
   dataproc_custom_endpoint           = local.emulated ? local.endpoints["dataproc_custom_endpoint"] : null
   dataproc_metastore_custom_endpoint = local.emulated ? local.endpoints["dataproc_metastore_custom_endpoint"] : null
