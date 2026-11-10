@@ -13,16 +13,6 @@
 # a scheduled fix can close its classification when it lands.
 rules:
   - case: "*"
-    path: resources.google_kms_crypto_key.*.destroy_scheduled_duration
-    verdict: emulator-gap
-    id: TF6-1
-    branch: fix/gcp-kms-destroy-scheduled-duration
-    reason: >-
-      CryptoKey.get omits destroyScheduledDuration. Real GCP always returns the
-      default 2592000s; the provider stores it as a computed attribute, so an
-      import/refresh against the emulator sees an empty value.
-
-  - case: "*"
     path: resources.google_bigquery_dataset.*.self_link
     verdict: emulator-gap
     id: TF6-2

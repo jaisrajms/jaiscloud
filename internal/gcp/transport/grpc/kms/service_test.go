@@ -134,6 +134,16 @@ func TestKMSKeyRingKeyVersionCRUD(t *testing.T) {
 	if gotKey.GetName() != symKey {
 		t.Fatalf("GetCryptoKey name = %q, want %q", gotKey.GetName(), symKey)
 	}
+	// Cloud KMS always reports the destruction window; a create that omits it
+	// gets the documented 30-day default (TF6-1).
+	if createdKey.GetDestroyScheduledDuration().AsDuration() != kmsstore.DefaultDestroyScheduledDuration {
+		t.Fatalf("CreateCryptoKey destroyScheduledDuration = %v, want %v",
+			createdKey.GetDestroyScheduledDuration().AsDuration(), kmsstore.DefaultDestroyScheduledDuration)
+	}
+	if gotKey.GetDestroyScheduledDuration().AsDuration() != kmsstore.DefaultDestroyScheduledDuration {
+		t.Fatalf("GetCryptoKey destroyScheduledDuration = %v, want %v",
+			gotKey.GetDestroyScheduledDuration().AsDuration(), kmsstore.DefaultDestroyScheduledDuration)
+	}
 	cks, err := client.ListCryptoKeys(ctx, &kmspb.ListCryptoKeysRequest{Parent: keyRing})
 	if err != nil {
 		t.Fatalf("ListCryptoKeys: %v", err)
