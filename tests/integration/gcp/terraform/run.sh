@@ -190,6 +190,7 @@ fi
 
 out() { tf output -raw "$1" 2>/dev/null || true; }
 SA_EMAIL="$(out service_account_email)"
+SA_NODESC_EMAIL="$(out service_account_nodesc_email)"
 SQL_INSTANCE="$(out sql_instance_name)"
 SQL_DB="$(out sql_database_name)"
 SQL_USER="$(out sql_user_name)"
@@ -220,6 +221,11 @@ check "GCS object content-type" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket/o/RE
   '"contentType":"text/plain"'
 check "IAM service account created" \
   "$ENDPOINT/v1/projects/$PROJECT/serviceAccounts/$SA_EMAIL" 'jaiscloud-tf-sa'
+# TF2-14: an account created without display_name reads back without the field
+# (real IAM does not default it to the account id), and the second plan above
+# gates the provider permadiff.
+check_absent "IAM account without display_name omits it" \
+  "$ENDPOINT/v1/projects/$PROJECT/serviceAccounts/$SA_NODESC_EMAIL" '"displayName"'
 check "Secret Manager secret created" \
   "$ENDPOINT/v1/projects/$PROJECT/secrets/jaiscloud-tf-secret" \
   'jaiscloud-tf-secret' '"automatic"'

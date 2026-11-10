@@ -26,11 +26,12 @@
 #    and the role from the same string, so the case always passes the explicit
 #    `var.project=>role` form.
 #  * `display_name` is set explicitly. The provider's `display_name` is
-#    Optional (not Computed), while the emulator defaults an omitted
-#    `serviceAccount.displayName` to the account id, so an omitted value
-#    permadiffs — TF2-14 (`fix/gcp-iam-serviceaccount-display-name`). The
-#    module's own default is a non-empty display name, so a real consumer does
-#    not hit the gap; the case keeps the module default.
+#    Optional (not Computed); the emulator used to default an omitted
+#    `serviceAccount.displayName` to the account id, which made an omitted
+#    value permadiff — fixed in TF2-14
+#    (`fix/gcp-iam-serviceaccount-display-name`), gated by the fixture's
+#    `google_service_account.nodesc` + second plan. The module's own default
+#    is a non-empty display name, so this case keeps the module default.
 #  * `grant_billing_role` and `grant_xpn_roles` are false: billing and
 #    organization IAM are outside the emulated project-scoped surface.
 #  * `generate_keys` is false: service-account keys are a separate surface
