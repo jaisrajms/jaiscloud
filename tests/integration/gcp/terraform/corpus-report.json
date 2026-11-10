@@ -2,7 +2,7 @@
   "provider": "hashicorp/google",
   "provider_version": "7.46.2",
   "terraform": "Terraform v1.16.3",
-  "endpoint": "http://localhost:8080",
+  "endpoint": "http://localhost:18112",
   "project": "test-project",
   "corpora": [
     {
@@ -2078,19 +2078,6 @@
       "summary": ""
     },
     {
-      "name": "compute_disk-example-1",
-      "source": "provider-docs",
-      "file": "website/docs/r/compute_disk.html.markdown",
-      "block": 1,
-      "service": "compute",
-      "resource_types": [
-        "google_compute_disk"
-      ],
-      "mode": "plan",
-      "class": "plan-ok",
-      "summary": ""
-    },
-    {
       "name": "compute_disk-example-2",
       "source": "provider-docs",
       "file": "website/docs/r/compute_disk.html.markdown",
@@ -2138,6 +2125,20 @@
       "service": "compute",
       "resource_types": [
         "google_compute_firewall"
+      ],
+      "mode": "plan",
+      "class": "plan-ok",
+      "summary": ""
+    },
+    {
+      "name": "compute_instance-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_instance.html.markdown",
+      "block": 1,
+      "service": "compute",
+      "resource_types": [
+        "google_service_account",
+        "google_compute_instance"
       ],
       "mode": "plan",
       "class": "plan-ok",
@@ -4300,6 +4301,32 @@
       "resource_types": [
         "google_dns_record_set",
         "google_dns_managed_zone"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "compute_disk-example-1",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_disk.html.markdown",
+      "block": 1,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_disk"
+      ],
+      "mode": "apply",
+      "class": "apply-ok",
+      "summary": "apply, no changes, destroy"
+    },
+    {
+      "name": "compute_network-example-3",
+      "source": "provider-docs",
+      "file": "website/docs/r/compute_network.html.markdown",
+      "block": 3,
+      "service": "compute",
+      "resource_types": [
+        "google_compute_network"
       ],
       "mode": "apply",
       "class": "apply-ok",

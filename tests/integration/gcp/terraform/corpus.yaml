@@ -10423,13 +10423,17 @@ cases:
     resource_types:
       - google_compute_disk
     service: compute
-    mode: plan
+    mode: apply
     status: candidate
     assert:
       - phase: before
         url: '{{endpoint}}/compute/v1/projects/{{project}}/zones/us-central1-a/disks/test-disk'
         contains:
-          - test-disk
+          - '"name":"test-disk"'
+          - '"physicalBlockSizeBytes":"4096"'
+          - diskTypes/pd-ssd
+          - projects/debian-cloud/global/images/debian-13-trixie-v20260827
+          - '"environment":"dev"'
       - phase: after
         url: '{{endpoint}}/compute/v1/projects/{{project}}/zones/us-central1-a/disks/test-disk'
         status: 404
@@ -12117,8 +12121,19 @@ cases:
     resource_types:
       - google_compute_network
     service: compute
-    mode: plan
+    mode: apply
     status: candidate
+    assert:
+      - phase: before
+        url: '{{endpoint}}/compute/v1/projects/{{project}}/global/networks/vpc-network'
+        contains:
+          - '"name":"vpc-network"'
+          - '"mtu":1460'
+          - '"networkFirewallPolicyEnforcementOrder":"BEFORE_CLASSIC_FIREWALL"'
+          - '"autoCreateSubnetworks":true'
+      - phase: after
+        url: '{{endpoint}}/compute/v1/projects/{{project}}/global/networks/vpc-network'
+        status: 404
   - name: compute_network-example-4
     source: provider-docs
     file: website/docs/r/compute_network.html.markdown
