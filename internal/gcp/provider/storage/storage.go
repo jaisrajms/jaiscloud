@@ -931,17 +931,29 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	if !resource.ValidBucketName(name) {
 		return nil, model.NewProviderError("InvalidRequest", "Invalid bucket name: "+name, 400)
 	}
+	// location and storageClass are closed sets in the docs even though
+	// Discovery declares them as strings (see bucket_validation.go). Real GCS
+	// rejects a value outside each set with INVALID_ARGUMENT before the bucket
+	// is created.
+	loc, _ := body["location"].(string)
+	if err := ValidateBucketLocation(loc); err != nil {
+		return nil, err
+	}
+	sc, _ := body["storageClass"].(string)
+	if err := ValidateBucketStorageClass(sc); err != nil {
+		return nil, err
+	}
 	b := bucketMeta{Name: name}
 	// GCS accepts the location code in any case and always serves the canonical
 	// uppercase form. google_storage_bucket's `location` is Required+ForceNew
 	// with StateFunc strings.ToUpper, so echoing the request's case made every
 	// plan after apply propose a replacement (us-central1 -> US-CENTRAL1).
-	if loc, _ := body["location"].(string); BucketLocationCanonical(loc) != "" {
-		b.Location = BucketLocationCanonical(loc)
+	if loc = BucketLocationCanonical(loc); loc != "" {
+		b.Location = loc
 	} else {
 		b.Location = "US"
 	}
-	if sc, _ := body["storageClass"].(string); sc != "" {
+	if sc != "" {
 		b.StorageClass = sc
 	} else {
 		b.StorageClass = "STANDARD"
@@ -1509,6 +1521,16 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 	// and a present block replaces the stored one (see the block comment on
 	// website/logging).
 	mergePatch, _ := nr.Params[wire.MergePatchKey].(bool)
+	// The default storage class is mutable (Discovery: buckets.patch/update
+	// carry storageClass), so an update body's value is validated against the
+	// same documented enum as create (bucket_validation.go). Location is not
+	// validated here: it is creation-only, and CheckBucketLocationUpdate below
+	// rejects any change with INVALID_ARGUMENT.
+	if sc, _ := body["storageClass"].(string); sc != "" {
+		if err := ValidateBucketStorageClass(sc); err != nil {
+			return nil, err
+		}
+	}
 	pre, err := bucketPrecondition(nr)
 	if err != nil {
 		return nil, err
