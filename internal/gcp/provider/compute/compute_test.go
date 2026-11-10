@@ -640,6 +640,170 @@ func TestNetworkAndFirewallCRUD(t *testing.T) {
 	}
 }
 
+// TestNetworksPatchAppliesMutableFields pins compute.networks.patch (TF2-17-1).
+// A Terraform google_compute_network update path PATCHes the network (with a
+// fingerprinted body for mtu) whenever mtu, network_firewall_policy_enforcement_order,
+// routing_mode or a bgp_* field changes, then polls the operation it returns —
+// before this, every such apply failed with a 501 after the resource was already
+// created. The two fields the record stores are applied in place, an absent field
+// keeps its stored value (merge semantics), the identity of the record is
+// untouched, and the response is the Operation envelope Discovery declares.
+func TestNetworksPatchAppliesMutableFields(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "vpc-patch", "autoCreateSubnetworks": false, "description": "original",
+	}})); err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+	before, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network: %v", err)
+	}
+
+	// The provider's mtu update sends the fingerprint it read plus the new mtu;
+	// a network has no fingerprint field, so only mtu must land.
+	op, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body":    map[string]any{"mtu": 1500, "fingerprint": nil},
+	}))
+	if err != nil {
+		t.Fatalf("patch mtu: %v", err)
+	}
+	if op.Data["operationType"] != "patch" || op.Data["status"] != "DONE" {
+		t.Errorf("patch operation = %v, want operationType patch and status DONE", op.Data)
+	}
+	if op.Data["targetLink"] != before.Data["selfLink"] {
+		t.Errorf("operation targetLink = %v, want the network selfLink %v", op.Data["targetLink"], before.Data["selfLink"])
+	}
+	if op.Data["name"] == "" || op.Data["id"] == "" {
+		t.Errorf("operation envelope missing name/id: %v", op.Data)
+	}
+
+	afterMtu, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after mtu patch: %v", err)
+	}
+	if mtu, ok := afterMtu.Data["mtu"].(float64); !ok || int(mtu) != 1500 {
+		t.Errorf("mtu = %v, want 1500 after the patch", afterMtu.Data["mtu"])
+	}
+	// A merge patch that names only mtu must not reset the enforcement order.
+	if afterMtu.Data["networkFirewallPolicyEnforcementOrder"] != defaultNetworkFirewallPolicyEnforcementOrder {
+		t.Errorf("networkFirewallPolicyEnforcementOrder = %v, want the unchanged %s default",
+			afterMtu.Data["networkFirewallPolicyEnforcementOrder"], defaultNetworkFirewallPolicyEnforcementOrder)
+	}
+	// Identity and non-patchable fields survive the mutation.
+	for _, field := range []string{"kind", "id", "name", "selfLink", "targetLink", "creationTimestamp", "description", "autoCreateSubnetworks"} {
+		if afterMtu.Data[field] != before.Data[field] {
+			t.Errorf("%s changed across a patch: %v -> %v", field, before.Data[field], afterMtu.Data[field])
+		}
+	}
+
+	// The enforcement order is patchable on its own, and does not reset mtu.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body":    map[string]any{"networkFirewallPolicyEnforcementOrder": "BEFORE_CLASSIC_FIREWALL"},
+	})); err != nil {
+		t.Fatalf("patch enforcement order: %v", err)
+	}
+	afterOrder, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after order patch: %v", err)
+	}
+	if afterOrder.Data["networkFirewallPolicyEnforcementOrder"] != "BEFORE_CLASSIC_FIREWALL" {
+		t.Errorf("networkFirewallPolicyEnforcementOrder = %v, want BEFORE_CLASSIC_FIREWALL", afterOrder.Data["networkFirewallPolicyEnforcementOrder"])
+	}
+	if mtu, ok := afterOrder.Data["mtu"].(float64); !ok || int(mtu) != 1500 {
+		t.Errorf("mtu = %v, want the patched 1500 to survive an order-only patch", afterOrder.Data["mtu"])
+	}
+
+	// The provider's routing_mode/BGP path sends a collapsed routingConfig (and
+	// the ULA pair when it changes). Those are outside the record's stored shape
+	// (TF2-17-2): the call succeeds — the provider's apply must not fail — and
+	// the record reports no routing config rather than a fabricated one.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body": map[string]any{
+			"routingConfig":         map[string]any{"routingMode": "REGIONAL"},
+			"enableUlaInternalIpv6": true,
+			"internalIpv6Range":     "fd20:0:0::/48",
+		},
+	})); err != nil {
+		t.Fatalf("patch routingConfig: %v", err)
+	}
+	afterRouting, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after routingConfig patch: %v", err)
+	}
+	if _, ok := afterRouting.Data["routingConfig"]; ok {
+		t.Errorf("routingConfig = %v, want it unpersisted (TF2-17-2)", afterRouting.Data["routingConfig"])
+	}
+
+	// A retried patch replays its operation instead of mutating twice.
+	reqID := "0f8fad5b-d9cb-469f-a165-70867728950e"
+	retryParams := map[string]any{
+		"network":   "vpc-patch",
+		"requestId": reqID,
+		"body":      map[string]any{"mtu": 1400},
+	}
+	retryFirst, err := p.NetworksPatch(ctx, newNR(retryParams))
+	if err != nil {
+		t.Fatalf("patch with requestId: %v", err)
+	}
+	retrySecond, err := p.NetworksPatch(ctx, newNR(retryParams))
+	if err != nil {
+		t.Fatalf("retry patch with requestId: %v", err)
+	}
+	if retrySecond.Data["name"] != retryFirst.Data["name"] {
+		t.Errorf("patch retry replayed %v, want %v", retrySecond.Data["name"], retryFirst.Data["name"])
+	}
+
+	// Failures are loud and leave the record untouched.
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{"network": "no-such-network", "body": map[string]any{"mtu": 1500}})); !isCode(err, "NotFound") {
+		t.Errorf("patch of an unknown network = %v, want NotFound", err)
+	}
+	for _, mtu := range []int{minNetworkMtu - 1, maxNetworkMtu + 1} {
+		if _, err := p.NetworksPatch(ctx, newNR(map[string]any{"network": "vpc-patch", "body": map[string]any{"mtu": mtu}})); !isCode(err, "InvalidArgument") {
+			t.Errorf("patch mtu=%d = %v, want InvalidArgument", mtu, err)
+		}
+	}
+	if _, err := p.NetworksPatch(ctx, newNR(map[string]any{
+		"network": "vpc-patch",
+		"body":    map[string]any{"networkFirewallPolicyEnforcementOrder": "SIDEWAYS"},
+	})); !isCode(err, "InvalidArgument") {
+		t.Errorf("patch bad enforcement order = %v, want InvalidArgument", err)
+	}
+	final, err := p.NetworksGet(ctx, newNR(map[string]any{"network": "vpc-patch"}))
+	if err != nil {
+		t.Fatalf("get network after rejected patches: %v", err)
+	}
+	if mtu, ok := final.Data["mtu"].(float64); !ok || int(mtu) != 1400 {
+		t.Errorf("mtu = %v, want the last accepted 1400 (a rejected patch must not mutate)", final.Data["mtu"])
+	}
+}
+
+// TestNetworkCreateValidatesMutableFieldRanges pins that the create path rejects
+// the same out-of-range mtu and unknown enforcement order a patch does: real
+// Compute validates the field whichever method carries it, and accepting a bad
+// value at create only to reject it at the first update is a worse contract.
+func TestNetworkCreateValidatesMutableFieldRanges(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, mtu := range []int{minNetworkMtu - 1, maxNetworkMtu + 1} {
+		if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{"name": "bad-mtu", "mtu": mtu}})); !isCode(err, "InvalidArgument") {
+			t.Errorf("create mtu=%d = %v, want InvalidArgument", mtu, err)
+		}
+	}
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{
+		"name": "bad-order", "networkFirewallPolicyEnforcementOrder": "SIDEWAYS",
+	}})); !isCode(err, "InvalidArgument") {
+		t.Errorf("create with bad enforcement order = %v, want InvalidArgument", err)
+	}
+	if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{"name": "jumbo", "mtu": 8896}})); err != nil {
+		t.Errorf("create mtu=8896 = %v, want success (documented maximum)", err)
+	}
+}
+
 func TestSubnetworkCRUD(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()

@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1254,
+    "total": 1255,
     "by_state": {
       "ga": 1042,
-      "limited": 159,
+      "limited": 160,
       "preview": 14,
       "unsupported": 39
     },
@@ -16,7 +16,7 @@
       },
       "rest": {
         "ga": 592,
-        "limited": 136,
+        "limited": 137,
         "preview": 14,
         "unsupported": 11
       }
@@ -36,7 +36,7 @@
         "unsupported": 1
       },
       "compute": {
-        "limited": 35,
+        "limited": 36,
         "unsupported": 1
       },
       "container": {
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 707
+        "rest": 708
       },
       "unverified": {
         "grpc": 46,
@@ -234,7 +234,7 @@
       "source_ref": "compute.v1",
       "published": 1011,
       "served": 974,
-      "graded": 35,
+      "graded": 36,
       "unserved": [
         "compute.firewallPolicies.addAssociation",
         "compute.firewallPolicies.addRule",
@@ -274,9 +274,9 @@
         "compute.organizationSecurityPolicies.removeAssociation",
         "compute.organizationSecurityPolicies.removeRule"
       ],
-      "ungraded": 939,
-      "unimplemented": 931,
-      "note": "939 served method(s) have no graded cell; 931 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
+      "ungraded": 938,
+      "unimplemented": 930,
+      "note": "938 served method(s) have no graded cell; 930 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)"
     },
     {
       "service": "compute",
@@ -3052,7 +3052,7 @@
         "discovery=compute.networks.insert",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 3 transcript entries)"
+        "verified=true (rest, 4 transcript entries)"
       ]
     },
     {
@@ -3065,6 +3065,21 @@
       "verified": true,
       "evidence": [
         "discovery=compute.networks.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "compute",
+      "operation": "Compute.NetworksPatch",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no control plane)",
+      "discovery": "compute.networks.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=compute.networks.patch",
+        "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]

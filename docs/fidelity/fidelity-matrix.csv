@@ -112,6 +112,7 @@ compute,Compute.NetworksDelete,rest,limited,true,metadata-only over ResourceStor
 compute,Compute.NetworksGet,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.NetworksInsert,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.NetworksList,rest,limited,true,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksPatch,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.OperationsGet,rest,limited,false,metadata-only over ResourceStore (no control plane)
 compute,Compute.OperationsList,rest,limited,true,metadata-only over ResourceStore (no control plane)
 compute,Compute.ProjectsGet,rest,limited,true,metadata-only over ResourceStore (no control plane)

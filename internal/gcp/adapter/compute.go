@@ -226,6 +226,8 @@ func computeNetworkAction(rest []string, method string, nr *model.NormalizedRequ
 			return "NetworksGet"
 		case http.MethodDelete:
 			return "NetworksDelete"
+		case http.MethodPatch:
+			return "NetworksPatch"
 		}
 	}
 	return "Unimplemented"

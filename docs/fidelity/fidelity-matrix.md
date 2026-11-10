@@ -12,14 +12,14 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1254**
+Cells: **1255**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
 | ga | 1042 |
-| limited | 159 |
+| limited | 160 |
 | preview | 14 |
 | unsupported | 39 |
 
@@ -27,7 +27,7 @@ Cells: **1254**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 592 | 136 | 14 | 11 |
+| rest | 592 | 137 | 14 | 11 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 707 | 46 |
+| rest | 708 | 46 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -53,7 +53,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | clouddns | grpc | — | — | — | — | — | unavailable |
 | cloudsql | rest | 80 | 69 | 27 | 11 | 42 | sqladmin.v1 |
 | cloudsql | grpc | — | — | — | — | — | unavailable |
-| compute | rest | 1011 | 974 | 35 | 37 | 939 | compute.v1 |
+| compute | rest | 1011 | 974 | 36 | 37 | 938 | compute.v1 |
 | compute | grpc | — | — | — | — | — | unavailable |
 | container | rest | 71 | 31 | 30 | 40 | 1 | container.v1 |
 | container | grpc | 37 | 37 | 37 | 0 | 0 | google.container.v1.ClusterManager |
@@ -118,7 +118,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 - `clouddns` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `cloudsql` REST: 42 served method(s) have no graded cell; 42 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `cloudsql` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
-- `compute` REST: 939 served method(s) have no graded cell; 931 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
+- `compute` REST: 938 served method(s) have no graded cell; 930 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `compute` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `container` REST: 1 served method(s) have no graded cell (their routes are aggregated under one cell)
 - `dataproc` REST: 64 served method(s) have no graded cell; 62 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
@@ -288,11 +288,11 @@ _28 cell(s): ga=0 limited=27 preview=0 unsupported=1_
 
 ## compute
 
-_Coverage: REST **974 of 1011** published methods served · 37 not served · 35 graded · 939 served-but-ungraded (`compute.v1` Discovery)_
+_Coverage: REST **974 of 1011** published methods served · 37 not served · 36 graded · 938 served-but-ungraded (`compute.v1` Discovery)_
 
 _Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
 
-_36 cell(s): ga=0 limited=35 preview=0 unsupported=1_
+_37 cell(s): ga=0 limited=36 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -320,6 +320,7 @@ _36 cell(s): ga=0 limited=35 preview=0 unsupported=1_
 | Compute.NetworksGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | Compute.NetworksInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | Compute.NetworksList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.NetworksPatch | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | Compute.OperationsGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
 | Compute.OperationsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | Compute.ProjectsGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
