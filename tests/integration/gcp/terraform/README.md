@@ -30,6 +30,9 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
 - Compute Engine project metadata (`google_compute_project_metadata`, via
   `projects.setCommonInstanceMetadata` + the `projects.get` read-back; TF1-5)
+- Compute Engine disk CMEK (`google_compute_disk` with a
+  `disk_encryption_key` block, read back through
+  `diskEncryptionKey.kmsKeyName`; TF2-11-4)
 - Service Usage (`/v1/projects/{project}/services`)
 - Cloud Billing — the `data "google_project"` `billing_account` read
   (`projects.getBillingInfo`) and `google_project`'s `billing_account`

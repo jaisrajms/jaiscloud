@@ -21,6 +21,8 @@ package sdk_compute_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -222,6 +224,61 @@ func TestSDKCompute(t *testing.T) {
 	require.Equal(t, int64(30000), gotFeatures.ProvisionedIops)
 	require.Equal(t, int64(1200), gotFeatures.ProvisionedThroughput)
 	_, err = svc.Disks.Delete(project, zone, features).Do()
+	require.NoError(t, err)
+
+	// --- disk CustomerEncryptionKey echo (TF2-11-4) ---
+	// Real Compute returns the key's kmsKeyName for a CMEK disk and only the
+	// documented sha256 for a CSEK disk; rawKey/rsaEncryptedKey never come back.
+	// The provider reads the block into its ForceNew disk_encryption_key, so the
+	// echo is what stops a CMEK config re-planning as a replacement.
+	kmsKey := "projects/" + project + "/locations/us-central1/keyRings/compat/cryptoKeys/compat"
+	cmek := unique("disk-cmek")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{
+		Name:              cmek,
+		Type:              "pd-ssd",
+		DiskEncryptionKey: &compute.CustomerEncryptionKey{KmsKeyName: kmsKey},
+	}).Do()
+	require.NoError(t, err)
+	gotCMEK, err := svc.Disks.Get(project, zone, cmek).Do()
+	require.NoError(t, err)
+	require.NotNil(t, gotCMEK.DiskEncryptionKey)
+	require.Equal(t, kmsKey, gotCMEK.DiskEncryptionKey.KmsKeyName)
+	require.Empty(t, gotCMEK.DiskEncryptionKey.RawKey)
+	require.Empty(t, gotCMEK.DiskEncryptionKey.RsaEncryptedKey)
+	require.Empty(t, gotCMEK.DiskEncryptionKey.Sha256)
+	_, err = svc.Disks.Delete(project, zone, cmek).Do()
+	require.NoError(t, err)
+
+	// A CSEK disk reports the RFC 4648 base64 SHA-256 of the decoded 32-byte key
+	// and nothing of the key material itself.
+	keyBytes := []byte("0123456789abcdef0123456789abcdef")
+	sum := sha256.Sum256(keyBytes)
+	wantSHA := base64.StdEncoding.EncodeToString(sum[:])
+	csek := unique("disk-csek")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{
+		Name:              csek,
+		Type:              "pd-ssd",
+		DiskEncryptionKey: &compute.CustomerEncryptionKey{RawKey: base64.StdEncoding.EncodeToString(keyBytes)},
+	}).Do()
+	require.NoError(t, err)
+	gotCSEK, err := svc.Disks.Get(project, zone, csek).Do()
+	require.NoError(t, err)
+	require.NotNil(t, gotCSEK.DiskEncryptionKey)
+	require.Equal(t, wantSHA, gotCSEK.DiskEncryptionKey.Sha256)
+	require.Empty(t, gotCSEK.DiskEncryptionKey.RawKey)
+	require.Empty(t, gotCSEK.DiskEncryptionKey.RsaEncryptedKey)
+	_, err = svc.Disks.Delete(project, zone, csek).Do()
+	require.NoError(t, err)
+
+	// A disk created without a key reports no block (Google-managed default),
+	// not an empty one.
+	plain := unique("disk-plain")
+	_, err = svc.Disks.Insert(project, zone, &compute.Disk{Name: plain, Type: "pd-ssd"}).Do()
+	require.NoError(t, err)
+	gotPlain, err := svc.Disks.Get(project, zone, plain).Do()
+	require.NoError(t, err)
+	require.Nil(t, gotPlain.DiskEncryptionKey)
+	_, err = svc.Disks.Delete(project, zone, plain).Do()
 	require.NoError(t, err)
 
 	// --- networks (global) ---

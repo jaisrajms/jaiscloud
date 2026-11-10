@@ -583,6 +583,7 @@ rules:
   - match: google_compute_disk
     service: compute
     state: limited
+    reason: disks.{insert,get,list,delete} over the shared ResourceStore; the record echoes the persisted create inputs the provider reads back — including the encryption-key blocks in their server-visible shape (CMEK kmsKeyName/kmsKeyServiceAccount, CSEK sha256, never raw material) — but there is no disk data plane.
   - match: google_compute_firewall
     service: compute
     state: limited

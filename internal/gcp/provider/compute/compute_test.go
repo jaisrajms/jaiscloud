@@ -2,7 +2,9 @@ package compute
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -370,10 +372,10 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 		"sourceSnapshot":            "projects/proj/global/snapshots/snap",
 		"sourceInstantSnapshot":     "projects/proj/zones/us-central1-a/instantSnapshots/instant",
 		"sourceStorageObject":       "gs://bucket/disk.tar.gz",
-		// Input-only and secret material: real Compute never returns either, so
-		// the record must not, however persistently the caller sent it.
-		"params":            map[string]any{"resourceManagerTags": map[string]any{"tagKeys/1": "tagValues/2"}},
-		"diskEncryptionKey": map[string]any{"rawKey": "c2VjcmV0"},
+		// Input-only material: real Compute does not persist `params` as part of
+		// the resource payload, so the record must not either. The encryption-key
+		// blocks are covered by TestDiskInsertEncryptionKeyShapes.
+		"params": map[string]any{"resourceManagerTags": map[string]any{"tagKeys/1": "tagValues/2"}},
 	}}))); err != nil {
 		t.Fatalf("create disk: %v", err)
 	}
@@ -402,10 +404,8 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 			t.Errorf("%s = %v (%T), want %v", field, got.Data[field], got.Data[field], want)
 		}
 	}
-	for _, field := range []string{"params", "diskEncryptionKey"} {
-		if v, ok := got.Data[field]; ok {
-			t.Errorf("%s must not be recorded, got %v", field, v)
-		}
+	if v, ok := got.Data["params"]; ok {
+		t.Errorf("params must not be recorded, got %v", v)
 	}
 
 	// A create that omits the optional inputs keeps them absent, except the one
@@ -422,6 +422,7 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 		"guestOsFeatures", "licenses", "provisionedIops", "provisionedThroughput",
 		"replicaZones", "resourcePolicies", "sourceDisk", "sourceInstantSnapshot",
 		"sourceSnapshot", "sourceStorageObject", "storagePool",
+		"diskEncryptionKey", "sourceImageEncryptionKey", "sourceSnapshotEncryptionKey",
 	} {
 		if v, ok := bare.Data[field]; ok {
 			t.Errorf("bare disk must omit %s, got %v", field, v)
@@ -429,6 +430,185 @@ func TestDiskInsertEchoesPersistedInputs(t *testing.T) {
 	}
 	if bare.Data["physicalBlockSizeBytes"] != defaultDiskPhysicalBlockSizeBytes {
 		t.Errorf("physicalBlockSizeBytes = %v, want the %s default", bare.Data["physicalBlockSizeBytes"], defaultDiskPhysicalBlockSizeBytes)
+	}
+}
+
+// TestDiskInsertEncryptionKeyShapes pins the CustomerEncryptionKey echo
+// (TF2-11-4). Discovery types the disk's diskEncryptionKey,
+// sourceImageEncryptionKey and sourceSnapshotEncryptionKey as
+// CustomerEncryptionKey blocks whose rawKey/rsaEncryptedKey are request-only
+// material and whose sha256 is "[Output only] The RFC 4648 base64 encoded
+// SHA-256 hash of the customer-supplied encryption key that protects this
+// resource" — so the record keeps the server-visible shape alone. The provider
+// reads the block back into its ForceNew disk_encryption_key (and source_*)
+// block, which is what stopped a CMEK disk re-planning "forces replacement".
+func TestDiskInsertEncryptionKeyShapes(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	zone := "us-central1-a"
+	kmsKey := "projects/proj/locations/us-central1/keyRings/ring/cryptoKeys/key"
+	kmsSA := "service-123@compute-system.iam.gserviceaccount.com"
+	keyBytes := []byte("0123456789abcdef0123456789abcdef")
+	rawKey := base64.StdEncoding.EncodeToString(keyBytes)
+	sum := sha256.Sum256(keyBytes)
+	wantSHA := base64.StdEncoding.EncodeToString(sum[:])
+
+	insert := func(name string, body map[string]any) map[string]any {
+		t.Helper()
+		if body == nil {
+			body = map[string]any{}
+		}
+		body["name"] = name
+		if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": body}))); err != nil {
+			t.Fatalf("create disk %s: %v", name, err)
+		}
+		got, err := p.DisksGet(ctx, newNR(zonal(zone, map[string]any{"disk": name})))
+		if err != nil {
+			t.Fatalf("get disk %s: %v", name, err)
+		}
+		return got.Data
+	}
+
+	// CMEK: the key name and its service account echo. There is no key material
+	// to leak; real Compute may additionally qualify the name with a key
+	// version once the disk exists, which the emulator does not invent.
+	cmek := insert("disk-cmek", map[string]any{"diskEncryptionKey": map[string]any{
+		"kmsKeyName":           kmsKey,
+		"kmsKeyServiceAccount": kmsSA,
+	}})
+	wantCMEK := map[string]any{"kmsKeyName": kmsKey, "kmsKeyServiceAccount": kmsSA}
+	if !reflect.DeepEqual(cmek["diskEncryptionKey"], wantCMEK) {
+		t.Errorf("diskEncryptionKey = %v, want %v", cmek["diskEncryptionKey"], wantCMEK)
+	}
+
+	// CSEK: only the documented sha256 is echoed — a caller-supplied sha256 is
+	// ignored (output-only) and the raw key never comes back.
+	csek := insert("disk-csek", map[string]any{"diskEncryptionKey": map[string]any{
+		"rawKey": rawKey,
+		"sha256": base64.StdEncoding.EncodeToString([]byte("caller-supplied")),
+	}})
+	wantCSEK := map[string]any{"sha256": wantSHA}
+	if !reflect.DeepEqual(csek["diskEncryptionKey"], wantCSEK) {
+		t.Errorf("diskEncryptionKey = %v, want %v", csek["diskEncryptionKey"], wantCSEK)
+	}
+
+	// The source-image and source-snapshot keys follow the same rule.
+	source := insert("disk-source-keys", map[string]any{
+		"sourceImageEncryptionKey":    map[string]any{"kmsKeyName": kmsKey},
+		"sourceSnapshotEncryptionKey": map[string]any{"rawKey": rawKey},
+	})
+	if want := map[string]any{"kmsKeyName": kmsKey}; !reflect.DeepEqual(source["sourceImageEncryptionKey"], want) {
+		t.Errorf("sourceImageEncryptionKey = %v, want %v", source["sourceImageEncryptionKey"], want)
+	}
+	if want := map[string]any{"sha256": wantSHA}; !reflect.DeepEqual(source["sourceSnapshotEncryptionKey"], want) {
+		t.Errorf("sourceSnapshotEncryptionKey = %v, want %v", source["sourceSnapshotEncryptionKey"], want)
+	}
+
+	// An rsa-wrapped key alone carries no server-derivable member: the wrapped
+	// material is never echoed, and its sha256 needs the private key real
+	// Compute holds. No block is rendered rather than an empty one.
+	rsa := insert("disk-rsa", map[string]any{"diskEncryptionKey": map[string]any{
+		"rsaEncryptedKey": base64.StdEncoding.EncodeToString([]byte("wrapped")),
+	}})
+	if v, ok := rsa["diskEncryptionKey"]; ok {
+		t.Errorf("rsa-only create must render no block, got %v", v)
+	}
+
+	// A plain create renders no block, not an empty one.
+	if v, ok := insert("disk-no-key", nil)["diskEncryptionKey"]; ok {
+		t.Errorf("plain create must render no block, got %v", v)
+	}
+
+	// A rawKey that is not a base64-encoded 256-bit key is the documented 400.
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"disk-bad-base64", map[string]any{"diskEncryptionKey": map[string]any{"rawKey": "not base64!"}}},
+		{"disk-short-key", map[string]any{"diskEncryptionKey": map[string]any{"rawKey": base64.StdEncoding.EncodeToString([]byte("short"))}}},
+	} {
+		tc.body["name"] = tc.name
+		_, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": tc.body})))
+		if !isCode(err, "InvalidArgument") {
+			t.Errorf("%s: expected InvalidArgument, got %v", tc.name, err)
+		}
+	}
+}
+
+// TestDiskEncryptionKeyStoreRoundTrip checks the persisted record itself (the
+// JSON the ResourceStore keeps) rather than only the rendered read: a CSEK
+// key's raw material must not be persisted anywhere, a CMEK key name must
+// survive the store round trip, and disks.list renders the same block as
+// disks.get.
+func TestDiskEncryptionKeyStoreRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	zone := "us-central1-a"
+	kmsKey := "projects/proj/locations/us-central1/keyRings/ring/cryptoKeys/key"
+	keyBytes := []byte("0123456789abcdef0123456789abcdef")
+	rawKey := base64.StdEncoding.EncodeToString(keyBytes)
+	sum := sha256.Sum256(keyBytes)
+	wantSHA := base64.StdEncoding.EncodeToString(sum[:])
+
+	for name, body := range map[string]map[string]any{
+		// A CMEK request never carries raw material in practice; the extra
+		// rsaEncryptedKey here is the leak check (it must be dropped, not
+		// sanitized into an invented sha256).
+		"disk-store-cmek": {"diskEncryptionKey": map[string]any{
+			"kmsKeyName": kmsKey, "rsaEncryptedKey": "d3JhcHBlZA==",
+		}},
+		"disk-store-csek": {"diskEncryptionKey": map[string]any{"rawKey": rawKey}},
+	} {
+		body["name"] = name
+		if _, err := p.DisksInsert(ctx, newNR(zonal(zone, map[string]any{"body": body}))); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		entry, err := p.resources.Get(ctx, "proj", zone, rtDisk, name)
+		if err != nil {
+			t.Fatalf("store get %s: %v", name, err)
+		}
+		record := string(entry.Data)
+		for _, secret := range []string{rawKey, "d3JhcHBlZA==", "rawKey", "rsaEncryptedKey"} {
+			if strings.Contains(record, secret) {
+				t.Errorf("%s: stored record leaks key material %q: %s", name, secret, record)
+			}
+		}
+		var stored map[string]any
+		if err := json.Unmarshal(entry.Data, &stored); err != nil {
+			t.Fatalf("unmarshal %s: %v", name, err)
+		}
+		block, _ := stored["diskEncryptionKey"].(map[string]any)
+		if name == "disk-store-cmek" {
+			if block["kmsKeyName"] != kmsKey {
+				t.Errorf("%s: stored kmsKeyName = %v, want %v", name, block["kmsKeyName"], kmsKey)
+			}
+			if _, ok := block["sha256"]; ok {
+				t.Errorf("%s: stored block has an invented sha256: %v", name, block["sha256"])
+			}
+			continue
+		}
+		if block["sha256"] != wantSHA {
+			t.Errorf("%s: stored sha256 = %v, want %v", name, block["sha256"], wantSHA)
+		}
+	}
+
+	// The list path renders the stored block exactly as get does.
+	list, err := p.DisksList(ctx, newNR(zonal(zone, map[string]any{})))
+	if err != nil {
+		t.Fatalf("list disks: %v", err)
+	}
+	items, _ := list.Data["items"].([]any)
+	var listed map[string]any
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok && m["name"] == "disk-store-csek" {
+			listed = m
+		}
+	}
+	if listed == nil {
+		t.Fatal("disk-store-csek missing from disks.list")
+	}
+	if want := map[string]any{"sha256": wantSHA}; !reflect.DeepEqual(listed["diskEncryptionKey"], want) {
+		t.Errorf("disks.list diskEncryptionKey = %v, want %v", listed["diskEncryptionKey"], want)
 	}
 }
 

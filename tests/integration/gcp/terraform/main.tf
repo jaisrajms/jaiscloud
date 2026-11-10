@@ -268,6 +268,23 @@ resource "google_compute_project_metadata" "compat" {
   }
 }
 
+# ── Compute Engine: disk CMEK echo ───────────────────────────────────────────
+# google_compute_disk reads disk_encryption_key back from
+# diskEncryptionKey.kmsKeyName into a ForceNew block. Real Compute returns the
+# key name (and never raw/rsa-wrapped material), so the emulator echoes the CMEK
+# shape; the second plan above is the assertion that the disk is not replaced
+# on every plan (TF2-11-4), and run.sh checks the wire body.
+resource "google_compute_disk" "cmek" {
+  name = "jaiscloud-tf-cmek"
+  type = "pd-ssd"
+  zone = "${var.region}-a"
+  size = 10
+
+  disk_encryption_key {
+    kms_key_self_link = google_kms_crypto_key.compat.id
+  }
+}
+
 # ── Cloud SQL for PostgreSQL ──────────────────────────────────────────────────
 resource "google_sql_database_instance" "compat" {
   name                = "jaiscloud-tf-postgres"
@@ -617,6 +634,10 @@ output "enabled_service" {
 
 output "project_metadata_project" {
   value = google_compute_project_metadata.compat.project
+}
+
+output "disk_cmek_key" {
+  value = google_compute_disk.cmek.disk_encryption_key[0].kms_key_self_link
 }
 
 output "metastore_service_name" {
