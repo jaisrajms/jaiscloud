@@ -6,7 +6,7 @@ gate: every failure class below is owned by a ledger row in
 
 - provider: `hashicorp/google` 7.46.2
 - terraform: Terraform v1.16.3
-- endpoint: http://localhost:8080
+- endpoint: http://localhost:18112
 - project: test-project
 - corpus `docs-samples`: terraform-google-modules/terraform-docs-samples @ `fbf08aa52ee5a2ff5510b2791ae77230ae1a7a85` (., 2026-10-26)
 - corpus `provider-docs`: hashicorp/terraform-provider-google @ `5dbfd8a3d1eafa32db6a3afbc1c63924370fdfc6` (website/docs/r, 2026-10-23)
@@ -210,11 +210,11 @@ gate: every failure class below is owned by a ledger row in
 | compute | `vpc/firewall_with_target_tags` | plan-ok | — |
 | compute | `vpc/network_custom_mtu` | plan-ok | — |
 | compute | `vpc/network_ipv6` | plan-ok | — |
-| compute | `compute_disk-example-1` | plan-ok | — |
 | compute | `compute_disk-example-2` | plan-ok | — |
 | compute | `compute_disk-example-3` | plan-ok | — |
 | compute | `compute_firewall-example-1` | plan-ok | — |
 | compute | `compute_firewall-example-2` | plan-ok | — |
+| compute | `compute_instance-example-1` | plan-ok | — |
 | container | `gke/autopilot/basic` | plan-ok | — |
 | container | `gke/autopilot/custom_service_account` | plan-ok | — |
 | container | `gke/autopilot/labels` | plan-ok | — |
@@ -380,6 +380,8 @@ gate: every failure class below is owned by a ledger row in
 |---|---|---|---|
 | bigquery | `bigquery_dataset-example-4` | apply-ok | apply, no changes, destroy |
 | clouddns | `dns_record_set-example-2` | apply-ok | apply, no changes, destroy |
+| compute | `compute_disk-example-1` | apply-ok | apply, no changes, destroy |
+| compute | `compute_network-example-3` | apply-ok | apply, no changes, destroy |
 | dataproc | `dataproc_cluster-example-1` | apply-ok | apply, no changes, destroy |
 | eventarc | `eventarc_channel-example-1` | apply-ok | apply, no changes, destroy |
 | firestore | `firestore_document-example-1` | apply-ok | apply, no changes, destroy |
