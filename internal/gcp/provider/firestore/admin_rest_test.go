@@ -1756,6 +1756,8 @@ func TestRESTDatabaseEnumValidation(t *testing.T) {
 		{"pointInTimeRecoveryEnablement", "BOGUS"},
 		{"deleteProtectionState", "BOGUS"},
 		{"databaseEdition", "BOGUS"},
+		{"firestoreDataAccessMode", "BOGUS"},
+		{"mongodbCompatibleDataAccessMode", "BOGUS"},
 	}
 	for _, tc := range cases {
 		// Create rejects before the record is written.
@@ -1788,15 +1790,104 @@ func TestRESTDatabaseEnumValidation(t *testing.T) {
 	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
 		"databaseId": "enum-db",
 		"body": map[string]any{
-			"type":                          "DATABASE_TYPE_UNSPECIFIED",
-			"concurrencyMode":               "OPTIMISTIC_WITH_ENTITY_GROUPS",
-			"appEngineIntegrationMode":      "APP_ENGINE_INTEGRATION_MODE_UNSPECIFIED",
-			"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-			"deleteProtectionState":         "DELETE_PROTECTION_STATE_UNSPECIFIED",
-			"databaseEdition":               "DATABASE_EDITION_UNSPECIFIED",
+			"type":                            "DATABASE_TYPE_UNSPECIFIED",
+			"concurrencyMode":                 "OPTIMISTIC_WITH_ENTITY_GROUPS",
+			"appEngineIntegrationMode":        "APP_ENGINE_INTEGRATION_MODE_UNSPECIFIED",
+			"pointInTimeRecoveryEnablement":   "POINT_IN_TIME_RECOVERY_DISABLED",
+			"deleteProtectionState":           "DELETE_PROTECTION_STATE_UNSPECIFIED",
+			"databaseEdition":                 "DATABASE_EDITION_UNSPECIFIED",
+			"firestoreDataAccessMode":         "DATA_ACCESS_MODE_UNSPECIFIED",
+			"mongodbCompatibleDataAccessMode": "DATA_ACCESS_MODE_UNSPECIFIED",
 		},
 	})); err != nil {
 		t.Fatalf("CreateDatabase with documented enum names: %v", err)
+	}
+}
+
+// TestRESTDatabaseDataAccessModes is the REST transport check for TF6-6: both
+// data-access modes are OPTIONAL enums with documented edition defaults. A
+// create that omits them serves the default (STANDARD: Firestore ENABLED /
+// Mongo-compatible DISABLED; ENTERPRISE: Firestore DISABLED / Mongo-compatible
+// ENABLED), an explicit value is echoed on the operation response and on a GET,
+// and a masked patch applies.
+func TestRESTDatabaseDataAccessModes(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	// A STANDARD create that omits both modes serves the documented defaults, so
+	// a provider Read stores a value instead of the empty string (the TF6-6
+	// permadiff).
+	resp, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "dam-std",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(STANDARD): %v", err)
+	}
+	created, _ := resp.Data["response"].(map[string]any)
+	if created["firestoreDataAccessMode"] != dataAccessModeEnabled {
+		t.Errorf("created firestoreDataAccessMode = %v, want %s (STANDARD default)", created["firestoreDataAccessMode"], dataAccessModeEnabled)
+	}
+	if created["mongodbCompatibleDataAccessMode"] != dataAccessModeDisabled {
+		t.Errorf("created mongodbCompatibleDataAccessMode = %v, want %s (STANDARD default)", created["mongodbCompatibleDataAccessMode"], dataAccessModeDisabled)
+	}
+
+	// An ENTERPRISE create serves the ENTERPRISE defaults.
+	ent, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "dam-ent",
+		"body":       map[string]any{"databaseEdition": databaseEditionEnterprise},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(ENTERPRISE): %v", err)
+	}
+	entBody, _ := ent.Data["response"].(map[string]any)
+	if entBody["firestoreDataAccessMode"] != dataAccessModeDisabled || entBody["mongodbCompatibleDataAccessMode"] != dataAccessModeEnabled {
+		t.Errorf("enterprise create modes = %v/%v, want DISABLED/ENABLED",
+			entBody["firestoreDataAccessMode"], entBody["mongodbCompatibleDataAccessMode"])
+	}
+
+	// An explicit write is stored and echoed on the create response and on GET.
+	explicit, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "dam-explicit",
+		"body": map[string]any{
+			"databaseEdition":                 databaseEditionEnterprise,
+			"firestoreDataAccessMode":         dataAccessModeEnabled,
+			"mongodbCompatibleDataAccessMode": dataAccessModeDisabled,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(explicit modes): %v", err)
+	}
+	explicitBody, _ := explicit.Data["response"].(map[string]any)
+	if explicitBody["firestoreDataAccessMode"] != dataAccessModeEnabled || explicitBody["mongodbCompatibleDataAccessMode"] != dataAccessModeDisabled {
+		t.Errorf("explicit create modes = %v/%v, want ENABLED/DISABLED",
+			explicitBody["firestoreDataAccessMode"], explicitBody["mongodbCompatibleDataAccessMode"])
+	}
+	got, err := p.GetDatabase(ctx, adminNR("databases/dam-explicit", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.Data["firestoreDataAccessMode"] != dataAccessModeEnabled || got.Data["mongodbCompatibleDataAccessMode"] != dataAccessModeDisabled {
+		t.Errorf("GetDatabase modes = %v/%v, want the stored values",
+			got.Data["firestoreDataAccessMode"], got.Data["mongodbCompatibleDataAccessMode"])
+	}
+
+	// A masked patch applies each mode (the attribute is ForceNew in the
+	// provider, but the API field itself is mutable).
+	upd, err := p.UpdateDatabase(ctx, adminNR("databases/dam-explicit", map[string]any{
+		"updateMask": "firestoreDataAccessMode,mongodbCompatibleDataAccessMode",
+		"body": map[string]any{
+			"firestoreDataAccessMode":         dataAccessModeDisabled,
+			"mongodbCompatibleDataAccessMode": dataAccessModeEnabled,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(modes): %v", err)
+	}
+	updBody, _ := upd.Data["response"].(map[string]any)
+	if updBody["firestoreDataAccessMode"] != dataAccessModeDisabled || updBody["mongodbCompatibleDataAccessMode"] != dataAccessModeEnabled {
+		t.Errorf("masked patch modes = %v/%v, want DISABLED/ENABLED",
+			updBody["firestoreDataAccessMode"], updBody["mongodbCompatibleDataAccessMode"])
 	}
 }
 

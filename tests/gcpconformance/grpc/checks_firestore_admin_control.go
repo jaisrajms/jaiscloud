@@ -26,10 +26,10 @@ import (
 // run-unique named database, all other probes on (default).
 func firestoreAdminControlChecks() []Check {
 	return []Check{
-		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name; edition-default concurrency_mode; earliest_version_time about now-1h", Run: checkFsAdminCreateDatabase},
+		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name; edition-default concurrency_mode + data-access modes; earliest_version_time about now-1h", Run: checkFsAdminCreateDatabase},
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid/timestamps/etag + (default) materialized with stable output fields", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default) with output fields", Run: checkFsAdminListDatabases},
-		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected", Run: checkFsAdminUpdateDatabase},
+		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected, data-access modes mutable", Run: checkFsAdminUpdateDatabase},
 		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete; child backup schedules/user creds deleted with it (one daily + one weekly) and their lists NotFound", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask with OUTPUT_ONLY members derived + index_config/ttl_config under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip with derived ancestor/uses_ancestor_config + ttl state ACTIVE", Run: checkFsAdminGetField},
@@ -139,6 +139,17 @@ func checkFsAdminCreateDatabase(ctx context.Context, cfg Config) error {
 	// Pessimistic for all other databases").
 	if db.GetConcurrencyMode() != adminpb.Database_PESSIMISTIC {
 		return fmt.Errorf("CreateDatabase concurrency_mode = %v, want PESSIMISTIC for the STANDARD default", db.GetConcurrencyMode())
+	}
+	// Both data-access modes are OPTIONAL enums; the create omitted them, so the
+	// documented STANDARD-edition defaults are served (Firestore ENABLED,
+	// Mongo-compatible DISABLED) instead of the proto3 zero value. A provider
+	// that Read an empty value would re-plan the ForceNew attribute forever
+	// (TF6-6).
+	if db.GetFirestoreDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_ENABLED {
+		return fmt.Errorf("CreateDatabase firestore_data_access_mode = %v, want DATA_ACCESS_MODE_ENABLED (STANDARD default)", db.GetFirestoreDataAccessMode())
+	}
+	if db.GetMongodbCompatibleDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_DISABLED {
+		return fmt.Errorf("CreateDatabase mongodb_compatible_data_access_mode = %v, want DATA_ACCESS_MODE_DISABLED (STANDARD default)", db.GetMongodbCompatibleDataAccessMode())
 	}
 	// earliest_version_time is `now - version_retention_period`; PITR is off, so
 	// it trails the response by about an hour.
@@ -314,6 +325,34 @@ func checkFsAdminUpdateDatabase(ctx context.Context, cfg Config) error {
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"database_edition"}},
 	}); status.Code(err) != codes.InvalidArgument {
 		return fmt.Errorf("UpdateDatabase(database_edition change) code = %v, want InvalidArgument", status.Code(err))
+	}
+	// The two data-access modes are mutable OPTIONAL enums (TF6-6): a masked
+	// update stores the requested value and serves it back.
+	cur, err = stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name})
+	if err != nil {
+		return fmt.Errorf("GetDatabase (before data-access update): %w", err)
+	}
+	op, err = stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                            name,
+			Etag:                            cur.GetEtag(),
+			FirestoreDataAccessMode:         adminpb.Database_DATA_ACCESS_MODE_DISABLED,
+			MongodbCompatibleDataAccessMode: adminpb.Database_DATA_ACCESS_MODE_ENABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"firestore_data_access_mode", "mongodb_compatible_data_access_mode"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDatabase(data-access modes): %w", err)
+	}
+	modes := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(modes); err != nil {
+		return fmt.Errorf("UpdateDatabase(data-access modes) response: %w", err)
+	}
+	if modes.GetFirestoreDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_DISABLED {
+		return fmt.Errorf("UpdateDatabase firestore_data_access_mode = %v, want DATA_ACCESS_MODE_DISABLED", modes.GetFirestoreDataAccessMode())
+	}
+	if modes.GetMongodbCompatibleDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_ENABLED {
+		return fmt.Errorf("UpdateDatabase mongodb_compatible_data_access_mode = %v, want DATA_ACCESS_MODE_ENABLED", modes.GetMongodbCompatibleDataAccessMode())
 	}
 	return nil
 }

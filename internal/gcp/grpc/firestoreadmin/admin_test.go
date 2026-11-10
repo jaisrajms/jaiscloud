@@ -1215,6 +1215,115 @@ func TestDatabaseOutputFields(t *testing.T) {
 // and by Get/List, a database created without one reports no block (never
 // fabricated), and a masked key change is INVALID_ARGUMENT because CMEK is
 // create-only and a CMEK-protected database's key cannot change.
+// TestDatabaseDataAccessModes is the gRPC view of TF6-6: both data-access modes
+// are OPTIONAL enums with documented edition defaults. A create that omits them
+// serves the default, an explicit write is stored and returned, a masked update
+// applies, and the proto3 zero value on a masked write clears back to the
+// edition default.
+func TestDatabaseDataAccessModes(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		id    string
+		ed    adminpb.Database_DatabaseEdition
+		fire  adminpb.Database_DataAccessMode
+		mongo adminpb.Database_DataAccessMode
+	}{
+		{"damstd", adminpb.Database_STANDARD, adminpb.Database_DATA_ACCESS_MODE_ENABLED, adminpb.Database_DATA_ACCESS_MODE_DISABLED},
+		{"dament", adminpb.Database_ENTERPRISE, adminpb.Database_DATA_ACCESS_MODE_DISABLED, adminpb.Database_DATA_ACCESS_MODE_ENABLED},
+	} {
+		op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+			Parent:     testDBParent,
+			DatabaseId: tc.id,
+			Database:   &adminpb.Database{DatabaseEdition: tc.ed},
+		})
+		if err != nil {
+			t.Fatalf("CreateDatabase(%v): %v", tc.ed, err)
+		}
+		db := &adminpb.Database{}
+		if err := op.GetResponse().UnmarshalTo(db); err != nil {
+			t.Fatalf("CreateDatabase response: %v", err)
+		}
+		if db.GetFirestoreDataAccessMode() != tc.fire {
+			t.Errorf("create(%v) firestore_data_access_mode = %v, want %v", tc.ed, db.GetFirestoreDataAccessMode(), tc.fire)
+		}
+		if db.GetMongodbCompatibleDataAccessMode() != tc.mongo {
+			t.Errorf("create(%v) mongodb_compatible_data_access_mode = %v, want %v", tc.ed, db.GetMongodbCompatibleDataAccessMode(), tc.mongo)
+		}
+	}
+
+	// An explicit create value is stored and returned by Get.
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "damexplicit",
+		Database: &adminpb.Database{
+			DatabaseEdition:                 adminpb.Database_ENTERPRISE,
+			FirestoreDataAccessMode:         adminpb.Database_DATA_ACCESS_MODE_ENABLED,
+			MongodbCompatibleDataAccessMode: adminpb.Database_DATA_ACCESS_MODE_DISABLED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase(explicit modes): %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response: %v", err)
+	}
+	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if got.GetFirestoreDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_ENABLED ||
+		got.GetMongodbCompatibleDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_DISABLED {
+		t.Errorf("GetDatabase modes = %v/%v, want ENABLED/DISABLED",
+			got.GetFirestoreDataAccessMode(), got.GetMongodbCompatibleDataAccessMode())
+	}
+
+	// A masked update applies each mode; the proto3 zero value clears it back to
+	// the documented edition default.
+	updOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                            created.GetName(),
+			Etag:                            got.GetEtag(),
+			FirestoreDataAccessMode:         adminpb.Database_DATA_ACCESS_MODE_DISABLED,
+			MongodbCompatibleDataAccessMode: adminpb.Database_DATA_ACCESS_MODE_ENABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"firestore_data_access_mode", "mongodb_compatible_data_access_mode"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(modes): %v", err)
+	}
+	updated := &adminpb.Database{}
+	if err := updOp.GetResponse().UnmarshalTo(updated); err != nil {
+		t.Fatalf("UpdateDatabase response: %v", err)
+	}
+	if updated.GetFirestoreDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_DISABLED ||
+		updated.GetMongodbCompatibleDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_ENABLED {
+		t.Errorf("masked update modes = %v/%v, want DISABLED/ENABLED",
+			updated.GetFirestoreDataAccessMode(), updated.GetMongodbCompatibleDataAccessMode())
+	}
+	clearOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                    created.GetName(),
+			Etag:                    updated.GetEtag(),
+			FirestoreDataAccessMode: adminpb.Database_DATA_ACCESS_MODE_UNSPECIFIED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"firestore_data_access_mode"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(clear mode): %v", err)
+	}
+	cleared := &adminpb.Database{}
+	if err := clearOp.GetResponse().UnmarshalTo(cleared); err != nil {
+		t.Fatalf("UpdateDatabase response: %v", err)
+	}
+	if cleared.GetFirestoreDataAccessMode() != adminpb.Database_DATA_ACCESS_MODE_DISABLED {
+		t.Errorf("masked clear = %v, want the ENTERPRISE default DISABLED", cleared.GetFirestoreDataAccessMode())
+	}
+}
+
 func TestDatabaseCmekConfig(t *testing.T) {
 	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
 	defer cleanup()

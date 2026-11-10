@@ -1976,6 +1976,112 @@ func TestDatabaseEarliestVersionTime(t *testing.T) {
 	}
 }
 
+// TestDatabaseDataAccessModes pins TF6-6: both data-access modes are OPTIONAL
+// enums in database.proto with documented edition defaults. A create that omits
+// them stores the default (STANDARD: Firestore ENABLED / Mongo-compatible
+// DISABLED; ENTERPRISE: Firestore DISABLED / Mongo-compatible ENABLED), an
+// explicit value is stored and served, a masked update applies, and a record
+// persisted before the fields existed reads back the derived default rather
+// than an unspecified mode.
+func TestDatabaseDataAccessModes(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// Create: the documented default applies per edition.
+	cases := []struct {
+		id, edition, wantFirestore, wantMongo string
+	}{
+		{"damdefault", "", dataAccessModeEnabled, dataAccessModeDisabled},
+		{"damstd", databaseEditionStandard, dataAccessModeEnabled, dataAccessModeDisabled},
+		{"dament", databaseEditionEnterprise, dataAccessModeDisabled, dataAccessModeEnabled},
+	}
+	for _, tc := range cases {
+		created, _, err := p.CreateDatabaseDef(ctx, "proj", tc.id, databaseDef{DatabaseEdition: tc.edition})
+		if err != nil {
+			t.Fatalf("CreateDatabaseDef(%q): %v", tc.edition, err)
+		}
+		if created.FirestoreDataAccessMode != tc.wantFirestore {
+			t.Errorf("create(edition %q) firestore_data_access_mode = %q, want %q", tc.edition, created.FirestoreDataAccessMode, tc.wantFirestore)
+		}
+		if created.MongodbCompatibleDataAccessMode != tc.wantMongo {
+			t.Errorf("create(edition %q) mongodb_compatible_data_access_mode = %q, want %q", tc.edition, created.MongodbCompatibleDataAccessMode, tc.wantMongo)
+		}
+	}
+
+	// An explicit value is stored and echoed, on both editions.
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "damexplicit", databaseDef{
+		DatabaseEdition:                 databaseEditionEnterprise,
+		FirestoreDataAccessMode:         dataAccessModeEnabled,
+		MongodbCompatibleDataAccessMode: dataAccessModeDisabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(explicit modes): %v", err)
+	}
+	if created.FirestoreDataAccessMode != dataAccessModeEnabled || created.MongodbCompatibleDataAccessMode != dataAccessModeDisabled {
+		t.Fatalf("create(explicit modes) = %q/%q, want ENABLED/DISABLED",
+			created.FirestoreDataAccessMode, created.MongodbCompatibleDataAccessMode)
+	}
+	read, err := p.GetDatabase(ctx, "proj", "damexplicit")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if read.FirestoreDataAccessMode != dataAccessModeEnabled || read.MongodbCompatibleDataAccessMode != dataAccessModeDisabled {
+		t.Errorf("GetDatabase modes = %q/%q, want the stored values",
+			read.FirestoreDataAccessMode, read.MongodbCompatibleDataAccessMode)
+	}
+
+	// A masked update applies each mode; a masked write of the zero value clears
+	// it back to the documented edition default.
+	updated, _, err := p.UpdateDatabaseDef(ctx, "proj", "damexplicit",
+		databaseDef{FirestoreDataAccessMode: dataAccessModeDisabled, MongodbCompatibleDataAccessMode: dataAccessModeEnabled},
+		[]string{"firestore_data_access_mode", "mongodb_compatible_data_access_mode"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(modes): %v", err)
+	}
+	if updated.FirestoreDataAccessMode != dataAccessModeDisabled || updated.MongodbCompatibleDataAccessMode != dataAccessModeEnabled {
+		t.Fatalf("masked update modes = %q/%q, want DISABLED/ENABLED",
+			updated.FirestoreDataAccessMode, updated.MongodbCompatibleDataAccessMode)
+	}
+	cleared, _, err := p.UpdateDatabaseDef(ctx, "proj", "damexplicit",
+		databaseDef{FirestoreDataAccessMode: dataAccessModeUnspecified},
+		[]string{"firestore_data_access_mode"}, true, updated.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(clear mode): %v", err)
+	}
+	if cleared.FirestoreDataAccessMode != dataAccessModeDisabled {
+		t.Errorf("masked clear = %q, want the ENTERPRISE default DISABLED", cleared.FirestoreDataAccessMode)
+	}
+
+	// A record persisted before the fields existed derives both defaults from its
+	// stored edition on read.
+	if err := p.putResource(ctx, "proj", rtDatabase, databaseRel("damlegacy"), databaseDef{
+		Name:            databaseName("proj", "damlegacy"),
+		Type:            "FIRESTORE_NATIVE",
+		DatabaseEdition: databaseEditionStandard,
+	}, false); err != nil {
+		t.Fatalf("seed legacy database: %v", err)
+	}
+	legacy, err := p.GetDatabase(ctx, "proj", "damlegacy")
+	if err != nil {
+		t.Fatalf("GetDatabase(legacy): %v", err)
+	}
+	if legacy.FirestoreDataAccessMode != dataAccessModeEnabled || legacy.MongodbCompatibleDataAccessMode != dataAccessModeDisabled {
+		t.Errorf("legacy record modes = %q/%q, want the STANDARD defaults ENABLED/DISABLED",
+			legacy.FirestoreDataAccessMode, legacy.MongodbCompatibleDataAccessMode)
+	}
+
+	// The synthesized (default) database is a STANDARD database and serves the
+	// same defaults.
+	def, err := p.GetDatabase(ctx, "proj", defaultDatabaseID)
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if def.FirestoreDataAccessMode != dataAccessModeEnabled || def.MongodbCompatibleDataAccessMode != dataAccessModeDisabled {
+		t.Errorf("(default) modes = %q/%q, want the STANDARD defaults ENABLED/DISABLED",
+			def.FirestoreDataAccessMode, def.MongodbCompatibleDataAccessMode)
+	}
+}
+
 func TestFieldServerOwnedOutputOnly(t *testing.T) {
 	ctx := context.Background()
 	p := newAdminService()
